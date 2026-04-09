@@ -25,7 +25,8 @@ vi.mock("../agent-scope.js", () => ({
   listAgentIds: () => hoisted.listAgentIdsMock(),
 }));
 
-const { resolveSessionKeyForRequest } = await import("./session.js");
+const { resolveSessionKeyForRequest, resolveStoredSessionKeyForSessionId } =
+  await import("./session.js");
 
 describe("resolveSessionKeyForRequest", () => {
   beforeEach(() => {
@@ -94,5 +95,33 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.sessionKey).toBe("agent:other:acp:sid");
     expect(result.sessionStore).toBe(otherStore);
     expect(result.storePath).toBe("/stores/other.json");
+  });
+
+  it("scopes stored session-key lookup to the requested agent store", () => {
+    const embeddedAgentStore = {
+      "agent:embedded-agent:main": { sessionId: "other-session", updatedAt: 2 },
+      "agent:embedded-agent:work": { sessionId: "resume-agent-1", updatedAt: 1 },
+    } satisfies Record<string, SessionEntry>;
+    hoisted.loadSessionStoreMock.mockImplementation((storePath) => {
+      if (storePath === "/stores/embedded-agent.json") {
+        return embeddedAgentStore;
+      }
+      return {};
+    });
+
+    const result = resolveStoredSessionKeyForSessionId({
+      cfg: {
+        session: {
+          store: "/stores/{agentId}.json",
+        },
+      } satisfies OpenClawConfig,
+      sessionId: "resume-agent-1",
+      agentId: "embedded-agent",
+    });
+
+    expect(result.sessionKey).toBe("agent:embedded-agent:work");
+    expect(result.sessionStore).toBe(embeddedAgentStore);
+    expect(result.storePath).toBe("/stores/embedded-agent.json");
+    expect(hoisted.loadSessionStoreMock).toHaveBeenCalledTimes(1);
   });
 });

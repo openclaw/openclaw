@@ -1,32 +1,12 @@
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
-import { appendAssistantMessageToSessionTranscript } from "./transcript.js";
-
-function useTempSessionsFixture(prefix: string) {
-  let tempDir = "";
-  let storePath = "";
-  let sessionsDir = "";
-
-  beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-    sessionsDir = path.join(tempDir, "agents", "main", "sessions");
-    fs.mkdirSync(sessionsDir, { recursive: true });
-    storePath = path.join(sessionsDir, "sessions.json");
-  });
-
-  afterEach(() => {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  });
-
-  return {
-    storePath: () => storePath,
-    sessionsDir: () => sessionsDir,
-  };
-}
+import { useTempSessionsFixture } from "./test-helpers.js";
+import {
+  appendAssistantMessageToSessionTranscript,
+  appendExactAssistantMessageToSessionTranscript,
+} from "./transcript.js";
 
 describe("appendAssistantMessageToSessionTranscript", () => {
   const fixture = useTempSessionsFixture("transcript-test-");
@@ -215,5 +195,94 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(result.ok).toBe(true);
     const lines = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
     expect(lines.length).toBe(3);
+  });
+
+  it("appends exact assistant transcript messages without rewriting phased content", async () => {
+    writeTranscriptStore();
+
+    const result = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "internal reasoning",
+            textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
+          },
+          {
+            type: "text",
+            text: "Done.",
+            textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+          },
+        ],
+        api: "openai-responses",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const lines = fs.readFileSync(result.sessionFile, "utf-8").trim().split("\n");
+      const messageLine = JSON.parse(lines[1]);
+      expect(messageLine.message.content).toEqual([
+        {
+          type: "text",
+          text: "internal reasoning",
+          textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
+        },
+        {
+          type: "text",
+          text: "Done.",
+          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+        },
+      ]);
+    }
+  });
+
+  it("can emit file-only transcript refresh events for exact assistant appends", async () => {
+    writeTranscriptStore();
+    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
+
+    const result = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      updateMode: "file-only",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Done." }],
+        api: "openai-responses",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(emitSpy).toHaveBeenCalledWith(result.sessionFile);
+    }
+    emitSpy.mockRestore();
   });
 });

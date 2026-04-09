@@ -1,4 +1,4 @@
-import { getBundledChannelContractSurfaceModule } from "../channels/plugins/contract-surfaces.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export type TelegramCustomCommandInput = {
   command?: string | null;
@@ -10,38 +10,22 @@ export type TelegramCustomCommandIssue = {
   field: "command" | "description";
   message: string;
 };
+const TELEGRAM_COMMAND_NAME_PATTERN_VALUE = /^[a-z0-9_]{1,32}$/;
 
-type TelegramCommandConfigContract = {
-  TELEGRAM_COMMAND_NAME_PATTERN: RegExp;
-  normalizeTelegramCommandName: (value: string) => string;
-  normalizeTelegramCommandDescription: (value: string) => string;
-  resolveTelegramCustomCommands: (params: {
-    commands?: TelegramCustomCommandInput[] | null;
-    reservedCommands?: Set<string>;
-    checkReserved?: boolean;
-    checkDuplicates?: boolean;
-  }) => {
-    commands: Array<{ command: string; description: string }>;
-    issues: TelegramCustomCommandIssue[];
-  };
-};
-
-const FALLBACK_TELEGRAM_COMMAND_NAME_PATTERN = /^[a-z0-9_]{1,32}$/;
-
-function fallbackNormalizeTelegramCommandName(value: string): string {
+function normalizeTelegramCommandNameImpl(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
     return "";
   }
   const withoutSlash = trimmed.startsWith("/") ? trimmed.slice(1) : trimmed;
-  return withoutSlash.trim().toLowerCase().replace(/-/g, "_");
+  return normalizeLowercaseStringOrEmpty(withoutSlash).replace(/-/g, "_");
 }
 
-function fallbackNormalizeTelegramCommandDescription(value: string): string {
+function normalizeTelegramCommandDescriptionImpl(value: string): string {
   return value.trim();
 }
 
-function fallbackResolveTelegramCustomCommands(params: {
+function resolveTelegramCustomCommandsImpl(params: {
   commands?: TelegramCustomCommandInput[] | null;
   reservedCommands?: Set<string>;
   checkReserved?: boolean;
@@ -60,7 +44,7 @@ function fallbackResolveTelegramCustomCommands(params: {
 
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index];
-    const normalized = fallbackNormalizeTelegramCommandName(String(entry?.command ?? ""));
+    const normalized = normalizeTelegramCommandNameImpl(String(entry?.command ?? ""));
     if (!normalized) {
       issues.push({
         index,
@@ -69,7 +53,7 @@ function fallbackResolveTelegramCustomCommands(params: {
       });
       continue;
     }
-    if (!FALLBACK_TELEGRAM_COMMAND_NAME_PATTERN.test(normalized)) {
+    if (!TELEGRAM_COMMAND_NAME_PATTERN_VALUE.test(normalized)) {
       issues.push({
         index,
         field: "command",
@@ -93,9 +77,7 @@ function fallbackResolveTelegramCustomCommands(params: {
       });
       continue;
     }
-    const description = fallbackNormalizeTelegramCommandDescription(
-      String(entry?.description ?? ""),
-    );
+    const description = normalizeTelegramCommandDescriptionImpl(String(entry?.description ?? ""));
     if (!description) {
       issues.push({
         index,
@@ -113,30 +95,18 @@ function fallbackResolveTelegramCustomCommands(params: {
   return { commands: resolved, issues };
 }
 
-const FALLBACK_TELEGRAM_COMMAND_CONFIG_CONTRACT: TelegramCommandConfigContract = {
-  TELEGRAM_COMMAND_NAME_PATTERN: FALLBACK_TELEGRAM_COMMAND_NAME_PATTERN,
-  normalizeTelegramCommandName: fallbackNormalizeTelegramCommandName,
-  normalizeTelegramCommandDescription: fallbackNormalizeTelegramCommandDescription,
-  resolveTelegramCustomCommands: fallbackResolveTelegramCustomCommands,
-};
-
-function loadTelegramCommandConfigContract(): TelegramCommandConfigContract {
-  const contract = getBundledChannelContractSurfaceModule<TelegramCommandConfigContract>({
-    pluginId: "telegram",
-    preferredBasename: "contract-surfaces.ts",
-  });
-  return contract ?? FALLBACK_TELEGRAM_COMMAND_CONFIG_CONTRACT;
+export function getTelegramCommandNamePattern(): RegExp {
+  return TELEGRAM_COMMAND_NAME_PATTERN_VALUE;
 }
 
-export const TELEGRAM_COMMAND_NAME_PATTERN =
-  loadTelegramCommandConfigContract().TELEGRAM_COMMAND_NAME_PATTERN;
+export const TELEGRAM_COMMAND_NAME_PATTERN = TELEGRAM_COMMAND_NAME_PATTERN_VALUE;
 
 export function normalizeTelegramCommandName(value: string): string {
-  return loadTelegramCommandConfigContract().normalizeTelegramCommandName(value);
+  return normalizeTelegramCommandNameImpl(value);
 }
 
 export function normalizeTelegramCommandDescription(value: string): string {
-  return loadTelegramCommandConfigContract().normalizeTelegramCommandDescription(value);
+  return normalizeTelegramCommandDescriptionImpl(value);
 }
 
 export function resolveTelegramCustomCommands(params: {
@@ -148,5 +118,5 @@ export function resolveTelegramCustomCommands(params: {
   commands: Array<{ command: string; description: string }>;
   issues: TelegramCustomCommandIssue[];
 } {
-  return loadTelegramCommandConfigContract().resolveTelegramCustomCommands(params);
+  return resolveTelegramCustomCommandsImpl(params);
 }

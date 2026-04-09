@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { MsgContext } from "./templating.js";
 
 function formatMediaAttachedLine(params: {
@@ -37,7 +38,7 @@ function isAudioPath(path: string | undefined): boolean {
   if (!path) {
     return false;
   }
-  const lower = path.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(path);
   for (const ext of AUDIO_EXTENSIONS) {
     if (lower.endsWith(ext)) {
       return true;
@@ -113,7 +114,8 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
       // Note: Only trust MIME type from per-entry types array, not fallback ctx.MediaType
       // which could misclassify non-audio attachments (greptile review feedback)
       const hasPerEntryType = types !== undefined;
-      const isAudioByMime = hasPerEntryType && entry.type?.toLowerCase().startsWith("audio/");
+      const isAudioByMime =
+        hasPerEntryType && normalizeLowercaseStringOrEmpty(entry.type).startsWith("audio/");
       const isAudioEntry = isAudioPath(entry.path) || isAudioByMime;
       if (!isAudioEntry) {
         return true;

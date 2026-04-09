@@ -1,12 +1,6 @@
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import {
-  clearCommandLane,
-  setCommandLaneConcurrency,
-  waitForActiveTasks,
-} from "../../process/command-queue.js";
-import { CommandLane } from "../../process/lanes.js";
-import {
   createAbortAwareIsolatedRunner,
   createDeferred,
   createDueIsolatedJob,
@@ -15,7 +9,13 @@ import {
   noopLogger,
   setupCronRegressionFixtures,
   writeCronJobs,
-} from "../service.regression-fixtures.js";
+} from "../../../test/helpers/cron/service-regression-fixtures.js";
+import {
+  clearCommandLane,
+  setCommandLaneConcurrency,
+  waitForActiveTasks,
+} from "../../process/command-queue.js";
+import { CommandLane } from "../../process/lanes.js";
 import { enqueueRun, run } from "./ops.js";
 import type { CronEvent } from "./state.js";
 import { createCronServiceState } from "./state.js";

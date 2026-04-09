@@ -1,6 +1,9 @@
 import { ChannelType, type RequestClient } from "@buape/carbon";
-import { resolveAckReaction, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
-import { EmbeddedBlockChunker } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  EmbeddedBlockChunker,
+  resolveAckReaction,
+  resolveHumanDelayConfig,
+} from "openclaw/plugin-sdk/agent-runtime";
 import {
   createStatusReactionController,
   DEFAULT_TIMING,
@@ -13,30 +16,37 @@ import {
   resolveEnvelopeFormatOptions,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/config-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
+import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-streaming";
+import {
+  isDangerousNameMatchingEnabled,
+  readSessionUpdatedAt,
+  resolveChannelContextVisibilityMode,
+  resolveMarkdownTableMode,
+  resolveStorePath,
+} from "openclaw/plugin-sdk/config-runtime";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
-import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
 } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
-import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import { buildAgentSessionKey, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
-import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
+import {
+  convertMarkdownTables,
+  stripInlineDirectiveTagsForDelivery,
+  stripReasoningTagsFromText,
+  truncateUtf16Safe,
+} from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
+import { createDiscordRestClient } from "../client.js";
+import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
 import { resolveDiscordDraftStreamingChunking } from "../draft-chunking.js";
 import { createDiscordDraftStream } from "../draft-stream.js";
 import { resolveDiscordPreviewStreamMode } from "../preview-streaming.js";
@@ -201,9 +211,19 @@ export async function processDiscordMessage(
   const shouldSendAckReaction = shouldAckReaction();
   const statusReactionsEnabled =
     shouldSendAckReaction && cfg.messages?.statusReactions?.enabled !== false;
+  const feedbackRest = createDiscordRestClient({
+    cfg,
+    token,
+    accountId,
+  }).rest as unknown as RequestClient;
+  const deliveryRest = createDiscordRestClient({
+    cfg,
+    token,
+    accountId,
+  }).rest as unknown as RequestClient;
   // Discord outbound helpers expect Carbon's request client shape explicitly.
   const ackReactionContext = createDiscordAckReactionContext({
-    rest: client.rest as unknown as RequestClient,
+    rest: feedbackRest,
     cfg,
     accountId,
   });
@@ -423,8 +443,14 @@ export async function processDiscordMessage(
     runtime.error?.(danger("discord: missing reply target"));
     return;
   }
+  const dmConversationTarget = isDirectMessage
+    ? resolveDiscordConversationIdentity({
+        isDirectMessage,
+        userId: author.id,
+      })
+    : undefined;
   // Keep DM routes user-addressed so follow-up sends resolve direct session keys.
-  const lastRouteTo = isDirectMessage ? `user:${author.id}` : effectiveTo;
+  const lastRouteTo = dmConversationTarget ?? effectiveTo;
 
   const inboundHistory =
     shouldIncludeChannelHistory && historyLimit > 0
@@ -434,6 +460,8 @@ export async function processDiscordMessage(
           timestamp: entry.timestamp,
         }))
       : undefined;
+
+  const originatingTo = autoThreadContext?.OriginatingTo ?? dmConversationTarget ?? replyTarget;
 
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
@@ -474,7 +502,7 @@ export async function processDiscordMessage(
     CommandSource: "text" as const,
     // Originating channel for reply routing.
     OriginatingChannel: "discord" as const,
-    OriginatingTo: autoThreadContext?.OriginatingTo ?? replyTarget,
+    OriginatingTo: originatingTo,
   });
   const persistedSessionKey = ctxPayload.SessionKey ?? route.sessionKey;
   observer?.onReplyPlanResolved?.({
@@ -514,7 +542,7 @@ export async function processDiscordMessage(
     channel: "discord",
     accountId: route.accountId,
     typing: {
-      start: () => sendTyping({ client, channelId: typingChannelId }),
+      start: () => sendTyping({ rest: feedbackRest, channelId: typingChannelId }),
       onStartError: (err) => {
         logTypingFailure({
           log: logVerbose,
@@ -543,9 +571,8 @@ export async function processDiscordMessage(
   const discordStreamMode = resolveDiscordPreviewStreamMode(discordConfig);
   const draftMaxChars = Math.min(textLimit, 2000);
   const accountBlockStreamingEnabled =
-    typeof discordConfig?.blockStreaming === "boolean"
-      ? discordConfig.blockStreaming
-      : cfg.agents?.defaults?.blockStreamingDefault === "on";
+    resolveChannelStreamingBlockEnabled(discordConfig) ??
+    cfg.agents?.defaults?.blockStreamingDefault === "on";
   const canStreamDraft = discordStreamMode !== "off" && !accountBlockStreamingEnabled;
   const draftReplyToMessageId = () => replyReference.use();
   const deliverChannelId = deliverTarget.startsWith("channel:")
@@ -553,7 +580,7 @@ export async function processDiscordMessage(
     : messageChannelId;
   const draftStream = canStreamDraft
     ? createDiscordDraftStream({
-        rest: client.rest,
+        rest: deliveryRest,
         channelId: deliverChannelId,
         maxChars: draftMaxChars,
         replyToMessageId: draftReplyToMessageId,
@@ -578,7 +605,10 @@ export async function processDiscordMessage(
     if (typeof text !== "string") {
       return undefined;
     }
-    const formatted = convertMarkdownTables(text, tableMode);
+    const formatted = convertMarkdownTables(
+      stripInlineDirectiveTagsForDelivery(text).text,
+      tableMode,
+    );
     const chunks = chunkDiscordTextWithMode(formatted, {
       maxChars: draftMaxChars,
       maxLines: maxLinesPerMessage,
@@ -610,7 +640,9 @@ export async function processDiscordMessage(
       return;
     }
     // Strip reasoning/thinking tags that may leak through the stream.
-    const cleaned = stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
+    const cleaned = stripInlineDirectiveTagsForDelivery(
+      stripReasoningTagsFromText(text, { mode: "strict", trim: "both" }),
+    ).text;
     // Skip pure-reasoning messages (e.g. "Reasoning:\n…") that contain no answer text.
     if (!cleaned || cleaned.startsWith("Reasoning:\n")) {
       return;
@@ -709,6 +741,9 @@ export async function processDiscordMessage(
           const hasMedia = reply.hasMedia;
           const finalText = payload.text;
           const previewFinalText = resolvePreviewFinalText(finalText);
+          const hasExplicitReplyDirective =
+            Boolean(payload.replyToTag || payload.replyToCurrent) ||
+            (typeof finalText === "string" && /\[\[\s*reply_to(?:_current|\s*:)/i.test(finalText));
           const previewMessageId = draftStream.messageId();
 
           // Try to finalize via preview edit (text-only, fits in 2000 chars, not an error)
@@ -717,6 +752,7 @@ export async function processDiscordMessage(
             !hasMedia &&
             typeof previewFinalText === "string" &&
             typeof previewMessageId === "string" &&
+            !hasExplicitReplyDirective &&
             !payload.isError;
 
           if (canFinalizeViaPreviewEdit) {
@@ -730,7 +766,7 @@ export async function processDiscordMessage(
                 deliverChannelId,
                 previewMessageId,
                 { content: previewFinalText },
-                { rest: client.rest },
+                { rest: deliveryRest },
               );
               finalizedViaPreviewMessage = true;
               replyReference.markSent();
@@ -754,6 +790,7 @@ export async function processDiscordMessage(
               typeof messageIdAfterStop === "string" &&
               typeof previewFinalText === "string" &&
               !hasMedia &&
+              !hasExplicitReplyDirective &&
               !payload.isError
             ) {
               try {
@@ -762,7 +799,7 @@ export async function processDiscordMessage(
                   deliverChannelId,
                   messageIdAfterStop,
                   { content: previewFinalText },
-                  { rest: client.rest },
+                  { rest: deliveryRest },
                 );
                 finalizedViaPreviewMessage = true;
                 replyReference.markSent();
@@ -795,7 +832,7 @@ export async function processDiscordMessage(
           target: deliverTarget,
           token,
           accountId,
-          rest: client.rest,
+          rest: deliveryRest,
           runtime,
           replyToId,
           replyToMode,
@@ -824,6 +861,7 @@ export async function processDiscordMessage(
       },
     });
 
+  const resolvedBlockStreamingEnabled = resolveChannelStreamingBlockEnabled(discordConfig);
   let dispatchResult: Awaited<ReturnType<typeof dispatchInboundMessage>> | null = null;
   let dispatchError = false;
   let dispatchAborted = false;
@@ -842,8 +880,8 @@ export async function processDiscordMessage(
         skillFilter: channelConfig?.skills,
         disableBlockStreaming:
           disableBlockStreamingForDraft ??
-          (typeof discordConfig?.blockStreaming === "boolean"
-            ? !discordConfig.blockStreaming
+          (typeof resolvedBlockStreamingEnabled === "boolean"
+            ? !resolvedBlockStreamingEnabled
             : undefined),
         onPartialReply: draftStream ? (payload) => updateDraftFromPartial(payload.text) : undefined,
         onAssistantMessageStart: draftStream

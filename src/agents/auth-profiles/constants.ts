@@ -2,6 +2,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 export const AUTH_STORE_VERSION = 1;
 export const AUTH_PROFILE_FILENAME = "auth-profiles.json";
+export const AUTH_STATE_FILENAME = "auth-state.json";
 export const LEGACY_AUTH_FILENAME = "auth.json";
 
 export const CLAUDE_CLI_PROFILE_ID = "anthropic:claude-cli";

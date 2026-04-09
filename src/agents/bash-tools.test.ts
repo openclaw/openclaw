@@ -1,11 +1,17 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { drainFormattedSystemEvents } from "../auto-reply/reply/session-updates.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   resetHeartbeatWakeStateForTests,
   setHeartbeatWakeHandler,
 } from "../infra/heartbeat-wake.js";
 import { applyPathPrepend, findPathKey } from "../infra/path-prepend.js";
-import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
+import {
+  peekSystemEventEntries,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "../infra/system-events.js";
 import { captureEnv } from "../test-utils/env.js";
 import { getFinishedSession, resetProcessRegistryForTests } from "./bash-process-registry.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
@@ -53,6 +59,7 @@ const DEFAULT_NOTIFY_SESSION_KEY = "agent:main:main";
 const ECHO_HI_COMMAND = shellEcho("hi");
 let callIdCounter = 0;
 const nextCallId = () => `call${++callIdCounter}`;
+const notifyCfg = {} as OpenClawConfig;
 type ExecToolInstance = ReturnType<typeof createExecTool>;
 type ProcessToolInstance = ReturnType<typeof createProcessTool>;
 type ExecToolArgs = Parameters<ExecToolInstance["execute"]>[1];
@@ -224,6 +231,16 @@ async function startBackgroundCommand(tool: ExecToolInstance, command: string) {
   const result = await executeExecCommand(tool, command, { background: true });
   return requireRunningSessionId(result);
 }
+
+async function drainNotifyEvents(sessionKey = DEFAULT_NOTIFY_SESSION_KEY) {
+  return await drainFormattedSystemEvents({
+    cfg: notifyCfg,
+    sessionKey,
+    isMainSession: false,
+    isNewSession: false,
+  });
+}
+
 async function runBackgroundCommandToCompletion(tool: ExecToolInstance, command: string) {
   const sessionId = await startBackgroundCommand(tool, command);
   const status = await waitForCompletion(sessionId);
@@ -433,8 +450,12 @@ describe("tool descriptions", () => {
     expect(execTool.description).not.toContain("use cron instead");
     expect(processTool.description).not.toContain("scheduled follow-ups");
     expect(execTool.description).toContain("otherwise use process to confirm completion");
-    expect(processTool.description).toContain("completion confirmation when automatic completion wake is unavailable");
-    expect(processTool.description).toContain("Use write/send-keys/submit/paste/kill for input or intervention.");
+    expect(processTool.description).toContain(
+      "completion confirmation when automatic completion wake is unavailable",
+    );
+    expect(processTool.description).toContain(
+      "Use write/send-keys/submit/paste/kill for input or intervention.",
+    );
   });
 });
 
@@ -547,9 +568,15 @@ describe("exec notifyOnExit", () => {
     const sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
 
     const { finished, hasEvent } = await waitForNotifyEvent(sessionId);
+    const queuedEvent = peekSystemEventEntries(DEFAULT_NOTIFY_SESSION_KEY).find((event) =>
+      event.text.includes(sessionId.slice(0, 8)),
+    );
+    const formatted = await drainNotifyEvents();
 
     expect(finished).toBeTruthy();
     expect(hasEvent).toBe(true);
+    expect(queuedEvent).toMatchObject({ trusted: false });
+    expect(formatted).toContain("System (untrusted):");
   });
 
   it("scopes notifyOnExit heartbeat wake to the exec session key", async () => {
@@ -559,12 +586,12 @@ describe("exec notifyOnExit", () => {
       wakeHandler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0],
     );
     try {
-      const sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
+      const _sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
 
       await expect
         .poll(() => wakeHandler.mock.calls[0]?.[0], NOTIFY_POLL_OPTIONS)
         .toMatchObject({
-          reason: `exec:${sessionId}:exit`,
+          reason: "exec-event",
           sessionKey: DEFAULT_NOTIFY_SESSION_KEY,
         });
     } finally {
@@ -579,12 +606,12 @@ describe("exec notifyOnExit", () => {
       wakeHandler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0],
     );
     try {
-      const sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
+      const _sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
 
       await expect
         .poll(() => wakeHandler.mock.calls[0]?.[0], NOTIFY_POLL_OPTIONS)
         .toEqual({
-          reason: `exec:${sessionId}:exit`,
+          reason: "exec-event",
         });
     } finally {
       dispose();
@@ -674,4 +701,35 @@ describe("applyPathPrepend with case-insensitive PATH key", () => {
     expect("PATH" in env).toBe(false);
     expect("Path" in env).toBe(false);
   });
+});
+
+describe("exec backgrounded onUpdate suppression", () => {
+  useCapturedEnv([...SHELL_ENV_KEYS], applyDefaultShellEnv);
+
+  it(
+    "does not invoke onUpdate after the session is backgrounded",
+    async () => {
+      const onUpdateSpy = vi.fn();
+      const tool = createTestExecTool({ allowBackground: true, backgroundMs: 0 });
+      const command = joinCommands([shellEcho("before"), yieldDelayCmd, shellEcho("after")]);
+      const result = await tool.execute(
+        nextCallId(),
+        { command, background: true },
+        undefined,
+        onUpdateSpy,
+      );
+
+      expect(readProcessStatus(result.details)).toBe(PROCESS_STATUS_RUNNING);
+      const sessionId = requireSessionId(result.details as { sessionId?: string });
+      const callsBeforeBackground = onUpdateSpy.mock.calls.length;
+      await expect
+        .poll(() => {
+          const finished = getFinishedSession(sessionId);
+          return Boolean(finished);
+        }, BACKGROUND_POLL_OPTIONS)
+        .toBe(true);
+      expect(onUpdateSpy.mock.calls.length).toBe(callsBeforeBackground);
+    },
+    isWin ? 15_000 : 5_000,
+  );
 });

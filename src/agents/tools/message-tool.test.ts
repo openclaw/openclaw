@@ -8,10 +8,13 @@ import {
   createMessageToolCardSchema,
 } from "../../plugin-sdk/channel-actions.js";
 type CreateMessageTool = typeof import("./message-tool.js").createMessageTool;
+type ResetPluginRuntimeStateForTest =
+  typeof import("../../plugins/runtime.js").resetPluginRuntimeStateForTest;
 type SetActivePluginRegistry = typeof import("../../plugins/runtime.js").setActivePluginRegistry;
 type CreateTestRegistry = typeof import("../../test-utils/channel-plugins.js").createTestRegistry;
 
 let createMessageTool: CreateMessageTool;
+let resetPluginRuntimeStateForTest: ResetPluginRuntimeStateForTest;
 let setActivePluginRegistry: SetActivePluginRegistry;
 let createTestRegistry: CreateTestRegistry;
 
@@ -62,6 +65,70 @@ const mocks = vi.hoisted(() => ({
     resolvedConfig: config,
     diagnostics: [],
   })),
+  getScopedChannelsCommandSecretTargets: vi.fn(
+    ({
+      config,
+      channel,
+      accountId,
+    }: {
+      config?: { channels?: Record<string, unknown> };
+      channel?: string | null;
+      accountId?: string | null;
+    }) => {
+      const allowedPaths = new Set<string>();
+      const targetIds = new Set<string>();
+      const scopedChannel = channel?.trim();
+      const scopedAccountId = accountId?.trim();
+      const scopedConfig =
+        scopedChannel && config?.channels && typeof config.channels[scopedChannel] === "object"
+          ? (config.channels[scopedChannel] as Record<string, unknown>)
+          : null;
+      if (!scopedChannel || !scopedConfig) {
+        return { targetIds };
+      }
+
+      const maybeCollectSecretPath = (path: string, value: unknown) => {
+        if (!value || typeof value !== "object" || Array.isArray(value)) {
+          return;
+        }
+        const record = value as Record<string, unknown>;
+        if (typeof record.source === "string" && typeof record.id === "string") {
+          targetIds.add(path);
+          allowedPaths.add(path);
+        }
+      };
+
+      maybeCollectSecretPath(`channels.${scopedChannel}.token`, scopedConfig.token);
+      maybeCollectSecretPath(`channels.${scopedChannel}.botToken`, scopedConfig.botToken);
+      if (scopedAccountId) {
+        const accountRecord =
+          scopedConfig.accounts &&
+          typeof scopedConfig.accounts === "object" &&
+          !Array.isArray(scopedConfig.accounts) &&
+          typeof (scopedConfig.accounts as Record<string, unknown>)[scopedAccountId] === "object"
+            ? ((scopedConfig.accounts as Record<string, unknown>)[scopedAccountId] as Record<
+                string,
+                unknown
+              >)
+            : null;
+        if (accountRecord) {
+          maybeCollectSecretPath(
+            `channels.${scopedChannel}.accounts.${scopedAccountId}.token`,
+            accountRecord.token,
+          );
+          maybeCollectSecretPath(
+            `channels.${scopedChannel}.accounts.${scopedAccountId}.botToken`,
+            accountRecord.botToken,
+          );
+        }
+      }
+
+      return {
+        targetIds,
+        ...(allowedPaths.size > 0 ? { allowedPaths } : {}),
+      };
+    },
+  ),
 }));
 
 vi.mock("../../infra/outbound/message-action-runner.js", async () => {
@@ -87,6 +154,10 @@ vi.mock("../../cli/command-secret-gateway.js", () => ({
   resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway,
 }));
 
+vi.mock("../../cli/command-secret-targets.js", () => ({
+  getScopedChannelsCommandSecretTargets: mocks.getScopedChannelsCommandSecretTargets,
+}));
+
 function mockSendResult(overrides: { channel?: string; to?: string } = {}) {
   mocks.runMessageAction.mockClear();
   mocks.runMessageAction.mockResolvedValue({
@@ -109,18 +180,22 @@ function getActionEnum(properties: Record<string, unknown>) {
 }
 
 beforeAll(async () => {
-  ({ setActivePluginRegistry } = await import("../../plugins/runtime.js"));
+  ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } =
+    await import("../../plugins/runtime.js"));
   ({ createTestRegistry } = await import("../../test-utils/channel-plugins.js"));
   ({ createMessageTool } = await import("./message-tool.js"));
 });
 
 beforeEach(() => {
+  resetPluginRuntimeStateForTest();
   mocks.runMessageAction.mockReset();
   mocks.loadConfig.mockReset().mockReturnValue({});
   mocks.resolveCommandSecretRefsViaGateway.mockReset().mockImplementation(async ({ config }) => ({
     resolvedConfig: config,
     diagnostics: [],
   }));
+  mocks.getScopedChannelsCommandSecretTargets.mockClear();
+  setActivePluginRegistry(createTestRegistry([]));
 });
 
 function createChannelPlugin(params: {
@@ -221,7 +296,7 @@ describe("message tool secret scoping", () => {
       message: "hi",
     });
 
-    const secretResolveCall = mocks.resolveCommandSecretRefsViaGateway.mock.calls[0]?.[0] as {
+    const secretResolveCall = mocks.resolveCommandSecretRefsViaGateway.mock.calls.at(-1)?.[0] as {
       targetIds?: Set<string>;
       allowedPaths?: Set<string>;
     };
@@ -864,6 +939,69 @@ describe("message tool description", () => {
 
     expect(tool.description).toContain("Current channel (bluebubbles) supports:");
     expect(tool.description).not.toContain("Other configured channels");
+  });
+
+  it("includes the thread read hint when the current channel supports read", () => {
+    const signalPlugin = createChannelPlugin({
+      id: "signal",
+      label: "Signal",
+      docsPath: "/channels/signal",
+      blurb: "Signal test plugin.",
+      actions: ["send", "read", "react"],
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "signal", source: "test", plugin: signalPlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "signal",
+    });
+
+    expect(tool.description).toContain('Use action="read" with threadId');
+  });
+
+  it("omits the thread read hint when the current channel does not support read", () => {
+    const signalPlugin = createChannelPlugin({
+      id: "signal",
+      label: "Signal",
+      docsPath: "/channels/signal",
+      blurb: "Signal test plugin.",
+      actions: ["send", "react"],
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "signal", source: "test", plugin: signalPlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "signal",
+    });
+
+    expect(tool.description).not.toContain('Use action="read" with threadId');
+  });
+
+  it("includes the thread read hint in the generic fallback when configured actions include read", () => {
+    const signalPlugin = createChannelPlugin({
+      id: "signal",
+      label: "Signal",
+      docsPath: "/channels/signal",
+      blurb: "Signal test plugin.",
+      actions: ["read"],
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "signal", source: "test", plugin: signalPlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+    });
+
+    expect(tool.description).toContain("Supports actions:");
+    expect(tool.description).toContain('Use action="read" with threadId');
   });
 });
 

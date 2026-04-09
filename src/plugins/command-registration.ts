@@ -1,5 +1,9 @@
 import { logVerbose } from "../globals.js";
 import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
+import {
   clearPluginCommands,
   clearPluginCommandsForPlugin,
   getPluginCommandSpecs,
@@ -17,7 +21,6 @@ import type { OpenClawPluginCommandDefinition } from "./types.js";
  * output chunk, so any module-level const/let would be uninitialized when
  * first accessed during plugin registration.
  */
-// eslint-disable-next-line no-var -- var avoids TDZ when bundler reorders module bodies in a chunk
 var reservedCommands: Set<string> | undefined;
 
 export type CommandRegistrationResult = {
@@ -26,7 +29,7 @@ export type CommandRegistrationResult = {
 };
 
 export function validateCommandName(name: string): string | null {
-  const trimmed = name.trim().toLowerCase();
+  const trimmed = normalizeOptionalLowercaseString(name) ?? "";
 
   if (!trimmed) {
     return "Command name cannot be empty";
@@ -126,7 +129,7 @@ export function validatePluginCommandDefinition(
 export function listPluginInvocationKeys(command: OpenClawPluginCommandDefinition): string[] {
   const keys = new Set<string>();
   const push = (value: string | undefined) => {
-    const normalized = value?.trim().toLowerCase();
+    const normalized = normalizeOptionalLowercaseString(value);
     if (!normalized) {
       return;
     }
@@ -166,7 +169,7 @@ export function registerPluginCommand(
     description,
   };
   const invocationKeys = listPluginInvocationKeys(normalizedCommand);
-  const key = `/${name.toLowerCase()}`;
+  const key = `/${normalizeLowercaseStringOrEmpty(name)}`;
 
   // Check for duplicate registration
   for (const invocationKey of invocationKeys) {

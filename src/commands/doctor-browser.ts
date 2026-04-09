@@ -1,9 +1,11 @@
+import type { OpenClawConfig } from "../config/config.js";
 import {
   parseBrowserMajorVersion,
   readBrowserVersion,
   resolveGoogleChromeExecutableForPlatform,
-} from "../../extensions/browser/runtime-api.js";
-import type { OpenClawConfig } from "../config/config.js";
+} from "../plugin-sdk/browser-host-inspection.js";
+import { asNullableRecord } from "../shared/record-coerce.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 
 const CHROME_MCP_MIN_MAJOR = 144;
@@ -13,42 +15,36 @@ const REMOTE_DEBUGGING_PAGES = [
   "edge://inspect/#remote-debugging",
 ].join(", ");
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 type ExistingSessionProfile = {
   name: string;
   userDataDir?: string;
 };
 
 function collectChromeMcpProfiles(cfg: OpenClawConfig): ExistingSessionProfile[] {
-  const browser = asRecord(cfg.browser);
+  const browser = asNullableRecord(cfg.browser);
   if (!browser) {
     return [];
   }
 
   const profiles = new Map<string, ExistingSessionProfile>();
-  const defaultProfile =
-    typeof browser.defaultProfile === "string" ? browser.defaultProfile.trim() : "";
+  const defaultProfile = normalizeOptionalString(browser.defaultProfile) ?? "";
   if (defaultProfile === "user") {
     profiles.set("user", { name: "user" });
   }
 
-  const configuredProfiles = asRecord(browser.profiles);
+  const configuredProfiles = asNullableRecord(browser.profiles);
   if (!configuredProfiles) {
     return [...profiles.values()].toSorted((a, b) => a.name.localeCompare(b.name));
   }
 
   for (const [profileName, rawProfile] of Object.entries(configuredProfiles)) {
-    const profile = asRecord(rawProfile);
-    const driver = typeof profile?.driver === "string" ? profile.driver.trim() : "";
+    const profile = asNullableRecord(rawProfile);
+    const driver = normalizeOptionalString(profile?.driver) ?? "";
     if (driver === "existing-session") {
-      const userDataDir =
-        typeof profile?.userDataDir === "string" ? profile.userDataDir.trim() : undefined;
-      profiles.set(profileName, { name: profileName, userDataDir: userDataDir || undefined });
+      profiles.set(profileName, {
+        name: profileName,
+        userDataDir: normalizeOptionalString(profile?.userDataDir),
+      });
     }
   }
 

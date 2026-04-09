@@ -8,6 +8,10 @@ import {
   type PortUsage,
 } from "../../infra/ports.js";
 import { killProcessTree } from "../../process/kill-tree.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { sleep } from "../../utils.js";
 
 export const DEFAULT_RESTART_HEALTH_TIMEOUT_MS = 60_000;
@@ -15,6 +19,8 @@ export const DEFAULT_RESTART_HEALTH_DELAY_MS = 500;
 export const DEFAULT_RESTART_HEALTH_ATTEMPTS = Math.ceil(
   DEFAULT_RESTART_HEALTH_TIMEOUT_MS / DEFAULT_RESTART_HEALTH_DELAY_MS,
 );
+const STOPPED_FREE_EARLY_EXIT_GRACE_MS = 10_000;
+const WINDOWS_STOPPED_FREE_EARLY_EXIT_GRACE_MS = 25_000;
 
 export type GatewayRestartWaitOutcome = "healthy" | "stale-pids" | "stopped-free" | "timeout";
 
@@ -53,7 +59,7 @@ function looksLikeAuthClose(code: number | undefined, reason: string | undefined
   if (code !== 1008) {
     return false;
   }
-  const normalized = (reason ?? "").toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(reason);
   return (
     normalized.includes("auth") ||
     normalized.includes("token") ||
@@ -64,8 +70,8 @@ function looksLikeAuthClose(code: number | undefined, reason: string | undefined
 }
 
 async function confirmGatewayReachable(port: number): Promise<boolean> {
-  const token = process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined;
-  const password = process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() || undefined;
+  const token = normalizeOptionalString(process.env.OPENCLAW_GATEWAY_TOKEN);
+  const password = normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD);
   const probe = await probeGateway({
     url: `ws://127.0.0.1:${port}`,
     auth: token || password ? { token, password } : undefined,
@@ -217,6 +223,12 @@ function shouldEarlyExitStoppedFree(
   );
 }
 
+function stoppedFreeEarlyExitGraceMs(): number {
+  return process.platform === "win32"
+    ? WINDOWS_STOPPED_FREE_EARLY_EXIT_GRACE_MS
+    : STOPPED_FREE_EARLY_EXIT_GRACE_MS;
+}
+
 function withWaitContext(
   snapshot: GatewayRestartSnapshot,
   waitOutcome: GatewayRestartWaitOutcome,
@@ -245,7 +257,10 @@ export async function waitForGatewayHealthyRestart(params: {
 
   let consecutiveStoppedFreeCount = 0;
   const STOPPED_FREE_THRESHOLD = 6;
-  const minAttemptForEarlyExit = Math.min(Math.ceil(10_000 / delayMs), Math.floor(attempts / 2));
+  const minAttemptForEarlyExit = Math.min(
+    Math.ceil(stoppedFreeEarlyExitGraceMs() / delayMs),
+    Math.floor(attempts / 2),
+  );
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (snapshot.healthy) {

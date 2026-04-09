@@ -14,6 +14,7 @@ export type RegistryState = {
   httpRoute: RegistrySurfaceState;
   channel: RegistrySurfaceState;
   key: string | null;
+  workspaceDir: string | null;
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable";
   importedPluginIds: Set<string>;
 };
@@ -29,4 +30,9 @@ export function getPluginRegistryState(): RegistryState | undefined {
 export function getActivePluginChannelRegistryFromState(): PluginRegistry | null {
   const state = getPluginRegistryState();
   return state?.channel.registry ?? state?.activeRegistry ?? null;
+}
+
+export function getActivePluginRegistryWorkspaceDirFromState(): string | undefined {
+  const state = getPluginRegistryState();
+  return state?.workspaceDir ?? undefined;
 }

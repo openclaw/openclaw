@@ -278,6 +278,34 @@ describe("inspectGatewayRestart", () => {
     expect(sleep).toHaveBeenCalledTimes(25);
   });
 
+  it("waits longer before stopped-free early exit on Windows", async () => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    const service = makeGatewayService({ status: "stopped" });
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "free",
+      listeners: [],
+      hints: [],
+    });
+
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service,
+      port: 18789,
+      attempts: 120,
+      delayMs: 500,
+    });
+
+    expect(snapshot).toMatchObject({
+      healthy: false,
+      runtime: { status: "stopped" },
+      portUsage: { status: "free" },
+      waitOutcome: "stopped-free",
+      elapsedMs: 27_500,
+    });
+    expect(sleep).toHaveBeenCalledTimes(55);
+  });
+
   it("annotates timeout waits when the health loop exhausts all attempts", async () => {
     const service = makeGatewayService({ status: "running", pid: 8000 });
     inspectPortUsage.mockResolvedValue({

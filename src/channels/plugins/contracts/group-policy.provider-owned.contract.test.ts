@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evaluateZaloGroupAccess } from "../../../../extensions/zalo/api.js";
+import { evaluateZaloGroupAccess } from "../../../plugin-sdk/zalo-setup.js";
 
 function expectAllowedZaloGroupAccess(params: Parameters<typeof evaluateZaloGroupAccess>[0]) {
   expect(evaluateZaloGroupAccess(params)).toMatchObject({

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveBrewExecutable } from "../infra/brew.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   type InstallSafetyOverrides,
   scanSkillInstallSource,
@@ -11,6 +12,7 @@ import { runCommandWithTimeout, type CommandOptions } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { installDownloadSpec } from "./skills-install-download.js";
 import { formatInstallFailureMessage } from "./skills-install-output.js";
+import type { SkillInstallResult } from "./skills-install.types.js";
 import {
   hasBinary,
   loadWorkspaceSkillEntries,
@@ -28,15 +30,7 @@ export type SkillInstallRequest = InstallSafetyOverrides & {
   timeoutMs?: number;
   config?: OpenClawConfig;
 };
-
-export type SkillInstallResult = {
-  ok: boolean;
-  message: string;
-  stdout: string;
-  stderr: string;
-  code: number | null;
-  warnings?: string[];
-};
+export type { SkillInstallResult } from "./skills-install.types.js";
 
 function withWarnings(result: SkillInstallResult, warnings: string[]): SkillInstallResult {
   if (warnings.length === 0) {
@@ -248,7 +242,7 @@ async function runCommandSafely(
     return {
       code: null,
       stdout: "",
-      stderr: err instanceof Error ? err.message : String(err),
+      stderr: formatErrorMessage(err),
     };
   }
 }

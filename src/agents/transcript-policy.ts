@@ -1,6 +1,8 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { shouldPreserveThinkingBlocks } from "../plugins/provider-replay-helpers.js";
 import { resolveProviderRuntimePlugin } from "../plugins/provider-runtime.js";
 import type { ProviderReplayPolicy, ProviderRuntimeModel } from "../plugins/types.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./model-selection.js";
 import { isGoogleModelApi } from "./pi-embedded-helpers/google.js";
 import type { ToolCallIdMode } from "./tool-call-id.js";
@@ -11,6 +13,7 @@ export type TranscriptPolicy = {
   sanitizeMode: TranscriptSanitizeMode;
   sanitizeToolCallIds: boolean;
   toolCallIdMode?: ToolCallIdMode;
+  preserveNativeAnthropicToolUseIds: boolean;
   repairToolUseResultPairing: boolean;
   preserveSignatures: boolean;
   sanitizeThoughtSignatures?: {
@@ -29,6 +32,7 @@ const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {
   sanitizeMode: "images-only",
   sanitizeToolCallIds: false,
   toolCallIdMode: undefined,
+  preserveNativeAnthropicToolUseIds: false,
   repairToolUseResultPairing: true,
   preserveSignatures: false,
   sanitizeThoughtSignatures: undefined,
@@ -73,7 +77,7 @@ function buildUnownedProviderTransportReplayFallback(params: {
     return undefined;
   }
 
-  const modelId = params.modelId?.toLowerCase() ?? "";
+  const modelId = normalizeLowercaseStringOrEmpty(params.modelId);
   return {
     ...(isGoogle || isAnthropic ? { sanitizeMode: "full" as const } : {}),
     ...(isGoogle || isAnthropic || requiresOpenAiCompatibleToolIdSanitization
@@ -91,7 +95,9 @@ function buildUnownedProviderTransportReplayFallback(params: {
           },
         }
       : {}),
-    ...(isAnthropic && modelId.includes("claude") ? { dropThinkingBlocks: true } : {}),
+    ...(isAnthropic && modelId.includes("claude")
+      ? { dropThinkingBlocks: !shouldPreserveThinkingBlocks(modelId) }
+      : {}),
     ...(isGoogle || isStrictOpenAiCompatible ? { applyAssistantFirstOrderingFix: true } : {}),
     ...(isGoogle || isStrictOpenAiCompatible ? { validateGeminiTurns: true } : {}),
     ...(isAnthropic || isStrictOpenAiCompatible ? { validateAnthropicTurns: true } : {}),
@@ -114,6 +120,9 @@ function mergeTranscriptPolicy(
       ? { sanitizeToolCallIds: policy.sanitizeToolCallIds }
       : {}),
     ...(policy.toolCallIdMode ? { toolCallIdMode: policy.toolCallIdMode as ToolCallIdMode } : {}),
+    ...(typeof policy.preserveNativeAnthropicToolUseIds === "boolean"
+      ? { preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds }
+      : {}),
     ...(typeof policy.repairToolUseResultPairing === "boolean"
       ? { repairToolUseResultPairing: policy.repairToolUseResultPairing }
       : {}),

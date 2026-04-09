@@ -2,6 +2,7 @@ import { vi, type Mock } from "vitest";
 import { resolveFastModeState as resolveFastModeStateImpl } from "../../agents/fast-mode.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 type CronSessionEntry = {
   sessionId: string;
@@ -27,15 +28,14 @@ function createMock(): Mock {
 }
 
 function normalizeModelSelectionForTest(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed || undefined;
+  const direct = normalizeOptionalString(value);
+  if (direct) {
+    return direct;
   }
   if (!value || typeof value !== "object") {
     return undefined;
   }
-  const primary = (value as { primary?: unknown }).primary;
-  return typeof primary === "string" && primary.trim() ? primary.trim() : undefined;
+  return normalizeOptionalString((value as { primary?: unknown }).primary);
 }
 
 export const buildWorkspaceSkillSnapshotMock = createMock();
@@ -63,6 +63,9 @@ export const pickLastNonEmptyTextFromPayloadsMock = createMock();
 export const resolveCronPayloadOutcomeMock = createMock();
 export const resolveCronDeliveryPlanMock = createMock();
 export const resolveDeliveryTargetMock = createMock();
+export const dispatchCronDeliveryMock = createMock();
+export const isHeartbeatOnlyResponseMock = createMock();
+export const resolveHeartbeatAckMaxCharsMock = createMock();
 export const resolveSessionAuthProfileOverrideMock = createMock();
 export const resolveFastModeStateMock = createMock();
 
@@ -165,14 +168,23 @@ vi.mock("./delivery-target.js", () => ({
   resolveDeliveryTarget: resolveDeliveryTargetMock,
 }));
 
+vi.mock("./delivery-dispatch.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./delivery-dispatch.js")>("./delivery-dispatch.js");
+  return {
+    ...actual,
+    dispatchCronDelivery: dispatchCronDeliveryMock,
+  };
+});
+
 vi.mock("./helpers.js", () => ({
-  isHeartbeatOnlyResponse: vi.fn().mockReturnValue(false),
+  isHeartbeatOnlyResponse: isHeartbeatOnlyResponseMock,
   pickLastDeliverablePayload: vi.fn().mockReturnValue(undefined),
   pickLastNonEmptyTextFromPayloads: pickLastNonEmptyTextFromPayloadsMock,
   pickSummaryFromOutput: vi.fn().mockReturnValue("summary"),
   pickSummaryFromPayloads: vi.fn().mockReturnValue("summary"),
   resolveCronPayloadOutcome: resolveCronPayloadOutcomeMock,
-  resolveHeartbeatAckMaxChars: vi.fn().mockReturnValue(100),
+  resolveHeartbeatAckMaxChars: resolveHeartbeatAckMaxCharsMock,
 }));
 
 vi.mock("./session.js", () => ({
@@ -328,6 +340,32 @@ function resetRunOutcomeMocks(): void {
     accountId: undefined,
     error: undefined,
   });
+  dispatchCronDeliveryMock.mockReset();
+  dispatchCronDeliveryMock.mockImplementation(
+    ({
+      deliveryPayloads,
+      summary,
+      outputText,
+      synthesizedText,
+      deliveryRequested,
+      skipHeartbeatDelivery,
+      skipMessagingToolDelivery,
+    }) => ({
+      result: undefined,
+      delivered: Boolean(deliveryRequested && !skipHeartbeatDelivery && !skipMessagingToolDelivery),
+      deliveryAttempted: Boolean(
+        deliveryRequested && !skipHeartbeatDelivery && !skipMessagingToolDelivery,
+      ),
+      summary,
+      outputText,
+      synthesizedText,
+      deliveryPayloads,
+    }),
+  );
+  isHeartbeatOnlyResponseMock.mockReset();
+  isHeartbeatOnlyResponseMock.mockReturnValue(false);
+  resolveHeartbeatAckMaxCharsMock.mockReset();
+  resolveHeartbeatAckMaxCharsMock.mockReturnValue(100);
   resolveSessionAuthProfileOverrideMock.mockReset();
   resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
 }

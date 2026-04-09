@@ -20,7 +20,7 @@ const ROOT_RUNTIME_ALIAS_PATTERN = /^(?<base>.+\.(?:runtime|contract))-[A-Za-z0-
 export const STATIC_EXTENSION_ASSETS = [
   // acpx MCP proxy — co-deployed alongside the acpx index bundle so that
   // `path.resolve(dirname(import.meta.url), "mcp-proxy.mjs")` resolves correctly
-  // at runtime (see extensions/acpx/src/runtime-internals/mcp-agent-command.ts).
+  // at runtime from the built ACPX extension directory.
   {
     src: "extensions/acpx/src/runtime-internals/mcp-proxy.mjs",
     dest: "dist/extensions/acpx/mcp-proxy.mjs",

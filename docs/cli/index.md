@@ -35,7 +35,9 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`logs`](/cli/logs)
 - [`system`](/cli/system)
 - [`models`](/cli/models)
+- [`infer`](/cli/infer)
 - [`memory`](/cli/memory)
+- [`wiki`](/cli/wiki)
 - [`directory`](/cli/directory)
 - [`nodes`](/cli/nodes)
 - [`devices`](/cli/devices)
@@ -161,6 +163,19 @@ openclaw [--dev] [--profile <name>] <command>
     status
     index
     search
+  wiki
+    status
+    doctor
+    init
+    ingest
+    compile
+    lint
+    search
+    get
+    apply
+    bridge import
+    unsafe-local import
+    obsidian status|search|open|command|daily
   message
     send
     broadcast
@@ -248,6 +263,16 @@ openclaw [--dev] [--profile <name>] <command>
     fallbacks list|add|remove|clear
     image-fallbacks list|add|remove|clear
     scan
+  infer (alias: capability)
+    list
+    inspect
+    model run|list|inspect|providers|auth login|logout|status
+    image generate|edit|describe|describe-many|providers
+    audio transcribe|providers
+    tts convert|voices|providers|status|enable|disable|set-provider
+    video generate|describe|providers
+    web search|fetch|providers
+    embedding create|providers
     auth add|login|login-github-copilot|setup-token|paste-token
     auth order get|set|clear
   sandbox
@@ -1319,7 +1344,7 @@ List and manage [background task](/automation/tasks) runs across agents.
 - `tasks notify <id>` — change notification policy for a task run
 - `tasks cancel <id>` — cancel a running task
 - `tasks audit` — surface operational issues (stale, lost, delivery failures)
-- `tasks maintenance` — preview or apply tasks and TaskFlow cleanup/reconciliation (ACP/subagent child sessions, active cron jobs, live CLI runs)
+- `tasks maintenance [--apply] [--json]` — preview or apply tasks and TaskFlow cleanup/reconciliation (ACP/subagent child sessions, active cron jobs, live CLI runs)
 - `tasks flow list` — list active and recent Task Flow flows
 - `tasks flow show <lookup>` — inspect a flow by id or lookup key
 - `tasks flow cancel <lookup>` — cancel a running flow and its active tasks
@@ -1354,7 +1379,6 @@ Options:
 - `--force` (kill existing listener on port)
 - `--verbose`
 - `--cli-backend-logs`
-- `--claude-cli-logs` (deprecated alias)
 - `--ws-log <auto|full|compact>`
 - `--compact` (alias for `--ws-log compact`)
 - `--raw-stream`
@@ -1479,27 +1503,14 @@ Tip: the owner-only `gateway` runtime tool still refuses to rewrite `tools.exec.
 
 See [/concepts/models](/concepts/models) for fallback behavior and scanning strategy.
 
-Billing note: Anthropic changed third-party harness billing on **April 4, 2026
-at 12:00 PM PT / 8:00 PM BST**. Anthropic says Claude subscription limits no
-longer cover OpenClaw, and Claude CLI usage in OpenClaw now requires **Extra
-Usage** billed separately from the subscription. For production, prefer an
-Anthropic API key or another supported subscription-style provider such as
-OpenAI Codex, Qwen Cloud Coding Plan, MiniMax Coding Plan, or
-Z.AI / GLM Coding Plan.
+Anthropic note: Anthropic staff told us OpenClaw-style Claude CLI usage is
+allowed again, so OpenClaw treats Claude CLI reuse and `claude -p` usage as
+sanctioned for this integration unless Anthropic publishes a new policy. For
+production, prefer an Anthropic API key or another supported
+subscription-style provider such as OpenAI Codex, Alibaba Cloud Model Studio
+Coding Plan, MiniMax Coding Plan, or Z.AI / GLM Coding Plan.
 
-Anthropic Claude CLI migration:
-
-```bash
-openclaw models auth login --provider anthropic --method cli --set-default
-```
-
-Onboarding shortcut: `openclaw onboard --auth-choice anthropic-cli`
-
-Existing Anthropic OAuth/token profiles still run if already configured, but
-OpenClaw no longer offers Anthropic setup-token as a new auth path.
-
-Legacy alias note: `claude-cli` is the deprecated onboarding auth-choice alias.
-Use `anthropic-cli` for onboarding, or use `models auth login` directly.
+Anthropic setup-token remains available as a supported token-auth path, but OpenClaw now prefers Claude CLI reuse and `claude -p` when available.
 
 ### `models` (root)
 
@@ -1609,7 +1620,7 @@ Notes:
 - `setup-token` and `paste-token` are generic token commands for providers that expose token auth methods.
 - `setup-token` requires an interactive TTY and runs the provider's token-auth method.
 - `paste-token` prompts for the token value and defaults to auth profile id `<provider>:manual` when `--profile-id` is omitted.
-- Anthropic OAuth/token profiles still run if already configured, but Anthropic no longer supports `setup-token` or `paste-token` as a new OpenClaw auth path.
+- Anthropic `setup-token` / `paste-token` remain available as a supported OpenClaw token path, but OpenClaw now prefers Claude CLI reuse and `claude -p` when available.
 
 ### `models auth order get|set|clear`
 

@@ -187,6 +187,7 @@ describe("connectGateway", () => {
   beforeEach(() => {
     gatewayClientInstances.length = 0;
     loadChatHistoryMock.mockClear();
+    vi.restoreAllMocks();
   });
 
   it("ignores stale client onGap callbacks after reconnect", () => {
@@ -209,8 +210,13 @@ describe("connectGateway", () => {
     expect(host.lastError).toBeNull();
   });
 
-  it("preserves approval prompts, clears stale run indicators, and resumes queued work after seq-gap reconnect", () => {
+  it("preserves live approval prompts, clears stale run indicators, and resumes queued work after seq-gap reconnect", () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
     const host = createHost();
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
     const chatHost = host as typeof host & {
       chatRunId: string | null;
       chatQueue: Array<{
@@ -239,14 +245,10 @@ describe("connectGateway", () => {
         id: "approval-1",
         kind: "exec",
         request: { command: "rm -rf /tmp/demo" },
-        createdAtMs: Date.now(),
-        expiresAtMs: Date.now() + 60_000,
+        createdAtMs: now,
+        expiresAtMs: now + 60_000,
       },
     ];
-
-    connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
 
     client.emitGap(20, 24);
 

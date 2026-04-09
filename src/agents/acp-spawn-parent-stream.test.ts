@@ -77,11 +77,18 @@ describe("startAcpSpawnParentStreamRelay", () => {
   });
 
   it("relays assistant progress and completion to the parent session", () => {
+    const deliveryContext = {
+      channel: "telegram",
+      to: "-1001234567890",
+      accountId: "default",
+      threadId: 1122,
+    };
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-1",
       parentSessionKey: "agent:main:main",
       childSessionKey: "agent:codex:acp:child-1",
       agentId: "codex",
+      deliveryContext,
       streamFlushMs: 10,
       noOutputNoticeMs: 120_000,
     });
@@ -109,6 +116,19 @@ describe("startAcpSpawnParentStreamRelay", () => {
     expect(texts.some((text) => text.includes("Started codex session"))).toBe(true);
     expect(texts.some((text) => text.includes("codex: hello from child"))).toBe(true);
     expect(texts.some((text) => text.includes("codex run completed in 2s"))).toBe(true);
+    expect(
+      enqueueSystemEventMock.mock.calls.every(
+        (call) => (call[1] as { trusted?: boolean } | undefined)?.trusted === false,
+      ),
+    ).toBe(true);
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        deliveryContext,
+        trusted: false,
+      }),
+    );
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
       expect.objectContaining({
         reason: "acp:spawn:stream",

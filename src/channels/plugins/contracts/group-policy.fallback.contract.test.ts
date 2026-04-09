@@ -1,23 +1,10 @@
-import { describe, it } from "vitest";
-import { whatsappAccessControlTesting } from "../../../../extensions/whatsapp/api.js";
-import { resolveZaloRuntimeGroupPolicy } from "../../../../extensions/zalo/api.js";
+import { describe, expect, it } from "vitest";
+import { installChannelRuntimeGroupPolicyFallbackSuite } from "../../../../test/helpers/channels/group-policy-contract-suites.js";
 import {
-  expectResolvedGroupPolicyCase,
-  installChannelRuntimeGroupPolicyFallbackSuite,
-} from "../../../../test/helpers/channels/group-policy-contract-suites.js";
+  resolveZaloRuntimeGroupPolicy,
+  resolveWhatsAppRuntimeGroupPolicy,
+} from "../../../../test/helpers/channels/group-policy-contract.js";
 import { resolveOpenProviderRuntimeGroupPolicy } from "../../../config/runtime-group-policy.js";
-
-type ResolvedGroupPolicy = ReturnType<typeof resolveOpenProviderRuntimeGroupPolicy>;
-
-function expectResolvedDiscordGroupPolicyCase(params: {
-  providerConfigPresent: Parameters<
-    typeof resolveOpenProviderRuntimeGroupPolicy
-  >[0]["providerConfigPresent"];
-  groupPolicy: Parameters<typeof resolveOpenProviderRuntimeGroupPolicy>[0]["groupPolicy"];
-  expected: Pick<ResolvedGroupPolicy, "groupPolicy" | "providerMissingFallbackApplied">;
-}) {
-  expectResolvedGroupPolicyCase(resolveOpenProviderRuntimeGroupPolicy(params), params.expected);
-}
 
 describe("channel runtime group policy fallback contract", () => {
   describe("slack", () => {
@@ -42,7 +29,7 @@ describe("channel runtime group policy fallback contract", () => {
 
   describe("whatsapp", () => {
     installChannelRuntimeGroupPolicyFallbackSuite({
-      resolve: whatsappAccessControlTesting.resolveWhatsAppRuntimeGroupPolicy,
+      resolve: resolveWhatsAppRuntimeGroupPolicy,
       configuredLabel: "keeps open fallback when channels.whatsapp is configured",
       defaultGroupPolicyUnderTest: "disabled",
       missingConfigLabel: "fails closed when channels.whatsapp is missing and no defaults are set",
@@ -73,13 +60,11 @@ describe("channel runtime group policy fallback contract", () => {
       {
         providerConfigPresent: false,
         groupPolicy: "disabled",
-        expected: {
-          groupPolicy: "disabled",
-          providerMissingFallbackApplied: false,
-        },
       },
     ] as const)("respects explicit provider policy %#", (testCase) => {
-      expectResolvedDiscordGroupPolicyCase(testCase);
+      const resolved = resolveOpenProviderRuntimeGroupPolicy(testCase);
+      expect(resolved.groupPolicy).toBe("disabled");
+      expect(resolved.providerMissingFallbackApplied).toBe(false);
     });
   });
 

@@ -2,6 +2,7 @@ import { execFileSync, execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { formatErrorMessage } from "../infra/errors.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
@@ -461,7 +462,7 @@ export function writeClaudeCliKeychainCredentials(
     return true;
   } catch (error) {
     log.warn("failed to write credentials to claude cli keychain", {
-      error: error instanceof Error ? error.message : String(error),
+      error: formatErrorMessage(error),
     });
     return false;
   }
@@ -503,7 +504,7 @@ export function writeClaudeCliFileCredentials(
     return true;
   } catch (error) {
     log.warn("failed to write credentials to claude cli file", {
-      error: error instanceof Error ? error.message : String(error),
+      error: formatErrorMessage(error),
     });
     return false;
   }
@@ -584,7 +585,7 @@ export function writeCodexCliKeychainCredentials(
     return true;
   } catch (error) {
     log.warn("failed to write credentials to codex cli keychain", {
-      error: error instanceof Error ? error.message : String(error),
+      error: formatErrorMessage(error),
     });
     return false;
   }
@@ -614,7 +615,7 @@ export function writeCodexCliFileCredentials(
     return true;
   } catch (error) {
     log.warn("failed to write credentials to codex cli file", {
-      error: error instanceof Error ? error.message : String(error),
+      error: formatErrorMessage(error),
     });
     return false;
   }

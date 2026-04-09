@@ -4,6 +4,7 @@ import type {
   CommandArgChoice,
 } from "../../../../src/auto-reply/commands-registry.types.js";
 import type { IconName } from "../icons.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
 export type SlashCommandCategory = "session" | "model" | "agents" | "tools";
 
@@ -216,13 +217,13 @@ export const CATEGORY_LABELS: Record<SlashCommandCategory, string> = {
 };
 
 export function getSlashCommandCompletions(filter: string): SlashCommandDef[] {
-  const lower = filter.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(filter);
   const commands = lower
     ? SLASH_COMMANDS.filter(
         (cmd) =>
           cmd.name.startsWith(lower) ||
-          cmd.aliases?.some((alias) => alias.toLowerCase().startsWith(lower)) ||
-          cmd.description.toLowerCase().includes(lower),
+          cmd.aliases?.some((alias) => normalizeLowercaseStringOrEmpty(alias).startsWith(lower)) ||
+          normalizeLowercaseStringOrEmpty(cmd.description).includes(lower),
       )
     : SLASH_COMMANDS;
   return commands.toSorted((a, b) => {
@@ -266,11 +267,11 @@ export function parseSlashCommand(text: string): ParsedSlashCommand | null {
     return null;
   }
 
-  const normalizedName = name.toLowerCase();
+  const normalizedName = normalizeLowercaseStringOrEmpty(name);
   const command = SLASH_COMMANDS.find(
     (cmd) =>
       cmd.name === normalizedName ||
-      cmd.aliases?.some((alias) => alias.toLowerCase() === normalizedName),
+      cmd.aliases?.some((alias) => normalizeLowercaseStringOrEmpty(alias) === normalizedName),
   );
   if (!command) {
     return null;

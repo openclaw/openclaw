@@ -78,9 +78,11 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
   realtimeVoiceProviders: [],
   mediaUnderstandingProviders: [],
   imageGenerationProviders: [],
+  musicGenerationProviders: [],
   videoGenerationProviders: [],
   webFetchProviders: [],
   webSearchProviders: [],
+  memoryEmbeddingProviders: [],
   gatewayHandlers: {},
   httpRoutes: [],
   cliRegistrars: [],
@@ -92,14 +94,18 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
 type ServerPluginsModule = typeof import("./server-plugins.js");
 type ServerPluginBootstrapModule = typeof import("./server-plugin-bootstrap.js");
 type PluginRuntimeModule = typeof import("../plugins/runtime/index.js");
+type PluginRuntimeRegistryModule = typeof import("../plugins/runtime.js");
 type GatewayRequestScopeModule = typeof import("../plugins/runtime/gateway-request-scope.js");
 type MethodScopesModule = typeof import("./method-scopes.js");
+type RuntimeStateModule = typeof import("../plugins/runtime-state.js");
 
 let serverPluginsModule: ServerPluginsModule;
 let serverPluginBootstrapModule: ServerPluginBootstrapModule;
 let runtimeModule: PluginRuntimeModule;
+let runtimeRegistryModule: PluginRuntimeRegistryModule;
 let gatewayRequestScopeModule: GatewayRequestScopeModule;
 let methodScopesModule: MethodScopesModule;
+let getActivePluginRegistryWorkspaceDirFromState: typeof import("../plugins/runtime-state.js").getActivePluginRegistryWorkspaceDirFromState;
 
 function createTestLog() {
   return {
@@ -134,8 +140,11 @@ async function loadTestModules() {
   serverPluginsModule = await import("./server-plugins.js");
   serverPluginBootstrapModule = await import("./server-plugin-bootstrap.js");
   runtimeModule = await import("../plugins/runtime/index.js");
+  runtimeRegistryModule = await import("../plugins/runtime.js");
   gatewayRequestScopeModule = await import("../plugins/runtime/gateway-request-scope.js");
   methodScopesModule = await import("./method-scopes.js");
+  const runtimeStateModule: RuntimeStateModule = await import("../plugins/runtime-state.js");
+  ({ getActivePluginRegistryWorkspaceDirFromState } = runtimeStateModule);
 }
 
 async function createSubagentRuntime(
@@ -247,6 +256,7 @@ beforeEach(() => {
 
 afterEach(() => {
   runtimeModule.clearGatewaySubagentRuntime();
+  runtimeRegistryModule.resetPluginRuntimeStateForTest();
 });
 
 describe("loadGatewayPlugins", () => {
@@ -304,6 +314,20 @@ describe("loadGatewayPlugins", () => {
     );
   });
 
+  test("pins the initial startup channel registry against later active-registry churn", async () => {
+    const startupRegistry = createRegistry([]);
+    loadOpenClawPlugins.mockReturnValue(startupRegistry);
+
+    loadGatewayStartupPluginsForTest({
+      pluginIds: ["slack"],
+    });
+
+    const replacementRegistry = createRegistry([]);
+    runtimeRegistryModule.setActivePluginRegistry(replacementRegistry);
+
+    expect(runtimeRegistryModule.getActivePluginChannelRegistry()).toBe(startupRegistry);
+  });
+
   test("keeps the raw activation source when a precomputed startup scope is reused", async () => {
     const rawConfig = { channels: { slack: { botToken: "x" } } };
     const resolvedConfig = {
@@ -356,6 +380,20 @@ describe("loadGatewayPlugins", () => {
     expect(loadOpenClawPlugins).not.toHaveBeenCalled();
     expect(result.pluginRegistry.plugins).toEqual([]);
     expect(result.gatewayMethods).toEqual(["sessions.get"]);
+  });
+
+  test("stores workspaceDir on the active registry when startup scope is empty", () => {
+    resolveGatewayStartupPluginIds.mockReturnValue([]);
+
+    serverPluginsModule.loadGatewayPlugins({
+      cfg: {},
+      workspaceDir: "/tmp/gateway-workspace",
+      log: createTestLog(),
+      coreGatewayHandlers: {},
+      baseMethods: [],
+    });
+
+    expect(getActivePluginRegistryWorkspaceDirFromState()).toBe("/tmp/gateway-workspace");
   });
 
   test("loads gateway plugins from the auto-enabled config snapshot", async () => {

@@ -6,28 +6,29 @@ import {
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
-import { createChannelPluginBase, getChatChannelMeta } from "openclaw/plugin-sdk/core";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import { createChannelPluginBase, getChatChannelMeta } from "openclaw/plugin-sdk/core";
 import {
   createDelegatedSetupWizardProxy,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup-runtime";
 import {
+  hasAnyWhatsAppAuth,
   listWhatsAppAccountIds,
   resolveDefaultWhatsAppAccountId,
   resolveWhatsAppAccount,
-  hasAnyWhatsAppAuth,
   type ResolvedWhatsAppAccount,
 } from "./accounts.js";
 import { formatWhatsAppConfigAllowFromEntries } from "./config-accessors.js";
 import { WhatsAppChannelConfigSchema } from "./config-schema.js";
 import { whatsappDoctor } from "./doctor.js";
-import { resolveWhatsAppGroupIntroHint } from "./group-intro.js";
+import { resolveLegacyGroupSessionKey } from "./group-session-contract.js";
 import {
-  resolveWhatsAppGroupRequireMention,
-  resolveWhatsAppGroupToolPolicy,
-} from "./group-policy.js";
+  collectUnsupportedSecretRefConfigCandidates,
+  unsupportedSecretRefSurfacePatterns,
+} from "./security-contract.js";
 import { applyWhatsAppSecurityConfigFixes } from "./security-fix.js";
+import { canonicalizeLegacySessionKey, isLegacyGroupSessionKey } from "./session-contract.js";
 
 export const WHATSAPP_CHANNEL = "whatsapp" as const;
 
@@ -172,6 +173,17 @@ export function createWhatsAppPluginBase(params: {
     gatewayMethods: base.gatewayMethods!,
     configSchema: base.configSchema!,
     config: base.config!,
+    messaging: {
+      defaultMarkdownTableMode: "bullets",
+      resolveLegacyGroupSessionKey,
+      isLegacyGroupSessionKey,
+      canonicalizeLegacySessionKey: (params) =>
+        canonicalizeLegacySessionKey({ key: params.key, agentId: params.agentId }),
+    },
+    secrets: {
+      unsupportedSecretRefSurfacePatterns,
+      collectUnsupportedSecretRefConfigCandidates,
+    },
     security: base.security!,
     groups: base.groups!,
   } satisfies Pick<
@@ -184,6 +196,8 @@ export function createWhatsAppPluginBase(params: {
     | "gatewayMethods"
     | "configSchema"
     | "config"
+    | "messaging"
+    | "secrets"
     | "security"
     | "doctor"
     | "setup"

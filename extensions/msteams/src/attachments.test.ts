@@ -4,7 +4,7 @@ import { downloadMSTeamsAttachments } from "./attachments/download.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 
 const GRAPH_HOST = "graph.microsoft.com";
-const SHAREPOINT_HOST = "contoso.sharepoint.com";
+const _SHAREPOINT_HOST = "contoso.sharepoint.com";
 const AZUREEDGE_HOST = "azureedge.net";
 const TEST_HOST = "x";
 const createUrlForHost = (host: string, pathSegment: string) => `https://${host}/${pathSegment}`;
@@ -12,14 +12,14 @@ const createTestUrl = (pathSegment: string) => createUrlForHost(TEST_HOST, pathS
 const SAVED_PNG_PATH = "/tmp/saved.png";
 const SAVED_PDF_PATH = "/tmp/saved.pdf";
 const TEST_URL_IMAGE = createTestUrl("img");
-const TEST_URL_IMAGE_PNG = createTestUrl("img.png");
-const TEST_URL_IMAGE_1_PNG = createTestUrl("1.png");
-const TEST_URL_IMAGE_2_JPG = createTestUrl("2.jpg");
-const TEST_URL_PDF = createTestUrl("x.pdf");
-const TEST_URL_PDF_1 = createTestUrl("1.pdf");
-const TEST_URL_PDF_2 = createTestUrl("2.pdf");
-const TEST_URL_HTML_A = createTestUrl("a.png");
-const TEST_URL_HTML_B = createTestUrl("b.png");
+const _TEST_URL_IMAGE_PNG = createTestUrl("img.png");
+const _TEST_URL_IMAGE_1_PNG = createTestUrl("1.png");
+const _TEST_URL_IMAGE_2_JPG = createTestUrl("2.jpg");
+const _TEST_URL_PDF = createTestUrl("x.pdf");
+const _TEST_URL_PDF_1 = createTestUrl("1.pdf");
+const _TEST_URL_PDF_2 = createTestUrl("2.pdf");
+const _TEST_URL_HTML_A = createTestUrl("a.png");
+const _TEST_URL_HTML_B = createTestUrl("b.png");
 const TEST_URL_INLINE_IMAGE = createTestUrl("inline.png");
 const TEST_URL_DOC_PDF = createTestUrl("doc.pdf");
 const TEST_URL_FILE_DOWNLOAD = createTestUrl("dl");
@@ -28,7 +28,7 @@ const CONTENT_TYPE_IMAGE_PNG = "image/png";
 const CONTENT_TYPE_APPLICATION_PDF = "application/pdf";
 const CONTENT_TYPE_TEXT_HTML = "text/html";
 const CONTENT_TYPE_TEAMS_FILE_DOWNLOAD_INFO = "application/vnd.microsoft.teams.file.download.info";
-const REDIRECT_STATUS_CODES = [301, 302, 303, 307, 308];
+const REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
 const MAX_REDIRECT_HOPS = 5;
 type RemoteMediaFetchParams = {
   url: string;
@@ -92,7 +92,7 @@ async function fetchRemoteMediaWithRedirects(
       throw new Error(`Blocked hostname (not in allowlist): ${currentUrl}`);
     }
     const res = await fetchFn(currentUrl, { redirect: "manual", ...requestInit });
-    if (REDIRECT_STATUS_CODES.includes(res.status)) {
+    if (REDIRECT_STATUS_CODES.has(res.status)) {
       const location = res.headers.get("location");
       if (!location) {
         throw new Error("redirect missing location");
@@ -141,7 +141,7 @@ const DEFAULT_MAX_BYTES = 1024 * 1024;
 const DEFAULT_ALLOW_HOSTS = [TEST_HOST];
 const MEDIA_PLACEHOLDER_IMAGE = "<media:image>";
 const MEDIA_PLACEHOLDER_DOCUMENT = "<media:document>";
-const formatImagePlaceholder = (count: number) =>
+const _formatImagePlaceholder = (count: number) =>
   count > 1 ? `${MEDIA_PLACEHOLDER_IMAGE} (${count} images)` : MEDIA_PLACEHOLDER_IMAGE;
 const formatDocumentPlaceholder = (count: number) =>
   count > 1 ? `${MEDIA_PLACEHOLDER_DOCUMENT} (${count} files)` : MEDIA_PLACEHOLDER_DOCUMENT;
@@ -187,9 +187,9 @@ const createTeamsFileDownloadInfoAttachments = (
   );
 const createHostedContentsWithType = (contentType: string, ...ids: string[]) =>
   ids.map((id) => ({ id, contentType, contentBytes: PNG_BASE64 }));
-const createHostedImageContents = (...ids: string[]) =>
+const _createHostedImageContents = (...ids: string[]) =>
   createHostedContentsWithType(CONTENT_TYPE_IMAGE_PNG, ...ids);
-const createPdfResponse = (payload: Buffer | string = PDF_BUFFER) => {
+const _createPdfResponse = (payload: Buffer | string = PDF_BUFFER) => {
   return createBufferResponse(payload, CONTENT_TYPE_APPLICATION_PDF);
 };
 const createBufferResponse = (payload: Buffer | string, contentType: string, status = 200) => {
@@ -202,7 +202,7 @@ const createBufferResponse = (payload: Buffer | string, contentType: string, sta
 const createJsonResponse = (payload: unknown, status = 200) =>
   new Response(JSON.stringify(payload), { status });
 const createTextResponse = (body: string, status = 200) => new Response(body, { status });
-const createGraphCollectionResponse = (value: unknown[]) => createJsonResponse({ value });
+const _createGraphCollectionResponse = (value: unknown[]) => createJsonResponse({ value });
 const createNotFoundResponse = () => new Response("not found", { status: 404 });
 const createRedirectResponse = (location: string, status = 302) =>
   new Response(null, { status, headers: { location } });

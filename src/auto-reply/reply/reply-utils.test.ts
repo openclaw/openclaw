@@ -4,7 +4,7 @@ import { parseAudioTag } from "./audio-tags.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import { matchesMentionWithExplicit } from "./mentions.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
-import { createReplyReferencePlanner } from "./reply-reference.js";
+import { createReplyReferencePlanner, isSingleUseReplyToMode } from "./reply-reference.js";
 import {
   extractShortModelName,
   hasTemplateVariables,
@@ -125,10 +125,36 @@ describe("normalizeReplyPayload", () => {
     expect(result!.text).not.toContain("NO_REPLY");
   });
 
+  it("strips glued leading NO_REPLY text without leaking the token", () => {
+    const result = normalizeReplyPayload({
+      text: "NO_REPLYThe user is saying hello",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("The user is saying hello");
+  });
+
+  it("strips glued leading NO_REPLY text case-insensitively", () => {
+    const result = normalizeReplyPayload({
+      text: "no_replyThe user is saying hello",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("The user is saying hello");
+  });
+
   it("keeps NO_REPLY when used as leading substantive text", () => {
     const result = normalizeReplyPayload({ text: "NO_REPLY -- nope" });
     expect(result).not.toBeNull();
     expect(result!.text).toBe("NO_REPLY -- nope");
+  });
+
+  it("keeps punctuation-start content after a leading NO_REPLY token", () => {
+    const colonResult = normalizeReplyPayload({ text: "NO_REPLY: explanation" });
+    expect(colonResult).not.toBeNull();
+    expect(colonResult!.text).toBe("NO_REPLY: explanation");
+
+    const dashResult = normalizeReplyPayload({ text: "NO_REPLY—note" });
+    expect(dashResult).not.toBeNull();
+    expect(dashResult!.text).toBe("NO_REPLY—note");
   });
 
   it("suppresses message when stripping NO_REPLY leaves nothing", () => {
@@ -888,6 +914,13 @@ describe("createReplyReferencePlanner", () => {
     });
     expect(existingIdPlanner.use()).toBe("thread-1");
     expect(existingIdPlanner.use()).toBeUndefined();
+
+    const batchedPlanner = createReplyReferencePlanner({
+      replyToMode: "batched",
+      startId: "parent",
+    });
+    expect(batchedPlanner.use()).toBe("parent");
+    expect(batchedPlanner.use()).toBeUndefined();
   });
 
   it("honors allowReference=false", () => {
@@ -900,6 +933,15 @@ describe("createReplyReferencePlanner", () => {
     expect(planner.hasReplied()).toBe(false);
     planner.markSent();
     expect(planner.hasReplied()).toBe(true);
+  });
+});
+
+describe("isSingleUseReplyToMode", () => {
+  it("treats first and batched as single-use reply modes", () => {
+    expect(isSingleUseReplyToMode("off")).toBe(false);
+    expect(isSingleUseReplyToMode("all")).toBe(false);
+    expect(isSingleUseReplyToMode("first")).toBe(true);
+    expect(isSingleUseReplyToMode("batched")).toBe(true);
   });
 });
 
@@ -951,6 +993,22 @@ describe("createStreamingDirectiveAccumulator", () => {
     expect(afterReset?.replyToCurrent).toBe(false);
     expect(afterReset?.replyToTag).toBe(false);
     expect(afterReset?.replyToId).toBeUndefined();
+  });
+
+  it("strips a glued leading NO_REPLY token from streamed text", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    const result = accumulator.consume("NO_REPLYThe user is saying hello");
+
+    expect(result?.text).toBe("The user is saying hello");
+  });
+
+  it("keeps punctuation-start text after a leading NO_REPLY token", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    const result = accumulator.consume("NO_REPLY: explanation");
+
+    expect(result?.text).toBe("NO_REPLY: explanation");
   });
 });
 

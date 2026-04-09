@@ -487,17 +487,20 @@ export function loadGatewayPlugins(params: {
   pluginIds?: string[];
   preferSetupRuntimeForChannelPlugins?: boolean;
 }) {
+  const activationAutoEnabled =
+    params.activationSourceConfig !== undefined
+      ? applyPluginAutoEnable({
+          config: params.activationSourceConfig,
+          env: process.env,
+        })
+      : undefined;
   const autoEnabled =
     params.activationSourceConfig !== undefined
       ? {
           config: params.cfg,
-          changes: [],
+          changes: activationAutoEnabled?.changes ?? [],
           autoEnabledReasons:
-            params.autoEnabledReasons ??
-            applyPluginAutoEnable({
-              config: params.activationSourceConfig,
-              env: process.env,
-            }).autoEnabledReasons,
+            params.autoEnabledReasons ?? activationAutoEnabled?.autoEnabledReasons ?? {},
         }
       : params.autoEnabledReasons !== undefined
         ? {
@@ -520,7 +523,7 @@ export function loadGatewayPlugins(params: {
     });
   if (pluginIds.length === 0) {
     const pluginRegistry = createEmptyPluginRegistry();
-    setActivePluginRegistry(pluginRegistry, undefined, "gateway-bindable");
+    setActivePluginRegistry(pluginRegistry, undefined, "gateway-bindable", params.workspaceDir);
     return {
       pluginRegistry,
       gatewayMethods: [...params.baseMethods],

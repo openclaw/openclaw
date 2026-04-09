@@ -381,11 +381,10 @@ class NodeRuntime(
         parseChatSendRunId(response) ?: idempotencyKey
       },
       speakAssistantReply = { text ->
-        // Skip if TalkModeManager is handling TTS (ttsOnAllResponses) to avoid
-        // double-speaking the same assistant reply from both pipelines.
-        if (!talkMode.ttsOnAllResponses) {
-          voiceReplySpeaker.speakAssistantReply(text)
-        }
+        // Voice-tab replies should speak through the dedicated reply speaker.
+        // Relying on talkMode.ttsOnAllResponses here can drop playback if the
+        // chat-event path misses the terminal event for this turn.
+        voiceReplySpeaker.speakAssistantReply(text)
       },
     )
   }
@@ -557,6 +556,12 @@ class NodeRuntime(
   fun setGatewayToken(value: String) = prefs.setGatewayToken(value)
   fun setGatewayBootstrapToken(value: String) = prefs.setGatewayBootstrapToken(value)
   fun setGatewayPassword(value: String) = prefs.setGatewayPassword(value)
+  fun resetGatewaySetupAuth() {
+    prefs.clearGatewaySetupAuth()
+    val deviceId = identityStore.loadOrCreate().deviceId
+    deviceAuthStore.clearToken(deviceId, "node")
+    deviceAuthStore.clearToken(deviceId, "operator")
+  }
   fun setOnboardingCompleted(value: Boolean) = prefs.setOnboardingCompleted(value)
   val lastDiscoveredStableId: StateFlow<String> = prefs.lastDiscoveredStableId
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
@@ -596,12 +601,11 @@ class NodeRuntime(
 
     scope.launch {
       prefs.talkEnabled.collect { enabled ->
-        // MicCaptureManager handles STT + send to gateway.
-        // TalkModeManager plays TTS on assistant responses.
+        // MicCaptureManager handles STT + send to gateway, while the dedicated
+        // reply speaker handles TTS for assistant replies in the voice tab.
         micCapture.setMicEnabled(enabled)
         if (enabled) {
-          // Mic on = user is on voice screen and wants TTS responses.
-          talkMode.ttsOnAllResponses = true
+          talkMode.ttsOnAllResponses = false
           scope.launch { talkMode.ensureChatSubscribed() }
         }
         externalAudioCaptureActive.value = enabled
@@ -762,8 +766,8 @@ class NodeRuntime(
     prefs.setTalkEnabled(value)
     if (value) {
       // Tapping mic on interrupts any active TTS (barge-in)
-      talkMode.stopTts()
-      talkMode.ttsOnAllResponses = true
+      stopVoicePlayback()
+      talkMode.ttsOnAllResponses = false
       scope.launch { talkMode.ensureChatSubscribed() }
     }
     micCapture.setMicEnabled(value)
@@ -778,16 +782,23 @@ class NodeRuntime(
     if (voiceReplySpeakerLazy.isInitialized()) {
       voiceReplySpeaker.setPlaybackEnabled(value)
     }
-    // Keep TalkMode in sync so speaker mute works when ttsOnAllResponses is active.
+    // Keep TalkMode in sync so any active Talk playback also respects speaker mute.
     talkMode.setPlaybackEnabled(value)
   }
 
   private fun stopActiveVoiceSession() {
     talkMode.ttsOnAllResponses = false
-    talkMode.stopTts()
+    stopVoicePlayback()
     micCapture.setMicEnabled(false)
     prefs.setTalkEnabled(false)
     externalAudioCaptureActive.value = false
+  }
+
+  private fun stopVoicePlayback() {
+    talkMode.stopTts()
+    if (voiceReplySpeakerLazy.isInitialized()) {
+      voiceReplySpeaker.stopTts()
+    }
   }
 
   fun refreshGatewayConnection() {
@@ -1320,11 +1331,18 @@ internal fun resolveOperatorSessionConnectAuth(
 
   val storedToken = storedOperatorToken?.trim()?.takeIf { it.isNotEmpty() }
   if (storedToken != null) {
-    // Bootstrap can seed the operator token, but operator should reconnect
-    // through the stored device-token path rather than bootstrap auth itself.
     return NodeRuntime.GatewayConnectAuth(
       token = null,
       bootstrapToken = null,
+      password = null,
+    )
+  }
+
+  val explicitBootstrapToken = auth.bootstrapToken?.trim()?.takeIf { it.isNotEmpty() }
+  if (explicitBootstrapToken != null) {
+    return NodeRuntime.GatewayConnectAuth(
+      token = null,
+      bootstrapToken = explicitBootstrapToken,
       password = null,
     )
   }

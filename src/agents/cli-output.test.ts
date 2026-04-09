@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseCliJson, parseCliJsonl } from "./cli-output.js";
+import { extractCliErrorMessage, parseCliJson, parseCliJsonl } from "./cli-output.js";
 
 describe("parseCliJson", () => {
   it("recovers mixed-output Claude session metadata from embedded JSON objects", () => {
@@ -157,6 +157,43 @@ describe("parseCliJsonl", () => {
     });
   });
 
+  it("preserves Claude cache creation tokens instead of flattening them to zero", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({ type: "init", session_id: "session-cache-123" }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-cache-123",
+          result: "Claude says hello",
+          usage: {
+            input_tokens: 12,
+            output_tokens: 3,
+            cache_read_input_tokens: 4,
+            cache_creation_input_tokens: 7,
+          },
+        }),
+      ].join("\n"),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "Claude says hello",
+      sessionId: "session-cache-123",
+      usage: {
+        input: 12,
+        output: 3,
+        cacheRead: 4,
+        cacheWrite: 7,
+        total: undefined,
+      },
+    });
+  });
+
   it("preserves Claude session metadata even when the final result text is empty", () => {
     const result = parseCliJsonl(
       [
@@ -208,5 +245,42 @@ describe("parseCliJsonl", () => {
       sessionId: "session-999",
       usage: undefined,
     });
+  });
+
+  it("extracts nested Claude API errors from failed stream-json output", () => {
+    const message =
+      "Third-party apps now draw from your extra usage, not your plan limits. We've added a $200 credit to get you started. Claim it at claude.ai/settings/usage and keep going.";
+    const apiError = `API Error: 400 ${JSON.stringify({
+      type: "error",
+      error: {
+        type: "invalid_request_error",
+        message,
+      },
+      request_id: "req_011CZqHuXhFetYCnr8325DQc",
+    })}`;
+    const result = extractCliErrorMessage(
+      [
+        JSON.stringify({ type: "system", subtype: "init", session_id: "session-api-error" }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            model: "<synthetic>",
+            role: "assistant",
+            content: [{ type: "text", text: apiError }],
+          },
+          session_id: "session-api-error",
+          error: "unknown",
+        }),
+        JSON.stringify({
+          type: "result",
+          subtype: "success",
+          is_error: true,
+          result: apiError,
+          session_id: "session-api-error",
+        }),
+      ].join("\n"),
+    );
+
+    expect(result).toBe(message);
   });
 });

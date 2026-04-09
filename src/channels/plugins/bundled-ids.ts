@@ -1,11 +1,7 @@
-import { listBundledPluginMetadata } from "../../plugins/bundled-plugin-metadata.js";
+import { listChannelCatalogEntries } from "../../plugins/channel-catalog-registry.js";
 
-export const BUNDLED_CHANNEL_PLUGIN_IDS = listBundledPluginMetadata({
-  includeChannelConfigs: false,
-  includeSyntheticChannelConfigs: false,
-})
-  .filter(({ manifest }) => Array.isArray(manifest.channels) && manifest.channels.length > 0)
-  .map(({ manifest }) => manifest.id)
+export const BUNDLED_CHANNEL_PLUGIN_IDS = listChannelCatalogEntries({ origin: "bundled" })
+  .map((entry) => entry.pluginId)
   .toSorted((left, right) => left.localeCompare(right));
 
 export function listBundledChannelPluginIds(): string[] {
