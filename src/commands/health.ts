@@ -350,7 +350,8 @@ export async function getHealthSnapshot(params?: {
   probe?: boolean;
 }): Promise<HealthSummary> {
   const timeoutMs = params?.timeoutMs;
-  const cfg = loadConfig();
+  const rawCfg = await readBestEffortConfig();
+  const cfg = rawCfg ?? loadConfig();
   const { defaultAgentId, ordered } = resolveAgentOrder(cfg);
   const channelBindings = buildChannelAccountBindings(cfg);
   const sessionCache = new Map<string, HealthSummary["sessions"]>();
