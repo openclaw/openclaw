@@ -207,13 +207,20 @@ export function resolveIMessageInboundDecision(params: {
   const chatIdentifierNormalized = normalizeIMessageHandle(chatIdentifier ?? "") || undefined;
   const destinationCallerIdNormalized =
     normalizeIMessageHandle(destinationCallerId ?? "") || undefined;
-  // destination_caller_id distinguishes true self-chat from DM rows where imsg
-  // repeats the peer handle in sender/chat_identifier.
+  const chatParticipantHandles = new Set(
+    (params.message.participants ?? [])
+      .map((participant) => normalizeIMessageHandle(participant))
+      .filter((participant): participant is string => participant.length > 0),
+  );
+  const matchesSelfChatDestination =
+    destinationCallerIdNormalized == null ||
+    destinationCallerIdNormalized === senderNormalized ||
+    chatParticipantHandles.has(destinationCallerIdNormalized);
   const isSelfChat =
     !isGroup &&
     chatIdentifierNormalized != null &&
     senderNormalized === chatIdentifierNormalized &&
-    (destinationCallerIdNormalized == null || destinationCallerIdNormalized === senderNormalized);
+    matchesSelfChatDestination;
   // Track whether we already processed the is_from_me=true self-chat path.
   // When true, the selfChatCache.has() check below must be skipped — we just
   // called remember() and would immediately match our own entry.

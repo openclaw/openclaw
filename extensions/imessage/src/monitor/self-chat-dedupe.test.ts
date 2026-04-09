@@ -393,6 +393,32 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
     expect(decision.kind).toBe("dispatch");
   });
 
+  it("preserves self-chat when destination_caller_id is another local handle", () => {
+    const echoCache = createSentMessageCache();
+    const selfChatCache = createSelfChatCache();
+
+    const decision = resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 123705,
+          sender: "+15551234567",
+          chat_identifier: "+15551234567",
+          destination_caller_id: "me@icloud.com",
+          participants: ["+15551234567", "me@icloud.com"],
+          text: "Hello from my other local handle",
+          is_from_me: true,
+          is_group: false,
+        },
+        messageText: "Hello from my other local handle",
+        bodyText: "Hello from my other local handle",
+        echoCache,
+        selfChatCache,
+      }),
+    );
+
+    expect(decision.kind).toBe("dispatch");
+  });
+
   it("drops agent reply echo in self-chat (is_from_me=true, echo cache text match)", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
