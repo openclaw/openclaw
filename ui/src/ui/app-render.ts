@@ -1347,12 +1347,7 @@ export function renderApp(state: AppViewState) {
                   }
                   if (state.agentsPanel === "tools" && refreshedAgentId) {
                     void loadToolsCatalog(state, refreshedAgentId);
-                    if (refreshedAgentId === resolveAgentIdFromSessionKey(state.sessionKey)) {
-                      void loadToolsEffective(state, {
-                        agentId: refreshedAgentId,
-                        sessionKey: state.sessionKey,
-                      });
-                    }
+                    void refreshVisibleToolsEffectiveForCurrentSession(state);
                   }
                   if (state.agentsPanel === "channels") {
                     void loadChannels(state, false);
@@ -1385,12 +1380,7 @@ export function renderApp(state: AppViewState) {
                   }
                   if (state.agentsPanel === "tools") {
                     void loadToolsCatalog(state, agentId);
-                    if (agentId === resolveAgentIdFromSessionKey(state.sessionKey)) {
-                      void loadToolsEffective(state, {
-                        agentId,
-                        sessionKey: state.sessionKey,
-                      });
-                    }
+                    void refreshVisibleToolsEffectiveForCurrentSession(state);
                   }
                   if (state.agentsPanel === "skills") {
                     void loadAgentSkills(state, agentId);
