@@ -224,14 +224,18 @@ func sanitizeDocChunkProtocolWrappers(source, translated string) string {
 	if !strings.Contains(translated, bodyTagStart) && !strings.Contains(translated, frontmatterTagStart) {
 		return translated
 	}
-	_, body, err := parseTaggedDocument(strings.TrimSpace(translated))
+	trimmedTranslated := strings.TrimSpace(translated)
+	if !hasUnexpectedTopLevelProtocolWrapper(source, trimmedTranslated) {
+		return translated
+	}
+	_, body, err := parseTaggedDocument(trimmedTranslated)
 	if err == nil {
 		if strings.TrimSpace(body) == "" {
 			return translated
 		}
 		return body
 	}
-	body, ok := stripBodyOnlyWrapper(strings.TrimSpace(translated))
+	body, ok := stripBodyOnlyWrapper(trimmedTranslated)
 	if !ok || strings.TrimSpace(body) == "" {
 		return translated
 	}

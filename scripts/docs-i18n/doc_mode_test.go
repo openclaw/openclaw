@@ -438,6 +438,18 @@ func TestSanitizeDocChunkProtocolWrappersStripsTopLevelWrapperEvenWhenSourceMent
 	}
 }
 
+func TestSanitizeDocChunkProtocolWrappersKeepsLegitimateTopLevelBodyBlock(t *testing.T) {
+	t.Parallel()
+
+	source := "<body>\nLiteral HTML block.\n</body>\n"
+	translated := "<body>\nLiteral HTML block.\n</body>\n"
+
+	got := sanitizeDocChunkProtocolWrappers(source, translated)
+	if got != translated {
+		t.Fatalf("expected legitimate top-level body block to remain unchanged\nwant:\n%s\ngot:\n%s", translated, got)
+	}
+}
+
 func TestSplitDocBodyIntoBlocksKeepsInfoStringExampleInsideFence(t *testing.T) {
 	t.Parallel()
 
