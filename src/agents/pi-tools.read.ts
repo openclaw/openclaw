@@ -503,6 +503,9 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
   options: MemoryFlushAppendOnlyWriteOptions,
 ): AnyAgentTool {
   const allowedAbsolutePath = path.resolve(options.root, options.relativePath);
+  // The directory that owns memory flush files (e.g. <root>/memory/).
+  // Writes to other files inside this dir are blocked; writes outside it pass through.
+  const memoryDirAbsolutePath = path.dirname(allowedAbsolutePath);
   return {
     ...tool,
     description: `${tool.description} During memory flush, this tool may only append to ${options.relativePath}.`,
@@ -521,10 +524,22 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
         root: options.root,
         containerWorkdir: options.containerWorkdir,
       });
-      if (resolvedPath !== allowedAbsolutePath) {
-        throw new Error(
-          `Memory flush writes are restricted to ${options.relativePath}; use that path only.`,
-        );
+
+      if (resolvedPath === allowedAbsolutePath) {
+        // Exact match — fall through to append logic below.
+      } else {
+        // Block writes to other files inside the memory directory (e.g. a different date's
+        // memory file). Writes to unrelated workspace files are passed through to the
+        // underlying tool so normal edits are not blocked during a flush run.
+        const isInMemoryDir =
+          resolvedPath === memoryDirAbsolutePath ||
+          resolvedPath.startsWith(memoryDirAbsolutePath + path.sep);
+        if (isInMemoryDir) {
+          throw new Error(
+            `Memory flush writes are restricted to ${options.relativePath}; use that path only.`,
+          );
+        }
+        return tool.execute(toolCallId, args, signal, onUpdate);
       }
 
       await appendMemoryFlushContent({

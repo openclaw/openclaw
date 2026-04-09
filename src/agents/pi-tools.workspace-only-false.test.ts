@@ -220,12 +220,21 @@ describe("FS tools with workspaceOnly=false", () => {
     expect(writeTool).toBeDefined();
     expect(tools.map((tool) => tool.name).toSorted()).toEqual(["read", "write"]);
 
+    // A different date's memory file (same directory) must be blocked.
     await expect(
       writeTool!.execute("test-call-memory-deny", {
-        path: outsideFile,
+        path: "memory/2026-03-08.md",
         content: "should not write here",
       }),
     ).rejects.toThrow(/Memory flush writes are restricted to memory\/2026-03-07\.md/);
+
+    // A non-memory workspace file must pass through to the underlying tool (not blocked).
+    const nonMemoryFile = path.join(workspaceDir, "template.html");
+    await writeTool!.execute("test-call-non-memory-passthrough", {
+      path: nonMemoryFile,
+      content: "<html></html>",
+    });
+    await expect(fs.readFile(nonMemoryFile, "utf-8")).resolves.toBe("<html></html>");
 
     const result = await writeTool!.execute("test-call-memory-append", {
       path: allowedRelativePath,
