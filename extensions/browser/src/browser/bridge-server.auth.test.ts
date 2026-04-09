@@ -82,7 +82,7 @@ describe("startBrowserBridgeServer auth", () => {
     ).rejects.toThrow(/requires auth/i);
   });
 
-  it("serves noVNC bootstrap html without leaking VNC password in bootstrap response", async () => {
+  it("serves noVNC bootstrap html without leaking password in Location header", async () => {
     let resolveCalls = 0;
     const bridge = await startBrowserBridgeServer({
       resolved: buildResolvedConfig(),
@@ -92,7 +92,7 @@ describe("startBrowserBridgeServer auth", () => {
         if (token !== "valid-token") {
           return null;
         }
-        return { noVncPort: 45678 };
+        return { noVncPort: 45678, password: "Abc123xy" }; // pragma: allowlist secret
       },
     });
     servers.push({ stop: () => stopBrowserBridgeServer(bridge.server) });
@@ -112,7 +112,9 @@ describe("startBrowserBridgeServer auth", () => {
 
     const body = await res.text();
     expect(body).toContain("window.location.replace");
-    expect(body).toContain("http://127.0.0.1:45678/vnc.html#autoconnect=1&resize=remote");
-    expect(body).not.toContain("password=");
+    expect(body).toContain(
+      "http://127.0.0.1:45678/vnc.html#autoconnect=1&resize=remote&password=Abc123xy",
+    );
+    expect(body).not.toContain("?password=");
   });
 });
