@@ -264,6 +264,7 @@ describe("openai codex provider", () => {
         id: "gpt-5.4",
         contextWindow: 1_050_000,
         contextTokens: 272_000,
+        cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
       }),
     );
     expect(entries).toContainEqual(
@@ -271,12 +272,14 @@ describe("openai codex provider", () => {
         id: "gpt-5.4-pro",
         contextWindow: 1_050_000,
         contextTokens: 272_000,
+        cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
       }),
     );
     expect(entries).toContainEqual(
       expect.objectContaining({
         id: "gpt-5.4-mini",
         contextWindow: 272_000,
+        cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
       }),
     );
   });

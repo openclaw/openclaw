@@ -378,6 +378,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
           input: ["text", "image"],
           contextWindow: OPENAI_CODEX_GPT_54_NATIVE_CONTEXT_TOKENS,
           contextTokens: OPENAI_CODEX_GPT_54_DEFAULT_CONTEXT_TOKENS,
+          cost: OPENAI_CODEX_GPT_54_COST,
         }),
         buildOpenAISyntheticCatalogEntry(gpt54Template, {
           id: OPENAI_CODEX_GPT_54_PRO_MODEL_ID,
@@ -385,12 +386,14 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
           input: ["text", "image"],
           contextWindow: OPENAI_CODEX_GPT_54_NATIVE_CONTEXT_TOKENS,
           contextTokens: OPENAI_CODEX_GPT_54_DEFAULT_CONTEXT_TOKENS,
+          cost: OPENAI_CODEX_GPT_54_PRO_COST,
         }),
         buildOpenAISyntheticCatalogEntry(gpt54MiniTemplate, {
           id: OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
           reasoning: true,
           input: ["text", "image"],
           contextWindow: OPENAI_CODEX_GPT_54_MINI_CONTEXT_TOKENS,
+          cost: OPENAI_CODEX_GPT_54_MINI_COST,
         }),
         buildOpenAISyntheticCatalogEntry(sparkTemplate, {
           id: OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
