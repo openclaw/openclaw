@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { ContextEngine } from "../../context-engine/types.js";
 import {
   CHARS_PER_TOKEN_ESTIMATE,
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
@@ -181,6 +182,89 @@ function enforceToolResultLimitInPlace(params: {
     const truncated = truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache);
     applyMessageMutationInPlace(message, truncated, estimateCache);
   }
+}
+
+/**
+ * Per-iteration context-engine ingest + assemble hook.
+ *
+ * Used in place of `installToolResultContextGuard` for sessions whose context
+ * engine has claimed `info.ownsCompaction === true`. Wraps `agent.transformContext`
+ * so that on every LLM call:
+ *
+ *   1. Any messages appended since the last call are forwarded to the engine
+ *      via `afterTurn`, giving the engine a chance to ingest and trigger its
+ *      own compaction policy mid-tool-loop (instead of waiting until the end
+ *      of the attempt, which is the only point the runtime would otherwise
+ *      finalize a turn).
+ *   2. The engine's `assemble()` view is returned to pi-agent so the next LLM
+ *      call uses the (possibly compacted) context, while pi-agent's own
+ *      `state.messages` array is left untouched (mutating it mid-loop breaks
+ *      iteration tracking).
+ *
+ * The hook is best-effort: any failure inside the engine falls back to the
+ * raw source messages so the run still makes progress.
+ */
+export function installContextEngineLoopHook(params: {
+  agent: GuardableAgent;
+  contextEngine: ContextEngine;
+  sessionId: string;
+  sessionKey?: string;
+  sessionFile: string;
+  tokenBudget?: number;
+  modelId: string;
+}): () => void {
+  const { contextEngine, sessionId, sessionKey, sessionFile, tokenBudget, modelId } = params;
+  const mutableAgent = params.agent as GuardableAgentRecord;
+  const originalTransformContext = mutableAgent.transformContext;
+  let lastSeenLength = 0;
+
+  mutableAgent.transformContext = (async (messages: AgentMessage[], signal: AbortSignal) => {
+    const transformed = originalTransformContext
+      ? await originalTransformContext.call(mutableAgent, messages, signal)
+      : messages;
+    const sourceMessages = Array.isArray(transformed) ? transformed : messages;
+
+    try {
+      if (
+        sourceMessages.length > lastSeenLength &&
+        typeof contextEngine.afterTurn === "function"
+      ) {
+        const prePromptCount = lastSeenLength;
+        await contextEngine.afterTurn({
+          sessionId,
+          sessionKey,
+          sessionFile,
+          messages: sourceMessages,
+          prePromptMessageCount: prePromptCount,
+          tokenBudget,
+        });
+        lastSeenLength = sourceMessages.length;
+      }
+      const assembled = await contextEngine.assemble({
+        sessionId,
+        sessionKey,
+        messages: sourceMessages,
+        tokenBudget,
+        model: modelId,
+      });
+      if (
+        assembled &&
+        Array.isArray(assembled.messages) &&
+        assembled.messages.length !== sourceMessages.length
+      ) {
+        return assembled.messages;
+      }
+    } catch {
+      // Best-effort: any engine failure falls through to the raw source
+      // messages so the tool loop still makes forward progress.
+    }
+
+    return sourceMessages;
+  }) as GuardableTransformContext;
+
+  return () => {
+    mutableAgent.transformContext = originalTransformContext;
+  };
 }
 
 export function installToolResultContextGuard(params: {
