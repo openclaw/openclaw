@@ -1,11 +1,11 @@
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveSandboxInputPath, resolveSandboxPath } from "../sandbox-paths.js";
+import type { SandboxFsBridgeContext } from "./backend-handle.types.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
 import { isPathInsideContainerRoot, normalizeContainerPath } from "./path-utils.js";
-import type { SandboxContext } from "./types.js";
 
 export type SandboxFsMount = {
   hostRoot: string;
@@ -58,7 +58,7 @@ export function parseSandboxBindMount(spec: string): ParsedBindMount | null {
   };
 }
 
-export function buildSandboxFsMounts(sandbox: SandboxContext): SandboxFsMount[] {
+export function buildSandboxFsMounts(sandbox: SandboxFsBridgeContext): SandboxFsMount[] {
   const mounts: SandboxFsMount[] = [
     {
       hostRoot: path.resolve(sandbox.workspaceDir),

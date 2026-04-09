@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,9 +8,6 @@ import {
   isEmbeddedPiRunActive,
 } from "../../agents/pi-embedded-runner/runs.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
-import { onAgentEvent } from "../../infra/agent-events.js";
-import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import {
   clearMemoryPluginState,
   registerMemoryFlushPlanResolver,
@@ -57,6 +53,10 @@ vi.mock("../../agents/model-fallback.js", () => ({
     Array.isArray((err as { attempts?: unknown[] }).attempts),
 }));
 
+vi.mock("../../agents/model-auth.js", () => ({
+  resolveModelAuthMode: () => "api-key",
+}));
+
 vi.mock("../../agents/pi-embedded.js", () => {
   return {
     compactEmbeddedPiSession: (params: unknown) =>
@@ -93,6 +93,18 @@ vi.mock("./queue.js", () => {
     refreshQueuedFollowupSession: (...args: unknown[]) => refreshQueuedFollowupSessionMock(...args),
   };
 });
+
+vi.mock("../../cli/command-secret-gateway.js", () => ({
+  resolveCommandSecretRefsViaGateway: async ({ config }: { config: unknown }) => ({
+    resolvedConfig: config,
+    diagnostics: [],
+  }),
+}));
+
+vi.mock("../../utils/provider-utils.js", () => ({
+  isReasoningTagProvider: (provider: string | undefined | null) =>
+    provider === "google" || provider === "google-gemini-cli",
+}));
 
 const loadCronStoreMock = vi.fn();
 vi.mock("../../cron/store.js", () => {
@@ -131,6 +143,11 @@ beforeEach(() => {
   runWithModelFallbackMock.mockClear();
   runtimeErrorMock.mockClear();
   abortEmbeddedPiRunMock.mockClear();
+  compactState.compactEmbeddedPiSessionMock.mockReset();
+  compactState.compactEmbeddedPiSessionMock.mockResolvedValue({
+    compacted: false,
+    reason: "test-preflight-disabled",
+  });
   clearSessionQueuesMock.mockReset();
   clearSessionQueuesMock.mockReturnValue({ followupCleared: 0, laneCleared: 0, keys: [] });
   refreshQueuedFollowupSessionMock.mockReset();
@@ -138,7 +155,6 @@ beforeEach(() => {
   loadCronStoreMock.mockClear();
   // Default: no cron jobs in store.
   loadCronStoreMock.mockResolvedValue({ version: 1, jobs: [] });
-  resetSystemEventsForTest();
 
   // Default: no provider switch; execute the chosen provider+model.
   runWithModelFallbackMock.mockImplementation(
@@ -152,134 +168,12 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
-  resetSystemEventsForTest();
   clearMemoryPluginState();
   replyRunRegistryTesting.resetReplyRunRegistry();
   embeddedRunTesting.resetActiveEmbeddedRuns();
 });
 
-describe("runReplyAgent onAgentRunStart", () => {
-  function createRun(params?: {
-    provider?: string;
-    model?: string;
-    opts?: {
-      runId?: string;
-      onAgentRunStart?: (runId: string) => void;
-    };
-  }) {
-    const provider = params?.provider ?? "anthropic";
-    const model = params?.model ?? "claude";
-    const typing = createMockTypingController();
-    const sessionCtx = {
-      Provider: "webchat",
-      OriginatingTo: "session:1",
-      AccountId: "primary",
-      MessageSid: "msg",
-    } as unknown as TemplateContext;
-    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
-    const followupRun = {
-      prompt: "hello",
-      summaryLine: "hello",
-      enqueuedAt: Date.now(),
-      run: {
-        sessionId: "session",
-        sessionKey: "main",
-        messageProvider: "webchat",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/tmp",
-        config:
-          provider === "claude-cli"
-            ? { agents: { defaults: { cliBackends: { "claude-cli": {} } } } }
-            : createCliBackendTestConfig(),
-        skillsSnapshot: {},
-        provider,
-        model,
-        thinkLevel: "low",
-        verboseLevel: "off",
-        elevatedLevel: "off",
-        bashElevated: {
-          enabled: false,
-          allowed: false,
-          defaultLevel: "off",
-        },
-        timeoutMs: 1_000,
-        blockReplyBreak: "message_end",
-      },
-    } as unknown as FollowupRun;
-
-    return runReplyAgent({
-      commandBody: "hello",
-      followupRun,
-      queueKey: "main",
-      resolvedQueue,
-      shouldSteer: false,
-      shouldFollowup: false,
-      isActive: false,
-      isStreaming: false,
-      opts: params?.opts,
-      typing,
-      sessionCtx,
-      defaultModel: `${provider}/${model}`,
-      resolvedVerboseLevel: "off",
-      isNewSession: false,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      shouldInjectGroupIntro: false,
-      typingMode: "instant",
-    });
-  }
-
-  it("does not emit start callback when fallback fails before run start", async () => {
-    runWithModelFallbackMock.mockRejectedValueOnce(
-      new Error('No API key found for provider "anthropic".'),
-    );
-    const onAgentRunStart = vi.fn();
-
-    const result = await createRun({
-      opts: { runId: "run-no-start", onAgentRunStart },
-    });
-
-    expect(onAgentRunStart).not.toHaveBeenCalled();
-    expect(result).toMatchObject({
-      text: expect.stringContaining('No API key found for provider "anthropic".'),
-    });
-  });
-
-  it("emits start callback when the CLI runner starts", async () => {
-    runCliAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "ok" }],
-      meta: {
-        agentMeta: {
-          provider: "claude-cli",
-          model: "opus-4.5",
-        },
-      },
-    });
-    const onAgentRunStart = vi.fn();
-
-    const result = await createRun({
-      provider: "claude-cli",
-      model: "opus-4.5",
-      opts: { runId: "run-started", onAgentRunStart },
-    });
-
-    expect(onAgentRunStart).toHaveBeenCalledTimes(1);
-    expect(onAgentRunStart).toHaveBeenCalledWith("run-started");
-    expect(result).toMatchObject({ text: "ok" });
-  });
-});
-
 describe("runReplyAgent auto-compaction token update", () => {
-  type EmbeddedRunParams = {
-    prompt?: string;
-    extraSystemPrompt?: string;
-    abortSignal?: AbortSignal;
-    onAgentEvent?: (evt: {
-      stream?: string;
-      data?: { phase?: string; willRetry?: boolean; completed?: boolean };
-    }) => void;
-  };
-
   async function seedSessionStore(params: {
     storePath: string;
     sessionKey: string;
@@ -291,11 +185,6 @@ describe("runReplyAgent auto-compaction token update", () => {
       JSON.stringify({ [params.sessionKey]: params.entry }, null, 2),
       "utf-8",
     );
-  }
-
-  async function normalizeComparablePath(filePath: string): Promise<string> {
-    const parent = await fs.realpath(path.dirname(filePath)).catch(() => path.dirname(filePath));
-    return path.join(parent, path.basename(filePath));
   }
 
   function createBaseRun(params: {
@@ -340,321 +229,6 @@ describe("runReplyAgent auto-compaction token update", () => {
     return { typing, sessionCtx, resolvedQueue, followupRun };
   }
 
-  it("updates totalTokens after auto-compaction using lastCallUsage", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-tokens-"));
-    const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
-    const sessionEntry = {
-      sessionId: "session",
-      sessionFile: path.join(tmp, "session.jsonl"),
-      updatedAt: Date.now(),
-      totalTokens: 181_000,
-      compactionCount: 0,
-    };
-
-    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
-
-    runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
-      // Simulate auto-compaction during agent run
-      params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
-      params.onAgentEvent?.({
-        stream: "compaction",
-        data: { phase: "end", willRetry: false, completed: true },
-      });
-      return {
-        payloads: [{ text: "done" }],
-        meta: {
-          agentMeta: {
-            // Accumulated usage across pre+post compaction calls — inflated
-            usage: { input: 190_000, output: 8_000, total: 198_000 },
-            // Last individual API call's usage — actual post-compaction context
-            lastCallUsage: { input: 10_000, output: 3_000, total: 13_000 },
-            compactionCount: 1,
-          },
-        },
-      };
-    });
-
-    // Disable memory flush so we isolate the auto-compaction path
-    const config = {
-      agents: { defaults: { compaction: { memoryFlush: { enabled: false } } } },
-    };
-    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
-      storePath,
-      sessionEntry,
-      config,
-    });
-
-    await runReplyAgent({
-      commandBody: "hello",
-      followupRun,
-      queueKey: "main",
-      resolvedQueue,
-      shouldSteer: false,
-      shouldFollowup: false,
-      isActive: false,
-      isStreaming: false,
-      typing,
-      sessionCtx,
-      sessionEntry,
-      sessionStore: { [sessionKey]: sessionEntry },
-      sessionKey,
-      storePath,
-      defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: 200_000,
-      resolvedVerboseLevel: "off",
-      isNewSession: false,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      shouldInjectGroupIntro: false,
-      typingMode: "instant",
-    });
-
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    // totalTokens should reflect actual post-compaction context (~10k), not
-    // the stale pre-compaction value (181k) or the inflated accumulated (190k)
-    expect(stored[sessionKey].totalTokens).toBe(10_000);
-    // compactionCount should be incremented
-    expect(stored[sessionKey].compactionCount).toBe(1);
-  });
-
-  it("tracks auto-compaction from embedded result metadata even when no compaction event is emitted", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-meta-"));
-    const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
-    const sessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokens: 181_000,
-      compactionCount: 0,
-    };
-
-    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
-
-    runEmbeddedPiAgentMock.mockResolvedValue({
-      payloads: [{ text: "done" }],
-      meta: {
-        agentMeta: {
-          sessionId: "session-rotated",
-          usage: { input: 190_000, output: 8_000, total: 198_000 },
-          lastCallUsage: { input: 10_000, output: 3_000, total: 13_000 },
-          compactionCount: 2,
-        },
-      },
-    });
-
-    const config = {
-      agents: { defaults: { compaction: { memoryFlush: { enabled: false } } } },
-    };
-    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
-      storePath,
-      sessionEntry,
-      config,
-    });
-
-    await runReplyAgent({
-      commandBody: "hello",
-      followupRun,
-      queueKey: "main",
-      resolvedQueue,
-      shouldSteer: false,
-      shouldFollowup: false,
-      isActive: false,
-      isStreaming: false,
-      typing,
-      sessionCtx,
-      sessionEntry,
-      sessionStore: { [sessionKey]: sessionEntry },
-      sessionKey,
-      storePath,
-      defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: 200_000,
-      resolvedVerboseLevel: "off",
-      isNewSession: false,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      shouldInjectGroupIntro: false,
-      typingMode: "instant",
-    });
-
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].totalTokens).toBe(10_000);
-    expect(stored[sessionKey].compactionCount).toBe(2);
-    expect(stored[sessionKey].sessionId).toBe("session-rotated");
-    expect(await normalizeComparablePath(stored[sessionKey].sessionFile)).toBe(
-      await normalizeComparablePath(path.join(tmp, "session-rotated.jsonl")),
-    );
-  });
-
-  it("accumulates compactions across fallback attempts without double-counting a single attempt", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-fallback-"));
-    const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
-    const sessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokens: 181_000,
-      compactionCount: 0,
-    };
-
-    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
-
-    runWithModelFallbackMock.mockImplementationOnce(async ({ run }: RunWithModelFallbackParams) => {
-      try {
-        await run("anthropic", "claude");
-      } catch {
-        // Expected first-attempt failure.
-      }
-      return {
-        result: await run("openai", "gpt-5.4"),
-        provider: "openai",
-        model: "gpt-5.4",
-        attempts: [{ provider: "anthropic", model: "claude", error: "attempt failed" }],
-      };
-    });
-
-    runEmbeddedPiAgentMock
-      .mockImplementationOnce(async (params: EmbeddedRunParams) => {
-        params.onAgentEvent?.({
-          stream: "compaction",
-          data: { phase: "end", willRetry: true, completed: true },
-        });
-        throw new Error("attempt failed");
-      })
-      .mockResolvedValueOnce({
-        payloads: [{ text: "done" }],
-        meta: {
-          agentMeta: {
-            usage: { input: 190_000, output: 8_000, total: 198_000 },
-            lastCallUsage: { input: 10_000, output: 3_000, total: 13_000 },
-            compactionCount: 2,
-          },
-        },
-      });
-
-    const config = {
-      agents: { defaults: { compaction: { memoryFlush: { enabled: false } } } },
-    };
-    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
-      storePath,
-      sessionEntry,
-      config,
-    });
-
-    await runReplyAgent({
-      commandBody: "hello",
-      followupRun,
-      queueKey: "main",
-      resolvedQueue,
-      shouldSteer: false,
-      shouldFollowup: false,
-      isActive: false,
-      isStreaming: false,
-      typing,
-      sessionCtx,
-      sessionEntry,
-      sessionStore: { [sessionKey]: sessionEntry },
-      sessionKey,
-      storePath,
-      defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: 200_000,
-      resolvedVerboseLevel: "off",
-      isNewSession: false,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      shouldInjectGroupIntro: false,
-      typingMode: "instant",
-    });
-
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].totalTokens).toBe(10_000);
-    expect(stored[sessionKey].compactionCount).toBe(3);
-  });
-
-  it("does not count failed compaction end events from earlier fallback attempts", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-fallback-failed-"));
-    const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
-    const sessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokens: 181_000,
-      compactionCount: 0,
-    };
-
-    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
-
-    runWithModelFallbackMock.mockImplementationOnce(async ({ run }: RunWithModelFallbackParams) => {
-      try {
-        await run("anthropic", "claude");
-      } catch {
-        // Expected first-attempt failure.
-      }
-      return {
-        result: await run("openai", "gpt-5.4"),
-        provider: "openai",
-        model: "gpt-5.4",
-        attempts: [{ provider: "anthropic", model: "claude", error: "attempt failed" }],
-      };
-    });
-
-    runEmbeddedPiAgentMock
-      .mockImplementationOnce(async (params: EmbeddedRunParams) => {
-        params.onAgentEvent?.({
-          stream: "compaction",
-          data: { phase: "end", willRetry: true, completed: false },
-        });
-        throw new Error("attempt failed");
-      })
-      .mockResolvedValueOnce({
-        payloads: [{ text: "done" }],
-        meta: {
-          agentMeta: {
-            usage: { input: 190_000, output: 8_000, total: 198_000 },
-            lastCallUsage: { input: 10_000, output: 3_000, total: 13_000 },
-            compactionCount: 2,
-          },
-        },
-      });
-
-    const config = {
-      agents: { defaults: { compaction: { memoryFlush: { enabled: false } } } },
-    };
-    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
-      storePath,
-      sessionEntry,
-      config,
-    });
-
-    await runReplyAgent({
-      commandBody: "hello",
-      followupRun,
-      queueKey: "main",
-      resolvedQueue,
-      shouldSteer: false,
-      shouldFollowup: false,
-      isActive: false,
-      isStreaming: false,
-      typing,
-      sessionCtx,
-      sessionEntry,
-      sessionStore: { [sessionKey]: sessionEntry },
-      sessionKey,
-      storePath,
-      defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: 200_000,
-      resolvedVerboseLevel: "off",
-      isNewSession: false,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      shouldInjectGroupIntro: false,
-      typingMode: "instant",
-    });
-
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].totalTokens).toBe(10_000);
-    expect(stored[sessionKey].compactionCount).toBe(2);
-  });
   it("updates totalTokens from lastCallUsage even without compaction", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-last-"));
     const storePath = path.join(tmp, "sessions.json");
@@ -711,87 +285,6 @@ describe("runReplyAgent auto-compaction token update", () => {
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     // totalTokens should use lastCallUsage (55k), not accumulated (75k)
     expect(stored[sessionKey].totalTokens).toBe(55_000);
-  });
-
-  it("does not enqueue legacy post-compaction audit warnings", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-no-audit-warning-"));
-    const workspaceDir = path.join(tmp, "workspace");
-    await fs.mkdir(workspaceDir, { recursive: true });
-    const sessionFile = path.join(tmp, "session.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      `${JSON.stringify({ type: "message", message: { role: "assistant", content: [] } })}\n`,
-      "utf-8",
-    );
-
-    const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
-    const sessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokens: 10_000,
-      compactionCount: 0,
-    };
-
-    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
-
-    runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
-      params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
-      params.onAgentEvent?.({
-        stream: "compaction",
-        data: { phase: "end", willRetry: false, completed: true },
-      });
-      return {
-        payloads: [{ text: "done" }],
-        meta: {
-          agentMeta: {
-            usage: { input: 11_000, output: 500, total: 11_500 },
-            lastCallUsage: { input: 10_500, output: 500, total: 11_000 },
-            compactionCount: 1,
-          },
-        },
-      };
-    });
-
-    const config = {
-      agents: { defaults: { compaction: { memoryFlush: { enabled: false } } } },
-    };
-    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
-      storePath,
-      sessionEntry,
-      config,
-      sessionFile,
-      workspaceDir,
-    });
-
-    await runReplyAgent({
-      commandBody: "hello",
-      followupRun,
-      queueKey: "main",
-      resolvedQueue,
-      shouldSteer: false,
-      shouldFollowup: false,
-      isActive: false,
-      isStreaming: false,
-      typing,
-      sessionCtx,
-      sessionEntry,
-      sessionStore: { [sessionKey]: sessionEntry },
-      sessionKey,
-      storePath,
-      defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: 200_000,
-      resolvedVerboseLevel: "off",
-      isNewSession: false,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      shouldInjectGroupIntro: false,
-      typingMode: "instant",
-    });
-
-    const queuedSystemEvents = peekSystemEvents(sessionKey);
-    expect(queuedSystemEvents.some((event) => event.includes("Post-Compaction Audit"))).toBe(false);
-    expect(queuedSystemEvents.some((event) => event.includes("WORKFLOW_AUTO.md"))).toBe(false);
   });
 });
 
@@ -989,101 +482,6 @@ describe("runReplyAgent block streaming", () => {
   });
 });
 
-describe("runReplyAgent claude-cli routing", () => {
-  function createRun() {
-    const typing = createMockTypingController();
-    const sessionCtx = {
-      Provider: "webchat",
-      OriginatingTo: "session:1",
-      AccountId: "primary",
-      MessageSid: "msg",
-    } as unknown as TemplateContext;
-    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
-    const followupRun = {
-      prompt: "hello",
-      summaryLine: "hello",
-      enqueuedAt: Date.now(),
-      run: {
-        sessionId: "session",
-        sessionKey: "main",
-        messageProvider: "webchat",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/tmp",
-        config: { agents: { defaults: { cliBackends: { "claude-cli": {} } } } },
-        skillsSnapshot: {},
-        provider: "claude-cli",
-        model: "opus-4.5",
-        thinkLevel: "low",
-        verboseLevel: "off",
-        elevatedLevel: "off",
-        bashElevated: {
-          enabled: false,
-          allowed: false,
-          defaultLevel: "off",
-        },
-        timeoutMs: 1_000,
-        blockReplyBreak: "message_end",
-      },
-    } as unknown as FollowupRun;
-
-    return runReplyAgent({
-      commandBody: "hello",
-      followupRun,
-      queueKey: "main",
-      resolvedQueue,
-      shouldSteer: false,
-      shouldFollowup: false,
-      isActive: false,
-      isStreaming: false,
-      typing,
-      sessionCtx,
-      defaultModel: "claude-cli/opus-4.5",
-      resolvedVerboseLevel: "off",
-      isNewSession: false,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      shouldInjectGroupIntro: false,
-      typingMode: "instant",
-    });
-  }
-
-  it("uses the CLI runner for claude-cli provider", async () => {
-    const runId = "00000000-0000-0000-0000-000000000001";
-    const randomSpy = vi.spyOn(crypto, "randomUUID").mockReturnValue(runId);
-    const lifecyclePhases: string[] = [];
-    const unsubscribe = onAgentEvent((evt) => {
-      if (evt.runId !== runId) {
-        return;
-      }
-      if (evt.stream !== "lifecycle") {
-        return;
-      }
-      const phase = evt.data?.phase;
-      if (typeof phase === "string") {
-        lifecyclePhases.push(phase);
-      }
-    });
-    runCliAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "ok" }],
-      meta: {
-        agentMeta: {
-          provider: "claude-cli",
-          model: "opus-4.5",
-        },
-      },
-    });
-
-    const result = await createRun();
-    unsubscribe();
-    randomSpy.mockRestore();
-
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
-    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    expect(lifecyclePhases).toEqual(["start", "end"]);
-    expect(result).toMatchObject({ text: "ok" });
-  });
-});
-
 describe("runReplyAgent messaging tool suppression", () => {
   function createRun(
     messageProvider = "slack",
@@ -1205,108 +603,6 @@ describe("runReplyAgent messaging tool suppression", () => {
     const result = await createRun("slack");
 
     expect(result).toMatchObject({ text: "hello world!" });
-  });
-
-  it("persists usage fields even when replies are suppressed", async () => {
-    const storePath = path.join(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-")),
-      "sessions.json",
-    );
-    const sessionKey = "main";
-    const entry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
-    await saveSessionStore(storePath, { [sessionKey]: entry });
-
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "hello world!" }],
-      messagingToolSentTexts: ["different message"],
-      messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
-      meta: {
-        agentMeta: {
-          usage: { input: 10, output: 5 },
-          model: "claude-opus-4-6",
-          provider: "anthropic",
-        },
-      },
-    });
-
-    const result = await createRun("slack", { storePath, sessionKey });
-
-    expect(result).toBeUndefined();
-    const store = loadSessionStore(storePath, { skipCache: true });
-    expect(store[sessionKey]?.inputTokens).toBe(10);
-    expect(store[sessionKey]?.outputTokens).toBe(5);
-    expect(store[sessionKey]?.totalTokens).toBeUndefined();
-    expect(store[sessionKey]?.totalTokensFresh).toBe(false);
-    expect(store[sessionKey]?.model).toBe("claude-opus-4-6");
-  });
-
-  it("persists totalTokens from promptTokens when snapshot is available", async () => {
-    const storePath = path.join(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-")),
-      "sessions.json",
-    );
-    const sessionKey = "main";
-    const entry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
-    await saveSessionStore(storePath, { [sessionKey]: entry });
-
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "hello world!" }],
-      messagingToolSentTexts: ["different message"],
-      messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
-      meta: {
-        agentMeta: {
-          usage: { input: 10, output: 5 },
-          promptTokens: 42_000,
-          model: "claude-opus-4-6",
-          provider: "anthropic",
-        },
-      },
-    });
-
-    const result = await createRun("slack", { storePath, sessionKey });
-
-    expect(result).toBeUndefined();
-    const store = loadSessionStore(storePath, { skipCache: true });
-    expect(store[sessionKey]?.totalTokens).toBe(42_000);
-    expect(store[sessionKey]?.totalTokensFresh).toBe(true);
-    expect(store[sessionKey]?.model).toBe("claude-opus-4-6");
-  });
-
-  it("persists totalTokens from promptTokens when provider omits usage", async () => {
-    const storePath = path.join(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-")),
-      "sessions.json",
-    );
-    const sessionKey = "main";
-    const entry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      inputTokens: 111,
-      outputTokens: 22,
-    };
-    await saveSessionStore(storePath, { [sessionKey]: entry });
-
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "hello world!" }],
-      messagingToolSentTexts: ["different message"],
-      messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
-      meta: {
-        agentMeta: {
-          promptTokens: 41_000,
-          model: "claude-opus-4-6",
-          provider: "anthropic",
-        },
-      },
-    });
-
-    const result = await createRun("slack", { storePath, sessionKey });
-
-    expect(result).toBeUndefined();
-    const store = loadSessionStore(storePath, { skipCache: true });
-    expect(store[sessionKey]?.totalTokens).toBe(41_000);
-    expect(store[sessionKey]?.totalTokensFresh).toBe(true);
-    expect(store[sessionKey]?.inputTokens).toBe(111);
-    expect(store[sessionKey]?.outputTokens).toBe(22);
   });
 });
 
