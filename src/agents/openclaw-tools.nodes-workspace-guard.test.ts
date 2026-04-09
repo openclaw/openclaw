@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   }),
   nodesExecute: vi.fn(async () => ({
     content: [{ type: "text", text: "ok" }],
+    details: {},
   })),
 }));
 
@@ -32,7 +33,7 @@ vi.mock("./tools/nodes-tool.js", () => ({
         properties: {},
       },
       execute: mocks.nodesExecute,
-    }) as AnyAgentTool,
+    }) as unknown as AnyAgentTool,
 }));
 
 let createOpenClawTools: typeof import("./openclaw-tools.js").createOpenClawTools;
