@@ -56,15 +56,25 @@ export function hasAnyAutoRecallEnabled(cfg: OpenClawConfig): boolean {
   );
 }
 
-function shouldWarnForRecallOnlyWithoutAutoRecall(cfg: OpenClawConfig): boolean {
-  return cfg.agents?.defaults?.memoryInjection === "recall-only" && !hasAnyAutoRecallEnabled(cfg);
+function resolveRecallOnlyAutoRecallWarning(cfg: OpenClawConfig): string | undefined {
+  if (cfg.agents?.defaults?.memoryInjection !== "recall-only") {
+    return undefined;
+  }
+  if (cfg.agents?.defaults?.memorySearch?.autoRecall?.enabled) {
+    return undefined;
+  }
+  const hasAgentSpecificAutoRecall =
+    cfg.agents?.list?.some((agent) => agent?.memorySearch?.autoRecall?.enabled === true) ?? false;
+  if (hasAgentSpecificAutoRecall) {
+    return "memory-core: memoryInjection is set to 'recall-only' but agents.defaults.memorySearch.autoRecall is not enabled. Only agents with explicit memorySearch.autoRecall enabled will receive automatic memory context; other agents will have none.";
+  }
+  return "memory-core: memoryInjection is set to 'recall-only' but autoRecall is not enabled. The agent will have no memory context. Enable memorySearch.autoRecall or change memoryInjection back to 'full'.";
 }
 
 export function registerMemoryAutoRecall(api: OpenClawPluginApi): void {
-  if (shouldWarnForRecallOnlyWithoutAutoRecall(api.config)) {
-    api.logger.warn(
-      "memory-core: memoryInjection is set to 'recall-only' but autoRecall is not enabled. The agent will have no memory context. Enable memorySearch.autoRecall or change memoryInjection back to 'full'.",
-    );
+  const recallOnlyAutoRecallWarning = resolveRecallOnlyAutoRecallWarning(api.config);
+  if (recallOnlyAutoRecallWarning) {
+    api.logger.warn(recallOnlyAutoRecallWarning);
   }
 
   if (!hasAnyAutoRecallEnabled(api.config)) {

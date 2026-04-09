@@ -94,8 +94,9 @@ You can control how much long-term memory is injected into the prompt with
 
 - **`"full"`** -- default behavior. `MEMORY.md` is loaded at session start just
   like before.
-- **`"core-only"`** -- still injects `MEMORY.md`, but keeps it inside the normal
-  bootstrap size limits.
+- **`"core-only"`** -- still injects `MEMORY.md` and currently follows the same
+  bootstrap size limits as `"full"`. Use it when you want to opt into explicit
+  bounded-bootstrap intent ahead of future mode divergence.
 - **`"recall-only"`** -- skips bootstrap injection for `MEMORY.md` entirely and
   relies on search-based recall instead.
 

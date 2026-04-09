@@ -73,6 +73,33 @@ describe("registerMemoryAutoRecall", () => {
     );
   });
 
+  it("warns when recall-only is global but only some agents enable autoRecall", () => {
+    const { api, logger } = createApi({
+      agents: {
+        defaults: {
+          memoryInjection: "recall-only",
+          memorySearch: {},
+        },
+        list: [
+          {
+            id: "agent-with-recall",
+            memorySearch: {
+              autoRecall: {
+                enabled: true,
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    registerMemoryAutoRecall(api);
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      "memory-core: memoryInjection is set to 'recall-only' but agents.defaults.memorySearch.autoRecall is not enabled. Only agents with explicit memorySearch.autoRecall enabled will receive automatic memory context; other agents will have none.",
+    );
+  });
+
   it("prepends relevant memories when autoRecall returns hits", async () => {
     const { api, on } = createApi({
       agents: {

@@ -833,7 +833,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.contextInjection":
     'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
   "agents.defaults.memoryInjection":
-    'Controls how MEMORY.md is injected into workspace bootstrap context: "full" (default), "core-only", or "recall-only". Use "recall-only" when you want memory context to come only from per-turn recall instead of eager bootstrap injection.',
+    'Controls how MEMORY.md is injected into workspace bootstrap context: "full" (default), "core-only", or "recall-only". Today, "full" and "core-only" follow the same bounded bootstrap path; use "core-only" when you want to declare that intent explicitly, and use "recall-only" when memory context should come only from per-turn recall instead of eager bootstrap injection.',
   "agents.defaults.bootstrapMaxChars":
     "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
   "agents.defaults.bootstrapTotalMaxChars":

@@ -44,6 +44,10 @@ function applyMemoryInjectionFilter(
   files: WorkspaceBootstrapFile[],
   config?: OpenClawConfig,
 ): WorkspaceBootstrapFile[] {
+  // Today, "full" and "core-only" intentionally share the same bootstrap path.
+  // "core-only" remains a distinct config value so users can opt into explicit
+  // bounded bootstrap behavior without changing runtime semantics later when the
+  // modes diverge. Only "recall-only" changes file selection now.
   if (resolveMemoryInjectionMode(config) !== "recall-only") {
     return files;
   }

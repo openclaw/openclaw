@@ -214,7 +214,7 @@ describe("resolveBootstrapContextForRun", () => {
     expect(files.some((file) => file.name === "MEMORY.md")).toBe(false);
   });
 
-  it("keeps MEMORY.md on the normal truncation path in core-only mode", async () => {
+  it("keeps MEMORY.md on the current normal truncation path in core-only mode", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "0123456789".repeat(20), "utf8");
 
