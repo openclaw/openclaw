@@ -551,14 +551,20 @@ export function wrapToolWorkspaceRootGuardWithOptions(
   root: string,
   options?: {
     containerWorkdir?: string;
+    pathParamKeys?: readonly string[];
   },
 ): AnyAgentTool {
+  const pathParamKeys =
+    options?.pathParamKeys && options.pathParamKeys.length > 0 ? options.pathParamKeys : ["path"];
   return {
     ...tool,
     execute: async (toolCallId, args, signal, onUpdate) => {
       const record = getToolParamsRecord(args);
-      const filePath = record?.path;
-      if (typeof filePath === "string" && filePath.trim()) {
+      for (const key of pathParamKeys) {
+        const filePath = record?.[key];
+        if (typeof filePath !== "string" || !filePath.trim()) {
+          continue;
+        }
         const sandboxPath = mapContainerPathToWorkspaceRoot({
           filePath,
           root,
