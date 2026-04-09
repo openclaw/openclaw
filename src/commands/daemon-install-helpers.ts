@@ -30,6 +30,8 @@ export type GatewayInstallPlan = {
   environment: Record<string, string | undefined>;
 };
 
+const MANAGED_SERVICE_ENV_KEYS_VAR = "OPENCLAW_SERVICE_MANAGED_ENV_KEYS";
+
 function collectAuthProfileServiceEnvVars(params: {
   env: Record<string, string | undefined>;
   authStore?: AuthProfileStore;
@@ -93,8 +95,42 @@ function mergeServicePath(
   return segments.length > 0 ? segments.join(path.delimiter) : undefined;
 }
 
+function readManagedServiceEnvKeys(
+  existingEnvironment: Record<string, string | undefined> | undefined,
+): Set<string> {
+  if (!existingEnvironment) {
+    return new Set();
+  }
+  for (const [rawKey, rawValue] of Object.entries(existingEnvironment)) {
+    const key = normalizeEnvVarKey(rawKey, { portable: true });
+    if (!key || key.toUpperCase() !== MANAGED_SERVICE_ENV_KEYS_VAR) {
+      continue;
+    }
+    return new Set(
+      rawValue?.split(",").flatMap((value) => {
+        const normalized = normalizeEnvVarKey(value, { portable: true });
+        return normalized ? [normalized.toUpperCase()] : [];
+      }) ?? [],
+    );
+  }
+  return new Set();
+}
+
+function formatManagedServiceEnvKeys(
+  managedEnvironment: Record<string, string | undefined>,
+): string | undefined {
+  const keys = Object.keys(managedEnvironment)
+    .flatMap((key) => {
+      const normalized = normalizeEnvVarKey(key, { portable: true });
+      return normalized ? [normalized.toUpperCase()] : [];
+    })
+    .toSorted();
+  return keys.length > 0 ? keys.join(",") : undefined;
+}
+
 function collectPreservedExistingServiceEnvVars(
   existingEnvironment: Record<string, string | undefined> | undefined,
+  managedServiceEnvKeys: Set<string>,
 ): Record<string, string | undefined> {
   if (!existingEnvironment) {
     return {};
@@ -106,7 +142,15 @@ function collectPreservedExistingServiceEnvVars(
       continue;
     }
     const upper = key.toUpperCase();
-    if (upper === "HOME" || upper === "PATH" || upper === "TMPDIR" || upper.startsWith("OPENCLAW_")) {
+    if (
+      upper === "HOME" ||
+      upper === "PATH" ||
+      upper === "TMPDIR" ||
+      upper.startsWith("OPENCLAW_")
+    ) {
+      continue;
+    }
+    if (managedServiceEnvKeys.has(upper)) {
       continue;
     }
     if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
@@ -129,8 +173,7 @@ function buildGatewayInstallEnvironment(params: {
   serviceEnvironment: Record<string, string | undefined>;
   existingEnvironment?: Record<string, string | undefined>;
 }): Record<string, string | undefined> {
-  const environment: Record<string, string | undefined> = {
-    ...collectPreservedExistingServiceEnvVars(params.existingEnvironment),
+  const managedEnvironment: Record<string, string | undefined> = {
     ...collectDurableServiceEnvVars({
       env: params.env,
       config: params.config,
@@ -141,6 +184,13 @@ function buildGatewayInstallEnvironment(params: {
       warn: params.warn,
     }),
   };
+  const environment: Record<string, string | undefined> = {
+    ...collectPreservedExistingServiceEnvVars(
+      params.existingEnvironment,
+      readManagedServiceEnvKeys(params.existingEnvironment),
+    ),
+    ...managedEnvironment,
+  };
   Object.assign(environment, params.serviceEnvironment);
   const mergedPath = mergeServicePath(
     params.serviceEnvironment.PATH,
@@ -148,6 +198,10 @@ function buildGatewayInstallEnvironment(params: {
   );
   if (mergedPath) {
     environment.PATH = mergedPath;
+  }
+  const managedServiceEnvKeys = formatManagedServiceEnvKeys(managedEnvironment);
+  if (managedServiceEnvKeys) {
+    environment[MANAGED_SERVICE_ENV_KEYS_VAR] = managedServiceEnvKeys;
   }
   return environment;
 }
@@ -190,16 +244,10 @@ export async function buildGatewayInstallPlan(params: {
       process.platform === "darwin"
         ? resolveGatewayLaunchAgentLabel(params.env.OPENCLAW_PROFILE)
         : undefined,
-    // Keep npm/pnpm available to the service when the selected daemon node comes from
-    // a version-manager bin directory that isn't covered by static PATH guesses.
     extraPathDirs: resolveDaemonNodeBinDir(nodePath),
   });
 
-  // Merge env sources into the service environment in ascending priority:
-  //   1. ~/.openclaw/.env file vars  (lowest — user secrets / fallback keys)
-  //   2. Config env vars              (openclaw.json env.vars + inline keys)
-  //   3. Auth-profile env refs        (credential store → env var lookups)
-  //   4. Service environment          (HOME, PATH, OPENCLAW_* — highest)
+  // Lowest to highest: preserved custom vars, durable config, auth env refs, generated service env.
   return {
     programArguments,
     workingDirectory,
