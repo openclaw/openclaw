@@ -134,6 +134,7 @@ export const mockedFormatBillingErrorMessage = vi.fn(() => "");
 export const mockedClassifyFailoverReason = vi.fn<(raw: string) => FailoverReason | null>(
   () => null,
 );
+export const mockedSanitizeUserFacingText = vi.fn((text: string) => text);
 export const mockedExtractObservedOverflowTokenCount = vi.fn((msg?: string) => {
   const match = msg?.match(/prompt is too long:\s*([\d,]+)\s+tokens\s*>\s*[\d,]+\s+maximum/i);
   return match?.[1] ? Number(match[1].replaceAll(",", "")) : undefined;
@@ -250,6 +251,8 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
 
   mockedClassifyFailoverReason.mockReset();
   mockedClassifyFailoverReason.mockReturnValue(null);
+  mockedSanitizeUserFacingText.mockReset();
+  mockedSanitizeUserFacingText.mockImplementation((text: string) => text);
   mockedFormatBillingErrorMessage.mockReset();
   mockedFormatBillingErrorMessage.mockReturnValue("");
   mockedFormatAssistantErrorText.mockReset();
@@ -379,6 +382,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   vi.doMock("../pi-embedded-helpers.js", () => ({
     formatBillingErrorMessage: mockedFormatBillingErrorMessage,
     classifyFailoverReason: mockedClassifyFailoverReason,
+    sanitizeUserFacingText: mockedSanitizeUserFacingText,
     extractObservedOverflowTokenCount: mockedExtractObservedOverflowTokenCount,
     formatAssistantErrorText: mockedFormatAssistantErrorText,
     isAuthAssistantError: mockedIsAuthAssistantError,

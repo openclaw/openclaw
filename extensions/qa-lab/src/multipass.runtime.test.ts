@@ -198,24 +198,14 @@ describe("qa multipass runtime", () => {
 
   it("does not leave a temp guest transfer script behind when multipass is missing", async () => {
     const outputDir = path.join(process.cwd(), ".artifacts", "qa-e2e", "multipass-missing-test");
-    vi.spyOn(Date, "now").mockReturnValue(1_717_171_717_171);
-    vi.spyOn(Math, "random").mockReturnValue(0.123456789);
+    const preferredTmpDir = resolvePreferredOpenClawTmpDir();
+    const beforeEntries = new Set(fs.readdirSync(preferredTmpDir));
     (execFileMock as unknown as Mock).mockImplementation((...args: unknown[]) => {
       const callback = args[3] as (error: Error | null, stdout: string, stderr: string) => void;
       const error = new Error("spawn multipass ENOENT") as NodeJS.ErrnoException;
       error.code = "ENOENT";
       callback(error, "", "");
     });
-
-    const expectedVmName = createQaMultipassPlan({
-      repoRoot: process.cwd(),
-      outputDir,
-      scenarioIds: ["channel-chat-baseline"],
-    }).vmName;
-    const expectedTransferDir = path.join(
-      resolvePreferredOpenClawTmpDir(),
-      `${expectedVmName}-qa-suite-`,
-    );
 
     await expect(
       runQaMultipass({
@@ -226,8 +216,9 @@ describe("qa multipass runtime", () => {
     ).rejects.toThrow("Multipass is not installed on this host.");
 
     const tempEntries = fs
-      .readdirSync(resolvePreferredOpenClawTmpDir())
-      .filter((entry) => entry.startsWith(path.basename(expectedTransferDir)));
+      .readdirSync(preferredTmpDir)
+      .filter((entry) => !beforeEntries.has(entry))
+      .filter((entry) => entry.startsWith("openclaw-qa-") && entry.includes("-qa-suite-"));
     expect(tempEntries).toEqual([]);
     fs.rmSync(outputDir, { recursive: true, force: true });
   });
