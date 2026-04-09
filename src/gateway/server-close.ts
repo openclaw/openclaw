@@ -84,6 +84,11 @@ export function createGatewayCloseHandler(params: {
       params.cron.stop();
       params.heartbeatRunner.stop();
       try {
+        params.stopTaskRegistryMaintenance?.();
+      } catch {
+        /* ignore */
+      }
+      try {
         params.logStreamStop?.();
       } catch {
         /* ignore */

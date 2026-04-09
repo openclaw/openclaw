@@ -1,17 +1,17 @@
 // Full CSI: ESC [ <params> <final byte> covers cursor movement, erase, and SGR.
 const ANSI_CSI_PATTERN = "\\x1b\\[[\\x20-\\x3f]*[\\x40-\\x7e]";
-// OSC-8 hyperlinks: ESC ] 8 ; ; url ST ... ESC ] 8 ; ; ST
-const OSC8_PATTERN = "\\x1b\\]8;;.*?\\x1b\\\\|\\x1b\\]8;;\\x1b\\\\";
+// OSC: ESC ] ... BEL or ST (covers OSC-8 hyperlinks, OSC-52 clipboard writes, etc.)
+const ANSI_OSC_PATTERN = "\\x1b\\][\\s\\S]*?(?:\\x07|\\x1b\\\\)";
 
 const ANSI_CSI_REGEX = new RegExp(ANSI_CSI_PATTERN, "g");
-const OSC8_REGEX = new RegExp(OSC8_PATTERN, "g");
+const ANSI_OSC_REGEX = new RegExp(ANSI_OSC_PATTERN, "g");
 const graphemeSegmenter =
   typeof Intl !== "undefined" && "Segmenter" in Intl
     ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
     : null;
 
 export function stripAnsi(input: string): string {
-  return input.replace(OSC8_REGEX, "").replace(ANSI_CSI_REGEX, "");
+  return input.replace(ANSI_OSC_REGEX, "").replace(ANSI_CSI_REGEX, "");
 }
 
 export function splitGraphemes(input: string): string[] {

@@ -177,6 +177,28 @@ describe("logs cli", () => {
     expect(stderrWrites.join("")).toContain("output stdout closed");
   });
 
+  it("sanitizes terminal control sequences in text log output", async () => {
+    callGatewayFromCli.mockResolvedValueOnce({
+      file: "/tmp/openclaw.log",
+      lines: ['{"time":"2025-01-01T12:00:00.000Z","0":"hi \\u001b]52;;c2VjcmV0\\u0007","_meta":{"logLevelName":"INFO","name":"{\\"subsystem\\":\\"gate\\u001b[2Kway\\"}"}}'],
+    });
+
+    const stdoutWrites: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+      stdoutWrites.push(String(chunk));
+      return true;
+    });
+
+    await runLogsCli(["logs", "--plain"]);
+
+    const output = stdoutWrites.join("");
+    expect(output).toContain("gateway");
+    expect(output).toContain("hi");
+    expect(output).not.toContain("c2VjcmV0");
+    expect(output).not.toContain("\u001b");
+    expect(output).not.toContain("\u0007");
+  });
+
   it("falls back to logs.tail polling when follow streaming is unavailable", async () => {
     resolveGatewayClientConnection.mockResolvedValueOnce({
       clientOptions: {

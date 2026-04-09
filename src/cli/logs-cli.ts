@@ -1,8 +1,9 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { Command } from "commander";
+import { formatErrorMessage } from "../infra/errors.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import { formatTimestamp, isValidTimeZone } from "../logging/timestamps.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { sanitizeForLog } from "../terminal/ansi.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { clearActiveProgressLine } from "../terminal/progress-line.js";
 import { createSafeStreamWriter } from "../terminal/stream-writer.js";
@@ -75,6 +76,7 @@ async function fetchLogs(
   if (!payload || typeof payload !== "object") {
     throw new Error("Unexpected logs.tail response");
   }
+  return payload as LogsTailPayload;
 }
 
 function createDeferred<T>() {
@@ -607,13 +609,15 @@ function formatLogLine(
 ): string {
   const parsed = parseLogLine(raw);
   if (!parsed) {
-    return raw;
+    return sanitizeForLog(raw);
   }
-  const label = parsed.subsystem ?? parsed.module ?? "";
-  const time = formatLogTimestamp(parsed.time, opts.pretty ? "pretty" : "plain", opts.localTime);
-  const level = parsed.level ?? "";
+  const label = sanitizeForLog(parsed.subsystem ?? parsed.module ?? "");
+  const time = sanitizeForLog(
+    formatLogTimestamp(parsed.time, opts.pretty ? "pretty" : "plain", opts.localTime),
+  );
+  const level = sanitizeForLog(parsed.level ?? "");
   const levelLabel = level.padEnd(5).trim();
-  const message = parsed.message || parsed.raw;
+  const message = sanitizeForLog(parsed.message || parsed.raw);
 
   if (!opts.pretty) {
     return [time, level, label, message].filter(Boolean).join(" ").trim();

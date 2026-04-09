@@ -93,6 +93,7 @@ import {
 import { createExecApprovalIosPushDelivery } from "./exec-approval-ios-push.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { createGatewayLogStream } from "./log-stream.js";
+import { startMcpLoopbackServer } from "./mcp-http.js";
 import { startGatewayModelPricingRefresh } from "./model-pricing-cache.js";
 import { NodeRegistry } from "./node-registry.js";
 import { createChannelManager } from "./server-channels.js";
@@ -951,6 +952,7 @@ export async function startGatewayServer(
       }
       return undefined;
     },
+    broadcastToConnIds,
   });
   stopLogStream = logStream.close;
   const nodeSendEvent = (opts: { nodeId: string; event: string; payloadJSON?: string | null }) => {
@@ -986,8 +988,9 @@ export async function startGatewayServer(
   let lifecycleUnsub: (() => void) | null = null;
   try {
     try {
-      mcpServer = await startMcpLoopbackServer(0);
-      log.info(`MCP loopback server listening on http://127.0.0.1:${mcpServer.port}/mcp`);
+      const nextMcpServer = await startMcpLoopbackServer(0);
+      mcpServer = nextMcpServer;
+      log.info(`MCP loopback server listening on http://127.0.0.1:${nextMcpServer.port}/mcp`);
     } catch (error) {
       log.warn(`MCP loopback server failed to start: ${String(error)}`);
     }

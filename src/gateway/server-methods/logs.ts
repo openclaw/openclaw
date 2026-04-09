@@ -1,4 +1,5 @@
 import { getResolvedLoggerSettings } from "../../logging.js";
+import { MAX_LOG_STREAM_BYTES, MAX_LOG_STREAM_LIMIT } from "../log-stream.js";
 import { readLogSlice, resolveLogFile } from "../log-tail.js";
 import {
   ErrorCodes,
@@ -11,6 +12,13 @@ import type { GatewayRequestHandlers } from "./types.js";
 
 const DEFAULT_LIMIT = 500;
 const DEFAULT_MAX_BYTES = 250_000;
+
+function clampPositiveInt(value: number | undefined, fallback: number, max: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.max(1, Math.min(max, Math.floor(value)));
+}
 
 export const logsHandlers: GatewayRequestHandlers = {
   "logs.tail": async ({ params, respond }) => {
@@ -27,6 +35,8 @@ export const logsHandlers: GatewayRequestHandlers = {
     }
 
     const p = params as { file?: string; cursor?: number; limit?: number; maxBytes?: number };
+    const limit = clampPositiveInt(p.limit, DEFAULT_LIMIT, MAX_LOG_STREAM_LIMIT);
+    const maxBytes = clampPositiveInt(p.maxBytes, DEFAULT_MAX_BYTES, MAX_LOG_STREAM_BYTES);
     const configuredFile = getResolvedLoggerSettings().file;
     try {
       const file = await resolveLogFile(configuredFile);
@@ -34,8 +44,8 @@ export const logsHandlers: GatewayRequestHandlers = {
         file,
         previousFile: p.file,
         cursor: p.cursor,
-        limit: p.limit,
-        maxBytes: p.maxBytes,
+        limit,
+        maxBytes,
       });
       respond(true, result, undefined);
     } catch (err) {
@@ -70,8 +80,8 @@ export const logsHandlers: GatewayRequestHandlers = {
     }
 
     const p = params as { file?: string; cursor?: number; limit?: number; maxBytes?: number };
-    const limit = p.limit ?? DEFAULT_LIMIT;
-    const maxBytes = p.maxBytes ?? DEFAULT_MAX_BYTES;
+    const limit = clampPositiveInt(p.limit, DEFAULT_LIMIT, MAX_LOG_STREAM_LIMIT);
+    const maxBytes = clampPositiveInt(p.maxBytes, DEFAULT_MAX_BYTES, MAX_LOG_STREAM_BYTES);
     const configuredFile = getResolvedLoggerSettings().file;
     try {
       const file = await resolveLogFile(configuredFile);

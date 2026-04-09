@@ -51,6 +51,7 @@ describe("createGatewayLogStream unsubscribe race", () => {
       send: vi.fn(),
       close: vi.fn(),
     };
+    const broadcastToConnIds = vi.fn();
 
     const stream = createGatewayLogStream({
       getClientByConnId: (connId) =>
@@ -59,6 +60,7 @@ describe("createGatewayLogStream unsubscribe race", () => {
               socket,
             } as never)
           : undefined,
+      broadcastToConnIds,
     });
 
     try {
@@ -78,6 +80,93 @@ describe("createGatewayLogStream unsubscribe race", () => {
       await Promise.resolve();
 
       expect(socket.send).not.toHaveBeenCalled();
+      expect(broadcastToConnIds).not.toHaveBeenCalled();
+    } finally {
+      stream.close();
+    }
+  });
+
+  test("routes appended log events through targeted broadcast delivery", async () => {
+    readLogSlice.mockResolvedValueOnce({
+      cursor: 7,
+      size: 7,
+      lines: ["streamed line"],
+      truncated: false,
+      reset: false,
+    });
+
+    const socket = {
+      readyState: WebSocket.OPEN,
+      bufferedAmount: 0,
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+    const broadcastToConnIds = vi.fn();
+
+    const stream = createGatewayLogStream({
+      getClientByConnId: (connId) =>
+        connId === "conn-1"
+          ? ({
+              socket,
+            } as never)
+          : undefined,
+      broadcastToConnIds,
+    });
+
+    try {
+      expect(stream.subscribe("conn-1", { paused: true })).toBe(true);
+      stream.activate("conn-1");
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(broadcastToConnIds).toHaveBeenCalledWith(
+        "logs.appended",
+        expect.objectContaining({
+          file: "/tmp/openclaw-2026-04-03.log",
+          cursor: 7,
+          lines: ["streamed line"],
+        }),
+        new Set(["conn-1"]),
+      );
+      expect(socket.send).not.toHaveBeenCalled();
+    } finally {
+      stream.close();
+    }
+  });
+
+  test("rejects subscriptions beyond the per-ip cap", () => {
+    const sockets = new Map(
+      Array.from({ length: 5 }, (_, index) => [
+        `conn-${index + 1}`,
+        {
+          readyState: WebSocket.OPEN,
+          bufferedAmount: 0,
+          send: vi.fn(),
+          close: vi.fn(),
+        },
+      ]),
+    );
+
+    const stream = createGatewayLogStream({
+      getClientByConnId: (connId) => {
+        const socket = sockets.get(connId);
+        if (!socket) {
+          return undefined;
+        }
+        return {
+          socket,
+          clientIp: "127.0.0.1",
+        } as never;
+      },
+      broadcastToConnIds: vi.fn(),
+    });
+
+    try {
+      expect(stream.subscribe("conn-1")).toBe(true);
+      expect(stream.subscribe("conn-2")).toBe(true);
+      expect(stream.subscribe("conn-3")).toBe(true);
+      expect(stream.subscribe("conn-4")).toBe(true);
+      expect(stream.subscribe("conn-5")).toBe(false);
     } finally {
       stream.close();
     }

@@ -1,14 +1,18 @@
 import { WebSocket } from "ws";
 import { getResolvedLoggerSettings } from "../logging.js";
+import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast.js";
 import { readLogSlice, resolveLogFile } from "./log-tail.js";
-import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 const LOG_POLL_INTERVAL_MS = 1_000;
+export const MAX_LOG_STREAM_SUBSCRIBERS = 16;
+export const MAX_LOG_STREAM_SUBSCRIBERS_PER_IP = 4;
+export const MAX_LOG_STREAM_LIMIT = 500;
+export const MAX_LOG_STREAM_BYTES = 250_000;
 
 type LogSubscriber = {
   connId: string;
-  socket: WebSocket;
+  clientIp?: string;
   active: boolean;
   file?: string;
   cursor?: number;
@@ -35,6 +39,7 @@ export type GatewayLogStream = {
 
 export function createGatewayLogStream(params: {
   getClientByConnId: (connId: string) => GatewayWsClient | undefined;
+  broadcastToConnIds: GatewayBroadcastToConnIdsFn;
 }): GatewayLogStream {
   const subscribers = new Map<string, LogSubscriber>();
 
@@ -48,15 +53,9 @@ export function createGatewayLogStream(params: {
     }
     subscriber.polling = true;
     try {
-      if (subscriber.socket.readyState !== WebSocket.OPEN) {
+      const gatewayClient = params.getClientByConnId(subscriber.connId);
+      if (!gatewayClient || gatewayClient.socket.readyState !== WebSocket.OPEN) {
         unsubscribe(subscriber.connId);
-        return;
-      }
-      if (subscriber.socket.bufferedAmount > MAX_BUFFERED_BYTES) {
-        unsubscribe(subscriber.connId);
-        try {
-          subscriber.socket.close(1008, "slow consumer");
-        } catch {}
         return;
       }
       const configuredFile = getResolvedLoggerSettings().file;
@@ -71,7 +70,7 @@ export function createGatewayLogStream(params: {
       if (
         subscribers.get(subscriber.connId) !== subscriber ||
         !subscriber.active ||
-        subscriber.socket.readyState !== WebSocket.OPEN
+        params.getClientByConnId(subscriber.connId)?.socket.readyState !== WebSocket.OPEN
       ) {
         return;
       }
@@ -80,21 +79,20 @@ export function createGatewayLogStream(params: {
       if (!result.reset && result.lines.length === 0) {
         return;
       }
-      subscriber.socket.send(
-        JSON.stringify({
-          type: "event",
-          event: "logs.appended",
-          payload: {
-            file,
-            ...result,
-          },
-        }),
+      params.broadcastToConnIds(
+        "logs.appended",
+        {
+          file,
+          ...result,
+        },
+        new Set([subscriber.connId]),
       );
     } catch {
+      const gatewayClient = params.getClientByConnId(subscriber.connId);
       unsubscribe(subscriber.connId);
       try {
-        if (subscriber.socket.readyState === WebSocket.OPEN) {
-          subscriber.socket.close(1011, "log stream error");
+        if (gatewayClient?.socket.readyState === WebSocket.OPEN) {
+          gatewayClient.socket.close(1011, "log stream error");
         }
       } catch {}
     } finally {
@@ -119,14 +117,38 @@ export function createGatewayLogStream(params: {
       if (!gatewayClient) {
         return false;
       }
+      const existingSubscriber = subscribers.get(normalizedConnId);
+      if (!existingSubscriber) {
+        if (subscribers.size >= MAX_LOG_STREAM_SUBSCRIBERS) {
+          return false;
+        }
+        const clientIp = gatewayClient.clientIp?.trim();
+        if (clientIp) {
+          let subscriptionsForIp = 0;
+          for (const subscriber of subscribers.values()) {
+            if (subscriber.clientIp === clientIp) {
+              subscriptionsForIp += 1;
+            }
+          }
+          if (subscriptionsForIp >= MAX_LOG_STREAM_SUBSCRIBERS_PER_IP) {
+            return false;
+          }
+        }
+      }
       subscribers.set(normalizedConnId, {
         connId: normalizedConnId,
-        socket: gatewayClient.socket,
+        clientIp: gatewayClient.clientIp?.trim() || undefined,
         active: opts?.paused !== true,
         file: typeof opts?.file === "string" ? opts.file : undefined,
         cursor: typeof opts?.cursor === "number" ? opts.cursor : undefined,
-        limit: typeof opts?.limit === "number" ? opts.limit : 500,
-        maxBytes: typeof opts?.maxBytes === "number" ? opts.maxBytes : 250_000,
+        limit:
+          typeof opts?.limit === "number"
+            ? Math.max(1, Math.min(MAX_LOG_STREAM_LIMIT, Math.floor(opts.limit)))
+            : MAX_LOG_STREAM_LIMIT,
+        maxBytes:
+          typeof opts?.maxBytes === "number"
+            ? Math.max(1, Math.min(MAX_LOG_STREAM_BYTES, Math.floor(opts.maxBytes)))
+            : MAX_LOG_STREAM_BYTES,
         polling: false,
       });
       return true;
