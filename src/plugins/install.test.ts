@@ -764,6 +764,70 @@ describe("installPluginFromArchive", () => {
     expect(warnings.some((w) => w.includes("dangerous code pattern"))).toBe(true);
   });
 
+  it("blocks package installs when a package manifest declares a blocked dependency", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "blocked-dependency-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["index.js"] },
+        dependencies: {
+          "plain-crypto-js": "^4.2.1",
+        },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n");
+
+    const { result, warnings } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain('Plugin "blocked-dependency-plugin" installation blocked');
+      expect(result.error).toContain('blocked dependency "plain-crypto-js"');
+      expect(result.error).toContain("dependencies of blocked-dependency-plugin (package.json)");
+    }
+    expect(warnings).toContain(
+      'WARNING: Plugin "blocked-dependency-plugin" installation blocked: blocked dependency "plain-crypto-js" declared in dependencies of blocked-dependency-plugin (package.json).',
+    );
+  });
+
+  it("blocks package installs when a nested vendored package manifest declares a blocked dependency", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "vendored-blocked-dependency-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["index.js"] },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n");
+    fs.mkdirSync(path.join(pluginDir, "vendor", "axios"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "vendor", "axios", "package.json"),
+      JSON.stringify({
+        name: "axios",
+        version: "1.14.1",
+        dependencies: {
+          "plain-crypto-js": "^4.2.1",
+        },
+      }),
+    );
+
+    const { result } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain('blocked dependency "plain-crypto-js"');
+      expect(result.error).toContain("dependencies of axios (vendor/axios/package.json)");
+    }
+  });
+
   it("allows package installs with dangerous code patterns when forced unsafe install is set", async () => {
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
 
@@ -794,6 +858,47 @@ describe("installPluginFromArchive", () => {
         ),
       ),
     ).toBe(true);
+  });
+
+  it("keeps blocked dependency package checks active when forced unsafe install is set", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "forced-blocked-dependency-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["index.js"] },
+        dependencies: {
+          "plain-crypto-js": "^4.2.1",
+        },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n");
+
+    const { result, warnings } = await installFromDirWithWarnings({
+      pluginDir,
+      extensionsDir,
+      dangerouslyForceUnsafeInstall: true,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain('blocked dependency "plain-crypto-js"');
+    }
+    expect(
+      warnings.some((warning) =>
+        warning.includes('blocked dependency "plain-crypto-js" declared in dependencies'),
+      ),
+    ).toBe(true);
+    expect(
+      warnings.some((warning) =>
+        warning.includes(
+          "forced despite dangerous code patterns via --dangerously-force-unsafe-install",
+        ),
+      ),
+    ).toBe(false);
   });
 
   it("blocks bundle installs when bundle contains dangerous code patterns", async () => {

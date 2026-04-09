@@ -1,6 +1,8 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
 import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
+import { findBlockedManifestDependencies } from "./dependency-denylist.js";
 import { getGlobalHookRunner } from "./hook-runner-global.js";
 import { createBeforeInstallHookPayload } from "./install-policy-context.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
@@ -25,6 +27,13 @@ type BuiltinInstallScan = {
   info: number;
   findings: InstallScanFinding[];
   error?: string;
+};
+
+type PackageManifest = {
+  name?: string;
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
 };
 
 type PluginInstallRequestKind =
@@ -61,6 +70,20 @@ function buildScanFailureBlockReason(params: { error: string; targetLabel: strin
   return `${params.targetLabel} blocked: code safety scan failed (${params.error}). Run "openclaw security audit --deep" for details.`;
 }
 
+function buildBlockedDependencyReason(params: {
+  dependencyName: string;
+  field: "dependencies" | "optionalDependencies" | "peerDependencies";
+  manifestPackageName?: string;
+  manifestRelativePath: string;
+  targetLabel: string;
+}) {
+  const manifestLabel =
+    typeof params.manifestPackageName === "string" && params.manifestPackageName.trim()
+      ? `${params.manifestPackageName.trim()} (${params.manifestRelativePath})`
+      : params.manifestRelativePath;
+  return `${params.targetLabel} blocked: blocked dependency "${params.dependencyName}" declared in ${params.field} of ${manifestLabel}.`;
+}
+
 function buildBuiltinScanFromError(error: unknown): BuiltinInstallScan {
   return {
     status: "error",
@@ -88,6 +111,75 @@ function buildBuiltinScanFromSummary(summary: {
     info: summary.info,
     findings: summary.findings,
   };
+}
+
+async function collectPackageManifestPaths(rootDir: string): Promise<string[]> {
+  const queue = [rootDir];
+  const packageManifestPaths: string[] = [];
+
+  while (queue.length > 0) {
+    const currentDir = queue.shift();
+    if (!currentDir) {
+      continue;
+    }
+
+    const entries = await fs.readdir(currentDir, { withFileTypes: true });
+    for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
+      const nextPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        queue.push(nextPath);
+        continue;
+      }
+      if (entry.isFile() && entry.name === "package.json") {
+        packageManifestPaths.push(nextPath);
+      }
+    }
+  }
+
+  return packageManifestPaths;
+}
+
+async function scanManifestDependencyDenylist(params: {
+  logger: InstallScanLogger;
+  packageDir: string;
+  targetLabel: string;
+}): Promise<InstallSecurityScanResult | undefined> {
+  const packageManifestPaths = await collectPackageManifestPaths(params.packageDir);
+  for (const manifestPath of packageManifestPaths) {
+    let manifest: PackageManifest;
+    try {
+      manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as PackageManifest;
+    } catch {
+      continue;
+    }
+
+    const blockedDependencies = findBlockedManifestDependencies(manifest);
+    if (blockedDependencies.length === 0) {
+      continue;
+    }
+
+    const finding = blockedDependencies[0];
+    if (!finding) {
+      continue;
+    }
+
+    const manifestRelativePath = path.relative(params.packageDir, manifestPath) || "package.json";
+    const reason = buildBlockedDependencyReason({
+      dependencyName: finding.dependencyName,
+      field: finding.field,
+      manifestPackageName: manifest.name,
+      manifestRelativePath,
+      targetLabel: params.targetLabel,
+    });
+    params.logger.warn?.(`WARNING: ${reason}`);
+    return {
+      blocked: {
+        code: "security_scan_blocked",
+        reason,
+      },
+    };
+  }
+  return undefined;
 }
 
 async function scanDirectoryTarget(params: {
@@ -346,6 +438,15 @@ export async function scanPackageInstallSourceRuntime(
     version?: string;
   },
 ): Promise<InstallSecurityScanResult | undefined> {
+  const dependencyBlocked = await scanManifestDependencyDenylist({
+    logger: params.logger,
+    packageDir: params.packageDir,
+    targetLabel: `Plugin "${params.pluginId}" installation`,
+  });
+  if (dependencyBlocked) {
+    return dependencyBlocked;
+  }
+
   const forcedScanEntries: string[] = [];
   for (const entry of params.extensions) {
     const resolvedEntry = path.resolve(params.packageDir, entry);
