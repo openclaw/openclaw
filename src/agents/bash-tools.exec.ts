@@ -1560,7 +1560,7 @@ export function createExecTool(
         workdir = explicitWorkdir;
       } else {
         const rawWorkdir = explicitWorkdir ?? defaultWorkdir ?? process.cwd();
-        workdir = resolveWorkdir(rawWorkdir, warnings);
+        workdir = resolveWorkdir(rawWorkdir);
       }
       rejectExecApprovalShellCommand(params.command);
 

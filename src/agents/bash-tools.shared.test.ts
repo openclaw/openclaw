@@ -1,8 +1,8 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveSandboxWorkdir } from "./bash-tools.shared.js";
+import { resolveSandboxWorkdir, resolveWorkdir } from "./bash-tools.shared.js";
 
 async function withTempDir(run: (dir: string) => Promise<void>) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-bash-workdir-"));
@@ -72,6 +72,41 @@ describe("resolveSandboxWorkdir", () => {
       expect(resolved.hostWorkdir).toBe(nested);
       expect(resolved.containerWorkdir).toBe("/sandbox-root/project");
       expect(warnings).toEqual([]);
+    });
+  });
+});
+
+describe("resolveWorkdir", () => {
+  it("returns the workdir unchanged when not starting with ~", async () => {
+    await withTempDir(async (dir) => {
+      const resolved = resolveWorkdir(dir);
+      expect(resolved).toBe(dir);
+    });
+  });
+
+  it("expands ~ to the home directory", async () => {
+    const homeDir = os.homedir();
+    const resolved = resolveWorkdir("~");
+    expect(resolved).toBe(homeDir);
+  });
+
+  it("expands ~/subdir to home directory with subdir", async () => {
+    const home = os.homedir();
+    const resolved = resolveWorkdir("~");
+    expect(resolved).toBe(home);
+  });
+
+  it("throws error when workdir does not exist", async () => {
+    expect(() => resolveWorkdir("/nonexistent/path/to/dir")).toThrow(
+      'workdir "/nonexistent/path/to/dir" does not exist',
+    );
+  });
+
+  it("throws error when workdir is a file, not a directory", async () => {
+    await withTempDir(async (dir) => {
+      const filePath = path.join(dir, "file.txt");
+      await writeFile(filePath, "");
+      expect(() => resolveWorkdir(filePath)).toThrow(`workdir "${filePath}" is not a directory`);
     });
   });
 });
