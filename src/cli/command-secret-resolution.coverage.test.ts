@@ -17,18 +17,33 @@ const SECRET_TARGET_CALLSITES = [
 function hasSupportedTargetIdsWiring(source: string): boolean {
   return (
     /targetIds:\s*get[A-Za-z0-9_]+\(\)/m.test(source) ||
-    /targetIds:\s*scopedTargets\.targetIds/m.test(source)
+    /targetIds:\s*getAgentRuntimeCommandSecretTargetIds\(/m.test(source) ||
+    /targetIds:\s*scopedTargets\.targetIds/m.test(source) ||
+    source.includes("collectStatusScanOverview({")
   );
+}
+
+function hasSupportedSecretResolutionWiring(source: string): boolean {
+  return (
+    /resolveCommandConfigWithSecrets\(/.test(source) ||
+    /resolveCommandSecretRefsViaGateway\(/.test(source) ||
+    /collectStatusScanOverview\(/.test(source)
+  );
+}
+
+function usesDelegatedStatusOverviewFlow(source: string): boolean {
+  return /collectStatusScanOverview\(/.test(source);
 }
 
 describe("command secret resolution coverage", () => {
   it.each(SECRET_TARGET_CALLSITES)(
-    "routes target-id command path through shared gateway resolver: %s",
+    "routes target-id command path through shared secret resolution flow: %s",
     async (relativePath) => {
       const source = await readCommandSource(relativePath);
-      expect(source).toContain("resolveCommandSecretRefsViaGateway");
-      expect(hasSupportedTargetIdsWiring(source)).toBe(true);
-      expect(source).toContain("resolveCommandSecretRefsViaGateway({");
+      expect(hasSupportedSecretResolutionWiring(source)).toBe(true);
+      if (!usesDelegatedStatusOverviewFlow(source)) {
+        expect(hasSupportedTargetIdsWiring(source)).toBe(true);
+      }
     },
   );
 });

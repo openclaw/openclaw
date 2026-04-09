@@ -1,12 +1,19 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "../../runtime-api.js";
 import { getMSTeamsRuntime } from "../runtime.js";
+import { ensureUserAgentHeader } from "../user-agent.js";
 import { downloadMSTeamsAttachments } from "./download.js";
 import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import {
   applyAuthorizationHeaderForUrl,
   GRAPH_ROOT,
+  estimateBase64DecodedBytes,
   inferPlaceholder,
-  isRecord,
+  readNestedString,
   isUrlAllowed,
   type MSTeamsAttachmentFetchPolicy,
   normalizeContentType,
@@ -37,17 +44,6 @@ type GraphAttachment = {
   content?: unknown;
 };
 
-function readNestedString(value: unknown, keys: Array<string | number>): string | undefined {
-  let current: unknown = value;
-  for (const key of keys) {
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[key as keyof typeof current];
-  }
-  return typeof current === "string" && current.trim() ? current.trim() : undefined;
-}
-
 export function buildMSTeamsGraphMessageUrls(params: {
   conversationType?: string | null;
   conversationId?: string | null;
@@ -56,10 +52,10 @@ export function buildMSTeamsGraphMessageUrls(params: {
   conversationMessageId?: string | null;
   channelData?: unknown;
 }): string[] {
-  const conversationType = params.conversationType?.trim().toLowerCase() ?? "";
+  const conversationType = normalizeLowercaseStringOrEmpty(params.conversationType ?? "");
   const messageIdCandidates = new Set<string>();
   const pushCandidate = (value: string | null | undefined) => {
-    const trimmed = typeof value === "string" ? value.trim() : "";
+    const trimmed = normalizeOptionalString(value) ?? "";
     if (trimmed) {
       messageIdCandidates.add(trimmed);
     }
@@ -70,7 +66,7 @@ export function buildMSTeamsGraphMessageUrls(params: {
   pushCandidate(readNestedString(params.channelData, ["messageId"]));
   pushCandidate(readNestedString(params.channelData, ["teamsMessageId"]));
 
-  const replyToId = typeof params.replyToId === "string" ? params.replyToId.trim() : "";
+  const replyToId = normalizeOptionalString(params.replyToId) ?? "";
 
   if (conversationType === "channel") {
     const teamId =
@@ -130,7 +126,7 @@ async function fetchGraphCollection<T>(params: {
     url: params.url,
     fetchImpl: fetchFn,
     init: {
-      headers: { Authorization: `Bearer ${params.accessToken}` },
+      headers: ensureUserAgentHeader({ Authorization: `Bearer ${params.accessToken}` }),
     },
     policy: params.ssrfPolicy,
     auditContext: "msteams.graph.collection",
@@ -196,6 +192,9 @@ async function downloadGraphHostedContent(params: {
     const contentBytes = typeof item.contentBytes === "string" ? item.contentBytes : "";
     let buffer: Buffer;
     if (contentBytes) {
+      if (estimateBase64DecodedBytes(contentBytes) > params.maxBytes) {
+        continue;
+      }
       try {
         buffer = Buffer.from(contentBytes, "base64");
       } catch {
@@ -209,7 +208,7 @@ async function downloadGraphHostedContent(params: {
           url: valueUrl,
           fetchImpl: params.fetchFn ?? fetch,
           init: {
-            headers: { Authorization: `Bearer ${params.accessToken}` },
+            headers: ensureUserAgentHeader({ Authorization: `Bearer ${params.accessToken}` }),
           },
           policy: params.ssrfPolicy,
           auditContext: "msteams.graph.hostedContent.value",
@@ -297,7 +296,7 @@ export async function downloadMSTeamsGraphMedia(params: {
       url: messageUrl,
       fetchImpl: fetchFn,
       init: {
-        headers: { Authorization: `Bearer ${accessToken}` },
+        headers: ensureUserAgentHeader({ Authorization: `Bearer ${accessToken}` }),
       },
       policy: ssrfPolicy,
       auditContext: "msteams.graph.message",
@@ -340,7 +339,7 @@ export async function downloadMSTeamsGraphMedia(params: {
               ssrfPolicy,
               fetchImpl: async (input, init) => {
                 const requestUrl = resolveRequestUrl(input);
-                const headers = new Headers(init?.headers);
+                const headers = ensureUserAgentHeader(init?.headers);
                 applyAuthorizationHeaderForUrl({
                   headers,
                   url: requestUrl,
@@ -392,7 +391,7 @@ export async function downloadMSTeamsGraphMedia(params: {
   const filteredAttachments =
     sharePointMedia.length > 0
       ? normalizedAttachments.filter((att) => {
-          const contentType = att.contentType?.toLowerCase();
+          const contentType = normalizeOptionalLowercaseString(att.contentType);
           if (contentType !== "reference") {
             return true;
           }

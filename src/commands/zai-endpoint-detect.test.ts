@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectZaiEndpoint } from "./zai-endpoint-detect.js";
+import { detectZaiEndpoint } from "../plugins/provider-zai-endpoint.js";
 
 type FetchResponse = { status: number; body?: unknown };
 
@@ -27,34 +27,34 @@ describe("detectZaiEndpoint", () => {
     }> = [
       {
         responses: {
-          "https://api.z.ai/api/paas/v4/chat/completions::glm-5": { status: 200 },
+          "https://api.z.ai/api/paas/v4/chat/completions::glm-5.1": { status: 200 },
         },
-        expected: { endpoint: "global", modelId: "glm-5" },
+        expected: { endpoint: "global", modelId: "glm-5.1" },
       },
       {
         responses: {
-          "https://api.z.ai/api/paas/v4/chat/completions::glm-5": {
+          "https://api.z.ai/api/paas/v4/chat/completions::glm-5.1": {
             status: 404,
             body: { error: { message: "not found" } },
           },
-          "https://open.bigmodel.cn/api/paas/v4/chat/completions::glm-5": { status: 200 },
+          "https://open.bigmodel.cn/api/paas/v4/chat/completions::glm-5.1": { status: 200 },
         },
-        expected: { endpoint: "cn", modelId: "glm-5" },
+        expected: { endpoint: "cn", modelId: "glm-5.1" },
       },
       {
         responses: {
-          "https://api.z.ai/api/paas/v4/chat/completions::glm-5": { status: 404 },
-          "https://open.bigmodel.cn/api/paas/v4/chat/completions::glm-5": { status: 404 },
-          "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5": { status: 200 },
+          "https://api.z.ai/api/paas/v4/chat/completions::glm-5.1": { status: 404 },
+          "https://open.bigmodel.cn/api/paas/v4/chat/completions::glm-5.1": { status: 404 },
+          "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5.1": { status: 200 },
         },
-        expected: { endpoint: "coding-global", modelId: "glm-5" },
+        expected: { endpoint: "coding-global", modelId: "glm-5.1" },
       },
       {
         endpoint: "coding-global",
         responses: {
-          "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5": {
+          "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5.1": {
             status: 404,
-            body: { error: { message: "glm-5 unavailable" } },
+            body: { error: { message: "glm-5.1 unavailable" } },
           },
           "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-4.7": { status: 200 },
         },
@@ -63,16 +63,18 @@ describe("detectZaiEndpoint", () => {
       {
         endpoint: "coding-cn",
         responses: {
-          "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-5": { status: 200 },
+          "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-5.1": {
+            status: 200,
+          },
         },
-        expected: { endpoint: "coding-cn", modelId: "glm-5" },
+        expected: { endpoint: "coding-cn", modelId: "glm-5.1" },
       },
       {
         endpoint: "coding-cn",
         responses: {
-          "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-5": {
+          "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-5.1": {
             status: 404,
-            body: { error: { message: "glm-5 unavailable" } },
+            body: { error: { message: "glm-5.1 unavailable" } },
           },
           "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-4.7": { status: 200 },
         },
@@ -80,11 +82,13 @@ describe("detectZaiEndpoint", () => {
       },
       {
         responses: {
-          "https://api.z.ai/api/paas/v4/chat/completions::glm-5": { status: 401 },
-          "https://open.bigmodel.cn/api/paas/v4/chat/completions::glm-5": { status: 401 },
-          "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5": { status: 401 },
+          "https://api.z.ai/api/paas/v4/chat/completions::glm-5.1": { status: 401 },
+          "https://open.bigmodel.cn/api/paas/v4/chat/completions::glm-5.1": { status: 401 },
+          "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5.1": { status: 401 },
           "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-4.7": { status: 401 },
-          "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-5": { status: 401 },
+          "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-5.1": {
+            status: 401,
+          },
           "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-4.7": { status: 401 },
         },
         expected: null,

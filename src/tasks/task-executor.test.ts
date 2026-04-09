@@ -25,6 +25,7 @@ import {
   resetTaskFlowRegistryForTests,
 } from "./task-flow-registry.js";
 import {
+  setTaskRegistryDeliveryRuntimeForTests,
   getTaskById,
   findLatestTaskForFlowId,
   findTaskByRunId,
@@ -44,10 +45,6 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock("./task-registry-delivery-runtime.js", () => ({
-  sendMessage: hoisted.sendMessageMock,
-}));
-
 vi.mock("../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => ({
     cancelSession: hoisted.cancelSessionMock,
@@ -60,6 +57,9 @@ vi.mock("../agents/subagent-control.js", () => ({
 
 async function withTaskExecutorStateDir(run: (stateDir: string) => Promise<void>): Promise<void> {
   await withStateDirEnv("openclaw-task-executor-", async ({ stateDir }) => {
+    setTaskRegistryDeliveryRuntimeForTests({
+      sendMessage: hoisted.sendMessageMock,
+    });
     resetSystemEventsForTest();
     resetHeartbeatWakeStateForTests();
     resetAgentEventsForTest();
@@ -174,6 +174,33 @@ describe("task-executor", () => {
         progressSummary: "Collecting results",
         error: "tool failed",
         deliveryStatus: "failed",
+      });
+    });
+  });
+
+  it("persists explicit task kind metadata on created runs", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const created = createRunningTaskRun({
+        runtime: "cli",
+        taskKind: "video_generation",
+        sourceId: "video_generate:openai",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:main",
+        runId: "run-executor-kind",
+        task: "Generate lobster video",
+        startedAt: 10,
+        deliveryStatus: "not_applicable",
+      });
+
+      expect(getTaskById(created.taskId)).toMatchObject({
+        taskId: created.taskId,
+        taskKind: "video_generation",
+        sourceId: "video_generate:openai",
+      });
+      expect(findTaskByRunId("run-executor-kind")).toMatchObject({
+        taskId: created.taskId,
+        taskKind: "video_generation",
       });
     });
   });
@@ -317,6 +344,10 @@ describe("task-executor", () => {
         ownerKey: "agent:main:main",
         controllerId: "tests/managed-flow",
         goal: "Inspect PR batch",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:123",
+        },
       });
       const child = createRunningTaskRun({
         runtime: "acp",

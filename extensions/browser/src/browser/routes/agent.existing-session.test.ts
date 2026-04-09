@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 import type { BrowserRequest } from "./types.js";
 
@@ -94,13 +94,8 @@ vi.mock("./agent.shared.js", () => ({
   }),
 }));
 
-let registerBrowserAgentActRoutes: typeof import("./agent.act.js").registerBrowserAgentActRoutes;
-let registerBrowserAgentSnapshotRoutes: typeof import("./agent.snapshot.js").registerBrowserAgentSnapshotRoutes;
-
-beforeAll(async () => {
-  ({ registerBrowserAgentActRoutes } = await import("./agent.act.js"));
-  ({ registerBrowserAgentSnapshotRoutes } = await import("./agent.snapshot.js"));
-});
+const { registerBrowserAgentActRoutes } = await import("./agent.act.js");
+const { registerBrowserAgentSnapshotRoutes } = await import("./agent.snapshot.js");
 
 function getSnapshotGetHandler() {
   const { app, getHandlers } = createBrowserRouteApp();

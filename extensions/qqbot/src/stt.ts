@@ -6,6 +6,8 @@
 
 import * as fs from "node:fs";
 import path from "node:path";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { asRecord, readString } from "./config-record-shared.js";
 import { sanitizeFileName } from "./utils/platform.js";
 
 export interface STTConfig {
@@ -15,29 +17,36 @@ export interface STTConfig {
 }
 
 export function resolveSTTConfig(cfg: Record<string, unknown>): STTConfig | null {
-  const c = cfg as any;
+  const channels = asRecord(cfg.channels);
+  const qqbot = asRecord(channels?.qqbot);
+  const channelStt = asRecord(qqbot?.stt);
+  const models = asRecord(cfg.models);
+  const providers = asRecord(models?.providers);
 
   // Prefer plugin-specific STT config.
-  const channelStt = c?.channels?.qqbot?.stt;
   if (channelStt && channelStt.enabled !== false) {
-    const providerId: string = channelStt?.provider || "openai";
-    const providerCfg = c?.models?.providers?.[providerId];
-    const baseUrl: string | undefined = channelStt?.baseUrl || providerCfg?.baseUrl;
-    const apiKey: string | undefined = channelStt?.apiKey || providerCfg?.apiKey;
-    const model: string = channelStt?.model || "whisper-1";
+    const providerId = readString(channelStt, "provider") ?? "openai";
+    const providerCfg = asRecord(providers?.[providerId]);
+    const baseUrl = readString(channelStt, "baseUrl") ?? readString(providerCfg, "baseUrl");
+    const apiKey = readString(channelStt, "apiKey") ?? readString(providerCfg, "apiKey");
+    const model = readString(channelStt, "model") ?? "whisper-1";
     if (baseUrl && apiKey) {
       return { baseUrl: baseUrl.replace(/\/+$/, ""), apiKey, model };
     }
   }
 
   // Fall back to framework-level audio model config.
-  const audioModelEntry = c?.tools?.media?.audio?.models?.[0];
+  const tools = asRecord(cfg.tools);
+  const media = asRecord(tools?.media);
+  const audio = asRecord(media?.audio);
+  const audioModels = audio?.models;
+  const audioModelEntry = Array.isArray(audioModels) ? asRecord(audioModels[0]) : undefined;
   if (audioModelEntry) {
-    const providerId: string = audioModelEntry?.provider || "openai";
-    const providerCfg = c?.models?.providers?.[providerId];
-    const baseUrl: string | undefined = audioModelEntry?.baseUrl || providerCfg?.baseUrl;
-    const apiKey: string | undefined = audioModelEntry?.apiKey || providerCfg?.apiKey;
-    const model: string = audioModelEntry?.model || "whisper-1";
+    const providerId = readString(audioModelEntry, "provider") ?? "openai";
+    const providerCfg = asRecord(providers?.[providerId]);
+    const baseUrl = readString(audioModelEntry, "baseUrl") ?? readString(providerCfg, "baseUrl");
+    const apiKey = readString(audioModelEntry, "apiKey") ?? readString(providerCfg, "apiKey");
+    const model = readString(audioModelEntry, "model") ?? "whisper-1";
     if (baseUrl && apiKey) {
       return { baseUrl: baseUrl.replace(/\/+$/, ""), apiKey, model };
     }
@@ -51,7 +60,9 @@ export async function transcribeAudio(
   cfg: Record<string, unknown>,
 ): Promise<string | null> {
   const sttCfg = resolveSTTConfig(cfg);
-  if (!sttCfg) return null;
+  if (!sttCfg) {
+    return null;
+  }
 
   const fileBuffer = fs.readFileSync(audioPath);
   const fileName = sanitizeFileName(path.basename(audioPath));
@@ -79,5 +90,5 @@ export async function transcribeAudio(
   }
 
   const result = (await resp.json()) as { text?: string };
-  return result.text?.trim() || null;
+  return normalizeOptionalString(result.text) ?? null;
 }

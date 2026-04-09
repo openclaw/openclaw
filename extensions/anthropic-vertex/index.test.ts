@@ -3,8 +3,8 @@ import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-
 import anthropicVertexPlugin from "./index.js";
 
 describe("anthropic-vertex provider plugin", () => {
-  it("resolves the ADC marker through the provider hook", () => {
-    const provider = registerSingleProviderPlugin(anthropicVertexPlugin);
+  it("resolves the ADC marker through the provider hook", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
 
     expect(
       provider.resolveConfigApiKey?.({
@@ -17,7 +17,7 @@ describe("anthropic-vertex provider plugin", () => {
   });
 
   it("merges the implicit Vertex catalog into explicit provider overrides", async () => {
-    const provider = registerSingleProviderPlugin(anthropicVertexPlugin);
+    const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
 
     const result = await provider.catalog?.run({
       config: {
@@ -54,6 +54,27 @@ describe("anthropic-vertex provider plugin", () => {
           expect.objectContaining({ id: "claude-sonnet-4-6" }),
         ],
       },
+    });
+  });
+
+  it("owns Anthropic-style replay policy", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
+
+    expect(
+      provider.buildReplayPolicy?.({
+        provider: "anthropic-vertex",
+        modelApi: "anthropic-messages",
+        modelId: "claude-sonnet-4-6",
+      } as never),
+    ).toEqual({
+      sanitizeMode: "full",
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      preserveNativeAnthropicToolUseIds: true,
+      preserveSignatures: true,
+      repairToolUseResultPairing: true,
+      validateAnthropicTurns: true,
+      allowSyntheticToolResults: true,
     });
   });
 });

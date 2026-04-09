@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { projectSafeChannelAccountSnapshotFields } from "../account-snapshot-fields.js";
 import { inspectReadOnlyChannelAccount } from "../read-only-account-inspect.js";
 import type { ChannelAccountSnapshot, ChannelPlugin } from "./types.js";
@@ -14,13 +15,19 @@ async function buildSnapshotFromAccount<ResolvedAccount>(params: {
   audit?: unknown;
 }): Promise<ChannelAccountSnapshot> {
   if (params.plugin.status?.buildAccountSnapshot) {
-    return await params.plugin.status.buildAccountSnapshot({
+    const snapshot = await params.plugin.status.buildAccountSnapshot({
       account: params.account,
       cfg: params.cfg,
       runtime: params.runtime,
       probe: params.probe,
       audit: params.audit,
     });
+    return normalizeOptionalString(snapshot.accountId)
+      ? snapshot
+      : {
+          ...snapshot,
+          accountId: params.accountId,
+        };
   }
   const enabled = params.plugin.config.isEnabled
     ? params.plugin.config.isEnabled(params.account, params.cfg)

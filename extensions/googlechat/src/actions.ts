@@ -31,15 +31,9 @@ function listEnabledAccounts(cfg: OpenClawConfig) {
   );
 }
 
-function isReactionsEnabled(accounts: ReturnType<typeof listEnabledAccounts>, cfg: OpenClawConfig) {
+function isReactionsEnabled(accounts: Array<{ config: { actions?: unknown } }>) {
   for (const account of accounts) {
-    const gate = createActionGate(
-      (account.config.actions ??
-        (cfg.channels?.["googlechat"] as { actions?: unknown })?.actions) as Record<
-        string,
-        boolean | undefined
-      >,
-    );
+    const gate = createActionGate(account.config.actions as Record<string, boolean | undefined>);
     if (gate("reactions")) {
       return true;
     }
@@ -76,15 +70,19 @@ async function loadGoogleChatActionMedia(params: {
 }
 
 export const googlechatMessageActions: ChannelMessageActionAdapter = {
-  describeMessageTool: ({ cfg }) => {
-    const accounts = listEnabledAccounts(cfg);
+  describeMessageTool: ({ cfg, accountId }) => {
+    const accounts = accountId
+      ? [resolveGoogleChatAccount({ cfg, accountId })].filter(
+          (account) => account.enabled && account.credentialSource !== "none",
+        )
+      : listEnabledAccounts(cfg);
     if (accounts.length === 0) {
       return null;
     }
     const actions = new Set<ChannelMessageActionName>([]);
     actions.add("send");
     actions.add("upload-file");
-    if (isReactionsEnabled(accounts, cfg)) {
+    if (isReactionsEnabled(accounts)) {
       actions.add("react");
       actions.add("reactions");
     }

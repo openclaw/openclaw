@@ -7,6 +7,11 @@ import {
   INVALID_EXEC_SECRET_REF_IDS,
   VALID_EXEC_SECRET_REF_IDS,
 } from "../test-utils/secret-ref-test-vectors.js";
+import {
+  TALK_TEST_PROVIDER_API_KEY_PATH,
+  TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS,
+  TALK_TEST_PROVIDER_ID,
+} from "../test-utils/talk-test-provider.js";
 import { isSecretsApplyPlan } from "./plan.js";
 import { isValidExecSecretRefId } from "./ref-contract.js";
 import { materializePathTokens, parsePathPattern } from "./target-registry-pattern.js";
@@ -42,9 +47,10 @@ describe("exec SecretRef id parity", () => {
       generatedBy: "manual",
       targets: [
         {
-          type: "talk.apiKey",
-          path: "talk.apiKey",
-          pathSegments: ["talk", "apiKey"],
+          type: "talk.providers.*.apiKey",
+          path: TALK_TEST_PROVIDER_API_KEY_PATH,
+          pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
+          providerId: TALK_TEST_PROVIDER_ID,
           ref: { source: "exec", provider: "vault", id },
         },
       ],
@@ -88,6 +94,9 @@ describe("exec SecretRef id parity", () => {
     }
     if (canonicalId.startsWith("models.providers.") && canonicalId.includes(".headers.")) {
       return "models.headers";
+    }
+    if (canonicalId.startsWith("models.providers.") && canonicalId.includes(".request.")) {
+      return "models.request";
     }
     if (canonicalId.startsWith("models.providers.")) {
       return "models.apiKey";

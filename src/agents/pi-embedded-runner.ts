@@ -7,7 +7,6 @@ export {
   resolvePreparedExtraParams,
 } from "./pi-embedded-runner/extra-params.js";
 
-export { applyGoogleTurnOrderingFix } from "./pi-embedded-runner/google.js";
 export {
   getDmHistoryLimitFromSessionKey,
   getHistoryLimitFromSessionKey,
@@ -20,6 +19,7 @@ export {
   isEmbeddedPiRunActive,
   isEmbeddedPiRunStreaming,
   queueEmbeddedPiMessage,
+  resolveActiveEmbeddedRunSessionId,
   waitForEmbeddedPiRunEnd,
 } from "./pi-embedded-runner/runs.js";
 export { buildEmbeddedSandboxInfo } from "./pi-embedded-runner/sandbox-info.js";

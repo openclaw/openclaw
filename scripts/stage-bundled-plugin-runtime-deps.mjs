@@ -62,6 +62,12 @@ function dependencyVersionSatisfied(spec, installedVersion) {
   return semverSatisfies(installedVersion, spec, { includePrerelease: false });
 }
 
+const stagedRuntimeDepPruneRules = new Map([
+  // Type declarations only; runtime resolves through lib/es entrypoints.
+  ["@larksuiteoapi/node-sdk", ["types"]],
+]);
+const runtimeDepsStagingVersion = 2;
+
 function collectInstalledRuntimeClosure(rootNodeModulesDir, dependencySpecs) {
   const packageCache = new Map();
   const closure = new Set();
@@ -96,6 +102,23 @@ function collectInstalledRuntimeClosure(rootNodeModulesDir, dependencySpecs) {
   return [...closure];
 }
 
+function pruneStagedInstalledDependencyCargo(nodeModulesDir, depName) {
+  const prunePaths = stagedRuntimeDepPruneRules.get(depName);
+  if (!prunePaths) {
+    return;
+  }
+  const depRoot = dependencyNodeModulesPath(nodeModulesDir, depName);
+  for (const relativePath of prunePaths) {
+    removePathIfExists(path.join(depRoot, relativePath));
+  }
+}
+
+function pruneStagedRuntimeDependencyCargo(nodeModulesDir) {
+  for (const depName of stagedRuntimeDepPruneRules.keys()) {
+    pruneStagedInstalledDependencyCargo(nodeModulesDir, depName);
+  }
+}
+
 function listBundledPluginRuntimeDirs(repoRoot) {
   const extensionsRoot = path.join(repoRoot, "dist", "extensions");
   if (!fs.existsSync(extensionsRoot)) {
@@ -125,36 +148,18 @@ function sanitizeBundledManifestForRuntimeInstall(pluginDir) {
   const packageJson = readJson(manifestPath);
   let changed = false;
 
-  if (packageJson.peerDependencies?.openclaw) {
-    const nextPeerDependencies = { ...packageJson.peerDependencies };
-    delete nextPeerDependencies.openclaw;
-    if (Object.keys(nextPeerDependencies).length === 0) {
-      delete packageJson.peerDependencies;
-    } else {
-      packageJson.peerDependencies = nextPeerDependencies;
-    }
+  if (packageJson.peerDependencies) {
+    delete packageJson.peerDependencies;
     changed = true;
   }
 
-  if (packageJson.peerDependenciesMeta?.openclaw) {
-    const nextPeerDependenciesMeta = { ...packageJson.peerDependenciesMeta };
-    delete nextPeerDependenciesMeta.openclaw;
-    if (Object.keys(nextPeerDependenciesMeta).length === 0) {
-      delete packageJson.peerDependenciesMeta;
-    } else {
-      packageJson.peerDependenciesMeta = nextPeerDependenciesMeta;
-    }
+  if (packageJson.peerDependenciesMeta) {
+    delete packageJson.peerDependenciesMeta;
     changed = true;
   }
 
-  if (packageJson.devDependencies?.openclaw) {
-    const nextDevDependencies = { ...packageJson.devDependencies };
-    delete nextDevDependencies.openclaw;
-    if (Object.keys(nextDevDependencies).length === 0) {
-      delete packageJson.devDependencies;
-    } else {
-      packageJson.devDependencies = nextDevDependencies;
-    }
+  if (packageJson.devDependencies) {
+    delete packageJson.devDependencies;
     changed = true;
   }
 
@@ -170,7 +175,15 @@ function resolveRuntimeDepsStampPath(pluginDir) {
 }
 
 function createRuntimeDepsFingerprint(packageJson) {
-  return createHash("sha256").update(JSON.stringify(packageJson)).digest("hex");
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        packageJson,
+        pruneRules: [...stagedRuntimeDepPruneRules.entries()],
+        version: runtimeDepsStagingVersion,
+      }),
+    )
+    .digest("hex");
 }
 
 function readRuntimeDepsStamp(stampPath) {
@@ -217,6 +230,7 @@ function stageInstalledRootRuntimeDeps(params) {
       fs.mkdirSync(path.dirname(targetPath), { recursive: true });
       fs.cpSync(sourcePath, targetPath, { recursive: true, force: true, dereference: true });
     }
+    pruneStagedRuntimeDependencyCargo(stagedNodeModulesDir);
 
     replaceDir(nodeModulesDir, stagedNodeModulesDir);
     writeJson(stampPath, {
@@ -276,6 +290,8 @@ function installPluginRuntimeDeps(params) {
         `failed to stage bundled runtime deps for ${pluginId}: npm install produced no node_modules directory`,
       );
     }
+
+    pruneStagedRuntimeDependencyCargo(stagedNodeModulesDir);
 
     replaceDir(nodeModulesDir, stagedNodeModulesDir);
     writeJson(stampPath, {

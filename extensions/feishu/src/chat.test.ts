@@ -1,7 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
-import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
-import type { OpenClawPluginApi } from "../runtime-api.js";
+import type { OpenClawPluginApi, PluginRuntime } from "../runtime-api.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const chatGetMock = vi.hoisted(() => vi.fn());
@@ -14,6 +13,10 @@ vi.mock("./client.js", () => ({
 
 let registerFeishuChatTools: typeof import("./chat.js").registerFeishuChatTools;
 
+function createFeishuToolRuntime(): PluginRuntime {
+  return {} as PluginRuntime;
+}
+
 describe("registerFeishuChatTools", () => {
   function createChatToolApi(params: {
     config: OpenClawPluginApi["config"];
@@ -24,7 +27,7 @@ describe("registerFeishuChatTools", () => {
       name: "Feishu Test",
       source: "local",
       config: params.config,
-      runtime: createPluginRuntimeMock(),
+      runtime: createFeishuToolRuntime(),
       logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       registerTool: params.registerTool,
     });

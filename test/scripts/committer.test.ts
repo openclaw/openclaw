@@ -1,11 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import { createScriptTestHarness } from "./test-helpers.js";
 
 const scriptPath = path.join(process.cwd(), "scripts", "committer");
-const tempRepos: string[] = [];
+const { createTempDir } = createScriptTestHarness();
 
 function run(cwd: string, command: string, args: string[]) {
   return execFileSync(command, args, {
@@ -19,8 +19,7 @@ function git(cwd: string, ...args: string[]) {
 }
 
 function createRepo() {
-  const repo = mkdtempSync(path.join(tmpdir(), "committer-test-"));
-  tempRepos.push(repo);
+  const repo = createTempDir("committer-test-");
 
   git(repo, "init", "-q");
   git(repo, "config", "user.email", "test@example.com");
@@ -46,15 +45,6 @@ function committedPaths(repo: string) {
   const output = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD");
   return output.split("\n").filter(Boolean).toSorted();
 }
-
-afterEach(() => {
-  while (tempRepos.length > 0) {
-    const repo = tempRepos.pop();
-    if (repo) {
-      rmSync(repo, { force: true, recursive: true });
-    }
-  }
-});
 
 describe("scripts/committer", () => {
   it("accepts supported path argument shapes", () => {

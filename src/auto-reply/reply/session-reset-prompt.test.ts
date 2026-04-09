@@ -17,7 +17,7 @@ describe("buildBareSessionResetPrompt", () => {
     const nowMs = Date.UTC(2026, 2, 3, 14, 0, 0);
     const prompt = buildBareSessionResetPrompt(cfg, nowMs);
     expect(prompt).toContain(
-      "Current time: Tuesday, March 3rd, 2026 — 9:00 AM (America/New_York) / 2026-03-03 14:00 UTC",
+      "Current time: Tuesday, March 3rd, 2026 - 9:00 AM (America/New_York) / 2026-03-03 14:00 UTC",
     );
   });
 

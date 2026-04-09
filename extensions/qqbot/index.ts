@@ -1,22 +1,96 @@
-import type { ChannelPlugin, OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
-import { qqbotPlugin } from "./src/channel.js";
-import { resolveQQBotAccount } from "./src/config.js";
-import { sendDocument, type MediaTargetContext } from "./src/outbound.js";
-import { setQQBotRuntime } from "./src/runtime.js";
-import { getFrameworkCommands } from "./src/slash-commands.js";
-import { registerChannelTool } from "./src/tools/channel.js";
-import { registerRemindTool } from "./src/tools/remind.js";
+import {
+  defineBundledChannelEntry,
+  loadBundledEntryExportSync,
+  type OpenClawPluginApi,
+  type PluginCommandContext,
+} from "openclaw/plugin-sdk/channel-entry-contract";
 
-export { qqbotPlugin } from "./src/channel.js";
-export { setQQBotRuntime, getQQBotRuntime } from "./src/runtime.js";
+type QQBotAccount = {
+  accountId: string;
+  appId: string;
+  config: unknown;
+};
 
-export default defineChannelPluginEntry({
+type MediaTargetContext = {
+  targetType: "c2c" | "group" | "channel" | "dm";
+  targetId: string;
+  account: QQBotAccount;
+  logPrefix: string;
+};
+
+type QQBotFrameworkCommandResult =
+  | string
+  | {
+      text: string;
+      filePath?: string;
+    }
+  | null
+  | undefined;
+
+type QQBotFrameworkCommand = {
+  name: string;
+  description: string;
+  handler: (ctx: Record<string, unknown>) => Promise<QQBotFrameworkCommandResult>;
+};
+
+function resolveQQBotAccount(config: unknown, accountId?: string): QQBotAccount {
+  const resolve = loadBundledEntryExportSync<(config: unknown, accountId?: string) => QQBotAccount>(
+    import.meta.url,
+    {
+      specifier: "./api.js",
+      exportName: "resolveQQBotAccount",
+    },
+  );
+  return resolve(config, accountId);
+}
+
+function sendDocument(context: MediaTargetContext, filePath: string) {
+  const send = loadBundledEntryExportSync<
+    (context: MediaTargetContext, filePath: string) => Promise<unknown>
+  >(import.meta.url, {
+    specifier: "./api.js",
+    exportName: "sendDocument",
+  });
+  return send(context, filePath);
+}
+
+function getFrameworkCommands(): QQBotFrameworkCommand[] {
+  const getCommands = loadBundledEntryExportSync<() => QQBotFrameworkCommand[]>(import.meta.url, {
+    specifier: "./api.js",
+    exportName: "getFrameworkCommands",
+  });
+  return getCommands();
+}
+
+function registerChannelTool(api: OpenClawPluginApi): void {
+  const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
+    specifier: "./api.js",
+    exportName: "registerChannelTool",
+  });
+  register(api);
+}
+
+function registerRemindTool(api: OpenClawPluginApi): void {
+  const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
+    specifier: "./api.js",
+    exportName: "registerRemindTool",
+  });
+  register(api);
+}
+
+export default defineBundledChannelEntry({
   id: "qqbot",
   name: "QQ Bot",
   description: "QQ Bot channel plugin",
-  plugin: qqbotPlugin as ChannelPlugin,
-  setRuntime: setQQBotRuntime,
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./api.js",
+    exportName: "qqbotPlugin",
+  },
+  runtime: {
+    specifier: "./runtime-api.js",
+    exportName: "setQQBotRuntime",
+  },
   registerFull(api: OpenClawPluginApi) {
     registerChannelTool(api);
     registerRemindTool(api);
@@ -30,7 +104,7 @@ export default defineChannelPluginEntry({
         description: cmd.description,
         requireAuth: true,
         acceptsArgs: true,
-        handler: async (ctx) => {
+        handler: async (ctx: PluginCommandContext) => {
           // Derive the QQBot message type from ctx.from so that handlers that
           // inspect SlashCommandContext.type get the correct value.
           // ctx.from format: "qqbot:<type>:<id>" e.g. "qqbot:c2c:<senderId>"
@@ -91,7 +165,7 @@ export default defineChannelPluginEntry({
           }
 
           // File result: send the file attachment via QQ API, return text summary.
-          if (result && "filePath" in result) {
+          if (result && typeof result === "object" && "filePath" in result) {
             try {
               const mediaCtx: MediaTargetContext = {
                 targetType,
@@ -99,14 +173,22 @@ export default defineChannelPluginEntry({
                 account,
                 logPrefix: `[qqbot:${account.accountId}]`,
               };
-              await sendDocument(mediaCtx, result.filePath);
+              await sendDocument(mediaCtx, String(result.filePath));
             } catch {
               // File send failed; the text summary is still returned below.
             }
-            return { text: result.text };
+            return { text: String(result.text) };
           }
 
-          return { text: "⚠️ 命令返回了意外结果。" };
+          return {
+            text:
+              result &&
+              typeof result === "object" &&
+              "text" in result &&
+              typeof result.text === "string"
+                ? result.text
+                : "⚠️ 命令返回了意外结果。",
+          };
         },
       });
     }

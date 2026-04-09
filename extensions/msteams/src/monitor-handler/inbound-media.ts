@@ -52,9 +52,9 @@ export async function resolveMSTeamsInboundMedia(params: {
   });
 
   if (mediaList.length === 0) {
-    const hasHtmlAttachment =
-      attachments.length > 0 &&
-      attachments.some((att) => String(att.contentType ?? "").startsWith("text/html"));
+    const hasHtmlAttachment = attachments.some(
+      (att) => typeof att.contentType === "string" && att.contentType.startsWith("text/html"),
+    );
 
     if (hasHtmlAttachment) {
       const messageUrls = buildMSTeamsGraphMessageUrls({
