@@ -337,7 +337,7 @@ function resolveImageFallbackCandidates(params: {
 
   const addRaw = (raw: string, opts?: { allowlist?: boolean }) => {
     const resolved = resolveModelRefFromString({
-      raw: String(raw ?? ""),
+      raw: raw ?? "",
       defaultProvider: params.defaultProvider,
       aliasIndex,
     });
@@ -387,8 +387,8 @@ function resolveFallbackCandidates(params: {
     : null;
   const defaultProvider = primary?.provider ?? DEFAULT_PROVIDER;
   const defaultModel = primary?.model ?? DEFAULT_MODEL;
-  const providerRaw = normalizeOptionalString(String(params.provider ?? "")) || defaultProvider;
-  const modelRaw = normalizeOptionalString(String(params.model ?? "")) || defaultModel;
+  const providerRaw = normalizeOptionalString(params.provider ?? "") || defaultProvider;
+  const modelRaw = normalizeOptionalString(params.model ?? "") || defaultModel;
   const normalizedPrimary = normalizeModelRef(providerRaw, modelRaw);
   const configuredPrimary = normalizeModelRef(defaultProvider, defaultModel);
   const aliasIndex = buildModelAliasIndex({
@@ -415,7 +415,7 @@ function resolveFallbackCandidates(params: {
     if (normalizedPrimary.provider !== configuredPrimary.provider) {
       const isConfiguredFallback = configuredFallbacks.some((raw) => {
         const resolved = resolveModelRefFromString({
-          raw: String(raw ?? ""),
+          raw: raw ?? "",
           defaultProvider,
           aliasIndex,
         });
@@ -429,7 +429,7 @@ function resolveFallbackCandidates(params: {
 
   for (const raw of modelFallbacks) {
     const resolved = resolveModelRefFromString({
-      raw: String(raw ?? ""),
+      raw: raw ?? "",
       defaultProvider,
       aliasIndex,
     });
@@ -448,54 +448,99 @@ function resolveFallbackCandidates(params: {
   return candidates;
 }
 
-const lastProbeAttempt = new Map<string, number>();
 const MIN_PROBE_INTERVAL_MS = 30_000; // 30 seconds between probes per key
 const PROBE_MARGIN_MS = 2 * 60 * 1000;
 const PROBE_SCOPE_DELIMITER = "::";
 const PROBE_STATE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_PROBE_KEYS = 256;
 
-function resolveProbeThrottleKey(provider: string, agentDir?: string): string {
-  const scope = normalizeOptionalString(String(agentDir ?? "")) ?? "";
-  return scope ? `${scope}${PROBE_SCOPE_DELIMITER}${provider}` : provider;
-}
+/**
+ * Encapsulates probe-throttle state so that it can be reset cleanly in tests
+ * without relying on module-level mutable exports. The process-lifetime
+ * singleton is created below; tests access it through `_probeThrottleInternals`.
+ */
+class ProbeThrottleRegistry {
+  readonly lastProbeAttempt = new Map<string, number>();
 
-function pruneProbeState(now: number): void {
-  for (const [key, ts] of lastProbeAttempt) {
-    if (!Number.isFinite(ts) || ts <= 0 || now - ts > PROBE_STATE_TTL_MS) {
-      lastProbeAttempt.delete(key);
-    }
+  resolveKey(provider: string, agentDir?: string): string {
+    const scope = normalizeOptionalString(agentDir ?? "") ?? "";
+    return scope ? `${scope}${PROBE_SCOPE_DELIMITER}${provider}` : provider;
   }
-}
 
-function enforceProbeStateCap(): void {
-  while (lastProbeAttempt.size > MAX_PROBE_KEYS) {
-    let oldestKey: string | null = null;
-    let oldestTs = Number.POSITIVE_INFINITY;
-    for (const [key, ts] of lastProbeAttempt) {
-      if (ts < oldestTs) {
-        oldestKey = key;
-        oldestTs = ts;
+  // Not private — deliberately accessible to the module-level wrapper functions
+  // and the `_probeThrottleInternals` test helper below.
+  pruneState(now: number): void {
+    for (const [key, ts] of this.lastProbeAttempt) {
+      if (!Number.isFinite(ts) || ts <= 0 || now - ts > PROBE_STATE_TTL_MS) {
+        this.lastProbeAttempt.delete(key);
       }
     }
-    if (!oldestKey) {
-      break;
-    }
-    lastProbeAttempt.delete(oldestKey);
   }
+
+  private enforceCap(): void {
+    while (this.lastProbeAttempt.size > MAX_PROBE_KEYS) {
+      let oldestKey: string | null = null;
+      let oldestTs = Number.POSITIVE_INFINITY;
+      for (const [key, ts] of this.lastProbeAttempt) {
+        if (ts < oldestTs) {
+          oldestKey = key;
+          oldestTs = ts;
+        }
+      }
+      if (!oldestKey) {
+        break;
+      }
+      this.lastProbeAttempt.delete(oldestKey);
+    }
+  }
+
+  isOpen(now: number, throttleKey: string): boolean {
+    this.pruneState(now);
+    const lastProbe = this.lastProbeAttempt.get(throttleKey) ?? 0;
+    return now - lastProbe >= MIN_PROBE_INTERVAL_MS;
+  }
+
+  markAttempt(now: number, throttleKey: string): void {
+    this.pruneState(now);
+    this.lastProbeAttempt.set(throttleKey, now);
+    this.enforceCap();
+  }
+}
+
+/** Process-lifetime singleton — one registry per gateway process. */
+const probeThrottle = new ProbeThrottleRegistry();
+
+function resolveProbeThrottleKey(provider: string, agentDir?: string): string {
+  return probeThrottle.resolveKey(provider, agentDir);
 }
 
 function isProbeThrottleOpen(now: number, throttleKey: string): boolean {
-  pruneProbeState(now);
-  const lastProbe = lastProbeAttempt.get(throttleKey) ?? 0;
-  return now - lastProbe >= MIN_PROBE_INTERVAL_MS;
+  return probeThrottle.isOpen(now, throttleKey);
 }
 
 function markProbeAttempt(now: number, throttleKey: string): void {
-  pruneProbeState(now);
-  lastProbeAttempt.set(throttleKey, now);
-  enforceProbeStateCap();
+  probeThrottle.markAttempt(now, throttleKey);
 }
+
+/**
+ * @internal – exposed for unit tests only.
+ * Shape is kept stable so existing tests require no changes.
+ * Tests should call `_probeThrottleInternals.lastProbeAttempt.clear()` in
+ * `beforeEach` to reset state between runs.
+ */
+export const _probeThrottleInternals = {
+  get lastProbeAttempt() {
+    return probeThrottle.lastProbeAttempt;
+  },
+  MIN_PROBE_INTERVAL_MS,
+  PROBE_MARGIN_MS,
+  PROBE_STATE_TTL_MS,
+  MAX_PROBE_KEYS,
+  resolveProbeThrottleKey,
+  isProbeThrottleOpen,
+  pruneProbeState: (now: number) => probeThrottle.pruneState(now),
+  markProbeAttempt,
+} as const;
 
 function shouldProbePrimaryDuringCooldown(params: {
   isPrimary: boolean;
@@ -525,19 +570,6 @@ function shouldProbePrimaryDuringCooldown(params: {
   // Probe when cooldown already expired or within the configured margin.
   return params.now >= soonest - PROBE_MARGIN_MS;
 }
-
-/** @internal – exposed for unit tests only */
-export const _probeThrottleInternals = {
-  lastProbeAttempt,
-  MIN_PROBE_INTERVAL_MS,
-  PROBE_MARGIN_MS,
-  PROBE_STATE_TTL_MS,
-  MAX_PROBE_KEYS,
-  resolveProbeThrottleKey,
-  isProbeThrottleOpen,
-  pruneProbeState,
-  markProbeAttempt,
-} as const;
 
 type CooldownDecision =
   | {
@@ -889,7 +921,7 @@ export async function runWithModelFallback<T>(params: {
     }
   }
 
-  throwFallbackFailureSummary({
+  return throwFallbackFailureSummary({
     attempts,
     candidates,
     lastError,
@@ -951,7 +983,7 @@ export async function runWithImageModelFallback<T>(params: {
     }
   }
 
-  throwFallbackFailureSummary({
+  return throwFallbackFailureSummary({
     attempts,
     candidates,
     lastError,
