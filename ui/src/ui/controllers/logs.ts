@@ -67,35 +67,33 @@ export function parseLogLine(line: string): LogEntry {
     const contextCandidate =
       typeof obj["0"] === "string" ? obj["0"] : typeof meta?.name === "string" ? meta?.name : null;
     const contextObj = parseMaybeJsonString(contextCandidate);
-    let subsystem: string | null = null;
-    if (contextObj) {
-      if (typeof contextObj.subsystem === "string") {
-        subsystem = contextObj.subsystem;
-      } else if (typeof contextObj.module === "string") {
-        subsystem = contextObj.module;
-      }
-    }
+    let subsystem =
+      typeof contextObj?.subsystem === "string"
+        ? contextObj.subsystem
+        : typeof contextObj?.module === "string"
+          ? contextObj.module
+          : null;
     if (!subsystem && contextCandidate && contextCandidate.length < 120) {
       subsystem = contextCandidate;
     }
 
-    let message: string | null = null;
-    if (typeof obj["1"] === "string") {
-      message = obj["1"];
-    } else if (typeof obj["2"] === "string") {
-      message = obj["2"];
-    } else if (!contextObj && typeof obj["0"] === "string") {
-      message = obj["0"];
-    } else if (typeof obj.message === "string") {
-      message = obj.message;
-    }
+    const message =
+      typeof obj["1"] === "string"
+        ? obj["1"]
+        : typeof obj["2"] === "string"
+          ? obj["2"]
+          : !contextObj && typeof obj["0"] === "string"
+            ? obj["0"]
+            : typeof obj.message === "string"
+              ? obj.message
+              : line;
 
     return {
       raw: line,
       time,
       level,
       subsystem,
-      message: message ?? line,
+      message,
       meta: meta ?? undefined,
     };
   } catch {
