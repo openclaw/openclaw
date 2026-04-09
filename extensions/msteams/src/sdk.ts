@@ -466,7 +466,7 @@ const BOT_FRAMEWORK_ISSUERS: ReadonlyArray<{
  * - expiration validation with 5-minute clock tolerance
  */
 export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials): Promise<{
-  validate: (authHeader: string, serviceUrl?: string) => Promise<boolean>;
+  validate: (authHeader: string) => Promise<boolean>;
 }> {
   const jwt = await import("jsonwebtoken");
   const { JwksClient } = await import("jwks-rsa");
@@ -501,7 +501,9 @@ export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials):
 
   /** Resolve the issuer entry for a token's issuer claim (pre-verification). */
   function resolveIssuerEntry(issuerClaim: string | undefined) {
-    if (!issuerClaim) return undefined;
+    if (!issuerClaim) {
+      return undefined;
+    }
     return BOT_FRAMEWORK_ISSUERS.find((entry) => {
       const expected =
         typeof entry.issuer === "function" ? entry.issuer(creds.tenantId) : entry.issuer;
@@ -512,16 +514,22 @@ export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials):
   return {
     async validate(authHeader: string): Promise<boolean> {
       const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : authHeader;
-      if (!token) return false;
+      if (!token) {
+        return false;
+      }
 
       // Decode without verification to extract issuer and kid for key lookup.
       const header = decodeHeader(token);
       const unverifiedPayload = jwt.decode(token) as { iss?: string } | null;
-      if (!header?.kid || !unverifiedPayload?.iss) return false;
+      if (!header?.kid || !unverifiedPayload?.iss) {
+        return false;
+      }
 
       // Resolve which JWKS endpoint to use based on the issuer claim.
       const issuerEntry = resolveIssuerEntry(unverifiedPayload.iss);
-      if (!issuerEntry) return false;
+      if (!issuerEntry) {
+        return false;
+      }
 
       const client = getJwksClient(issuerEntry.jwksUri);
       try {
