@@ -276,7 +276,7 @@ export function buildChatModelOptionFromLookup(
   displayLookup: ChatModelDisplayLookup,
 ): { value: string; label: string } {
   const provider = entry.provider?.trim();
-  const value = (() => {
+  const _value = (() => {
     if (!provider) {
       return entry.id;
     }

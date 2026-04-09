@@ -606,7 +606,9 @@ export async function handleOpenAiHttpRequest(
             commonLen++;
           }
           content = fullText.slice(commonLen);
-          accumulatedSent = fullText;
+          // Set to the common prefix so that the `accumulatedSent += content`
+          // below correctly rebuilds fullText (commonPrefix + suffix = fullText).
+          accumulatedSent = fullText.slice(0, commonLen);
         }
       } else if (delta) {
         // Fallback: no full text available, use the raw delta.
