@@ -970,9 +970,7 @@ function validateConfigObjectWithPluginsBase(
     const entry = normalizedPlugins.entries[pluginId];
     const entryExists = entry !== undefined;
     const entryHasConfig = Boolean(entry?.config);
-    const shouldReplacePluginConfig = opts.applyDefaults
-      ? entryExists || entryHasConfig
-      : entryHasConfig;
+    const shouldReplacePluginConfig = entryHasConfig || (opts.applyDefaults && enabled);
 
     const activationState = resolveEffectivePluginActivationState({
       id: pluginId,
@@ -999,7 +997,7 @@ function validateConfigObjectWithPluginsBase(
       }
     }
 
-    const shouldValidate = enabled || entryExists || entryHasConfig;
+    const shouldValidate = enabled || entryHasConfig;
     if (shouldValidate) {
       if (record.configSchema) {
         const res = validateJsonSchemaValue({
