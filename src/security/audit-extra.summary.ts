@@ -8,6 +8,7 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
+import { isSecretRef } from "../config/types.secrets.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { normalizePluginId } from "../plugins/config-state.js";
 import { hasConfiguredWebSearchCredential } from "../plugins/web-search-credential-presence.js";
@@ -205,8 +206,8 @@ function isWebResearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): bool
     if (typeof configValue === "string") {
       return configValue.trim().length > 0;
     }
-    // SecretRef object -- treat as configured
-    if (typeof configValue === "object") {
+    // Valid SecretRef object -- treat as configured
+    if (isSecretRef(configValue)) {
       return true;
     }
   }
