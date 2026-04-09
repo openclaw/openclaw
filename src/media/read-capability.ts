@@ -6,6 +6,7 @@ import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { resolveWorkspaceRoot } from "../agents/workspace-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { OutboundMediaAccess, OutboundMediaReadFile } from "./load-options.js";
 import { getAgentScopedMediaLocalRootsForSources } from "./local-roots.js";
 
@@ -44,10 +45,10 @@ function isAgentScopedHostMediaReadAllowed(
     groupChannel: params.groupChannel,
     groupSpace: params.groupSpace,
     accountId: params.accountId,
-    senderId: params.requesterSenderId,
-    senderName: params.requesterSenderName,
-    senderUsername: params.requesterSenderUsername,
-    senderE164: params.requesterSenderE164,
+    senderId: normalizeOptionalString(params.requesterSenderId),
+    senderName: normalizeOptionalString(params.requesterSenderName),
+    senderUsername: normalizeOptionalString(params.requesterSenderUsername),
+    senderE164: normalizeOptionalString(params.requesterSenderE164),
   });
   // Sender/group policy only applies when a concrete group override exists.
   if (groupPolicy && !isToolAllowedByPolicies("read", [groupPolicy])) {

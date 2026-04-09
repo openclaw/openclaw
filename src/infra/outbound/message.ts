@@ -49,6 +49,8 @@ type MessageSendParams = {
   content: string;
   /** Active agent id for per-agent outbound media root scoping. */
   agentId?: string;
+  /** Originating sender id used for sender-scoped outbound media policy. */
+  requesterSenderId?: string;
   channel?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
@@ -266,6 +268,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       cfg,
       agentId: params.agentId,
       sessionKey: params.mirror?.sessionKey,
+      requesterSenderId: params.requesterSenderId,
     });
     const results = await deliverOutboundPayloads({
       cfg,

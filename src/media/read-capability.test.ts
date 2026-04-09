@@ -46,6 +46,7 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
       cfg,
       sessionKey: "agent:main:whatsapp:group:ops",
       messageProvider: "whatsapp",
+      // "attacker" matches the "id:attacker" toolsBySender entry after sender-id normalization.
       requesterSenderId: "attacker",
     });
 
@@ -91,6 +92,33 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
       } as OpenClawConfig,
       messageProvider: "whatsapp",
       requesterSenderId: "trusted-user",
+    });
+
+    expect(result.readFile).toBeTypeOf("function");
+  });
+
+  it("keeps host reads enabled for DM sender when no group context exists", () => {
+    const result = resolveAgentScopedOutboundMediaAccess({
+      cfg: {
+        tools: {
+          allow: ["read"],
+        },
+        channels: {
+          whatsapp: {
+            groups: {
+              ops: {
+                toolsBySender: {
+                  "id:dm-sender": {
+                    deny: ["read"],
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      messageProvider: "whatsapp",
+      requesterSenderId: "dm-sender",
     });
 
     expect(result.readFile).toBeTypeOf("function");

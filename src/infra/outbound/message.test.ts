@@ -89,6 +89,28 @@ describe("sendMessage", () => {
     );
   });
 
+  it("forwards requesterSenderId into the outbound delivery session", async () => {
+    await sendMessage({
+      cfg: {},
+      channel: "telegram",
+      to: "123456",
+      content: "hi",
+      requesterSenderId: "attacker",
+      mirror: {
+        sessionKey: "agent:main:telegram:group:ops",
+      },
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({
+          key: "agent:main:telegram:group:ops",
+          requesterSenderId: "attacker",
+        }),
+      }),
+    );
+  });
+
   it("propagates the send idempotency key into mirrored transcript delivery", async () => {
     await sendMessage({
       cfg: {},
