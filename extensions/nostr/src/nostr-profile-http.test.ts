@@ -110,8 +110,8 @@ function createMockResponse(): ServerResponse & {
     },
   });
 
-  (res as unknown as { _getData: () => string })._getData = () => data;
-  (res as unknown as { _getStatusCode: () => number })._getStatusCode = () => statusCode;
+  res._getData = () => data;
+  res._getStatusCode = () => statusCode;
 
   return res;
 }
