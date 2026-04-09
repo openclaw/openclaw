@@ -1318,6 +1318,14 @@ Best practice:
     if enable_vending:
         vending_email_domain = prompt("Email domain for new accounts (e.g. marsmovers.com)")
         vending_budget = prompt("Default monthly budget per account (USD)", default="100")
+        try:
+            vb = float(vending_budget)
+            if vb <= 0:
+                raise ValueError
+            vending_budget = str(int(vb)) if vb == int(vb) else str(vb)
+        except ValueError:
+            print(f"  ❌ Budget must be a positive number, got '{vending_budget}'")
+            sys.exit(1)
 
     # Summary
     print(f"""
