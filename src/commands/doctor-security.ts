@@ -169,7 +169,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   if (cfg.approvals?.exec?.enabled === false) {
     warnings.push(
       "- Note: approvals.exec.enabled=false disables approval forwarding only.",
-      "  Host exec gating still comes from ~/.openclaw/exec-approvals.json.",
+      "  Host exec gating still comes from exec-approvals.json in the active OPENCLAW_STATE_DIR.",
       `  Check local policy with: ${formatCliCommand("openclaw approvals get --gateway")}`,
     );
   }
