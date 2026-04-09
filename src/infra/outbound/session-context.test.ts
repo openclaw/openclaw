@@ -75,4 +75,15 @@ describe("buildOutboundSessionContext", () => {
       agentId: "explicit-agent",
     });
   });
+
+  it("preserves a trimmed requester sender id when provided", () => {
+    expect(
+      buildOutboundSessionContext({
+        cfg: {} as never,
+        requesterSenderId: "  sender-123  ",
+      }),
+    ).toEqual({
+      requesterSenderId: "sender-123",
+    });
+  });
 });

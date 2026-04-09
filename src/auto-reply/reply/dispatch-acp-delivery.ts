@@ -316,6 +316,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         to: params.originatingTo,
         sessionKey: params.ctx.SessionKey,
         accountId: resolvedAccountId,
+        requesterSenderId: params.ctx.SenderId,
         threadId: params.ctx.MessageThreadId,
         cfg: params.cfg,
       });
