@@ -121,6 +121,7 @@ function countJsonlLines(filePath: string): number {
 
 function findOtherStateDirs(stateDir: string): string[] {
   const resolvedState = path.resolve(stateDir);
+  const resolvedStateReal = tryResolveRealPath(resolvedState) ?? resolvedState;
   const roots =
     process.platform === "darwin" ? ["/Users"] : process.platform === "linux" ? ["/home"] : [];
   const found: string[] = [];
@@ -141,6 +142,10 @@ function findOtherStateDirs(stateDir: string): string[] {
       const candidates = [".openclaw"].map((dir) => path.resolve(root, entry.name, dir));
       for (const candidate of candidates) {
         if (candidate === resolvedState) {
+          continue;
+        }
+        const candidateReal = tryResolveRealPath(candidate);
+        if (candidateReal === resolvedStateReal) {
           continue;
         }
         if (existsDir(candidate)) {
@@ -698,8 +703,10 @@ export async function noteStateIntegrity(
   }
 
   const extraStateDirs = new Set<string>();
+  const resolvedStateReal = tryResolveRealPath(stateDir) ?? path.resolve(stateDir);
+  const defaultStateReal = tryResolveRealPath(defaultStateDir) ?? path.resolve(defaultStateDir);
   if (path.resolve(stateDir) !== path.resolve(defaultStateDir)) {
-    if (existsDir(defaultStateDir)) {
+    if (existsDir(defaultStateDir) && defaultStateReal !== resolvedStateReal) {
       extraStateDirs.add(defaultStateDir);
     }
   }

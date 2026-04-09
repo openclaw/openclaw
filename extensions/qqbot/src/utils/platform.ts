@@ -10,6 +10,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { debugLog, debugWarn } from "./debug-log.js";
 
 // Basic platform information.
@@ -56,11 +57,15 @@ export function getHomeDir(): string {
   return os.tmpdir();
 }
 
+function getOpenClawStateDir(): string {
+  return resolveStateDir(process.env, os.homedir);
+}
+
 /**
- * Return a path under `~/.openclaw/qqbot`, creating it on demand.
+ * Return a path under the active OpenClaw state dir's `qqbot` root, creating it on demand.
  */
 export function getQQBotDataDir(...subPaths: string[]): string {
-  const dir = path.join(getHomeDir(), ".openclaw", "qqbot", ...subPaths);
+  const dir = path.join(getOpenClawStateDir(), "qqbot", ...subPaths);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -68,13 +73,13 @@ export function getQQBotDataDir(...subPaths: string[]): string {
 }
 
 /**
- * Return a path under `~/.openclaw/media/qqbot`, creating it on demand.
+ * Return a path under the active OpenClaw state dir's `media/qqbot`, creating it on demand.
  *
  * Unlike `getQQBotDataDir`, this lives under OpenClaw's core media allowlist so
  * downloaded images and audio can be accessed by framework media tooling.
  */
 export function getQQBotMediaDir(...subPaths: string[]): string {
-  const dir = path.join(getHomeDir(), ".openclaw", "media", "qqbot", ...subPaths);
+  const dir = path.join(getOpenClawStateDir(), "media", "qqbot", ...subPaths);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -140,10 +145,10 @@ export function resolveQQBotLocalMediaPath(p: string): string {
     return normalized;
   }
 
-  const homeDir = getHomeDir();
+  const stateDir = getOpenClawStateDir();
   const mediaRoot = getQQBotMediaDir();
   const dataRoot = getQQBotDataDir();
-  const workspaceRoot = path.join(homeDir, ".openclaw", "workspace", "qqbot");
+  const workspaceRoot = path.join(stateDir, "workspace", "qqbot");
   const candidateRoots = [
     { from: workspaceRoot, to: mediaRoot },
     { from: dataRoot, to: mediaRoot },

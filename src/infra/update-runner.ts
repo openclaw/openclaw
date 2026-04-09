@@ -1165,6 +1165,35 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           timeoutMs,
         })
       ).packageRoot ?? pkgRoot;
+    const doctorEntry = path.join(verifiedPackageRoot, "openclaw.mjs");
+    const doctorEntryExists = await fs
+      .stat(doctorEntry)
+      .then(() => true)
+      .catch(() => false);
+    if (!doctorEntryExists) {
+      steps.push({
+        name: "global openclaw doctor entry",
+        command: `verify ${doctorEntry}`,
+        cwd: verifiedPackageRoot,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: `missing ${doctorEntry}`,
+      });
+    } else {
+      const doctorNodePath = await resolveStableNodePath(process.execPath);
+      const doctorStep = await runStep({
+        runCommand,
+        name: "global openclaw doctor",
+        argv: [doctorNodePath, doctorEntry, "doctor", "--non-interactive", "--fix"],
+        cwd: verifiedPackageRoot,
+        timeoutMs,
+        env: { ...globalInstallEnv, OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+        progress,
+        stepIndex: 1,
+        totalSteps: 2,
+      });
+      steps.push(doctorStep);
+    }
     const expectedVersion = resolveExpectedInstalledVersionFromSpec(packageName, spec);
     const verificationErrors = await collectInstalledGlobalPackageErrors({
       packageRoot: verifiedPackageRoot,
@@ -1184,8 +1213,14 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     const failedStep =
       finalStep.exitCode !== 0
         ? finalStep
-        : (steps.find((step) => step.name === "global install verify" && step.exitCode !== 0) ??
-          null);
+        : (steps.find(
+            (step) =>
+              [
+                "global openclaw doctor entry",
+                "global openclaw doctor",
+                "global install verify",
+              ].includes(step.name) && step.exitCode !== 0,
+          ) ?? null);
     return {
       status: failedStep ? "error" : "ok",
       mode: globalManager,

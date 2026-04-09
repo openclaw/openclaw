@@ -230,6 +230,7 @@ describe("runGatewayUpdate", () => {
       JSON.stringify({ name: "openclaw", version }),
       "utf-8",
     );
+    await fs.writeFile(path.join(pkgRoot, "openclaw.mjs"), "export {};\n", "utf-8");
     await writeBundledRuntimeSidecars(pkgRoot);
   }
 
@@ -239,6 +240,7 @@ describe("runGatewayUpdate", () => {
       JSON.stringify({ name: "openclaw", version }),
       "utf-8",
     );
+    await fs.writeFile(path.join(pkgRoot, "openclaw.mjs"), "export {};\n", "utf-8");
     await writeBundledRuntimeSidecars(pkgRoot);
   }
 
@@ -1005,6 +1007,7 @@ describe("runGatewayUpdate", () => {
     installCommand: string;
     gitRootMode?: "not-git" | "missing";
     onInstall?: (options?: { env?: NodeJS.ProcessEnv }) => Promise<void>;
+    onDoctor?: () => Promise<CommandResult>;
   }) => {
     const calls: string[] = [];
     const runCommand = async (argv: string[], options?: { env?: NodeJS.ProcessEnv }) => {
@@ -1028,6 +1031,14 @@ describe("runGatewayUpdate", () => {
       if (key === params.installCommand) {
         await params.onInstall?.(options);
         return { stdout: "ok", stderr: "", code: 0 };
+      }
+      if (
+        argv[1] === path.join(params.pkgRoot, "openclaw.mjs") &&
+        argv[2] === "doctor" &&
+        argv[3] === "--non-interactive" &&
+        argv[4] === "--fix"
+      ) {
+        return (await params.onDoctor?.()) ?? { stdout: "", stderr: "", code: 0 };
       }
       return { stdout: "", stderr: "", code: 0 };
     };
@@ -1061,6 +1072,9 @@ describe("runGatewayUpdate", () => {
     expect(result.before?.version).toBe("1.0.0");
     expect(result.after?.version).toBe("2.0.0");
     expect(calls.some((call) => call === expectedInstallCommand)).toBe(true);
+    expect(calls.some((call) => call.includes("openclaw.mjs doctor --non-interactive --fix"))).toBe(
+      true,
+    );
   });
 
   it("updates global npm installs from the GitHub main package spec", async () => {
@@ -1145,6 +1159,7 @@ describe("runGatewayUpdate", () => {
     expect(result.steps.map((s) => s.name)).toEqual([
       "global update",
       "global update (omit optional)",
+      "global openclaw doctor",
     ]);
   });
 
@@ -1176,6 +1191,7 @@ describe("runGatewayUpdate", () => {
           JSON.stringify({ name: "openclaw", version: "2.0.0" }),
           "utf-8",
         );
+        await fs.writeFile(path.join(pkgRoot, "openclaw.mjs"), "export {};\n", "utf-8");
         await fs.rm(path.join(pkgRoot, "dist"), { recursive: true, force: true });
       },
     });
@@ -1187,6 +1203,45 @@ describe("runGatewayUpdate", () => {
     expect(result.steps.at(-1)?.stderrTail).toContain(
       `missing bundled runtime sidecar ${WHATSAPP_LIGHT_RUNTIME_API}`,
     );
+  });
+
+  it("fails global npm update when openclaw.mjs is missing after install", async () => {
+    const { nodeModules, pkgRoot } = await createGlobalPackageFixture(tempDir);
+    const { runCommand } = createGlobalInstallHarness({
+      pkgRoot,
+      npmRootOutput: nodeModules,
+      installCommand: "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error",
+      onInstall: async () => {
+        await writeGlobalPackageVersion(pkgRoot);
+        await fs.rm(path.join(pkgRoot, "openclaw.mjs"), { force: true });
+      },
+    });
+
+    const result = await runWithCommand(runCommand, { cwd: pkgRoot });
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toBe("global openclaw doctor entry");
+    expect(result.steps.at(-1)?.name).toBe("global openclaw doctor entry");
+  });
+
+  it("fails global npm update when openclaw doctor fails", async () => {
+    const { nodeModules, pkgRoot } = await createGlobalPackageFixture(tempDir);
+    const { runCommand } = createGlobalInstallHarness({
+      pkgRoot,
+      npmRootOutput: nodeModules,
+      installCommand: "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error",
+      onInstall: async () => {
+        await writeGlobalPackageVersion(pkgRoot);
+      },
+      onDoctor: async () => ({ stdout: "", stderr: "doctor exploded", code: 1 }),
+    });
+
+    const result = await runWithCommand(runCommand, { cwd: pkgRoot });
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toBe("global openclaw doctor");
+    expect(result.steps.at(-1)?.name).toBe("global openclaw doctor");
+    expect(result.steps.at(-1)?.stderrTail).toContain("doctor exploded");
   });
 
   it("prepends portable Git PATH for global Windows npm updates", async () => {
