@@ -10,6 +10,41 @@ const ttsMocks = vi.hoisted(() => ({
     const params = paramsUnknown as { payload: unknown };
     return params.payload;
   }),
+  resolveTtsConfigForAccount: vi.fn(
+    (cfg: OpenClawConfig, channel: string | undefined, accountId?: string) => {
+      const raw = (cfg.messages?.tts ?? {}) as Record<string, unknown>;
+      const accountOverrides =
+        channel === "feishu"
+          ? (
+              cfg.channels as
+                | Record<
+                    string,
+                    | {
+                        accounts?: Record<string, { tts?: unknown } | undefined>;
+                      }
+                    | undefined
+                  >
+                | undefined
+            )?.feishu?.accounts?.[accountId ?? ""]?.tts
+          : undefined;
+      const merged = {
+        ...raw,
+        ...(typeof accountOverrides === "object" && accountOverrides !== null
+          ? (accountOverrides as Record<string, unknown>)
+          : {}),
+      };
+      return {
+        mode: (merged.mode as "all" | "final" | undefined) ?? "final",
+        sourceConfig: {
+          ...cfg,
+          messages: {
+            ...cfg.messages,
+            tts: merged,
+          },
+        },
+      };
+    },
+  ),
 }));
 
 const deliveryMocks = vi.hoisted(() => ({
@@ -45,6 +80,11 @@ const channelPluginMocks = vi.hoisted(() => ({
 
 vi.mock("./dispatch-acp-tts.runtime.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
+  resolveTtsConfigForAccount: (
+    cfg: OpenClawConfig,
+    channel: string | undefined,
+    accountId?: string,
+  ) => ttsMocks.resolveTtsConfigForAccount(cfg, channel, accountId),
 }));
 
 vi.mock("./route-reply.runtime.js", () => ({
@@ -122,6 +162,7 @@ async function expectVisibleChatBlockRoutesToAccount(
 
 describe("createAcpDispatchDeliveryCoordinator", () => {
   beforeEach(() => {
+    ttsMocks.resolveTtsConfigForAccount.mockClear();
     deliveryMocks.routeReply.mockClear();
     deliveryMocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock-message" });
     deliveryMocks.runMessageAction.mockClear();
@@ -447,6 +488,54 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
         channel: "feishu",
         accountId: "english-bot",
         kind: "final",
+      }),
+    );
+  });
+
+  it("applies account-level Feishu TTS overrides before ACP delivery gating", async () => {
+    const cfg = createAcpTestConfig({
+      messages: {
+        tts: {
+          auto: "off",
+          mode: "final",
+        },
+      },
+      channels: {
+        feishu: {
+          accounts: {
+            "english-bot": {
+              tts: {
+                auto: "always",
+                mode: "all",
+                provider: "openai",
+              },
+            },
+          },
+        },
+      },
+    });
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg,
+      ctx: buildTestCtx({
+        Provider: "feishu",
+        Surface: "feishu",
+        AccountId: "english-bot",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      ttsChannel: "feishu",
+      shouldRouteToOriginating: false,
+    });
+
+    await coordinator.deliver("block", { text: "hello from acp" });
+
+    expect(ttsMocks.resolveTtsConfigForAccount).toHaveBeenCalledWith(cfg, "feishu", "english-bot");
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "block",
+        channel: "feishu",
+        accountId: "english-bot",
       }),
     );
   });

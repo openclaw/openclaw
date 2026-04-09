@@ -20,7 +20,7 @@ import {
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
-import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
+import { resolveTtsConfigForAccount } from "../../tts/tts.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import { loadDispatchAcpMediaRuntime, resolveAcpAttachments } from "./dispatch-acp-attachments.js";
@@ -184,11 +184,12 @@ async function finalizeAcpTurnOutput(params: {
   await params.delivery.settleVisibleText();
   let queuedFinal =
     params.delivery.hasDeliveredVisibleText() && !params.delivery.hasFailedVisibleTextDelivery();
-  const ttsMode = resolveConfiguredTtsMode(params.cfg);
+  const ttsConfig = resolveTtsConfigForAccount(params.cfg, params.ttsChannel, params.accountId);
+  const ttsMode = ttsConfig.mode;
   const accumulatedBlockText = params.delivery.getAccumulatedBlockText();
   const hasAccumulatedBlockText = accumulatedBlockText.trim().length > 0;
   const ttsStatus = resolveStatusTtsSnapshot({
-    cfg: params.cfg,
+    cfg: ttsConfig.sourceConfig,
     sessionAuto: params.sessionTtsAuto,
   });
   const canAttemptFinalTts =

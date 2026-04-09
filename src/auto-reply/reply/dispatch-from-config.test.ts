@@ -140,6 +140,10 @@ const ttsMocks = vi.hoisted(() => {
       typeof value === "string" ? value : undefined,
     ),
     resolveTtsConfig: vi.fn((_cfg: OpenClawConfig) => ({ mode: "final" })),
+    resolveTtsConfigForAccount: vi.fn((cfg: OpenClawConfig) => ({
+      mode: "final",
+      sourceConfig: cfg,
+    })),
   };
 });
 const replyMediaPathMocks = vi.hoisted(() => ({
@@ -327,6 +331,11 @@ vi.mock("../../tts/tts.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
   resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
+  resolveTtsConfigForAccount: (
+    cfg: OpenClawConfig,
+    _channel: string | undefined,
+    _accountId?: string,
+  ) => ttsMocks.resolveTtsConfigForAccount(cfg),
 }));
 vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
@@ -655,6 +664,11 @@ describe("dispatchReplyFromConfig", () => {
     replyMediaPathMocks.createReplyMediaPathNormalizer.mockReturnValue(
       async (payload: ReplyPayload) => payload,
     );
+    ttsMocks.resolveTtsConfigForAccount.mockClear();
+    ttsMocks.resolveTtsConfigForAccount.mockImplementation((cfg: OpenClawConfig) => ({
+      mode: "final",
+      sourceConfig: cfg,
+    }));
   });
   it("does not route when Provider matches OriginatingChannel (even if Surface is missing)", async () => {
     setNoAbort();

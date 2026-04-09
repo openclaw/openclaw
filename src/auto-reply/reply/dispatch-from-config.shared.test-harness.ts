@@ -106,6 +106,10 @@ const ttsMocks = vi.hoisted(() => ({
   }),
   normalizeTtsAutoMode: vi.fn((value: unknown) => (typeof value === "string" ? value : undefined)),
   resolveTtsConfig: vi.fn((_cfg: OpenClawConfig) => ({ mode: "final" })),
+  resolveTtsConfigForAccount: vi.fn((cfg: OpenClawConfig) => ({
+    mode: "final",
+    sourceConfig: cfg,
+  })),
 }));
 const replyMediaPathMocks = vi.hoisted(() => ({
   createReplyMediaPathNormalizer: vi.fn(
@@ -265,6 +269,11 @@ vi.mock("../../tts/tts.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
   resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
+  resolveTtsConfigForAccount: (
+    cfg: OpenClawConfig,
+    _channel: string | undefined,
+    _accountId?: string,
+  ) => ttsMocks.resolveTtsConfigForAccount(cfg),
 }));
 vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
@@ -324,6 +333,10 @@ export function resetPluginTtsAndThreadMocks() {
   replyMediaPathMocks.createReplyMediaPathNormalizer
     .mockReset()
     .mockReturnValue(async (payload: ReplyPayload) => payload);
+  ttsMocks.resolveTtsConfigForAccount.mockReset().mockImplementation((cfg: OpenClawConfig) => ({
+    mode: "final",
+    sourceConfig: cfg,
+  }));
   threadInfoMocks.parseSessionThreadInfo
     .mockReset()
     .mockImplementation(parseGenericThreadSessionInfo);

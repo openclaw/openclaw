@@ -8,7 +8,7 @@ import {
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
-import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
+import { resolveTtsConfigForAccount } from "../../tts/tts.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
@@ -98,8 +98,9 @@ async function maybeApplyAcpTts(params: {
   if (params.skipTts) {
     return params.payload;
   }
+  const ttsConfig = resolveTtsConfigForAccount(params.cfg, params.channel, params.accountId);
   const ttsStatus = resolveStatusTtsSnapshot({
-    cfg: params.cfg,
+    cfg: ttsConfig.sourceConfig,
     sessionAuto: params.ttsAuto,
   });
   if (!ttsStatus) {
@@ -108,7 +109,7 @@ async function maybeApplyAcpTts(params: {
   if (ttsStatus.autoMode === "inbound" && !params.inboundAudio) {
     return params.payload;
   }
-  if (params.kind !== "final" && resolveConfiguredTtsMode(params.cfg) === "final") {
+  if (params.kind !== "final" && ttsConfig.mode === "final") {
     return params.payload;
   }
   const { maybeApplyTtsToPayload } = await loadDispatchAcpTtsRuntime();
