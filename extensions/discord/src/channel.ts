@@ -221,7 +221,7 @@ function resolveDiscordStartupDelayMs(cfg: OpenClawConfig, accountId: string): n
 const resolveDiscordDmPolicy = createScopedDmSecurityResolver<ResolvedDiscordAccount>({
   channelKey: "discord",
   resolvePolicy: (account) => account.config.dm?.policy,
-  resolveAllowFrom: (account) => account.config.dm?.allowFrom,
+  resolveAllowFrom: (account) => account.config.allowFrom ?? account.config.dm?.allowFrom,
   allowFromPathSuffix: "dm.",
   normalizeEntry: (raw) =>
     raw

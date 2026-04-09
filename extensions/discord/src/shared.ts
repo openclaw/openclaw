@@ -60,7 +60,8 @@ export const discordConfigAdapter = createScopedChannelConfigAdapter<ResolvedDis
   inspectAccount: adaptScopedAccountAccessor(inspectDiscordAccount),
   defaultAccountId: resolveDefaultDiscordAccountId,
   clearBaseFields: ["token", "name"],
-  resolveAllowFrom: (account: ResolvedDiscordAccount) => account.config.dm?.allowFrom,
+  resolveAllowFrom: (account: ResolvedDiscordAccount) =>
+    account.config.allowFrom ?? account.config.dm?.allowFrom,
   formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
   resolveDefaultTo: (account: ResolvedDiscordAccount) => account.config.defaultTo,
 });
