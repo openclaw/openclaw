@@ -7,6 +7,42 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "voice": {
+        "type": "object",
+        "description": "Teams voice/call support. Requires a Windows-based .NET Teams Voice Worker for live audio.",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Enable voice/call support. Default: false."
+          },
+          "permissionMode": {
+            "type": "string",
+            "enum": ["rsc-with-admin-media", "tenant-wide", "rsc-only"],
+            "description": "Permission model. Default: rsc-with-admin-media."
+          },
+          "workerAddress": {
+            "type": "string",
+            "description": "gRPC address of the .NET media worker. Default: localhost:9442."
+          },
+          "sttProvider": {
+            "type": "string",
+            "enum": ["openai-realtime", "deepgram", "whisper-file"],
+            "description": "Streaming STT provider. Default: openai-realtime."
+          },
+          "silenceDurationMs": {
+            "type": "number",
+            "description": "Silence detection duration (ms). Default: 1000."
+          },
+          "minSegmentSeconds": {
+            "type": "number",
+            "description": "Min audio segment duration (seconds). Default: 0.35."
+          },
+          "transcriptFallback": {
+            "description": "Post-meeting transcript fallback mode. false | rsc | tenant-wide."
+          }
+        }
+      }
+    }
   }
 }

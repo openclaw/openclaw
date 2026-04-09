@@ -1,0 +1,216 @@
+syntax = "proto3";
+
+package openclaw.msteams.voice;
+
+option csharp_namespace = "OpenClaw.MsTeams.Voice";
+
+// gRPC service definition for the TS ↔ .NET media worker bridge.
+//
+// The .NET media worker owns the full call lifecycle (Graph Communications
+// SDK + Real-Time Media SDK). The TS agent plane connects as a gRPC client
+// to orchestrate AI/STT/TTS processing.
+
+service TeamsMediaBridge {
+  // ── Call lifecycle (TS → Worker) ─────────────────────────────────────
+
+  // Join a Teams meeting. The worker creates the call via the stateful
+  // Graph Communications SDK with appHostedMediaConfig and
+  // ReceiveUnmixedMeetingAudio=true.
+  rpc JoinMeeting(JoinMeetingRequest) returns (JoinMeetingResponse);
+
+  // Leave / hang up a call. The worker tears down media and call state.
+  rpc LeaveCall(LeaveCallRequest) returns (LeaveCallResponse);
+
+  // Get status of all active calls on this worker.
+  rpc GetStatus(StatusRequest) returns (StatusResponse);
+
+  // ── Unmixed audio capture (Worker → TS) ──────────────────────────────
+
+  // Subscribe to per-speaker unmixed PCM audio segments. The worker
+  // captures via IAudioSocket with ReceiveUnmixedMeetingAudio, runs
+  // silence detection, and streams completed segments.
+  rpc SubscribeUnmixedAudio(SubscribeAudioRequest) returns (stream UnmixedAudioSegment);
+
+  // ── Audio playback (TS → Worker) ─────────────────────────────────────
+
+  // Stream TTS audio for injection into the call via IAudioSocket.Send().
+  rpc PlayAudio(stream AudioChunk) returns (PlayAudioResponse);
+
+  // Stop playback immediately (barge-in: human started speaking).
+  rpc StopPlayback(StopPlaybackRequest) returns (StopPlaybackResponse);
+
+  // ── Call events (Worker → TS) ────────────────────────────────────────
+
+  // Subscribe to call state changes, participant events, compliance
+  // status, and QoE metrics.
+  rpc SubscribeEvents(SubscribeEventsRequest) returns (stream CallEvent);
+
+  // ── Health ───────────────────────────────────────────────────────────
+
+  // Health check with capacity info (concurrent calls, CPU, memory).
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Call lifecycle messages
+// ═══════════════════════════════════════════════════════════════════════
+
+message JoinMeetingRequest {
+  // Internal call UUID assigned by the TS manager.
+  string call_id = 1;
+  // Teams meeting join URL.
+  string join_url = 2;
+  // Azure AD tenant ID.
+  string tenant_id = 3;
+  // Azure AD app ID (bot registration).
+  string app_id = 4;
+  // Azure AD app secret / client secret.
+  string app_secret = 5;
+  // Request unmixed per-speaker audio (default: true).
+  bool receive_unmixed = 6;
+}
+
+message JoinMeetingResponse {
+  // Graph API call resource ID.
+  string graph_call_id = 1;
+  bool success = 2;
+  string error = 3;
+}
+
+message LeaveCallRequest {
+  string call_id = 1;
+}
+
+message LeaveCallResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message StatusRequest {}
+
+message StatusResponse {
+  repeated CallStatusEntry calls = 1;
+  WorkerCapacity capacity = 2;
+}
+
+message CallStatusEntry {
+  string call_id = 1;
+  string graph_call_id = 2;
+  string state = 3;
+  string compliance_state = 4;
+  uint32 participant_count = 5;
+}
+
+message WorkerCapacity {
+  uint32 active_calls = 1;
+  uint32 max_concurrent_calls = 2;
+  double cpu_usage_percent = 3;
+  uint64 memory_used_bytes = 4;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Audio messages
+// ═══════════════════════════════════════════════════════════════════════
+
+message SubscribeAudioRequest {
+  string call_id = 1;
+}
+
+message UnmixedAudioSegment {
+  string call_id = 1;
+  // ActiveSpeakerId from the unmixed audio buffer (uint32).
+  uint32 speaker_id = 2;
+  // Resolved AAD object ID of the speaker.
+  string aad_user_id = 3;
+  // Display name of the speaker.
+  string display_name = 4;
+  // Duration of the audio segment in milliseconds.
+  uint32 duration_ms = 5;
+  // Raw PCM data: 16kHz, mono, 16-bit signed little-endian.
+  bytes pcm_data = 6;
+  // True if this segment was terminated by silence detection.
+  bool is_final = 7;
+}
+
+message AudioChunk {
+  string call_id = 1;
+  // Raw PCM data: 16kHz, mono, 16-bit signed little-endian.
+  bytes pcm_data = 2;
+}
+
+message PlayAudioResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message StopPlaybackRequest {
+  string call_id = 1;
+}
+
+message StopPlaybackResponse {
+  bool success = 1;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Call events
+// ═══════════════════════════════════════════════════════════════════════
+
+message SubscribeEventsRequest {
+  string call_id = 1;
+}
+
+message CallEvent {
+  string call_id = 1;
+  oneof event {
+    ComplianceEvent compliance = 2;
+    ParticipantEvent participant = 3;
+    StateEvent state = 4;
+    QoEEvent qoe = 5;
+    ErrorEvent error = 6;
+  }
+}
+
+// Compliance status from updateRecordingStatus. No audio should be
+// processed by the TS side until status reaches "active".
+message ComplianceEvent {
+  // "awaiting", "active", or "denied".
+  string status = 1;
+}
+
+message ParticipantEvent {
+  // "joined", "left", "muted", or "unmuted".
+  string action = 1;
+  string aad_user_id = 2;
+  string display_name = 3;
+}
+
+message StateEvent {
+  // "establishing", "established", or "terminated".
+  string state = 1;
+  string reason = 2;
+}
+
+// Quality-of-Experience metrics from MediaStreamQualityChangedEventArgs.
+message QoEEvent {
+  uint32 speaker_id = 1;
+  double packet_loss = 2;
+  uint32 jitter_ms = 3;
+}
+
+// Error from the media worker. If recoverable=true, the worker attempts
+// auto-rejoin (e.g. on MediaStreamFailure).
+message ErrorEvent {
+  string message = 1;
+  bool recoverable = 2;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Health
+// ═══════════════════════════════════════════════════════════════════════
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  bool healthy = 1;
+  WorkerCapacity capacity = 2;
+}

@@ -317,6 +317,30 @@ export async function monitorMSTeamsProvider(
     fallback: "/api/messages",
   });
 
+  // --- Voice/calling support ---
+  // The .NET media worker handles Graph Communications callbacks directly.
+  // The TS side connects as a gRPC client for AI/STT/TTS orchestration.
+  let voiceManager: import("./voice/manager.js").TeamsVoiceManager | undefined;
+  const voiceCfg = msteamsCfg.voice;
+  if (voiceCfg?.enabled) {
+    const { TeamsVoiceManager } = await import("./voice/manager.runtime.js");
+    voiceManager = new TeamsVoiceManager({
+      cfg,
+      msteamsConfig: msteamsCfg,
+      accountId: appId,
+      runtime,
+    });
+
+    const tier = await voiceManager.negotiateCapability();
+    log.info(`msteams voice: capability tier = ${tier}`);
+
+    if (tier === "live_voice") {
+      void voiceManager.autoJoin().catch((err) => {
+        log.error("msteams voice: auto-join failed", { error: String(err) });
+      });
+    }
+  }
+
   // Start listening and fail fast if bind/listen fails.
   const httpServer = expressApp.listen(port);
   await new Promise<void>((resolve, reject) => {
@@ -341,6 +365,13 @@ export async function monitorMSTeamsProvider(
 
   const shutdown = async () => {
     log.info("shutting down msteams provider");
+    if (voiceManager) {
+      try {
+        await voiceManager.destroy();
+      } catch (err) {
+        log.debug?.("msteams voice shutdown error", { error: String(err) });
+      }
+    }
     return new Promise<void>((resolve) => {
       httpServer.close((err) => {
         if (err) {
