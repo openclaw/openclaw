@@ -15,7 +15,11 @@ import {
   resolveTaskForLookupToken,
   setTaskCleanupAfterById,
 } from "./runtime-internal.js";
-import { listTaskAuditFindings, summarizeTaskAuditFindings } from "./task-registry.audit.js";
+import {
+  configureTaskAuditTaskProvider,
+  listTaskAuditFindings,
+  summarizeTaskAuditFindings,
+} from "./task-registry.audit.js";
 import type { TaskAuditSummary } from "./task-registry.audit.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type { TaskRecord, TaskRegistrySummary } from "./task-registry.types.js";
@@ -228,6 +232,8 @@ export function reconcileInspectableTasks(): TaskRecord[] {
     .listTaskRecords()
     .map((task) => reconcileTaskRecordForOperatorInspection(task));
 }
+
+configureTaskAuditTaskProvider(reconcileInspectableTasks);
 
 export function getInspectableTaskRegistrySummary(): TaskRegistrySummary {
   return summarizeTaskRecords(reconcileInspectableTasks());

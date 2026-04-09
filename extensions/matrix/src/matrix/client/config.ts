@@ -589,54 +589,6 @@ export async function resolveValidatedMatrixHomeserverUrl(
   return normalized;
 }
 
-export function resolveMatrixConfig(
-  cfg: CoreConfig = getMatrixRuntime().config.loadConfig() as CoreConfig,
-  env: NodeJS.ProcessEnv = process.env,
-): MatrixResolvedConfig {
-  const matrix = resolveMatrixBaseConfig(cfg);
-  const suppressInactivePasswordSecretRef = hasConfiguredMatrixAccessTokenSource({
-    cfg,
-    env,
-    accountId: DEFAULT_ACCOUNT_ID,
-  });
-  const fieldReadOptions = {
-    env,
-    config: cfg,
-  };
-  const defaultScopedEnv = resolveScopedMatrixEnvConfig(DEFAULT_ACCOUNT_ID, env);
-  const globalEnv = resolveGlobalMatrixEnvConfig(env);
-  const resolvedStrings = resolveMatrixAccountStringValues({
-    accountId: DEFAULT_ACCOUNT_ID,
-    scopedEnv: defaultScopedEnv,
-    channel: {
-      homeserver: readMatrixBaseConfigField(matrix, "homeserver", fieldReadOptions),
-      userId: readMatrixBaseConfigField(matrix, "userId", fieldReadOptions),
-      accessToken: readMatrixBaseConfigField(matrix, "accessToken", fieldReadOptions),
-      password: readMatrixBaseConfigField(matrix, "password", {
-        ...fieldReadOptions,
-        suppressSecretRef: suppressInactivePasswordSecretRef,
-      }),
-      deviceId: readMatrixBaseConfigField(matrix, "deviceId", fieldReadOptions),
-      deviceName: readMatrixBaseConfigField(matrix, "deviceName", fieldReadOptions),
-    },
-    globalEnv,
-  });
-  const initialSyncLimit = clampMatrixInitialSyncLimit(matrix.initialSyncLimit);
-  const encryption = matrix.encryption ?? false;
-  const allowPrivateNetwork = isPrivateNetworkOptInEnabled(matrix) ? true : undefined;
-  return {
-    homeserver: resolvedStrings.homeserver,
-    userId: resolvedStrings.userId,
-    accessToken: resolvedStrings.accessToken || undefined,
-    password: resolvedStrings.password || undefined,
-    deviceId: resolvedStrings.deviceId || undefined,
-    deviceName: resolvedStrings.deviceName || undefined,
-    initialSyncLimit,
-    encryption,
-    ...buildMatrixNetworkFields({ allowPrivateNetwork, proxy: matrix.proxy }),
-  };
-}
-
 export function resolveMatrixConfigForAccount(
   cfg: CoreConfig,
   accountId: string,
@@ -712,7 +664,7 @@ export function resolveMatrixConfigForAccount(
   };
 }
 
-export function resolveImplicitMatrixAccountId(
+function resolveImplicitMatrixAccountId(
   cfg: CoreConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): string | null {

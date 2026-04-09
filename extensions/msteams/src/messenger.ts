@@ -521,12 +521,16 @@ export async function sendMSTeamsMessages(params: {
     return messageIds;
   };
 
+  // Resolve the thread root message ID for channel thread routing.
+  // `threadId` is the canonical thread root (set on inbound for channel threads);
+  // fall back to `activityId` for backward compatibility with older stored refs.
+  const resolvedThreadId = params.conversationRef.threadId ?? params.conversationRef.activityId;
+
   if (params.replyStyle === "thread") {
     const ctx = params.context;
     if (!ctx) {
       throw new Error("Missing context for replyStyle=thread");
     }
-    const threadActivityId = params.conversationRef.activityId;
     const messageIds: string[] = [];
     for (const [idx, message] of messages.entries()) {
       const result = await withRevokedProxyFallback({
@@ -541,7 +545,7 @@ export async function sendMSTeamsMessages(params: {
           const remaining = messages.slice(idx);
           return {
             ids:
-              remaining.length > 0 ? await sendProactively(remaining, idx, threadActivityId) : [],
+              remaining.length > 0 ? await sendProactively(remaining, idx, resolvedThreadId) : [],
             fellBack: true,
           };
         },

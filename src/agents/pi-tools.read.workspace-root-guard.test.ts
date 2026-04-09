@@ -127,4 +127,38 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
       root,
     });
   });
+
+  it("does not guard outPath by default", async () => {
+    const { tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+    });
+
+    await wrapped.execute("tc-outpath-default", { outPath: "/workspace/videos/capture.mp4" });
+
+    expect(mocks.assertSandboxPath).not.toHaveBeenCalled();
+  });
+
+  it("guards custom outPath params when configured", async () => {
+    const { execute, tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+      pathParamKeys: ["outPath"],
+      normalizeGuardedPathParams: true,
+    });
+
+    await wrapped.execute("tc-outpath-custom", { outPath: "videos/capture.mp4" });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: "videos/capture.mp4",
+      cwd: root,
+      root,
+    });
+    expect(execute).toHaveBeenCalledWith(
+      "tc-outpath-custom",
+      { outPath: path.resolve(root, "videos", "capture.mp4") },
+      undefined,
+      undefined,
+    );
+  });
 });

@@ -8,6 +8,7 @@ let isCacheTtlEligibleProvider: typeof import("./cache-ttl.js").isCacheTtlEligib
 describe("kilocode cache-ttl eligibility", () => {
   beforeEach(async () => {
     vi.doUnmock("../../plugins/provider-runtime.js");
+    vi.doUnmock("../../plugins/provider-runtime.runtime.js");
     vi.resetModules();
     const { resetProviderRuntimeHookCacheForTest } =
       await import("../../plugins/provider-runtime.js");

@@ -28,6 +28,7 @@ import {
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { ElevatedLevel } from "../thinking.js";
 import { handleDirectiveOnly } from "./directive-handling.impl.js";
 import { parseInlineDirectives } from "./directive-handling.js";
 import {
@@ -622,6 +623,14 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(result?.text ?? "").not.toContain("failed");
   });
 
+  it("strips inline elevated directives while keeping user text", () => {
+    const directives = parseInlineDirectives("hello there /elevated off");
+
+    expect(directives.hasElevatedDirective).toBe(true);
+    expect(directives.elevatedLevel).toBe("off");
+    expect(directives.cleaned).toBe("hello there");
+  });
+
   it("persists thinkingLevel=off (does not clear)", async () => {
     const directives = parseInlineDirectives("/think off");
     const sessionEntry = createSessionEntry({ thinkingLevel: "low" });
@@ -637,6 +646,81 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(result?.text ?? "").not.toContain("failed");
     expect(sessionEntry.thinkingLevel).toBe("off");
     expect(sessionStore["agent:main:dm:1"]?.thinkingLevel).toBe("off");
+  });
+
+  it("persists and reports fast-mode directives", async () => {
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const onReply = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/fast on"),
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+    expect(onReply?.text).toContain("Fast mode enabled");
+    expect(sessionEntry.fastMode).toBe(true);
+
+    const statusReply = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/fast"),
+        sessionEntry,
+        sessionStore,
+        currentFastMode: sessionEntry.fastMode,
+      }),
+    );
+    expect(statusReply?.text).toContain("Current fast mode: on");
+
+    const offReply = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/fast off"),
+        sessionEntry,
+        sessionStore,
+        currentFastMode: sessionEntry.fastMode,
+      }),
+    );
+    expect(offReply?.text).toContain("Fast mode disabled");
+    expect(sessionEntry.fastMode).toBe(false);
+  });
+
+  it("persists and reports elevated-mode directives when allowed", async () => {
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const base = {
+      elevatedAllowed: true,
+      elevatedEnabled: true,
+      sessionEntry,
+      sessionStore,
+    } satisfies Partial<HandleParams>;
+
+    const onReply = await handleDirectiveOnly(
+      createHandleParams({
+        ...base,
+        directives: parseInlineDirectives("/elevated on"),
+      }),
+    );
+    expect(onReply?.text).toContain("Elevated mode set to ask");
+    expect(sessionEntry.elevatedLevel).toBe("on");
+
+    const statusReply = await handleDirectiveOnly(
+      createHandleParams({
+        ...base,
+        directives: parseInlineDirectives("/elevated"),
+        currentElevatedLevel: sessionEntry.elevatedLevel as ElevatedLevel | undefined,
+      }),
+    );
+    expect(statusReply?.text).toContain("Current elevated level: on");
+
+    const offReply = await handleDirectiveOnly(
+      createHandleParams({
+        ...base,
+        directives: parseInlineDirectives("/elevated off"),
+        currentElevatedLevel: sessionEntry.elevatedLevel as ElevatedLevel | undefined,
+      }),
+    );
+    expect(offReply?.text).toContain("Elevated mode disabled");
+    expect(sessionEntry.elevatedLevel).toBe("off");
   });
 
   it("blocks internal operator.write exec persistence in directive-only handling", async () => {

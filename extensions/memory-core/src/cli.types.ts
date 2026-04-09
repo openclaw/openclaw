@@ -36,4 +36,6 @@ export type MemoryRemHarnessOptions = MemoryCommandOptions & {
 export type MemoryRemBackfillOptions = MemoryCommandOptions & {
   path?: string;
   rollback?: boolean;
+  stageShortTerm?: boolean;
+  rollbackShortTerm?: boolean;
 };

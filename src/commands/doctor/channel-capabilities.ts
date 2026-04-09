@@ -1,6 +1,6 @@
 import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { AllowFromMode } from "./shared/allow-from-mode.js";
+import type { AllowFromMode } from "./shared/allow-from-mode.types.js";
 
 export type DoctorGroupModel = "sender" | "route" | "hybrid";
 

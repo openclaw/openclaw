@@ -1100,7 +1100,7 @@ describe("trusted-proxy auth", () => {
       expect(res.reason).toBe("trusted_proxy_loopback_source");
     });
 
-    it("rejects same-host proxy request with missing required header", async () => {
+    it("rejects same-host loopback proxy request when allowLoopback is false", async () => {
       const res = await authorizeGatewayConnect({
         auth: {
           mode: "trusted-proxy",

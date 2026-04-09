@@ -18,6 +18,7 @@ const getMemorySearchManager = vi.hoisted(() => vi.fn());
 const previewGroundedRemMarkdown = vi.hoisted(() => vi.fn());
 const writeBackfillDiaryEntries = vi.hoisted(() => vi.fn());
 const removeBackfillDiaryEntries = vi.hoisted(() => vi.fn());
+const removeGroundedShortTermCandidates = vi.hoisted(() => vi.fn());
 
 vi.mock("../../config/config.js", () => ({
   loadConfig,
@@ -40,6 +41,7 @@ vi.mock("./doctor.memory-core-runtime.js", () => ({
   previewGroundedRemMarkdown,
   writeBackfillDiaryEntries,
   removeBackfillDiaryEntries,
+  removeGroundedShortTermCandidates,
 }));
 
 import { doctorHandlers } from "./doctor.js";
@@ -100,6 +102,17 @@ const invokeDoctorMemoryResetDreamDiary = async (respond: ReturnType<typeof vi.f
   });
 };
 
+const invokeDoctorMemoryResetGroundedShortTerm = async (respond: ReturnType<typeof vi.fn>) => {
+  await doctorHandlers["doctor.memory.resetGroundedShortTerm"]({
+    req: {} as never,
+    params: {} as never,
+    respond: respond as never,
+    context: {} as never,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+};
+
 const expectEmbeddingErrorResponse = (respond: ReturnType<typeof vi.fn>, error: string) => {
   expect(respond).toHaveBeenCalledWith(
     true,
@@ -121,6 +134,10 @@ describe("doctor.memory.status", () => {
     resolveAgentWorkspaceDir.mockReset().mockReturnValue("/tmp/openclaw");
     resolveMemorySearchConfig.mockReset().mockReturnValue({ enabled: true });
     getMemorySearchManager.mockReset();
+    previewGroundedRemMarkdown.mockReset();
+    writeBackfillDiaryEntries.mockReset();
+    removeBackfillDiaryEntries.mockReset();
+    removeGroundedShortTermCandidates.mockReset();
   });
 
   it("returns gateway embedding probe status for the default agent", async () => {
@@ -701,6 +718,32 @@ describe("doctor.memory.status", () => {
   });
 });
 
+describe("doctor.memory dream actions", () => {
+  it("clears grounded-only staged short-term entries without touching the diary", async () => {
+    resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw");
+    removeGroundedShortTermCandidates.mockResolvedValue({
+      removed: 3,
+      storePath: "/tmp/openclaw/memory/.dreams/short-term-recall.json",
+    });
+    const respond = vi.fn();
+
+    await invokeDoctorMemoryResetGroundedShortTerm(respond);
+
+    expect(removeGroundedShortTermCandidates).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/openclaw",
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        agentId: "main",
+        action: "resetGroundedShortTerm",
+        removedShortTermEntries: 3,
+      },
+      undefined,
+    );
+  });
+});
+
 describe("doctor.memory.dreamDiary", () => {
   beforeEach(() => {
     loadConfig.mockClear();
@@ -749,7 +792,6 @@ describe("doctor.memory.dreamDiary", () => {
         expect.objectContaining({
           agentId: "main",
           found: true,
-          path: "DREAMS.md",
           content: "lowercase diary\n",
           updatedAtMs: expect.any(Number),
         }),
@@ -811,7 +853,15 @@ describe("doctor.memory.dreamDiary", () => {
         workspaceDir,
         inputPaths: [path.join(workspaceDir, "memory", "2026-02-19.md")],
       });
-      expect(writeBackfillDiaryEntries).toHaveBeenCalled();
+      expect(writeBackfillDiaryEntries).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entries: [
+            expect.objectContaining({
+              bodyLines: expect.arrayContaining(["What Happened", "1. Bunji — partner"]),
+            }),
+          ],
+        }),
+      );
       expect(respond).toHaveBeenCalledWith(
         true,
         expect.objectContaining({
@@ -820,6 +870,31 @@ describe("doctor.memory.dreamDiary", () => {
           scannedFiles: 1,
           written: 1,
           replaced: 1,
+        }),
+        undefined,
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("no-ops backfill when the workspace has no daily memory files", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-dream-diary-empty-"));
+    resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+    const respond = vi.fn();
+
+    try {
+      await invokeDoctorMemoryBackfillDreamDiary(respond);
+      expect(previewGroundedRemMarkdown).not.toHaveBeenCalled();
+      expect(writeBackfillDiaryEntries).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          agentId: "main",
+          action: "backfill",
+          scannedFiles: 0,
+          written: 0,
+          replaced: 0,
         }),
         undefined,
       );
