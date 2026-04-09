@@ -91,12 +91,7 @@ export function normalizeProviderId(provider: string): string {
   if (normalized === "bytedance" || normalized === "doubao") {
     return "volcengine";
   }
-  return normalized;
-}
-
-/** Normalize provider ID for auth lookup. Coding-plan variants share auth with base. */
-export function normalizeProviderIdForAuth(provider: string): string {
-  const normalized = normalizeProviderId(provider);
+  // Coding-plan variants share model catalog with base provider.
   if (normalized === "volcengine-plan") {
     return "volcengine";
   }
@@ -104,6 +99,11 @@ export function normalizeProviderIdForAuth(provider: string): string {
     return "byteplus";
   }
   return normalized;
+}
+
+/** Normalize provider ID for auth lookup. Coding-plan variants share auth with base. */
+export function normalizeProviderIdForAuth(provider: string): string {
+  return normalizeProviderId(provider);
 }
 
 export function findNormalizedProviderValue<T>(
