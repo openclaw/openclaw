@@ -49,12 +49,14 @@ function createCronHarness(
   opts?: { removeResult?: "boolean" | "unknown"; removeThrowsForIds?: string[] },
 ) {
   const jobs: CronJobLike[] = [...initialJobs];
+  let listCalls = 0;
   const addCalls: CronAddInput[] = [];
   const updateCalls: Array<{ id: string; patch: CronPatch }> = [];
   const removeCalls: string[] = [];
 
   const cron: CronParam = {
     async list() {
+      listCalls += 1;
       return jobs.map((job) => ({
         ...job,
         ...(job.schedule ? { schedule: { ...job.schedule } } : {}),
@@ -111,7 +113,16 @@ function createCronHarness(
     },
   };
 
-  return { cron, jobs, addCalls, updateCalls, removeCalls };
+  return {
+    cron,
+    jobs,
+    addCalls,
+    updateCalls,
+    removeCalls,
+    get listCalls() {
+      return listCalls;
+    },
+  };
 }
 
 function getBeforeAgentReplyHandler(
@@ -960,6 +971,63 @@ describe("gateway startup reconciliation", () => {
         tz: "UTC",
       });
     } finally {
+      clearInternalHooks();
+    }
+  });
+
+  it("does not reconcile managed cron on every repeated runtime reply", async () => {
+    clearInternalHooks();
+    const logger = createLogger();
+    const harness = createCronHarness();
+    const onMock = vi.fn();
+    const now = Date.parse("2026-04-10T12:00:00Z");
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    const api = {
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "0 2 * * *",
+                  timezone: "UTC",
+                },
+              },
+            },
+          },
+        },
+      },
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      registerHook: (event: string, handler: Parameters<typeof registerInternalHook>[1]) => {
+        registerInternalHook(event, handler);
+      },
+      on: onMock,
+    } as never;
+
+    try {
+      registerShortTermPromotionDreaming(api);
+      await triggerInternalHook(
+        createInternalHookEvent("gateway", "startup", "gateway:startup", {
+          cfg: api.config,
+          deps: { cron: harness.cron },
+        }),
+      );
+
+      expect(harness.listCalls).toBe(1);
+
+      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
+      await beforeAgentReply({ cleanedBody: "hello" }, { trigger: "user", workspaceDir: "." });
+      await beforeAgentReply(
+        { cleanedBody: "hello again" },
+        { trigger: "user", workspaceDir: "." },
+      );
+
+      expect(harness.listCalls).toBe(2);
+    } finally {
+      nowSpy.mockRestore();
       clearInternalHooks();
     }
   });

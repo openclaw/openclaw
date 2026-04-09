@@ -35,6 +35,7 @@ const LEGACY_LIGHT_SLEEP_EVENT_TEXT = "__openclaw_memory_core_light_sleep__";
 const LEGACY_REM_SLEEP_CRON_NAME = "Memory REM Dreaming";
 const LEGACY_REM_SLEEP_CRON_TAG = "[managed-by=memory-core.dreaming.rem]";
 const LEGACY_REM_SLEEP_EVENT_TEXT = "__openclaw_memory_core_rem_sleep__";
+const RUNTIME_CRON_RECONCILE_INTERVAL_MS = 60_000;
 
 type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
 
@@ -618,6 +619,25 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
 export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void {
   let startupCronSource: StartupCronSourceRefs | null = null;
   let unavailableCronWarningEmitted = false;
+  let lastRuntimeReconcileAtMs = 0;
+  let lastRuntimeConfigKey: string | null = null;
+  let lastRuntimeCronRef: CronServiceLike | null = null;
+
+  const runtimeConfigKey = (config: ShortTermPromotionDreamingConfig): string =>
+    [
+      config.enabled ? "enabled" : "disabled",
+      config.cron,
+      config.timezone ?? "",
+      String(config.limit),
+      String(config.minScore),
+      String(config.minRecallCount),
+      String(config.minUniqueQueries),
+      String(config.recencyHalfLifeDays ?? ""),
+      String(config.maxAgeDays ?? ""),
+      config.verboseLogging ? "verbose" : "quiet",
+      config.storage?.mode ?? "",
+      config.storage?.separateReports ? "separate" : "inline",
+    ].join("|");
 
   const reconcileManagedDreamingCron = async (params: {
     reason: "startup" | "runtime";
@@ -638,6 +658,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       startupCronSource = resolveStartupCronSourceFromEvent(params.startupEvent);
     }
     const cron = resolveCronServiceFromStartupSource(startupCronSource);
+    const configKey = runtimeConfigKey(config);
     if (!cron && config.enabled && !unavailableCronWarningEmitted) {
       api.logger.warn(
         "memory-core: managed dreaming cron could not be reconciled (cron service unavailable).",
@@ -646,6 +667,21 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     }
     if (cron) {
       unavailableCronWarningEmitted = false;
+    }
+    if (params.reason === "runtime") {
+      const now = Date.now();
+      const withinThrottleWindow =
+        now - lastRuntimeReconcileAtMs < RUNTIME_CRON_RECONCILE_INTERVAL_MS;
+      if (
+        withinThrottleWindow &&
+        lastRuntimeConfigKey === configKey &&
+        lastRuntimeCronRef === cron
+      ) {
+        return config;
+      }
+      lastRuntimeReconcileAtMs = now;
+      lastRuntimeConfigKey = configKey;
+      lastRuntimeCronRef = cron;
     }
     await reconcileShortTermDreamingCronJob({
       cron,
