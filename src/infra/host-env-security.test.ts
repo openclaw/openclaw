@@ -244,8 +244,6 @@ describe("isDangerousHostEnvVarName", () => {
       "R_ENVIRON",
       "R_PROFILE_USER",
       "TF_CLI_CONFIG_FILE",
-      "AWS_CONTAINER_CREDENTIALS_FULL_URI",
-      "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
     ] as const;
 
     for (const key of keys) {
@@ -256,6 +254,8 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("ANSIBLE_REMOTE_TEMP")).toBe(true);
     expect(isDangerousHostEnvVarName("R_LIBS_USER")).toBe(true);
     expect(isDangerousHostEnvVarName("TF_PLUGIN_CACHE_DIR")).toBe(true);
+    expect(isDangerousHostEnvVarName("AWS_CONTAINER_CREDENTIALS_FULL_URI")).toBe(false);
+    expect(isDangerousHostEnvVarName("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")).toBe(false);
   });
 });
 
@@ -512,6 +512,8 @@ describe("sanitizeHostExecEnv", () => {
         EXINIT: "silent !touch /tmp/pwned",
         LUA_INIT_5_4: "os.execute('touch /tmp/pwned')",
         HOSTALIASES: "/tmp/evil-hostaliases",
+        AWS_CONTAINER_CREDENTIALS_FULL_URI: "http://169.254.170.2/credentials",
+        AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: "/v2/credentials/abcd",
         CONFIG_SITE: "/tmp/evil-config-site",
         ANSIBLE_CONFIG: "/tmp/evil-ansible.cfg",
         R_PROFILE_USER: "/tmp/evil-Rprofile",
@@ -527,6 +529,8 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.EXINIT).toBeUndefined();
     expect(env.LUA_INIT_5_4).toBeUndefined();
     expect(env.HOSTALIASES).toBeUndefined();
+    expect(env.AWS_CONTAINER_CREDENTIALS_FULL_URI).toBe("http://169.254.170.2/credentials");
+    expect(env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI).toBe("/v2/credentials/abcd");
     expect(env.CONFIG_SITE).toBeUndefined();
     expect(env.ANSIBLE_CONFIG).toBeUndefined();
     expect(env.R_PROFILE_USER).toBeUndefined();
@@ -543,6 +547,8 @@ describe("sanitizeHostExecEnv", () => {
       overrides: {
         VIMINIT: ":!touch /tmp/pwned",
         HOSTALIASES: "/tmp/evil-hostaliases",
+        AWS_CONTAINER_CREDENTIALS_FULL_URI: "http://attacker/credentials",
+        AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: "/attacker-credentials",
         GITHUB_TOKEN: "ghp-test",
         DATABASE_URL: "postgres://attacker",
         NPM_TOKEN: "npm-test",
@@ -556,6 +562,8 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
     expect(env.VIMINIT).toBeUndefined();
     expect(env.HOSTALIASES).toBeUndefined();
+    expect(env.AWS_CONTAINER_CREDENTIALS_FULL_URI).toBeUndefined();
+    expect(env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI).toBeUndefined();
     expect(env.GITHUB_TOKEN).toBeUndefined();
     expect(env.DATABASE_URL).toBeUndefined();
     expect(env.NPM_TOKEN).toBeUndefined();
@@ -771,6 +779,8 @@ describe("isDangerousHostEnvOverrideVarName", () => {
       "NPM_TOKEN",
       "NODE_AUTH_TOKEN",
       "AWS_ACCESS_KEY_ID",
+      "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+      "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
       "AWS_SECRET_ACCESS_KEY",
       "AZURE_CLIENT_SECRET",
       "DATABASE_URL",
@@ -1020,6 +1030,8 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
         LUA_INIT_5_4: "os.execute('touch /tmp/pwned')",
         HOSTALIASES: "/tmp/evil-hostaliases",
         ANSIBLE_CONFIG: "/tmp/evil-ansible.cfg",
+        AWS_CONTAINER_CREDENTIALS_FULL_URI: "http://attacker/credentials",
+        AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: "/attacker-credentials",
         GITHUB_TOKEN: "ghp-test",
         DATABASE_URL: "postgres://attacker",
         R_PROFILE_USER: "/tmp/evil-Rprofile",
@@ -1030,6 +1042,8 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
 
     expect(result.rejectedOverrideBlockedKeys).toEqual([
       "ANSIBLE_CONFIG",
+      "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+      "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
       "DATABASE_URL",
       "GITHUB_TOKEN",
       "HOSTALIASES",

@@ -8,8 +8,6 @@ enum HostEnvSecurityPolicy {
     static let blockedKeys: Set<String> = [
         "_JAVA_OPTIONS",
         "ANT_OPTS",
-        "AWS_CONTAINER_CREDENTIALS_FULL_URI",
-        "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
         "BASH_ENV",
         "BROWSER",
         "BZR_EDITOR",
@@ -99,6 +97,8 @@ enum HostEnvSecurityPolicy {
         "AWKPATH",
         "AWS_ACCESS_KEY_ID",
         "AWS_CONFIG_FILE",
+        "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+        "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
         "AWS_DEFAULT_REGION",
         "AWS_EC2_METADATA_DISABLED",
         "AWS_METADATA_SERVICE_TIMEOUT",
