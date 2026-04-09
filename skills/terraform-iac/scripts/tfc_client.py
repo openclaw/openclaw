@@ -52,7 +52,7 @@ def validate_dir(path_str):
     """Validate --dir is a safe path under /tmp or the user's home directory."""
     resolved = Path(path_str).resolve()
     allowed_roots = [Path("/tmp").resolve(), Path.home().resolve()]
-    if not any(str(resolved).startswith(str(root)) for root in allowed_roots):
+    if not any(resolved == root or root in resolved.parents for root in allowed_roots):
         print(f"ERROR: --dir must be under /tmp or $HOME, got '{resolved}'")
         sys.exit(1)
     return str(resolved)
