@@ -98,20 +98,22 @@ jobs:
         id: tags
         shell: bash
         env:
-          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          REGISTRY: ${{ env.REGISTRY }}
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
           SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
         run: |
           set -euo pipefail
+          image_repo="${REGISTRY}/$(printf '%s' "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')"
           tags=()
           slim_tags=()
           if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
-            tags+=("${IMAGE}:main-amd64")
-            slim_tags+=("${IMAGE}:main-slim-amd64")
+            tags+=("${image_repo}:main-amd64")
+            slim_tags+=("${image_repo}:main-slim-amd64")
           fi
           if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
             version="${SOURCE_REF#refs/tags/v}"
-            tags+=("${IMAGE}:${version}-amd64")
-            slim_tags+=("${IMAGE}:${version}-slim-amd64")
+            tags+=("${image_repo}:${version}-amd64")
+            slim_tags+=("${image_repo}:${version}-slim-amd64")
           fi
           if [[ ${#tags[@]} -eq 0 ]]; then
             echo "::error::No amd64 tags resolved for ref ${SOURCE_REF}"
@@ -211,20 +213,22 @@ jobs:
         id: tags
         shell: bash
         env:
-          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          REGISTRY: ${{ env.REGISTRY }}
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
           SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
         run: |
           set -euo pipefail
+          image_repo="${REGISTRY}/$(printf '%s' "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')"
           tags=()
           slim_tags=()
           if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
-            tags+=("${IMAGE}:main-arm64")
-            slim_tags+=("${IMAGE}:main-slim-arm64")
+            tags+=("${image_repo}:main-arm64")
+            slim_tags+=("${image_repo}:main-slim-arm64")
           fi
           if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
             version="${SOURCE_REF#refs/tags/v}"
-            tags+=("${IMAGE}:${version}-arm64")
-            slim_tags+=("${IMAGE}:${version}-slim-arm64")
+            tags+=("${image_repo}:${version}-arm64")
+            slim_tags+=("${image_repo}:${version}-slim-arm64")
           fi
           if [[ ${#tags[@]} -eq 0 ]]; then
             echo "::error::No arm64 tags resolved for ref ${SOURCE_REF}"
@@ -318,25 +322,27 @@ jobs:
         id: tags
         shell: bash
         env:
-          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          REGISTRY: ${{ env.REGISTRY }}
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
           SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
           IS_MANUAL_BACKFILL: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
         run: |
           set -euo pipefail
+          image_repo="${REGISTRY}/$(printf '%s' "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')"
           tags=()
           slim_tags=()
           if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
-            tags+=("${IMAGE}:main")
-            slim_tags+=("${IMAGE}:main-slim")
+            tags+=("${image_repo}:main")
+            slim_tags+=("${image_repo}:main-slim")
           fi
           if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
             version="${SOURCE_REF#refs/tags/v}"
-            tags+=("${IMAGE}:${version}")
-            slim_tags+=("${IMAGE}:${version}-slim")
+            tags+=("${image_repo}:${version}")
+            slim_tags+=("${image_repo}:${version}-slim")
             # Manual backfills should only republish the requested version tags.
             if [[ "${IS_MANUAL_BACKFILL}" != "1" && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
-              tags+=("${IMAGE}:latest")
-              slim_tags+=("${IMAGE}:slim")
+              tags+=("${image_repo}:latest")
+              slim_tags+=("${image_repo}:slim")
             fi
           fi
           if [[ ${#tags[@]} -eq 0 ]]; then
