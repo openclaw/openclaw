@@ -212,6 +212,24 @@ func (t *oversizedBlockTranslator) TranslateRaw(_ context.Context, text, _, _ st
 
 func (t *oversizedBlockTranslator) Close() {}
 
+type singletonFenceRetryTranslator struct {
+	rawInputs []string
+}
+
+func (t *singletonFenceRetryTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
+	return text, nil
+}
+
+func (t *singletonFenceRetryTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
+	t.rawInputs = append(t.rawInputs, text)
+	if strings.Contains(text, "Line 01") && strings.Contains(text, "Line 04") {
+		return strings.Replace(text, "\n```\n", "\n", 1), nil
+	}
+	return strings.ReplaceAll(text, "Line ", "Translated line "), nil
+}
+
+func (t *singletonFenceRetryTranslator) Close() {}
+
 func TestParseTaggedDocumentRejectsMissingBodyCloseAtEOF(t *testing.T) {
 	t.Parallel()
 
@@ -641,6 +659,43 @@ func TestTranslateDocBodyChunkedSplitsOversizedFenceBeforeTrailingProse(t *testi
 	}
 	if !strings.Contains(translated, "Translated line 01") || !strings.Contains(translated, "Trailing paragraph after the fence.") {
 		t.Fatalf("expected fence content and trailing prose to survive split:\n%s", translated)
+	}
+}
+
+func TestTranslateDocBodyChunkedRetriesSingletonFenceAfterValidationFailure(t *testing.T) {
+	body := strings.Join([]string{
+		"```md",
+		"Line 01",
+		"Line 02",
+		"Line 03",
+		"Line 04",
+		"```",
+		"",
+	}, "\n")
+
+	t.Setenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_MAX_BYTES", "4096")
+	t.Setenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_PROMPT_BUDGET", "4096")
+
+	translator := &singletonFenceRetryTranslator{}
+	translated, err := translateDocBodyChunked(context.Background(), translator, "gateway/configuration-reference.md", body, "en", "zh-CN")
+	if err != nil {
+		t.Fatalf("translateDocBodyChunked returned error: %v", err)
+	}
+	if len(translator.rawInputs) < 3 {
+		t.Fatalf("expected singleton fence retry to split after validation failure, saw %d input(s)", len(translator.rawInputs))
+	}
+	if !strings.Contains(translator.rawInputs[0], "Line 01") || !strings.Contains(translator.rawInputs[0], "Line 04") {
+		t.Fatalf("expected first raw attempt to include the original fenced block:\n%s", translator.rawInputs[0])
+	}
+	for _, input := range translator.rawInputs[1:] {
+		if strings.Contains(input, "Line 01") || strings.Contains(input, "Line 02") || strings.Contains(input, "Line 03") || strings.Contains(input, "Line 04") {
+			if !strings.Contains(input, "```md") || !strings.Contains(input, "```") {
+				t.Fatalf("expected split retry inputs to preserve fence wrappers:\n%s", input)
+			}
+		}
+	}
+	if !strings.Contains(translated, "Translated line 01") || !strings.Contains(translated, "Translated line 04") {
+		t.Fatalf("expected singleton fence retry to reassemble translated output:\n%s", translated)
 	}
 }
 

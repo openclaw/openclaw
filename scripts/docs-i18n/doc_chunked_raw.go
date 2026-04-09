@@ -82,6 +82,10 @@ func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chun
 		if fallback, fallbackErr := translateDocLeafBlock(ctx, translator, chunkID, source, srcLang, tgtLang); fallbackErr == nil {
 			return fallback, nil
 		}
+		if plan, ok := planSingletonDocChunkRetry(source, docsI18nDocChunkMaxBytes(), docsI18nDocChunkPromptBudget()); ok {
+			logDocChunkPlanSplit(chunkID, plan, source)
+			return translatePlannedDocChunkGroups(ctx, translator, chunkID, plan.groups, srcLang, tgtLang)
+		}
 		return "", fmt.Errorf("%s: %w", chunkID, err)
 	}
 	if plan, ok := planDocChunkSplit(blocks, docsI18nDocChunkMaxBytes(), docsI18nDocChunkPromptBudget()); ok {
@@ -470,26 +474,46 @@ func planSingletonDocChunk(block string, maxBytes, promptBudget int) (docChunkSp
 		return docChunkSplitPlan{}, false
 	}
 
+	return planSingletonDocChunkWithMode(block, maxBytes, promptBudget, false)
+}
+
+func planSingletonDocChunkRetry(block string, maxBytes, promptBudget int) (docChunkSplitPlan, bool) {
+	return planSingletonDocChunkWithMode(block, maxBytes, promptBudget, true)
+}
+
+func planSingletonDocChunkWithMode(block string, maxBytes, promptBudget int, force bool) (docChunkSplitPlan, bool) {
 	if sections := splitDocBlockSections(block); len(sections) > 1 {
 		if groups := wrapDocChunkSections(sections); len(groups) > 1 {
+			reason := "singleton-structural"
+			if force {
+				reason = "singleton-retry-structural"
+			}
 			return docChunkSplitPlan{
 				groups: groups,
-				reason: "singleton-structural",
+				reason: reason,
 			}, true
 		}
 	}
 
-	if groups, ok := splitPureFencedDocSection(block, maxBytes, promptBudget); ok {
+	if groups, ok := splitPureFencedDocSectionWithMode(block, maxBytes, promptBudget, force); ok {
+		reason := "singleton-fence"
+		if force {
+			reason = "singleton-retry-fence"
+		}
 		return docChunkSplitPlan{
 			groups: groups,
-			reason: "singleton-fence",
+			reason: reason,
 		}, true
 	}
 
-	if groups, ok := splitPlainDocSection(block, maxBytes, promptBudget); ok {
+	if groups, ok := splitPlainDocSectionWithMode(block, maxBytes, promptBudget, force); ok {
+		reason := "singleton-lines"
+		if force {
+			reason = "singleton-retry-lines"
+		}
 		return docChunkSplitPlan{
 			groups: groups,
-			reason: "singleton-lines",
+			reason: reason,
 		}, true
 	}
 
@@ -552,6 +576,10 @@ func splitDocBlockSections(block string) []string {
 }
 
 func splitPureFencedDocSection(block string, maxBytes, promptBudget int) ([][]string, bool) {
+	return splitPureFencedDocSectionWithMode(block, maxBytes, promptBudget, false)
+}
+
+func splitPureFencedDocSectionWithMode(block string, maxBytes, promptBudget int, force bool) ([][]string, bool) {
 	lines := strings.SplitAfter(block, "\n")
 	if len(lines) < 2 {
 		return nil, false
@@ -573,7 +601,7 @@ func splitPureFencedDocSection(block string, maxBytes, promptBudget int) ([][]st
 	}
 	closing := lines[closingIndex]
 	inner := strings.Join(lines[openingIndex+1:closingIndex], "")
-	groups, ok := splitPlainDocSection(inner, maxBytes-len(opening)-len(closing), promptBudget)
+	groups, ok := splitPlainDocSectionWithMode(inner, maxBytes-len(opening)-len(closing), promptBudget, force)
 	if !ok {
 		return nil, false
 	}
@@ -585,6 +613,10 @@ func splitPureFencedDocSection(block string, maxBytes, promptBudget int) ([][]st
 }
 
 func splitPlainDocSection(text string, maxBytes, promptBudget int) ([][]string, bool) {
+	return splitPlainDocSectionWithMode(text, maxBytes, promptBudget, false)
+}
+
+func splitPlainDocSectionWithMode(text string, maxBytes, promptBudget int, force bool) ([][]string, bool) {
 	if maxBytes <= 0 {
 		maxBytes = len(text)
 	}
@@ -618,9 +650,28 @@ func splitPlainDocSection(text string, maxBytes, promptBudget int) ([][]string, 
 		groups = append(groups, []string{current.String()})
 	}
 	if len(groups) <= 1 {
-		return nil, false
+		if !force {
+			return nil, false
+		}
+		return splitPlainDocSectionMidpoint(lines)
 	}
 	return groups, true
+}
+
+func splitPlainDocSectionMidpoint(lines []string) ([][]string, bool) {
+	if len(lines) <= 1 {
+		return nil, false
+	}
+	mid := len(lines) / 2
+	if mid <= 0 || mid >= len(lines) {
+		return nil, false
+	}
+	left := strings.Join(lines[:mid], "")
+	right := strings.Join(lines[mid:], "")
+	if strings.TrimSpace(left) == "" || strings.TrimSpace(right) == "" {
+		return nil, false
+	}
+	return [][]string{{left}, {right}}, true
 }
 
 func firstNonEmptyLineIndex(lines []string) int {
