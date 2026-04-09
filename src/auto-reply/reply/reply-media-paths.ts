@@ -7,6 +7,7 @@ import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../agents/tool-fs-policy.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { saveMediaSource } from "../../media/store.js";
 import { resolveConfigDir } from "../../utils.js";
 import type { ReplyPayload } from "../types.js";
@@ -42,10 +43,30 @@ function isAllowedAbsoluteReplyMediaPath(params: {
   if (isManagedGlobalReplyMediaPath(params.candidate)) {
     return true;
   }
+  // Allow media from the OpenClaw temp directory (TTS output, etc.).
+  // These are trusted paths written by OpenClaw's own tooling
+  // and should be deliverable as reply media.
+  if (isOpenClawTmpPath(params.candidate)) {
+    return true;
+  }
   const volatileRoots = [params.workspaceDir, params.sandboxRoot]
     .filter((root): root is string => Boolean(root))
     .map((root) => path.join(path.resolve(root), AGENT_STATE_MEDIA_DIRNAME));
   return volatileRoots.some((root) => isPathInside(root, params.candidate));
+}
+
+/**
+ * Check whether a path is inside the OpenClaw temp directory.
+ * These are trusted paths written by OpenClaw's own tooling
+ * (TTS, media processing, etc.) and should be deliverable as reply media.
+ */
+function isOpenClawTmpPath(candidate: string): boolean {
+  try {
+    const tmpRoot = resolvePreferredOpenClawTmpDir();
+    return isPathInside(tmpRoot, candidate);
+  } catch {
+    return false;
+  }
 }
 
 function isLikelyLocalMediaSource(media: string): boolean {
