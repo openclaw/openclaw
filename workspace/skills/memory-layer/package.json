@@ -1,17 +1,18 @@
 {
   "name": "openclaw-memory-layer",
-  "version": "1.0.0",
-  "description": "Persistent memory system for OpenClaw - 纯JSON版本",
+  "version": "2.0.0",
+  "description": "Memory palace based persistent memory system for OpenClaw",
   "main": "index.js",
   "type": "module",
   "scripts": {
     "test": "node test.js",
-    "quickstart": "node quick-start.js"
+    "migrate": "node test-migrate.js"
   },
-  "keywords": ["openclaw", "memory", "cola", "ai"],
-  "author": "",
+  "keywords": ["openclaw", "memory", "mempalace", "ai"],
+  "author": "OpenClaw community",
   "license": "MIT",
-  "dependencies": {
+  "dependencies": {},
+  "optionalDependencies": {
     "chromadb": "^1.8.1"
   }
 }

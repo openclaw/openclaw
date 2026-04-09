@@ -1,169 +1,170 @@
 ---
 name: memory-layer
 description: >
-  基于记忆宫殿的持久化记忆系统 - 记住用户的一切。
-  使用MemPalace风格的结构化存储，支持7种走廊类型、AAAK压缩和向量搜索。
-  当用户说"记住"、"recall"、"我之前说过"、或提到需要记住的事情时使用。
-  支持：记住信息、回忆相关内容、管理用户偏好、对话后反思学习。
-  自动迁移旧数据到宫殿结构。
+  Memory palace based persistent memory system - remember everything about the user.
+  Uses MemPalace-style structured storage with 7 hall types, AAAK compression,
+  and vector search support. Auto-migrates legacy data to palace structure.
+  When user says "remember", "recall", "I mentioned before", or needs to remember
+  something, use this skill. Supports: remembering information, recalling related
+  content, managing user preferences, post-conversation reflection learning.
 ---
 
-# Memory Layer - 记忆宫殿版
+# Memory Layer - Memory Palace Edition
 
-你拥有强大的**记忆宫殿**系统，可以跨所有对话记住关于用户的一切重要信息。
+You have a powerful **memory palace** system that can remember everything important about the user across all conversations.
 
-## 🏛️ 核心能力
+## 🏛️ Core Capabilities
 
-### 1. 自动记住 🧠
+### 1. Auto-Remember 🧠
 
-当用户表达以下内容时，自动记住：
+When the user expresses the following, automatically remember:
 
-**事实类信息**：
-- "我在做[项目]"
-- "我在[公司]工作"
-- "我需要完成[任务]"
-- "我要和[某人]开会"
+**Factual Information**:
+- "I'm working on [project]"
+- "I work at [company]"
+- "I need to complete [task]"
+- "I'm meeting with [person]"
 
-**偏好类信息**：
-- "我喜欢[风格/方式]"
-- "我不要/不喜欢[内容]"
-- "我希望你[行为]"
-- "下次要[做法]"
+**Preference Information**:
+- "I like [style/way]"
+- "I don't like [content]"
+- "I want you to [behavior]"
+- "Next time [approach]"
 
-**重要原则**：
-- "最重要的是[原则]"
-- "一定要记住[要求]"
-- "千万要[避免]"
+**Important Principles**:
+- "The most important thing is [principle]"
+- "Must remember [requirement]"
+- "Must not [avoid]"
 
-**记住时说**：
-- "好的，我已经记住了：[简洁概括]"
-- "已更新：你[偏好内容]"
-- "我记住：[关键点]"
+**When remembering, say**:
+- "Got it, I've remembered: [brief summary]"
+- "Updated: you [preference content]"
+- "I remember: [key point]"
 
-### 2. 智能回忆 🔍
+### 2. Smart Recall 🔍
 
-当用户问以下问题时，搜索相关记忆：
+When the user asks the following, search relevant memories:
 
-**直接提问**：
-- "你还记得...？"
-- "我之前说过...吗？"
-- "关于...你怎么看？"
-- "我们之前讨论过...吗？"
+**Direct Questions**:
+- "Do you remember...?"
+- "Did I mention... before?"
+- "What do you think about...?"
+- "Did we discuss... before?"
 
-**场景触发**：
-- 用户提到以前的项目/任务
-- 用户回到某个话题
-- 用户重复某些要求
+**Context Triggers**:
+- User mentions previous projects/tasks
+- User returns to a topic
+- User repeats certain requests
 
-**回忆时说**：
-- "我记得你说过：[内容]"
-- "根据我们之前的讨论：[内容]"
-- "就像你之前提到的：[内容]"
+**When recalling, say**:
+- "I remember you said: [content]"
+- "Based on our previous discussion: [content]"
+- "Like you mentioned before: [content]"
 
-### 3. 使用记忆 💡
+### 3. Use Memory 💡
 
-在回答中自然引用记忆：
+Naturally reference memories in your responses:
 
-**好的做法**：
-- "我记得你重视数据准确性，所以这次我用API查询了..."
-- "按照你之前要求的简洁风格，这里是..."
-- "就像我们讨论AI报告时那样，我会..."
+**Good Practices**:
+- "I remember you value data accuracy, so I used the API this time..."
+- "Per your previous preference for concise style, here is..."
+- "Like we discussed with the AI report, I will..."
 
-**避免**：
-- 不要过度引用（每条对话2-3次足够）
-- 不要说"我正在搜索记忆"
-- 不要不确定时乱猜（说"我好像记得..."）
+**Avoid**:
+- Don't over-reference (2-3 times per conversation is enough)
+- Don't say "I'm searching memory"
+- Don't guess when uncertain (say "I seem to remember...")
 
-## 🏛️ 记忆宫殿结构
+## 🏛️ Memory Palace Structure
 
-### 翼楼 (Wing)
-按**实体**分类：
-- **user**: 用户本人
-- **projects**: 具体项目
-- **topics**: 知识主题
+### Wings (Wing)
+Classified by **entity**:
+- **user**: The user themselves
+- **projects**: Specific projects
+- **topics**: Knowledge topics
 
-### 走廊 (Hall)
-按**类型**组织：
-- **facts**: 事实信息
-- **preferences**: 用户偏好
-- **context**: 上下文信息
-- **decisions**: 决策记录
-- **milestones**: 里程碑事件
-- **advice**: 收到的建议
-- **discoveries**: 学到的知识
+### Halls (Hall)
+Organized by **type**:
+- **facts**: Factual information
+- **preferences**: User preferences
+- **context**: Context information
+- **decisions**: Decision records
+- **milestones**: Milestone events
+- **advice**: Received advice
+- **discoveries**: Learned knowledge
 
-### AAAK编码
-压缩关键事实，节省3倍token：
+### AAAK Encoding
+Compress key facts, save 3x tokens:
 ```json
-原始: {"communication": "concise answers", "working_style": "direct"}
-AAAK:  {"cmmnctn": "cncn_ans", "wrkng_stl": "drct"}
+Original: {"communication": "concise answers", "working_style": "direct"}
+AAAK:      {"cmmnctn": "cncn_ans", "wrkng_stl": "drct"}
 ```
 
-### 搜索优化
-- 全库搜索：~60%召回率
-- 结构化搜索：~95%召回率
-- 提升：**+35%**
+### Search Optimization
+- Full library search: ~60% recall rate
+- Structured search: ~95% recall rate
+- Improvement: **+35%**
 
-## 说话方式
+## Speaking Style
 
-### 记住时
-- ✅ "好的，已经记住了：[内容]"
-- ✅ "我记住：用户[偏好/事实]"
-- ✅ "已更新：[关键信息]"
+### When Remembering
+- ✅ "Got it, remembered: [content]"
+- ✅ "I remember: user [preference/fact]"
+- ✅ "Updated: [key information]"
 
-### 回忆时
-- ✅ "我记得你说过：[内容]"
-- ✅ "根据之前的对话：[内容]"
-- ✅ "就像你提到的：[内容]"
+### When Recalling
+- ✅ "I remember you said: [content]"
+- ✅ "Based on previous conversation: [content]"
+- ✅ "Like you mentioned: [content]"
 
-### 不需要
-- ❌ 不要说"我正在查找记忆"
-- ❌ 不要过度展示记忆能力
-- ❌ 不要记错（不确定时说"我好像记得..."）
-- ❌ 不要记琐碎的日常对话
+### Don't Need
+- ❌ Don't say "I'm searching memory"
+- ❌ Don't over-display memory capabilities
+- ❌ Don't remember wrong (say "I seem to remember..." when uncertain)
+- ❌ Don't remember trivial daily conversations
 
-## 示例对话
+## Example Conversations
 
-### 示例1: 记住偏好
+### Example 1: Remember Preference
 
-**用户**: "记住我喜欢简洁的回答，不要啰嗦"
-**你**: "好的，已经记住了：你喜欢简洁的回答。我会保持简洁。"
+**User**: "Remember I like concise answers, don't be verbose"
+**You**: "Got it, I've remembered: you like concise answers. I'll keep it concise."
 
-**用户**: "帮我写个报告"
-**你**: "[直接给出简洁版本，不加前言后语]"
+**User**: "Help me write a report"
+**You**: "[Provide concise version directly, without preamble/epilogue]"
 
-### 示例2: 使用记忆
+### Example 2: Use Memory
 
-**用户**: "帮我查一下B站粉丝数"
-**你**: "我记得你重视数据准确性，让我用B站API查... [结果]"
+**User**: "Help me check Bilibili follower count"
+**You**: "I remember you value data accuracy, let me use Bilibili API... [result]"
 
-### 示例3: 回忆
+### Example 3: Recall
 
-**用户**: "你还记得我的项目吗？"
-**你**: "我记得你在做AI科普报告，重视数据准确性，需要用B站API验证粉丝数。对吗？"
+**User**: "Do you remember my project?"
+**You**: "I remember you're working on an AI popular science report, value data accuracy, need to use Bilibili API to verify follower count. Right?"
 
-### 示例4: 学习改进
+### Example 4: Learn and Improve
 
-**用户**: "不要总是解释你在做什么，直接给结果"
-**你**: "已更新：你希望直接得到结果，不需要过程解释。我记住了。"
+**User**: "Don't always explain what you're doing, just give results"
+**You**: "Updated: you want results directly, no process explanation. I've remembered."
 
-## 自动学习（对话后）
+## Auto-Learning (Post-Conversation)
 
-在每次重要对话后，自动反思：
+After each important conversation, automatically reflect:
 
-**学到了什么**：
-- 新的事实/偏好
-- 用户的特点/习惯
-- 需要改进的地方
+**What was learned**:
+- New facts/preferences
+- User characteristics/habits
+- Areas needing improvement
 
-**下次改进**：
-- 调整回复风格
-- 避免重复错误
-- 更好地满足需求
+**How to improve next time**:
+- Adjust response style
+- Avoid repeating mistakes
+- Better meet needs
 
-## 技术说明
+## Technical Details
 
-### 存储位置
+### Storage Location
 ```
 ~/.openclaw/memory-palace/
 ├── PALACE.md
@@ -174,60 +175,60 @@ AAAK:  {"cmmnctn": "cncn_ans", "wrkng_stl": "drct"}
 └── tunnels/
 ```
 
-### 记忆类型
-- `fact`: 事实信息 → hall-facts
-- `preference`: 偏好信息 → hall-preferences
-- `context`: 上下文 → hall-context
+### Memory Types
+- `fact`: Factual information → hall-facts
+- `preference`: Preference information → hall-preferences
+- `context`: Context → hall-context
 
-### AAAK压缩
-- 自动压缩键名（去除元音）
-- 压缩常用词（缩写）
-- 节省~3倍token
+### AAAK Compression
+- Auto-compress keys (remove vowels)
+- Compress common words (abbreviations)
+- Save ~3x tokens
 
-### 向量搜索
-- ChromaDB本地向量数据库
-- 语义搜索
-- 自动降级到文本搜索
+### Vector Search
+- ChromaDB local vector database
+- Semantic search
+- Auto fallback to text search
 
-### 数据迁移
-- 自动迁移旧memory.json
-- 备份到memory.json.backup
-- 无缝升级
+### Data Migration
+- Auto migrate legacy memory.json
+- Backup to memory.json.backup
+- Seamless upgrade
 
-## 注意事项
+## Considerations
 
-1. **只记重要的**：
-   - ✅ 用户的偏好、习惯、重要项目
-   - ❌ 每句日常对话（太琐碎）
+1. **Only Remember Important Things**:
+   - ✅ User preferences, habits, important projects
+   - ❌ Every daily conversation (too trivial)
 
-2. **不确定时确认**：
-   - ✅ "我记得你说过...对吗？"
-   - ❌ "你肯定说了..."
+2. **Confirm When Uncertain**:
+   - ✅ "I remember you said... right?"
+   - ❌ "You definitely said..."
 
-3. **保护隐私**：
-   - ❌ 不记密码、敏感信息
-   - ✅ 可以提醒"这个比较敏感，我不记录"
+3. **Protect Privacy**:
+   - ❌ Don't remember passwords, sensitive information
+   - ✅ Can remind "This is sensitive, I won't record it"
 
-4. **保持更新**：
-   - 用户纠正时立即更新
-   - 定期清理过时信息
-   - 优先使用最新的偏好
+4. **Keep Updated**:
+   - Update immediately when user corrects
+   - Regularly clean outdated information
+   - Prioritize latest preferences
 
-## 命令接口
+## Command Interface
 
 ```javascript
-// 记住
+// Remember
 await memory.remember('User prefers concise answers', 'preference');
 
-// 回忆
+// Recall
 const results = await memory.recall('communication style');
 
-// 偏好
+// Preferences
 await memory.updatePreference('style', 'concise');
 
-// 反思
+// Reflect
 await memory.addReflection('User likes hands-on approach', 0.8);
 
-// 统计
+// Stats
 const stats = await memory.getStats();
 ```

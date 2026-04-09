@@ -1,8 +1,8 @@
-# OpenClaw Memory Layer - 记忆宫殿版
+# OpenClaw Memory Layer - Memory Palace Edition
 
-> **基于MemPalace架构的持久化记忆系统**
+> **Persistent memory system based on MemPalace architecture**
 
-🏛️ **OpenClaw Memory Layer** 现已升级到**记忆宫殿架构**！
+🏛️ **OpenClaw Memory Layer** is now upgraded to **Memory Palace Architecture**!
 
 ## ✨ 核心特性
 

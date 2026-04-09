@@ -57,24 +57,24 @@ export class SimpleMemory {
    */
   async init() {
     try {
-      console.log('⏳ 正在初始化记忆宫殿...');
+      console.log('⏳ Initializing memory palace...');
 
       // 构建宫殿结构（先建宫殿）
       await this.buildPalace();
 
-      // 暂时禁用自动迁移（用户可手动触发）
+      // 暂时disabled自动迁移（用户可手动触发）
       // await this.migrateLegacyData();
-      console.log('💡 如需迁移旧数据，请运行: memory.migrateLegacyData()');
+      console.log('💡 To migrate legacy data, run: memory.migrateLegacyData()');
 
       // 初始化向量DB
       await this.initChroma();
 
-      console.log('✅ 记忆宫殿已就绪');
-      console.log(`   翼楼数: ${this.countWings()}`);
-      console.log(`   记忆数: ${this.countMemories()}`);
-      console.log(`   向量搜索: ${this.isInitialized ? '启用' : '禁用'}`);
+      console.log('✅ Memory palace ready');
+      console.log(`   Wings: ${this.countWings()}`);
+      console.log(`   Memories: ${this.countMemories()}`);
+      console.log(`   向量搜索: ${this.isInitialized ? 'enabled' : '禁用'}`);
     } catch (error) {
-      console.log('⚠️  初始化失败:', error.message);
+      console.log('⚠️  Initialization failed:', error.message);
     }
   }
 
@@ -90,28 +90,28 @@ export class SimpleMemory {
       const content = fs.readFileSync(this.legacyPath, 'utf-8');
       this.legacyData = JSON.parse(content);
 
-      console.log(`📦 发现旧数据: ${this.legacyData.memories.length} 条记忆`);
+      console.log(`📦 Found legacy data: ${this.legacyData.memories.length}  memories`);
 
       // 迁移记忆到宫殿
-      console.log(`📦 正在迁移 ${this.legacyData.memories.length} 条记忆...`);
+      console.log(`📦 Migrating ${this.legacyData.memories.length} 条记忆...`);
       let migratedCount = 0;
       for (const memory of this.legacyData.memories) {
         try {
           await this.migrateMemory(memory);
           migratedCount++;
           if (migratedCount % 10 === 0) {
-            console.log(`   已迁移 ${migratedCount}/${this.legacyData.memories.length}...`);
+            console.log(`   Migrated ${migratedCount}/${this.legacyData.memories.length}...`);
           }
         } catch (e) {
-          console.log(`⚠️  迁移失败: ${memory.id} - ${e.message}`);
+          console.log(`⚠️  Migration failed: ${memory.id} - ${e.message}`);
         }
       }
-      console.log(`✅ 记忆迁移完成: ${migratedCount}/${this.legacyData.memories.length}`);
+      console.log(`✅ Memory migration complete: ${migratedCount}/${this.legacyData.memories.length}`);
 
       // 迁移偏好
       const prefKeys = Object.keys(this.legacyData.profile).filter(k => !k.endsWith('_updated'));
       if (prefKeys.length > 0) {
-        console.log(`📦 正在迁移 ${prefKeys.length} 条偏好...`);
+        console.log(`📦 正在迁移 ${prefKeys.length}  preferences...`);
         for (const [key, value] of Object.entries(this.legacyData.profile)) {
           if (!key.endsWith('_updated')) {
             try {
@@ -121,7 +121,7 @@ export class SimpleMemory {
                 migrated: true
               });
             } catch (e) {
-              console.log(`⚠️  偏好迁移失败: ${key} - ${e.message}`);
+              console.log(`⚠️  Preference migration failed: ${key} - ${e.message}`);
             }
           }
         }
@@ -130,7 +130,7 @@ export class SimpleMemory {
 
       // 迁移反思
       if (this.legacyData.reflections.length > 0) {
-        console.log(`📦 正在迁移 ${this.legacyData.reflections.length} 条反思...`);
+        console.log(`📦 正在迁移 ${this.legacyData.reflections.length}  reflections...`);
         for (const reflection of this.legacyData.reflections) {
           try {
             await this.storeMemory('user', 'discoveries', {
@@ -139,16 +139,16 @@ export class SimpleMemory {
               migrated: true
             });
           } catch (e) {
-            console.log(`⚠️  反思迁移失败: ${e.message}`);
+            console.log(`⚠️  Reflection migration failed: ${e.message}`);
           }
         }
-        console.log('✅ 反思迁移完成');
+        console.log('✅ Reflections migration complete');
       }
 
       // 备份旧文件
       const backupPath = this.legacyPath + '.backup';
       fs.renameSync(this.legacyPath, backupPath);
-      console.log(`✅ 旧数据已迁移并备份到: ${backupPath}`);
+      console.log(`✅ Legacy data migrated and backed up to: ${backupPath}`);
     } catch (error) {
       console.log('⚠️  迁移失败:', error.message);
     }
@@ -263,12 +263,12 @@ export class SimpleMemory {
     try {
       this.collection = await this.chroma.getOrCreateCollection({
         name: 'openclaw-memories',
-        metadata: { hnsw: { space: 'cosine' } }
+        metadata: { 'hnsw:space': 'cosine' }
       });
       this.isInitialized = true;
-      console.log('✅ 向量搜索已启用');
+      console.log('✅ Vector search enabled');
     } catch (error) {
-      console.log('⚠️  ChromaDB失败，使用文本搜索');
+      console.log('⚠️  ChromaDB initialization failed, using text search');
     }
   }
 
