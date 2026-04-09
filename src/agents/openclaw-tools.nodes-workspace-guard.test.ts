@@ -3,14 +3,28 @@ import type { AnyAgentTool } from "./tools/common.js";
 
 const mocks = vi.hoisted(() => ({
   assertSandboxPath: vi.fn(async (params: { filePath: string; cwd: string; root: string }) => {
-    const root = params.root.replace(/\/+$/, "");
-    const filePath = params.filePath;
-    const inside = filePath === root || filePath.startsWith(`${root}/`);
-    if (!inside) {
-      throw new Error(`Path escapes sandbox root (${root}): ${filePath}`);
+    const root = `/${params.root.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "")}`;
+    const candidate = params.filePath.replace(/\\/g, "/");
+    const input = candidate.startsWith("/") ? candidate : `${root}/${candidate}`;
+    const segments = input.split("/");
+    const stack: string[] = [];
+    for (const segment of segments) {
+      if (!segment || segment === ".") {
+        continue;
+      }
+      if (segment === "..") {
+        stack.pop();
+        continue;
+      }
+      stack.push(segment);
     }
-    const relative = filePath === root ? "" : filePath.slice(root.length + 1);
-    return { resolved: filePath, relative };
+    const resolved = `/${stack.join("/")}`;
+    const inside = resolved === root || resolved.startsWith(`${root}/`);
+    if (!inside) {
+      throw new Error(`Path escapes sandbox root (${root}): ${params.filePath}`);
+    }
+    const relative = resolved === root ? "" : resolved.slice(root.length + 1);
+    return { resolved, relative };
   }),
   nodesExecute: vi.fn(async () => ({
     content: [{ type: "text", text: "ok" }],
@@ -79,6 +93,29 @@ describe("createOpenClawTools nodes workspace guard", () => {
       root: WORKSPACE_ROOT,
     });
     expect(mocks.nodesExecute).toHaveBeenCalledTimes(1);
+  });
+
+  it("normalizes relative outPath to an absolute workspace path before execute", async () => {
+    const nodesTool = getNodesTool(true);
+    await nodesTool.execute("call-rel", {
+      action: "screen_record",
+      outPath: "videos/capture.mp4",
+    });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: "videos/capture.mp4",
+      cwd: WORKSPACE_ROOT,
+      root: WORKSPACE_ROOT,
+    });
+    expect(mocks.nodesExecute).toHaveBeenCalledWith(
+      "call-rel",
+      {
+        action: "screen_record",
+        outPath: `${WORKSPACE_ROOT}/videos/capture.mp4`,
+      },
+      undefined,
+      undefined,
+    );
   });
 
   it("rejects outPath outside workspace when workspaceOnly is enabled", async () => {

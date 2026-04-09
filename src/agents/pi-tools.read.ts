@@ -552,6 +552,7 @@ export function wrapToolWorkspaceRootGuardWithOptions(
   options?: {
     containerWorkdir?: string;
     pathParamKeys?: readonly string[];
+    normalizeGuardedPathParams?: boolean;
   },
 ): AnyAgentTool {
   const pathParamKeys =
@@ -560,6 +561,7 @@ export function wrapToolWorkspaceRootGuardWithOptions(
     ...tool,
     execute: async (toolCallId, args, signal, onUpdate) => {
       const record = getToolParamsRecord(args);
+      let normalizedRecord: Record<string, unknown> | undefined;
       for (const key of pathParamKeys) {
         const filePath = record?.[key];
         if (typeof filePath !== "string" || !filePath.trim()) {
@@ -570,9 +572,13 @@ export function wrapToolWorkspaceRootGuardWithOptions(
           root,
           containerWorkdir: options?.containerWorkdir,
         });
-        await assertSandboxPath({ filePath: sandboxPath, cwd: root, root });
+        const sandboxResult = await assertSandboxPath({ filePath: sandboxPath, cwd: root, root });
+        if (options?.normalizeGuardedPathParams && record) {
+          normalizedRecord ??= { ...record };
+          normalizedRecord[key] = sandboxResult.resolved;
+        }
       }
-      return tool.execute(toolCallId, args, signal, onUpdate);
+      return tool.execute(toolCallId, normalizedRecord ?? args, signal, onUpdate);
     },
   };
 }

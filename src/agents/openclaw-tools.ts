@@ -220,6 +220,7 @@ export function createOpenClawTools(
     options?.fsPolicy?.workspaceOnly === true
       ? wrapToolWorkspaceRootGuardWithOptions(nodesToolBase, options?.sandboxRoot ?? workspaceDir, {
           pathParamKeys: ["outPath"],
+          normalizeGuardedPathParams: true,
         })
       : nodesToolBase;
   const tools: AnyAgentTool[] = [
