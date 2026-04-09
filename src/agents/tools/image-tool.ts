@@ -410,9 +410,8 @@ export function createImageTool(options?: {
         // Match `loadWebMedia`: strip optional MEDIA: tag before scheme/path handling.
         // Do not treat the `media:` scheme of gateway claim-check URIs (`media://inbound/...`)
         // as a tagged path — `/^\s*MEDIA\s*:\s*/i` would otherwise consume `media:` and yield `//inbound/...`.
-        const trimmedForNorm = imageRaw.trimStart();
-        const normalizedRef = trimmedForNorm.toLowerCase().startsWith("media://")
-          ? trimmedForNorm
+        const normalizedRef = imageRaw.toLowerCase().startsWith("media://")
+          ? imageRaw
           : imageRaw.replace(/^\s*MEDIA\s*:\s*/i, "");
 
         const inboundMediaMatch = normalizedRef.match(INBOUND_MEDIA_URI_RE);
