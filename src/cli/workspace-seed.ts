@@ -141,7 +141,7 @@ export const MANAGED_SKILLS: ReadonlyArray<{ name: string; templatePaths?: boole
   { name: "crm", templatePaths: true },
   { name: "app-builder", templatePaths: true },
   { name: "gstack" },
-  { name: "composio-apps" },
+  { name: "dench-integrations" },
 ];
 
 export function seedSkill(

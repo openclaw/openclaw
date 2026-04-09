@@ -13,7 +13,7 @@ import {
   buildDenchCloudConfigPatch,
   buildDenchCloudProviderConfig,
 } from "./config-patch.js";
-import { registerCuratedComposioBridge } from "./composio-bridge.js";
+import { registerDenchIntegrationsBridge } from "./composio-bridge.js";
 export { buildDenchCloudConfigPatch } from "./config-patch.js";
 
 export const id = "dench-ai-gateway";
@@ -311,7 +311,7 @@ export default function register(api: any) {
     },
   } as any);
 
-  registerCuratedComposioBridge(api, gatewayUrl);
+  registerDenchIntegrationsBridge(api, gatewayUrl);
 
   api.registerService({
     id: "dench-ai-gateway",

@@ -249,27 +249,41 @@ function readStringArrayValue(value: unknown): string[] {
 
 function buildComposioSearchCardData(output?: Record<string, unknown>) {
 	if (!output) {return null;}
-	const recommended = asRecordValue(output.recommended_result);
-	const topTools = asRecordArrayValue(output.results)
+	const results = asRecordArrayValue(output.results);
+	const recommended = asRecordValue(output.recommended_result) ?? results[0];
+	const topTools = results
 		.slice(0, 3)
-		.map((result) => readStringValue(result.tool))
+		.map((result) => readStringValue(result.tool) ?? readStringValue(result.tool_slug) ?? readStringValue(result.name))
 		.filter((tool): tool is string => Boolean(tool));
 	const selectedAccount = asRecordValue(recommended?.selected_account);
-	const accountCandidates = asRecordArrayValue(recommended?.account_candidates);
-	const inputSchema = asRecordValue(recommended?.input_schema);
+	const accountCandidates = asRecordArrayValue(recommended?.account_candidates ?? recommended?.accounts);
+	const inputSchema = asRecordValue(recommended?.input_schema ?? recommended?.input_parameters);
 	const schemaProperties = asRecordValue(inputSchema?.properties);
 	const schemaPropertyNames = schemaProperties ? Object.keys(schemaProperties) : [];
 	const requiredFields = readStringArrayValue(inputSchema?.required);
 	const planSteps = readStringArrayValue(recommended?.recommended_plan_steps ?? output.next_steps_guidance).slice(0, 3);
 	const pitfalls = readStringArrayValue(recommended?.known_pitfalls).slice(0, 2);
+	const accountCount = typeof recommended?.account_count === "number" ? recommended.account_count : accountCandidates.length;
+	const toolkitRec = asRecordValue(recommended?.toolkit);
+	const toolkitName = readStringValue(toolkitRec?.name) ?? readStringValue(toolkitRec?.slug);
+	const resultCount = typeof output.result_count === "number" ? output.result_count : results.length;
+	const connectedToolkits = readStringArrayValue(output.connected_toolkits);
+	const toolkitFilter = readStringValue(output.toolkit_filter) ?? readStringValue(output.app_filter);
+	const resultSummary = resultCount > 0
+		? `${resultCount} tool${resultCount === 1 ? "" : "s"} found`
+		: toolkitFilter
+			? `No ${toolkitFilter} tools matched`
+			: "No tools matched";
 	return {
+		resultSummary,
+		connectedToolkits: connectedToolkits.length > 0 ? connectedToolkits.join(", ") : null,
 		topTools,
 		sessionId: readStringValue(output.search_session_id),
 		accountSummary:
 			readStringValue(selectedAccount?.display_label) ??
-			(accountCandidates.length > 0
-				? `${accountCandidates.length} connected account${accountCandidates.length === 1 ? "" : "s"}`
-				: null),
+			(accountCount > 0
+				? `${accountCount} connected account${accountCount === 1 ? "" : "s"}${toolkitName ? ` (${toolkitName})` : ""}`
+				: recommended?.is_connected === true ? "Connected" : null),
 		schemaSummary:
 			schemaPropertyNames.length > 0
 				? `${schemaPropertyNames.length} input fields${requiredFields.length > 0 ? `, ${requiredFields.length} required` : ""}`
@@ -288,6 +302,7 @@ function buildComposioCallCardData(
 	const recovery = asRecordValue(output?.recovery);
 	const toolName =
 		readStringValue(args?.tool_name) ??
+		readStringValue(args?.tool_slug) ??
 		readStringValue(output?.tool_slug) ??
 		readStringValue(execution?.tool_name);
 	if (!toolName) {return null;}
@@ -301,23 +316,25 @@ function buildComposioCallCardData(
 					return `${key}: ${formatted}`;
 				})
 		: [];
+	const structuredContent = asRecordValue(output?.structuredContent);
+	const dataSource = structuredContent ?? output;
 	const items =
-		Array.isArray(output?.data) ? output.data :
-		Array.isArray(output?.items) ? output.items :
+		Array.isArray(dataSource?.data) ? dataSource.data :
+		Array.isArray(dataSource?.items) ? dataSource.items :
 		undefined;
 	const resultSummary =
 		items
 			? `${items.length} result${items.length === 1 ? "" : "s"}`
 			: readStringValue(output?.status) ?? null;
 	const paginationBits = [
-		Object.hasOwn(output ?? {}, "has_more")
-			? `has_more: ${String(output?.has_more)}`
+		Object.hasOwn(dataSource ?? {}, "has_more")
+			? `has_more: ${String(dataSource?.has_more)}`
 			: null,
-		readStringValue(output?.next_cursor)
-			? `next_cursor: ${readStringValue(output?.next_cursor)}`
+		readStringValue(dataSource?.next_cursor)
+			? `next_cursor: ${readStringValue(dataSource?.next_cursor)}`
 			: null,
-		readStringValue(output?.starting_after)
-			? `starting_after: ${readStringValue(output?.starting_after)}`
+		readStringValue(dataSource?.starting_after)
+			? `starting_after: ${readStringValue(dataSource?.starting_after)}`
 			: null,
 	].filter((value): value is string => Boolean(value));
 	const recoveryBits = [
@@ -329,17 +346,21 @@ function buildComposioCallCardData(
 			? "refreshed execution_ref returned"
 			: null,
 	].filter((value): value is string => Boolean(value));
+	const toolSlugParts = toolName.split("_");
+	const inferredToolkit = toolSlugParts.length > 1 ? toolSlugParts[0]?.toLowerCase() : null;
 	return {
 		app:
 			readStringValue(args?.app) ??
 			readStringValue(output?.toolkit) ??
-			readStringValue(execution?.toolkit),
+			readStringValue(execution?.toolkit) ??
+			inferredToolkit,
 		toolName,
 		account:
 			readStringValue(args?.account) ??
 			readStringValue(output?.account) ??
 			readStringValue(execution?.account) ??
 			readStringValue(args?.connected_account_id) ??
+			readStringValue(output?.connectedAccountId) ??
 			readStringValue(args?.account_identity),
 		keyArgs,
 		pagination: paginationBits.length > 0 ? paginationBits.join(" | ") : null,
@@ -383,7 +404,7 @@ function classifyTool(
 	args?: Record<string, unknown>,
 	output?: Record<string, unknown>,
 ): StepKind {
-	if (name === "composio_search_tools" || name === "composio_call_tool") {
+	if (name === "dench_search_integrations" || name === "dench_execute_integrations" || name === "composio_search_tools" || name === "composio_call_tool") {
 		return "composio";
 	}
 	const n = name.toLowerCase().replace(/[_-]/g, "");
@@ -487,9 +508,9 @@ function buildStepLabel(
 
 	switch (kind) {
 		case "composio":
-			return toolName === "composio_search_tools"
+			return toolName === "dench_search_integrations" || toolName === "composio_search_tools"
 				? denchIntegrationsBrand.searchLabel
-				: toolName === "composio_call_tool"
+				: toolName === "dench_execute_integrations" || toolName === "composio_call_tool"
 					? denchIntegrationsBrand.callLabel
 					: denchIntegrationsBrand.genericToolLabel;
 		case "search": {
@@ -1366,8 +1387,8 @@ function ToolStep({
 	errorText?: string;
 }) {
 	const kind = classifyTool(toolName, args, output);
-	const isComposioSearch = toolName === "composio_search_tools";
-	const isComposioCall = toolName === "composio_call_tool";
+	const isComposioSearch = toolName === "dench_search_integrations" || toolName === "composio_search_tools";
+	const isComposioCall = toolName === "dench_execute_integrations" || toolName === "composio_call_tool";
 	const isComposioTool = isComposioSearch || isComposioCall;
 	// Show output by default for exec/command tools — these are the most
 	// useful to see inline.  Other tools default to collapsed.
@@ -1631,6 +1652,16 @@ function ToolStep({
 							border: "1px solid var(--color-border)",
 						}}
 					>
+						<SummaryRow
+							label="Results"
+							value={composioSearchCard.resultSummary}
+						/>
+						{composioSearchCard.connectedToolkits && (
+							<SummaryRow
+								label="Connected"
+								value={composioSearchCard.connectedToolkits}
+							/>
+						)}
 						{composioSearchCard.topTools.length > 0 && (
 							<SummaryRow
 								label="Top matches"

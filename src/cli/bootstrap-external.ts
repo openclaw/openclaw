@@ -2062,12 +2062,8 @@ function readBootstrapConfig(stateDir: string): Record<string, unknown> | undefi
   return undefined;
 }
 
-function hasConfiguredComposioServer(stateDir: string): boolean {
-  const raw = readBootstrapConfig(stateDir);
-  const mcp = asRecord(raw?.mcp);
-  const servers = asRecord(mcp?.servers);
-  const composio = asRecord(servers?.composio);
-  return typeof composio?.url === "string" && composio.url.trim().length > 0;
+function hasConfiguredComposioServer(_stateDir: string): boolean {
+  return true;
 }
 
 function resolveBootstrapWorkspaceDir(stateDir: string): string {
@@ -2265,11 +2261,11 @@ export function buildBootstrapDiagnostics(params: {
         "composio",
         params.composioConfigured ? "pass" : "warn",
         params.composioConfigured
-          ? "Composio MCP configured via Dench Cloud gateway."
-          : "Composio MCP not configured. Check mcp.servers.composio in openclaw.json.",
+          ? "Dench Integrations configured via Dench Cloud gateway."
+          : "Dench Integrations not configured. Check Dench Cloud gateway connectivity.",
         params.composioConfigured
           ? undefined
-          : `Open Settings > Integrations and repair the Composio MCP setup, or run \`openclaw --profile ${DEFAULT_DENCHCLAW_PROFILE} gateway restart\` after restoring the Dench Cloud config.`,
+          : `Open Settings > Integrations or run \`openclaw --profile ${DEFAULT_DENCHCLAW_PROFILE} gateway restart\` to repair the Dench Cloud config.`,
       ),
     );
   }
@@ -2770,28 +2766,6 @@ async function applyDenchCloudBootstrapConfig(params: {
     apiKey: params.apiKey,
     preferredShape: preferredTtsShape,
   });
-
-  if ((configPatch as Record<string, unknown>).mcp) {
-    const mcpPatch = (configPatch as Record<string, unknown>).mcp as Record<string, unknown>;
-    const servers = mcpPatch.servers as Record<string, unknown> | undefined;
-    if (servers?.composio) {
-      try {
-        await setOpenClawConfigJson({
-          openclawCommand: params.openclawCommand,
-          profile: params.profile,
-          key: "mcp.servers.composio",
-          value: servers.composio,
-          errorMessage: "Failed to configure Composio MCP server via Dench Cloud gateway.",
-        });
-      } catch {
-        console.warn(
-          theme.warn(
-            "Could not configure the Composio MCP server during bootstrap. You can repair it later in Settings > Integrations.",
-          ),
-        );
-      }
-    }
-  }
 
   const nextAlsoAllow = mergeAllowedTools(
     (raw as Record<string, unknown> | undefined)?.tools,
