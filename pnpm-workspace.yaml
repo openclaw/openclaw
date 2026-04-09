@@ -19,6 +19,7 @@ minimumReleaseAgeExclude:
   - "sqlite-vec-*"
   - "vite"
   - "basic-ftp"
+  - "axios"
 
 onlyBuiltDependencies:
   - "@lydell/node-pty"

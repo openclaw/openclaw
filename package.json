@@ -1298,7 +1298,7 @@
       "hono": "4.12.12",
       "@hono/node-server": "1.19.13",
       "basic-ftp": "5.2.1",
-      "axios": "1.13.6",
+      "axios": "1.15.0",
       "defu": "6.1.5",
       "fast-xml-parser": "5.5.7",
       "request": "npm:@cypress/request@3.0.10",
@@ -1339,6 +1339,9 @@
           "strip-ansi": "^7.2.0"
         }
       }
-    }
+    },
+    "minimumReleaseAgeExclude": [
+      "axios"
+    ]
   }
 }
