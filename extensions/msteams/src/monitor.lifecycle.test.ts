@@ -259,6 +259,27 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     await expect(result.shutdown()).resolves.toBeUndefined();
   });
 
+  it("falls back to default listen host when webhook host is whitespace", async () => {
+    const abort = new AbortController();
+    const stores = createStores();
+    const task = monitorMSTeamsProvider({
+      cfg: createConfigWithHost(0, "   "),
+      runtime: createRuntime(),
+      abortSignal: abort.signal,
+      conversationStore: stores.conversationStore,
+      pollStore: stores.pollStore,
+    });
+
+    await new Promise<void>((resolve) => setTimeout(() => resolve(), 0));
+
+    const app = expressControl.apps.at(-1);
+    expect(app?.listen).toHaveBeenCalledWith(0);
+
+    abort.abort();
+    const result = await task;
+    await expect(result.shutdown()).resolves.toBeUndefined();
+  });
+
   it("rejects startup when webhook port is already in use", async () => {
     expressControl.mode.value = "error";
     await expect(

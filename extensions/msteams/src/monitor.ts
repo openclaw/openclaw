@@ -211,7 +211,7 @@ export async function monitorMSTeamsProvider(
   };
 
   const port = msteamsCfg.webhook?.port ?? 3978;
-  const host = msteamsCfg.webhook?.host;
+  const host = msteamsCfg.webhook?.host?.trim() || undefined;
   const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "msteams");
   const MB = 1024 * 1024;
   const agentDefaults = cfg.agents?.defaults;
