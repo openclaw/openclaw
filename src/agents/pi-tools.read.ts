@@ -572,10 +572,10 @@ export function wrapToolWorkspaceRootGuardWithOptions(
           root,
           containerWorkdir: options?.containerWorkdir,
         });
-        const sandboxResult = await assertSandboxPath({ filePath: sandboxPath, cwd: root, root });
+        await assertSandboxPath({ filePath: sandboxPath, cwd: root, root });
         if (options?.normalizeGuardedPathParams && record) {
           normalizedRecord ??= { ...record };
-          normalizedRecord[key] = sandboxResult.resolved;
+          normalizedRecord[key] = path.resolve(root, sandboxPath);
         }
       }
       return tool.execute(toolCallId, normalizedRecord ?? args, signal, onUpdate);
