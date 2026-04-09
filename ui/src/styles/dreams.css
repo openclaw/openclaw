@@ -18,6 +18,8 @@
   gap: 2px;
   padding: 6px 8px;
   flex-shrink: 0;
+  position: relative;
+  z-index: 10;
 }
 
 .dreams__tab {
@@ -283,6 +285,7 @@
 /* ---- Stats bar ---- */
 
 .dreams__stats {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 48px;
@@ -317,6 +320,7 @@
 }
 
 .dreams__trace {
+  position: relative;
   width: min(900px, calc(100% - 40px));
   margin-top: 28px;
   display: grid;
@@ -327,12 +331,14 @@
 }
 
 .dreams__trace-section {
+  position: relative;
   background: color-mix(in oklab, var(--panel) 82%, transparent);
   border: 1px solid color-mix(in oklab, var(--border) 78%, transparent);
   border-radius: 16px;
   padding: 12px;
   min-height: 180px;
   backdrop-filter: blur(14px);
+  z-index: 1;
 }
 
 .dreams__trace-header {
