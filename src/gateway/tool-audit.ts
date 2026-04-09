@@ -1,9 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
-import { redactSensitiveText } from "../logging/redact.js";
+import { readLoggingConfig } from "../logging/config.js";
+import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
 
 const GATEWAY_TOOL_AUDIT_LOG_FILENAME = "gateway-tool-audit.jsonl";
+
+function resolveConfiguredRedactPatterns(): string[] {
+  const configured = readLoggingConfig()?.redactPatterns;
+  if (!Array.isArray(configured)) {
+    return [];
+  }
+  return configured.filter((pattern): pattern is string => typeof pattern === "string");
+}
 
 export type GatewayToolAuditSurface = "tools-invoke" | "openresponses";
 
@@ -38,7 +47,10 @@ export function resolveGatewayToolAuditLogPath(
 export function sanitizeGatewayToolAuditArgs(args: unknown): unknown {
   try {
     const raw = JSON.stringify(args ?? null);
-    const redacted = redactSensitiveText(raw, { mode: "tools" });
+    const redacted = redactSensitiveText(raw, {
+      mode: "tools",
+      patterns: [...getDefaultRedactPatterns(), ...resolveConfiguredRedactPatterns()],
+    });
     return JSON.parse(redacted) as unknown;
   } catch {
     return { _unserializable: true };
