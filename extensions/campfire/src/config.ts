@@ -28,9 +28,21 @@ function isBareBasecampHostUrl(value: string): boolean {
   }
 }
 
+function isHttpUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 const campfireBaseUrlSchema = z
   .string()
   .url()
+  .refine((value) => isHttpUrl(value), {
+    message: "Campfire baseUrl must be a valid http(s) URL.",
+  })
   .refine((value) => !isBareBasecampHostUrl(value), {
     message:
       "Campfire baseUrl must include a Basecamp workspace path (for example https://3.basecamp.com/1234567).",

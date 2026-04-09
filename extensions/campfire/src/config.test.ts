@@ -250,4 +250,22 @@ describe("campfire config resolution", () => {
     expect(topLevelResult.success).toBe(false);
     expect(accountResult.success).toBe(false);
   });
+
+  it("rejects non-http(s) baseUrl protocols in schema", () => {
+    const topLevelResult = campfireConfigSchema.safeParse({
+      baseUrl: "ftp://campfire.example.com/1234567",
+      botKey: "42-AbCdEf",
+    });
+    const accountResult = campfireConfigSchema.safeParse({
+      accounts: {
+        support: {
+          baseUrl: "file:///tmp/campfire-room",
+          botKey: "99-ZyXwVu",
+        },
+      },
+    });
+
+    expect(topLevelResult.success).toBe(false);
+    expect(accountResult.success).toBe(false);
+  });
 });
