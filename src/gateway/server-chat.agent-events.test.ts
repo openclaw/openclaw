@@ -210,7 +210,7 @@ describe("agent event handler", () => {
     const payload = chatCalls[0]?.[1] as {
       message?: { content?: Array<{ text?: string }> };
     };
-    expect(payload.message?.content?.[0]?.text).toBe("Hello  world ");
+    expect(payload.message?.content?.[0]?.text).toBe("Hello  world");
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
     nowSpy?.mockRestore();
   });
@@ -227,6 +227,63 @@ describe("agent event handler", () => {
       nowSpy?.mockRestore();
     },
   );
+
+  it("strips relevant-memories scaffolding from assistant chat events", () => {
+    const { broadcast, nodeSendToSession, nowSpy } = emitRun1AssistantText(
+      createHarness({ now: 1_000 }),
+      [
+        "<relevant-memories>",
+        "Internal memory context",
+        "</relevant-memories>",
+        "Visible answer",
+      ].join("\n"),
+    );
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(1);
+    const payload = chatCalls[0]?.[1] as {
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(payload.message?.content?.[0]?.text).toBe("Visible answer");
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    nowSpy?.mockRestore();
+  });
+
+  it("strips leaked prompt context from assistant chat events", () => {
+    const { broadcast, nodeSendToSession, nowSpy } = emitRun1AssistantText(
+      createHarness({ now: 1_000 }),
+      [
+        "<relevant-memories>",
+        "Internal memory context",
+        "</relevant-memories>",
+        "em kiem tra xu ly loi giup anh",
+        "",
+        "System (untrusted): [2026-04-09 15:57:55 GMT+9] Exec failed",
+        "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
+        "When reading HEARTBEAT.md, use workspace file /home/manhhai/.openclaw/workspace/HEARTBEAT.md (exact case). Do not read docs/heartbeat.md.",
+        "Current time: Thursday, April 9th, 2026 - 15:58 (Asia/Seoul) / 2026-04-09 06:58 UTC",
+        "",
+        "Da ro, em se kiem tra loi nay.",
+      ].join("\n"),
+    );
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(1);
+    const payload = chatCalls[0]?.[1] as {
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(payload.message?.content?.[0]?.text).toBe("Da ro, em se kiem tra loi nay.");
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    nowSpy?.mockRestore();
+  });
+
+  it("does not emit chat delta for NO_REPLY streaming text", () => {
+    const { broadcast, nodeSendToSession, nowSpy } = emitRun1AssistantText(
+      createHarness({ now: 1_000 }),
+      " NO_REPLY  ",
+    );
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
+    nowSpy?.mockRestore();
+  });
 
   it.each(["NO_REPLY", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
     "does not include %s text in chat final message",

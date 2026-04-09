@@ -440,6 +440,34 @@ describe("sanitizeAssistantVisibleText", () => {
 
     expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
   });
+
+  it("strips leaked leading prompt context blocks from assistant-visible text", () => {
+    const input = [
+      "<relevant-memories>",
+      "Internal memory context",
+      "</relevant-memories>",
+      "em kiem tra xu ly loi giup anh",
+      "",
+      "System (untrusted): [2026-04-09 15:57:55 GMT+9] Exec failed",
+      "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
+      "When reading HEARTBEAT.md, use workspace file /home/manhhai/.openclaw/workspace/HEARTBEAT.md (exact case). Do not read docs/heartbeat.md.",
+      "Current time: Thursday, April 9th, 2026 - 15:58 (Asia/Seoul) / 2026-04-09 06:58 UTC",
+      "",
+      "Da ro, em se kiem tra loi nay.",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("Da ro, em se kiem tra loi nay.");
+  });
+
+  it("keeps explanatory prose that merely references heartbeat prompts", () => {
+    const input = [
+      "These leaked lines included:",
+      "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly.",
+      "Current time: example only",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
 });
 
 describe("sanitizeAssistantVisibleTextWithProfile", () => {

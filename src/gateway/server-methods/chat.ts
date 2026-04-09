@@ -6,6 +6,10 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
+import {
+  extractAssistantText as extractAssistantHistoryText,
+  hasAssistantPhaseMetadata,
+} from "../../agents/tools/chat-history-text.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
@@ -25,6 +29,11 @@ import {
   parseAssistantTextSignature,
   resolveAssistantMessagePhase,
 } from "../../shared/chat-message-content.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
+import { sanitizeAssistantVisibleTextWithProfile } from "../../shared/text/assistant-visible-text.js";
 import {
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
@@ -638,7 +647,10 @@ function sanitizeChatHistoryContentBlock(
       entry.text = stripped.text;
       changed ||= stripped.changed;
     } else {
-      const res = truncateChatHistoryText(stripped.text, maxChars);
+      const res = truncateChatHistoryText(
+        sanitizeAssistantVisibleTextWithProfile(stripped.text, "history"),
+        maxChars,
+      );
       entry.text = res.text;
       changed ||= stripped.changed || res.truncated;
     }
@@ -649,7 +661,10 @@ function sanitizeChatHistoryContentBlock(
       entry.content = stripped.text;
       changed ||= stripped.changed;
     } else {
-      const res = truncateChatHistoryText(stripped.text, maxChars);
+      const res = truncateChatHistoryText(
+        sanitizeAssistantVisibleTextWithProfile(stripped.text, "history"),
+        maxChars,
+      );
       entry.content = res.text;
       changed ||= stripped.changed || res.truncated;
     }
@@ -846,7 +861,10 @@ function sanitizeChatHistoryMessage(
       entry.content = stripped.text;
       changed ||= stripped.changed;
     } else {
-      const res = truncateChatHistoryText(stripped.text, maxChars);
+      const res = truncateChatHistoryText(
+        sanitizeAssistantVisibleTextWithProfile(stripped.text, "history"),
+        maxChars,
+      );
       entry.content = res.text;
       changed ||= stripped.changed || res.truncated;
     }
@@ -854,8 +872,24 @@ function sanitizeChatHistoryMessage(
     const updated = entry.content.map((block) =>
       sanitizeChatHistoryContentBlock(block, { preserveExactToolPayload, maxChars }),
     );
-    if (updated.some((item) => item.changed)) {
-      entry.content = updated.map((item) => item.block);
+    const sanitizedBlocks = updated.map((item) => item.block);
+    const hasPhaseMetadata = hasAssistantPhaseMetadata(entry);
+    if (hasPhaseMetadata) {
+      const stripped = stripInlineDirectiveTagsForDisplay(extractAssistantHistoryText(entry) ?? "");
+      const res = truncateChatHistoryText(
+        sanitizeAssistantVisibleTextWithProfile(stripped.text, "history"),
+        maxChars,
+      );
+      const nonTextBlocks = sanitizedBlocks.filter(
+        (block) =>
+          !block || typeof block !== "object" || (block as { type?: unknown }).type !== "text",
+      );
+      entry.content = res.text
+        ? [{ type: "text", text: res.text }, ...nonTextBlocks]
+        : nonTextBlocks;
+      changed = true;
+    } else if (updated.some((item) => item.changed)) {
+      entry.content = sanitizedBlocks;
       changed = true;
     }
     if (entry.role === "assistant" && Array.isArray(entry.content)) {
@@ -873,7 +907,10 @@ function sanitizeChatHistoryMessage(
       entry.text = stripped.text;
       changed ||= stripped.changed;
     } else {
-      const res = truncateChatHistoryText(stripped.text, maxChars);
+      const res = truncateChatHistoryText(
+        sanitizeAssistantVisibleTextWithProfile(stripped.text, "history"),
+        maxChars,
+      );
       entry.text = res.text;
       changed ||= stripped.changed || res.truncated;
     }

@@ -43,6 +43,32 @@ describe("extractTextCached", () => {
     expect(extractTextCached(message)).toBe("Final user answer");
   });
 
+  it("strips leaked prompt context from assistant messages", () => {
+    const message = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: [
+            "<relevant-memories>",
+            "Internal memory context",
+            "</relevant-memories>",
+            "em kiem tra xu ly loi giup anh",
+            "",
+            "System (untrusted): [2026-04-09 15:57:55 GMT+9] Exec failed",
+            "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
+            "When reading HEARTBEAT.md, use workspace file /home/manhhai/.openclaw/workspace/HEARTBEAT.md (exact case). Do not read docs/heartbeat.md.",
+            "Current time: Thursday, April 9th, 2026 - 15:58 (Asia/Seoul) / 2026-04-09 06:58 UTC",
+            "",
+            "Da ro, em se kiem tra loi nay.",
+          ].join("\n"),
+        },
+      ],
+    };
+    expect(extractText(message)).toBe("Da ro, em se kiem tra loi nay.");
+    expect(extractTextCached(message)).toBe("Da ro, em se kiem tra loi nay.");
+  });
+
   it("prefers final_answer assistant text over commentary text", () => {
     const message = {
       role: "assistant",

@@ -9,6 +9,12 @@ import {
 
 const MEMORY_TAG_RE = /<\s*(\/?)\s*relevant[-_]memories\b[^<>]*>/gi;
 const MEMORY_TAG_QUICK_RE = /<\s*\/?\s*relevant[-_]memories\b/i;
+const LEAKED_HEARTBEAT_PROMPT_RE =
+  /Read HEARTBEAT\.md if it exists \(workspace context\)\. Follow it strictly\./i;
+const LEAKED_HEARTBEAT_HINT_RE =
+  /When reading HEARTBEAT\.md, use workspace file .+?\. Do not read docs\/heartbeat\.md\./i;
+const LEAKED_CURRENT_TIME_RE = /^Current time:\s+/im;
+const LEAKED_SYSTEM_EVENT_RE = /^System(?: \(untrusted\))?:\s+/i;
 
 /**
  * Strip XML-style tool call tags that models sometimes emit as plain text.
@@ -476,6 +482,39 @@ function stripRelevantMemoriesTags(text: string): string {
   return result;
 }
 
+function stripLeadingLeakedPromptContext(text: string): string {
+  if (!text) {
+    return text;
+  }
+
+  const trimmedStart = text.trimStart();
+  if (!trimmedStart) {
+    return text;
+  }
+
+  const startsWithLeakMarker =
+    MEMORY_TAG_QUICK_RE.test(trimmedStart) ||
+    LEAKED_HEARTBEAT_PROMPT_RE.test(trimmedStart) ||
+    LEAKED_SYSTEM_EVENT_RE.test(trimmedStart);
+  if (!startsWithLeakMarker) {
+    return text;
+  }
+
+  const heartbeatIndex = trimmedStart.search(LEAKED_HEARTBEAT_PROMPT_RE);
+  const heartbeatHintIndex = trimmedStart.search(LEAKED_HEARTBEAT_HINT_RE);
+  const currentTimeMatch = trimmedStart.match(LEAKED_CURRENT_TIME_RE);
+  const currentTimeIndex = currentTimeMatch?.index ?? -1;
+
+  if (currentTimeIndex === -1 || (heartbeatIndex === -1 && heartbeatHintIndex === -1)) {
+    return text;
+  }
+
+  const lineEndSearchStart = currentTimeIndex + currentTimeMatch![0].length;
+  const nextLineBreak = trimmedStart.indexOf("\n", lineEndSearchStart);
+  const blockEnd = nextLineBreak === -1 ? trimmedStart.length : nextLineBreak + 1;
+  return trimmedStart.slice(blockEnd).trimStart();
+}
+
 export type AssistantVisibleTextSanitizerProfile = "delivery" | "history" | "internal-scaffolding";
 
 type AssistantVisibleTextPipelineOptions = {
@@ -541,6 +580,7 @@ function applyAssistantVisibleTextStagePipeline(
       cleaned = stripMinimaxToolCallXml(cleaned);
     }
     cleaned = stripModelSpecialTokens(cleaned);
+    cleaned = stripLeadingLeakedPromptContext(cleaned);
     cleaned = stripRelevantMemoriesTags(cleaned);
     cleaned = stripToolCallXmlTags(cleaned);
     if (!options.preserveDowngradedToolText) {
