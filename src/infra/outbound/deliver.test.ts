@@ -7,6 +7,7 @@ import {
   whatsappOutbound,
 } from "../../../test/helpers/infra/deliver-test-outbounds.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import * as mediaCapabilityModule from "../../media/read-capability.js";
 import { createHookRunner } from "../../plugins/hooks.js";
 import { addTestHook } from "../../plugins/hooks.test-helpers.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
@@ -217,6 +218,69 @@ describe("deliverOutboundPayloads", () => {
     releasePinnedPluginChannelRegistry();
     setActivePluginRegistry(emptyRegistry);
   });
+
+  it("keeps requester session channel authoritative for delivery media policy", async () => {
+    const resolveMediaAccessSpy = vi.spyOn(
+      mediaCapabilityModule,
+      "resolveAgentScopedOutboundMediaAccess",
+    );
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hello" }],
+      deps: { whatsapp: sendWhatsApp },
+      session: {
+        key: "agent:main:whatsapp:group:ops",
+        requesterSenderId: "attacker",
+      },
+    });
+
+    expect(resolveMediaAccessSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:whatsapp:group:ops",
+        messageProvider: undefined,
+        requesterSenderId: "attacker",
+      }),
+    );
+    resolveMediaAccessSpy.mockRestore();
+  });
+
+  it("forwards all sender fields to media access for non-id policy matching", async () => {
+    const resolveMediaAccessSpy = vi.spyOn(
+      mediaCapabilityModule,
+      "resolveAgentScopedOutboundMediaAccess",
+    );
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w2", toJid: "jid" });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hello" }],
+      deps: { whatsapp: sendWhatsApp },
+      session: {
+        key: "agent:main:whatsapp:group:ops",
+        requesterSenderId: "id:whatsapp:123",
+        requesterSenderName: "Alice",
+        requesterSenderUsername: "alice_u",
+        requesterSenderE164: "+15551234567",
+      },
+    });
+
+    expect(resolveMediaAccessSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterSenderId: "id:whatsapp:123",
+        requesterSenderName: "Alice",
+        requesterSenderUsername: "alice_u",
+        requesterSenderE164: "+15551234567",
+      }),
+    );
+    resolveMediaAccessSpy.mockRestore();
+  });
+
   it("chunks direct adapter text and preserves delivery overrides across sends", async () => {
     const sendText = vi.fn().mockImplementation(async ({ text }: { text: string }) => ({
       channel: "matrix" as const,
