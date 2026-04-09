@@ -35,13 +35,13 @@ import {
  * See: https://github.com/openclaw/openclaw/issues/14321
  * See: https://github.com/openclaw/openclaw/issues/32179
  */
-function safeParseStreamingJson(json: string | undefined): unknown {
+function safeParseStreamingJson(json: string): unknown {
   try {
     return parseStreamingJson(json);
   } catch (e) {
     if (e instanceof SyntaxError) {
       // Strip C0 control characters and retry
-      return parseStreamingJson(json?.replace(/[\x00-\x1f]/g, ""));
+      return parseStreamingJson(json.replace(/[\x00-\x1f]/g, ""));
     }
     throw e;
   }
