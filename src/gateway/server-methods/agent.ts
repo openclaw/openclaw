@@ -28,6 +28,7 @@ import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -110,6 +111,10 @@ async function runSessionResetFromAgent(params: {
   if (!result.ok) {
     return result;
   }
+  emitSessionLifecycleEvent({
+    sessionKey: result.key,
+    reason: params.reason,
+  });
   return {
     ok: true,
     key: result.key,

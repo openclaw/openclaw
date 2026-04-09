@@ -722,6 +722,44 @@ describe("session.message websocket events", () => {
     });
   });
 
+  test("broadcasts socket.drain event when a session is reset via agent /reset chat command", async () => {
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+
+    await withOperatorSessionSubscriber(harness, async (ws) => {
+      const socketDrainPromise = onceMessage(
+        ws,
+        (message) =>
+          message.type === "event" &&
+          message.event === "socket.drain" &&
+          (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
+            "agent:main:main",
+      );
+
+      const resetRes = await rpcReq(ws, "agent", {
+        sessionKey: "agent:main:main",
+        message: "/reset",
+        idempotencyKey: "123-reset",
+      });
+      expect(resetRes.ok).toBe(true);
+
+      const drainEvent = await socketDrainPromise;
+      expect(drainEvent.payload).toMatchObject({
+        sessionKey: "agent:main:main",
+        reason: "reset",
+      });
+      expect(typeof (drainEvent.payload as any).ts).toBe("number");
+    });
+  });
+
   test("broadcasts socket.drain event when a session is deleted", async () => {
     const storePath = await createSessionStoreFile();
     await writeSessionStore({
