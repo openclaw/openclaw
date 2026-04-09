@@ -130,4 +130,90 @@ describe("chunkDiscordText", () => {
     expect(second.startsWith("_")).toBe(true);
     expect(second).toContain("  11. indented line");
   });
+
+  it("pre-splits long blockquote lines so every physical line has > prefix", () => {
+    const longBq = `> ${Array.from({ length: 6 }, () => "Short sentence here.").join(" ")}`;
+    // Should be >90 chars to trigger the split
+    expect(longBq.length).toBeGreaterThan(90);
+
+    const chunks = chunkDiscordText(longBq, { maxChars: 2000, maxLines: 50 });
+    // All physical lines in the output should start with "> "
+    for (const chunk of chunks) {
+      for (const line of chunk.split("\n")) {
+        if (line.trim()) {
+          expect(line).toMatch(/^> /);
+        }
+      }
+    }
+  });
+
+  it("does not split short blockquote lines", () => {
+    const shortBq = "> This is a short blockquote.";
+    const chunks = chunkDiscordText(shortBq, { maxChars: 2000, maxLines: 50 });
+    expect(chunks).toEqual([shortBq]);
+  });
+
+  it("does not split blockquote lines inside code fences", () => {
+    const text = "```\n> " + "x".repeat(100) + "\n```";
+    const chunks = chunkDiscordText(text, { maxChars: 2000, maxLines: 50 });
+    expect(chunks).toEqual([text]);
+  });
+
+  it("avoids creating list markers when splitting blockquote lines", () => {
+    // "- we" at the start of a blockquote line renders as a bullet in Discord
+    const bq = "> Something happened gradually - we need to make sure this dash does not start a new line and get interpreted as a list bullet by Discord.";
+    const chunks = chunkDiscordText(bq, { maxChars: 2000, maxLines: 50 });
+    for (const chunk of chunks) {
+      for (const line of chunk.split("\n")) {
+        if (!line.startsWith(">")) { continue; }
+        const afterPrefix = line.replace(/^>+\s?/, "");
+        // Should not start with a list marker character
+        expect(afterPrefix).not.toMatch(/^[-*+] /);
+      }
+    }
+  });
+
+  it("repeats table header in continuation chunk when code-fenced table splits", () => {
+    const header = "| Name | Value | Status |";
+    const sep = "| ---- | ----- | ------ |";
+    const rows = Array.from({ length: 20 }, (_, i) => `| item_${i} | val_${i} | active |`).join(
+      "\n",
+    );
+    const text = `Intro text\n\n\`\`\`\n${header}\n${sep}\n${rows}\n\`\`\`\n\nDone.`;
+
+    const chunks = chunkDiscordText(text, { maxChars: 600, maxLines: 17 });
+    expect(chunks.length).toBeGreaterThan(1);
+
+    // Every chunk after the first should contain the header and separator
+    for (let i = 1; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      if (chunk.includes("|")) {
+        expect(chunk).toContain(header);
+        expect(chunk).toContain(sep);
+      }
+    }
+
+    // All chunks should have balanced fences
+    for (const chunk of chunks) {
+      expect(hasBalancedFences(chunk)).toBe(true);
+    }
+  });
+
+  it("does not repeat headers for non-table content in code fences", () => {
+    const body = Array.from({ length: 20 }, (_, i) => `console.log(${i});`).join("\n");
+    const text = `\`\`\`js\n${body}\n\`\`\``;
+
+    const chunks = chunkDiscordText(text, { maxChars: 300, maxLines: 17 });
+    expect(chunks.length).toBeGreaterThan(1);
+
+    // Second chunk should NOT contain pipe-delimited header rows
+    for (let i = 1; i < chunks.length; i++) {
+      const lines = chunks[i].split("\n");
+      // First line after fence open should be code, not a table header
+      const contentLines = lines.filter((l) => !l.startsWith("```"));
+      if (contentLines.length > 0) {
+        expect(contentLines[0]).toMatch(/^console\.log/);
+      }
+    }
+  });
 });
