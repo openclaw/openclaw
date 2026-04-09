@@ -2,29 +2,15 @@ import Foundation
 import MLXAudioTTS
 import OSLog
 
-// Runtime access stays serialized through TalkModeRuntime's MainActor helper methods.
-final class TalkMLXSpeechSynthesizer: @unchecked Sendable {
+// swiftformat:disable wrap wrapMultilineStatementBraces trailingCommas redundantSelf extensionAccessControl
+/// Runtime access stays serialized through `TalkModeRuntime` actor helper methods.
+final class TalkMLXSpeechSynthesizer {
     enum SynthesizeError: Error {
         case canceled
         case modelLoadFailed(String)
         case audioGenerationFailed
         case audioPlaybackFailed
-    }
-
-    private struct UncheckedSpeechModel: @unchecked Sendable {
-        let raw: any SpeechGenerationModel
-
-        var sampleRate: Int { raw.sampleRate }
-
-        func generateAudio(text: String, voice: String?, language: String?) async throws -> [Float] {
-            try await raw.generate(
-                text: text,
-                voice: voice,
-                refAudio: nil,
-                refText: nil,
-                language: language
-            ).asArray(Float.self)
-        }
+        case timedOut
     }
 
     static let shared = TalkMLXSpeechSynthesizer()
@@ -45,8 +31,7 @@ final class TalkMLXSpeechSynthesizer: @unchecked Sendable {
         text: String,
         modelRepo: String?,
         language: String?,
-        voicePreset: String?
-    ) async throws -> Data {
+        voicePreset: String?) async throws -> Data {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return Data() }
 
@@ -55,22 +40,29 @@ final class TalkMLXSpeechSynthesizer: @unchecked Sendable {
         self.currentToken = token
 
         let resolvedRepo = Self.resolvedModelRepo(modelRepo)
-        let model = UncheckedSpeechModel(raw: try await self.loadModel(modelRepo: resolvedRepo, token: token))
+        let rawModel = try await self.loadModel(
+            modelRepo: resolvedRepo,
+            token: token)
+        let model = UncheckedSpeechModel(raw: rawModel)
         guard self.currentToken == token else {
             throw SynthesizeError.canceled
         }
 
         let audioData: Data
         do {
-            let audio = try await model.generateAudio(text: trimmed, voice: voicePreset, language: language)
+            let audio = try await model.generateAudio(
+                text: trimmed,
+                voice: voicePreset,
+                language: language)
             audioData = Self.makeWavData(
                 samples: audio,
-                sampleRate: Double(model.sampleRate)
-            )
+                sampleRate: Double(model.sampleRateValue()))
         } catch {
-            self.logger.error("talk mlx generation failed: \(error.localizedDescription, privacy: .public)")
+            self.logger.error(
+                "talk mlx generation failed: \(error.localizedDescription, privacy: .public)")
             throw SynthesizeError.audioGenerationFailed
         }
+
         guard self.currentToken == token else {
             throw SynthesizeError.canceled
         }
@@ -79,8 +71,7 @@ final class TalkMLXSpeechSynthesizer: @unchecked Sendable {
 
     private func loadModel(
         modelRepo: String,
-        token: UUID
-    ) async throws -> any SpeechGenerationModel {
+        token: UUID) async throws -> any SpeechGenerationModel {
         if let model = self.model, self.modelRepo == modelRepo {
             return model
         }
@@ -97,7 +88,8 @@ final class TalkMLXSpeechSynthesizer: @unchecked Sendable {
         } catch is CancellationError {
             throw SynthesizeError.canceled
         } catch {
-            self.logger.error("talk mlx load failed: \(error.localizedDescription, privacy: .public)")
+            self.logger.error(
+                "talk mlx load failed: \(error.localizedDescription, privacy: .public)")
             throw SynthesizeError.modelLoadFailed(modelRepo)
         }
     }
@@ -139,22 +131,48 @@ final class TalkMLXSpeechSynthesizer: @unchecked Sendable {
         }
         return data
     }
-
 }
 
-private extension Data {
-    mutating func appendLEUInt16(_ value: UInt16) {
-        var littleEndian = value.littleEndian
-        Swift.withUnsafeBytes(of: &littleEndian) { self.append(contentsOf: $0) }
+extension TalkMLXSpeechSynthesizer: @unchecked Sendable {}
+
+private struct UncheckedSpeechModel {
+    let raw: any SpeechGenerationModel
+
+    func sampleRateValue() -> Int {
+        raw.sampleRate
     }
 
-    mutating func appendLEUInt32(_ value: UInt32) {
-        var littleEndian = value.littleEndian
-        Swift.withUnsafeBytes(of: &littleEndian) { self.append(contentsOf: $0) }
-    }
-
-    mutating func appendLEInt16(_ value: Int16) {
-        var littleEndian = value.littleEndian
-        Swift.withUnsafeBytes(of: &littleEndian) { self.append(contentsOf: $0) }
+    func generateAudio(
+        text: String,
+        voice: String?,
+        language: String?) async throws -> [Float] {
+        let generatedAudio = try await raw.generate(
+            text: text,
+            voice: voice,
+            refAudio: nil,
+            refText: nil,
+            language: language)
+        return generatedAudio.asArray(Float.self)
     }
 }
+
+extension UncheckedSpeechModel: @unchecked Sendable {}
+
+extension Data {
+    fileprivate mutating func appendLEUInt16(_ value: UInt16) {
+        var littleEndian = value.littleEndian
+        Swift.withUnsafeBytes(of: &littleEndian) { append(contentsOf: $0) }
+    }
+
+    fileprivate mutating func appendLEUInt32(_ value: UInt32) {
+        var littleEndian = value.littleEndian
+        Swift.withUnsafeBytes(of: &littleEndian) { append(contentsOf: $0) }
+    }
+
+    fileprivate mutating func appendLEInt16(_ value: Int16) {
+        var littleEndian = value.littleEndian
+        Swift.withUnsafeBytes(of: &littleEndian) { append(contentsOf: $0) }
+    }
+}
+
+// swiftformat:enable wrap wrapMultilineStatementBraces trailingCommas redundantSelf extensionAccessControl
