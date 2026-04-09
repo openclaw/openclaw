@@ -3625,8 +3625,26 @@ def cmd_state(args):
     print(f"  Updated: {attrs.get('created-at', 'unknown')}")
 
     sv_id = r2.json()["data"]["id"]
+    resources_processed = attrs.get("resources-processed", True)
+    if not resources_processed:
+        import time
+        print("  Resources still being indexed by TFC, waiting...")
+        for attempt in range(6):
+            wait = 2 ** attempt
+            time.sleep(wait)
+            r_check = requests.get(f"{TFC_API}/state-versions/{sv_id}", headers=api_headers())
+            if r_check.status_code == 200:
+                if r_check.json()["data"]["attributes"].get("resources-processed", False):
+                    break
+            print(f"    still processing... ({attempt + 1}/6)")
+        else:
+            print("  ⚠️  Resources may be incomplete — TFC is still indexing. Re-run in a minute.")
+
     r3 = requests.get(f"{TFC_API}/state-versions/{sv_id}/resources", headers=api_headers())
-    for res in r3.json().get("data", []):
+    resources = r3.json().get("data", [])
+    if not resources:
+        print("  (no resources)")
+    for res in resources:
         a = res["attributes"]
         print(f"  - {a.get('provider-type','?')}.{a.get('name','?')}")
 
