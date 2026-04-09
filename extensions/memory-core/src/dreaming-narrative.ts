@@ -153,6 +153,56 @@ async function startNarrativeRunOrFallback(params: {
   }
 }
 
+function buildRequestScopedFallbackNarrative(data: NarrativePhaseData): string {
+  return (
+    data.snippets.map((value) => value.trim()).find((value) => value.length > 0) ??
+    (data.promotions ?? []).map((value) => value.trim()).find((value) => value.length > 0) ??
+    "A memory trace surfaced, but details were unavailable in this run."
+  );
+}
+
+async function startNarrativeRunOrFallback(params: {
+  subagent: SubagentSurface;
+  sessionKey: string;
+  message: string;
+  data: NarrativePhaseData;
+  workspaceDir: string;
+  nowMs: number;
+  timezone?: string;
+  logger: Logger;
+}): Promise<string | null> {
+  try {
+    const run = await params.subagent.run({
+      idempotencyKey: params.sessionKey,
+      sessionKey: params.sessionKey,
+      message: params.message,
+      extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,
+      deliver: false,
+    });
+    return run.runId;
+  } catch (runErr) {
+    if (!isRequestScopedSubagentRuntimeError(runErr)) {
+      throw runErr;
+    }
+    try {
+      await appendNarrativeEntry({
+        workspaceDir: params.workspaceDir,
+        narrative: buildRequestScopedFallbackNarrative(params.data),
+        nowMs: params.nowMs,
+        timezone: params.timezone,
+      });
+      params.logger.warn(
+        `memory-core: narrative generation used fallback for ${params.data.phase} phase because subagent runtime is request-scoped [workspace=${params.workspaceDir}].`,
+      );
+    } catch (fallbackErr) {
+      params.logger.warn(
+        `memory-core: narrative fallback failed for ${params.data.phase} phase: ${formatErrorMessage(fallbackErr)}`,
+      );
+    }
+    return null;
+  }
+}
+
 // ── Prompt building ────────────────────────────────────────────────────
 
 export function buildNarrativePrompt(data: NarrativePhaseData): string {
