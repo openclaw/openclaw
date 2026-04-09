@@ -6,16 +6,16 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   loadConfigReturn: {} as Record<string, unknown>,
-  listAgentEntries: vi.fn(() => [] as Array<{ agentId: string }>),
-  findAgentEntryIndex: vi.fn(() => -1),
+  listAgentEntries: vi.fn((_cfg?: unknown) => [] as Array<Record<string, unknown>>),
+  findAgentEntryIndex: vi.fn((_list?: unknown, _agentId?: string) => -1),
   applyAgentConfig: vi.fn((_cfg: unknown, _opts: unknown) => ({})),
   pruneAgentConfig: vi.fn(() => ({ config: {}, removedBindings: 0 })),
   writeConfigFile: vi.fn(async () => {}),
   ensureAgentWorkspace: vi.fn(async () => {}),
   isWorkspaceSetupCompleted: vi.fn(async () => false),
-  resolveAgentDir: vi.fn(() => "/agents/test-agent"),
-  resolveAgentWorkspaceDir: vi.fn(() => "/workspace/test-agent"),
-  resolveSessionTranscriptsDirForAgent: vi.fn(() => "/transcripts/test-agent"),
+  resolveAgentDir: vi.fn((_cfg?: unknown, _agentId?: string) => "/agents/test-agent"),
+  resolveAgentWorkspaceDir: vi.fn((_cfg?: unknown, _agentId?: string) => "/workspace/test-agent"),
+  resolveSessionTranscriptsDirForAgent: vi.fn((_agentId?: string) => "/transcripts/test-agent"),
   listAgentsForGateway: vi.fn(() => ({
     defaultId: "main",
     mainKey: "agent:main:main",
@@ -55,6 +55,8 @@ vi.mock("../../commands/agents.config.js", () => ({
 vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: () => ["main"],
   resolveAgentDir: mocks.resolveAgentDir,
+  resolveAgentConfig: (cfg: unknown, agentId: string) =>
+    getAgentList(cfg).find((entry) => entry.id === agentId),
   resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
 }));
 
@@ -130,6 +132,19 @@ const { __testing: agentsTesting, agentsHandlers } = await import("./agents.js")
 
 beforeEach(() => {
   agentsTesting.resetDepsForTests();
+  mocks.listAgentEntries.mockImplementation((cfg: unknown) => getAgentList(cfg));
+  mocks.findAgentEntryIndex.mockImplementation((list: unknown, agentId: string) =>
+    (Array.isArray(list) ? (list as MockAgentEntry[]) : []).findIndex(
+      (entry) => entry.id === agentId,
+    ),
+  );
+  mocks.applyAgentConfig.mockImplementation((cfg: unknown, opts: unknown) =>
+    mergeAgentConfig(cfg, opts),
+  );
+  mocks.resolveAgentWorkspaceDir.mockImplementation((cfg: unknown, agentId: string) =>
+    resolveMockWorkspaceDir(cfg, agentId),
+  );
+  mocks.writeFileWithinRoot.mockResolvedValue(undefined);
 });
 
 function makeCall(method: keyof typeof agentsHandlers, params: Record<string, unknown>) {
@@ -174,6 +189,74 @@ function makeFileStat(params?: {
     ino: params?.ino ?? 1,
     nlink: params?.nlink ?? 1,
   } as unknown as import("node:fs").Stats;
+}
+
+type MockIdentity = {
+  name?: string;
+  theme?: string;
+  emoji?: string;
+  avatar?: string;
+};
+
+type MockAgentEntry = {
+  id: string;
+  name?: string;
+  workspace?: string;
+  agentDir?: string;
+  model?: string;
+  identity?: MockIdentity;
+};
+
+type MockConfig = {
+  agents?: {
+    list?: MockAgentEntry[];
+  };
+};
+
+function getAgentList(cfg: unknown): MockAgentEntry[] {
+  return ((cfg as MockConfig | undefined)?.agents?.list ?? []).map((entry) => ({ ...entry }));
+}
+
+function mergeAgentConfig(cfg: unknown, opts: unknown): MockConfig {
+  const config = (cfg as MockConfig | undefined) ?? {};
+  const params = (opts as {
+    agentId?: string;
+    name?: string;
+    workspace?: string;
+    agentDir?: string;
+    model?: string;
+    identity?: MockIdentity;
+  }) ?? { agentId: "" };
+  const list = getAgentList(config);
+  const agentId = String(params.agentId ?? "");
+  const index = list.findIndex((entry) => entry.id === agentId);
+  const base = index >= 0 ? list[index] : { id: agentId };
+  const nextEntry: MockAgentEntry = {
+    ...base,
+    ...(params.name ? { name: params.name } : {}),
+    ...(params.workspace ? { workspace: params.workspace } : {}),
+    ...(params.agentDir ? { agentDir: params.agentDir } : {}),
+    ...(params.model ? { model: params.model } : {}),
+    ...(params.identity ? { identity: { ...base.identity, ...params.identity } } : {}),
+  };
+  if (index >= 0) {
+    list[index] = nextEntry;
+  } else {
+    list.push(nextEntry);
+  }
+  return {
+    ...config,
+    agents: {
+      ...config.agents,
+      list,
+    },
+  };
+}
+
+function resolveMockWorkspaceDir(cfg: unknown, agentId: string): string {
+  return (
+    getAgentList(cfg).find((entry) => entry.id === agentId)?.workspace ?? `/workspace/${agentId}`
+  );
 }
 
 function mockWorkspaceStateRead(params: {
@@ -269,7 +352,6 @@ describe("agents.create", () => {
     vi.clearAllMocks();
     mocks.loadConfigReturn = {};
     mocks.findAgentEntryIndex.mockReturnValue(-1);
-    mocks.applyAgentConfig.mockImplementation((_cfg, _opts) => ({}));
   });
 
   it("creates a new agent successfully", async () => {
@@ -356,7 +438,7 @@ describe("agents.create", () => {
     );
   });
 
-  it("writes identity to config instead of IDENTITY.md", async () => {
+  it("writes identity to both config and IDENTITY.md", async () => {
     const { promise } = makeCall("agents.create", {
       name: "Plain Agent",
       workspace: "/tmp/ws",
@@ -369,9 +451,16 @@ describe("agents.create", () => {
         identity: expect.objectContaining({ name: "Plain Agent" }),
       }),
     );
+    expect(mocks.writeFileWithinRoot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rootDir: "/resolved/tmp/ws",
+        relativePath: "IDENTITY.md",
+        data: expect.stringContaining("- Name: Plain Agent"),
+      }),
+    );
   });
 
-  it("writes emoji and avatar to config identity when provided", async () => {
+  it("writes emoji and avatar to both config and IDENTITY.md", async () => {
     const { promise } = makeCall("agents.create", {
       name: "Fancy Agent",
       workspace: "/tmp/ws",
@@ -390,6 +479,33 @@ describe("agents.create", () => {
         }),
       }),
     );
+    expect(mocks.writeFileWithinRoot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rootDir: "/resolved/tmp/ws",
+        relativePath: "IDENTITY.md",
+        data: expect.stringMatching(/- Name: Fancy Agent[\s\S]*- Emoji: 🤖[\s\S]*- Avatar:/),
+      }),
+    );
+  });
+
+  it("does not persist config when IDENTITY.md write fails with SafeOpenError", async () => {
+    const { SafeOpenError: SOE } = await import("../../infra/fs-safe.js");
+    mocks.writeFileWithinRoot.mockRejectedValueOnce(
+      new SOE("path-mismatch", "path escapes workspace root"),
+    );
+
+    const { respond, promise } = makeCall("agents.create", {
+      name: "Unsafe Agent",
+      workspace: "/tmp/ws",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("unsafe workspace file") }),
+    );
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("passes model to applyAgentConfig when provided", async () => {
@@ -415,9 +531,21 @@ describe("agents.create", () => {
 describe("agents.update", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.loadConfigReturn = {};
-    mocks.findAgentEntryIndex.mockReturnValue(0);
-    mocks.applyAgentConfig.mockImplementation((_cfg, _opts) => ({}));
+    mocks.loadConfigReturn = {
+      agents: {
+        list: [
+          {
+            id: "test-agent",
+            workspace: "/workspace/test-agent",
+            identity: {
+              name: "Current Agent",
+              theme: "steady",
+              emoji: "🐢",
+            },
+          },
+        ],
+      },
+    };
   });
 
   it("updates an existing agent successfully", async () => {
@@ -462,7 +590,7 @@ describe("agents.update", () => {
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
   });
 
-  it("writes avatar to config identity instead of IDENTITY.md", async () => {
+  it("writes merged identity to IDENTITY.md when only avatar changes", async () => {
     const { respond, promise } = makeCall("agents.update", {
       agentId: "test-agent",
       avatar: "https://example.com/avatar.png",
@@ -478,9 +606,18 @@ describe("agents.update", () => {
         }),
       }),
     );
+    expect(mocks.writeFileWithinRoot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rootDir: "/workspace/test-agent",
+        relativePath: "IDENTITY.md",
+        data: expect.stringMatching(
+          /- Name: Current Agent[\s\S]*- Theme: steady[\s\S]*- Emoji: 🐢[\s\S]*- Avatar: https:\/\/example\.com\/avatar\.png/,
+        ),
+      }),
+    );
   });
 
-  it("writes emoji to config identity when provided", async () => {
+  it("writes merged identity to IDENTITY.md when only emoji changes", async () => {
     const { respond, promise } = makeCall("agents.update", {
       agentId: "test-agent",
       emoji: "🦀",
@@ -494,9 +631,18 @@ describe("agents.update", () => {
         identity: expect.objectContaining({ emoji: "🦀" }),
       }),
     );
+    expect(mocks.writeFileWithinRoot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rootDir: "/workspace/test-agent",
+        relativePath: "IDENTITY.md",
+        data: expect.stringMatching(
+          /- Name: Current Agent[\s\S]*- Theme: steady[\s\S]*- Emoji: 🦀/,
+        ),
+      }),
+    );
   });
 
-  it("writes combined identity fields to config", async () => {
+  it("writes combined identity fields to both config and IDENTITY.md", async () => {
     const { respond, promise } = makeCall("agents.update", {
       agentId: "test-agent",
       name: "New Name",
@@ -517,6 +663,55 @@ describe("agents.update", () => {
         }),
       }),
     );
+    expect(mocks.writeFileWithinRoot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rootDir: "/workspace/test-agent",
+        relativePath: "IDENTITY.md",
+        data: expect.stringMatching(
+          /- Name: New Name[\s\S]*- Theme: steady[\s\S]*- Emoji: 🤖[\s\S]*- Avatar: https:\/\/example\.com\/new\.png/,
+        ),
+      }),
+    );
+  });
+
+  it("syncs existing identity into a new workspace even without identity params", async () => {
+    const { respond, promise } = makeCall("agents.update", {
+      agentId: "test-agent",
+      workspace: "/new/workspace",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(true, { ok: true, agentId: "test-agent" }, undefined);
+    expect(mocks.writeFileWithinRoot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rootDir: "/resolved/new/workspace",
+        relativePath: "IDENTITY.md",
+        data: expect.stringMatching(
+          /- Name: Current Agent[\s\S]*- Theme: steady[\s\S]*- Emoji: 🐢/,
+        ),
+      }),
+    );
+  });
+
+  it("does not persist config when IDENTITY.md write fails on update", async () => {
+    const { SafeOpenError: SOE } = await import("../../infra/fs-safe.js");
+    mocks.writeFileWithinRoot.mockRejectedValueOnce(
+      new SOE("path-mismatch", "path escapes workspace root"),
+    );
+
+    const { respond, promise } = makeCall("agents.update", {
+      agentId: "test-agent",
+      name: "Bad Update",
+      avatar: "https://example.com/avatar.png",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("unsafe workspace file") }),
+    );
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 });
 
@@ -633,7 +828,11 @@ describe("agents.files.list", () => {
 describe("agents.files.get/set symlink safety", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.loadConfigReturn = {};
+    mocks.loadConfigReturn = {
+      agents: {
+        list: [{ id: "main", workspace: "/workspace/test-agent" }],
+      },
+    };
     mocks.fsMkdir.mockResolvedValue(undefined);
   });
 
