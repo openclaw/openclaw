@@ -1,0 +1,109 @@
+{
+  "id": "model-switch",
+  "enabledByDefault": false,
+  "contracts": {
+    "tools": ["model_switch", "model_info"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "models": {
+        "type": "object",
+        "description": "Registry of switchable models. Keys are model IDs used in the model_switch tool.",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "displayName": { "type": "string", "description": "Human-readable model name" },
+            "modelIdentifier": {
+              "type": "string",
+              "description": "Substring matched against /v1/models response to verify identity"
+            },
+            "startCommand": {
+              "type": "string",
+              "description": "Shell command to start this model's inference server"
+            },
+            "stopCommand": {
+              "type": "string",
+              "description": "Shell command to stop this model's inference server"
+            },
+            "healthUrl": {
+              "type": "string",
+              "description": "URL to poll for health (HTTP 200 = ready)"
+            },
+            "identityUrl": {
+              "type": "string",
+              "description": "URL returning model identity (e.g., /v1/models)"
+            },
+            "capabilities": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Model capabilities (e.g., reasoning, code, vision)"
+            },
+            "contextWindow": {
+              "type": "integer",
+              "description": "Configured context window in tokens"
+            },
+            "nativeContextWindow": {
+              "type": "integer",
+              "description": "Model's native maximum context window"
+            },
+            "description": {
+              "type": "string",
+              "description": "Human-readable description of strengths and architecture"
+            }
+          },
+          "required": [
+            "displayName",
+            "modelIdentifier",
+            "startCommand",
+            "stopCommand",
+            "healthUrl",
+            "identityUrl"
+          ]
+        }
+      },
+      "defaultModel": {
+        "type": "string",
+        "description": "Model ID to assume on startup if no model is detected"
+      },
+      "skipBootstrapBelowTokens": {
+        "type": "integer",
+        "default": 2000,
+        "description": "Skip bootstrap for sessions smaller than this"
+      },
+      "healthPollIntervalMs": { "type": "integer", "default": 2000 },
+      "healthTimeoutMs": { "type": "integer", "default": 120000 },
+      "switchTimeoutMs": { "type": "integer", "default": 300000 },
+      "staleMarkerMaxAgeMs": { "type": "integer", "default": 600000 },
+      "maxMarkerRetries": { "type": "integer", "default": 3 },
+      "contextBridge": {
+        "type": "object",
+        "properties": {
+          "strategy": {
+            "type": "string",
+            "enum": ["bootstrap", "compact", "preserve"],
+            "default": "bootstrap"
+          },
+          "contextWindowBufferRatio": { "type": "number", "default": 0.8 },
+          "bootstrap": {
+            "type": "object",
+            "properties": {
+              "summaryMaxTokens": { "type": "integer", "default": 1500 },
+              "preserveRecentTurns": { "type": "integer", "default": 3 },
+              "preserveRecentMaxTokens": { "type": "integer", "default": 2000 },
+              "includeSystemPrompt": { "type": "boolean", "default": true }
+            }
+          },
+          "compact": {
+            "type": "object",
+            "properties": {
+              "targetTokens": { "type": "integer", "default": 6000 },
+              "preserveRecentTurns": { "type": "integer", "default": 5 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

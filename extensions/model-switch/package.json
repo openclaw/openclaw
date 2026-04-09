@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/model-switch-plugin",
+  "version": "2026.4.9-beta.1",
+  "private": true,
+  "description": "Seamless local LLM model switching with session continuation and context bridging",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "npmSpec": "@openclaw/model-switch-plugin"
+    }
+  }
+}
