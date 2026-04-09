@@ -724,6 +724,14 @@ export function renderApp(state: AppViewState) {
       void refreshVisibleToolsEffectiveForCurrentSession(state);
     }
   };
+  const refreshAgentsPanelSupplementalData = (panel: AppViewState["agentsPanel"]) => {
+    if (panel === "channels") {
+      return void loadChannels(state, false);
+    }
+    if (panel === "cron") {
+      void state.loadCron();
+    }
+  };
   const resetAgentFilesState = (clearLoading = false) => {
     state.agentFilesList = null;
     state.agentFilesError = null;
@@ -1367,12 +1375,7 @@ export function renderApp(state: AppViewState) {
                     state.agentsList?.agents?.[0]?.id ??
                     null;
                   loadAgentPanelDataForSelectedAgent(refreshedAgentId);
-                  if (state.agentsPanel === "channels") {
-                    void loadChannels(state, false);
-                  }
-                  if (state.agentsPanel === "cron") {
-                    void state.loadCron();
-                  }
+                  refreshAgentsPanelSupplementalData(state.agentsPanel);
                 },
                 onSelectAgent: (agentId) => {
                   if (state.agentsSelectedId === agentId) {
@@ -1428,12 +1431,7 @@ export function renderApp(state: AppViewState) {
                       resetToolsEffectiveState(state);
                     }
                   }
-                  if (panel === "channels") {
-                    void loadChannels(state, false);
-                  }
-                  if (panel === "cron") {
-                    void state.loadCron();
-                  }
+                  refreshAgentsPanelSupplementalData(panel);
                 },
                 onLoadFiles: (agentId) => loadAgentFiles(state, agentId),
                 onSelectFile: (name) => {
