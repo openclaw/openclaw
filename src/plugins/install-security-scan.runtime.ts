@@ -3,6 +3,8 @@ import path from "node:path";
 import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
 import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
 import {
+  findBlockedPackageDirectoryInPath,
+  findBlockedPackageFileAliasInPath,
   findBlockedManifestDependencies,
   findBlockedNodeModulesDirectory,
   findBlockedNodeModulesFileAlias,
@@ -157,21 +159,6 @@ function pathContainsNodeModulesSegment(relativePath: string): boolean {
     .includes("node_modules");
 }
 
-function buildSyntheticNodeModulesTargetPath(targetRelativePath: string): string | undefined {
-  const segments = targetRelativePath
-    .split(/[\\/]+/)
-    .map((segment) => segment.trim())
-    .filter(Boolean);
-  const targetLeaf = segments.at(-1);
-  if (!targetLeaf) {
-    return undefined;
-  }
-  const targetParent = segments.at(-2);
-  return targetParent?.startsWith("@")
-    ? path.posix.join("node_modules", targetParent, targetLeaf)
-    : path.posix.join("node_modules", targetLeaf);
-}
-
 async function inspectNodeModulesSymlinkTarget(params: {
   rootRealPath: string;
   symlinkPath: string;
@@ -198,56 +185,14 @@ async function inspectNodeModulesSymlinkTarget(params: {
   }
 
   const resolvedTargetRelativePath = path.relative(params.rootRealPath, resolvedTargetPath);
-
-  let resolvedTargetStats: Awaited<ReturnType<typeof fs.stat>>;
-  try {
-    resolvedTargetStats = await fs.stat(resolvedTargetPath);
-  } catch (error) {
-    throw new Error(
-      `manifest dependency scan could not stat symlink target ${params.symlinkRelativePath}: ${String(error)}`,
-      {
-        cause: error,
-      },
-    );
-  }
-
-  if (resolvedTargetStats.isDirectory()) {
-    const syntheticTargetPath = buildSyntheticNodeModulesTargetPath(resolvedTargetRelativePath);
-    const blockedDirectoryFinding = syntheticTargetPath
-      ? findBlockedNodeModulesDirectory({
-          directoryRelativePath: syntheticTargetPath,
-        })
-      : undefined;
-    return {
-      blockedDirectoryFinding: blockedDirectoryFinding
-        ? {
-            ...blockedDirectoryFinding,
-            directoryRelativePath: resolvedTargetRelativePath,
-          }
-        : undefined,
-    };
-  }
-
-  if (resolvedTargetStats.isFile()) {
-    const syntheticTargetPath = buildSyntheticNodeModulesTargetPath(resolvedTargetRelativePath);
-    const blockedFileFinding = syntheticTargetPath
-      ? findBlockedNodeModulesFileAlias({
-          fileRelativePath: syntheticTargetPath,
-        })
-      : undefined;
-    return {
-      blockedFileFinding: blockedFileFinding
-        ? {
-            ...blockedFileFinding,
-            fileRelativePath: resolvedTargetRelativePath,
-          }
-        : undefined,
-    };
-  }
-
-  throw new Error(
-    `manifest dependency scan found unsupported node_modules symlink target type at ${params.symlinkRelativePath}`,
-  );
+  return {
+    blockedDirectoryFinding: findBlockedPackageDirectoryInPath({
+      pathRelativeToRoot: resolvedTargetRelativePath,
+    }),
+    blockedFileFinding: findBlockedPackageFileAliasInPath({
+      pathRelativeToRoot: resolvedTargetRelativePath,
+    }),
+  };
 }
 
 function buildBuiltinScanFromError(error: unknown): BuiltinInstallScan {

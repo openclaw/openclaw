@@ -267,3 +267,59 @@ export function findBlockedNodeModulesFileAlias(params: {
       }
     : undefined;
 }
+
+export function findBlockedPackageDirectoryInPath(params: {
+  pathRelativeToRoot: string;
+}): BlockedPackageDirectoryFinding | undefined {
+  const segments = normalizePathSegments(params.pathRelativeToRoot);
+
+  for (let index = 0; index < segments.length; index += 1) {
+    const packageScopeOrName = segments[index];
+    if (!packageScopeOrName) {
+      continue;
+    }
+
+    if (packageScopeOrName.startsWith("@")) {
+      const packageName = segments[index + 1];
+      if (!packageName) {
+        continue;
+      }
+      const scopedPackageId = `${packageScopeOrName}/${packageName}`;
+      if (!isBlockedInstallDependencyPackagePathName(scopedPackageId)) {
+        continue;
+      }
+      return {
+        dependencyName: scopedPackageId,
+        directoryRelativePath: params.pathRelativeToRoot,
+      };
+    }
+
+    if (!isBlockedInstallDependencyPackagePathName(packageScopeOrName)) {
+      continue;
+    }
+    return {
+      dependencyName: packageScopeOrName,
+      directoryRelativePath: params.pathRelativeToRoot,
+    };
+  }
+
+  return undefined;
+}
+
+export function findBlockedPackageFileAliasInPath(params: {
+  pathRelativeToRoot: string;
+}): BlockedPackageFileFinding | undefined {
+  const segments = normalizePathSegments(params.pathRelativeToRoot);
+  const fileName = segments.at(-1);
+  if (!fileName) {
+    return undefined;
+  }
+  const dependencyName = parseBlockedPackageFileAliasName(fileName);
+  if (!dependencyName || !isBlockedInstallDependencyPackagePathName(dependencyName)) {
+    return undefined;
+  }
+  return {
+    dependencyName,
+    fileRelativePath: params.pathRelativeToRoot,
+  };
+}

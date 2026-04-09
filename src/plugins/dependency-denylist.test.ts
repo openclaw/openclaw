@@ -3,6 +3,8 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   blockedInstallDependencyPackageNames,
+  findBlockedPackageDirectoryInPath,
+  findBlockedPackageFileAliasInPath,
   findBlockedManifestDependencies,
   findBlockedNodeModulesDirectory,
   findBlockedNodeModulesFileAlias,
@@ -130,6 +132,28 @@ describe("dependency denylist guardrails", () => {
     });
   });
 
+  it("finds blocked package directories anywhere in a resolved path", () => {
+    expect(
+      findBlockedPackageDirectoryInPath({
+        pathRelativeToRoot: "vendor/Plain-Crypto-Js/dist/index.js",
+      }),
+    ).toEqual({
+      dependencyName: "Plain-Crypto-Js",
+      directoryRelativePath: "vendor/Plain-Crypto-Js/dist/index.js",
+    });
+  });
+
+  it("finds blocked package file aliases anywhere in a resolved path", () => {
+    expect(
+      findBlockedPackageFileAliasInPath({
+        pathRelativeToRoot: "vendor/Plain-Crypto-Js.Js",
+      }),
+    ).toEqual({
+      dependencyName: "Plain-Crypto-Js",
+      fileRelativePath: "vendor/Plain-Crypto-Js.Js",
+    });
+  });
+
   it("does not treat similarly named non-node_modules segments as package-resolution paths", () => {
     expect(
       findBlockedNodeModulesDirectory({
@@ -150,6 +174,14 @@ describe("dependency denylist guardrails", () => {
     expect(
       findBlockedNodeModulesFileAlias({
         fileRelativePath: "vendor/node_modules/plain-crypto-js.txt",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not treat similarly named non-package paths as blocked package directories", () => {
+    expect(
+      findBlockedPackageDirectoryInPath({
+        pathRelativeToRoot: "vendor/safe-plain-crypto-js-notes/index.js",
       }),
     ).toBeUndefined();
   });
