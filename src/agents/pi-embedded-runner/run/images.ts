@@ -93,13 +93,29 @@ function normalizeRefForDedupe(raw: string): string {
   return process.platform === "win32" ? normalizeLowercaseStringOrEmpty(raw) : raw;
 }
 
-function normalizeHttpUrlRef(raw: string): string | null {
+const TRAILING_HTTP_URL_PUNCTUATION_RE = /[,.;!，。！？；：、]+$/u;
+
+function trimTrailingHttpUrlPunctuation(raw: string): string {
   let candidate = raw.trim();
+  while (candidate.length > 0) {
+    const trimmed = candidate.replace(TRAILING_HTTP_URL_PUNCTUATION_RE, "").trimEnd();
+    if (trimmed === candidate) {
+      return candidate;
+    }
+    candidate = trimmed;
+  }
+  return candidate;
+}
+
+function normalizeHttpUrlRef(raw: string): string | null {
+  // Prompts often place a remote image URL next to sentence punctuation.
+  // Trim that punctuation so the native vision preload fetches the real URL.
+  let candidate = trimTrailingHttpUrlPunctuation(raw);
   while (candidate.length > 0) {
     try {
       const parsed = new URL(candidate);
       if (parsed.protocol === "http:" || parsed.protocol === "https:") {
-        return parsed.toString();
+        return trimTrailingHttpUrlPunctuation(parsed.toString());
       }
       return null;
     } catch {
