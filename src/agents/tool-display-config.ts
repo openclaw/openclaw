@@ -691,6 +691,21 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "TTS",
       detailKeys: ["text", "channel"],
     },
+    agent_performance: {
+      emoji: "📈",
+      title: "Agent Performance",
+      detailKeys: [],
+    },
+    context_management: {
+      emoji: "🗃️",
+      title: "Context Management",
+      detailKeys: [],
+    },
+    system_health: {
+      emoji: "🩺",
+      title: "System Health",
+      detailKeys: [],
+    },
   },
 };
 

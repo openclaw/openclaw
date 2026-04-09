@@ -45,13 +45,13 @@ describe("system-health-tool", () => {
   describe("execute function", () => {
     it("requires action parameter", async () => {
       await expect(
-        tool.execute!("test-id", {}, undefined, undefined),
+        tool.execute("test-id", {}, undefined, undefined),
       ).rejects.toThrow("Action is required");
     });
 
     it("performs health check action", async () => {
-      const result = await tool.execute!("test-id", { action: "check" }, undefined, undefined);
-      const details = result.details as any;
+      const result = await tool.execute("test-id", { action: "check" }, undefined, undefined);
+
       
       expect(result).toMatchObject({
         content: expect.arrayContaining([
@@ -79,8 +79,8 @@ describe("system-health-tool", () => {
     });
 
     it("performs diagnose action", async () => {
-      const result = await tool.execute!("test-id", { action: "diagnose" }, undefined, undefined);
-      const details = result.details as any;
+      const result = await tool.execute("test-id", { action: "diagnose" }, undefined, undefined);
+
       
       expect(result).toMatchObject({
         content: expect.any(Array),
@@ -93,8 +93,8 @@ describe("system-health-tool", () => {
     });
 
     it("performs monitor action", async () => {
-      const result = await tool.execute!("test-id", { action: "monitor", duration: 30 }, undefined, undefined);
-      const details = result.details as any;
+      const result = await tool.execute("test-id", { action: "monitor", duration: 30 }, undefined, undefined);
+
       
       expect(result).toMatchObject({
         content: expect.any(Array),
@@ -110,8 +110,8 @@ describe("system-health-tool", () => {
     });
 
     it("performs report action", async () => {
-      const result = await tool.execute!("test-id", { action: "report", detailed: true }, undefined, undefined);
-      const details = result.details as any;
+      const result = await tool.execute("test-id", { action: "report", detailed: true }, undefined, undefined);
+
       
       expect(result).toMatchObject({
         content: expect.any(Array),
@@ -124,8 +124,8 @@ describe("system-health-tool", () => {
     });
 
     it("performs analyze action", async () => {
-      const result = await tool.execute!("test-id", { action: "analyze" }, undefined, undefined);
-      const details = result.details as any;
+      const result = await tool.execute("test-id", { action: "analyze" }, undefined, undefined);
+
       
       expect(result).toMatchObject({
         content: expect.any(Array),
@@ -139,7 +139,7 @@ describe("system-health-tool", () => {
     });
 
     it("handles specific components", async () => {
-      const result = await tool.execute!("test-id", { action: "check", component: "memory" }, undefined, undefined);
+      const result = await tool.execute("test-id", { action: "check", component: "memory" }, undefined, undefined);
       const details = result.details as any;
       
       expect(details.checks).toHaveLength(1);
@@ -147,7 +147,7 @@ describe("system-health-tool", () => {
     });
 
     it("validates threshold parameter", async () => {
-      const result = await tool.execute!("test-id", { action: "check", threshold: 0.9 }, undefined, undefined);
+      const result = await tool.execute("test-id", { action: "check", threshold: 0.9 }, undefined, undefined);
       const details = result.details as any;
       
       expect(details).toBeDefined();
@@ -161,7 +161,7 @@ describe("system-health-tool", () => {
     });
 
     it("includes recommendations when detailed is true", async () => {
-      const result = await tool.execute!("test-id", { action: "check", detailed: true }, undefined, undefined);
+      const result = await tool.execute("test-id", { action: "check", detailed: true }, undefined, undefined);
       const details = result.details as any;
       
       expect(details.checks).toEqual(
@@ -175,12 +175,12 @@ describe("system-health-tool", () => {
 
     it("rejects invalid action", async () => {
       await expect(
-        tool.execute!("test-id", { action: "invalid" }, undefined, undefined),
+        tool.execute("test-id", { action: "invalid" }, undefined, undefined),
       ).rejects.toThrow("Unknown health action: invalid");
     });
 
     it("uses default values for optional parameters", async () => {
-      const result = await tool.execute!("test-id", { action: "check" }, undefined, undefined);
+      const result = await tool.execute("test-id", { action: "check" }, undefined, undefined);
       const details = result.details as any;
       
       expect(details).toBeDefined();
@@ -191,7 +191,7 @@ describe("system-health-tool", () => {
 
   describe("component health evaluation", () => {
     it("evaluates memory health correctly", async () => {
-      const result = await tool.execute!("test-id", { action: "check", component: "memory" }, undefined, undefined);
+      const result = await tool.execute("test-id", { action: "check", component: "memory" }, undefined, undefined);
       const details = result.details as any;
       
       const memoryCheck = details.checks.find((c: any) => c.component === "memory");
@@ -203,7 +203,7 @@ describe("system-health-tool", () => {
     });
 
     it("evaluates CPU health correctly", async () => {
-      const result = await tool.execute!("test-id", { action: "check", component: "cpu" }, undefined, undefined);
+      const result = await tool.execute("test-id", { action: "check", component: "cpu" }, undefined, undefined);
       const details = result.details as any;
       
       const cpuCheck = details.checks.find((c: any) => c.component === "cpu");
@@ -213,7 +213,7 @@ describe("system-health-tool", () => {
     });
 
     it("evaluates disk health correctly", async () => {
-      const result = await tool.execute!("test-id", { action: "check", component: "disk" }, undefined, undefined);
+      const result = await tool.execute("test-id", { action: "check", component: "disk" }, undefined, undefined);
       const details = result.details as any;
       
       const diskCheck = details.checks.find((c: any) => c.component === "disk");
@@ -225,7 +225,7 @@ describe("system-health-tool", () => {
     });
 
     it("evaluates services health correctly", async () => {
-      const result = await tool.execute!("test-id", { action: "check", component: "services" }, undefined, undefined);
+      const result = await tool.execute("test-id", { action: "check", component: "services" }, undefined, undefined);
       const details = result.details as any;
       
       const servicesCheck = details.checks.find((c: any) => c.component === "services");
@@ -239,7 +239,7 @@ describe("system-health-tool", () => {
 
   describe("monitoring functionality", () => {
     it("collects samples over duration", async () => {
-      const result = await tool.execute!("test-id", { action: "monitor", duration: 60 }, undefined, undefined);
+      const result = await tool.execute("test-id", { action: "monitor", duration: 60 }, undefined, undefined);
       const details = result.details as any;
       
       expect(details.monitoring.samples).toBeInstanceOf(Array);
@@ -255,7 +255,7 @@ describe("system-health-tool", () => {
     });
 
     it("generates alerts for unhealthy states", async () => {
-      const result = await tool.execute!("test-id", { action: "monitor", component: "memory", threshold: 0.1 }, undefined, undefined);
+      const result = await tool.execute("test-id", { action: "monitor", component: "memory", threshold: 0.1 }, undefined, undefined);
       const details = result.details as any;
       
       // With very low threshold, should generate alerts
@@ -274,7 +274,7 @@ describe("system-health-tool", () => {
 
   describe("report generation", () => {
     it("generates comprehensive health report", async () => {
-      const result = await tool.execute!("test-id", { action: "report", detailed: true }, undefined, undefined);
+      const result = await tool.execute("test-id", { action: "report", detailed: true }, undefined, undefined);
       const details = result.details as any;
       
       expect(details.report).toContain("System Health Report");
@@ -293,7 +293,7 @@ describe("system-health-tool", () => {
 
   describe("performance analysis", () => {
     it("analyzes system performance and provides insights", async () => {
-      const result = await tool.execute!("test-id", { action: "analyze", detailed: true }, undefined, undefined);
+      const result = await tool.execute("test-id", { action: "analyze", detailed: true }, undefined, undefined);
       const details = result.details as any;
       
       expect(details.analysis).toContain("System Performance Analysis");
