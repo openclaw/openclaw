@@ -249,60 +249,73 @@ export function setThemeMode(
   );
 }
 
-export async function refreshActiveTab(host: SettingsHost) {
-  const app = host as unknown as OpenClawApp;
-  switch (host.tab) {
-    case "overview":
-      await loadOverview(host);
-      return;
-    case "channels":
-      await loadChannelsTab(host);
-      return;
-    case "instances":
-      await loadPresence(app);
-      return;
-    case "usage":
-      await loadUsage(app);
-      return;
-    case "sessions":
-      await loadSessions(app);
-      return;
-    case "cron":
-      await loadCron(host);
+async function refreshAgentsTab(host: SettingsHost, app: OpenClawApp) {
+  await loadAgents(app);
+  await loadConfig(app);
+  const agentIds = host.agentsList?.agents?.map((entry) => entry.id) ?? [];
+  if (agentIds.length > 0) {
+    void loadAgentIdentities(app, agentIds);
+  }
+  const agentId =
+    host.agentsSelectedId ?? host.agentsList?.defaultId ?? host.agentsList?.agents?.[0]?.id;
+  if (!agentId) {
+    return;
+  }
+  void loadAgentIdentity(app, agentId);
+  switch (host.agentsPanel) {
+    case "files":
+      void loadAgentFiles(app, agentId);
       return;
     case "skills":
-      await loadSkills(app);
+      void loadAgentSkills(app, agentId);
       return;
-    case "agents": {
-      await loadAgents(app);
-      await loadConfig(app);
-      const agentIds = host.agentsList?.agents?.map((entry) => entry.id) ?? [];
-      if (agentIds.length > 0) {
-        void loadAgentIdentities(app, agentIds);
-      }
-      const agentId =
-        host.agentsSelectedId ?? host.agentsList?.defaultId ?? host.agentsList?.agents?.[0]?.id;
-      if (!agentId) {
-        return;
-      }
-      void loadAgentIdentity(app, agentId);
-      switch (host.agentsPanel) {
-        case "files":
-          void loadAgentFiles(app, agentId);
-          return;
-        case "skills":
-          void loadAgentSkills(app, agentId);
-          return;
-        case "channels":
-          void loadChannels(app, false);
-          return;
-        case "cron":
-          void loadCron(host);
-          return;
-        default:
-          return;
-      }
-    }
+    case "channels":
+      void loadChannels(app, false);
+      return;
+    case "cron":
+      void loadCron(host);
+      return;
+    default:
+      return;
+  }
+}
+
+export async function refreshActiveTab(host: SettingsHost) {
+  const app = host as unknown as OpenClawApp;
+  if (
+    (
+      [
+        "config",
+        "communications",
+        "appearance",
+        "automation",
+        "infrastructure",
+        "aiAgents",
+      ] as Tab[]
+    ).includes(host.tab)
+  ) {
+    await loadConfigSchema(app);
+    await loadConfig(app);
+    return;
+  }
+  const simpleTabLoaders: Partial<Record<Tab, () => Promise<void>>> = {
+    overview: () => loadOverview(host),
+    channels: () => loadChannelsTab(host),
+    instances: () => loadPresence(app),
+    usage: () => loadUsage(app),
+    sessions: () => loadSessions(app),
+    cron: () => loadCron(host),
+    skills: () => loadSkills(app),
+  };
+  const simpleTabLoader = simpleTabLoaders[host.tab];
+  if (simpleTabLoader) {
+    await simpleTabLoader();
+    return;
+  }
+  switch (host.tab) {
+    case "agents":
+      await refreshAgentsTab(host, app);
+      return;
     case "nodes":
       await loadNodes(app);
       await loadDevices(app);
@@ -319,15 +332,6 @@ export async function refreshActiveTab(host: SettingsHost) {
         host as unknown as Parameters<typeof scheduleChatScroll>[0],
         !host.chatHasAutoScrolled,
       );
-      return;
-    case "config":
-    case "communications":
-    case "appearance":
-    case "automation":
-    case "infrastructure":
-    case "aiAgents":
-      await loadConfigSchema(app);
-      await loadConfig(app);
       return;
     case "debug":
       await loadDebug(app);

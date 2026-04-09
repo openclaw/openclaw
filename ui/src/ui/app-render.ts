@@ -568,6 +568,27 @@ export function renderApp(state: AppViewState) {
       includeVirtualSections: false,
       ...overrides,
     });
+  const buildScopedConfigTabOverrides = (params: {
+    formMode: ConfigProps["formMode"];
+    searchQuery: string;
+    selection: ConfigSectionSelection;
+    setFormMode: (mode: ConfigProps["formMode"]) => void;
+    setSearchQuery: (query: string) => void;
+    setActiveSection: (section: string | null) => void;
+    setActiveSubsection: (section: string | null) => void;
+  }): ConfigTabOverrides => ({
+    formMode: params.formMode,
+    searchQuery: params.searchQuery,
+    activeSection: params.selection.activeSection,
+    activeSubsection: params.selection.activeSubsection,
+    onFormModeChange: params.setFormMode,
+    onSearchChange: params.setSearchQuery,
+    onSectionChange: (section) => {
+      params.setActiveSection(section);
+      params.setActiveSubsection(null);
+    },
+    onSubsectionChange: params.setActiveSubsection,
+  });
   const configSelection = normalizeMainConfigSelection(
     state.configActiveSection,
     state.configActiveSubsection,
@@ -601,17 +622,15 @@ export function renderApp(state: AppViewState) {
     switch (state.tab) {
       case "config":
         return renderConfigTab({
-          formMode: state.configFormMode,
-          searchQuery: state.configSearchQuery,
-          activeSection: configSelection.activeSection,
-          activeSubsection: configSelection.activeSubsection,
-          onFormModeChange: (mode) => (state.configFormMode = mode),
-          onSearchChange: (query) => (state.configSearchQuery = query),
-          onSectionChange: (section) => {
-            state.configActiveSection = section;
-            state.configActiveSubsection = null;
-          },
-          onSubsectionChange: (section) => (state.configActiveSubsection = section),
+          ...buildScopedConfigTabOverrides({
+            formMode: state.configFormMode,
+            searchQuery: state.configSearchQuery,
+            selection: configSelection,
+            setFormMode: (mode) => (state.configFormMode = mode),
+            setSearchQuery: (query) => (state.configSearchQuery = query),
+            setActiveSection: (section) => (state.configActiveSection = section),
+            setActiveSubsection: (section) => (state.configActiveSubsection = section),
+          }),
           showModeToggle: true,
           excludeSections: [
             ...COMMUNICATION_SECTION_KEYS,
@@ -624,82 +643,72 @@ export function renderApp(state: AppViewState) {
         });
       case "communications":
         return renderConfigTab({
-          formMode: state.communicationsFormMode,
-          searchQuery: state.communicationsSearchQuery,
-          activeSection: communicationsSelection.activeSection,
-          activeSubsection: communicationsSelection.activeSubsection,
-          onFormModeChange: (mode) => (state.communicationsFormMode = mode),
-          onSearchChange: (query) => (state.communicationsSearchQuery = query),
-          onSectionChange: (section) => {
-            state.communicationsActiveSection = section;
-            state.communicationsActiveSubsection = null;
-          },
-          onSubsectionChange: (section) => (state.communicationsActiveSubsection = section),
+          ...buildScopedConfigTabOverrides({
+            formMode: state.communicationsFormMode,
+            searchQuery: state.communicationsSearchQuery,
+            selection: communicationsSelection,
+            setFormMode: (mode) => (state.communicationsFormMode = mode),
+            setSearchQuery: (query) => (state.communicationsSearchQuery = query),
+            setActiveSection: (section) => (state.communicationsActiveSection = section),
+            setActiveSubsection: (section) => (state.communicationsActiveSubsection = section),
+          }),
           navRootLabel: "Communication",
           includeSections: [...COMMUNICATION_SECTION_KEYS],
         });
       case "appearance":
         return renderConfigTab({
-          formMode: state.appearanceFormMode,
-          searchQuery: state.appearanceSearchQuery,
-          activeSection: appearanceSelection.activeSection,
-          activeSubsection: appearanceSelection.activeSubsection,
-          onFormModeChange: (mode) => (state.appearanceFormMode = mode),
-          onSearchChange: (query) => (state.appearanceSearchQuery = query),
-          onSectionChange: (section) => {
-            state.appearanceActiveSection = section;
-            state.appearanceActiveSubsection = null;
-          },
-          onSubsectionChange: (section) => (state.appearanceActiveSubsection = section),
+          ...buildScopedConfigTabOverrides({
+            formMode: state.appearanceFormMode,
+            searchQuery: state.appearanceSearchQuery,
+            selection: appearanceSelection,
+            setFormMode: (mode) => (state.appearanceFormMode = mode),
+            setSearchQuery: (query) => (state.appearanceSearchQuery = query),
+            setActiveSection: (section) => (state.appearanceActiveSection = section),
+            setActiveSubsection: (section) => (state.appearanceActiveSubsection = section),
+          }),
           navRootLabel: t("tabs.appearance"),
           includeSections: [...APPEARANCE_SECTION_KEYS],
           includeVirtualSections: true,
         });
       case "automation":
         return renderConfigTab({
-          formMode: state.automationFormMode,
-          searchQuery: state.automationSearchQuery,
-          activeSection: automationSelection.activeSection,
-          activeSubsection: automationSelection.activeSubsection,
-          onFormModeChange: (mode) => (state.automationFormMode = mode),
-          onSearchChange: (query) => (state.automationSearchQuery = query),
-          onSectionChange: (section) => {
-            state.automationActiveSection = section;
-            state.automationActiveSubsection = null;
-          },
-          onSubsectionChange: (section) => (state.automationActiveSubsection = section),
+          ...buildScopedConfigTabOverrides({
+            formMode: state.automationFormMode,
+            searchQuery: state.automationSearchQuery,
+            selection: automationSelection,
+            setFormMode: (mode) => (state.automationFormMode = mode),
+            setSearchQuery: (query) => (state.automationSearchQuery = query),
+            setActiveSection: (section) => (state.automationActiveSection = section),
+            setActiveSubsection: (section) => (state.automationActiveSubsection = section),
+          }),
           navRootLabel: "Automation",
           includeSections: [...AUTOMATION_SECTION_KEYS],
         });
       case "infrastructure":
         return renderConfigTab({
-          formMode: state.infrastructureFormMode,
-          searchQuery: state.infrastructureSearchQuery,
-          activeSection: infrastructureSelection.activeSection,
-          activeSubsection: infrastructureSelection.activeSubsection,
-          onFormModeChange: (mode) => (state.infrastructureFormMode = mode),
-          onSearchChange: (query) => (state.infrastructureSearchQuery = query),
-          onSectionChange: (section) => {
-            state.infrastructureActiveSection = section;
-            state.infrastructureActiveSubsection = null;
-          },
-          onSubsectionChange: (section) => (state.infrastructureActiveSubsection = section),
+          ...buildScopedConfigTabOverrides({
+            formMode: state.infrastructureFormMode,
+            searchQuery: state.infrastructureSearchQuery,
+            selection: infrastructureSelection,
+            setFormMode: (mode) => (state.infrastructureFormMode = mode),
+            setSearchQuery: (query) => (state.infrastructureSearchQuery = query),
+            setActiveSection: (section) => (state.infrastructureActiveSection = section),
+            setActiveSubsection: (section) => (state.infrastructureActiveSubsection = section),
+          }),
           navRootLabel: "Infrastructure",
           includeSections: [...INFRASTRUCTURE_SECTION_KEYS],
         });
       case "aiAgents":
         return renderConfigTab({
-          formMode: state.aiAgentsFormMode,
-          searchQuery: state.aiAgentsSearchQuery,
-          activeSection: aiAgentsSelection.activeSection,
-          activeSubsection: aiAgentsSelection.activeSubsection,
-          onFormModeChange: (mode) => (state.aiAgentsFormMode = mode),
-          onSearchChange: (query) => (state.aiAgentsSearchQuery = query),
-          onSectionChange: (section) => {
-            state.aiAgentsActiveSection = section;
-            state.aiAgentsActiveSubsection = null;
-          },
-          onSubsectionChange: (section) => (state.aiAgentsActiveSubsection = section),
+          ...buildScopedConfigTabOverrides({
+            formMode: state.aiAgentsFormMode,
+            searchQuery: state.aiAgentsSearchQuery,
+            selection: aiAgentsSelection,
+            setFormMode: (mode) => (state.aiAgentsFormMode = mode),
+            setSearchQuery: (query) => (state.aiAgentsSearchQuery = query),
+            setActiveSection: (section) => (state.aiAgentsActiveSection = section),
+            setActiveSubsection: (section) => (state.aiAgentsActiveSubsection = section),
+          }),
           navRootLabel: "AI & Agents",
           includeSections: [...AI_AGENTS_SECTION_KEYS],
         });
@@ -1387,20 +1396,20 @@ export function renderApp(state: AppViewState) {
                 },
                 onSelectPanel: (panel) => {
                   state.agentsPanel = panel;
-                  if (panel === "files" && resolvedAgentId) {
-                    if (state.agentFilesList?.agentId !== resolvedAgentId) {
-                      state.agentFilesList = null;
-                      state.agentFilesError = null;
-                      state.agentFileActive = null;
-                      state.agentFileContents = {};
-                      state.agentFileDrafts = {};
-                      void loadAgentFiles(state, resolvedAgentId);
-                    }
+                  if (
+                    panel === "files" &&
+                    resolvedAgentId &&
+                    state.agentFilesList?.agentId !== resolvedAgentId
+                  ) {
+                    state.agentFilesList = null;
+                    state.agentFilesError = null;
+                    state.agentFileActive = null;
+                    state.agentFileContents = {};
+                    state.agentFileDrafts = {};
+                    void loadAgentFiles(state, resolvedAgentId);
                   }
-                  if (panel === "skills") {
-                    if (resolvedAgentId) {
-                      void loadAgentSkills(state, resolvedAgentId);
-                    }
+                  if (panel === "skills" && resolvedAgentId) {
+                    void loadAgentSkills(state, resolvedAgentId);
                   }
                   if (panel === "tools" && resolvedAgentId) {
                     if (
