@@ -1,3 +1,4 @@
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -351,6 +352,41 @@ describeNonWin("exec script preflight", () => {
         });
         const text = result.content.find((block) => block.type === "text")?.text ?? "";
         expect(swapped).toBe(true);
+        expect(text).not.toMatch(/exec preflight:/);
+      } finally {
+        openSpy.mockRestore();
+      }
+    });
+  });
+
+  it("opens preflight script reads with O_NONBLOCK to avoid FIFO stalls", async () => {
+    await withTempDir("openclaw-exec-preflight-nonblock-", async (tmp) => {
+      const scriptPath = path.join(tmp, "script.js");
+      await fs.writeFile(scriptPath, 'console.log("ok")', "utf-8");
+
+      const originalOpen = fs.open.bind(fs);
+      const scriptOpenFlags: number[] = [];
+      const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const [target, flags] = args;
+        if (
+          typeof target === "string" &&
+          path.resolve(target) === scriptPath &&
+          typeof flags === "number"
+        ) {
+          scriptOpenFlags.push(flags);
+        }
+        return await originalOpen(...args);
+      });
+
+      try {
+        const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+        const result = await tool.execute("call-nonblocking-preflight-open", {
+          command: "node script.js",
+          workdir: tmp,
+        });
+        const text = result.content.find((block) => block.type === "text")?.text ?? "";
+        expect(scriptOpenFlags.length).toBeGreaterThan(0);
+        expect(scriptOpenFlags.some((flags) => (flags & fsConstants.O_NONBLOCK) !== 0)).toBe(true);
         expect(text).not.toMatch(/exec preflight:/);
       } finally {
         openSpy.mockRestore();

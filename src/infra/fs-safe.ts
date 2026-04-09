@@ -51,7 +51,9 @@ export type SafeLocalReadResult = {
 };
 
 const SUPPORTS_NOFOLLOW = process.platform !== "win32" && "O_NOFOLLOW" in fsConstants;
+const NONBLOCK_OPEN_FLAG = "O_NONBLOCK" in fsConstants ? fsConstants.O_NONBLOCK : 0;
 const OPEN_READ_FLAGS = fsConstants.O_RDONLY | (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
+const OPEN_READ_NONBLOCK_FLAGS = OPEN_READ_FLAGS | NONBLOCK_OPEN_FLAG;
 const OPEN_WRITE_EXISTING_FLAGS =
   fsConstants.O_WRONLY | (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
 const OPEN_WRITE_CREATE_FLAGS =
@@ -84,6 +86,7 @@ async function openVerifiedLocalFile(
   filePath: string,
   options?: {
     rejectHardlinks?: boolean;
+    nonBlockingRead?: boolean;
   },
 ): Promise<SafeOpenResult> {
   // Reject directories before opening so we never surface EISDIR to callers (e.g. tool
@@ -102,7 +105,10 @@ async function openVerifiedLocalFile(
 
   let handle: FileHandle;
   try {
-    handle = await fs.open(filePath, OPEN_READ_FLAGS);
+    handle = await fs.open(
+      filePath,
+      options?.nonBlockingRead ? OPEN_READ_NONBLOCK_FLAGS : OPEN_READ_FLAGS,
+    );
   } catch (err) {
     if (isNotFoundPathError(err)) {
       throw new SafeOpenError("not-found", "file not found");
@@ -180,12 +186,15 @@ export async function openFileWithinRoot(params: {
   rootDir: string;
   relativePath: string;
   rejectHardlinks?: boolean;
+  nonBlockingRead?: boolean;
 }): Promise<SafeOpenResult> {
   const { rootWithSep, resolved } = await resolvePathWithinRoot(params);
 
   let opened: SafeOpenResult;
   try {
-    opened = await openVerifiedLocalFile(resolved);
+    opened = await openVerifiedLocalFile(resolved, {
+      nonBlockingRead: params.nonBlockingRead,
+    });
   } catch (err) {
     if (err instanceof SafeOpenError) {
       if (err.code === "not-found") {
@@ -215,12 +224,14 @@ export async function readFileWithinRoot(params: {
   rootDir: string;
   relativePath: string;
   rejectHardlinks?: boolean;
+  nonBlockingRead?: boolean;
   maxBytes?: number;
 }): Promise<SafeLocalReadResult> {
   const opened = await openFileWithinRoot({
     rootDir: params.rootDir,
     relativePath: params.relativePath,
     rejectHardlinks: params.rejectHardlinks,
+    nonBlockingRead: params.nonBlockingRead,
   });
   try {
     return await readOpenedFileSafely({ opened, maxBytes: params.maxBytes });

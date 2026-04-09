@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
@@ -966,26 +965,17 @@ async function validateScriptFileForShellBleed(params: {
     if (!relativePath) {
       continue;
     }
-    try {
-      const stat = await fs.lstat(absPath);
-      if (!stat.isFile()) {
-        continue;
-      }
-    } catch (error) {
-      if (shouldSkipScriptPreflightPathError(error)) {
-        continue;
-      }
-      throw error;
-    }
 
     // Best-effort: only validate files that safely resolve within workdir and
     // are reasonably small. This keeps preflight checks on a pinned file
     // identity instead of trusting mutable pathnames across multiple ops.
+    // Use non-blocking open to avoid stalls if a path is swapped to a FIFO.
     let content: string;
     try {
       const safeRead = await readFileWithinRoot({
         rootDir: params.workdir,
         relativePath,
+        nonBlockingRead: true,
         maxBytes: 512 * 1024,
       });
       content = safeRead.buffer.toString("utf-8");
