@@ -359,6 +359,25 @@ describe("nostr-profile-http", () => {
       expect(ctx.updateConfigProfile).not.toHaveBeenCalled();
     });
 
+    it("rejects profile mutation when gateway scope context is missing", async () => {
+      setGatewayRuntimeScopes(undefined);
+      const { ctx, res, run } = createProfileHttpHarness(
+        "PUT",
+        "/api/channels/nostr/default/profile",
+        {
+          body: { name: "attacker" },
+        },
+      );
+
+      await run();
+
+      expect(res._getStatusCode()).toBe(403);
+      const data = JSON.parse(res._getData());
+      expect(data.error).toBe("missing scope: operator.admin");
+      expect(publishNostrProfile).not.toHaveBeenCalled();
+      expect(ctx.updateConfigProfile).not.toHaveBeenCalled();
+    });
+
     it("rejects private IP in picture URL (SSRF protection)", async () => {
       await expectPrivatePictureRejected("https://127.0.0.1/evil.jpg");
     });
@@ -522,6 +541,25 @@ describe("nostr-profile-http", () => {
 
     it("rejects profile import when gateway caller is missing operator.admin", async () => {
       setGatewayRuntimeScopes(["operator.write"]);
+      const { ctx, res, run } = createProfileHttpHarness(
+        "POST",
+        "/api/channels/nostr/default/profile/import",
+        {
+          body: { autoMerge: true },
+        },
+      );
+
+      await run();
+
+      expect(res._getStatusCode()).toBe(403);
+      const data = JSON.parse(res._getData());
+      expect(data.error).toBe("missing scope: operator.admin");
+      expect(importProfileFromRelays).not.toHaveBeenCalled();
+      expect(ctx.updateConfigProfile).not.toHaveBeenCalled();
+    });
+
+    it("rejects profile import when gateway scope context is missing", async () => {
+      setGatewayRuntimeScopes(undefined);
       const { ctx, res, run } = createProfileHttpHarness(
         "POST",
         "/api/channels/nostr/default/profile/import",

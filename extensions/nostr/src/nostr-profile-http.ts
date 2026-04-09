@@ -31,7 +31,7 @@ import { validateUrlSafety } from "./nostr-profile-url-safety.js";
 
 export interface NostrProfileHttpContext {
   /** Get current profile from config */
-  getConfigProfile: (accountId: string) => NostrProfile;
+  getConfigProfile: (accountId: string) => Record<string, unknown> | undefined;
   /** Update profile in config (after successful publish) */
   updateConfigProfile: (accountId: string, profile: NostrProfile) => Promise<void>;
   /** Get account's public key and relays */
@@ -306,10 +306,8 @@ function enforceGatewayAdminMutationScope(
   accountId: string,
   res: ServerResponse,
 ): boolean {
-  const scopes = getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes;
-  if (!Array.isArray(scopes)) {
-    return true;
-  }
+  const runtimeScopes = getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes;
+  const scopes = Array.isArray(runtimeScopes) ? runtimeScopes : [];
   if (scopes.includes(ADMIN_SCOPE)) {
     return true;
   }
@@ -400,10 +398,10 @@ async function handleUpdateProfile(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<true> {
-  if (!enforceLoopbackMutationGuards(ctx, req, res)) {
+  if (!enforceGatewayAdminMutationScope(ctx, accountId, res)) {
     return true;
   }
-  if (!enforceGatewayAdminMutationScope(ctx, accountId, res)) {
+  if (!enforceLoopbackMutationGuards(ctx, req, res)) {
     return true;
   }
 
@@ -506,10 +504,10 @@ async function handleImportProfile(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<true> {
-  if (!enforceLoopbackMutationGuards(ctx, req, res)) {
+  if (!enforceGatewayAdminMutationScope(ctx, accountId, res)) {
     return true;
   }
-  if (!enforceGatewayAdminMutationScope(ctx, accountId, res)) {
+  if (!enforceLoopbackMutationGuards(ctx, req, res)) {
     return true;
   }
 
