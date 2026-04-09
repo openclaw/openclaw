@@ -332,6 +332,82 @@ describe("resolveAnnounceTarget", () => {
       accountId: "work",
     });
   });
+
+  it("preserves string threadId from deliveryContext in sessions.list fallback", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [
+        {
+          key: "agent:main:whatsapp:group:123@g.us",
+          deliveryContext: {
+            channel: "whatsapp",
+            to: "123@g.us",
+            accountId: "work",
+            threadId: "topic-42",
+          },
+        },
+      ],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "agent:main:whatsapp:group:123@g.us",
+      displayKey: "agent:main:whatsapp:group:123@g.us",
+    });
+    expect(target).toEqual({
+      channel: "whatsapp",
+      to: "123@g.us",
+      accountId: "work",
+      threadId: "topic-42",
+    });
+  });
+
+  it("preserves numeric threadId from deliveryContext in sessions.list fallback", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [
+        {
+          key: "agent:main:whatsapp:group:123@g.us",
+          deliveryContext: {
+            channel: "whatsapp",
+            to: "123@g.us",
+            threadId: 554,
+          },
+        },
+      ],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "agent:main:whatsapp:group:123@g.us",
+      displayKey: "agent:main:whatsapp:group:123@g.us",
+    });
+    expect(target).toEqual({
+      channel: "whatsapp",
+      to: "123@g.us",
+      threadId: "554",
+    });
+  });
+
+  it("omits threadId when deliveryContext has no threadId in sessions.list fallback", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [
+        {
+          key: "agent:main:whatsapp:group:123@g.us",
+          deliveryContext: {
+            channel: "whatsapp",
+            to: "123@g.us",
+          },
+        },
+      ],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "agent:main:whatsapp:group:123@g.us",
+      displayKey: "agent:main:whatsapp:group:123@g.us",
+    });
+    expect(target).toEqual({
+      channel: "whatsapp",
+      to: "123@g.us",
+    });
+    expect(target?.threadId).toBeUndefined();
+  });
 });
 
 describe("sessions_list gating", () => {
