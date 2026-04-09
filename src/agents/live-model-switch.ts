@@ -43,10 +43,15 @@ export function resolveLiveSessionModelSelection(params: {
     providerOverride: entry?.providerOverride,
     modelOverride: entry?.modelOverride,
   });
+  // Skip session-stored runtime model when it came from the fallback chain,
+  // so the live-switch resolver sees the configured default rather than a
+  // stale fallback identity.  Mirrors the guard in session-utils.ts.  #47705
+  const isFromFallback =
+    entry && "modelIsFromFallback" in entry && entry.modelIsFromFallback === true;
   const persisted = resolvePersistedSelectedModelRef({
     defaultProvider: defaultModelRef.provider,
-    runtimeProvider: entry?.modelProvider,
-    runtimeModel: entry?.model,
+    runtimeProvider: isFromFallback ? undefined : entry?.modelProvider,
+    runtimeModel: isFromFallback ? undefined : entry?.model,
     overrideProvider: normalizedSelection.providerOverride,
     overrideModel: normalizedSelection.modelOverride,
   });
