@@ -133,18 +133,24 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     senderIsOwner: params.command.senderIsOwner,
     ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
   });
+  const normalizedResult = result ?? {
+    ok: false,
+    compacted: false,
+    reason: "Compaction returned no result.",
+  };
 
   const compactLabel =
-    result.ok || isCompactionSkipReason(result.reason)
-      ? result.compacted
-        ? result.result?.tokensBefore != null && result.result?.tokensAfter != null
-          ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(result.result.tokensAfter)})`
-          : result.result?.tokensBefore
-            ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} before)`
+    normalizedResult.ok || isCompactionSkipReason(normalizedResult.reason)
+      ? normalizedResult.compacted
+        ? normalizedResult.result?.tokensBefore != null &&
+          normalizedResult.result?.tokensAfter != null
+          ? `Compacted (${runtime.formatTokenCount(normalizedResult.result.tokensBefore)} → ${runtime.formatTokenCount(normalizedResult.result.tokensAfter)})`
+          : normalizedResult.result?.tokensBefore
+            ? `Compacted (${runtime.formatTokenCount(normalizedResult.result.tokensBefore)} before)`
             : "Compacted"
         : "Compaction skipped"
       : "Compaction failed";
-  if (result.ok && result.compacted) {
+  if (normalizedResult.ok && normalizedResult.compacted) {
     await runtime.incrementCompactionCount({
       cfg: params.cfg,
       sessionEntry: params.sessionEntry,
@@ -152,18 +158,18 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       sessionKey: params.sessionKey,
       storePath: params.storePath,
       // Update token counts after compaction
-      tokensAfter: result.result?.tokensAfter,
+      tokensAfter: normalizedResult.result?.tokensAfter,
     });
   }
   // Use the post-compaction token count for context summary if available
-  const tokensAfterCompaction = result.result?.tokensAfter;
+  const tokensAfterCompaction = normalizedResult.result?.tokensAfter;
   const totalTokens =
     tokensAfterCompaction ?? runtime.resolveFreshSessionTotalTokens(params.sessionEntry);
   const contextSummary = runtime.formatContextUsageShort(
     typeof totalTokens === "number" && totalTokens > 0 ? totalTokens : null,
     params.contextTokens ?? params.sessionEntry.contextTokens ?? null,
   );
-  const reason = formatCompactionReason(result.reason);
+  const reason = formatCompactionReason(normalizedResult.reason);
   const line = reason
     ? `${compactLabel}: ${reason} • ${contextSummary}`
     : `${compactLabel} • ${contextSummary}`;
