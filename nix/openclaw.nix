@@ -39,7 +39,7 @@ pkgs.stdenvNoCC.mkDerivation (finalAttrs: {
     fetcherVersion = 3;
     # Update this hash when pnpm-lock.yaml changes.
     # Set to "" and build — the error message will show the correct hash.
-    hash = "sha256-GrGh7rACPl+eROOOBYzneWJxl+xsh39/m2+dNI01oaQ=";
+    hash = "sha256-mdppNeJVf0Def0GohiKks6W3uzsaoJUYJo/ggGmypKQ=";
   };
 
   nativeBuildInputs = [
@@ -147,10 +147,17 @@ pkgs.stdenvNoCC.mkDerivation (finalAttrs: {
           emulator = pkgs.stdenvNoCC.hostPlatform.emulator pkgs.buildPackages;
         in
         ''
-          installShellCompletion --cmd openclaw \
-            --bash <(${emulator} $out/bin/openclaw completion --shell bash) \
-            --fish <(${emulator} $out/bin/openclaw completion --shell fish) \
-            --zsh <(${emulator} $out/bin/openclaw completion --shell zsh)
+          # Shell completions are best-effort — the CLI registers all subcommands
+          # during completion generation, which can fail if optional runtime files
+          # (qa scenarios, etc.) are not bundled. Skip gracefully.
+          if ${emulator} $out/bin/openclaw completion --shell bash > /tmp/openclaw.bash 2>/dev/null && [ -s /tmp/openclaw.bash ]; then
+            installShellCompletion --cmd openclaw \
+              --bash /tmp/openclaw.bash \
+              --fish <(${emulator} $out/bin/openclaw completion --shell fish 2>/dev/null || true) \
+              --zsh <(${emulator} $out/bin/openclaw completion --shell zsh 2>/dev/null || true)
+          else
+            echo "Shell completion generation failed (non-fatal) — skipping"
+          fi
         ''
       );
 
