@@ -106,12 +106,18 @@ function readErrorTextField(value: unknown, key: "description" | "message"): str
  * Returns undefined if the error is not a 429 or the delay cannot be parsed.
  */
 function extractRateLimitRetryAfterSeconds(err: unknown): number | undefined {
-  if (!err || typeof err !== "object") return undefined;
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
   const maybe = err as { error_code?: unknown; description?: unknown };
-  if (maybe.error_code !== 429) return undefined;
+  if (maybe.error_code !== 429) {
+    return undefined;
+  }
   const desc = typeof maybe.description === "string" ? maybe.description : "";
   const match = /retry after (\d+)/i.exec(desc);
-  if (match?.[1]) return parseInt(match[1], 10);
+  if (match?.[1]) {
+    return parseInt(match[1], 10);
+  }
   return undefined;
 }
 
