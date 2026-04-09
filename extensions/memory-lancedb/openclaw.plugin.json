@@ -81,6 +81,10 @@
         "type": "number",
         "minimum": 100,
         "maximum": 10000
+      },
+      "dreaming": {
+        "type": "object",
+        "description": "Memory dreaming config passed through to the shared dreaming resolver. See memory-core dreaming docs for the full schema."
       }
     },
     "required": ["embedding"]
