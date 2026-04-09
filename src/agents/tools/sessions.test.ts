@@ -275,7 +275,10 @@ describe("resolveAnnounceTarget", () => {
       sessionKey: "agent:main:discord:group:dev",
       displayKey: "agent:main:discord:group:dev",
     });
-    expect(target).toEqual({ channel: "discord", to: "group:dev" });
+    expect(target).toEqual({
+      kind: "external_target",
+      target: { channel: "discord", to: "group:dev", threadId: undefined },
+    });
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -298,9 +301,12 @@ describe("resolveAnnounceTarget", () => {
       displayKey: "agent:main:whatsapp:group:123@g.us",
     });
     expect(target).toEqual({
-      channel: "whatsapp",
-      to: "123@g.us",
-      accountId: "work",
+      kind: "external_target",
+      target: {
+        channel: "whatsapp",
+        to: "123@g.us",
+        accountId: "work",
+      },
     });
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
     const first = callGatewayMock.mock.calls[0]?.[0] as { method?: string } | undefined;
@@ -327,9 +333,173 @@ describe("resolveAnnounceTarget", () => {
       displayKey: "agent:main:whatsapp:group:123@g.us",
     });
     expect(target).toEqual({
-      channel: "whatsapp",
-      to: "123@g.us",
-      accountId: "work",
+      kind: "external_target",
+      target: {
+        channel: "whatsapp",
+        to: "123@g.us",
+        accountId: "work",
+      },
+    });
+  });
+
+  it("prefers deliveryContext accountId over stale origin accountId", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [
+        {
+          key: "main",
+          lastChannel: "whatsapp",
+          lastTo: "123@g.us",
+          deliveryContext: {
+            channel: "whatsapp",
+            to: "123@g.us",
+            accountId: "current-work",
+          },
+          origin: {
+            provider: "whatsapp",
+            accountId: "stale-work",
+          },
+        },
+      ],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "main",
+      displayKey: "main",
+    });
+
+    expect(target).toEqual({
+      kind: "external_target",
+      target: {
+        channel: "whatsapp",
+        to: "123@g.us",
+        accountId: "current-work",
+      },
+    });
+  });
+
+  it("treats lookup-preferred channels inferred only from row metadata as missing delivery", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [{ key: "main", channel: "whatsapp", displayName: "wa target" }],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "main",
+      displayKey: "main",
+    });
+
+    expect(target).toEqual({ kind: "unknown", reason: "missing_delivery" });
+  });
+
+  it("does not treat a non-lookup-preferred row channel as a partial delivery route", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [{ key: "main", channel: "discord", displayName: "discord target" }],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "main",
+      displayKey: "main",
+    });
+
+    expect(target).toEqual({ kind: "no_external_target" });
+  });
+
+  it("preserves threadId from metadata-backed delivery routes", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [
+        {
+          key: "main",
+          deliveryContext: {
+            channel: "discord",
+            to: "channel:dev",
+            accountId: "ops",
+            threadId: "1710000000.000100",
+          },
+        },
+      ],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "main",
+      displayKey: "main",
+    });
+
+    expect(target).toEqual({
+      kind: "external_target",
+      target: {
+        channel: "discord",
+        to: "channel:dev",
+        accountId: "ops",
+        threadId: "1710000000.000100",
+      },
+    });
+  });
+
+  it("hydrates accountId from origin when deliveryContext omits it", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [
+        {
+          key: "main",
+          lastChannel: "discord",
+          lastTo: "channel:dev",
+          deliveryContext: {
+            channel: "discord",
+            to: "channel:dev",
+          },
+          origin: {
+            provider: "discord",
+            accountId: "ops",
+          },
+        },
+      ],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "main",
+      displayKey: "main",
+    });
+
+    expect(target).toEqual({
+      kind: "external_target",
+      target: {
+        channel: "discord",
+        to: "channel:dev",
+        accountId: "ops",
+      },
+    });
+  });
+
+  it("prefers deliveryContext threadId over stale origin threadId", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [
+        {
+          key: "main",
+          origin: {
+            provider: "discord",
+            threadId: "stale-thread",
+          },
+          deliveryContext: {
+            channel: "discord",
+            to: "channel:dev",
+            accountId: "ops",
+            threadId: "1710000000.000100",
+          },
+        },
+      ],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "main",
+      displayKey: "main",
+    });
+
+    expect(target).toEqual({
+      kind: "external_target",
+      target: {
+        channel: "discord",
+        to: "channel:dev",
+        accountId: "ops",
+        threadId: "1710000000.000100",
+      },
     });
   });
 });
