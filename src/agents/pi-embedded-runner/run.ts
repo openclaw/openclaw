@@ -1598,12 +1598,19 @@ export async function runEmbeddedPiAgent(
             };
           }
 
-          // Detect "fake success" empty responses: the provider returned
-          // stopReason "stop"/"end_turn" but produced zero output tokens and no
-          // content.  This is observed with MiniMax and other non-standard
-          // providers that silently fail without surfacing an error.  Retry up
-          // to MAX_EMPTY_RESPONSE_RETRIES times before giving up with a
-          // user-visible error (instead of silently dropping the turn).
+          // Detect "fake success" empty responses from non-standard providers.
+          //
+          // Root cause (confirmed via curl against MiniMax 2026-04-09):
+          // MiniMax's Anthropic-compat SSE endpoint intermittently returns a
+          // truncated stream: `message_start` (id="", input_tokens=0) → `ping`
+          // → `message_stop`, skipping all content_block events.  The Anthropic
+          // SDK treats this as a valid completion, so pi-ai yields the default
+          // output: content=[], stopReason="stop", usage.output=0.  ~40 % of
+          // rapid requests reproduce the pattern.
+          //
+          // Detection: stopReason is "stop"/"end_turn", output tokens === 0,
+          // content is empty, and no text/tool payloads were emitted.  Retry up
+          // to MAX_EMPTY_RESPONSE_RETRIES before surfacing an error.
           if (
             !aborted &&
             !timedOut &&
@@ -1619,7 +1626,8 @@ export async function runEmbeddedPiAgent(
             if (emptyResponseRetries <= MAX_EMPTY_RESPONSE_RETRIES) {
               log.warn(
                 `[empty-response-retry] Empty response from ${provider}/${modelId} ` +
-                  `(stopReason=${lastAssistant?.stopReason ?? "unknown"}, usage.output=0). ` +
+                  `(stopReason=${lastAssistant?.stopReason ?? "unknown"}, usage.output=0, ` +
+                  `responseId=${(lastAssistant as { responseId?: string }).responseId ?? "(none)"}). ` +
                   `Retry ${emptyResponseRetries}/${MAX_EMPTY_RESPONSE_RETRIES}. ` +
                   `runId=${params.runId} sessionId=${params.sessionId}`,
               );
@@ -1627,7 +1635,8 @@ export async function runEmbeddedPiAgent(
             }
             log.error(
               `[empty-response-exhausted] Empty response from ${provider}/${modelId} ` +
-                `after ${MAX_EMPTY_RESPONSE_RETRIES} retries. ` +
+                `after ${MAX_EMPTY_RESPONSE_RETRIES} retries ` +
+                `(responseId=${(lastAssistant as { responseId?: string }).responseId ?? "(none)"}). ` +
                 `runId=${params.runId} sessionId=${params.sessionId}`,
             );
             return {
