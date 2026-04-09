@@ -21,6 +21,7 @@ export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecTarget = "auto" | ExecHost;
 export type ExecSecurity = "deny" | "allowlist" | "full";
 export type ExecAsk = "off" | "on-miss" | "always";
+export type ExecApprovalExpiredReason = "timeout" | "no-approval-route";
 
 export function normalizeExecHost(value?: string | null): ExecHost | null {
   const normalized = normalizeOptionalLowercaseString(value);
@@ -52,6 +53,16 @@ export function normalizeExecSecurity(value?: string | null): ExecSecurity | nul
 export function normalizeExecAsk(value?: string | null): ExecAsk | null {
   const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
+    return normalized;
+  }
+  return null;
+}
+
+export function normalizeExecApprovalExpiredReason(
+  value?: string | null,
+): ExecApprovalExpiredReason | null {
+  const normalized = normalizeOptionalLowercaseString(value);
+  if (normalized === "timeout" || normalized === "no-approval-route") {
     return normalized;
   }
   return null;

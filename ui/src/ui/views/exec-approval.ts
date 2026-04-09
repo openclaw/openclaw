@@ -5,6 +5,43 @@ import type {
   ExecApprovalRequestPayload,
 } from "../controllers/exec-approval.ts";
 
+function renderPluginRouteSemantics(entry: AppViewState["execApprovalQueue"][number]) {
+  if (entry.kind !== "plugin") {
+    return nothing;
+  }
+
+  const route = entry.routeStatus;
+  const recoverability = entry.recoverability;
+  if (!route && !recoverability) {
+    return nothing;
+  }
+
+  let routeText: string | null = null;
+  if (route === "delivery-failed") {
+    routeText = "Delivery failed";
+  } else if (route === "pending-route") {
+    routeText = "Waiting for route";
+  } else if (route === "no-route") {
+    routeText = "No approval route";
+  } else if (route === "delivered") {
+    routeText = "Delivered";
+  }
+
+  const recoverabilityText =
+    recoverability === "reconnect-recoverable"
+      ? "reconnect-recoverable"
+      : recoverability === "terminal"
+        ? "terminal"
+        : null;
+
+  const parts = [routeText, recoverabilityText].filter((value): value is string => Boolean(value));
+  if (parts.length === 0) {
+    return nothing;
+  }
+
+  return html`<div class="exec-approval-sub">${parts.join(" • ")}</div>`;
+}
+
 function formatRemaining(ms: number): string {
   const remaining = Math.max(0, ms);
   const totalSeconds = Math.floor(remaining / 1000);
@@ -73,6 +110,7 @@ export function renderExecApprovalPrompt(state: AppViewState) {
           <div>
             <div class="exec-approval-title">${title}</div>
             <div class="exec-approval-sub">${remaining}</div>
+            ${renderPluginRouteSemantics(active)}
           </div>
           ${queueCount > 1
             ? html`<div class="exec-approval-queue">${queueCount} pending</div>`

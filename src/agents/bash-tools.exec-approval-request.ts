@@ -1,4 +1,9 @@
-import type { ExecAsk, ExecSecurity, SystemRunApprovalPlan } from "../infra/exec-approvals.js";
+import type {
+  ExecApprovalExpiredReason,
+  ExecAsk,
+  ExecSecurity,
+  SystemRunApprovalPlan,
+} from "../infra/exec-approvals.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
@@ -58,6 +63,7 @@ function buildExecApprovalRequestToolParams(
 }
 
 type ParsedDecision = { present: boolean; value: string | null };
+type ParsedFinalStatus = "accepted" | "resolved" | "expired" | undefined;
 
 function parseDecision(value: unknown): ParsedDecision {
   if (!value || typeof value !== "object") {
@@ -72,6 +78,14 @@ function parseDecision(value: unknown): ParsedDecision {
   return { present: true, value: typeof decision === "string" ? decision : null };
 }
 
+function parseFinalStatus(value: unknown): ParsedFinalStatus {
+  return value === "accepted" || value === "resolved" || value === "expired" ? value : undefined;
+}
+
+function parseExpiredReason(value: unknown): ExecApprovalExpiredReason | undefined {
+  return value === "timeout" || value === "no-approval-route" ? value : undefined;
+}
+
 function parseString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
@@ -84,6 +98,8 @@ export type ExecApprovalRegistration = {
   id: string;
   expiresAtMs: number;
   finalDecision?: string | null;
+  finalStatus?: Exclude<ParsedFinalStatus, "accepted">;
+  expiredReason?: ExecApprovalExpiredReason;
 };
 
 export async function registerExecApprovalRequest(
@@ -91,18 +107,41 @@ export async function registerExecApprovalRequest(
 ): Promise<ExecApprovalRegistration> {
   // Two-phase registration is critical: the ID must be registered server-side
   // before exec returns `approval-pending`, otherwise `/approve` can race and orphan.
-  const registrationResult = await callGatewayTool(
+  const registrationResult = await callGatewayTool<{
+    id?: string;
+    expiresAtMs?: number;
+    decision?: string;
+    status?: string;
+    expiredReason?: string;
+  }>(
     "exec.approval.request",
     { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
     buildExecApprovalRequestToolParams(params),
     { expectFinal: false },
   );
   const decision = parseDecision(registrationResult);
+  const finalStatus = parseFinalStatus(registrationResult?.status);
+  const expiredReason = parseExpiredReason(registrationResult?.expiredReason);
   const id = parseString(registrationResult?.id) ?? params.id;
   const expiresAtMs =
     parseExpiresAtMs(registrationResult?.expiresAtMs) ?? Date.now() + DEFAULT_APPROVAL_TIMEOUT_MS;
   if (decision.present) {
-    return { id, expiresAtMs, finalDecision: decision.value };
+    return {
+      id,
+      expiresAtMs,
+      finalDecision: decision.value,
+      ...(finalStatus === "resolved" || finalStatus === "expired" ? { finalStatus } : {}),
+      ...(expiredReason ? { expiredReason } : {}),
+    };
+  }
+  if (finalStatus === "expired") {
+    return {
+      id,
+      expiresAtMs,
+      finalDecision: null,
+      finalStatus,
+      ...(expiredReason ? { expiredReason } : {}),
+    };
   }
   return { id, expiresAtMs };
 }

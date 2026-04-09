@@ -174,4 +174,26 @@ describe("requestExecApprovalDecision", () => {
     expect(result).toBe("deny");
     expect(vi.mocked(callGatewayTool).mock.calls).toHaveLength(1);
   });
+
+  it("treats immediate no-route expiry as a final null decision without waiting", async () => {
+    vi.mocked(callGatewayTool).mockResolvedValueOnce({
+      id: "approval-id",
+      decision: null,
+      status: "expired",
+      expiredReason: "no-approval-route",
+      expiresAtMs: DEFAULT_APPROVAL_TIMEOUT_MS,
+    });
+
+    const result = await requestExecApprovalDecision({
+      id: "approval-id",
+      command: "echo hi",
+      cwd: "/tmp",
+      host: "gateway",
+      security: "allowlist",
+      ask: "on-miss",
+    });
+
+    expect(result).toBeNull();
+    expect(vi.mocked(callGatewayTool).mock.calls).toHaveLength(1);
+  });
 });

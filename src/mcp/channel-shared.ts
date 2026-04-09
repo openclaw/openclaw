@@ -101,6 +101,8 @@ export type QueueEvent =
   | {
       cursor: number;
       type: "plugin_approval_requested" | "plugin_approval_resolved";
+      routeStatus?: "pending-route" | "delivered" | "delivery-failed" | "no-route";
+      recoverability?: "reconnect-recoverable" | "terminal";
       raw: Record<string, unknown>;
     };
 

@@ -1,5 +1,8 @@
 import { hasApprovalTurnSourceRoute } from "../../infra/approval-turn-source.js";
-import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
+import type {
+  ExecApprovalDecision,
+  ExecApprovalExpiredReason,
+} from "../../infra/exec-approvals.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type {
   ExecApprovalIdLookupResult,
@@ -32,8 +35,73 @@ type RequestedApprovalEvent<TPayload extends ApprovalTurnSourceFields> = {
   expiresAtMs: number;
 };
 
+type ApprovalRouteStatus = "pending-route" | "delivered" | "delivery-failed" | "no-route";
+type ApprovalRecoverability = "reconnect-recoverable" | "terminal";
+
+type ApprovalDecisionResponseRecord = {
+  decision?: ExecApprovalDecision;
+  expiredReason?: ExecApprovalExpiredReason | null;
+  resolvedAtMs?: number;
+  resolvedBy?: string | null;
+};
+
+type ApprovalLifecycleState =
+  | { status: "pending" }
+  | { status: "resolved"; decision: ExecApprovalDecision }
+  | { status: "expired"; expiredReason: ExecApprovalExpiredReason };
+
 function isPromiseLike<T>(value: T | Promise<T>): value is Promise<T> {
   return typeof value === "object" && value !== null && "then" in value;
+}
+
+function resolveApprovalLifecycle(
+  record: ApprovalDecisionResponseRecord | null | undefined,
+): ApprovalLifecycleState {
+  if (!record || record.resolvedAtMs === undefined) {
+    return { status: "pending" };
+  }
+  if (record.decision) {
+    return { status: "resolved", decision: record.decision };
+  }
+  return {
+    status: "expired",
+    expiredReason:
+      record.expiredReason ??
+      (normalizeOptionalString(record.resolvedBy) === "no-approval-route"
+        ? "no-approval-route"
+        : "timeout"),
+  };
+}
+
+function buildApprovalDecisionResponse(params: {
+  id: string;
+  createdAtMs?: number;
+  expiresAtMs?: number;
+  record: ApprovalDecisionResponseRecord | null;
+  routeStatus?: ApprovalRouteStatus;
+  recoverability?: ApprovalRecoverability;
+  statusOverride?: "accepted";
+}) {
+  const lifecycle = resolveApprovalLifecycle(params.record);
+  const status =
+    params.statusOverride === "accepted"
+      ? "accepted"
+      : lifecycle.status === "pending"
+        ? undefined
+        : lifecycle.status;
+
+  return {
+    id: params.id,
+    ...(lifecycle.status === "resolved" ? { decision: lifecycle.decision } : {}),
+    ...(lifecycle.status === "expired"
+      ? { decision: null, expiredReason: lifecycle.expiredReason }
+      : {}),
+    ...(status ? { status } : {}),
+    ...(params.createdAtMs !== undefined ? { createdAtMs: params.createdAtMs } : {}),
+    ...(params.expiresAtMs !== undefined ? { expiresAtMs: params.expiresAtMs } : {}),
+    ...(params.routeStatus ? { routeStatus: params.routeStatus } : {}),
+    ...(params.recoverability ? { recoverability: params.recoverability } : {}),
+  };
 }
 
 export function isApprovalDecision(value: string): value is ExecApprovalDecision {
@@ -131,12 +199,19 @@ export async function handleApprovalWaitDecision<TPayload>(params: {
   const decision = await decisionPromise;
   params.respond(
     true,
-    {
+    buildApprovalDecisionResponse({
       id,
-      decision,
       createdAtMs: snapshot?.createdAtMs,
       expiresAtMs: snapshot?.expiresAtMs,
-    },
+      record: snapshot
+        ? {
+            decision: snapshot.decision,
+            expiredReason: snapshot.expiredReason,
+            resolvedAtMs: snapshot.resolvedAtMs,
+            resolvedBy: snapshot.resolvedBy,
+          }
+        : { decision: decision ?? undefined, resolvedAtMs: Date.now() },
+    }),
     undefined,
   );
 }
@@ -154,6 +229,7 @@ export async function handlePendingApprovalRequest<
   requestEvent: RequestedApprovalEvent<TPayload>;
   twoPhase: boolean;
   deliverRequest: () => boolean | Promise<boolean>;
+  routeStatusOnPending?: ApprovalRouteStatus | (() => ApprovalRouteStatus);
   afterDecision?: (
     decision: ExecApprovalDecision | null,
     requestEvent: RequestedApprovalEvent<TPayload>,
@@ -169,31 +245,50 @@ export async function handlePendingApprovalRequest<
   });
   const deliveredResult = params.deliverRequest();
   const delivered = isPromiseLike(deliveredResult) ? await deliveredResult : deliveredResult;
+  const includeRouteSemantics = params.routeStatusOnPending !== undefined;
 
   if (!hasApprovalClients && !hasTurnSourceRoute && !delivered) {
     params.manager.expire(params.record.id, "no-approval-route");
     params.respond(
       true,
-      {
+      buildApprovalDecisionResponse({
         id: params.record.id,
-        decision: null,
         createdAtMs: params.record.createdAtMs,
         expiresAtMs: params.record.expiresAtMs,
-      },
+        record: params.record,
+        ...(includeRouteSemantics
+          ? {
+              routeStatus: "no-route" as const,
+              recoverability: "terminal" as const,
+            }
+          : {}),
+      }),
       undefined,
     );
     return;
   }
 
+  const currentPendingRouteStatus =
+    typeof params.routeStatusOnPending === "function"
+      ? params.routeStatusOnPending()
+      : params.routeStatusOnPending;
+
   if (params.twoPhase) {
     params.respond(
       true,
-      {
-        status: "accepted",
+      buildApprovalDecisionResponse({
         id: params.record.id,
         createdAtMs: params.record.createdAtMs,
         expiresAtMs: params.record.expiresAtMs,
-      },
+        record: params.record,
+        statusOverride: "accepted",
+        ...(includeRouteSemantics
+          ? {
+              routeStatus: currentPendingRouteStatus ?? "pending-route",
+              recoverability: "reconnect-recoverable" as const,
+            }
+          : {}),
+      }),
       undefined,
     );
   }
@@ -210,12 +305,18 @@ export async function handlePendingApprovalRequest<
   }
   params.respond(
     true,
-    {
+    buildApprovalDecisionResponse({
       id: params.record.id,
-      decision,
       createdAtMs: params.record.createdAtMs,
       expiresAtMs: params.record.expiresAtMs,
-    },
+      record: params.record,
+      ...(includeRouteSemantics
+        ? {
+            routeStatus: currentPendingRouteStatus,
+            recoverability: decision === null ? ("terminal" as const) : undefined,
+          }
+        : {}),
+    }),
     undefined,
   );
 }

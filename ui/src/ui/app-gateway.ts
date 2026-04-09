@@ -203,6 +203,54 @@ function applySessionDefaults(host: GatewayHost, defaults?: SessionDefaultsSnaps
   }
 }
 
+function queueExecApproval(host: GatewayHost, entry: ExecApprovalRequest) {
+  host.execApprovalQueue = addExecApproval(host.execApprovalQueue, entry);
+  const delay = Math.max(0, entry.expiresAtMs - Date.now() + 500);
+  globalThis.setTimeout(() => {
+    host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, entry.id);
+  }, delay);
+}
+
+async function rehydratePendingExecApprovals(host: GatewayHost, client: GatewayBrowserClient) {
+  try {
+    const approvals = await client.request<unknown[]>("exec.approval.list", {});
+    if (host.client !== client) {
+      return;
+    }
+    for (const approval of Array.isArray(approvals) ? approvals : []) {
+      const entry = parseExecApprovalRequested(approval);
+      if (entry) {
+        queueExecApproval(host, entry);
+      }
+    }
+  } catch (err) {
+    if (host.client !== client) {
+      return;
+    }
+    console.error("[gateway] exec approval rehydrate failed:", err);
+  }
+}
+
+async function rehydratePendingPluginApprovals(host: GatewayHost, client: GatewayBrowserClient) {
+  try {
+    const approvals = await client.request<unknown[]>("plugin.approval.list", {});
+    if (host.client !== client) {
+      return;
+    }
+    for (const approval of Array.isArray(approvals) ? approvals : []) {
+      const entry = parsePluginApprovalRequested(approval);
+      if (entry) {
+        queueExecApproval(host, entry);
+      }
+    }
+  } catch (err) {
+    if (host.client !== client) {
+      return;
+    }
+    console.error("[gateway] plugin approval rehydrate failed:", err);
+  }
+}
+
 export function connectGateway(host: GatewayHost, options?: ConnectGatewayOptions) {
   const shutdownHost = host as GatewayHostWithShutdownMessage;
   const reconnectReason = options?.reason ?? "initial";
@@ -220,7 +268,9 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
     );
     shutdownHost.resumeChatQueueAfterReconnect = true;
   } else {
-    host.execApprovalQueue = pruneExecApprovalQueue(host.execApprovalQueue);
+    // On a fresh hello we prefer the gateway's current pending approval set.
+    // This avoids leaving stale local entries behind after reconnects.
+    host.execApprovalQueue = [];
   }
   host.execApprovalError = null;
 
@@ -261,6 +311,10 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         void flushChatQueueForEvent(
           host as unknown as Parameters<typeof flushChatQueueForEvent>[0],
         );
+      }
+      if (reconnectReason !== "seq-gap") {
+        void rehydratePendingExecApprovals(host, client);
+        void rehydratePendingPluginApprovals(host, client);
       }
       void subscribeSessions(host as unknown as SessionsState);
       void loadAssistantIdentity(host as unknown as AssistantIdentityState);
@@ -471,12 +525,8 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   if (evt.event === "exec.approval.requested") {
     const entry = parseExecApprovalRequested(evt.payload);
     if (entry) {
-      host.execApprovalQueue = addExecApproval(host.execApprovalQueue, entry);
+      queueExecApproval(host, entry);
       host.execApprovalError = null;
-      const delay = Math.max(0, entry.expiresAtMs - Date.now() + 500);
-      window.setTimeout(() => {
-        host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, entry.id);
-      }, delay);
     }
     return;
   }
@@ -492,12 +542,8 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   if (evt.event === "plugin.approval.requested") {
     const entry = parsePluginApprovalRequested(evt.payload);
     if (entry) {
-      host.execApprovalQueue = addExecApproval(host.execApprovalQueue, entry);
+      queueExecApproval(host, entry);
       host.execApprovalError = null;
-      const delay = Math.max(0, entry.expiresAtMs - Date.now() + 500);
-      window.setTimeout(() => {
-        host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, entry.id);
-      }, delay);
     }
     return;
   }

@@ -72,13 +72,30 @@ export function buildPluginApprovalPendingReplyPayload(params: {
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
   channelData?: Record<string, unknown>;
 }): ReplyPayload {
+  const routeSummary = [params.request.routeStatus, params.request.recoverability]
+    .filter(
+      (value): value is NonNullable<typeof value> => typeof value === "string" && value.length > 0,
+    )
+    .join(" • ");
   return buildApprovalPendingReplyPayload({
     approvalKind: "plugin",
     approvalId: params.request.id,
     approvalSlug: params.approvalSlug ?? params.request.id.slice(0, 8),
     text: params.text ?? buildPluginApprovalRequestMessage(params.request, params.nowMs),
     allowedDecisions: params.allowedDecisions,
-    channelData: params.channelData,
+    channelData: {
+      pluginApproval: {
+        id: params.request.id,
+        title: params.request.request.title,
+        description: params.request.request.description,
+        severity: params.request.request.severity ?? null,
+        pluginId: params.request.request.pluginId ?? null,
+        routeStatus: params.request.routeStatus ?? null,
+        recoverability: params.request.recoverability ?? null,
+        routeSummary: routeSummary || null,
+      },
+      ...params.channelData,
+    },
   });
 }
 

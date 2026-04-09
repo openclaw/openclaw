@@ -97,6 +97,16 @@ describe("plugin-sdk/approval-renderers", () => {
           sessionKey: undefined,
           state: "pending",
         },
+        pluginApproval: {
+          id: "plugin-approval-123",
+          title: "Sensitive action",
+          description: "Needs approval",
+          severity: null,
+          pluginId: null,
+          routeStatus: null,
+          recoverability: null,
+          routeSummary: null,
+        },
         telegram: {
           quoteText: "quoted",
         },

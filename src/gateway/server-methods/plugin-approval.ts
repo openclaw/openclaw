@@ -115,7 +115,10 @@ export function createPluginApprovalHandlers(
         request: record.request,
         createdAtMs: record.createdAtMs,
         expiresAtMs: record.expiresAtMs,
+        routeStatus: "pending-route" as const,
+        recoverability: "reconnect-recoverable" as const,
       };
+      let routeStatus: "pending-route" | "delivered" | "delivery-failed" = "pending-route";
 
       await handlePendingApprovalRequest({
         manager,
@@ -127,15 +130,25 @@ export function createPluginApprovalHandlers(
         requestEventName: "plugin.approval.requested",
         requestEvent,
         twoPhase,
-        deliverRequest: () => {
+        deliverRequest: async () => {
           if (!opts?.forwarder?.handlePluginApprovalRequested) {
+            routeStatus = "pending-route";
+            requestEvent.routeStatus = routeStatus;
             return false;
           }
-          return opts.forwarder.handlePluginApprovalRequested(requestEvent).catch((err) => {
+          try {
+            const delivered = await opts.forwarder.handlePluginApprovalRequested(requestEvent);
+            routeStatus = delivered ? "delivered" : "pending-route";
+            requestEvent.routeStatus = routeStatus;
+            return delivered;
+          } catch (err) {
+            routeStatus = "delivery-failed";
+            requestEvent.routeStatus = routeStatus;
             context.logGateway?.error?.(`plugin approvals: forward request failed: ${String(err)}`);
             return false;
-          });
+          }
         },
+        routeStatusOnPending: () => routeStatus,
       });
     },
 

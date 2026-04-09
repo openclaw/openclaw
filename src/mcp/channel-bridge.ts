@@ -418,9 +418,20 @@ export class OpenClawChannelBridge {
       case "plugin.approval.requested": {
         const raw = (event.payload ?? {}) as Record<string, unknown>;
         this.trackApproval("plugin", raw);
+        const routeStatus = raw.routeStatus;
+        const recoverability = raw.recoverability;
         this.enqueue({
           cursor: this.nextCursor(),
           type: "plugin_approval_requested",
+          ...(routeStatus === "pending-route" ||
+          routeStatus === "delivered" ||
+          routeStatus === "delivery-failed" ||
+          routeStatus === "no-route"
+            ? { routeStatus }
+            : {}),
+          ...(recoverability === "reconnect-recoverable" || recoverability === "terminal"
+            ? { recoverability }
+            : {}),
           raw,
         });
         return;

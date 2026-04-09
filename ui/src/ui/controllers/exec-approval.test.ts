@@ -30,6 +30,8 @@ describe("parsePluginApprovalRequested", () => {
       agentId: "agent-1",
       sessionKey: "sess-1",
     },
+    routeStatus: "delivery-failed",
+    recoverability: "reconnect-recoverable",
   };
 
   it("parses a valid payload", () => {
@@ -45,6 +47,8 @@ describe("parsePluginApprovalRequested", () => {
     expect(result!.request.sessionKey).toBe("sess-1");
     expect(result!.createdAtMs).toBe(1000);
     expect(result!.expiresAtMs).toBe(120_000);
+    expect(result!.routeStatus).toBe("delivery-failed");
+    expect(result!.recoverability).toBe("reconnect-recoverable");
   });
 
   it("returns null when title is missing from request", () => {
