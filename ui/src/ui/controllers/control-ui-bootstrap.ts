@@ -39,11 +39,9 @@ export async function loadControlUiBootstrapConfig(state: ControlUiBootstrapStat
     const normalized = normalizeAssistantIdentity({
       name: parsed.assistantName,
       avatar: parsed.assistantAvatar ?? null,
-      agentId: parsed.assistantAgentId,
     });
     state.assistantName = normalized.name;
     state.assistantAvatar = normalized.avatar;
-    state.assistantAgentId = normalized.agentId ?? null;
     if (parsed.title) {
       document.title = parsed.title;
     }
