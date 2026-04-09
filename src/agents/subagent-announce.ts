@@ -494,9 +494,8 @@ export async function runSubagentAnnounceFlow(params: {
       if (isAnnounceSkip(reply) || isSilentReplyText(reply, SILENT_REPLY_TOKEN)) {
         if (fallbackReply && !fallbackIsSilent) {
           reply = fallbackReply;
-        } else {
-          return true;
         }
+        // Always proceed to delivery, even when reply is ANNOUNCE_SKIP
       }
     }
 
