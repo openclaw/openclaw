@@ -23,8 +23,8 @@ import {
 import {
   ANNOUNCE_EXPIRY_MS,
   MAX_ANNOUNCE_RETRY_COUNT,
-  reconcileOrphanedRestoredRuns,
-  reconcileOrphanedRun,
+  markOrphanedRestoredRunsForCleanup,
+  markOrphanedRunForCleanup,
   resolveAnnounceRetryDelayMs,
   resolveSubagentRunOrphanReason,
   resolveSubagentSessionStatus,
@@ -331,19 +331,9 @@ function resumeSubagentRun(runId: string) {
   }
   const orphanReason = resolveSubagentRunOrphanReason({ entry });
   if (orphanReason) {
-    if (
-      reconcileOrphanedRun({
-        runId,
-        entry,
-        reason: orphanReason,
-        source: "resume",
-        runs: subagentRuns,
-        resumedRuns,
-      })
-    ) {
+    if (markOrphanedRunForCleanup({ runId, entry, reason: orphanReason, source: "resume" })) {
       persistSubagentRuns();
     }
-    return;
   }
   if (entry.cleanupCompletedAt) {
     return;
@@ -420,9 +410,8 @@ function restoreSubagentRunsOnce() {
       return;
     }
     if (
-      reconcileOrphanedRestoredRuns({
+      markOrphanedRestoredRunsForCleanup({
         runs: subagentRuns,
-        resumedRuns,
       })
     ) {
       persistSubagentRuns();

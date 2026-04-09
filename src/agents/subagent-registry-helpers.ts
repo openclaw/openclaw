@@ -204,13 +204,11 @@ export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promis
   }
 }
 
-export function reconcileOrphanedRun(params: {
+export function markOrphanedRunForCleanup(params: {
   runId: string;
   entry: SubagentRunRecord;
   reason: SubagentRunOrphanReason;
   source: "restore" | "resume";
-  runs: Map<string, SubagentRunRecord>;
-  resumedRuns: Set<string>;
 }) {
   const now = Date.now();
   let changed = false;
@@ -230,33 +228,41 @@ export function reconcileOrphanedRun(params: {
     params.entry.endedReason = SUBAGENT_ENDED_REASON_ERROR;
     changed = true;
   }
-  if (params.entry.cleanupHandled !== true) {
-    params.entry.cleanupHandled = true;
+  if (params.entry.cleanupHandled !== false) {
+    params.entry.cleanupHandled = false;
     changed = true;
   }
-  if (typeof params.entry.cleanupCompletedAt !== "number") {
-    params.entry.cleanupCompletedAt = now;
+  if (typeof params.entry.cleanupCompletedAt === "number") {
+    params.entry.cleanupCompletedAt = undefined;
     changed = true;
   }
-  const shouldDeleteAttachments =
-    params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep;
-  if (shouldDeleteAttachments) {
-    void safeRemoveAttachmentsDir(params.entry);
+  if (params.entry.suppressAnnounceReason !== undefined) {
+    params.entry.suppressAnnounceReason = undefined;
+    changed = true;
   }
-  const removed = params.runs.delete(params.runId);
-  params.resumedRuns.delete(params.runId);
-  if (!removed && !changed) {
+  if (params.entry.wakeOnDescendantSettle !== undefined) {
+    params.entry.wakeOnDescendantSettle = undefined;
+    changed = true;
+  }
+  if (params.entry.announceRetryCount !== undefined) {
+    params.entry.announceRetryCount = undefined;
+    changed = true;
+  }
+  if (params.entry.lastAnnounceRetryAt !== undefined) {
+    params.entry.lastAnnounceRetryAt = undefined;
+    changed = true;
+  }
+  if (!changed) {
     return false;
   }
   defaultRuntime.log(
-    `[warn] Subagent orphan run pruned source=${params.source} run=${params.runId} child=${params.entry.childSessionKey} reason=${params.reason}`,
+    `[warn] Subagent orphan run marked for parent reclaim source=${params.source} run=${params.runId} child=${params.entry.childSessionKey} reason=${params.reason}`,
   );
   return true;
 }
 
-export function reconcileOrphanedRestoredRuns(params: {
+export function markOrphanedRestoredRunsForCleanup(params: {
   runs: Map<string, SubagentRunRecord>;
-  resumedRuns: Set<string>;
 }) {
   const storeCache = new Map<string, Record<string, SessionEntry>>();
   let changed = false;
@@ -269,13 +275,11 @@ export function reconcileOrphanedRestoredRuns(params: {
       continue;
     }
     if (
-      reconcileOrphanedRun({
+      markOrphanedRunForCleanup({
         runId,
         entry,
         reason: orphanReason,
         source: "restore",
-        runs: params.runs,
-        resumedRuns: params.resumedRuns,
       })
     ) {
       changed = true;
