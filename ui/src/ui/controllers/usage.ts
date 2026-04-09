@@ -187,10 +187,7 @@ export async function loadUsage(
 ) {
   // Capture client for TS18047 work around on it being possibly null
   const client = state.client;
-  if (!client || !state.connected) {
-    return;
-  }
-  if (state.usageLoading) {
+  if (!client || !state.connected || state.usageLoading) {
     return;
   }
   state.usageLoading = true;

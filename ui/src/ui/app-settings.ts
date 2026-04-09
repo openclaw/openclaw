@@ -128,9 +128,9 @@ export function applySettingsFromUrl(host: SettingsHost) {
   const hashToken = hashParams.get("token");
   const tokenRaw = hashToken ?? queryToken;
   const passwordRaw = params.get("password") ?? hashParams.get("password");
-  const sessionRaw = params.get("session") ?? hashParams.get("session");
+  const sessionParam = params.get("session") ?? hashParams.get("session");
   const token = normalizeOptionalString(tokenRaw);
-  const session = normalizeOptionalString(sessionRaw);
+  const session = normalizeOptionalString(sessionParam);
   const shouldResetSessionForToken = Boolean(token && !session && !gatewayUrlChanged);
   let shouldCleanUrl = false;
 
@@ -146,10 +146,12 @@ export function applySettingsFromUrl(host: SettingsHost) {
         "[openclaw] Auth token passed as query parameter (?token=). Use URL fragment instead: #token=<token>. Query parameters may appear in server logs.",
       );
     }
-    if (token && gatewayUrlChanged) {
-      host.pendingGatewayToken = token;
-    } else if (token && token !== host.settings.token) {
-      applySettings(host, { ...host.settings, token });
+    if (token) {
+      if (gatewayUrlChanged) {
+        host.pendingGatewayToken = token;
+      } else if (token !== host.settings.token) {
+        applySettings(host, { ...host.settings, token });
+      }
     }
     hashParams.delete("token");
     shouldCleanUrl = true;
@@ -171,16 +173,14 @@ export function applySettingsFromUrl(host: SettingsHost) {
     shouldCleanUrl = true;
   }
 
-  if (sessionRaw != null && session) {
+  if (session) {
     applySessionSelection(host, session);
   }
 
   if (gatewayUrlRaw != null) {
     if (gatewayUrlChanged) {
       host.pendingGatewayUrl = nextGatewayUrl;
-      if (!token) {
-        host.pendingGatewayToken = null;
-      }
+      host.pendingGatewayToken = token ?? null;
     } else {
       host.pendingGatewayUrl = null;
       host.pendingGatewayToken = null;
