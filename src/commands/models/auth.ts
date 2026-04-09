@@ -602,9 +602,11 @@ export async function modelsAuthPasteTokenCommand(
     return undefined;
   };
   const rawToken = normalizeOptionalString(opts.token);
-  const rawTokenValidation = rawToken ? validateTokenInput(rawToken) : undefined;
-  if (rawTokenValidation) {
-    throw new Error(rawTokenValidation);
+  if (rawToken !== undefined) {
+    const rawTokenValidation = validateTokenInput(rawToken);
+    if (rawTokenValidation) {
+      throw new Error(rawTokenValidation);
+    }
   }
   const tokenInput =
     rawToken ??
