@@ -26,6 +26,18 @@ function buildComfyConfig(config: Record<string, unknown>): OpenClawConfig {
   } as unknown as OpenClawConfig;
 }
 
+function buildPluginComfyConfig(config: Record<string, unknown>): OpenClawConfig {
+  return {
+    plugins: {
+      entries: {
+        comfy: {
+          config,
+        },
+      },
+    },
+  } as unknown as OpenClawConfig;
+}
+
 describe("comfy video-generation provider", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -41,6 +53,22 @@ describe("comfy video-generation provider", () => {
     expect(
       provider.isConfigured?.({
         cfg: buildComfyConfig({
+          video: {
+            workflow: {
+              "6": { inputs: { text: "" } },
+            },
+            promptNodeId: "6",
+          },
+        }),
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts the bundled plugin config shape for local comfy video workflows", () => {
+    const provider = buildComfyVideoGenerationProvider();
+    expect(
+      provider.isConfigured?.({
+        cfg: buildPluginComfyConfig({
           video: {
             workflow: {
               "6": { inputs: { text: "" } },
