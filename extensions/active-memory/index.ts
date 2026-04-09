@@ -13,6 +13,7 @@ import { resolveSessionStoreEntry, updateSessionStore } from "openclaw/plugin-sd
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
+const DEFAULT_AGENT_ID = "main";
 const DEFAULT_MAX_SUMMARY_CHARS = 220;
 const DEFAULT_RECENT_USER_TURNS = 2;
 const DEFAULT_RECENT_ASSISTANT_TURNS = 1;
@@ -23,6 +24,7 @@ const DEFAULT_MAX_CACHE_ENTRIES = 1000;
 const DEFAULT_MODEL_REF = "github-copilot/gpt-5.4-mini";
 const DEFAULT_QUERY_MODE = "recent" as const;
 const DEFAULT_TRANSCRIPT_DIR = "active-memory";
+const TOGGLE_STATE_FILE = "session-toggles.json";
 
 const NO_RECALL_VALUES = new Set([
   "",
@@ -128,6 +130,10 @@ type CachedActiveRecallResult = {
 };
 
 type ActiveMemoryChatType = "direct" | "group" | "channel";
+
+type ActiveMemoryToggleStore = {
+  sessions?: Record<string, { disabled?: boolean; updatedAt?: number }>;
+};
 type ActiveMemoryThinkingLevel =
   | "off"
   | "minimal"
@@ -248,6 +254,124 @@ function resolveCanonicalSessionKeyFromSessionId(params: {
   } catch {
     return undefined;
   }
+}
+
+function resolveToggleStatePath(api: OpenClawPluginApi): string {
+  return path.join(
+    api.runtime.state.resolveStateDir(),
+    "plugins",
+    "active-memory",
+    TOGGLE_STATE_FILE,
+  );
+}
+
+async function readToggleStore(statePath: string): Promise<ActiveMemoryToggleStore> {
+  try {
+    const raw = await fs.readFile(statePath, "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") {
+      return {};
+    }
+    const sessions = (parsed as { sessions?: unknown }).sessions;
+    if (!sessions || typeof sessions !== "object" || Array.isArray(sessions)) {
+      return {};
+    }
+    const nextSessions: NonNullable<ActiveMemoryToggleStore["sessions"]> = {};
+    for (const [sessionKey, value] of Object.entries(sessions)) {
+      if (!sessionKey.trim() || !value || typeof value !== "object" || Array.isArray(value)) {
+        continue;
+      }
+      const disabled = (value as { disabled?: unknown }).disabled === true;
+      const updatedAt =
+        typeof (value as { updatedAt?: unknown }).updatedAt === "number"
+          ? (value as { updatedAt: number }).updatedAt
+          : undefined;
+      if (disabled) {
+        nextSessions[sessionKey] = { disabled, updatedAt };
+      }
+    }
+    return Object.keys(nextSessions).length > 0 ? { sessions: nextSessions } : {};
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return {};
+    }
+    return {};
+  }
+}
+
+async function writeToggleStore(statePath: string, store: ActiveMemoryToggleStore): Promise<void> {
+  await fs.mkdir(path.dirname(statePath), { recursive: true });
+  await fs.writeFile(`${statePath}.tmp`, `${JSON.stringify(store, null, 2)}\n`, "utf8");
+  await fs.rename(`${statePath}.tmp`, statePath);
+}
+
+async function isSessionActiveMemoryDisabled(params: {
+  api: OpenClawPluginApi;
+  sessionKey?: string;
+}): Promise<boolean> {
+  const sessionKey = params.sessionKey?.trim();
+  if (!sessionKey) {
+    return false;
+  }
+  try {
+    const store = await readToggleStore(resolveToggleStatePath(params.api));
+    return store.sessions?.[sessionKey]?.disabled === true;
+  } catch (error) {
+    params.api.logger.debug?.(
+      `active-memory: failed to read session toggle (${error instanceof Error ? error.message : String(error)})`,
+    );
+    return false;
+  }
+}
+
+async function setSessionActiveMemoryDisabled(params: {
+  api: OpenClawPluginApi;
+  sessionKey: string;
+  disabled: boolean;
+}): Promise<void> {
+  const statePath = resolveToggleStatePath(params.api);
+  const store = await readToggleStore(statePath);
+  const sessions = { ...store.sessions };
+  if (params.disabled) {
+    sessions[params.sessionKey] = { disabled: true, updatedAt: Date.now() };
+  } else {
+    delete sessions[params.sessionKey];
+  }
+  await writeToggleStore(statePath, Object.keys(sessions).length > 0 ? { sessions } : {});
+}
+
+function resolveCommandSessionKey(params: {
+  api: OpenClawPluginApi;
+  config: ResolvedActiveRecallPluginConfig;
+  sessionKey?: string;
+  sessionId?: string;
+}): string | undefined {
+  const explicit = params.sessionKey?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const configuredAgents =
+    params.config.agents.length > 0 ? params.config.agents : [DEFAULT_AGENT_ID];
+  for (const agentId of configuredAgents) {
+    const sessionKey = resolveCanonicalSessionKeyFromSessionId({
+      api: params.api,
+      agentId,
+      sessionId: params.sessionId,
+    });
+    if (sessionKey) {
+      return sessionKey;
+    }
+  }
+  return undefined;
+}
+
+function formatActiveMemoryCommandHelp(): string {
+  return [
+    "Active Memory session toggle:",
+    "/active-memory status",
+    "/active-memory on",
+    "/active-memory off",
+  ].join("\n");
 }
 
 function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPluginConfig {
@@ -1165,6 +1289,51 @@ export default definePluginEntry({
   description: "Proactively surfaces relevant memory before eligible conversational replies.",
   register(api: OpenClawPluginApi) {
     const config = normalizePluginConfig(api.pluginConfig);
+    api.registerCommand({
+      name: "active-memory",
+      description: "Enable, disable, or inspect Active Memory for this session.",
+      acceptsArgs: true,
+      handler: async (ctx) => {
+        const action = (ctx.args?.trim().split(/\s+/).filter(Boolean)[0] ?? "status").toLowerCase();
+        if (action === "help") {
+          return { text: formatActiveMemoryCommandHelp() };
+        }
+        const sessionKey = resolveCommandSessionKey({
+          api,
+          config,
+          sessionKey: ctx.sessionKey,
+          sessionId: ctx.sessionId,
+        });
+        if (!sessionKey) {
+          return {
+            text: "Active Memory: session toggle unavailable because this command has no session context.",
+          };
+        }
+        if (action === "status") {
+          const disabled = await isSessionActiveMemoryDisabled({ api, sessionKey });
+          return {
+            text: `Active Memory: ${disabled ? "off" : "on"} for this session.`,
+          };
+        }
+        if (action === "on" || action === "enable" || action === "enabled") {
+          await setSessionActiveMemoryDisabled({ api, sessionKey, disabled: false });
+          return { text: "Active Memory: on for this session." };
+        }
+        if (action === "off" || action === "disable" || action === "disabled") {
+          await setSessionActiveMemoryDisabled({ api, sessionKey, disabled: true });
+          await persistPluginStatusLines({
+            api,
+            agentId: resolveStatusUpdateAgentId({ sessionKey }),
+            sessionKey,
+          });
+          return { text: "Active Memory: off for this session." };
+        }
+        return {
+          text: `Unknown Active Memory action: ${action}\n\n${formatActiveMemoryCommandHelp()}`,
+        };
+      },
+    });
+
     api.on("before_prompt_build", async (event, ctx) => {
       const resolvedAgentId = resolveStatusUpdateAgentId(ctx);
       const resolvedSessionKey =
@@ -1178,6 +1347,14 @@ export default definePluginEntry({
           : undefined);
       const effectiveAgentId =
         resolvedAgentId || resolveStatusUpdateAgentId({ sessionKey: resolvedSessionKey });
+      if (await isSessionActiveMemoryDisabled({ api, sessionKey: resolvedSessionKey })) {
+        await persistPluginStatusLines({
+          api,
+          agentId: effectiveAgentId,
+          sessionKey: resolvedSessionKey,
+        });
+        return;
+      }
       if (!isEnabledForAgent(config, effectiveAgentId)) {
         await persistPluginStatusLines({
           api,

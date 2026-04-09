@@ -119,6 +119,21 @@ What this means:
 Active memory injects hidden system context for the model. It does not expose
 raw `<active_memory_plugin>...</active_memory_plugin>` tags to the client.
 
+## Session toggle
+
+Use the plugin command when you want to pause or resume active memory for the
+current chat session without editing config:
+
+```text
+/active-memory status
+/active-memory off
+/active-memory on
+```
+
+This is session-scoped. It does not change
+`plugins.entries.active-memory.enabled`, agent targeting, or other global
+configuration.
+
 If you want to see what active memory is doing in a live session, turn verbose
 mode on for that session:
 

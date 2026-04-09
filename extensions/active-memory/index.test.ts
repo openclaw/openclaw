@@ -1,4 +1,6 @@
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import plugin from "./index.js";
@@ -32,7 +34,9 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
 
 describe("active-memory plugin", () => {
   const hooks: Record<string, Function> = {};
+  const registeredCommands: Record<string, any> = {};
   const runEmbeddedPiAgent = vi.fn();
+  let stateDir = "";
   const api: any = {
     pluginConfig: {
       agents: ["main"],
@@ -51,14 +55,21 @@ describe("active-memory plugin", () => {
           saveSessionStore: vi.fn(async () => {}),
         },
       },
+      state: {
+        resolveStateDir: () => stateDir,
+      },
     },
+    registerCommand: vi.fn((command) => {
+      registeredCommands[command.name] = command;
+    }),
     on: vi.fn((hookName: string, handler: Function) => {
       hooks[hookName] = handler;
     }),
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-active-memory-test-"));
     api.pluginConfig = {
       agents: ["main"],
       logging: true,
@@ -70,18 +81,105 @@ describe("active-memory plugin", () => {
     for (const key of Object.keys(hooks)) {
       delete hooks[key];
     }
+    for (const key of Object.keys(registeredCommands)) {
+      delete registeredCommands[key];
+    }
     runEmbeddedPiAgent.mockResolvedValue({
       payloads: [{ text: "- lemon pepper wings\n- blue cheese" }],
     });
     plugin.register(api as unknown as OpenClawPluginApi);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    if (stateDir) {
+      await fs.rm(stateDir, { recursive: true, force: true });
+      stateDir = "";
+    }
   });
 
   it("registers a before_prompt_build hook", () => {
     expect(api.on).toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
+  });
+
+  it("registers a session-scoped active-memory toggle command", async () => {
+    const command = registeredCommands["active-memory"];
+    const sessionKey = "agent:main:active-memory-toggle";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-active-memory-toggle",
+      updatedAt: 0,
+    };
+    expect(command).toMatchObject({
+      name: "active-memory",
+      acceptsArgs: true,
+    });
+
+    const offResult = await command.handler({
+      channel: "webchat",
+      isAuthorizedSender: true,
+      sessionKey,
+      args: "off",
+      commandBody: "/active-memory off",
+      config: {},
+      requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
+      detachConversationBinding: async () => ({ removed: false }),
+      getCurrentConversationBinding: async () => null,
+    });
+
+    expect(offResult.text).toContain("off for this session");
+
+    const statusResult = await command.handler({
+      channel: "webchat",
+      isAuthorizedSender: true,
+      sessionKey,
+      args: "status",
+      commandBody: "/active-memory status",
+      config: {},
+      requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
+      detachConversationBinding: async () => ({ removed: false }),
+      getCurrentConversationBinding: async () => null,
+    });
+
+    expect(statusResult.text).toBe("Active Memory: off for this session.");
+
+    const disabledResult = await hooks.before_prompt_build(
+      { prompt: "what wings should i order? active memory toggle", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey,
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(disabledResult).toBeUndefined();
+    expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+
+    const onResult = await command.handler({
+      channel: "webchat",
+      isAuthorizedSender: true,
+      sessionKey,
+      args: "on",
+      commandBody: "/active-memory on",
+      config: {},
+      requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
+      detachConversationBinding: async () => ({ removed: false }),
+      getCurrentConversationBinding: async () => null,
+    });
+
+    expect(onResult.text).toContain("on for this session");
+
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order? active memory toggle", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey,
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
   });
 
   it("does not run for agents that are not explicitly targeted", async () => {
