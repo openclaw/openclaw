@@ -313,4 +313,51 @@ describe("Feishu startup probe queue serialisation (#63475)", () => {
     expect(results).toEqual([{}, {}]);
     expect(order).toEqual([]);
   });
+
+  it("aborted account escapes the queue without waiting for the in-flight probe", async () => {
+    let releaseAlpha!: () => void;
+    const alphaGate = new Promise<void>((resolve) => {
+      releaseAlpha = resolve;
+    });
+    const order: string[] = [];
+
+    probeFeishuMock.mockImplementation(async (account: { accountId: string }) => {
+      order.push(account.accountId);
+      if (account.accountId === "alpha") {
+        await alphaGate;
+      }
+      return { ok: true, botOpenId: `bot_${account.accountId}` };
+    });
+
+    const accounts = ["alpha", "beta"].map((id) => ({
+      accountId: id,
+      appId: `cli_${id}`,
+      appSecret: `secret_${id}`,
+    }));
+
+    const betaAbort = new AbortController();
+
+    // Start both concurrently — alpha enters the probe, beta queues behind it.
+    const alphaPromise = fetchBotIdentityForMonitor(accounts[0] as never);
+    const betaPromise = fetchBotIdentityForMonitor(accounts[1] as never, {
+      abortSignal: betaAbort.signal,
+    });
+
+    // Wait for alpha to be in-flight.
+    await vi.waitFor(() => expect(order).toEqual(["alpha"]));
+
+    // Abort beta while it is still queued behind alpha's long probe.
+    betaAbort.abort();
+    const betaResult = await betaPromise;
+
+    // Beta must return immediately with an empty identity — NOT wait for alpha.
+    expect(betaResult).toEqual({});
+    // Alpha is still running (not released yet).
+    expect(order).toEqual(["alpha"]);
+
+    // Release alpha and let the queue drain cleanly.
+    releaseAlpha();
+    const alphaResult = await alphaPromise;
+    expect(alphaResult).toEqual({ botOpenId: "bot_alpha" });
+  });
 });

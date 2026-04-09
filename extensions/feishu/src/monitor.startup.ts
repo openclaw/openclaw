@@ -86,12 +86,28 @@ export async function fetchBotIdentityForMonitor(
   account: ResolvedFeishuAccount,
   options: FetchBotOpenIdOptions = {},
 ): Promise<FeishuMonitorBotIdentity> {
+  // Short-circuit before joining the queue if already aborted.
+  if (options.abortSignal?.aborted) {
+    return {};
+  }
+
   // Chain onto the shared queue so only one probe is in-flight at a time,
   // regardless of how many concurrent callers exist.
   const ticket = startupProbeQueue.then(() => fetchBotIdentityCore(account, options));
   // Swallow rejections in the queue itself so a failing probe does not block
   // subsequent accounts.
   startupProbeQueue = ticket.catch(() => {});
+
+  // Race the queue wait against the abort signal so a stopped account does not
+  // block behind another account's long probe timeout.
+  if (options.abortSignal) {
+    const signal = options.abortSignal;
+    const abortRace = new Promise<FeishuMonitorBotIdentity>((resolve) => {
+      signal.addEventListener("abort", () => resolve({}), { once: true });
+    });
+    return Promise.race([ticket, abortRace]);
+  }
+
   return ticket;
 }
 
