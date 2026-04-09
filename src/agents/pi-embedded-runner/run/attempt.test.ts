@@ -287,6 +287,48 @@ describe("resolvePromptBuildHookResult", () => {
     expect(userResult.prependContext).toBeUndefined();
     expect(userResult.appendContext).toBeUndefined();
   });
+
+  it("passes scopeEnvelope through to before_prompt_build", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn(
+        (
+          hookName:
+            | "agent_turn_prepare"
+            | "heartbeat_prompt_contribution"
+            | "before_prompt_build"
+            | "before_agent_start",
+        ): boolean => hookName === "before_prompt_build",
+      ),
+      runBeforePromptBuild: vi.fn(async () => undefined),
+      runBeforeAgentStart: vi.fn(async () => undefined),
+    };
+
+    const scopeEnvelope = {
+      workspaceKind: "topic_workspace" as const,
+      scopeOwner: "active_task" as const,
+      topicKey: "duoduo-memory",
+      taskId: "duoduo-memory-benchmark",
+      statePath: "state/active-tasks/duoduo-memory-benchmark.json",
+    };
+
+    await resolvePromptBuildHookResult({
+      config: {},
+      prompt: "hello",
+      messages: [{ role: "user", content: "ctx" }],
+      scopeEnvelope,
+      hookCtx: {},
+      hookRunner,
+    });
+
+    expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledWith(
+      {
+        prompt: "hello",
+        messages: [{ role: "user", content: "ctx" }],
+        scopeEnvelope,
+      },
+      {},
+    );
+  });
 });
 
 describe("composeSystemPromptWithHookContext", () => {

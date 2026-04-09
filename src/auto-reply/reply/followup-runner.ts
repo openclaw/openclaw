@@ -276,6 +276,7 @@ export function createFollowupRunner(params: {
                 replyOperation,
                 sessionId: run.sessionId,
                 sessionKey: run.sessionKey,
+                sessionEntry: activeSessionEntry,
                 agentId: run.agentId,
                 trigger: "user",
                 messageChannel: queued.originatingChannel ?? undefined,

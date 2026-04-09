@@ -318,6 +318,7 @@ export async function initSessionState(params: {
   let persistedSubagentRole: SessionEntry["subagentRole"];
   let persistedSubagentControlScope: SessionEntry["subagentControlScope"];
   let persistedDisplayName: SessionEntry["displayName"];
+  let persistedScopeEnvelope: SessionEntry["scopeEnvelope"];
 
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup =
@@ -540,6 +541,7 @@ export async function initSessionState(params: {
       persistedSubagentRole = entry.subagentRole;
       persistedSubagentControlScope = entry.subagentControlScope;
       persistedDisplayName = entry.displayName;
+      persistedScopeEnvelope = entry.scopeEnvelope;
     }
   }
 
@@ -651,6 +653,7 @@ export async function initSessionState(params: {
     queueCap: baseEntry?.queueCap,
     queueDrop: baseEntry?.queueDrop,
     displayName: persistedDisplayName ?? baseEntry?.displayName,
+    scopeEnvelope: persistedScopeEnvelope ?? baseEntry?.scopeEnvelope,
     chatType: baseEntry?.chatType,
     channel: baseEntry?.channel,
     groupId: baseEntry?.groupId,

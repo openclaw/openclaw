@@ -564,6 +564,7 @@ export function runAgentAttempt(params: {
   return runEmbeddedPiAgent({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    sessionEntry: params.sessionEntry,
     agentId: params.sessionAgentId,
     trigger: "user",
     messageChannel: params.messageChannel,

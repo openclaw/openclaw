@@ -2130,6 +2130,61 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     }
   });
 
+  it("preserves scopeEnvelope across /new and /reset", async () => {
+    const storePath = await createStorePath("openclaw-reset-scope-envelope-");
+    const sessionKey = "agent:main:webchat:scope-envelope";
+    const existingSessionId = "existing-session-scope-envelope";
+    const overrides = {
+      scopeEnvelope: {
+        workspaceKind: "topic_workspace",
+        scopeOwner: "active_task",
+        topicKey: "duoduo-memory",
+        topicAliases: ["duoduo-memory"],
+        taskId: "duoduo-memory-benchmark",
+        statePath: "state/active-tasks/duoduo-memory-benchmark.json",
+        statusDocPath: "docs/status/duoduo-memory-benchmark.md",
+      },
+    } as const;
+    const cases = [
+      { name: "new preserves scopeEnvelope", body: "/new" },
+      { name: "reset preserves scopeEnvelope", body: "/reset" },
+    ] as const;
+
+    for (const testCase of cases) {
+      await seedSessionStoreWithOverrides({
+        storePath,
+        sessionKey,
+        sessionId: existingSessionId,
+        overrides: { ...overrides },
+      });
+
+      const cfg = {
+        session: { store: storePath, idleMinutes: 999 },
+      } as OpenClawConfig;
+
+      const result = await initSessionState({
+        ctx: {
+          Body: testCase.body,
+          RawBody: testCase.body,
+          CommandBody: testCase.body,
+          From: "user-scope-envelope",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "webchat",
+          Surface: "webchat",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession, testCase.name).toBe(true);
+      expect(result.resetTriggered, testCase.name).toBe(true);
+      expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
+      expect(result.sessionEntry.scopeEnvelope, testCase.name).toEqual(overrides.scopeEnvelope);
+    }
+  });
+
   it("preserves selected auth profile overrides across /new and /reset", async () => {
     const storePath = await createStorePath("openclaw-reset-model-auth-");
     const sessionKey = "agent:main:telegram:dm:user-model-auth";

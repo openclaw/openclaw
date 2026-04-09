@@ -35,7 +35,9 @@ import {
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
+import type { PromptBuildScopeEnvelope } from "../shared/prompt-build-scope-envelope.js";
 import {
+  normalizeStringifiedOptionalString,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
@@ -84,6 +86,67 @@ function normalizeSubagentControlScope(raw: string): "children" | "none" | undef
     return normalized;
   }
   return undefined;
+}
+
+function normalizeScopeEnvelopeWorkspaceKind(
+  raw: unknown,
+): PromptBuildScopeEnvelope["workspaceKind"] | undefined {
+  const normalized = normalizeOptionalLowercaseString(raw);
+  if (
+    normalized === "personal_workspace" ||
+    normalized === "topic_workspace" ||
+    normalized === "multi_user_shared_space"
+  ) {
+    return normalized;
+  }
+  return undefined;
+}
+
+function normalizeScopeEnvelopeScopeOwner(
+  raw: unknown,
+): PromptBuildScopeEnvelope["scopeOwner"] | undefined {
+  const normalized = normalizeOptionalLowercaseString(raw);
+  if (
+    normalized === "session" ||
+    normalized === "channel" ||
+    normalized === "thread" ||
+    normalized === "topic_kb" ||
+    normalized === "active_task"
+  ) {
+    return normalized;
+  }
+  return undefined;
+}
+
+function normalizeNonEmptyStringArray(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const values = raw
+    .map((value) => normalizeStringifiedOptionalString(value))
+    .filter((value): value is string => Boolean(value));
+  return values.length > 0 ? values : undefined;
+}
+
+function normalizeScopeEnvelope(raw: unknown): PromptBuildScopeEnvelope | undefined {
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const input = raw as Record<string, unknown>;
+  const workspaceKind = normalizeScopeEnvelopeWorkspaceKind(input.workspaceKind);
+  const scopeOwner = normalizeScopeEnvelopeScopeOwner(input.scopeOwner);
+  if (!workspaceKind || !scopeOwner) {
+    return undefined;
+  }
+  return {
+    workspaceKind,
+    scopeOwner,
+    topicKey: normalizeOptionalString(input.topicKey),
+    topicAliases: normalizeNonEmptyStringArray(input.topicAliases),
+    taskId: normalizeOptionalString(input.taskId),
+    statePath: normalizeOptionalString(input.statePath),
+    statusDocPath: normalizeOptionalString(input.statusDocPath),
+  };
 }
 
 export async function applySessionsPatchToStore(params: {
@@ -505,6 +568,19 @@ export async function applySessionsPatchToStore(params: {
         return invalid('invalid groupActivation (use "mention"|"always")');
       }
       next.groupActivation = normalized;
+    }
+  }
+
+  if ("scopeEnvelope" in patch) {
+    const raw = patch.scopeEnvelope;
+    if (raw === null) {
+      delete next.scopeEnvelope;
+    } else if (raw !== undefined) {
+      const normalized = normalizeScopeEnvelope(raw);
+      if (!normalized) {
+        return invalid("invalid scopeEnvelope");
+      }
+      next.scopeEnvelope = normalized;
     }
   }
 
