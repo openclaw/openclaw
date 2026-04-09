@@ -59,14 +59,29 @@ function resolveSerperConfig(searchConfig?: SearchConfigRecord): SerperConfig {
     : {};
 }
 
-function resolveApiKey(
-  searchConfig?: SearchConfigRecord,
-  pluginConfig?: Record<string, unknown>,
-): string | undefined {
-  const fromPlugin = pluginConfig?.apiKey;
-  if (typeof fromPlugin === "string" && fromPlugin.trim()) return fromPlugin.trim();
+function mergeScopedSearchConfig(
+  searchConfig: SearchConfigRecord | undefined,
+  key: string,
+  pluginConfig: Record<string, unknown> | undefined,
+  options?: { mirrorApiKeyToTopLevel?: boolean },
+): SearchConfigRecord | undefined {
+  if (!pluginConfig) return searchConfig;
+  const currentScoped = isRecord(searchConfig?.[key]) ? searchConfig?.[key] : {};
+  const next: SearchConfigRecord = {
+    ...searchConfig,
+    [key]: { ...currentScoped, ...pluginConfig },
+  };
+  if (options?.mirrorApiKeyToTopLevel && pluginConfig.apiKey !== undefined) {
+    next.apiKey = pluginConfig.apiKey;
+  }
+  return next;
+}
+
+function resolveApiKey(searchConfig?: SearchConfigRecord): string | undefined {
   const fromSearch = searchConfig?.apiKey;
   if (typeof fromSearch === "string" && fromSearch.trim()) return fromSearch.trim();
+  const fromSerper = resolveSerperConfig(searchConfig).apiKey;
+  if (typeof fromSerper === "string" && fromSerper.trim()) return fromSerper.trim();
   return process.env.SERPER_API_KEY?.trim() || undefined;
 }
 
@@ -83,7 +98,9 @@ function createSerperToolDefinition(
     isConfigured: Boolean(apiKey),
     execute: async (query: string, options?: { numResults?: number }) => {
       if (!apiKey) {
-        throw new Error("Serper API key not configured. Set SERPER_API_KEY or configure via plugin settings.");
+        throw new Error(
+          "Serper API key not configured. Set SERPER_API_KEY or configure via plugin settings.",
+        );
       }
 
       const num = options?.numResults ?? serperConfig.num ?? 10;
@@ -143,19 +160,14 @@ export function createSerperWebSearchProviderPlugin(): WebSearchProviderPlugin {
       webSearch.apiKey = value;
     },
 
-    mergeSearchConfig(
-      searchConfig: SearchConfigRecord | undefined,
-      pluginConfig: Record<string, unknown> | undefined,
-    ): SearchConfigRecord | undefined {
-      if (!pluginConfig) return searchConfig;
-      return {
-        ...searchConfig,
-        serper: { ...(isRecord(searchConfig?.serper) ? searchConfig.serper : {}), ...pluginConfig },
-        ...(pluginConfig.apiKey !== undefined ? { apiKey: pluginConfig.apiKey } : {}),
-      };
-    },
-
-    createTool: (searchConfig?: SearchConfigRecord) =>
-      createSerperToolDefinition(searchConfig),
+    createTool: (ctx) =>
+      createSerperToolDefinition(
+        mergeScopedSearchConfig(
+          ctx.searchConfig,
+          PLUGIN_ID,
+          resolvePluginConfig(ctx.config, PLUGIN_ID),
+          { mirrorApiKeyToTopLevel: true },
+        ),
+      ),
   };
 }
