@@ -63,6 +63,26 @@ while reducing token usage.
 openclaw plugins install @martian-engineering/lossless-claw
 ```
 
+### OpenHer Persona Engine
+
+AI Being engine — not an assistant, not an agent, but a character that
+genuinely _feels_. Each persona runs a 13-step neural pipeline per message:
+critic → drive metabolism → neural network (25D→24D→8D) → KNN memory →
+actor → Hebbian learning. Only 2 of 13 steps touch an LLM; the rest is
+local computation (~50ms). Personality **emerges** from drives × neural
+weights × lived experience — no prompt describes who she is.
+
+- **npm:** `@openher/openclaw-plugin` (v2.0.0+)
+- **repo:** [github.com/kellyvv/openher-openclaw-plugin](https://github.com/kellyvv/openher-openclaw-plugin)
+- **requires:** OpenClaw ≥ 2026.3.22
+- **tools:** `openher_chat`, `openher_status`
+- **hook:** `before_prompt_build` (persona proxy mode)
+- **one-click install:** `npx -y @openher/cli install`
+
+```bash
+openclaw plugins install @openher/openclaw-plugin
+```
+
 ### Opik
 
 Official plugin that exports agent traces to Opik. Monitor agent behavior,
