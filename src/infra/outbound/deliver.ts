@@ -583,6 +583,7 @@ async function deliverOutboundPayloadsCore(
     sessionKey: params.session?.key,
     messageProvider: channel,
     accountId,
+    requesterSenderId: params.session?.requesterSenderId,
   });
   const results: OutboundDeliveryResult[] = [];
   const handler = await createChannelHandler({

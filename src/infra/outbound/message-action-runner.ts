@@ -542,6 +542,8 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       channel,
       params,
       agentId,
+      sessionKey: input.sessionKey,
+      requesterSenderId: input.requesterSenderId ?? undefined,
       mediaAccess: ctx.mediaAccess,
       accountId: accountId ?? undefined,
       gateway,

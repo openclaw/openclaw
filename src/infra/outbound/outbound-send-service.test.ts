@@ -17,7 +17,12 @@ const createAgentScopedHostMediaReadFileMock = vi.hoisted(() =>
 );
 const resolveAgentScopedOutboundMediaAccessMock = vi.hoisted(() =>
   vi.fn<
-    (params: { cfg: unknown; agentId?: string; mediaSources?: readonly string[] }) => {
+    (params: {
+      cfg: unknown;
+      agentId?: string;
+      mediaSources?: readonly string[];
+      requesterSenderId?: string;
+    }) => {
       localRoots: string[];
       readFile: (filePath: string) => Promise<Buffer>;
     }
@@ -176,6 +181,29 @@ describe("executeSendAction", () => {
         channel: "demo-outbound",
         to: "channel:123",
         content: "hello",
+      }),
+    );
+  });
+
+  it("forwards requesterSenderId into outbound media access resolution", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "demo-outbound",
+        params: { media: "/tmp/host.png" },
+        sessionKey: "agent:main:whatsapp:group:ops",
+        requesterSenderId: "attacker",
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+    });
+
+    expect(mocks.resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterSenderId: "attacker",
       }),
     );
   });

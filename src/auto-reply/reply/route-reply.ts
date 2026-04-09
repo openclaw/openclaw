@@ -46,6 +46,8 @@ export type RouteReplyParams = {
   sessionKey?: string;
   /** Provider account id (multi-account). */
   accountId?: string;
+  /** Originating sender id for sender-scoped outbound media policy. */
+  requesterSenderId?: string;
   /** Thread id for replies (Telegram topic id or Matrix thread event id). */
   threadId?: string | number;
   /** Config for provider-specific settings. */
@@ -187,6 +189,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       cfg,
       agentId: resolvedAgentId,
       sessionKey: params.sessionKey,
+      requesterSenderId: params.requesterSenderId,
     });
     const results = await deliverOutboundPayloads({
       cfg,
