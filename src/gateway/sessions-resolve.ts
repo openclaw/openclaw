@@ -10,10 +10,10 @@ import {
 } from "./protocol/index.js";
 import {
   listSessionsFromStore,
-  loadCombinedSessionStoreForGateway,
   migrateAndPruneGatewaySessionStoreKey,
   resolveGatewaySessionStoreTarget,
 } from "./session-utils.js";
+import { loadResilientCombinedSessionStoreForGateway } from "./session-store-recovery.js";
 
 export type SessionsResolveResult = { ok: true; key: string } | { ok: false; error: ErrorShape };
 
@@ -81,7 +81,17 @@ export async function resolveSessionKeyFromResolveParams(params: {
 
   if (hasKey) {
     const target = resolveGatewaySessionStoreTarget({ cfg, key });
-    const store = loadSessionStore(target.storePath);
+    let store: ReturnType<typeof loadSessionStore>;
+    try {
+      store = loadSessionStore(target.storePath);
+    } catch {
+      await loadResilientCombinedSessionStoreForGateway(cfg, { forceRecovery: true });
+      store = loadSessionStore(target.storePath);
+    }
+    if (!store[target.canonicalKey]) {
+      await loadResilientCombinedSessionStoreForGateway(cfg, { forceRecovery: true });
+      store = loadSessionStore(target.storePath);
+    }
     if (store[target.canonicalKey]) {
       if (
         !isResolvedSessionKeyVisible({
@@ -121,8 +131,10 @@ export async function resolveSessionKeyFromResolveParams(params: {
   }
 
   if (hasSessionId) {
-    const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
-    const list = listSessionsFromStore({
+    let { storePath, store } = await loadResilientCombinedSessionStoreForGateway(cfg, {
+      minStoreEntries: 1,
+    });
+    let list = listSessionsFromStore({
       cfg,
       storePath,
       store,
@@ -133,9 +145,28 @@ export async function resolveSessionKeyFromResolveParams(params: {
         agentId: p.agentId,
       },
     });
-    const matches = list.sessions.filter(
+    let matches = list.sessions.filter(
       (session) => session.sessionId === sessionId || session.key === sessionId,
     );
+    if (matches.length === 0) {
+      ({ storePath, store } = await loadResilientCombinedSessionStoreForGateway(cfg, {
+        forceRecovery: true,
+      }));
+      list = listSessionsFromStore({
+        cfg,
+        storePath,
+        store,
+        opts: {
+          includeGlobal: p.includeGlobal === true,
+          includeUnknown: p.includeUnknown === true,
+          spawnedBy: p.spawnedBy,
+          agentId: p.agentId,
+        },
+      });
+      matches = list.sessions.filter(
+        (session) => session.sessionId === sessionId || session.key === sessionId,
+      );
+    }
     if (matches.length === 0) {
       return {
         ok: false,
@@ -163,8 +194,10 @@ export async function resolveSessionKeyFromResolveParams(params: {
     };
   }
 
-  const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
-  const list = listSessionsFromStore({
+  let { storePath, store } = await loadResilientCombinedSessionStoreForGateway(cfg, {
+    minStoreEntries: 1,
+  });
+  let list = listSessionsFromStore({
     cfg,
     storePath,
     store,
@@ -177,6 +210,24 @@ export async function resolveSessionKeyFromResolveParams(params: {
       limit: 2,
     },
   });
+  if (list.sessions.length === 0) {
+    ({ storePath, store } = await loadResilientCombinedSessionStoreForGateway(cfg, {
+      forceRecovery: true,
+    }));
+    list = listSessionsFromStore({
+      cfg,
+      storePath,
+      store,
+      opts: {
+        includeGlobal: p.includeGlobal === true,
+        includeUnknown: p.includeUnknown === true,
+        label: parsedLabel.label,
+        agentId: p.agentId,
+        spawnedBy: p.spawnedBy,
+        limit: 2,
+      },
+    });
+  }
   if (list.sessions.length === 0) {
     return {
       ok: false,

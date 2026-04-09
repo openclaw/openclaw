@@ -67,7 +67,6 @@ import { reactivateCompletedSubagentSession } from "../session-subagent-reactiva
 import {
   archiveFileOnDisk,
   listSessionsFromStore,
-  loadCombinedSessionStoreForGateway,
   loadGatewaySessionRow,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
@@ -81,6 +80,7 @@ import {
   type SessionsPreviewResult,
   readSessionMessages,
 } from "../session-utils.js";
+import { loadResilientCombinedSessionStoreForGateway } from "../session-store-recovery.js";
 import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { chatHandlers } from "./chat.js";
@@ -552,20 +552,26 @@ async function handleSessionSend(params: {
   }
 }
 export const sessionsHandlers: GatewayRequestHandlers = {
-  "sessions.list": ({ params, respond }) => {
+  "sessions.list": async ({ params, respond }) => {
     if (!assertValidParams(params, validateSessionsListParams, "sessions.list", respond)) {
       return;
     }
     const p = params;
     const cfg = loadConfig();
-    const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
-    const result = listSessionsFromStore({
-      cfg,
-      storePath,
-      store,
-      opts: p,
-    });
-    respond(true, result, undefined);
+    try {
+      const { storePath, store } = await loadResilientCombinedSessionStoreForGateway(cfg, {
+        minStoreEntries: 1,
+      });
+      const result = listSessionsFromStore({
+        cfg,
+        storePath,
+        store,
+        opts: p,
+      });
+      respond(true, result, undefined);
+    } catch (error) {
+      respond(false, undefined, errorShape(ErrorCodes.INTERNAL_ERROR, formatErrorMessage(error)));
+    }
   },
   "sessions.subscribe": ({ client, context, respond }) => {
     const connId = client?.connId?.trim();

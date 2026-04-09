@@ -85,6 +85,7 @@ export function loadSessionStore(
   let fileStat = getFileStatSnapshot(storePath);
   let mtimeMs = fileStat?.mtimeMs;
   let serializedFromDisk: string | undefined;
+  let loadFailure: unknown;
   const maxReadAttempts = process.platform === "win32" ? 3 : 1;
   const retryBuf = maxReadAttempts > 1 ? new Int32Array(new SharedArrayBuffer(4)) : undefined;
   for (let attempt = 0; attempt < maxReadAttempts; attempt += 1) {
@@ -95,19 +96,31 @@ export function loadSessionStore(
         continue;
       }
       const parsed = JSON.parse(raw);
-      if (isSessionStoreRecord(parsed)) {
-        store = parsed;
-        serializedFromDisk = raw;
+      if (!isSessionStoreRecord(parsed)) {
+        throw new Error("invalid session store payload");
       }
+      store = parsed;
+      serializedFromDisk = raw;
       fileStat = getFileStatSnapshot(storePath) ?? fileStat;
       mtimeMs = fileStat?.mtimeMs;
+      loadFailure = undefined;
       break;
-    } catch {
+    } catch (err) {
+      loadFailure = err;
       if (attempt < maxReadAttempts - 1) {
         Atomics.wait(retryBuf!, 0, 0, 50);
         continue;
       }
     }
+  }
+
+  const loadFailureCode =
+    loadFailure && typeof loadFailure === "object" && "code" in loadFailure
+      ? String((loadFailure as { code?: unknown }).code ?? "")
+      : undefined;
+  if (loadFailure && loadFailureCode !== "ENOENT") {
+    const message = loadFailure instanceof Error ? loadFailure.message : String(loadFailure);
+    throw new Error(`failed to load session store ${storePath}: ${message}`);
   }
 
   if (serializedFromDisk !== undefined) {

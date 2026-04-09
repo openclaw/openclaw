@@ -8,6 +8,7 @@ const hoisted = vi.hoisted(() => ({
   listSessionsFromStoreMock: vi.fn(),
   migrateAndPruneGatewaySessionStoreKeyMock: vi.fn(),
   resolveGatewaySessionStoreTargetMock: vi.fn(),
+  loadResilientCombinedSessionStoreForGatewayMock: vi.fn(),
 }));
 
 vi.mock("../config/sessions.js", async () => {
@@ -30,6 +31,11 @@ vi.mock("./session-utils.js", async () => {
   };
 });
 
+vi.mock("./session-store-recovery.js", () => ({
+  loadResilientCombinedSessionStoreForGateway:
+    hoisted.loadResilientCombinedSessionStoreForGatewayMock,
+}));
+
 const { resolveSessionKeyFromResolveParams } = await import("./sessions-resolve.js");
 
 describe("resolveSessionKeyFromResolveParams", () => {
@@ -43,12 +49,17 @@ describe("resolveSessionKeyFromResolveParams", () => {
     hoisted.listSessionsFromStoreMock.mockReset();
     hoisted.migrateAndPruneGatewaySessionStoreKeyMock.mockReset();
     hoisted.resolveGatewaySessionStoreTargetMock.mockReset();
+    hoisted.loadResilientCombinedSessionStoreForGatewayMock.mockReset();
     hoisted.resolveGatewaySessionStoreTargetMock.mockReturnValue({
       canonicalKey,
       storeKeys: [canonicalKey, legacyKey],
       storePath,
     });
     hoisted.migrateAndPruneGatewaySessionStoreKeyMock.mockReturnValue({ primaryKey: canonicalKey });
+    hoisted.loadResilientCombinedSessionStoreForGatewayMock.mockResolvedValue({
+      storePath,
+      store: {},
+    });
     hoisted.updateSessionStoreMock.mockImplementation(
       async (_path: string, updater: (store: Record<string, SessionEntry>) => void) => {
         const store = hoisted.loadSessionStoreMock.mock.results[0]?.value as
@@ -113,4 +124,35 @@ describe("resolveSessionKeyFromResolveParams", () => {
       },
     });
   });
+
+  it("recovers key resolution when the session store load initially fails", async () => {
+    const recoveredStore = {
+      [canonicalKey]: { sessionId: "sess-1", updatedAt: 1 },
+    } satisfies Record<string, SessionEntry>;
+    hoisted.loadSessionStoreMock
+      .mockImplementationOnce(() => {
+        throw new Error("failed to load session store /tmp/sessions.json: Unexpected end of JSON input");
+      })
+      .mockImplementation(() => recoveredStore);
+    hoisted.loadResilientCombinedSessionStoreForGatewayMock.mockResolvedValue({
+      storePath,
+      store: recoveredStore,
+    });
+
+    await expect(
+      resolveSessionKeyFromResolveParams({
+        cfg: {},
+        p: { key: canonicalKey },
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      key: canonicalKey,
+    });
+
+    expect(hoisted.loadResilientCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(
+      {},
+      { forceRecovery: true },
+    );
+  });
+
 });

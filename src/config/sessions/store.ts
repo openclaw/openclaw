@@ -530,6 +530,21 @@ async function writeSessionStoreAtomic(params: {
   store: Record<string, SessionEntry>;
   serialized: string;
 }): Promise<void> {
+  const previousPath = `${params.storePath}.prev`;
+  try {
+    const existing = fs.statSync(params.storePath);
+    if (existing.isFile() && existing.size > 0) {
+      await fs.promises.copyFile(params.storePath, previousPath);
+    }
+  } catch (err) {
+    const code =
+      err && typeof err === "object" && "code" in err
+        ? String((err as { code?: unknown }).code ?? "")
+        : undefined;
+    if (code !== "ENOENT") {
+      throw err;
+    }
+  }
   await writeTextAtomic(params.storePath, params.serialized, { mode: 0o600 });
   updateSessionStoreWriteCaches({
     storePath: params.storePath,
