@@ -90,6 +90,48 @@ async function fetchSessionCompactionCheckpoints(state: SessionsState, key: stri
   }
 }
 
+async function withSessionsLoading<T>(
+  state: SessionsState,
+  run: () => Promise<T>,
+): Promise<T | undefined> {
+  if (state.sessionsLoading) {
+    return undefined;
+  }
+  state.sessionsLoading = true;
+  state.sessionsError = null;
+  try {
+    return await run();
+  } finally {
+    state.sessionsLoading = false;
+  }
+}
+
+async function runCompactionMutation<T>(
+  state: SessionsState,
+  key: string,
+  checkpointId: string,
+  method: "sessions.compaction.branch" | "sessions.compaction.restore",
+  confirmMessage: string,
+): Promise<T | null> {
+  if (!state.client || !state.connected || !window.confirm(confirmMessage)) {
+    return null;
+  }
+  const client = state.client;
+  state.sessionsCheckpointBusyKey = checkpointId;
+  try {
+    const result = await client.request<T>(method, { key, checkpointId });
+    await loadSessions(state);
+    return result ?? null;
+  } catch (err) {
+    state.sessionsError = String(err);
+    return null;
+  } finally {
+    if (state.sessionsCheckpointBusyKey === checkpointId) {
+      state.sessionsCheckpointBusyKey = null;
+    }
+  }
+}
+
 export async function subscribeSessions(state: SessionsState) {
   if (!state.client || !state.connected) {
     return;
@@ -113,12 +155,8 @@ export async function loadSessions(
   if (!state.client || !state.connected) {
     return;
   }
-  if (state.sessionsLoading) {
-    return;
-  }
-  state.sessionsLoading = true;
-  state.sessionsError = null;
-  try {
+  const client = state.client;
+  await withSessionsLoading(state, async () => {
     const previousRows = new Map(
       (state.sessionsResult?.sessions ?? []).map((row) => [row.key, row] as const),
     );
@@ -136,7 +174,7 @@ export async function loadSessions(
     if (limit > 0) {
       params.limit = limit;
     }
-    const res = await state.client.request<SessionsListResult | undefined>("sessions.list", params);
+    const res = await client.request<SessionsListResult | undefined>("sessions.list", params);
     if (res) {
       state.sessionsResult = res;
       const nextKeys = new Set(res.sessions.map((row) => row.key));
@@ -164,16 +202,15 @@ export async function loadSessions(
         await fetchSessionCompactionCheckpoints(state, expandedKey);
       }
     }
-  } catch (err) {
-    if (isMissingOperatorReadScopeError(err)) {
-      state.sessionsResult = null;
-      state.sessionsError = formatMissingOperatorReadScopeMessage("sessions");
-    } else {
+    return undefined;
+  }).catch((err: unknown) => {
+    if (!isMissingOperatorReadScopeError(err)) {
       state.sessionsError = String(err);
+      return;
     }
-  } finally {
-    state.sessionsLoading = false;
-  }
+    state.sessionsResult = null;
+    state.sessionsError = formatMissingOperatorReadScopeMessage("sessions");
+  });
 }
 
 export async function patchSession(
@@ -191,20 +228,16 @@ export async function patchSession(
     return;
   }
   const params: Record<string, unknown> = { key };
-  if ("label" in patch) {
-    params.label = patch.label;
-  }
-  if ("thinkingLevel" in patch) {
-    params.thinkingLevel = patch.thinkingLevel;
-  }
-  if ("fastMode" in patch) {
-    params.fastMode = patch.fastMode;
-  }
-  if ("verboseLevel" in patch) {
-    params.verboseLevel = patch.verboseLevel;
-  }
-  if ("reasoningLevel" in patch) {
-    params.reasoningLevel = patch.reasoningLevel;
+  for (const field of [
+    "label",
+    "thinkingLevel",
+    "fastMode",
+    "verboseLevel",
+    "reasoningLevel",
+  ] as const) {
+    if (field in patch) {
+      params[field] = patch[field];
+    }
   }
   try {
     await state.client.request("sessions.patch", params);
@@ -221,32 +254,28 @@ export async function deleteSessionsAndRefresh(
   if (!state.client || !state.connected || keys.length === 0) {
     return [];
   }
+  const client = state.client;
   if (state.sessionsLoading) {
     return [];
   }
-  const noun = keys.length === 1 ? "session" : "sessions";
   const confirmed = window.confirm(
-    `Delete ${keys.length} ${noun}?\n\nThis will delete the session entries and archive their transcripts.`,
+    `Delete ${keys.length} ${keys.length === 1 ? "session" : "sessions"}?\n\nThis will delete the session entries and archive their transcripts.`,
   );
   if (!confirmed) {
     return [];
   }
-  state.sessionsLoading = true;
-  state.sessionsError = null;
   const deleted: string[] = [];
   const deleteErrors: string[] = [];
-  try {
+  await withSessionsLoading(state, async () => {
     for (const key of keys) {
       try {
-        await state.client.request("sessions.delete", { key, deleteTranscript: true });
+        await client.request("sessions.delete", { key, deleteTranscript: true });
         deleted.push(key);
       } catch (err) {
         deleteErrors.push(String(err));
       }
     }
-  } finally {
-    state.sessionsLoading = false;
-  }
+  });
   if (deleted.length > 0) {
     await loadSessions(state);
   }
@@ -277,31 +306,14 @@ export async function branchSessionFromCheckpoint(
   key: string,
   checkpointId: string,
 ): Promise<string | null> {
-  if (!state.client || !state.connected) {
-    return null;
-  }
-  const confirmed = window.confirm(
+  const result = await runCompactionMutation<SessionsCompactionBranchResult>(
+    state,
+    key,
+    checkpointId,
+    "sessions.compaction.branch",
     "Create a new child session from this pre-compaction checkpoint?",
   );
-  if (!confirmed) {
-    return null;
-  }
-  state.sessionsCheckpointBusyKey = checkpointId;
-  try {
-    const result = await state.client.request<SessionsCompactionBranchResult>(
-      "sessions.compaction.branch",
-      { key, checkpointId },
-    );
-    await loadSessions(state);
-    return result?.key ?? null;
-  } catch (err) {
-    state.sessionsError = String(err);
-    return null;
-  } finally {
-    if (state.sessionsCheckpointBusyKey === checkpointId) {
-      state.sessionsCheckpointBusyKey = null;
-    }
-  }
+  return result?.key ?? null;
 }
 
 export async function restoreSessionFromCheckpoint(
@@ -309,27 +321,11 @@ export async function restoreSessionFromCheckpoint(
   key: string,
   checkpointId: string,
 ) {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  const confirmed = window.confirm(
+  await runCompactionMutation<SessionsCompactionRestoreResult>(
+    state,
+    key,
+    checkpointId,
+    "sessions.compaction.restore",
     "Restore this session to the selected pre-compaction checkpoint?\n\nThis replaces the current active transcript for the session key.",
   );
-  if (!confirmed) {
-    return;
-  }
-  state.sessionsCheckpointBusyKey = checkpointId;
-  try {
-    await state.client.request<SessionsCompactionRestoreResult>("sessions.compaction.restore", {
-      key,
-      checkpointId,
-    });
-    await loadSessions(state);
-  } catch (err) {
-    state.sessionsError = String(err);
-  } finally {
-    if (state.sessionsCheckpointBusyKey === checkpointId) {
-      state.sessionsCheckpointBusyKey = null;
-    }
-  }
 }

@@ -197,7 +197,7 @@ export function applySettingsFromUrl(host: SettingsHost) {
   url.search = params.toString();
   const nextHash = hashParams.toString();
   url.hash = nextHash ? `#${nextHash}` : "";
-  window.history.replaceState({}, "", url.toString());
+  updateBrowserHistory(url, true);
 }
 
 export function setTab(host: SettingsHost, next: Tab) {
@@ -458,6 +458,14 @@ export function setTabFromRoute(host: SettingsHost, next: Tab) {
   applyTabSelection(host, next, { refreshPolicy: "connected" });
 }
 
+function updateBrowserHistory(url: URL, replace: boolean) {
+  if (replace) {
+    window.history.replaceState({}, "", url.toString());
+    return;
+  }
+  window.history.pushState({}, "", url.toString());
+}
+
 function applyTabSelection(
   host: SettingsHost,
   next: Tab,
@@ -514,11 +522,7 @@ export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
     url.pathname = targetPath;
   }
 
-  if (replace) {
-    window.history.replaceState({}, "", url.toString());
-  } else {
-    window.history.pushState({}, "", url.toString());
-  }
+  updateBrowserHistory(url, replace);
 }
 
 export function syncUrlWithSessionKey(host: SettingsHost, sessionKey: string, replace: boolean) {
@@ -527,11 +531,7 @@ export function syncUrlWithSessionKey(host: SettingsHost, sessionKey: string, re
   }
   const url = new URL(window.location.href);
   url.searchParams.set("session", sessionKey);
-  if (replace) {
-    window.history.replaceState({}, "", url.toString());
-  } else {
-    window.history.pushState({}, "", url.toString());
-  }
+  updateBrowserHistory(url, replace);
 }
 
 export async function loadOverview(host: SettingsHost) {
@@ -675,11 +675,8 @@ function buildAttentionItems(host: OpenClawApp) {
 }
 
 export async function loadChannelsTab(host: SettingsHost) {
-  await Promise.all([
-    loadChannels(host as unknown as OpenClawApp, true),
-    loadConfigSchema(host as unknown as OpenClawApp),
-    loadConfig(host as unknown as OpenClawApp),
-  ]);
+  const app = host as unknown as OpenClawApp;
+  await Promise.all([loadChannels(app, true), loadConfigSchema(app), loadConfig(app)]);
 }
 
 export async function loadCron(host: SettingsHost) {
