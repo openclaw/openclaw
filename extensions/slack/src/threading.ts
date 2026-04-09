@@ -20,11 +20,19 @@ export function resolveSlackThreadContext(params: {
   const isThreadReply =
     hasThreadTs && (incomingThreadTs !== messageTs || Boolean(params.message.parent_user_id));
   const replyToId = incomingThreadTs ?? messageTs;
+  // Preserve thread context for thread replies AND for thread-root messages
+  // (e.g. Slack Agents & Assistants DMs where thread_ts == ts on the initial
+  // message). Without this, tool calls that run during the same turn (subagent
+  // results) lose the thread identifier after the first reply because
+  // hasRepliedRef gets marked true, causing subsequent sendMessage calls to fall
+  // through to the top-level channel.
   const messageThreadId = isThreadReply
     ? incomingThreadTs
-    : params.replyToMode === "all"
-      ? messageTs
-      : undefined;
+    : hasThreadTs
+      ? incomingThreadTs
+      : params.replyToMode === "all"
+        ? messageTs
+        : undefined;
   return {
     incomingThreadTs,
     messageTs,
