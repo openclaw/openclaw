@@ -780,7 +780,7 @@ export async function runMessageAction(
     agentId: resolvedAgentId,
     mediaSources: collectActionMediaSourceHints(params),
     sessionKey: input.sessionKey,
-    messageProvider: channel,
+    messageProvider: input.sessionKey ? undefined : channel,
     accountId,
     requesterSenderId: input.requesterSenderId,
   });
