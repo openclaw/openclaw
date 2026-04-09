@@ -274,4 +274,22 @@ describe("doctor state integrity checks", () => {
 
     expect(text).not.toContain("Session isolation risk:");
   });
+
+  it("does not merge whitespace-variant sessionIds into one ambiguity warning", async () => {
+    const cfg: OpenClawConfig = {};
+    writeSessionStore(cfg, {
+      "agent:main:beta": {
+        sessionId: "sid-dup",
+        updatedAt: 10,
+      },
+      "agent:main:alpha": {
+        sessionId: " sid-dup ",
+        updatedAt: 10,
+      },
+    });
+
+    const text = await runStateIntegrityText(cfg);
+
+    expect(text).not.toContain("Session isolation risk:");
+  });
 });

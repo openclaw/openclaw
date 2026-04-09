@@ -23,10 +23,7 @@ import { resolveMemoryBackendConfig } from "../memory-host-sdk/engine-storage.js
 import { resolveSessionIdMatchSelection } from "../sessions/session-id-resolution.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { asNullableObjectRecord } from "../shared/record-coerce.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
@@ -498,8 +495,8 @@ function collectAmbiguousSessionIdWarnings(
 ): Array<{ sessionId: string; sessionKeys: string[] }> {
   const bySessionId = new Map<string, Array<[string, SessionEntry]>>();
   for (const [sessionKey, entry] of entries) {
-    const sessionId = normalizeOptionalString(entry.sessionId);
-    if (!sessionId) {
+    const sessionId = entry.sessionId;
+    if (typeof sessionId !== "string" || sessionId.length === 0) {
       continue;
     }
     const bucket = bySessionId.get(sessionId);
