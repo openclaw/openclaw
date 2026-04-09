@@ -1501,7 +1501,20 @@ resource "aws_organizations_account" "audit" {{
     trail_block = ""
     trail_bucket_block = ""
     if org_trail:
-        trail_bucket = f"{name}-org-trail-logs"
+        trail_bucket = f"{name}-org-trail-logs".lower().replace(" ", "-").replace("_", "-")
+        errors = validate_s3_bucket_name(trail_bucket)
+        if errors:
+            print(f"  ⚠️  Auto-derived trail bucket name '{trail_bucket}' is invalid:")
+            for e in errors:
+                print(f"     - {e}")
+            trail_bucket = prompt("S3 bucket name for org trail logs")
+            trail_bucket = trail_bucket.lower().replace(" ", "-").replace("_", "-")
+            errors = validate_s3_bucket_name(trail_bucket)
+            if errors:
+                print("❌ Invalid S3 bucket name:")
+                for e in errors:
+                    print(f"   - {e}")
+                sys.exit(1)
         trail_bucket_block = f"""
 resource "aws_s3_bucket" "org_trail" {{
   bucket        = "{trail_bucket}"
