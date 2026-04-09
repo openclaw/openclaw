@@ -39,7 +39,9 @@ import {
 } from "./memory-embedding-providers.js";
 import {
   buildMemoryPromptSection,
+  clearMemoryPluginState,
   getMemoryRuntime,
+  listActiveMemoryPublicArtifacts,
   listMemoryCorpusSupplements,
   registerMemoryCorpusSupplement,
   registerMemoryFlushPlanResolver,
@@ -1788,6 +1790,68 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(() => loadOpenClawPlugins({ activate: false, cache: true })).toThrow(
       "activate:false requires cache:false",
     );
+  });
+
+  it("restores unified memory capability from plugin loader cache", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "cache-memory-capability",
+      filename: "cache-memory-capability.cjs",
+      body: `module.exports = {
+        id: "cache-memory-capability",
+        kind: "memory",
+        register(api) {
+          api.registerMemoryCapability({
+            publicArtifacts: {
+              async listArtifacts() {
+                return [{
+                  kind: "memory-root",
+                  workspaceDir: ${JSON.stringify("/tmp/cache-memory-capability")},
+                  relativePath: "MEMORY.md",
+                  absolutePath: ${JSON.stringify("/tmp/cache-memory-capability/MEMORY.md")},
+                  agentIds: ["main"],
+                  contentType: "markdown",
+                }];
+              },
+            },
+          });
+        },
+      };`,
+    });
+
+    const options = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["cache-memory-capability"],
+          slots: { memory: "cache-memory-capability" },
+        },
+      },
+      onlyPluginIds: ["cache-memory-capability"],
+    };
+
+    loadOpenClawPlugins(options);
+    await expect(
+      listActiveMemoryPublicArtifacts({ cfg: options.config as never }),
+    ).resolves.toHaveLength(1);
+
+    clearMemoryPluginState();
+    setActivePluginRegistry(createEmptyPluginRegistry(), "stale-registry");
+
+    loadOpenClawPlugins(options);
+    await expect(
+      listActiveMemoryPublicArtifacts({ cfg: options.config as never }),
+    ).resolves.toEqual([
+      {
+        kind: "memory-root",
+        workspaceDir: "/tmp/cache-memory-capability",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/cache-memory-capability/MEMORY.md",
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+    ]);
   });
 
   it("re-initializes global hook runner when serving registry from cache", () => {
