@@ -132,6 +132,32 @@ describe("memory-core /dreaming command", () => {
     expect(runtime.config.writeConfigFile).not.toHaveBeenCalled();
   });
 
+  it("blocks unscoped gateway callers from persisting dreaming config", async () => {
+    const { command, runtime } = createHarness();
+
+    const result = await command.handler(
+      createCommandContext("off", {
+        gatewayClientScopes: [],
+      }),
+    );
+
+    expect(result.text).toContain("requires operator.admin");
+    expect(runtime.config.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("allows write-scoped gateway callers to use /dreaming status", async () => {
+    const { command, runtime } = createHarness();
+
+    const result = await command.handler(
+      createCommandContext("status", {
+        gatewayClientScopes: ["operator.write"],
+      }),
+    );
+
+    expect(result.text).toContain("Dreaming status:");
+    expect(runtime.config.writeConfigFile).not.toHaveBeenCalled();
+  });
+
   it("allows admin-scoped gateway callers to persist dreaming config", async () => {
     const { command, runtime, getRuntimeConfig } = createHarness();
 
