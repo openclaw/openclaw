@@ -223,6 +223,25 @@ export async function loadCronModelSuggestions(state: CronModelSuggestionsState)
   }
 }
 
+async function withCronBusy(
+  state: CronState,
+  run: (client: GatewayBrowserClient) => Promise<void>,
+) {
+  const client = state.client;
+  if (!client || !state.connected || state.cronBusy) {
+    return;
+  }
+  state.cronBusy = true;
+  state.cronError = null;
+  try {
+    await run(client);
+  } catch (err) {
+    state.cronError = String(err);
+  } finally {
+    state.cronBusy = false;
+  }
+}
+
 export async function loadCronJobs(state: CronState) {
   return await loadCronJobsPage(state, { append: false });
 }
@@ -627,12 +646,7 @@ function buildFailureAlert(form: CronFormState) {
 }
 
 export async function addCronJob(state: CronState) {
-  if (!state.client || !state.connected || state.cronBusy) {
-    return;
-  }
-  state.cronBusy = true;
-  state.cronError = null;
-  try {
+  await withCronBusy(state, async (client) => {
     const form = normalizeCronFormState(state.cronForm);
     if (form !== state.cronForm) {
       state.cronForm = form;
@@ -698,69 +712,42 @@ export async function addCronJob(state: CronState) {
       throw new Error(t("cron.errors.nameRequiredShort"));
     }
     if (state.cronEditingJobId) {
-      await state.client.request("cron.update", {
+      await client.request("cron.update", {
         id: state.cronEditingJobId,
         patch: job,
       });
       clearCronEditState(state);
     } else {
-      await state.client.request("cron.add", job);
+      await client.request("cron.add", job);
       resetCronFormToDefaults(state);
     }
     await loadCronJobs(state);
     await loadCronStatus(state);
-  } catch (err) {
-    state.cronError = String(err);
-  } finally {
-    state.cronBusy = false;
-  }
+  });
 }
 
 export async function toggleCronJob(state: CronState, job: CronJob, enabled: boolean) {
-  if (!state.client || !state.connected || state.cronBusy) {
-    return;
-  }
-  state.cronBusy = true;
-  state.cronError = null;
-  try {
-    await state.client.request("cron.update", { id: job.id, patch: { enabled } });
+  await withCronBusy(state, async (client) => {
+    await client.request("cron.update", { id: job.id, patch: { enabled } });
     await loadCronJobs(state);
     await loadCronStatus(state);
-  } catch (err) {
-    state.cronError = String(err);
-  } finally {
-    state.cronBusy = false;
-  }
+  });
 }
 
 export async function runCronJob(state: CronState, job: CronJob, mode: "force" | "due" = "force") {
-  if (!state.client || !state.connected || state.cronBusy) {
-    return;
-  }
-  state.cronBusy = true;
-  state.cronError = null;
-  try {
-    await state.client.request("cron.run", { id: job.id, mode });
+  await withCronBusy(state, async (client) => {
+    await client.request("cron.run", { id: job.id, mode });
     if (state.cronRunsScope === "all") {
       await loadCronRuns(state, null);
     } else {
       await loadCronRuns(state, job.id);
     }
-  } catch (err) {
-    state.cronError = String(err);
-  } finally {
-    state.cronBusy = false;
-  }
+  });
 }
 
 export async function removeCronJob(state: CronState, job: CronJob) {
-  if (!state.client || !state.connected || state.cronBusy) {
-    return;
-  }
-  state.cronBusy = true;
-  state.cronError = null;
-  try {
-    await state.client.request("cron.remove", { id: job.id });
+  await withCronBusy(state, async (client) => {
+    await client.request("cron.remove", { id: job.id });
     if (state.cronEditingJobId === job.id) {
       clearCronEditState(state);
     }
@@ -773,11 +760,7 @@ export async function removeCronJob(state: CronState, job: CronJob) {
     }
     await loadCronJobs(state);
     await loadCronStatus(state);
-  } catch (err) {
-    state.cronError = String(err);
-  } finally {
-    state.cronBusy = false;
-  }
+  });
 }
 
 export async function loadCronRuns(
