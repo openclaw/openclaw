@@ -993,8 +993,16 @@ data "terraform_remote_state" "vpc" {{
         rules = [{"type": "ingress", "port": 22, "proto": "tcp", "cidr": my_ip, "desc": "SSH from trusted IP"}]
     elif preset == "6":
         app_port = prompt("Application port (e.g. 8080, 3000, 8443)")
+        try:
+            app_port_int = int(app_port)
+            if not (1 <= app_port_int <= 65535):
+                print(f"  ❌ Port must be 1-65535, got {app_port_int}")
+                sys.exit(1)
+        except ValueError:
+            print(f"  ❌ Port must be a number, got '{app_port}'")
+            sys.exit(1)
         app_cidr = prompt("Source CIDR", default="10.0.0.0/8")
-        rules = [{"type": "ingress", "port": int(app_port), "proto": "tcp", "cidr": app_cidr, "desc": f"App port {app_port}"}]
+        rules = [{"type": "ingress", "port": app_port_int, "proto": "tcp", "cidr": app_cidr, "desc": f"App port {app_port}"}]
 
     # Additional rules
     if preset != "7":
@@ -1013,15 +1021,28 @@ data "terraform_remote_state" "vpc" {{
         r_desc  = prompt("Description", default=f"Port {r_port}")
 
         # Validate
-        if r_cidr == "0.0.0.0/0" and int(r_port) in (22, 3306, 5432, 6379, 27017):
-            print(f"  ⚠️  WARNING: Opening port {r_port} to 0.0.0.0/0 is a security risk!")
-            force = prompt("  Are you sure?", default="no", choices=["yes", "no"])
-            if force != "yes":
-                print("  Skipped.")
-                add_more = prompt("  Add another rule?", default="no", choices=["yes", "no"])
-                continue
+        if r_cidr == "0.0.0.0/0":
+            try:
+                r_port_int = int(r_port)
+            except ValueError:
+                r_port_int = 0
+            if r_port_int in (22, 3306, 5432, 6379, 27017):
+                print(f"  ⚠️  WARNING: Opening port {r_port} to 0.0.0.0/0 is a security risk!")
+                force = prompt("  Are you sure?", default="no", choices=["yes", "no"])
+                if force != "yes":
+                    print("  Skipped.")
+                    add_more = prompt("  Add another rule?", default="no", choices=["yes", "no"])
+                    continue
 
-        rules.append({"type": "ingress", "port": int(r_port), "proto": r_proto, "cidr": r_cidr, "desc": r_desc})
+        try:
+            r_port_int = int(r_port)
+            if not (1 <= r_port_int <= 65535):
+                print(f"  ❌ Port must be 1-65535, got {r_port_int}")
+                continue
+        except ValueError:
+            print(f"  ❌ Port must be a number, got '{r_port}'")
+            continue
+        rules.append({"type": "ingress", "port": r_port_int, "proto": r_proto, "cidr": r_cidr, "desc": r_desc})
         if preset == "7":
             preset = "done"
         add_more = prompt("  Add another rule?", default="no", choices=["yes", "no"])
