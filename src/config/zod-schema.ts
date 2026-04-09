@@ -566,6 +566,7 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        deliveryPayloads: z.enum(["full", "last", "none"]).optional(),
       })
       .strict()
       .superRefine((val, ctx) => {

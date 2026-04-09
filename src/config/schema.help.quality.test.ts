@@ -126,6 +126,7 @@ const TARGET_KEYS = [
   "cron.retry.maxAttempts",
   "cron.retry.backoffMs",
   "cron.retry.retryOn",
+  "cron.deliveryPayloads",
   "cron.webhook",
   "cron.webhookToken",
   "cron.sessionRetention",
@@ -694,6 +695,13 @@ describe("config help copy quality", () => {
 
     const keepLines = FIELD_HELP["cron.runLog.keepLines"];
     expect(keepLines.includes("2000")).toBe(true);
+  });
+
+  it("documents cron delivery payload modes", () => {
+    const help = FIELD_HELP["cron.deliveryPayloads"];
+    expect(help.includes("full")).toBe(true);
+    expect(help.includes("last")).toBe(true);
+    expect(help.includes("none")).toBe(true);
   });
 
   it("documents approvals filters and target semantics", () => {

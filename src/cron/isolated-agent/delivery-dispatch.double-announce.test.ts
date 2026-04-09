@@ -912,4 +912,17 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       timeoutMs: 10_000,
     });
   });
+
+  it("does not call deliverOutboundPayloads when suppressCronOutboundDelivery is true", async () => {
+    const params = {
+      ...makeBaseParams({
+        synthesizedText: "would normally synthesize outbound",
+        deliveryRequested: true,
+      }),
+      deliveryPayloads: [] as { text?: string }[],
+      suppressCronOutboundDelivery: true,
+    };
+    await dispatchCronDelivery(params);
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
 });

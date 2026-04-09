@@ -633,6 +633,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "cron.retry.maxAttempts": "Cron Retry Max Attempts",
   "cron.retry.backoffMs": "Cron Retry Backoff (ms)",
   "cron.retry.retryOn": "Cron Retry Error Types",
+  "cron.deliveryPayloads": "Cron Delivery Payloads Mode",
   "cron.webhook": "Cron Legacy Webhook (Deprecated)",
   "cron.webhookToken": "Cron Webhook Bearer Token",
   "cron.sessionRetention": "Cron Session Retention",

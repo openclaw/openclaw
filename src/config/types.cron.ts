@@ -27,6 +27,9 @@ export type CronFailureDestinationConfig = {
   mode?: "announce" | "webhook";
 };
 
+/** How cron maps model reply payloads into outbound channel delivery lists. */
+export type CronDeliveryPayloadsMode = "full" | "last" | "none";
+
 export type CronConfig = {
   enabled?: boolean;
   store?: string;
@@ -57,4 +60,11 @@ export type CronConfig = {
   failureAlert?: CronFailureAlertConfig;
   /** Default destination for failure notifications across all cron jobs. */
   failureDestination?: CronFailureDestinationConfig;
+  /**
+   * Which assistant payloads to send to the configured delivery channel.
+   * `full` (default): all deliverable segments (or synthesized text when empty).
+   * `last`: only the last deliverable segment.
+   * `none`: do not send to channels; run logs and UI may still record summary/output text.
+   */
+  deliveryPayloads?: CronDeliveryPayloadsMode;
 };

@@ -25677,6 +25677,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Error types to retry: rate_limit, overloaded, network, timeout, server_error. Use to restrict which errors trigger retries; omit to retry all transient types.",
       tags: ["reliability", "automation"],
     },
+    "cron.deliveryPayloads": {
+      label: "Cron Delivery Payloads Mode",
+      help: "Controls which model reply payloads are sent to the cron job delivery channel. `full` (default) sends every deliverable segment (or synthesized text when needed). `last` sends only the final segment. `none` skips channel delivery while still recording summary/output in run logs and UIs.",
+      tags: ["automation"],
+    },
     "cron.webhook": {
       label: "Cron Legacy Webhook (Deprecated)",
       help: 'Deprecated legacy fallback webhook URL used only for old jobs with `notify=true`. Migrate to per-job delivery using `delivery.mode="webhook"` plus `delivery.to`, and avoid relying on this global field.',

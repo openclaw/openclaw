@@ -1,6 +1,7 @@
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "../../auto-reply/heartbeat.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { CronDeliveryPayloadsMode } from "../../config/types.cron.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { shouldSkipHeartbeatOnlyDelivery } from "../heartbeat-policy.js";
@@ -19,6 +20,7 @@ export type CronPayloadOutcome = {
   deliveryPayloadHasStructuredContent: boolean;
   hasFatalErrorPayload: boolean;
   embeddedRunError?: string;
+  suppressCronOutboundDelivery?: boolean;
 };
 
 export function pickSummaryFromOutput(text: string | undefined) {
@@ -125,6 +127,7 @@ export function resolveHeartbeatAckMaxChars(agentCfg?: { heartbeat?: { ackMaxCha
 export function resolveCronPayloadOutcome(params: {
   payloads: DeliveryPayload[];
   runLevelError?: unknown;
+  deliveryPayloadsMode?: CronDeliveryPayloadsMode;
 }): CronPayloadOutcome {
   const firstText = params.payloads[0]?.text ?? "";
   const summary = pickSummaryFromPayloads(params.payloads) ?? pickSummaryFromOutput(firstText);
@@ -132,12 +135,21 @@ export function resolveCronPayloadOutcome(params: {
   const synthesizedText = normalizeOptionalString(outputText) ?? normalizeOptionalString(summary);
   const deliveryPayload = pickLastDeliverablePayload(params.payloads);
   const selectedDeliveryPayloads = pickDeliverablePayloads(params.payloads);
-  const resolvedDeliveryPayloads =
+  let resolvedDeliveryPayloads =
     selectedDeliveryPayloads.length > 0
       ? selectedDeliveryPayloads
       : synthesizedText
         ? [{ text: synthesizedText }]
         : [];
+  const mode = params.deliveryPayloadsMode ?? "full";
+  let suppressCronOutboundDelivery = false;
+  if (mode === "last" && resolvedDeliveryPayloads.length > 1) {
+    const lastPayload = resolvedDeliveryPayloads[resolvedDeliveryPayloads.length - 1];
+    resolvedDeliveryPayloads = lastPayload ? [lastPayload] : [];
+  } else if (mode === "none") {
+    resolvedDeliveryPayloads = [];
+    suppressCronOutboundDelivery = true;
+  }
   const deliveryPayloadHasStructuredContent =
     deliveryPayload?.mediaUrl !== undefined ||
     (deliveryPayload?.mediaUrls?.length ?? 0) > 0 ||
@@ -169,5 +181,6 @@ export function resolveCronPayloadOutcome(params: {
     embeddedRunError: hasFatalErrorPayload
       ? (lastErrorPayloadText ?? "cron isolated run returned an error payload")
       : undefined,
+    ...(suppressCronOutboundDelivery ? { suppressCronOutboundDelivery: true } : {}),
   };
 }

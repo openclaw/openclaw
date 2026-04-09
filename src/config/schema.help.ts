@@ -1302,6 +1302,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Backoff delays in ms for each retry attempt (default: [30000, 60000, 300000]). Use shorter values for faster retries.",
   "cron.retry.retryOn":
     "Error types to retry: rate_limit, overloaded, network, timeout, server_error. Use to restrict which errors trigger retries; omit to retry all transient types.",
+  "cron.deliveryPayloads":
+    "Controls which model reply payloads are sent to the cron job delivery channel. `full` (default) sends every deliverable segment (or synthesized text when needed). `last` sends only the final segment. `none` skips channel delivery while still recording summary/output in run logs and UIs.",
   "cron.webhook":
     'Deprecated legacy fallback webhook URL used only for old jobs with `notify=true`. Migrate to per-job delivery using `delivery.mode="webhook"` plus `delivery.to`, and avoid relying on this global field.',
   "cron.webhookToken":

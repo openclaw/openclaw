@@ -552,6 +552,8 @@ async function finalizeCronRun(params: {
   if (params.isAborted()) {
     return prepared.withRunSession({ status: "error", error: params.abortReason(), ...telemetry });
   }
+  const deliveryPayloadsMode =
+    prepared.cfgWithAgentDefaults.cron?.deliveryPayloads ?? "full";
   let {
     summary,
     outputText,
@@ -560,9 +562,11 @@ async function finalizeCronRun(params: {
     deliveryPayloadHasStructuredContent,
     hasFatalErrorPayload,
     embeddedRunError,
+    suppressCronOutboundDelivery,
   } = resolveCronPayloadOutcome({
     payloads,
     runLevelError: finalRunResult.meta?.error,
+    deliveryPayloadsMode,
   });
   const resolveRunOutcome = (result?: { delivered?: boolean; deliveryAttempted?: boolean }) =>
     prepared.withRunSession({
@@ -606,6 +610,7 @@ async function finalizeCronRun(params: {
     deliveryRequested: prepared.deliveryRequested,
     skipHeartbeatDelivery,
     skipMessagingToolDelivery,
+    suppressCronOutboundDelivery: suppressCronOutboundDelivery === true,
     deliveryBestEffort: resolveCronDeliveryBestEffort(prepared.input.job),
     deliveryPayloadHasStructuredContent,
     deliveryPayloads,

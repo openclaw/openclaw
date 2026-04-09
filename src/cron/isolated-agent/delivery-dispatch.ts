@@ -71,6 +71,7 @@ type DispatchCronDeliveryParams = {
   deliveryRequested: boolean;
   skipHeartbeatDelivery: boolean;
   skipMessagingToolDelivery?: boolean;
+  suppressCronOutboundDelivery?: boolean;
   deliveryBestEffort: boolean;
   deliveryPayloadHasStructuredContent: boolean;
   deliveryPayloads: ReplyPayload[];
@@ -669,7 +670,12 @@ export async function dispatchCronDelivery(
     }
   };
 
-  if (params.deliveryRequested && !params.skipHeartbeatDelivery && !skipMessagingToolDelivery) {
+  if (
+    params.deliveryRequested &&
+    !params.skipHeartbeatDelivery &&
+    !skipMessagingToolDelivery &&
+    params.suppressCronOutboundDelivery !== true
+  ) {
     if (!params.resolvedDelivery.ok) {
       if (!params.deliveryBestEffort) {
         return {

@@ -96,4 +96,26 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.deliveryPayloads).toEqual([{ text: "last error", isError: true }]);
     expect(result.deliveryPayload).toEqual({ text: "last error", isError: true });
   });
+
+  it("deliveryPayloadsMode last keeps only the last deliverable segment for outbound list", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "a" }, { text: "b" }, { text: "c" }],
+      deliveryPayloadsMode: "last",
+    });
+
+    expect(result.deliveryPayloads).toEqual([{ text: "c" }]);
+    expect(result.deliveryPayload).toEqual({ text: "c" });
+    expect(result.suppressCronOutboundDelivery).toBeUndefined();
+  });
+
+  it("deliveryPayloadsMode none clears outbound list and sets suppressCronOutboundDelivery", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "hello" }],
+      deliveryPayloadsMode: "none",
+    });
+
+    expect(result.deliveryPayloads).toEqual([]);
+    expect(result.suppressCronOutboundDelivery).toBe(true);
+    expect(result.summary).toBe("hello");
+  });
 });

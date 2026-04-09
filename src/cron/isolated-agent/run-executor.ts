@@ -301,12 +301,14 @@ export async function executeCronRun(params: {
 
   if (!params.isAborted()) {
     const interimPayloads = runResult.payloads ?? [];
+    const deliveryPayloadsMode = params.cfgWithAgentDefaults.cron?.deliveryPayloads ?? "full";
     const {
       deliveryPayloadHasStructuredContent: interimPayloadHasStructuredContent,
       outputText: interimOutputText,
     } = resolveCronPayloadOutcome({
       payloads: interimPayloads,
       runLevelError: runResult.meta?.error,
+      deliveryPayloadsMode,
     });
     const interimText = interimOutputText?.trim() ?? "";
     const shouldRetryInterimAck =
