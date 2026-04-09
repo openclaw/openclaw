@@ -6,6 +6,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 type SubagentSurface = {
   run: (params: {
+    idempotencyKey: string;
     sessionKey: string;
     message: string;
     extraSystemPrompt?: string;
@@ -409,7 +410,7 @@ export async function appendNarrativeEntry(params: {
     }
   }
 
-  await fs.writeFile(dreamsPath, updated.endsWith("\n") ? updated : `${updated}\n`, "utf-8");
+  await writeDreamsFileAtomic(dreamsPath, updated.endsWith("\n") ? updated : `${updated}\n`);
   return dreamsPath;
 }
 
@@ -434,6 +435,7 @@ export async function generateAndAppendDreamNarrative(params: {
 
   try {
     const { runId } = await params.subagent.run({
+      idempotencyKey: sessionKey,
       sessionKey,
       message,
       extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,
