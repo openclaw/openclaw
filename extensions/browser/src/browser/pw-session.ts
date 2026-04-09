@@ -10,7 +10,7 @@ import type {
 } from "playwright-core";
 import { chromium } from "playwright-core";
 import { formatErrorMessage } from "../infra/errors.js";
-import { SsrFBlockedError, type SsrFPolicy } from "../infra/net/ssrf.js";
+import { SsrfBlockedError, type SsrFPolicy } from "../infra/net/ssrf.js";
 import { withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import {
   appendCdpPath,
@@ -694,7 +694,7 @@ function isTopLevelNavigationRequest(page: Page, request: Request): boolean {
 }
 
 function isPolicyDenyNavigationError(err: unknown): boolean {
-  return err instanceof SsrFBlockedError || err instanceof InvalidBrowserNavigationUrlError;
+  return err instanceof SsrfBlockedError || err instanceof InvalidBrowserNavigationUrlError;
 }
 
 async function closeBlockedNavigationTarget(opts: {

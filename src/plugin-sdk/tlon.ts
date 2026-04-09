@@ -20,7 +20,7 @@ export type { OpenClawConfig } from "../config/config.js";
 export { createDedupeCache } from "../infra/dedupe.js";
 export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 export type { LookupFn, SsrFPolicy } from "../infra/net/ssrf.js";
-export { isBlockedHostnameOrIp, SsrFBlockedError } from "../infra/net/ssrf.js";
+export { isBlockedHostnameOrIp, SsrfBlockedError } from "../infra/net/ssrf.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { OpenClawPluginApi } from "../plugins/types.js";

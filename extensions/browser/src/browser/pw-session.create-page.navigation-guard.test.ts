@@ -1,6 +1,6 @@
 import { chromium } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { SsrfBlockedError } from "../infra/net/ssrf.js";
 import * as chromeModule from "./chrome.js";
 import { BrowserTabNotFoundError } from "./errors.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
@@ -210,7 +210,7 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
         cdpUrl: "http://127.0.0.1:18792",
         url: "https://93.184.216.34/start",
       }),
-    ).rejects.toBeInstanceOf(SsrFBlockedError);
+    ).rejects.toBeInstanceOf(SsrfBlockedError);
 
     expect(pageGoto).toHaveBeenCalledTimes(1);
     expect(pageClose).toHaveBeenCalledTimes(1);
@@ -231,7 +231,7 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
         cdpUrl: "http://127.0.0.1:18792",
         url: "https://93.184.216.34/start",
       }),
-    ).rejects.toBeInstanceOf(SsrFBlockedError);
+    ).rejects.toBeInstanceOf(SsrfBlockedError);
 
     expect(pageGoto).toHaveBeenCalledTimes(1);
     expect(pageClose).toHaveBeenCalledTimes(1);
@@ -379,7 +379,7 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
         cdpUrl: "http://127.0.0.1:18792",
         url: "https://93.184.216.34/start",
       }),
-    ).rejects.toBeInstanceOf(SsrFBlockedError);
+    ).rejects.toBeInstanceOf(SsrfBlockedError);
 
     const pages = await listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:18792" });
     expect(pages).toHaveLength(0);
@@ -407,7 +407,7 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
         cdpUrl: "http://127.0.0.1:18792",
         url: "https://93.184.216.34/start",
       }),
-    ).rejects.toBeInstanceOf(SsrFBlockedError);
+    ).rejects.toBeInstanceOf(SsrfBlockedError);
 
     await forceDisconnectPlaywrightForTarget({
       cdpUrl: "http://127.0.0.1:18792",
@@ -433,7 +433,7 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
         cdpUrl: "http://127.0.0.1:18792",
         url: "https://93.184.216.34/start",
       }),
-    ).rejects.toBeInstanceOf(SsrFBlockedError);
+    ).rejects.toBeInstanceOf(SsrfBlockedError);
 
     const disconnectedHandler = getBrowserDisconnectedHandler();
     expect(disconnectedHandler).toBeTypeOf("function");
@@ -457,7 +457,7 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
         cdpUrl: "http://127.0.0.1:18792",
         url: "https://93.184.216.34/start",
       }),
-    ).rejects.toBeInstanceOf(SsrFBlockedError);
+    ).rejects.toBeInstanceOf(SsrfBlockedError);
 
     sessionSend.mockRejectedValueOnce(new Error("Target lookup failed"));
     await expect(
@@ -477,7 +477,7 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
         cdpUrl: "http://127.0.0.1:18792",
         url: "https://93.184.216.34/start",
       }),
-    ).rejects.toBeInstanceOf(SsrFBlockedError);
+    ).rejects.toBeInstanceOf(SsrfBlockedError);
 
     sessionSend.mockImplementationOnce(async (method: string) => {
       if (method === "Target.getTargetInfo") {
@@ -543,7 +543,7 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
         timeoutMs: 1000,
         targetId: "MISSING_TARGET",
       }),
-    ).rejects.toBeInstanceOf(SsrFBlockedError);
+    ).rejects.toBeInstanceOf(SsrfBlockedError);
 
     await expect(
       getPageForTargetId({
@@ -583,7 +583,7 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
         timeoutMs: 1000,
         targetId: "TARGET_1",
       }),
-    ).rejects.toBeInstanceOf(SsrFBlockedError);
+    ).rejects.toBeInstanceOf(SsrfBlockedError);
 
     await forceDisconnectPlaywrightForTarget({
       cdpUrl: "http://127.0.0.1:18792",

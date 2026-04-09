@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { SsrfBlockedError } from "../infra/net/ssrf.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 import {
   getPwToolsCoreSessionMocks,
@@ -129,7 +129,7 @@ describe("pw-tools-core.snapshot navigate guard", () => {
       url: vi.fn(() => "https://93.184.216.34/final"),
     });
     getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely.mockRejectedValueOnce(
-      new SsrFBlockedError("Blocked hostname or private/internal/special-use IP address"),
+      new SsrfBlockedError("Blocked hostname or private/internal/special-use IP address"),
     );
 
     await expect(
@@ -137,7 +137,7 @@ describe("pw-tools-core.snapshot navigate guard", () => {
         cdpUrl: "http://127.0.0.1:18792",
         url: "https://93.184.216.34/start",
       }),
-    ).rejects.toBeInstanceOf(SsrFBlockedError);
+    ).rejects.toBeInstanceOf(SsrfBlockedError);
 
     expect(getPwToolsCoreSessionMocks().gotoPageWithNavigationGuard).toHaveBeenCalledTimes(1);
     expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledTimes(

@@ -1,4 +1,4 @@
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { SsrfBlockedError } from "../infra/net/ssrf.js";
 import { isChromeReachable, resolveOpenClawUserDataDir } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { resolveProfile } from "./config.js";
@@ -229,7 +229,7 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
     if (browserMapped) {
       return browserMapped;
     }
-    if (err instanceof SsrFBlockedError) {
+    if (err instanceof SsrfBlockedError) {
       return { status: 400, message: err.message };
     }
     if (err instanceof InvalidBrowserNavigationUrlError) {

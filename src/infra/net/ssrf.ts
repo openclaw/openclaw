@@ -34,6 +34,9 @@ export class SsrfBlockedError extends Error {
   }
 }
 
+/** @deprecated Use {@link SsrfBlockedError} instead. */
+export const SsrFBlockedError = SsrfBlockedError;
+
 export type LookupFn = typeof dnsLookup;
 
 export type SsrFPolicy = {

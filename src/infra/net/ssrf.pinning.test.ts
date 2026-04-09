@@ -4,7 +4,7 @@ import {
   type LookupFn,
   resolvePinnedHostname,
   resolvePinnedHostnameWithPolicy,
-  SsrFBlockedError,
+  SsrfBlockedError,
 } from "./ssrf.js";
 
 function createPublicLookupMock(): LookupFn {
@@ -159,7 +159,7 @@ describe("ssrf pinning", () => {
     const lookup = createPublicLookupMock();
 
     await expect(resolvePinnedHostnameWithPolicy(hostname, { lookupFn: lookup })).rejects.toThrow(
-      SsrFBlockedError,
+      SsrfBlockedError,
     );
     expect(lookup).not.toHaveBeenCalled();
   });
