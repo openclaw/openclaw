@@ -64,6 +64,7 @@ import {
   listSessionCompactionCheckpoints,
 } from "../session-compaction-checkpoints.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
+import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import {
   archiveFileOnDisk,
   listSessionsFromStore,
@@ -1345,6 +1346,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       sessionKey: result.key,
       reason,
     });
+    emitSessionLifecycleEvent({
+      sessionKey: result.key,
+      reason,
+    });
   },
   "sessions.delete": async ({ params, respond, client, isWebchatConnect, context }) => {
     if (!assertValidParams(params, validateSessionsDeleteParams, "sessions.delete", respond)) {
@@ -1437,6 +1442,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       emitSessionsChanged(context, {
         sessionKey: target.canonicalKey,
         reason: "delete",
+      });
+      emitSessionLifecycleEvent({
+        sessionKey: target.canonicalKey,
+        reason: "deleted",
       });
     }
   },
