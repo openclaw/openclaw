@@ -561,6 +561,10 @@ export async function handleOpenAiHttpRequest(
   let sawAssistantDelta = false;
   let closed = false;
   let stopWatchingDisconnect = () => {};
+  // Track the full cleaned text we have already sent so we can derive correct
+  // incremental SSE deltas even when the upstream emits `replace` events
+  // (e.g. partial `<final>` tags resolved across chunk boundaries).
+  let accumulatedSent = "";
 
   const unsubscribe = onAgentEvent((evt) => {
     if (evt.runId !== runId) {
@@ -571,7 +575,36 @@ export async function handleOpenAiHttpRequest(
     }
 
     if (evt.stream === "assistant") {
-      const content = resolveAssistantStreamDeltaText(evt) ?? "";
+      // The upstream subscribe handler strips `<final>` / `<think>` tags from
+      // the streamed text.  When a tag straddles two chunks the handler first
+      // emits a delta containing a partial tag remnant (e.g. `<`) and then,
+      // once the full tag is recognised in the accumulated buffer, emits a
+      // *replace* event (`replace: true`, `delta: ""`) whose `text` field
+      // carries the corrected full content.
+      //
+      // Because SSE cannot retract bytes already written, we always derive the
+      // incremental content from the authoritative `text` (full accumulated
+      // cleaned response) by diffing it against what we have already sent.
+      // This avoids both (a) sending partial tag remnants and (b) silently
+      // dropping content on replace events.
+      const fullText = typeof evt.data?.text === "string" ? evt.data.text : "";
+      const delta = resolveAssistantStreamDeltaText(evt) ?? "";
+
+      let content: string;
+      if (fullText) {
+        // Prefer deriving delta from the full cleaned text.
+        content = fullText.startsWith(accumulatedSent)
+          ? fullText.slice(accumulatedSent.length)
+          : fullText.length > accumulatedSent.length
+            ? fullText.slice(accumulatedSent.length)
+            : "";
+      } else if (delta) {
+        // Fallback: no full text available, use the raw delta.
+        content = delta;
+      } else {
+        content = "";
+      }
+
       if (!content) {
         return;
       }
@@ -582,6 +615,7 @@ export async function handleOpenAiHttpRequest(
       }
 
       sawAssistantDelta = true;
+      accumulatedSent += content;
       writeAssistantContentChunk(res, {
         runId,
         model,
