@@ -1,14 +1,37 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-
-let runMessageAction: typeof import("./message-action-runner.js").runMessageAction;
+import { runMessageAction } from "./message-action-runner.js";
 
 const mocks = vi.hoisted(() => ({
   executePollAction: vi.fn(),
+  resolveOutboundChannelPlugin: vi.fn(),
 }));
+
+vi.mock("./channel-resolution.js", () => ({
+  resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
+  resetOutboundChannelResolutionStateForTest: vi.fn(),
+}));
+
+vi.mock("./outbound-send-service.js", () => ({
+  executeSendAction: vi.fn(async () => {
+    throw new Error("executeSendAction should not run in poll tests");
+  }),
+  executePollAction: mocks.executePollAction,
+}));
+
+vi.mock("./outbound-session.js", () => ({
+  ensureOutboundSessionEntry: vi.fn(async () => undefined),
+  resolveOutboundSessionRoute: vi.fn(async () => null),
+}));
+
+vi.mock("./message-action-threading.js", async () => {
+  const { createOutboundThreadingMock } =
+    await import("./message-action-threading.test-helpers.js");
+  return createOutboundThreadingMock();
+});
 const telegramConfig = {
   channels: {
     telegram: {
@@ -92,17 +115,7 @@ async function runPollAction(params: {
 }
 
 describe("runMessageAction poll handling", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.doMock("./outbound-send-service.js", async () => {
-      const actual = await vi.importActual<typeof import("./outbound-send-service.js")>(
-        "./outbound-send-service.js",
-      );
-      return {
-        ...actual,
-        executePollAction: mocks.executePollAction,
-      };
-    });
+  beforeEach(() => {
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -112,13 +125,17 @@ describe("runMessageAction poll handling", () => {
         },
       ]),
     );
+    mocks.resolveOutboundChannelPlugin.mockReset();
+    mocks.resolveOutboundChannelPlugin.mockImplementation(
+      ({ channel }: { channel: string }) =>
+        getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)?.plugin,
+    );
     mocks.executePollAction.mockReset();
     mocks.executePollAction.mockImplementation(async (input) => ({
       handledBy: "core",
       payload: { ok: true, corePoll: input.resolveCorePoll() },
       pollResult: { ok: true },
     }));
-    ({ runMessageAction } = await import("./message-action-runner.js"));
   });
 
   afterEach(() => {

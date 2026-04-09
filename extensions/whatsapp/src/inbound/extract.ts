@@ -6,8 +6,8 @@ import {
 } from "@whiskeysockets/baileys";
 import { formatLocationText, type NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { jidToE164 } from "openclaw/plugin-sdk/text-runtime";
 import { resolveComparableIdentity, type WhatsAppReplyContext } from "../identity.js";
+import { jidToE164 } from "../text-runtime.js";
 import { parseVcard } from "../vcard.js";
 
 const MESSAGE_WRAPPER_KEYS = [
@@ -99,7 +99,7 @@ function getMessageContentType(
 
 function extractMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
   if (typeof extractMessageContent === "function") {
-    return extractMessageContent(message) as proto.IMessage | undefined;
+    return extractMessageContent(message);
   }
   const normalized = fallbackNormalizeMessageContent(message);
   const contentType = fallbackGetContentType(normalized);

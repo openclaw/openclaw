@@ -21,6 +21,7 @@ import {
   repairMatrixDirectRooms,
   type MatrixDirectRoomCandidate,
 } from "./matrix/direct-management.js";
+import { formatMatrixErrorMessage } from "./matrix/errors.js";
 import { applyMatrixProfileUpdate, type MatrixProfileUpdateResult } from "./profile-update.js";
 import { formatZonedTimestamp, normalizeAccountId, type ChannelSetupInput } from "./runtime-api.js";
 import { getMatrixRuntime } from "./runtime.js";
@@ -49,7 +50,7 @@ function markCliFailure(): void {
 }
 
 function toErrorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  return formatMatrixErrorMessage(err);
 }
 
 function printJson(payload: unknown): void {
@@ -177,11 +178,11 @@ async function addMatrixAccount(params: {
     throw new Error("Matrix account setup is unavailable.");
   }
 
-  const input: ChannelSetupInput & { avatarUrl?: string } = {
+  const input: ChannelSetupInput = {
     name: params.name,
     avatarUrl: params.avatarUrl,
     homeserver: params.homeserver,
-    allowPrivateNetwork: params.allowPrivateNetwork,
+    dangerouslyAllowPrivateNetwork: params.allowPrivateNetwork,
     proxy: params.proxy,
     userId: params.userId,
     accessToken: params.accessToken,
@@ -610,14 +611,14 @@ function buildVerificationGuidance(
       `Backup key mismatch on this device. Re-run '${formatMatrixCliCommand("verify device <key>", accountId)}' with the matching recovery key.`,
     );
     nextSteps.add(
-      `If you want a fresh backup baseline and accept losing unrecoverable history, run '${formatMatrixCliCommand("verify backup reset --yes", accountId)}'.`,
+      `If you want a fresh backup baseline and accept losing unrecoverable history, run '${formatMatrixCliCommand("verify backup reset --yes", accountId)}'. This may also repair secret storage so the new backup key can be loaded after restart.`,
     );
   } else if (backupIssue.code === "untrusted-signature") {
     nextSteps.add(
       `Backup trust chain is not verified on this device. Re-run '${formatMatrixCliCommand("verify device <key>", accountId)}' if you have the correct recovery key.`,
     );
     nextSteps.add(
-      `If you want a fresh backup baseline and accept losing unrecoverable history, run '${formatMatrixCliCommand("verify backup reset --yes", accountId)}'.`,
+      `If you want a fresh backup baseline and accept losing unrecoverable history, run '${formatMatrixCliCommand("verify backup reset --yes", accountId)}'. This may also repair secret storage so the new backup key can be loaded after restart.`,
     );
   } else if (backupIssue.code === "indeterminate") {
     nextSteps.add(
@@ -949,7 +950,9 @@ export function registerMatrixCli(params: { program: Command }): void {
 
   backup
     .command("reset")
-    .description("Delete the current server backup and create a fresh room-key backup baseline")
+    .description(
+      "Delete the current server backup and create a fresh room-key backup baseline, repairing secret storage if needed for a durable reset",
+    )
     .option("--account <id>", "Account ID (for multi-account setups)")
     .option("--yes", "Confirm destructive backup reset", false)
     .option("--verbose", "Show detailed diagnostics")

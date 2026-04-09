@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   collectUnsupportedSecretRefConfigCandidates,
-  UNSUPPORTED_SECRETREF_SURFACE_PATTERNS,
+  getUnsupportedSecretRefSurfacePatterns,
 } from "./unsupported-surface-policy.js";
 
 describe("unsupported SecretRef surface policy metadata", () => {
   it("exposes the canonical unsupported surface patterns", () => {
-    expect(UNSUPPORTED_SECRETREF_SURFACE_PATTERNS).toEqual([
+    expect(getUnsupportedSecretRefSurfacePatterns()).toEqual([
       "commands.ownerDisplaySecret",
       "hooks.token",
       "hooks.gmail.pushToken",

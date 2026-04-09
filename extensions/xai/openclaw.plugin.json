@@ -38,6 +38,30 @@
       "label": "Enable Code Execution",
       "help": "Enable the code_execution tool for remote xAI sandbox analysis."
     },
+    "xSearch.enabled": {
+      "label": "Enable X Search",
+      "help": "Enable the x_search tool for searching X posts with xAI."
+    },
+    "xSearch.model": {
+      "label": "X Search Model",
+      "help": "xAI model override for x_search."
+    },
+    "xSearch.inlineCitations": {
+      "label": "X Search Inline Citations",
+      "help": "Keep inline markdown citations from xAI in x_search responses when available."
+    },
+    "xSearch.maxTurns": {
+      "label": "X Search Max Turns",
+      "help": "Optional max internal tool turns xAI may use per x_search request."
+    },
+    "xSearch.timeoutSeconds": {
+      "label": "X Search Timeout",
+      "help": "Timeout in seconds for x_search requests."
+    },
+    "xSearch.cacheTtlMinutes": {
+      "label": "X Search Cache TTL",
+      "help": "Cache TTL in minutes for x_search results."
+    },
     "codeExecution.model": {
       "label": "Code Execution Model",
       "help": "xAI model override for code_execution."
@@ -53,6 +77,7 @@
   },
   "contracts": {
     "webSearchProviders": ["grok"],
+    "videoGenerationProviders": ["xai"],
     "tools": ["code_execution", "x_search"]
   },
   "configSchema": {
@@ -71,6 +96,30 @@
           },
           "inlineCitations": {
             "type": "boolean"
+          }
+        }
+      },
+      "xSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "model": {
+            "type": "string"
+          },
+          "inlineCitations": {
+            "type": "boolean"
+          },
+          "maxTurns": {
+            "type": "number"
+          },
+          "timeoutSeconds": {
+            "type": "number"
+          },
+          "cacheTtlMinutes": {
+            "type": "number"
           }
         }
       },

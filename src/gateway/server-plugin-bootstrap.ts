@@ -20,6 +20,7 @@ type GatewayPluginBootstrapLog = {
 
 type GatewayPluginBootstrapParams = {
   cfg: ReturnType<typeof loadConfig>;
+  activationSourceConfig?: ReturnType<typeof loadConfig>;
   workspaceDir: string;
   log: GatewayPluginBootstrapLog;
   coreGatewayHandlers: Record<string, GatewayRequestHandler>;
@@ -58,13 +59,17 @@ function logGatewayPluginDiagnostics(params: {
 }
 
 export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
-  const resolvedConfig = applyPluginAutoEnable({
-    config: params.cfg,
+  const activationSourceConfig = params.activationSourceConfig ?? params.cfg;
+  const autoEnabled = applyPluginAutoEnable({
+    config: activationSourceConfig,
     env: process.env,
-  }).config;
+  });
+  const resolvedConfig = autoEnabled.config;
   installGatewayPluginRuntimeEnvironment(resolvedConfig);
   const loaded = loadGatewayPlugins({
     cfg: resolvedConfig,
+    activationSourceConfig,
+    autoEnabledReasons: autoEnabled.autoEnabledReasons,
     workspaceDir: params.workspaceDir,
     log: params.log,
     coreGatewayHandlers: params.coreGatewayHandlers,
@@ -86,7 +91,10 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
 export function loadGatewayStartupPlugins(
   params: Omit<GatewayPluginBootstrapParams, "beforePrimeRegistry">,
 ) {
-  return prepareGatewayPluginLoad(params);
+  return prepareGatewayPluginLoad({
+    ...params,
+    beforePrimeRegistry: pinActivePluginChannelRegistry,
+  });
 }
 
 export function reloadDeferredGatewayPlugins(

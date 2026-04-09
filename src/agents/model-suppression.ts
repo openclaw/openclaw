@@ -1,18 +1,28 @@
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveProviderBuiltInModelSuppression } from "../plugins/provider-runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./provider-id.js";
 
-function resolveBuiltInModelSuppression(params: { provider?: string | null; id?: string | null }) {
-  const provider = normalizeProviderId(params.provider?.trim().toLowerCase() ?? "");
-  const modelId = params.id?.trim().toLowerCase() ?? "";
+function resolveBuiltInModelSuppression(params: {
+  provider?: string | null;
+  id?: string | null;
+  baseUrl?: string | null;
+  config?: OpenClawConfig;
+}) {
+  const provider = normalizeProviderId(params.provider ?? "");
+  const modelId = normalizeLowercaseStringOrEmpty(params.id);
   if (!provider || !modelId) {
     return undefined;
   }
   return resolveProviderBuiltInModelSuppression({
+    ...(params.config ? { config: params.config } : {}),
     env: process.env,
     context: {
+      ...(params.config ? { config: params.config } : {}),
       env: process.env,
       provider,
       modelId,
+      ...(params.baseUrl ? { baseUrl: params.baseUrl } : {}),
     },
   });
 }
@@ -20,6 +30,8 @@ function resolveBuiltInModelSuppression(params: { provider?: string | null; id?:
 export function shouldSuppressBuiltInModel(params: {
   provider?: string | null;
   id?: string | null;
+  baseUrl?: string | null;
+  config?: OpenClawConfig;
 }) {
   return resolveBuiltInModelSuppression(params)?.suppress ?? false;
 }
@@ -27,6 +39,8 @@ export function shouldSuppressBuiltInModel(params: {
 export function buildSuppressedBuiltInModelError(params: {
   provider?: string | null;
   id?: string | null;
+  baseUrl?: string | null;
+  config?: OpenClawConfig;
 }): string | undefined {
   return resolveBuiltInModelSuppression(params)?.errorMessage;
 }

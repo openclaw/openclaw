@@ -9,6 +9,7 @@ const sendGoogleChatMessage = vi.hoisted(() => vi.fn());
 const uploadGoogleChatAttachment = vi.hoisted(() => vi.fn());
 const resolveGoogleChatOutboundSpace = vi.hoisted(() => vi.fn());
 const getGoogleChatRuntime = vi.hoisted(() => vi.fn());
+const loadOutboundMediaFromUrl = vi.hoisted(() => vi.fn());
 
 vi.mock("./accounts.js", () => ({
   listEnabledGoogleChatAccounts,
@@ -30,6 +31,15 @@ vi.mock("./runtime.js", () => ({
 vi.mock("./targets.js", () => ({
   resolveGoogleChatOutboundSpace,
 }));
+
+vi.mock("../runtime-api.js", async () => {
+  const actual = await vi.importActual<typeof import("../runtime-api.js")>("../runtime-api.js");
+  return {
+    ...actual,
+    loadOutboundMediaFromUrl: (...args: Parameters<typeof actual.loadOutboundMediaFromUrl>) =>
+      (loadOutboundMediaFromUrl as unknown as typeof actual.loadOutboundMediaFromUrl)(...args),
+  };
+});
 
 let googlechatMessageActions: typeof import("./actions.js").googlechatMessageActions;
 
@@ -55,6 +65,27 @@ describe("googlechat message actions", () => {
     ]);
 
     expect(googlechatMessageActions.describeMessageTool?.({ cfg: {} as never })).toEqual({
+      actions: ["send", "upload-file", "react", "reactions"],
+    });
+  });
+
+  it("honors account-scoped reaction gates during discovery", () => {
+    resolveGoogleChatAccount.mockImplementation(({ accountId }: { accountId?: string | null }) => ({
+      enabled: true,
+      credentialSource: "service-account",
+      config: {
+        actions: { reactions: accountId === "work" },
+      },
+    }));
+
+    expect(
+      googlechatMessageActions.describeMessageTool?.({ cfg: {} as never, accountId: "default" }),
+    ).toEqual({
+      actions: ["send", "upload-file"],
+    });
+    expect(
+      googlechatMessageActions.describeMessageTool?.({ cfg: {} as never, accountId: "work" }),
+    ).toEqual({
       actions: ["send", "upload-file", "react", "reactions"],
     });
   });
@@ -130,19 +161,16 @@ describe("googlechat message actions", () => {
       config: { mediaMaxMb: 5 },
     });
     resolveGoogleChatOutboundSpace.mockResolvedValue("spaces/BBB");
-    const loadWebMedia = vi.fn(async () => ({
+    loadOutboundMediaFromUrl.mockResolvedValue({
       buffer: Buffer.from("local-bytes"),
       fileName: "local.txt",
       contentType: "text/plain",
-    }));
+    });
     getGoogleChatRuntime.mockReturnValue({
       channel: {
         media: {
           fetchRemoteMedia: vi.fn(),
         },
-      },
-      media: {
-        loadWebMedia,
       },
     });
     uploadGoogleChatAttachment.mockResolvedValue({
@@ -168,9 +196,9 @@ describe("googlechat message actions", () => {
       mediaLocalRoots: ["/tmp"],
     } as never);
 
-    expect(loadWebMedia).toHaveBeenCalledWith(
+    expect(loadOutboundMediaFromUrl).toHaveBeenCalledWith(
       "/tmp/local.txt",
-      expect.objectContaining({ localRoots: ["/tmp"] }),
+      expect.objectContaining({ mediaLocalRoots: ["/tmp"] }),
     );
     expect(uploadGoogleChatAttachment).toHaveBeenCalledWith(
       expect.objectContaining({

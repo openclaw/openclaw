@@ -30,6 +30,58 @@ endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switc
 openclaw onboard --auth-choice qianfan-api-key
 ```
 
+## Config snippet
+
+```json5
+{
+  env: { QIANFAN_API_KEY: "bce-v3/ALTAK-..." },
+  agents: {
+    defaults: {
+      model: { primary: "qianfan/deepseek-v3.2" },
+      models: {
+        "qianfan/deepseek-v3.2": { alias: "QIANFAN" },
+      },
+    },
+  },
+  models: {
+    providers: {
+      qianfan: {
+        baseUrl: "https://qianfan.baidubce.com/v2",
+        api: "openai-completions",
+        models: [
+          {
+            id: "deepseek-v3.2",
+            name: "DEEPSEEK V3.2",
+            reasoning: true,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 98304,
+            maxTokens: 32768,
+          },
+          {
+            id: "ernie-5.0-thinking-preview",
+            name: "ERNIE-5.0-Thinking-Preview",
+            reasoning: true,
+            input: ["text", "image"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 119000,
+            maxTokens: 64000,
+          },
+        ],
+      },
+    },
+  },
+}
+```
+
+## Notes
+
+- Default bundled model ref: `qianfan/deepseek-v3.2`
+- Default base URL: `https://qianfan.baidubce.com/v2`
+- Bundled catalog currently includes `deepseek-v3.2` and `ernie-5.0-thinking-preview`
+- Add or override `models.providers.qianfan` only when you need custom base URL or model metadata
+- Qianfan runs through the OpenAI-compatible transport path, not native OpenAI request shaping
+
 ## Related Documentation
 
 - [OpenClaw Configuration](/gateway/configuration)

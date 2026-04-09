@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isAllowlistedCaller, normalizePhoneNumber } from "../allowlist.js";
-import type { CallRecord, CallState, NormalizedEvent } from "../types.js";
+import type { CallRecord, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { finalizeCall } from "./lifecycle.js";
 import { findCall } from "./lookup.js";
@@ -137,7 +138,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
           reason: "hangup-bot",
         })
         .catch((err) => {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = formatErrorMessage(err);
           console.warn(`[voice-call] Failed to reject inbound call ${pid}:`, message);
         });
       return;

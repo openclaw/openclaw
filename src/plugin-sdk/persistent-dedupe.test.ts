@@ -1,16 +1,9 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createPersistentDedupe } from "./persistent-dedupe.js";
+import { createPluginSdkTestHarness } from "./test-helpers.js";
 
-const tmpRoots: string[] = [];
-
-async function makeTmpRoot(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dedupe-"));
-  tmpRoots.push(root);
-  return root;
-}
+const { createTempDir } = createPluginSdkTestHarness();
 
 function createDedupe(root: string, overrides?: { ttlMs?: number }) {
   return createPersistentDedupe({
@@ -21,15 +14,9 @@ function createDedupe(root: string, overrides?: { ttlMs?: number }) {
   });
 }
 
-afterEach(async () => {
-  await Promise.all(
-    tmpRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
-  );
-});
-
 describe("createPersistentDedupe", () => {
   it("deduplicates keys and persists across instances", async () => {
-    const root = await makeTmpRoot();
+    const root = await createTempDir("openclaw-dedupe-");
     const first = createDedupe(root);
     expect(await first.checkAndRecord("m1", { namespace: "a" })).toBe(true);
     expect(await first.checkAndRecord("m1", { namespace: "a" })).toBe(false);
@@ -40,7 +27,7 @@ describe("createPersistentDedupe", () => {
   });
 
   it("guards concurrent calls for the same key", async () => {
-    const root = await makeTmpRoot();
+    const root = await createTempDir("openclaw-dedupe-");
     const dedupe = createDedupe(root, { ttlMs: 10_000 });
 
     const [first, second] = await Promise.all([
@@ -64,7 +51,7 @@ describe("createPersistentDedupe", () => {
   });
 
   it("warmup loads persisted entries into memory", async () => {
-    const root = await makeTmpRoot();
+    const root = await createTempDir("openclaw-dedupe-");
     const writer = createDedupe(root);
     expect(await writer.checkAndRecord("msg-1", { namespace: "acct" })).toBe(true);
     expect(await writer.checkAndRecord("msg-2", { namespace: "acct" })).toBe(true);
@@ -104,7 +91,7 @@ describe("createPersistentDedupe", () => {
       },
     },
   ])("warmup $name", async ({ setup, namespace, expectedLoaded, verify }) => {
-    const root = await makeTmpRoot();
+    const root = await createTempDir("openclaw-dedupe-");
     const reader = await setup(root);
     const loaded = await reader.warmup(namespace);
     expect(loaded).toBe(expectedLoaded);

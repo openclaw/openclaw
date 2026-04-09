@@ -11,14 +11,18 @@ import {
 import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount } from "./accounts.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
-import { createSlackWebClient } from "./client.js";
+import { createSlackWriteClient } from "./client.js";
 import { markdownToSlackMrkdwnChunks } from "./format.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
+import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 import { parseSlackTarget } from "./targets.js";
 import { resolveSlackBotToken } from "./token.js";
 const SLACK_UPLOAD_SSRF_POLICY = {
@@ -49,6 +53,10 @@ type SlackSendOpts = {
   token?: string;
   accountId?: string;
   mediaUrl?: string;
+  mediaAccess?: {
+    localRoots?: readonly string[];
+    readFile?: (filePath: string) => Promise<Buffer>;
+  };
   uploadFileName?: string;
   uploadTitle?: string;
   mediaLocalRoots?: readonly string[];
@@ -74,18 +82,18 @@ function isSlackCustomizeScopeError(err: unknown): boolean {
       response_metadata?: { scopes?: string[]; acceptedScopes?: string[] };
     };
   };
-  const code = maybeData.data?.error?.toLowerCase();
+  const code = normalizeLowercaseStringOrEmpty(maybeData.data?.error);
   if (code !== "missing_scope") {
     return false;
   }
-  const needed = maybeData.data?.needed?.toLowerCase();
+  const needed = normalizeLowercaseStringOrEmpty(maybeData.data?.needed);
   if (needed?.includes("chat:write.customize")) {
     return true;
   }
   const scopes = [
     ...(maybeData.data?.response_metadata?.scopes ?? []),
     ...(maybeData.data?.response_metadata?.acceptedScopes ?? []),
-  ].map((scope) => scope.toLowerCase());
+  ].map((scope) => normalizeLowercaseStringOrEmpty(scope));
   return scopes.includes("chat:write.customize");
 }
 
@@ -231,6 +239,10 @@ async function uploadSlackFile(params: {
   client: WebClient;
   channelId: string;
   mediaUrl: string;
+  mediaAccess?: {
+    localRoots?: readonly string[];
+    readFile?: (filePath: string) => Promise<Buffer>;
+  };
   uploadFileName?: string;
   uploadTitle?: string;
   mediaLocalRoots?: readonly string[];
@@ -239,11 +251,11 @@ async function uploadSlackFile(params: {
   threadTs?: string;
   maxBytes?: number;
 }): Promise<string> {
-  const { buffer, contentType, fileName } = await loadWebMedia(params.mediaUrl, {
+  const { buffer, contentType, fileName } = await loadOutboundMediaFromUrl(params.mediaUrl, {
     maxBytes: params.maxBytes,
-    localRoots: params.mediaLocalRoots,
-    readFile: params.mediaReadFile,
-    hostReadCapability: Boolean(params.mediaReadFile),
+    mediaAccess: params.mediaAccess,
+    mediaLocalRoots: params.mediaLocalRoots,
+    mediaReadFile: params.mediaReadFile,
   });
   const uploadFileName = params.uploadFileName ?? fileName ?? "upload";
   const uploadTitle = params.uploadTitle ?? uploadFileName;
@@ -299,7 +311,7 @@ export async function sendMessageSlack(
   message: string,
   opts: SlackSendOpts = {},
 ): Promise<SlackSendResult> {
-  const trimmedMessage = message?.trim() ?? "";
+  const trimmedMessage = normalizeOptionalString(message) ?? "";
   if (isSilentReplyText(trimmedMessage) && !opts.mediaUrl && !opts.blocks) {
     logVerbose("slack send: suppressed NO_REPLY token before API call");
     return { messageId: "suppressed", channelId: "" };
@@ -319,7 +331,7 @@ export async function sendMessageSlack(
     fallbackToken: account.botToken,
     fallbackSource: account.botTokenSource,
   });
-  const client = opts.client ?? createSlackWebClient(token);
+  const client = opts.client ?? createSlackWriteClient(token);
   const recipient = parseRecipient(to);
   const { channelId } = await resolveChannelId(client, recipient, {
     accountId: account.accountId,
@@ -373,6 +385,7 @@ export async function sendMessageSlack(
       client,
       channelId,
       mediaUrl: opts.mediaUrl,
+      mediaAccess: opts.mediaAccess,
       uploadFileName: opts.uploadFileName,
       uploadTitle: opts.uploadTitle,
       mediaLocalRoots: opts.mediaLocalRoots,

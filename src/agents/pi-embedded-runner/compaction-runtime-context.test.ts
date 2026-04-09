@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { buildEmbeddedCompactionRuntimeContext } from "./compaction-runtime-context.js";
+import {
+  buildEmbeddedCompactionRuntimeContext,
+  resolveEmbeddedCompactionTarget,
+} from "./compaction-runtime-context.js";
 
 describe("buildEmbeddedCompactionRuntimeContext", () => {
   it("preserves sender and current message routing for compaction", () => {
@@ -72,6 +75,73 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       senderId: undefined,
       provider: undefined,
       model: undefined,
+    });
+  });
+
+  it("applies compaction.model override with provider/model format", () => {
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      config: {
+        agents: { defaults: { compaction: { model: "anthropic/claude-opus-4-6" } } },
+      } as OpenClawConfig,
+      provider: "ollama",
+      modelId: "minimax-m2.7:cloud",
+      authProfileId: "ollama:default",
+    });
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-opus-4-6");
+    // Auth profile dropped because provider changed
+    expect(result.authProfileId).toBeUndefined();
+  });
+
+  it("applies compaction.model override with model-only format", () => {
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      config: {
+        agents: { defaults: { compaction: { model: "gpt-4o" } } },
+      } as OpenClawConfig,
+      provider: "openai",
+      modelId: "gpt-3.5-turbo",
+      authProfileId: "openai:p1",
+    });
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("gpt-4o");
+    // Auth profile preserved because provider didn't change
+    expect(result.authProfileId).toBe("openai:p1");
+  });
+
+  it("uses session model when no compaction.model override configured", () => {
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      modelId: "minimax-m2.7:cloud",
+      authProfileId: "ollama:default",
+    });
+    expect(result.provider).toBe("ollama");
+    expect(result.model).toBe("minimax-m2.7:cloud");
+    expect(result.authProfileId).toBe("ollama:default");
+  });
+
+  it("applies runtime defaults when resolving the effective compaction target", () => {
+    expect(
+      resolveEmbeddedCompactionTarget({
+        config: {
+          agents: { defaults: { compaction: { model: "anthropic/" } } },
+        } as OpenClawConfig,
+        provider: "openai-codex",
+        modelId: "gpt-5.4",
+        authProfileId: "openai:p1",
+        defaultProvider: "openai-codex",
+        defaultModel: "gpt-5.4",
+      }),
+    ).toEqual({
+      provider: "anthropic",
+      model: "gpt-5.4",
+      authProfileId: undefined,
     });
   });
 });

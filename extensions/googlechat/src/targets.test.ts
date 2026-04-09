@@ -21,8 +21,8 @@ vi.mock("google-auth-library", () => ({
   },
 }));
 
-vi.mock("./auth.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./auth.js")>();
+vi.mock("./auth.js", async () => {
+  const actual = await vi.importActual<typeof import("./auth.js")>("./auth.js");
   return {
     ...actual,
     getGoogleChatAccessToken: mocks.getGoogleChatAccessToken,
@@ -94,7 +94,6 @@ describe("googlechat group policy", () => {
           },
         },
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
     expect(resolveGoogleChatGroupRequireMention({ cfg, groupId: "spaces/AAA" })).toBe(false);

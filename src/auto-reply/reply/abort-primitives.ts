@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { normalizeCommandBody, type CommandNormalizeOptions } from "../commands-registry.js";
 
 const ABORT_TRIGGERS = new Set([
@@ -49,9 +50,7 @@ const ABORT_MEMORY_MAX = 2000;
 const TRAILING_ABORT_PUNCTUATION_RE = /[.!?…,，。;；:：'"’”)\]}]+$/u;
 
 function normalizeAbortTriggerText(text: string): string {
-  return text
-    .trim()
-    .toLowerCase()
+  return normalizeLowercaseStringOrEmpty(text)
     .replace(/[’`]/g, "'")
     .replace(/\s+/g, " ")
     .replace(TRAILING_ABORT_PUNCTUATION_RE, "")
@@ -74,7 +73,7 @@ export function isAbortRequestText(text?: string, options?: CommandNormalizeOpti
   if (!normalized) {
     return false;
   }
-  const normalizedLower = normalized.toLowerCase();
+  const normalizedLower = normalizeLowercaseStringOrEmpty(normalized);
   return (
     normalizedLower === "/stop" ||
     normalizeAbortTriggerText(normalizedLower) === "/stop" ||

@@ -1,4 +1,3 @@
-import { getInspectableTaskRegistrySummary } from "openclaw/plugin-sdk/tasks-summary";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CliDeps } from "../cli/deps.js";
@@ -17,6 +16,7 @@ import {
 } from "../infra/restart.js";
 import { setCommandLaneConcurrency, getTotalQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
+import { getInspectableTaskRegistrySummary } from "../tasks/task-registry.maintenance.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { ChannelKind } from "./config-reload-plan.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
@@ -153,7 +153,7 @@ export function createGatewayReloadHandlers(params: {
   const requestGatewayRestart = (
     plan: GatewayReloadPlan,
     nextConfig: ReturnType<typeof loadConfig>,
-  ) => {
+  ): boolean => {
     setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
     const reasons = plan.restartReasons.length
       ? plan.restartReasons.join(", ")
@@ -161,7 +161,7 @@ export function createGatewayReloadHandlers(params: {
 
     if (process.listenerCount("SIGUSR1") === 0) {
       params.logReload.warn("no SIGUSR1 listener found; restart skipped");
-      return;
+      return false;
     }
 
     const getActiveCounts = () => {
@@ -201,7 +201,7 @@ export function createGatewayReloadHandlers(params: {
         params.logReload.info(
           `config change requires gateway restart (${reasons}) — already waiting for operations to complete`,
         );
-        return;
+        return true;
       }
       restartPending = true;
       const initialDetails = formatActiveDetails(active);
@@ -232,6 +232,7 @@ export function createGatewayReloadHandlers(params: {
           },
         },
       });
+      return true;
     } else {
       // No active operations or pending replies, restart immediately
       params.logReload.warn(`config change requires gateway restart (${reasons})`);
@@ -239,6 +240,7 @@ export function createGatewayReloadHandlers(params: {
       if (!emitted) {
         params.logReload.info("gateway restart already scheduled; skipping duplicate signal");
       }
+      return true;
     }
   };
 

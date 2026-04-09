@@ -4,6 +4,12 @@ import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins
 import type { OpenClawConfig } from "../../config/config.js";
 import { createRootScopedReadFile } from "../../infra/fs-safe.js";
 import { basenameFromMediaSource } from "../../infra/local-file-access.js";
+import {
+  buildOutboundMediaLoadOptions,
+  resolveOutboundMediaAccess,
+  type OutboundMediaAccess,
+  type OutboundMediaReadFile,
+} from "../../media/load-options.js";
 import { extensionForMime } from "../../media/mime.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { readBooleanParam as readBooleanParamShared } from "../../plugin-sdk/boolean-param.js";
@@ -101,14 +107,14 @@ export type AttachmentMediaPolicy =
     }
   | {
       mode: "host";
-      localRoots?: readonly string[];
-      readFile?: (filePath: string) => Promise<Buffer>;
+      mediaAccess?: OutboundMediaAccess;
     };
 
 export function resolveAttachmentMediaPolicy(params: {
   sandboxRoot?: string;
+  mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
+  mediaReadFile?: OutboundMediaReadFile;
 }): AttachmentMediaPolicy {
   const sandboxRoot = params.sandboxRoot?.trim();
   if (sandboxRoot) {
@@ -119,8 +125,11 @@ export function resolveAttachmentMediaPolicy(params: {
   }
   return {
     mode: "host",
-    localRoots: params.mediaLocalRoots,
-    readFile: params.mediaReadFile,
+    mediaAccess: resolveOutboundMediaAccess({
+      mediaAccess: params.mediaAccess,
+      mediaLocalRoots: params.mediaLocalRoots,
+      mediaReadFile: params.mediaReadFile,
+    }),
   };
 }
 
@@ -136,7 +145,7 @@ function buildAttachmentMediaLoadOptions(params: {
   | {
       maxBytes?: number;
       localRoots?: readonly string[] | "any";
-      readFile?: (filePath: string) => Promise<Buffer>;
+      readFile?: OutboundMediaReadFile;
       hostReadCapability?: boolean;
     } {
   if (params.policy.mode === "sandbox") {
@@ -149,16 +158,10 @@ function buildAttachmentMediaLoadOptions(params: {
       readFile: readSandboxFile,
     };
   }
-  return {
+  return buildOutboundMediaLoadOptions({
     maxBytes: params.maxBytes,
-    ...(params.policy.readFile
-      ? {
-          localRoots: "any" as const,
-          readFile: params.policy.readFile,
-          hostReadCapability: true,
-        }
-      : { localRoots: params.policy.localRoots }),
-  };
+    mediaAccess: params.policy.mediaAccess,
+  });
 }
 
 async function hydrateAttachmentPayload(params: {
@@ -308,12 +311,11 @@ export async function hydrateAttachmentParamsForAction(params: {
   dryRun?: boolean;
   mediaPolicy: AttachmentMediaPolicy;
 }): Promise<void> {
-  const shouldHydrateBlueBubblesUploadFile =
-    params.action === "upload-file" && params.channel === "bluebubbles";
+  const shouldHydrateUploadFile = params.action === "upload-file";
   if (
     params.action !== "sendAttachment" &&
     params.action !== "setGroupIcon" &&
-    !shouldHydrateBlueBubblesUploadFile
+    !shouldHydrateUploadFile
   ) {
     return;
   }
@@ -324,8 +326,7 @@ export async function hydrateAttachmentParamsForAction(params: {
     args: params.args,
     dryRun: params.dryRun,
     mediaPolicy: params.mediaPolicy,
-    allowMessageCaptionFallback:
-      params.action === "sendAttachment" || shouldHydrateBlueBubblesUploadFile,
+    allowMessageCaptionFallback: params.action === "sendAttachment" || shouldHydrateUploadFile,
   });
 }
 

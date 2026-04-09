@@ -1,6 +1,6 @@
-import type { TaskAuditSummary } from "openclaw/plugin-sdk/tasks-summary";
-import type { TaskRegistrySummary } from "openclaw/plugin-sdk/tasks-summary";
 import type { ChannelId } from "../channels/plugins/types.js";
+import type { TaskAuditSummary } from "../tasks/task-registry.audit.js";
+import type { TaskRegistrySummary } from "../tasks/task-registry.types.js";
 
 export type SessionStatus = {
   agentId?: string;

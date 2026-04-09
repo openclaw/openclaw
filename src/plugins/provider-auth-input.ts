@@ -1,6 +1,10 @@
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { SecretInput } from "../config/types.secrets.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeStringifiedOptionalString,
+} from "../shared/string-coerce.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
   resolveSecretInputModeForEnvSelection,
@@ -28,7 +32,7 @@ export {
 const DEFAULT_KEY_PREVIEW = { head: 4, tail: 4 };
 
 export function normalizeApiKeyInput(raw: string): string {
-  const trimmed = String(raw ?? "").trim();
+  const trimmed = normalizeStringifiedOptionalString(raw) ?? "";
   if (!trimmed) {
     return "";
   }
@@ -76,18 +80,13 @@ export function formatApiKeyPreview(
 export function normalizeTokenProviderInput(
   tokenProvider: string | null | undefined,
 ): string | undefined {
-  const normalized = String(tokenProvider ?? "")
-    .trim()
-    .toLowerCase();
-  return normalized || undefined;
+  return normalizeOptionalLowercaseString(tokenProvider);
 }
 
 export function normalizeSecretInputModeInput(
   secretInputMode: string | null | undefined,
 ): SecretInputMode | undefined {
-  const normalized = String(secretInputMode ?? "")
-    .trim()
-    .toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(secretInputMode);
   if (normalized === "plaintext" || normalized === "ref") {
     return normalized;
   }

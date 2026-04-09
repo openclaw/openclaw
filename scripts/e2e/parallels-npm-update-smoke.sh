@@ -24,6 +24,8 @@ LATEST_VERSION=""
 CURRENT_HEAD=""
 CURRENT_HEAD_SHORT=""
 API_KEY_VALUE=""
+PROGRESS_INTERVAL_S=15
+PROGRESS_STALE_S=60
 
 MACOS_FRESH_STATUS="skip"
 WINDOWS_FRESH_STATUS="skip"
@@ -139,12 +141,25 @@ resolve_linux_vm_name() {
 import difflib
 import json
 import os
+import re
 import sys
 
 payload = json.loads(os.environ["PRL_VM_JSON"])
 requested = os.environ["REQUESTED_VM_NAME"].strip()
 requested_lower = requested.lower()
 names = [str(item.get("name", "")).strip() for item in payload if str(item.get("name", "")).strip()]
+
+def parse_ubuntu_version(name: str) -> tuple[int, ...] | None:
+    match = re.search(r"ubuntu\s+(\d+(?:\.\d+)*)", name, re.IGNORECASE)
+    if not match:
+        return None
+    return tuple(int(part) for part in match.group(1).split("."))
+
+def version_distance(version: tuple[int, ...], target: tuple[int, ...]) -> tuple[int, ...]:
+    width = max(len(version), len(target))
+    padded_version = version + (0,) * (width - len(version))
+    padded_target = target + (0,) * (width - len(target))
+    return tuple(abs(a - b) for a, b in zip(padded_version, padded_target))
 
 if requested in names:
     print(requested)
@@ -153,6 +168,27 @@ if requested in names:
 ubuntu_names = [name for name in names if "ubuntu" in name.lower()]
 if not ubuntu_names:
     sys.exit(f"default vm not found and no Ubuntu fallback available: {requested}")
+
+requested_version = parse_ubuntu_version(requested) or (24,)
+ubuntu_with_versions = [
+    (name, parse_ubuntu_version(name)) for name in ubuntu_names
+]
+ubuntu_ge_24 = [
+    (name, version)
+    for name, version in ubuntu_with_versions
+    if version and version[0] >= 24
+]
+if ubuntu_ge_24:
+    best_name = min(
+        ubuntu_ge_24,
+        key=lambda item: (
+            version_distance(item[1], requested_version),
+            -len(item[1]),
+            item[0].lower(),
+        ),
+    )[0]
+    print(best_name)
+    raise SystemExit(0)
 
 best_name = max(
     ubuntu_names,
@@ -219,6 +255,12 @@ param(
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 
+function Write-ProgressLog {
+  param([Parameter(Mandatory = $true)][string]$Stage)
+
+  "==> $Stage" | Tee-Object -FilePath $LogPath -Append | Out-Null
+}
+
 function Invoke-Logged {
   param(
     [Parameter(Mandatory = $true)][string]$Label,
@@ -278,29 +320,90 @@ function Invoke-CaptureLogged {
   return ($output | Out-String).Trim()
 }
 
+function Wait-GatewayRpcReady {
+  param(
+    [Parameter(Mandatory = $true)][string]$OpenClawPath,
+    [int]$Attempts = 20,
+    [int]$SleepSeconds = 3
+  )
+
+  for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+    Write-ProgressLog "update.gateway-status.attempt-$attempt"
+    try {
+      Invoke-Logged 'openclaw gateway status' { & $OpenClawPath gateway status --deep --require-rpc }
+      return
+    } catch {
+      if ($attempt -ge $Attempts) {
+        throw
+      }
+      Write-ProgressLog "update.gateway-status.retry-$attempt"
+      Start-Sleep -Seconds $SleepSeconds
+    }
+  }
+}
+
+function Restart-GatewayWithRecovery {
+  param(
+    [Parameter(Mandatory = $true)][string]$OpenClawPath
+  )
+
+  $restartFailed = $false
+  try {
+    Invoke-Logged 'openclaw gateway restart' { & $OpenClawPath gateway restart }
+  } catch {
+    $restartFailed = $true
+    Write-ProgressLog 'update.restart-gateway.soft-fail'
+    ($_ | Out-String) | Tee-Object -FilePath $LogPath -Append | Out-Null
+  }
+
+  Write-ProgressLog 'update.gateway-status'
+  try {
+    Wait-GatewayRpcReady -OpenClawPath $OpenClawPath
+    return
+  } catch {
+    if (-not $restartFailed) {
+      throw
+    }
+    Write-ProgressLog 'update.gateway-start-recover'
+    Invoke-Logged 'openclaw gateway start' { & $OpenClawPath gateway start }
+    Write-ProgressLog 'update.gateway-status-recover'
+    Wait-GatewayRpcReady -OpenClawPath $OpenClawPath
+  }
+}
+
 try {
   $env:PATH = "$env:LOCALAPPDATA\OpenClaw\deps\portable-git\cmd;$env:LOCALAPPDATA\OpenClaw\deps\portable-git\mingw64\bin;$env:LOCALAPPDATA\OpenClaw\deps\portable-git\usr\bin;$env:PATH"
   $tgz = Join-Path $env:TEMP 'openclaw-main-update.tgz'
   Remove-Item $tgz, $LogPath, $DonePath -Force -ErrorAction SilentlyContinue
+  Write-ProgressLog 'update.start'
   Set-Item -Path ('Env:' + $ProviderKeyEnv) -Value $ProviderKey
+  Write-ProgressLog 'update.download-tgz'
   Invoke-Logged 'download current tgz' { curl.exe -fsSL $TgzUrl -o $tgz }
+  Write-ProgressLog 'update.install-tgz'
   Invoke-Logged 'npm install current tgz' { npm.cmd install -g $tgz --no-fund --no-audit }
   $openclaw = Join-Path $env:APPDATA 'npm\openclaw.cmd'
+  Write-ProgressLog 'update.verify-version'
   $version = Invoke-CaptureLogged 'openclaw --version' { & $openclaw --version }
   if ($version -notmatch [regex]::Escape($HeadShort)) {
     throw "version mismatch: expected substring $HeadShort"
   }
+  Write-ProgressLog $version
+  Write-ProgressLog 'update.set-model'
   Invoke-Logged 'openclaw models set' { & $openclaw models set $ModelId }
   # Windows can keep the old hashed dist modules alive across in-place global npm upgrades.
   # Restart the gateway/service before verifying status or the next agent turn.
-  Invoke-Logged 'openclaw gateway restart' { & $openclaw gateway restart }
-  Start-Sleep -Seconds 5
-  Invoke-Logged 'openclaw gateway status' { & $openclaw gateway status --deep --require-rpc }
+  # Current login-item restarts can report failure before the background service
+  # is fully observable again, so verify readiness separately and fall back to
+  # an explicit start only if the RPC endpoint never returns.
+  Write-ProgressLog 'update.restart-gateway'
+  Restart-GatewayWithRecovery -OpenClawPath $openclaw
+  Write-ProgressLog 'update.agent-turn'
   Invoke-CaptureLogged 'openclaw agent' { & $openclaw agent --agent main --session-id $SessionId --message 'Reply with exact ASCII text OK only.' --json } | Out-Null
   $exitCode = $LASTEXITCODE
   if ($null -eq $exitCode) {
     $exitCode = 0
   }
+  Write-ProgressLog 'update.done'
   Set-Content -Path $DonePath -Value ([string]$exitCode)
   exit $exitCode
 } catch {
@@ -331,11 +434,97 @@ start_server() {
 wait_job() {
   local label="$1"
   local pid="$2"
+  local log_path="${3:-}"
   if wait "$pid"; then
     return 0
   fi
   warn "$label failed"
+  if [[ -n "$log_path" ]]; then
+    dump_log_tail "$label" "$log_path"
+  fi
   return 1
+}
+
+extract_log_progress() {
+  local log_path="$1"
+  python3 - "$log_path" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+if not path.exists():
+    print("")
+    raise SystemExit(0)
+
+text = path.read_text(encoding="utf-8", errors="replace")
+lines = [line.strip() for line in text.splitlines() if line.strip()]
+
+for line in reversed(lines):
+    if line.startswith("==> "):
+        print(line[4:].strip())
+        raise SystemExit(0)
+
+for line in reversed(lines):
+    if line.startswith("warn:") or line.startswith("error:"):
+        print(line)
+        raise SystemExit(0)
+
+if lines:
+    print(lines[-1][:240])
+else:
+    print("")
+PY
+}
+
+dump_log_tail() {
+  local label="$1"
+  local log_path="$2"
+  [[ -f "$log_path" ]] || return 0
+  warn "$label log tail ($log_path)"
+  tail -n 40 "$log_path" >&2 || true
+}
+
+monitor_jobs_progress() {
+  local group="$1"
+  shift
+
+  local labels=()
+  local pids=()
+  local logs=()
+  local last_progress=()
+  local last_print=()
+  local i summary now running
+
+  while [[ $# -gt 0 ]]; do
+    labels+=("$1")
+    pids+=("$2")
+    logs+=("$3")
+    last_progress+=("")
+    last_print+=(0)
+    shift 3
+  done
+
+  say "$group progress; run dir: $RUN_DIR"
+
+  while :; do
+    running=0
+    now=$SECONDS
+    for ((i = 0; i < ${#pids[@]}; i++)); do
+      if ! kill -0 "${pids[$i]}" >/dev/null 2>&1; then
+        continue
+      fi
+      running=1
+      summary="$(extract_log_progress "${logs[$i]}")"
+      [[ -n "$summary" ]] || summary="waiting for first log line"
+      if [[ "${last_progress[$i]}" != "$summary" ]] || (( now - last_print[$i] >= PROGRESS_STALE_S )); then
+        say "$group ${labels[$i]}: $summary"
+        last_progress[$i]="$summary"
+        last_print[$i]=$now
+      fi
+    done
+    (( running )) || break
+    sleep "$PROGRESS_INTERVAL_S"
+  done
 }
 
 extract_last_version() {
@@ -397,6 +586,57 @@ raise SystemExit(completed.returncode)
 PY
 }
 
+resolve_macos_desktop_user() {
+  local user
+  user="$(prlctl exec "$MACOS_VM" /usr/bin/stat -f '%Su' /dev/console 2>/dev/null | tr -d '\r' | tail -n 1 || true)"
+  if [[ "$user" =~ ^[A-Za-z0-9._-]+$ && "$user" != "root" && "$user" != "loginwindow" ]]; then
+    printf '%s\n' "$user"
+    return 0
+  fi
+  prlctl exec "$MACOS_VM" /usr/bin/dscl . -list /Users NFSHomeDirectory 2>/dev/null \
+    | tr -d '\r' \
+    | awk '$2 ~ /^\/Users\// && $1 !~ /^_/ && $1 != "Shared" && $1 != ".localized" { print $1; exit }'
+}
+
+resolve_macos_desktop_home() {
+  local user="$1"
+  local home
+  home="$(
+    prlctl exec "$MACOS_VM" /usr/bin/dscl . -read "/Users/$user" NFSHomeDirectory 2>/dev/null \
+      | tr -d '\r' \
+      | awk '/NFSHomeDirectory:/ { print $2; exit }'
+  )"
+  if [[ -n "$home" ]]; then
+    printf '%s\n' "$home"
+  else
+    printf '/Users/%s\n' "$user"
+  fi
+}
+
+macos_current_user_available() {
+  prlctl exec "$MACOS_VM" --current-user /usr/bin/whoami >/dev/null 2>&1
+}
+
+macos_desktop_user_exec() {
+  if macos_current_user_available; then
+    prlctl exec "$MACOS_VM" --current-user /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" "$@"
+    return
+  fi
+
+  local user home
+  user="$(resolve_macos_desktop_user)"
+  [[ -n "$user" ]] || die "unable to resolve macOS desktop user for sudo fallback"
+  home="$(resolve_macos_desktop_home "$user")"
+  warn "macOS --current-user unavailable; using root sudo fallback for $user"
+  prlctl exec "$MACOS_VM" /usr/bin/sudo -u "$user" /usr/bin/env \
+    "HOME=$home" \
+    "USER=$user" \
+    "LOGNAME=$user" \
+    "PATH=/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin" \
+    "$API_KEY_ENV=$API_KEY_VALUE" \
+    "$@"
+}
+
 guest_powershell_poll() {
   local timeout_s="$1"
   local script="$2"
@@ -422,11 +662,14 @@ run_windows_script_via_log() {
   local model_id="$5"
   local provider_key_env="$6"
   local provider_key="$7"
-  local runner_name log_name done_name done_status launcher_state
+  local runner_name log_name done_name done_status launcher_state guest_log
   local start_seconds poll_deadline startup_checked poll_rc state_rc log_rc
+  local log_state_path
   runner_name="openclaw-update-$RANDOM-$RANDOM.ps1"
   log_name="openclaw-update-$RANDOM-$RANDOM.log"
   done_name="openclaw-update-$RANDOM-$RANDOM.done"
+  log_state_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-update-log-state.XXXXXX")"
+  : >"$log_state_path"
   start_seconds="$SECONDS"
   poll_deadline=$((SECONDS + 900))
   startup_checked=0
@@ -453,6 +696,34 @@ Start-Process powershell.exe -ArgumentList @(
 EOF
 )"
 
+  stream_windows_update_log() {
+    set +e
+    guest_log="$(
+      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+    )"
+    log_rc=$?
+    set -e
+    if [[ $log_rc -ne 0 ]] || [[ -z "$guest_log" ]]; then
+      return "$log_rc"
+    fi
+    GUEST_LOG="$guest_log" python3 - "$log_state_path" <<'PY'
+import os
+import pathlib
+import sys
+
+state_path = pathlib.Path(sys.argv[1])
+previous = state_path.read_text(encoding="utf-8", errors="replace")
+current = os.environ["GUEST_LOG"].replace("\r\n", "\n").replace("\r", "\n")
+
+if current.startswith(previous):
+    sys.stdout.write(current[len(previous):])
+else:
+    sys.stdout.write(current)
+
+state_path.write_text(current, encoding="utf-8")
+PY
+  }
+
   while :; do
     set +e
     done_status="$(
@@ -470,14 +741,18 @@ EOF
       sleep 2
       continue
     fi
+    set +e
+    stream_windows_update_log
+    log_rc=$?
+    set -e
+    if [[ $log_rc -ne 0 ]]; then
+      warn "windows update helper live log poll failed; retrying"
+    fi
     if [[ -n "$done_status" ]]; then
-      set +e
-      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
-      log_rc=$?
-      set -e
-      if [[ $log_rc -ne 0 ]]; then
+      if ! stream_windows_update_log; then
         warn "windows update helper log drain failed after completion"
       fi
+      rm -f "$log_state_path"
       [[ "$done_status" == "0" ]]
       return $?
     fi
@@ -496,13 +771,10 @@ EOF
       fi
     fi
     if (( SECONDS >= poll_deadline )); then
-      set +e
-      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
-      log_rc=$?
-      set -e
-      if [[ $log_rc -ne 0 ]]; then
+      if ! stream_windows_update_log; then
         warn "windows update helper log drain failed after timeout"
       fi
+      rm -f "$log_state_path"
       warn "windows update helper timed out waiting for done file"
       return 1
     fi
@@ -513,10 +785,14 @@ EOF
 run_macos_update() {
   local tgz_url="$1"
   local head_short="$2"
-  cat <<EOF | prlctl exec "$MACOS_VM" --current-user /usr/bin/tee /tmp/openclaw-main-update.sh >/dev/null
+  cat <<EOF | prlctl exec "$MACOS_VM" /usr/bin/tee /tmp/openclaw-main-update.sh >/dev/null
 set -euo pipefail
 export PATH=/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin
 if [ -z "\${HOME:-}" ]; then export HOME="/Users/\$(id -un)"; fi
+if [ -z "\${$API_KEY_ENV:-}" ]; then
+  echo "$API_KEY_ENV is required in the macOS update environment" >&2
+  exit 1
+fi
 cd "\$HOME"
 curl -fsSL "$tgz_url" -o /tmp/openclaw-main-update.tgz
 /opt/homebrew/bin/npm install -g /tmp/openclaw-main-update.tgz
@@ -530,10 +806,19 @@ case "\$version" in
     ;;
 esac
 /opt/homebrew/bin/openclaw models set "$MODEL_ID"
+# Same-guest npm upgrades can leave launchd holding the old gateway process or
+# module graph briefly; wait for a fresh RPC-ready restart before the agent turn.
+/opt/homebrew/bin/openclaw gateway restart
+for _ in 1 2 3 4 5 6 7 8; do
+  if /opt/homebrew/bin/openclaw gateway status --deep --require-rpc >/dev/null 2>&1; then
+    break
+  fi
+  sleep 2
+done
 /opt/homebrew/bin/openclaw gateway status --deep --require-rpc
-/usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" /opt/homebrew/bin/openclaw agent --agent main --session-id parallels-npm-update-macos-$head_short --message "Reply with exact ASCII text OK only." --json
+/opt/homebrew/bin/openclaw agent --agent main --session-id parallels-npm-update-macos-$head_short --message "Reply with exact ASCII text OK only." --json
 EOF
-  prlctl exec "$MACOS_VM" --current-user /bin/bash /tmp/openclaw-main-update.sh
+  macos_desktop_user_exec /bin/bash /tmp/openclaw-main-update.sh
 }
 
 run_windows_update() {
@@ -626,6 +911,7 @@ if [[ "$RESOLVED_LINUX_VM" != "$LINUX_VM" ]]; then
 fi
 
 say "Run fresh npm baseline: $PACKAGE_SPEC"
+say "Run dir: $RUN_DIR"
 bash "$ROOT_DIR/scripts/e2e/parallels-macos-smoke.sh" \
   --mode fresh \
   --provider "$PROVIDER" \
@@ -650,9 +936,14 @@ bash "$ROOT_DIR/scripts/e2e/parallels-linux-smoke.sh" \
   --json >"$RUN_DIR/linux-fresh.log" 2>&1 &
 linux_fresh_pid=$!
 
-wait_job "macOS fresh" "$macos_fresh_pid" && MACOS_FRESH_STATUS="pass" || MACOS_FRESH_STATUS="fail"
-wait_job "Windows fresh" "$windows_fresh_pid" && WINDOWS_FRESH_STATUS="pass" || WINDOWS_FRESH_STATUS="fail"
-wait_job "Linux fresh" "$linux_fresh_pid" && LINUX_FRESH_STATUS="pass" || LINUX_FRESH_STATUS="fail"
+monitor_jobs_progress "fresh" \
+  "macOS" "$macos_fresh_pid" "$RUN_DIR/macos-fresh.log" \
+  "Windows" "$windows_fresh_pid" "$RUN_DIR/windows-fresh.log" \
+  "Linux" "$linux_fresh_pid" "$RUN_DIR/linux-fresh.log"
+
+wait_job "macOS fresh" "$macos_fresh_pid" "$RUN_DIR/macos-fresh.log" && MACOS_FRESH_STATUS="pass" || MACOS_FRESH_STATUS="fail"
+wait_job "Windows fresh" "$windows_fresh_pid" "$RUN_DIR/windows-fresh.log" && WINDOWS_FRESH_STATUS="pass" || WINDOWS_FRESH_STATUS="fail"
+wait_job "Linux fresh" "$linux_fresh_pid" "$RUN_DIR/linux-fresh.log" && LINUX_FRESH_STATUS="pass" || LINUX_FRESH_STATUS="fail"
 
 [[ "$MACOS_FRESH_STATUS" == "pass" ]] || die "macOS fresh baseline failed"
 [[ "$WINDOWS_FRESH_STATUS" == "pass" ]] || die "Windows fresh baseline failed"
@@ -673,9 +964,14 @@ windows_update_pid=$!
 run_linux_update "$tgz_url" "$CURRENT_HEAD_SHORT" >"$RUN_DIR/linux-update.log" 2>&1 &
 linux_update_pid=$!
 
-wait_job "macOS update" "$macos_update_pid" && MACOS_UPDATE_STATUS="pass" || MACOS_UPDATE_STATUS="fail"
-wait_job "Windows update" "$windows_update_pid" && WINDOWS_UPDATE_STATUS="pass" || WINDOWS_UPDATE_STATUS="fail"
-wait_job "Linux update" "$linux_update_pid" && LINUX_UPDATE_STATUS="pass" || LINUX_UPDATE_STATUS="fail"
+monitor_jobs_progress "update" \
+  "macOS" "$macos_update_pid" "$RUN_DIR/macos-update.log" \
+  "Windows" "$windows_update_pid" "$RUN_DIR/windows-update.log" \
+  "Linux" "$linux_update_pid" "$RUN_DIR/linux-update.log"
+
+wait_job "macOS update" "$macos_update_pid" "$RUN_DIR/macos-update.log" && MACOS_UPDATE_STATUS="pass" || MACOS_UPDATE_STATUS="fail"
+wait_job "Windows update" "$windows_update_pid" "$RUN_DIR/windows-update.log" && WINDOWS_UPDATE_STATUS="pass" || WINDOWS_UPDATE_STATUS="fail"
+wait_job "Linux update" "$linux_update_pid" "$RUN_DIR/linux-update.log" && LINUX_UPDATE_STATUS="pass" || LINUX_UPDATE_STATUS="fail"
 
 [[ "$MACOS_UPDATE_STATUS" == "pass" ]] || die "macOS update failed"
 [[ "$WINDOWS_UPDATE_STATUS" == "pass" ]] || die "Windows update failed"

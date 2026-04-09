@@ -1,5 +1,7 @@
+import type { ReactionLevel } from "../utils/reaction-level.js";
 import type {
   BlockStreamingCoalesceConfig,
+  ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
   MarkdownConfig,
@@ -16,6 +18,8 @@ export type WhatsAppActionConfig = {
   sendMessage?: boolean;
   polls?: boolean;
 };
+
+export type WhatsAppReactionLevel = ReactionLevel;
 
 export type WhatsAppGroupConfig = {
   requireMention?: boolean;
@@ -58,6 +62,8 @@ type WhatsAppSharedConfig = {
    * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
    */
   groupPolicy?: GroupPolicy;
+  /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
+  contextVisibility?: ContextVisibilityMode;
   /** Max group messages to keep as history context (0 disables). */
   historyLimit?: number;
   /** Max DM turns to keep as history context. */
@@ -77,6 +83,14 @@ type WhatsAppSharedConfig = {
   groups?: Record<string, WhatsAppGroupConfig>;
   /** Acknowledgment reaction sent immediately upon message receipt. */
   ackReaction?: WhatsAppAckReactionConfig;
+  /**
+   * Controls agent reaction behavior:
+   * - "off": No reactions
+   * - "ack": Only automatic ack reactions
+   * - "minimal" (default): Agent can react sparingly
+   * - "extensive": Agent can react liberally
+   */
+  reactionLevel?: WhatsAppReactionLevel;
   /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
   debounceMs?: number;
   /** Heartbeat visibility settings. */

@@ -1,6 +1,7 @@
 import * as http from "http";
 import crypto from "node:crypto";
 import * as Lark from "@larksuiteoapi/node-sdk";
+import { createFeishuWSClient } from "./client.js";
 import {
   applyBasicWebhookRequestGuards,
   isRequestBodyLimitError,
@@ -8,8 +9,8 @@ import {
   installRequestBodyLimitGuard,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
-} from "../runtime-api.js";
-import { createFeishuWSClient } from "./client.js";
+  safeEqualSecret,
+} from "./monitor-transport-runtime-api.js";
 import {
   botNames,
   botOpenIds,
@@ -32,15 +33,6 @@ export type MonitorTransportParams = {
 
 function isFeishuWebhookPayload(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function timingSafeEqualString(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left, "utf8");
-  const rightBuffer = Buffer.from(right, "utf8");
-  if (leftBuffer.length !== rightBuffer.length) {
-    return false;
-  }
-  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
 }
 
 function buildFeishuWebhookEnvelope(
@@ -83,7 +75,7 @@ function isFeishuWebhookSignatureValid(params: {
     .createHash("sha256")
     .update(timestamp + nonce + encryptKey + params.rawBody)
     .digest("hex");
-  return timingSafeEqualString(computedSignature, signature);
+  return safeEqualSecret(computedSignature, signature);
 }
 
 function respondText(res: http.ServerResponse, statusCode: number, body: string): void {
@@ -103,14 +95,16 @@ export async function monitorWebSocket({
   const error = runtime?.error ?? console.error;
   log(`feishu[${accountId}]: starting WebSocket connection...`);
 
-  const wsClient = createFeishuWSClient(account);
+  const wsClient = await createFeishuWSClient(account);
   wsClients.set(accountId, wsClient);
 
   return new Promise((resolve, reject) => {
     let cleanedUp = false;
 
     const cleanup = () => {
-      if (cleanedUp) return;
+      if (cleanedUp) {
+        return;
+      }
       cleanedUp = true;
       abortSignal?.removeEventListener("abort", handleAbort);
       try {
@@ -139,7 +133,7 @@ export async function monitorWebSocket({
     abortSignal?.addEventListener("abort", handleAbort, { once: true });
 
     try {
-      wsClient.start({ eventDispatcher });
+      void wsClient.start({ eventDispatcher });
       log(`feishu[${accountId}]: WebSocket client started`);
     } catch (err) {
       cleanup();

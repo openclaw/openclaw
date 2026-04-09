@@ -1,6 +1,6 @@
-import { findTaskByRunId, resetTaskRegistryForTests } from "openclaw/plugin-sdk/tasks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
+import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { agentHandlers } from "./agent.js";
 import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
@@ -146,33 +146,12 @@ function mockMainSessionEntry(entry: Record<string, unknown>, cfg: Record<string
   });
 }
 
-function captureUpdatedMainEntry() {
-  let capturedEntry: Record<string, unknown> | undefined;
-  mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-    const store: Record<string, unknown> = {};
-    await updater(store);
-    capturedEntry = store["agent:main:main"] as Record<string, unknown>;
-  });
-  return () => capturedEntry;
-}
-
 function buildExistingMainStoreEntry(overrides: Record<string, unknown> = {}) {
   return {
     sessionId: "existing-session-id",
     updatedAt: Date.now(),
     ...overrides,
   };
-}
-
-async function runMainAgentAndCaptureEntry(idempotencyKey: string) {
-  const getCapturedEntry = captureUpdatedMainEntry();
-  mocks.agentCommand.mockResolvedValue({
-    payloads: [{ text: "ok" }],
-    meta: { durationMs: 100 },
-  });
-  await runMainAgent("test", idempotencyKey);
-  expect(mocks.updateSessionStore).toHaveBeenCalled();
-  return getCapturedEntry();
 }
 
 function setupNewYorkTimeConfig(isoDate: string) {
@@ -225,6 +204,27 @@ async function runMainAgent(message: string, idempotencyKey: string) {
     { respond, reqId: idempotencyKey },
   );
   return respond;
+}
+
+async function runMainAgentAndCaptureEntry(idempotencyKey: string) {
+  const loaded = mocks.loadSessionEntry();
+  const canonicalKey = loaded?.canonicalKey ?? "agent:main:main";
+  const existingEntry = structuredClone(loaded?.entry ?? buildExistingMainStoreEntry());
+  let capturedEntry: Record<string, unknown> | undefined;
+  mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+    const store: Record<string, unknown> = {
+      [canonicalKey]: existingEntry,
+    };
+    const result = await updater(store);
+    capturedEntry = result as Record<string, unknown>;
+    return result;
+  });
+  mocks.agentCommand.mockResolvedValue({
+    payloads: [{ text: "ok" }],
+    meta: { durationMs: 100 },
+  });
+  await runMainAgent("hi", idempotencyKey);
+  return capturedEntry;
 }
 
 function readLastAgentCommandCall():
@@ -466,14 +466,14 @@ describe("gateway agent handler", () => {
     expect(capturedEntry?.cliSessionIds).toEqual(existingCliSessionIds);
     expect(capturedEntry?.claudeCliSessionId).toBe(existingClaudeCliSessionId);
   });
-
   it("reactivates completed subagent sessions and broadcasts send updates", async () => {
     const childSessionKey = "agent:main:subagent:followup";
     const completedRun = {
       runId: "run-old",
       childSessionKey,
       controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
       requesterDisplayKey: "main",
       task: "initial task",
       cleanup: "keep" as const,
@@ -794,6 +794,85 @@ describe("gateway agent handler", () => {
     );
   });
 
+  it("accepts music generation internal events", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "music generation finished",
+        sessionKey: "agent:main:main",
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "music_generation",
+            childSessionKey: "music:task-123",
+            childSessionId: "task-123",
+            announceType: "music generation task",
+            taskLabel: "compose a loop",
+            status: "ok",
+            statusLabel: "completed successfully",
+            result: "MEDIA: https://example.test/song.mp3",
+            replyInstruction: "Reply in your normal assistant voice now.",
+          },
+        ],
+        idempotencyKey: "music-generation-event",
+      },
+      { reqId: "music-generation-event-1", respond },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    expect(respond).not.toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("invalid agent params"),
+      }),
+    );
+  });
+
+  it("does not create task rows for inter-session completion wakes", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent(
+      {
+        message: [
+          "[Mon 2026-04-06 02:42 GMT+1] <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "OpenClaw runtime context (internal):",
+          "This context is runtime-generated, not user-authored. Keep internal details private.",
+        ].join("\n"),
+        sessionKey: "agent:main:main",
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "music_generation",
+            childSessionKey: "music:task-123",
+            childSessionId: "task-123",
+            announceType: "music generation task",
+            taskLabel: "compose a loop",
+            status: "ok",
+            statusLabel: "completed successfully",
+            result: "MEDIA:/tmp/song.mp3",
+            replyInstruction: "Reply in your normal assistant voice now.",
+          },
+        ],
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "music_generate:task-123",
+          sourceChannel: "internal",
+          sourceTool: "music_generate",
+        },
+        idempotencyKey: "music-generation-event-inter-session",
+      },
+      { reqId: "music-generation-event-inter-session" },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    expect(findTaskByRunId("music-generation-event-inter-session")).toBeUndefined();
+  });
+
   it("only forwards workspaceDir for spawned sessions with stored workspace inheritance", async () => {
     primeMainAgentRun();
     mockMainSessionEntry({
@@ -904,7 +983,6 @@ describe("gateway agent handler", () => {
     expect(capturedEntry?.cliSessionIds).toBeUndefined();
     expect(capturedEntry?.claudeCliSessionId).toBeUndefined();
   });
-
   it("prunes legacy main alias keys when writing a canonical session entry", async () => {
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {

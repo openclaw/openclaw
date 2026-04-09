@@ -70,14 +70,101 @@ fields are required. The canonical publish snippets live in
 
 ### `openclaw` fields
 
-| Field        | Type       | Description                                                                                |
-| ------------ | ---------- | ------------------------------------------------------------------------------------------ |
-| `extensions` | `string[]` | Entry point files (relative to package root)                                               |
-| `setupEntry` | `string`   | Lightweight setup-only entry (optional)                                                    |
-| `channel`    | `object`   | Channel metadata: `id`, `label`, `blurb`, `selectionLabel`, `docsPath`, `order`, `aliases` |
-| `providers`  | `string[]` | Provider ids registered by this plugin                                                     |
-| `install`    | `object`   | Install hints: `npmSpec`, `localPath`, `defaultChoice`                                     |
-| `startup`    | `object`   | Startup behavior flags                                                                     |
+| Field        | Type       | Description                                                                                            |
+| ------------ | ---------- | ------------------------------------------------------------------------------------------------------ |
+| `extensions` | `string[]` | Entry point files (relative to package root)                                                           |
+| `setupEntry` | `string`   | Lightweight setup-only entry (optional)                                                                |
+| `channel`    | `object`   | Channel catalog metadata for setup, picker, quickstart, and status surfaces                            |
+| `providers`  | `string[]` | Provider ids registered by this plugin                                                                 |
+| `install`    | `object`   | Install hints: `npmSpec`, `localPath`, `defaultChoice`, `minHostVersion`, `allowInvalidConfigRecovery` |
+| `startup`    | `object`   | Startup behavior flags                                                                                 |
+
+### `openclaw.channel`
+
+`openclaw.channel` is cheap package metadata for channel discovery and setup
+surfaces before runtime loads.
+
+| Field                                  | Type       | What it means                                                                 |
+| -------------------------------------- | ---------- | ----------------------------------------------------------------------------- |
+| `id`                                   | `string`   | Canonical channel id.                                                         |
+| `label`                                | `string`   | Primary channel label.                                                        |
+| `selectionLabel`                       | `string`   | Picker/setup label when it should differ from `label`.                        |
+| `detailLabel`                          | `string`   | Secondary detail label for richer channel catalogs and status surfaces.       |
+| `docsPath`                             | `string`   | Docs path for setup and selection links.                                      |
+| `docsLabel`                            | `string`   | Override label used for docs links when it should differ from the channel id. |
+| `blurb`                                | `string`   | Short onboarding/catalog description.                                         |
+| `order`                                | `number`   | Sort order in channel catalogs.                                               |
+| `aliases`                              | `string[]` | Extra lookup aliases for channel selection.                                   |
+| `preferOver`                           | `string[]` | Lower-priority plugin/channel ids this channel should outrank.                |
+| `systemImage`                          | `string`   | Optional icon/system-image name for channel UI catalogs.                      |
+| `selectionDocsPrefix`                  | `string`   | Prefix text before docs links in selection surfaces.                          |
+| `selectionDocsOmitLabel`               | `boolean`  | Show the docs path directly instead of a labeled docs link in selection copy. |
+| `selectionExtras`                      | `string[]` | Extra short strings appended in selection copy.                               |
+| `markdownCapable`                      | `boolean`  | Marks the channel as markdown-capable for outbound formatting decisions.      |
+| `exposure`                             | `object`   | Channel visibility controls for setup, configured lists, and docs surfaces.   |
+| `quickstartAllowFrom`                  | `boolean`  | Opt this channel into the standard quickstart `allowFrom` setup flow.         |
+| `forceAccountBinding`                  | `boolean`  | Require explicit account binding even when only one account exists.           |
+| `preferSessionLookupForAnnounceTarget` | `boolean`  | Prefer session lookup when resolving announce targets for this channel.       |
+
+Example:
+
+```json
+{
+  "openclaw": {
+    "channel": {
+      "id": "my-channel",
+      "label": "My Channel",
+      "selectionLabel": "My Channel (self-hosted)",
+      "detailLabel": "My Channel Bot",
+      "docsPath": "/channels/my-channel",
+      "docsLabel": "my-channel",
+      "blurb": "Webhook-based self-hosted chat integration.",
+      "order": 80,
+      "aliases": ["mc"],
+      "preferOver": ["my-channel-legacy"],
+      "selectionDocsPrefix": "Guide:",
+      "selectionExtras": ["Markdown"],
+      "markdownCapable": true,
+      "exposure": {
+        "configured": true,
+        "setup": true,
+        "docs": true
+      },
+      "quickstartAllowFrom": true
+    }
+  }
+}
+```
+
+`exposure` supports:
+
+- `configured`: include the channel in configured/status-style listing surfaces
+- `setup`: include the channel in interactive setup/configure pickers
+- `docs`: mark the channel as public-facing in docs/navigation surfaces
+
+`showConfigured` and `showInSetup` remain supported as legacy aliases. Prefer
+`exposure`.
+
+### `openclaw.install`
+
+`openclaw.install` is package metadata, not manifest metadata.
+
+| Field                        | Type                 | What it means                                                                    |
+| ---------------------------- | -------------------- | -------------------------------------------------------------------------------- |
+| `npmSpec`                    | `string`             | Canonical npm spec for install/update flows.                                     |
+| `localPath`                  | `string`             | Local development or bundled install path.                                       |
+| `defaultChoice`              | `"npm"` \| `"local"` | Preferred install source when both are available.                                |
+| `minHostVersion`             | `string`             | Minimum supported OpenClaw version in the form `>=x.y.z`.                        |
+| `allowInvalidConfigRecovery` | `boolean`            | Lets bundled-plugin reinstall flows recover from specific stale-config failures. |
+
+If `minHostVersion` is set, install and manifest-registry loading both enforce
+it. Older hosts skip the plugin; invalid version strings are rejected.
+
+`allowInvalidConfigRecovery` is not a general bypass for broken configs. It is
+for narrow bundled-plugin recovery only, so reinstall/setup can repair known
+upgrade leftovers like a missing bundled plugin path or stale `channels.<id>`
+entry for that same plugin. If config is broken for unrelated reasons, install
+still fails closed and tells the operator to run `openclaw doctor --fix`.
 
 ### Deferred full load
 
@@ -105,6 +192,11 @@ gateway starts listening.
   gateway methods). If the full entry owns required startup capabilities, keep
   the default behavior.
 </Warning>
+
+If your setup/full entry registers gateway RPC methods, keep them on a
+plugin-specific prefix. Reserved core admin namespaces (`config.*`,
+`exec.approvals.*`, `wizard.*`, `update.*`) stay core-owned and always resolve
+to `operator.admin`.
 
 ## Plugin manifest
 
@@ -178,7 +270,7 @@ disabled channel inspection).
 
 ```typescript
 // setup-entry.ts
-import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
+import { defineSetupPluginEntry } from "openclaw/plugin-sdk/channel-core";
 import { myChannelPlugin } from "./src/channel.js";
 
 export default defineSetupPluginEntry(myChannelPlugin);
@@ -199,12 +291,57 @@ background services) during setup flows.
 - Any HTTP routes required before gateway listen
 - Any gateway methods needed during startup
 
+Those startup gateway methods should still avoid reserved core admin
+namespaces such as `config.*` or `update.*`.
+
 **What `setupEntry` should NOT include:**
 
 - CLI registrations
 - Background services
 - Heavy runtime imports (crypto, SDKs)
 - Gateway methods only needed after startup
+
+### Narrow setup helper imports
+
+For hot setup-only paths, prefer the narrow setup helper seams over the broader
+`plugin-sdk/setup` umbrella when you only need part of the setup surface:
+
+| Import path                        | Use it for                                                                                | Key exports                                                                                                                                                                                                                                                                                  |
+| ---------------------------------- | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `plugin-sdk/setup-runtime`         | setup-time runtime helpers that stay available in `setupEntry` / deferred channel startup | `createPatchedAccountSetupAdapter`, `createEnvPatchedAccountSetupAdapter`, `createSetupInputPresenceValidator`, `noteChannelLookupFailure`, `noteChannelLookupSummary`, `promptResolvedAllowFrom`, `splitSetupEntries`, `createAllowlistSetupWizardProxy`, `createDelegatedSetupWizardProxy` |
+| `plugin-sdk/setup-adapter-runtime` | environment-aware account setup adapters                                                  | `createEnvPatchedAccountSetupAdapter`                                                                                                                                                                                                                                                        |
+| `plugin-sdk/setup-tools`           | setup/install CLI/archive/docs helpers                                                    | `formatCliCommand`, `detectBinary`, `extractArchive`, `resolveBrewExecutable`, `formatDocsLink`, `CONFIG_DIR`                                                                                                                                                                                |
+
+Use the broader `plugin-sdk/setup` seam when you want the full shared setup
+toolbox, including config-patch helpers such as
+`moveSingleAccountChannelSectionToDefaultAccount(...)`.
+
+The setup patch adapters stay hot-path safe on import. Their bundled
+single-account promotion contract-surface lookup is lazy, so importing
+`plugin-sdk/setup-runtime` does not eagerly load bundled contract-surface
+discovery before the adapter is actually used.
+
+### Channel-owned single-account promotion
+
+When a channel upgrades from a single-account top-level config to
+`channels.<id>.accounts.*`, the default shared behavior is to move promoted
+account-scoped values into `accounts.default`.
+
+Bundled channels can narrow or override that promotion through their setup
+contract surface:
+
+- `singleAccountKeysToMove`: extra top-level keys that should move into the
+  promoted account
+- `namedAccountPromotionKeys`: when named accounts already exist, only these
+  keys move into the promoted account; shared policy/delivery keys stay at the
+  channel root
+- `resolveSingleAccountPromotionTarget(...)`: choose which existing account
+  receives promoted values
+
+Matrix is the current bundled example. If exactly one named Matrix account
+already exists, or if `defaultAccount` points at an existing non-canonical key
+such as `Ops`, promotion preserves that account instead of creating a new
+`accounts.default` entry.
 
 ## Config schema
 
@@ -326,6 +463,29 @@ const setupSurface = createOptionalChannelSetupSurface({
 // Returns { setupAdapter, setupWizard }
 ```
 
+`plugin-sdk/channel-setup` also exposes the lower-level
+`createOptionalChannelSetupAdapter(...)` and
+`createOptionalChannelSetupWizard(...)` builders when you only need one half of
+that optional-install surface.
+
+The generated optional adapter/wizard fail closed on real config writes. They
+reuse one install-required message across `validateInput`,
+`applyAccountConfig`, and `finalize`, and append a docs link when `docsPath` is
+set.
+
+For binary-backed setup UIs, prefer the shared delegated helpers instead of
+copying the same binary/status glue into every channel:
+
+- `createDetectedBinaryStatus(...)` for status blocks that vary only by labels,
+  hints, scores, and binary detection
+- `createCliPathTextInput(...)` for path-backed text inputs
+- `createDelegatedSetupWizardStatusResolvers(...)`,
+  `createDelegatedPrepare(...)`, `createDelegatedFinalize(...)`, and
+  `createDelegatedResolveConfigured(...)` when `setupEntry` needs to forward to
+  a heavier full wizard lazily
+- `createDelegatedTextInputShouldPrompt(...)` when `setupEntry` only needs to
+  delegate a `textInputs[*].shouldPrompt` decision
+
 ## Publishing and installing
 
 **External plugins:** publish to [ClawHub](/tools/clawhub) or npm, then install:
@@ -335,20 +495,25 @@ openclaw plugins install @myorg/openclaw-my-plugin
 ```
 
 OpenClaw tries ClawHub first and falls back to npm automatically. You can also
-force a specific source:
+force ClawHub explicitly:
 
 ```bash
 openclaw plugins install clawhub:@myorg/openclaw-my-plugin   # ClawHub only
-openclaw plugins install npm:@myorg/openclaw-my-plugin       # npm only
+```
+
+There is no matching `npm:` override. Use the normal npm package spec when you
+want the npm path after ClawHub fallback:
+
+```bash
+openclaw plugins install @myorg/openclaw-my-plugin
 ```
 
 **In-repo plugins:** place under the bundled plugin workspace tree and they are automatically
 discovered during build.
 
-**Users can browse and install:**
+**Users can install:**
 
 ```bash
-openclaw plugins search <query>
 openclaw plugins install <package-name>
 ```
 

@@ -1,7 +1,14 @@
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "openclaw/plugin-sdk/agent-runtime";
-import type { PluginRuntime } from "openclaw/plugin-sdk/testing";
-import { removeAckReactionAfterReply, shouldAckReaction } from "openclaw/plugin-sdk/testing";
 import { vi } from "vitest";
+import {
+  removeAckReactionAfterReply,
+  shouldAckReaction,
+} from "../../../src/channels/ack-reactions.js";
+import {
+  implicitMentionKindWhen,
+  resolveInboundMentionDecision,
+} from "../../../src/channels/mention-gating.js";
+import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
 
 type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends (...args: never[]) => unknown
@@ -34,6 +41,40 @@ function mergeDeep<T>(base: T, overrides: DeepPartial<T>): T {
 }
 
 export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = {}): PluginRuntime {
+  const taskFlow = {
+    bindSession: vi.fn(() => ({
+      sessionKey: "agent:main:main",
+      createManaged: vi.fn(),
+      get: vi.fn(),
+      list: vi.fn(() => []),
+      findLatest: vi.fn(),
+      resolve: vi.fn(),
+      getTaskSummary: vi.fn(),
+      setWaiting: vi.fn(),
+      resume: vi.fn(),
+      finish: vi.fn(),
+      fail: vi.fn(),
+      requestCancel: vi.fn(),
+      cancel: vi.fn(),
+      runTask: vi.fn(),
+    })) as unknown as PluginRuntime["taskFlow"]["bindSession"],
+    fromToolContext: vi.fn(() => ({
+      sessionKey: "agent:main:main",
+      createManaged: vi.fn(),
+      get: vi.fn(),
+      list: vi.fn(() => []),
+      findLatest: vi.fn(),
+      resolve: vi.fn(),
+      getTaskSummary: vi.fn(),
+      setWaiting: vi.fn(),
+      resume: vi.fn(),
+      finish: vi.fn(),
+      fail: vi.fn(),
+      requestCancel: vi.fn(),
+      cancel: vi.fn(),
+      runTask: vi.fn(),
+    })) as unknown as PluginRuntime["taskFlow"]["fromToolContext"],
+  };
   const base: PluginRuntime = {
     version: "1.0.0-test",
     config: {
@@ -125,42 +166,20 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       generate: vi.fn() as unknown as PluginRuntime["imageGeneration"]["generate"],
       listProviders: vi.fn() as unknown as PluginRuntime["imageGeneration"]["listProviders"],
     },
+    musicGeneration: {
+      generate: vi.fn() as unknown as PluginRuntime["musicGeneration"]["generate"],
+      listProviders: vi.fn() as unknown as PluginRuntime["musicGeneration"]["listProviders"],
+    },
+    videoGeneration: {
+      generate: vi.fn() as unknown as PluginRuntime["videoGeneration"]["generate"],
+      listProviders: vi.fn() as unknown as PluginRuntime["videoGeneration"]["listProviders"],
+    },
     webSearch: {
       listProviders: vi.fn() as unknown as PluginRuntime["webSearch"]["listProviders"],
       search: vi.fn() as unknown as PluginRuntime["webSearch"]["search"],
     },
     stt: {
       transcribeAudioFile: vi.fn() as unknown as PluginRuntime["stt"]["transcribeAudioFile"],
-    },
-    operations: {
-      dispatch: vi.fn().mockResolvedValue({
-        matched: false,
-        record: null,
-      }) as unknown as PluginRuntime["operations"]["dispatch"],
-      getById: vi.fn().mockResolvedValue(null) as unknown as PluginRuntime["operations"]["getById"],
-      findByRunId: vi
-        .fn()
-        .mockResolvedValue(null) as unknown as PluginRuntime["operations"]["findByRunId"],
-      list: vi.fn().mockResolvedValue([]) as unknown as PluginRuntime["operations"]["list"],
-      summarize: vi.fn().mockResolvedValue({
-        total: 0,
-        active: 0,
-        terminal: 0,
-        failures: 0,
-        byNamespace: {},
-        byKind: {},
-        byStatus: {},
-      }) as unknown as PluginRuntime["operations"]["summarize"],
-      audit: vi.fn().mockResolvedValue([]) as unknown as PluginRuntime["operations"]["audit"],
-      maintenance: vi.fn().mockResolvedValue({
-        reconciled: 0,
-        cleanupStamped: 0,
-        pruned: 0,
-      }) as unknown as PluginRuntime["operations"]["maintenance"],
-      cancel: vi.fn().mockResolvedValue({
-        found: false,
-        cancelled: false,
-      }) as unknown as PluginRuntime["operations"]["cancel"],
     },
     channel: {
       text: {
@@ -283,6 +302,8 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
               ? true
               : params.mentionRegexes.some((regex) => regex.test(params.text)),
         ) as unknown as PluginRuntime["channel"]["mentions"]["matchesMentionWithExplicit"],
+        implicitMentionKindWhen,
+        resolveInboundMentionDecision,
       },
       reactions: {
         shouldAckReaction,
@@ -329,12 +350,18 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         setMaxAgeBySessionKey:
           vi.fn() as unknown as PluginRuntime["channel"]["threadBindings"]["setMaxAgeBySessionKey"],
       },
-      discord: {} as PluginRuntime["channel"]["discord"],
+      runtimeContexts: {
+        register: vi.fn(({ abortSignal }: { abortSignal?: AbortSignal }) => {
+          const lease = { dispose: vi.fn() };
+          abortSignal?.addEventListener("abort", lease.dispose, { once: true });
+          return lease;
+        }) as unknown as PluginRuntime["channel"]["runtimeContexts"]["register"],
+        get: vi.fn() as unknown as PluginRuntime["channel"]["runtimeContexts"]["get"],
+        watch: vi.fn(() =>
+          vi.fn(),
+        ) as unknown as PluginRuntime["channel"]["runtimeContexts"]["watch"],
+      },
       activity: {} as PluginRuntime["channel"]["activity"],
-      line: {} as PluginRuntime["channel"]["line"],
-      slack: {} as PluginRuntime["channel"]["slack"],
-      matrix: {} as PluginRuntime["channel"]["matrix"],
-      signal: {} as PluginRuntime["channel"]["signal"],
     },
     events: {
       onAgentEvent: vi.fn(() => () => {}) as unknown as PluginRuntime["events"]["onAgentEvent"],
@@ -354,8 +381,22 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     state: {
       resolveStateDir: vi.fn(() => "/tmp/openclaw"),
     },
+    tasks: {
+      runs: {
+        bindSession: vi.fn(),
+        fromToolContext: vi.fn(),
+      } as PluginRuntime["tasks"]["runs"],
+      flows: {
+        bindSession: vi.fn(),
+        fromToolContext: vi.fn(),
+      } as PluginRuntime["tasks"]["flows"],
+      flow: taskFlow,
+    },
+    taskFlow,
     modelAuth: {
       getApiKeyForModel: vi.fn() as unknown as PluginRuntime["modelAuth"]["getApiKeyForModel"],
+      getRuntimeAuthForModel:
+        vi.fn() as unknown as PluginRuntime["modelAuth"]["getRuntimeAuthForModel"],
       resolveApiKeyForProvider:
         vi.fn() as unknown as PluginRuntime["modelAuth"]["resolveApiKeyForProvider"],
     },
