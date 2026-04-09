@@ -234,6 +234,7 @@ enum HostEnvSecurityPolicy {
         "VIRTUAL_ENV",
         "VISUAL",
         "WGETRC",
+        "XDG_CONFIG_DIRS",
         "XDG_CONFIG_HOME",
         "YARN_RC_FILENAME",
         "ZDOTDIR"

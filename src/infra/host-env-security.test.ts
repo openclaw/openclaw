@@ -553,6 +553,7 @@ describe("sanitizeHostExecEnv", () => {
         TF_CLI_CONFIG_FILE: "/tmp/override-terraformrc",
         CFLAGS: "-I/attacker/include",
         LDFLAGS: "-L/attacker/lib",
+        XDG_CONFIG_DIRS: "/tmp/evil-config-dirs",
         GITHUB_TOKEN: "ghp-test",
         DATABASE_URL: "postgres://attacker",
         NPM_TOKEN: "npm-test",
@@ -571,6 +572,7 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.TF_CLI_CONFIG_FILE).toBeUndefined();
     expect(env.CFLAGS).toBeUndefined();
     expect(env.LDFLAGS).toBeUndefined();
+    expect(env.XDG_CONFIG_DIRS).toBeUndefined();
     expect(env.GITHUB_TOKEN).toBeUndefined();
     expect(env.DATABASE_URL).toBeUndefined();
     expect(env.NPM_TOKEN).toBeUndefined();
@@ -770,6 +772,8 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("coreclr_profiler_path")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("XDG_CONFIG_HOME")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("xdg_config_home")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("XDG_CONFIG_DIRS")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("xdg_config_dirs")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("AWS_CONFIG_FILE")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("aws_config_file")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("yarn_rc_filename")).toBe(true);
@@ -792,6 +796,7 @@ describe("isDangerousHostEnvOverrideVarName", () => {
       "TF_CLI_CONFIG_FILE",
       "CFLAGS",
       "LDFLAGS",
+      "XDG_CONFIG_DIRS",
       "AWS_SECRET_ACCESS_KEY",
       "AZURE_CLIENT_SECRET",
       "DATABASE_URL",
@@ -1040,6 +1045,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
         GITHUB_TOKEN: "ghp-test",
         DATABASE_URL: "postgres://attacker",
         R_PROFILE_USER: "/tmp/evil-Rprofile",
+        XDG_CONFIG_DIRS: "/tmp/evil-config-dirs",
         SAFE_KEY: "ok",
       },
     });
@@ -1055,6 +1061,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "R_PROFILE_USER",
       "TF_CLI_CONFIG_FILE",
       "VIMINIT",
+      "XDG_CONFIG_DIRS",
     ]);
     expect(result.rejectedOverrideInvalidKeys).toEqual([]);
     expect(result.env.SAFE_KEY).toBe("ok");
@@ -1066,6 +1073,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.GITHUB_TOKEN).toBeUndefined();
     expect(result.env.DATABASE_URL).toBeUndefined();
     expect(result.env.R_PROFILE_USER).toBeUndefined();
+    expect(result.env.XDG_CONFIG_DIRS).toBeUndefined();
   });
 
   it("allows Windows-style override names while still rejecting invalid keys", () => {
