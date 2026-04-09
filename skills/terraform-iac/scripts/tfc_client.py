@@ -125,7 +125,7 @@ def tf_init(cwd):
 
 
 def prompt(question, default=None, choices=None):
-    """Interactive prompt with default and optional choices."""
+    """Interactive prompt with default and optional choices. All returned strings are HCL-safe."""
     hint = ""
     if choices:
         hint = f" [{'/'.join(choices)}]"
@@ -134,13 +134,33 @@ def prompt(question, default=None, choices=None):
     while True:
         val = input(f"  {question}{hint}: ").strip()
         if not val and default is not None:
-            return default
+            return sanitize_hcl(default) if isinstance(default, str) else default
         if choices and val not in choices:
             print(f"    ⚠️  Choose one of: {', '.join(choices)}")
             continue
         if val:
-            return val
+            return sanitize_hcl(val)
         print("    ⚠️  Value required")
+
+
+def prompt_num(question, default=None, min_val=None, max_val=None):
+    """Interactive prompt that validates and returns a numeric string."""
+    while True:
+        hint = f" (default: {default})" if default is not None else ""
+        val = input(f"  {question}{hint}: ").strip()
+        if not val and default is not None:
+            val = str(default)
+        try:
+            num = float(val)
+            if min_val is not None and num < min_val:
+                print(f"    ⚠️  Must be >= {min_val}, got {num}")
+                continue
+            if max_val is not None and num > max_val:
+                print(f"    ⚠️  Must be <= {max_val}, got {num}")
+                continue
+            return str(int(num)) if num == int(num) else str(num)
+        except (ValueError, TypeError):
+            print(f"    ⚠️  Must be a number, got '{val}'")
 
 
 def prompt_iam_user(org, workspace, outdir):
@@ -237,15 +257,7 @@ Best practices enforced:
     print("    Terraform will auto-generate a secure password.")
     print("    Retrieve after apply with: terraform output -raw password")
     print("    User must change password on first login.")
-    pw_length = prompt("Password length (min 14)", default="20")
-    try:
-        pw_len_int = int(pw_length)
-        if pw_len_int < 14:
-            print(f"  \u274c Password length must be at least 14 (got {pw_len_int})")
-            sys.exit(1)
-    except ValueError:
-        print("  \u274c Password length must be a number")
-        sys.exit(1)
+    pw_length = prompt_num("Password length (min 14)", default=20, min_val=14)
 
     # Summary
     print(f"""
@@ -533,20 +545,8 @@ Supported runtimes: Python 3.12, Node.js 20, Go (AL2023)
     print("\n  Resource limits:")
     print("    Memory: 128-3008 MB (128 default, 256 recommended for APIs)")
     print("    Timeout: 3-900 seconds (30s recommended for APIs, 300s for processing)")
-    memory = prompt("Memory (MB)", default="256")
-    timeout = prompt("Timeout (seconds)", default="30")
-    try:
-        mem_int = int(memory)
-        if not (128 <= mem_int <= 3008):
-            print(f"  ❌ Memory must be 128-3008 MB, got {mem_int}")
-            sys.exit(1)
-        to_int = int(timeout)
-        if not (3 <= to_int <= 900):
-            print(f"  ❌ Timeout must be 3-900 seconds, got {to_int}")
-            sys.exit(1)
-    except ValueError:
-        print("  ❌ Memory and timeout must be numbers")
-        sys.exit(1)
+    memory = prompt_num("Memory (MB)", default=256, min_val=128, max_val=3008)
+    timeout = prompt_num("Timeout (seconds)", default=30, min_val=3, max_val=900)
 
     # Environment variables
     env_vars = {}
@@ -992,17 +992,9 @@ data "terraform_remote_state" "vpc" {{
             print(f"  ℹ️  Auto-appended /32: {my_ip}")
         rules = [{"type": "ingress", "port": 22, "proto": "tcp", "cidr": my_ip, "desc": "SSH from trusted IP"}]
     elif preset == "6":
-        app_port = prompt("Application port (e.g. 8080, 3000, 8443)")
-        try:
-            app_port_int = int(app_port)
-            if not (1 <= app_port_int <= 65535):
-                print(f"  ❌ Port must be 1-65535, got {app_port_int}")
-                sys.exit(1)
-        except ValueError:
-            print(f"  ❌ Port must be a number, got '{app_port}'")
-            sys.exit(1)
+        app_port = prompt_num("Application port (e.g. 8080, 3000, 8443)", min_val=1, max_val=65535)
         app_cidr = prompt("Source CIDR", default="10.0.0.0/8")
-        rules = [{"type": "ingress", "port": app_port_int, "proto": "tcp", "cidr": app_cidr, "desc": f"App port {app_port}"}]
+        rules = [{"type": "ingress", "port": int(app_port), "proto": "tcp", "cidr": app_cidr, "desc": f"App port {app_port}"}]
 
     # Additional rules
     if preset != "7":
@@ -1015,33 +1007,20 @@ data "terraform_remote_state" "vpc" {{
         print("\n  Common ports: 22=SSH, 80=HTTP, 443=HTTPS, 3000=Node,")
         print("    3306=MySQL, 5432=PostgreSQL, 6379=Redis, 8080=Alt HTTP,")
         print("    8443=Alt HTTPS, 27017=MongoDB")
-        r_port  = prompt("Port number")
+        r_port  = prompt_num("Port number", min_val=1, max_val=65535)
+        r_port_int = int(r_port)
         r_proto = prompt("Protocol", default="tcp", choices=["tcp", "udp", "icmp"])
         r_cidr  = prompt("Source CIDR", default="10.0.0.0/8")
         r_desc  = prompt("Description", default=f"Port {r_port}")
 
-        # Validate
-        if r_cidr == "0.0.0.0/0":
-            try:
-                r_port_int = int(r_port)
-            except ValueError:
-                r_port_int = 0
-            if r_port_int in (22, 3306, 5432, 6379, 27017):
-                print(f"  ⚠️  WARNING: Opening port {r_port} to 0.0.0.0/0 is a security risk!")
-                force = prompt("  Are you sure?", default="no", choices=["yes", "no"])
-                if force != "yes":
-                    print("  Skipped.")
-                    add_more = prompt("  Add another rule?", default="no", choices=["yes", "no"])
-                    continue
-
-        try:
-            r_port_int = int(r_port)
-            if not (1 <= r_port_int <= 65535):
-                print(f"  ❌ Port must be 1-65535, got {r_port_int}")
+        if r_cidr == "0.0.0.0/0" and r_port_int in (22, 3306, 5432, 6379, 27017):
+            print(f"  ⚠️  WARNING: Opening port {r_port} to 0.0.0.0/0 is a security risk!")
+            force = prompt("  Are you sure?", default="no", choices=["yes", "no"])
+            if force != "yes":
+                print("  Skipped.")
+                add_more = prompt("  Add another rule?", default="no", choices=["yes", "no"])
                 continue
-        except ValueError:
-            print(f"  ❌ Port must be a number, got '{r_port}'")
-            continue
+
         rules.append({"type": "ingress", "port": r_port_int, "proto": r_proto, "cidr": r_cidr, "desc": r_desc})
         if preset == "7":
             preset = "done"
@@ -1317,15 +1296,7 @@ Best practice:
     vending_email_domain = ""
     if enable_vending:
         vending_email_domain = prompt("Email domain for new accounts (e.g. marsmovers.com)")
-        vending_budget = prompt("Default monthly budget per account (USD)", default="100")
-        try:
-            vb = float(vending_budget)
-            if vb <= 0:
-                raise ValueError
-            vending_budget = str(int(vb)) if vb == int(vb) else str(vb)
-        except ValueError:
-            print(f"  ❌ Budget must be a positive number, got '{vending_budget}'")
-            sys.exit(1)
+        vending_budget = prompt_num("Default monthly budget per account (USD)", default=100, min_val=1)
 
     # Summary
     print(f"""
@@ -2034,7 +2005,7 @@ Storage classes:
     tp_mode = tp_map[tp]
     provisioned_block = ""
     if tp_mode == "provisioned":
-        tp_mibps = prompt("Provisioned throughput (MiB/s, min 1)", default="10")
+        tp_mibps = prompt_num("Provisioned throughput (MiB/s, min 1)", default=10, min_val=1)
         provisioned_block = f'  provisioned_throughput_in_mibps = {tp_mibps}'
 
     # Encryption
@@ -2260,7 +2231,7 @@ resource "aws_sns_topic_subscription" "email" {{
 
     if alarm_type == "1":
         instance_id = prompt("EC2 Instance ID (e.g. i-0abc1234)")
-        cpu_threshold = prompt("CPU alarm threshold (%)", default="80")
+        cpu_threshold = prompt_num("CPU alarm threshold (%)", default=80, min_val=1, max_val=100)
         alarm_blocks = f"""
 resource "aws_cloudwatch_metric_alarm" "cpu_high" {{
   alarm_name          = "{name}-ec2-cpu-high"
@@ -2318,9 +2289,9 @@ resource "aws_cloudwatch_metric_alarm" "network_in" {{
 
     elif alarm_type == "2":
         db_id = prompt("RDS DB instance identifier (e.g. marsmovers-db)")
-        cpu_threshold = prompt("CPU alarm threshold (%)", default="80")
-        conn_threshold = prompt("Max connections alarm threshold", default="100")
-        storage_threshold = prompt("Free storage alarm threshold (bytes, default 5GB)", default="5368709120")
+        cpu_threshold = prompt_num("CPU alarm threshold (%)", default=80, min_val=1, max_val=100)
+        conn_threshold = prompt_num("Max connections alarm threshold", default=100, min_val=1)
+        storage_threshold = prompt_num("Free storage alarm threshold (bytes, default 5GB)", default=5368709120, min_val=0)
         alarm_blocks = f"""
 resource "aws_cloudwatch_metric_alarm" "rds_cpu" {{
   alarm_name          = "{name}-rds-cpu-high"
@@ -2379,8 +2350,8 @@ resource "aws_cloudwatch_metric_alarm" "rds_storage" {{
 
     elif alarm_type == "3":
         fn_name = prompt("Lambda function name")
-        error_threshold = prompt("Error count alarm threshold (per 5 min)", default="5")
-        duration_threshold = prompt("Duration alarm threshold (ms)", default="10000")
+        error_threshold = prompt_num("Error count alarm threshold (per 5 min)", default=5, min_val=0)
+        duration_threshold = prompt_num("Duration alarm threshold (ms)", default=10000, min_val=1)
         alarm_blocks = f"""
 resource "aws_cloudwatch_metric_alarm" "lambda_errors" {{
   alarm_name          = "{name}-lambda-errors"
@@ -2436,7 +2407,7 @@ resource "aws_cloudwatch_metric_alarm" "lambda_throttles" {{
         alarm_summary = f"Lambda alarms for {fn_name}: errors>{error_threshold}, duration>{duration_threshold}ms, throttles"
 
     elif alarm_type == "4":
-        billing_threshold = prompt("Monthly billing alarm threshold (USD)", default="100")
+        billing_threshold = prompt_num("Monthly billing alarm threshold (USD)", default=100, min_val=1)
         alarm_blocks = f"""
 resource "aws_cloudwatch_metric_alarm" "billing" {{
   alarm_name          = "{name}-billing-alarm"
@@ -2464,10 +2435,10 @@ resource "aws_cloudwatch_metric_alarm" "billing" {{
         cw_namespace = prompt("CloudWatch namespace (e.g. AWS/EC2, Custom/MyApp)")
         cw_metric = prompt("Metric name")
         cw_stat = prompt("Statistic", default="Average", choices=["Average", "Sum", "Maximum", "Minimum", "SampleCount"])
-        cw_period = prompt("Period (seconds)", default="300")
+        cw_period = prompt_num("Period (seconds)", default=300, min_val=10)
         cw_operator = prompt("Comparison", default="GreaterThanThreshold", choices=["GreaterThanThreshold", "LessThanThreshold", "GreaterThanOrEqualToThreshold", "LessThanOrEqualToThreshold"])
-        cw_threshold = prompt("Threshold value")
-        cw_eval = prompt("Evaluation periods", default="2")
+        cw_threshold = prompt_num("Threshold value", default=0)
+        cw_eval = prompt_num("Evaluation periods", default=2, min_val=1)
         cw_dim_key = prompt("Dimension key (e.g. InstanceId, leave blank for none)", default="")
         cw_dim_val = ""
         dim_block = ""
@@ -2839,14 +2810,8 @@ alert at 50%, 80%, and 100% thresholds.
     print("      Dev/test   : $50 - $200")
     print("      Staging    : $200 - $500")
     print("      Production : $500 - $5000+")
-    budget_str = prompt("Monthly budget limit (USD)", default="100")
-    try:
-        budget = float(budget_str)
-        if budget <= 0:
-            raise ValueError
-    except ValueError:
-        print(f"  ❌ Budget must be a positive number, got '{budget_str}'")
-        sys.exit(1)
+    budget_str = prompt_num("Monthly budget limit (USD)", default=100, min_val=1)
+    budget = float(budget_str)
 
     # Alert thresholds
     print(f"\n  Alert thresholds (% of ${budget:.0f} budget):")
@@ -2872,15 +2837,7 @@ alert at 50%, 80%, and 100% thresholds.
     forecast = forecast == "yes"
     forecast_threshold = 100
     if forecast:
-        ft_str = prompt("Forecast alert threshold (%)", default="100")
-        try:
-            forecast_threshold = int(ft_str)
-            if not (1 <= forecast_threshold <= 200):
-                print(f"  ❌ Forecast threshold must be 1-200%, got {forecast_threshold}")
-                sys.exit(1)
-        except ValueError:
-            print(f"  ❌ Forecast threshold must be a number, got '{ft_str}'")
-            sys.exit(1)
+        forecast_threshold = int(prompt_num("Forecast alert threshold (%)", default=100, min_val=1, max_val=200))
 
     # Notification
     print("\n  Notification method:")
@@ -3124,7 +3081,7 @@ data "aws_ami" "this" {
 """
 
     # Root volume
-    vol_size = prompt("Root volume size (GB)", default="20")
+    vol_size = prompt_num("Root volume size (GB)", default=20, min_val=8, max_val=16384)
 
     spec = ALLOWED_INSTANCES[instance_type]
     print(f"""
