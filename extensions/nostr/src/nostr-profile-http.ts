@@ -16,6 +16,7 @@ import {
 import { z } from "openclaw/plugin-sdk/zod";
 import {
   createFixedWindowRateLimiter,
+  getPluginRuntimeGatewayRequestScope,
   readJsonBodyWithLimit,
   requestBodyErrorToText,
 } from "../runtime-api.js";
@@ -30,7 +31,7 @@ import { validateUrlSafety } from "./nostr-profile-url-safety.js";
 
 export interface NostrProfileHttpContext {
   /** Get current profile from config */
-  getConfigProfile: (accountId: string) => NostrProfile | undefined;
+  getConfigProfile: (accountId: string) => NostrProfile;
   /** Update profile in config (after successful publish) */
   updateConfigProfile: (accountId: string, profile: NostrProfile) => Promise<void>;
   /** Get account's public key and relays */
@@ -127,6 +128,8 @@ const ProfileUpdateSchema = NostrProfileSchema.extend({
   nip05: nip05FormatSchema,
   lud16: lud16FormatSchema,
 });
+
+const ADMIN_SCOPE = "operator.admin";
 
 // ============================================================================
 // Request Helpers
@@ -298,6 +301,23 @@ function enforceLoopbackMutationGuards(
   return true;
 }
 
+function enforceGatewayAdminMutationScope(
+  ctx: NostrProfileHttpContext,
+  accountId: string,
+  res: ServerResponse,
+): boolean {
+  const scopes = getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes;
+  if (!Array.isArray(scopes)) {
+    return true;
+  }
+  if (scopes.includes(ADMIN_SCOPE)) {
+    return true;
+  }
+  ctx.log?.warn?.(`[${accountId}] Rejected profile mutation missing ${ADMIN_SCOPE}`);
+  sendJson(res, 403, { ok: false, error: `missing scope: ${ADMIN_SCOPE}` });
+  return false;
+}
+
 // ============================================================================
 // HTTP Handler
 // ============================================================================
@@ -381,6 +401,9 @@ async function handleUpdateProfile(
   res: ServerResponse,
 ): Promise<true> {
   if (!enforceLoopbackMutationGuards(ctx, req, res)) {
+    return true;
+  }
+  if (!enforceGatewayAdminMutationScope(ctx, accountId, res)) {
     return true;
   }
 
@@ -484,6 +507,9 @@ async function handleImportProfile(
   res: ServerResponse,
 ): Promise<true> {
   if (!enforceLoopbackMutationGuards(ctx, req, res)) {
+    return true;
+  }
+  if (!enforceGatewayAdminMutationScope(ctx, accountId, res)) {
     return true;
   }
 
