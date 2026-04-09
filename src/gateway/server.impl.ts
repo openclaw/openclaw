@@ -1250,6 +1250,7 @@ export async function startGatewayServer(
               "socket.drain",
               { sessionKey: event.sessionKey, reason: event.reason, ts: Date.now() },
               connIds,
+              { dropIfSlow: true },
             );
           }
         });
