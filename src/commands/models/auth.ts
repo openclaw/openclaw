@@ -386,6 +386,17 @@ export async function modelsAuthPasteTokenCommand(
     normalizeOptionalString(opts.profileId) || resolveDefaultTokenProfileId(provider);
 
   const rawToken = normalizeOptionalString(opts.token);
+  if (rawToken !== undefined) {
+    if (!rawToken) {
+      throw new Error("--token value must not be empty");
+    }
+    if (provider === "anthropic") {
+      const validationError = validateAnthropicSetupToken(rawToken.replaceAll(/\s+/g, ""));
+      if (validationError) {
+        throw new Error(validationError);
+      }
+    }
+  }
   const tokenInput =
     rawToken ??
     (await text({
