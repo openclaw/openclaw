@@ -511,6 +511,46 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.sendPayload).not.toHaveBeenCalled();
   });
 
+  it("prefers the active preview and clears stale archived previews from failed attempts", async () => {
+    const harness = createHarness({
+      answerMessageId: 1003,
+      answerHasStreamedMessage: true,
+      answerLastPartialText: "Attempt C partial",
+    });
+    harness.archivedAnswerPreviews.push(
+      {
+        messageId: 1001,
+        textSnapshot: "Attempt A partial",
+        deleteIfUnused: true,
+      },
+      {
+        messageId: 1002,
+        textSnapshot: "Attempt B partial",
+        deleteIfUnused: true,
+      },
+    );
+
+    const result = await deliverFinalAnswer(harness, "Attempt C final");
+
+    expect(expectPreviewFinalized(result)).toEqual({
+      content: "Attempt C final",
+      messageId: 1003,
+    });
+    expect(harness.editPreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        laneName: "answer",
+        messageId: 1003,
+        text: "Attempt C final",
+        context: "final",
+      }),
+    );
+    expect(harness.deletePreviewMessage.mock.calls).toEqual([
+      [1001],
+      [1002],
+    ]);
+    expect(harness.sendPayload).not.toHaveBeenCalled();
+  });
+
   it("falls back on 4xx client rejection with error_code during final", async () => {
     const harness = createHarness({ answerMessageId: 999 });
     const err = Object.assign(new Error("403: Forbidden"), { error_code: 403 });
