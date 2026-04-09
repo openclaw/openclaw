@@ -3,9 +3,11 @@ import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import { resolveActivePluginHttpRouteRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
 import { PROTOCOL_VERSION } from "../protocol/index.js";
 import type { GatewayRequestOptions } from "../server-methods/types.js";
+import { resolvePluginRouteRuntimeOperatorScopes } from "./plugin-route-runtime-scopes.js";
 import {
   resolvePluginRoutePathContext,
   type PluginRoutePathContext,
@@ -47,6 +49,7 @@ function createPluginRouteRuntimeClient(
 
 export type PluginRouteDispatchContext = {
   gatewayAuthSatisfied?: boolean;
+  gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
   gatewayRequestOperatorScopes?: readonly string[];
 };
 
@@ -80,19 +83,35 @@ export function createGatewayPluginRequestHandler(params: {
       return false;
     }
     const requiresGatewayAuth = matchedPluginRoutesRequireGatewayAuth(matchedRoutes);
+    const usesTrustedOperatorSurface = matchedRoutes.some(
+      (route) => route.gatewayRuntimeScopeSurface === "trusted-operator",
+    );
     let runtimeScopes: readonly string[] = [];
     if (requiresGatewayAuth) {
       if (dispatchContext?.gatewayAuthSatisfied !== true) {
         log.warn(`plugin http route blocked without gateway auth (${pathContext.canonicalPath})`);
         return false;
       }
-      if (dispatchContext.gatewayRequestOperatorScopes === undefined) {
+      if (usesTrustedOperatorSurface) {
+        if (!dispatchContext.gatewayRequestAuth) {
+          log.warn(
+            `plugin http route blocked without caller auth context (${pathContext.canonicalPath})`,
+          );
+          return false;
+        }
+        runtimeScopes = resolvePluginRouteRuntimeOperatorScopes(
+          req,
+          dispatchContext.gatewayRequestAuth,
+          "trusted-operator",
+        );
+      } else if (dispatchContext.gatewayRequestOperatorScopes === undefined) {
         log.warn(
           `plugin http route blocked without caller scope context (${pathContext.canonicalPath})`,
         );
         return false;
+      } else {
+        runtimeScopes = dispatchContext.gatewayRequestOperatorScopes;
       }
-      runtimeScopes = dispatchContext.gatewayRequestOperatorScopes;
     }
     const runtimeClient = createPluginRouteRuntimeClient(runtimeScopes);
 

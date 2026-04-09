@@ -45,4 +45,34 @@ describe("resolvePluginRouteRuntimeOperatorScopes", () => {
       ),
     ).toEqual(["operator.write"]);
   });
+
+  it("restores trusted default operator scopes for shared-secret bearer routes opting into trusted-operator surface", () => {
+    expect(
+      resolvePluginRouteRuntimeOperatorScopes(
+        createReq({
+          authorization: "Bearer secret",
+          "x-openclaw-scopes": "operator.read",
+        }),
+        { authMethod: "token", trustDeclaredOperatorScopes: false },
+        "trusted-operator",
+      ),
+    ).toEqual([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+      "operator.approvals",
+      "operator.pairing",
+      "operator.talk.secrets",
+    ]);
+  });
+
+  it("preserves trusted-proxy declared scopes for routes opting into trusted-operator surface", () => {
+    expect(
+      resolvePluginRouteRuntimeOperatorScopes(
+        createReq({ "x-openclaw-scopes": "operator.admin,operator.write" }),
+        { authMethod: "trusted-proxy", trustDeclaredOperatorScopes: true },
+        "trusted-operator",
+      ),
+    ).toEqual(["operator.admin", "operator.write"]);
+  });
 });

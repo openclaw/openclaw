@@ -129,7 +129,7 @@ const ProfileUpdateSchema = NostrProfileSchema.extend({
   lud16: lud16FormatSchema,
 });
 
-const PROFILE_MUTATION_SCOPE = "operator.write";
+const PROFILE_MUTATION_SCOPE = "operator.admin";
 
 // ============================================================================
 // Request Helpers

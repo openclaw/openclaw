@@ -1960,6 +1960,7 @@ export type PluginInteractiveHandlerRegistration = PluginInteractiveRegistration
 
 export type OpenClawPluginHttpRouteAuth = "gateway" | "plugin";
 export type OpenClawPluginHttpRouteMatch = "exact" | "prefix";
+export type OpenClawPluginGatewayRuntimeScopeSurface = "write-default" | "trusted-operator";
 
 export type OpenClawPluginHttpRouteHandler = (
   req: IncomingMessage,
@@ -1971,6 +1972,7 @@ export type OpenClawPluginHttpRouteParams = {
   handler: OpenClawPluginHttpRouteHandler;
   auth: OpenClawPluginHttpRouteAuth;
   match?: OpenClawPluginHttpRouteMatch;
+  gatewayRuntimeScopeSurface?: OpenClawPluginGatewayRuntimeScopeSurface;
   replaceExisting?: boolean;
 };
 

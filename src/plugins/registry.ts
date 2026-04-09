@@ -46,7 +46,7 @@ import type {
   PluginCommandRegistration,
   PluginConversationBindingResolvedHandlerRegistration,
   PluginHookRegistration,
-  PluginHttpRouteRegistration,
+  PluginHttpRouteRegistration as RegistryTypesPluginHttpRouteRegistration,
   PluginMemoryEmbeddingProviderRegistration,
   PluginNodeHostCommandRegistration,
   PluginProviderRegistration,
@@ -75,6 +75,7 @@ import type {
   OpenClawPluginCliRegistrar,
   OpenClawPluginCommandDefinition,
   PluginConversationBindingResolvedEvent,
+  OpenClawPluginGatewayRuntimeScopeSurface,
   OpenClawPluginHttpRouteParams,
   OpenClawPluginHookOptions,
   OpenClawPluginNodeHostCommand,
@@ -99,6 +100,9 @@ import type {
   WebSearchProviderPlugin,
 } from "./types.js";
 
+export type PluginHttpRouteRegistration = RegistryTypesPluginHttpRouteRegistration & {
+  gatewayRuntimeScopeSurface?: OpenClawPluginGatewayRuntimeScopeSurface;
+};
 type PluginOwnedProviderRegistration<T extends { id: string }> = {
   pluginId: string;
   pluginName?: string;
@@ -115,7 +119,6 @@ export type {
   PluginCommandRegistration,
   PluginConversationBindingResolvedHandlerRegistration,
   PluginHookRegistration,
-  PluginHttpRouteRegistration,
   PluginMemoryEmbeddingProviderRegistration,
   PluginNodeHostCommandRegistration,
   PluginProviderRegistration,
@@ -390,6 +393,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         handler: params.handler,
         auth: params.auth,
         match,
+        ...(params.gatewayRuntimeScopeSurface
+          ? { gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface }
+          : {}),
         source: record.source,
       };
       return;
@@ -401,6 +407,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       handler: params.handler,
       auth: params.auth,
       match,
+      ...(params.gatewayRuntimeScopeSurface
+        ? { gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface }
+        : {}),
       source: record.source,
     });
   };
