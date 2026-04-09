@@ -41,14 +41,27 @@ def _is_high_priority(priority):
     return _PRIORITY_LEVELS.get(str(priority).lower(), 0) >= _HIGH_THRESHOLD
 
 
+def _make_default_state():
+    return {"cursor": {"last_ingested_id": 0}, "pending_attention": []}
+
+
 def get_state():
     if os.path.exists(STATE_PATH):
         try:
             with open(STATE_PATH, "r") as f:
-                return json.load(f)
+                data = json.load(f)
         except (json.JSONDecodeError, OSError):
-            return dict(_DEFAULT_STATE, pending_attention=[])
-    return dict(_DEFAULT_STATE, pending_attention=[])
+            return _make_default_state()
+        if not isinstance(data, dict):
+            return _make_default_state()
+        cursor = data.get("cursor")
+        if not isinstance(cursor, dict) or "last_ingested_id" not in cursor:
+            cursor = {"last_ingested_id": 0}
+        pending = data.get("pending_attention")
+        if not isinstance(pending, list):
+            pending = []
+        return {"cursor": cursor, "pending_attention": pending}
+    return _make_default_state()
 
 
 def save_state(state):

@@ -90,6 +90,38 @@ class TestState(TestCase):
         self.assertEqual(state["cursor"]["last_ingested_id"], 0)
         self.assertEqual(state["pending_attention"], [])
 
+    def test_get_state_empty_object(self):
+        os.makedirs(os.path.dirname(self.state_path), exist_ok=True)
+        with open(self.state_path, "w") as f:
+            json.dump({}, f)
+        state = triage.get_state()
+        self.assertEqual(state["cursor"]["last_ingested_id"], 0)
+        self.assertEqual(state["pending_attention"], [])
+
+    def test_get_state_missing_cursor(self):
+        os.makedirs(os.path.dirname(self.state_path), exist_ok=True)
+        with open(self.state_path, "w") as f:
+            json.dump({"pending_attention": [{"id": 1}]}, f)
+        state = triage.get_state()
+        self.assertEqual(state["cursor"]["last_ingested_id"], 0)
+        self.assertEqual(state["pending_attention"], [{"id": 1}])
+
+    def test_get_state_missing_pending(self):
+        os.makedirs(os.path.dirname(self.state_path), exist_ok=True)
+        with open(self.state_path, "w") as f:
+            json.dump({"cursor": {"last_ingested_id": 10}}, f)
+        state = triage.get_state()
+        self.assertEqual(state["cursor"]["last_ingested_id"], 10)
+        self.assertEqual(state["pending_attention"], [])
+
+    def test_get_state_non_dict(self):
+        os.makedirs(os.path.dirname(self.state_path), exist_ok=True)
+        with open(self.state_path, "w") as f:
+            json.dump([1, 2, 3], f)
+        state = triage.get_state()
+        self.assertEqual(state["cursor"]["last_ingested_id"], 0)
+        self.assertEqual(state["pending_attention"], [])
+
     def test_save_state_bare_filename(self):
         """save_state should work when STATE_PATH has no directory component."""
         bare_path = os.path.join(self.tmpdir, "state.json")
