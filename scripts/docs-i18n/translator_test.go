@@ -106,6 +106,14 @@ func TestIsRetryableTranslateErrorRetriesPiTermination(t *testing.T) {
 	}
 }
 
+func TestIsRetryableTranslateErrorRetriesTerminatedStopReason(t *testing.T) {
+	t.Parallel()
+
+	if !isRetryableTranslateError(errors.New("pi error: stopReason=terminated; assistant=partial output")) {
+		t.Fatal("terminated stopReason should retry")
+	}
+}
+
 func TestRunPromptIncludesStderr(t *testing.T) {
 	t.Parallel()
 
@@ -198,6 +206,53 @@ func TestPiTranslatorRestartsClientAfterPiTermination(t *testing.T) {
 			prompt: func(context.Context, string) (string, error) {
 				if index == 1 {
 					return "", errors.New("pi error: terminated; stopReason=error; assistant=partial output")
+				}
+				return "translated", nil
+			},
+		}
+		clients = append(clients, client)
+		return client, nil
+	}
+
+	client, err := factory(context.Background())
+	if err != nil {
+		t.Fatalf("factory failed: %v", err)
+	}
+	translator := &PiTranslator{client: client, clientFactory: factory}
+
+	got, err := translator.TranslateRaw(context.Background(), "Translate me", "en", "zh-CN")
+	if err != nil {
+		t.Fatalf("TranslateRaw returned error: %v", err)
+	}
+	if got != "translated" {
+		t.Fatalf("unexpected translation %q", got)
+	}
+	if factoryCalls != 2 {
+		t.Fatalf("expected factory to run twice, got %d", factoryCalls)
+	}
+	if len(clients) != 2 {
+		t.Fatalf("expected 2 clients, got %d", len(clients))
+	}
+	if !clients[0].closed {
+		t.Fatal("expected first client to close before retry")
+	}
+	if clients[1].closed {
+		t.Fatal("expected replacement client to remain open")
+	}
+}
+
+func TestPiTranslatorRestartsClientAfterTerminatedStopReason(t *testing.T) {
+	t.Parallel()
+
+	clients := []*fakePiPromptClient{}
+	factoryCalls := 0
+	factory := func(context.Context) (docsPiPromptClient, error) {
+		factoryCalls++
+		index := factoryCalls
+		client := &fakePiPromptClient{
+			prompt: func(context.Context, string) (string, error) {
+				if index == 1 {
+					return "", errors.New("pi error: stopReason=terminated; assistant=partial output")
 				}
 				return "translated", nil
 			},

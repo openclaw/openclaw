@@ -162,6 +162,7 @@ func shouldRestartPiClientForError(err error) bool {
 	}
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "pi error: terminated") ||
+		strings.Contains(message, "stopreason=terminated") ||
 		strings.Contains(message, "stopreason=error") ||
 		strings.Contains(message, "pi process closed") ||
 		strings.Contains(message, "pi event stream closed")
