@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
 import { formatErrorMessage } from "../errors.js";
 import {
@@ -9,7 +7,6 @@ import {
   moveToFailed,
   type QueuedDelivery,
   type QueuedDeliveryPayload,
-  resolveQueueDir,
 } from "./delivery-queue-storage.js";
 
 export type RecoverySummary = {
@@ -58,9 +55,9 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
 ];
 
 const NO_LISTENER_ERROR_RE = /No active WhatsApp Web listener/i;
-const RECONNECT_QUEUE_TTL_MS = 5 * 60 * 1000;
 
 const drainInProgress = new Map<string, boolean>();
+const entriesInProgress = new Set<string>();
 
 type DeliverRuntimeModule = typeof import("./deliver-runtime.js");
 
@@ -81,31 +78,6 @@ function getErrnoCode(err: unknown): string | null {
     : null;
 }
 
-async function resetReconnectEntry(entry: QueuedDelivery, stateDir?: string): Promise<boolean> {
-  const filePath = path.join(resolveQueueDir(stateDir), `${entry.id}.json`);
-  const tmp = `${filePath}.${process.pid}.tmp`;
-  const reset: QueuedDelivery = {
-    ...entry,
-    retryCount: 0,
-    lastAttemptAt: undefined,
-    lastError: undefined,
-  };
-  await fs.promises.writeFile(tmp, JSON.stringify(reset, null, 2), {
-    encoding: "utf-8",
-    mode: 0o600,
-  });
-  try {
-    await fs.promises.rename(tmp, filePath);
-  } catch (err) {
-    await fs.promises.unlink(tmp).catch(() => {});
-    if (getErrnoCode(err) === "ENOENT") {
-      return false;
-    }
-    throw err;
-  }
-  return true;
-}
-
 function createEmptyRecoverySummary(): RecoverySummary {
   return {
     recovered: 0,
@@ -113,6 +85,18 @@ function createEmptyRecoverySummary(): RecoverySummary {
     skippedMaxRetries: 0,
     deferredBackoff: 0,
   };
+}
+
+function claimRecoveryEntry(entryId: string): boolean {
+  if (entriesInProgress.has(entryId)) {
+    return false;
+  }
+  entriesInProgress.add(entryId);
+  return true;
+}
+
+function releaseRecoveryEntry(entryId: string): void {
+  entriesInProgress.delete(entryId);
 }
 
 function buildRecoveryDeliverParams(entry: QueuedDelivery, cfg: OpenClawConfig) {
@@ -211,62 +195,50 @@ export async function drainReconnectQueue(opts: {
 
   drainInProgress.set(opts.accountId, true);
   try {
-    const pending = await loadPendingDeliveries(opts.stateDir);
-    const now = Date.now();
-    const matchingEntries = pending.filter(
-      (entry) =>
-        entry.channel === "whatsapp" &&
-        normalizeQueueAccountId(entry.accountId) === opts.accountId &&
-        typeof entry.lastError === "string" &&
-        NO_LISTENER_ERROR_RE.test(entry.lastError),
-    );
-    const eligible = matchingEntries.filter(
-      (entry) => entry.retryCount < MAX_RETRIES && now - entry.enqueuedAt < RECONNECT_QUEUE_TTL_MS,
-    );
-    const expired = matchingEntries.filter(
-      (entry) =>
-        entry.retryCount >= MAX_RETRIES || now - entry.enqueuedAt >= RECONNECT_QUEUE_TTL_MS,
-    );
+    const matchingEntries = (await loadPendingDeliveries(opts.stateDir))
+      .filter(
+        (entry) =>
+          entry.channel === "whatsapp" &&
+          normalizeQueueAccountId(entry.accountId) === opts.accountId &&
+          typeof entry.lastError === "string" &&
+          NO_LISTENER_ERROR_RE.test(entry.lastError),
+      )
+      .toSorted((a, b) => a.enqueuedAt - b.enqueuedAt);
 
-    for (const entry of expired) {
-      try {
-        await moveToFailed(entry.id, opts.stateDir);
-      } catch (err) {
-        if (getErrnoCode(err) === "ENOENT") {
-          opts.log.info(`reconnect drain: expired entry ${entry.id} already gone, skipping`);
-          continue;
-        }
-        throw err;
-      }
-      opts.log.warn(
-        `WhatsApp reconnect drain: expired entry ${entry.id} (TTL exceeded or max retries)`,
-      );
-    }
-
-    if (eligible.length === 0) {
+    if (matchingEntries.length === 0) {
       return;
     }
 
     opts.log.info(
-      `WhatsApp reconnect drain: ${eligible.length} pending message(s) for account ${opts.accountId}`,
+      `WhatsApp reconnect drain: ${matchingEntries.length} pending message(s) for account ${opts.accountId}`,
     );
-
-    const resetEntries: QueuedDelivery[] = [];
-    for (const entry of eligible) {
-      const reset = await resetReconnectEntry(entry, opts.stateDir);
-      if (!reset) {
-        opts.log.info(
-          `reconnect drain: entry ${entry.id} already acked by concurrent recovery, skipping`,
-        );
-        continue;
-      }
-      resetEntries.push(entry);
-    }
 
     const deliver = opts.deliver ?? (await loadDeliverRuntime()).deliverOutboundPayloads;
 
-    // Deliver only the reset entries for this account instead of replaying the full queue.
-    for (const entry of resetEntries) {
+    for (const entry of matchingEntries) {
+      if (!claimRecoveryEntry(entry.id)) {
+        opts.log.info(`WhatsApp reconnect drain: entry ${entry.id} is already being recovered`);
+        continue;
+      }
+
+      if (entry.retryCount >= MAX_RETRIES) {
+        try {
+          await moveToFailed(entry.id, opts.stateDir);
+        } catch (err) {
+          if (getErrnoCode(err) === "ENOENT") {
+            opts.log.info(`reconnect drain: entry ${entry.id} already gone, skipping`);
+            continue;
+          }
+          throw err;
+        } finally {
+          releaseRecoveryEntry(entry.id);
+        }
+        opts.log.warn(
+          `WhatsApp reconnect drain: entry ${entry.id} exceeded max retries and was moved to failed/`,
+        );
+        continue;
+      }
+
       try {
         await deliver(buildRecoveryDeliverParams(entry, opts.cfg));
         await ackDelivery(entry.id, opts.stateDir);
@@ -277,6 +249,8 @@ export async function drainReconnectQueue(opts: {
         } else {
           await failDelivery(entry.id, errMsg, opts.stateDir).catch(() => {});
         }
+      } finally {
+        releaseRecoveryEntry(entry.id);
       }
     }
   } finally {
@@ -316,11 +290,19 @@ export async function recoverPendingDeliveries(opts: {
       break;
     }
     if (entry.retryCount >= MAX_RETRIES) {
-      opts.log.warn(
-        `Delivery ${entry.id} exceeded max retries (${entry.retryCount}/${MAX_RETRIES}) — moving to failed/`,
-      );
-      await moveEntryToFailedWithLogging(entry.id, opts.log, opts.stateDir);
-      summary.skippedMaxRetries += 1;
+      if (!claimRecoveryEntry(entry.id)) {
+        opts.log.info(`Recovery skipped for delivery ${entry.id}: already being processed`);
+        continue;
+      }
+      try {
+        opts.log.warn(
+          `Delivery ${entry.id} exceeded max retries (${entry.retryCount}/${MAX_RETRIES}) — moving to failed/`,
+        );
+        await moveEntryToFailedWithLogging(entry.id, opts.log, opts.stateDir);
+        summary.skippedMaxRetries += 1;
+      } finally {
+        releaseRecoveryEntry(entry.id);
+      }
       continue;
     }
 
@@ -330,6 +312,11 @@ export async function recoverPendingDeliveries(opts: {
       opts.log.info(
         `Delivery ${entry.id} not ready for retry yet — backoff ${retryEligibility.remainingBackoffMs}ms remaining`,
       );
+      continue;
+    }
+
+    if (!claimRecoveryEntry(entry.id)) {
+      opts.log.info(`Recovery skipped for delivery ${entry.id}: already being processed`);
       continue;
     }
 
@@ -353,6 +340,8 @@ export async function recoverPendingDeliveries(opts: {
       }
       summary.failed += 1;
       opts.log.warn(`Retry failed for delivery ${entry.id}: ${errMsg}`);
+    } finally {
+      releaseRecoveryEntry(entry.id);
     }
   }
 

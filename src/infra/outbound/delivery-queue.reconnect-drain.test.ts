@@ -10,6 +10,7 @@ import {
   failDelivery,
   MAX_RETRIES,
   type RecoveryLogger,
+  recoverPendingDeliveries,
 } from "./delivery-queue.js";
 
 function createMockLogger(): RecoveryLogger {
@@ -90,22 +91,24 @@ describe("drainReconnectQueue", () => {
     expect(deliver).not.toHaveBeenCalled();
   });
 
-  it("expires and moves to failed entries older than TTL", async () => {
+  it("retries immediately without resetting retry history", async () => {
     const log = createMockLogger();
-    const deliver = vi.fn<DeliverFn>(async () => {});
+    const deliver = vi.fn<DeliverFn>(async () => {
+      throw new Error("transient failure");
+    });
 
     const id = await enqueueDelivery(
       { channel: "whatsapp", to: "+1555", payloads: [{ text: "hi" }], accountId: "acct1" },
       tmpDir,
     );
     await failDelivery(id, "No active WhatsApp Web listener", tmpDir);
-
-    // Backdate enqueuedAt to exceed 5-minute TTL
     const queueDir = path.join(tmpDir, "delivery-queue");
     const filePath = path.join(queueDir, `${id}.json`);
-    const entry = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-    entry.enqueuedAt = Date.now() - 6 * 60 * 1000; // 6 minutes ago
-    fs.writeFileSync(filePath, JSON.stringify(entry, null, 2));
+    const before = JSON.parse(fs.readFileSync(filePath, "utf-8")) as {
+      retryCount: number;
+      lastAttemptAt?: number;
+      lastError?: string;
+    };
 
     await drainReconnectQueue({
       accountId: "acct1",
@@ -115,11 +118,17 @@ describe("drainReconnectQueue", () => {
       deliver,
     });
 
-    // Should have been moved to failed/
-    const failedDir = path.join(queueDir, "failed");
-    const failedFiles = fs.readdirSync(failedDir).filter((f) => f.endsWith(".json"));
-    expect(failedFiles).toHaveLength(1);
-    expect(deliver).not.toHaveBeenCalled();
+    expect(deliver).toHaveBeenCalledTimes(1);
+
+    const after = JSON.parse(fs.readFileSync(filePath, "utf-8")) as {
+      retryCount: number;
+      lastAttemptAt?: number;
+      lastError?: string;
+    };
+    expect(after.retryCount).toBe(before.retryCount + 1);
+    expect(after.lastAttemptAt).toBeTypeOf("number");
+    expect(after.lastAttemptAt).toBeGreaterThanOrEqual(before.lastAttemptAt ?? 0);
+    expect(after.lastError).toBe("transient failure");
   });
 
   it("does not throw if delivery fails during drain", async () => {
@@ -212,5 +221,62 @@ describe("drainReconnectQueue", () => {
     // Unblock first drain
     resolveDeliver!();
     await first;
+  });
+
+  it("does not re-deliver an entry already being recovered at startup", async () => {
+    const log = createMockLogger();
+    const startupLog = createMockLogger();
+    let resolveDeliver: () => void;
+    const deliverPromise = new Promise<void>((resolve) => {
+      resolveDeliver = resolve;
+    });
+    const deliver = vi.fn<DeliverFn>(async () => {
+      await deliverPromise;
+    });
+
+    const id = await enqueueDelivery(
+      { channel: "whatsapp", to: "+1555", payloads: [{ text: "hi" }], accountId: "acct1" },
+      tmpDir,
+    );
+    const queuePath = path.join(tmpDir, "delivery-queue", `${id}.json`);
+    const entry = JSON.parse(fs.readFileSync(queuePath, "utf-8")) as {
+      id: string;
+      enqueuedAt: number;
+      channel: string;
+      to: string;
+      accountId?: string;
+      payloads: Array<{ text: string }>;
+      retryCount: number;
+      lastError?: string;
+    };
+    entry.lastError = "No active WhatsApp Web listener";
+    fs.writeFileSync(queuePath, JSON.stringify(entry, null, 2));
+
+    const startupRecovery = recoverPendingDeliveries({
+      cfg: stubCfg,
+      deliver,
+      log: startupLog,
+      stateDir: tmpDir,
+    });
+
+    await vi.waitFor(() => {
+      expect(deliver).toHaveBeenCalledTimes(1);
+    });
+
+    await drainReconnectQueue({
+      accountId: "acct1",
+      cfg: stubCfg,
+      log,
+      stateDir: tmpDir,
+      deliver,
+    });
+
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringContaining(`entry ${id} is already being recovered`),
+    );
+
+    resolveDeliver!();
+    await startupRecovery;
   });
 });
