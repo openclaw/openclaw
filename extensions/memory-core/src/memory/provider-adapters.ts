@@ -132,6 +132,7 @@ const openAiAdapter: MemoryEmbeddingProviderAdapter = {
       provider: "openai",
       fallback: "none",
     });
+    const effectiveDocumentInputType = client.documentInputType ?? client.inputType;
     return {
       provider,
       runtime: {
@@ -140,12 +141,10 @@ const openAiAdapter: MemoryEmbeddingProviderAdapter = {
           provider: "openai",
           baseUrl: client.baseUrl,
           model: client.model,
-          inputType: client.inputType,
-          documentInputType: client.documentInputType,
+          documentInputType: effectiveDocumentInputType,
           headers: sanitizeHeaders(client.headers, ["authorization"]),
         },
         batchEmbed: async (batch) => {
-          const inputType = client.documentInputType ?? client.inputType;
           const byCustomId = await runOpenAiEmbeddingBatches({
             openAi: client,
             agentId: batch.agentId,
@@ -156,7 +155,7 @@ const openAiAdapter: MemoryEmbeddingProviderAdapter = {
               body: {
                 model: client.model,
                 input: chunk.text,
-                ...(inputType ? { input_type: inputType } : {}),
+                ...(effectiveDocumentInputType ? { input_type: effectiveDocumentInputType } : {}),
               },
             })),
             wait: batch.wait,
