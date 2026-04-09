@@ -18,6 +18,25 @@ export type HeartbeatEventPayload = {
   silent?: boolean;
   /** Indicator type for UI status display. */
   indicatorType?: HeartbeatIndicatorType;
+  triggerSignalId?: string;
+  triggerScore?: number;
+  triggerPersona?: string;
+  triggerChannel?: string;
+  triggerActionClassCap?: string;
+  triggerSourceKind?: "slack" | "telegram" | "gmail" | "jira" | "notion" | "github" | "research";
+  triggerSignalKind?: string;
+  triggerCanonicalFingerprint?: string;
+  triggerRequestId?: string;
+  triggerIdempotencyKey?: string;
+  triggerExternalLinks?: string[];
+  triggerTruthLayer?: string;
+  triggerUrgency?: "critical" | "high" | "medium" | "low";
+  triggerWhyNow?: string;
+  triggerConfidenceScore?: number;
+  triggerConfidenceLabel?: "low" | "medium" | "high";
+  triggerFollowUp?: string;
+  triggerNotificationStatus?: "ready" | "suppressed";
+  triggerTaskId?: string;
 };
 
 export function resolveIndicatorType(

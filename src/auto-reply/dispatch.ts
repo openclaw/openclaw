@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { maybeHandleChatIngressOrchestration } from "../orchestration/task-os-chat-ingress.js";
 import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
@@ -40,6 +41,14 @@ export async function dispatchInboundMessage(params: {
   replyResolver?: typeof import("./reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   const finalized = finalizeInboundContext(params.ctx);
+  const ingressOrchestrated = await maybeHandleChatIngressOrchestration({
+    ctx: finalized,
+    cfg: params.cfg,
+    dispatcher: params.dispatcher,
+  });
+  if (ingressOrchestrated.handled) {
+    return { queuedFinal: true, counts: params.dispatcher.getQueuedCounts() };
+  }
   return await withReplyDispatcher({
     dispatcher: params.dispatcher,
     run: () =>
@@ -60,8 +69,9 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
   replyResolver?: typeof import("./reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
-  const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
-    createReplyDispatcherWithTyping(params.dispatcherOptions);
+  const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping(
+    params.dispatcherOptions,
+  );
   try {
     return await dispatchInboundMessage({
       ctx: params.ctx,
@@ -74,7 +84,6 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
       },
     });
   } finally {
-    markRunComplete();
     markDispatchIdle();
   }
 }
