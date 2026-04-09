@@ -189,7 +189,7 @@ describe("nostr-profile-http", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     clearNostrProfileRateLimitStateForTest();
-    setGatewayRuntimeScopes(["operator.write"]);
+    setGatewayRuntimeScopes(["operator.admin"]);
   });
 
   describe("route matching", () => {
@@ -340,7 +340,7 @@ describe("nostr-profile-http", () => {
       expect(res._getStatusCode()).toBe(403);
     });
 
-    it("rejects profile mutation when gateway caller is missing operator.write", async () => {
+    it("rejects profile mutation when gateway caller is missing operator.admin", async () => {
       setGatewayRuntimeScopes(["operator.read"]);
       const { ctx, res, run } = createProfileHttpHarness(
         "PUT",
@@ -354,7 +354,7 @@ describe("nostr-profile-http", () => {
 
       expect(res._getStatusCode()).toBe(403);
       const data = JSON.parse(res._getData());
-      expect(data.error).toBe("missing scope: operator.write");
+      expect(data.error).toBe("missing scope: operator.admin");
       expect(publishNostrProfile).not.toHaveBeenCalled();
       expect(ctx.updateConfigProfile).not.toHaveBeenCalled();
     });
@@ -373,7 +373,7 @@ describe("nostr-profile-http", () => {
 
       expect(res._getStatusCode()).toBe(403);
       const data = JSON.parse(res._getData());
-      expect(data.error).toBe("missing scope: operator.write");
+      expect(data.error).toBe("missing scope: operator.admin");
       expect(publishNostrProfile).not.toHaveBeenCalled();
       expect(ctx.updateConfigProfile).not.toHaveBeenCalled();
     });
@@ -539,7 +539,7 @@ describe("nostr-profile-http", () => {
       expect(res._getStatusCode()).toBe(403);
     });
 
-    it("rejects profile import when gateway caller is missing operator.write", async () => {
+    it("rejects profile import when gateway caller is missing operator.admin", async () => {
       setGatewayRuntimeScopes(["operator.read"]);
       const { ctx, res, run } = createProfileHttpHarness(
         "POST",
@@ -553,7 +553,7 @@ describe("nostr-profile-http", () => {
 
       expect(res._getStatusCode()).toBe(403);
       const data = JSON.parse(res._getData());
-      expect(data.error).toBe("missing scope: operator.write");
+      expect(data.error).toBe("missing scope: operator.admin");
       expect(importProfileFromRelays).not.toHaveBeenCalled();
       expect(ctx.updateConfigProfile).not.toHaveBeenCalled();
     });
@@ -572,7 +572,7 @@ describe("nostr-profile-http", () => {
 
       expect(res._getStatusCode()).toBe(403);
       const data = JSON.parse(res._getData());
-      expect(data.error).toBe("missing scope: operator.write");
+      expect(data.error).toBe("missing scope: operator.admin");
       expect(importProfileFromRelays).not.toHaveBeenCalled();
       expect(ctx.updateConfigProfile).not.toHaveBeenCalled();
     });
