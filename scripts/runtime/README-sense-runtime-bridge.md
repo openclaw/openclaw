@@ -1073,6 +1073,10 @@ job-status lookup as `/nemoclaw recent`, but keeps only jobs with `result.error`
 `result.exit_code != 0`. Digest-bearing failed jobs still render through the shared Slack
 digest formatter; non-digest failures prefer `error`, then `summary`, then minimal status.
 
+`/nemoclaw help` is the minimal operator entrypoint: it returns the currently supported
+Slack commands (`digest`, `recent`, `failures`, and `job <id>`) as a short fixed-text guide
+so the first Slack surface can stay shallow and discoverable.
+
 The runtime entrypoint now also emits a lightweight feedback layer for the next turn:
 
 - `feedback_summary`

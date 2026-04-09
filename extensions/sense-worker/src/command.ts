@@ -3,6 +3,14 @@ import { getRecentSenseJobRefs, getSenseJobStatus } from "./client.js";
 import { readLatestNemoClawDigestCache } from "./latest-digest-cache.js";
 import { formatSlackDigestNotification } from "./slack-digest.js";
 
+const NEMOCLAW_HELP_TEXT = [
+  "NemoClaw commands",
+  "- /nemoclaw digest      latest digest",
+  "- /nemoclaw recent      recent jobs",
+  "- /nemoclaw failures    recent failed jobs",
+  "- /nemoclaw job <id>    show one job",
+].join("\n");
+
 function normalizeArgs(value: string | undefined): string {
   return value?.trim().toLowerCase() || "";
 }
@@ -132,7 +140,10 @@ export async function handleNemoClawCommand(
   config?: OpenClawConfig,
 ): Promise<{ text: string }> {
   const normalized = normalizeArgs(args);
-  if (!normalized || normalized === "digest") {
+  if (!normalized || normalized === "help") {
+    return { text: NEMOCLAW_HELP_TEXT };
+  }
+  if (normalized === "digest") {
     const latest = await readLatestNemoClawDigestCache();
     const text = formatSlackDigestNotification(latest ?? undefined);
     if (text) {
@@ -177,7 +188,6 @@ export async function handleNemoClawCommand(
     return { text: formatJobSummary({ jobId, body: result.body }) };
   }
   return {
-    text:
-      "Usage: /nemoclaw digest\nUsage: /nemoclaw recent\nUsage: /nemoclaw failures\nUsage: /nemoclaw job <id>",
+    text: NEMOCLAW_HELP_TEXT,
   };
 }

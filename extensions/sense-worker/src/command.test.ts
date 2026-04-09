@@ -46,6 +46,18 @@ describe("handleNemoClawCommand", () => {
     });
   });
 
+  it("returns help text", async () => {
+    const { handleNemoClawCommand } = await import("./command.js");
+    await expect(handleNemoClawCommand("help")).resolves.toEqual({
+      text:
+        "NemoClaw commands\n" +
+        "- /nemoclaw digest      latest digest\n" +
+        "- /nemoclaw recent      recent jobs\n" +
+        "- /nemoclaw failures    recent failed jobs\n" +
+        "- /nemoclaw job <id>    show one job",
+    });
+  });
+
   it("returns no-data text when there is no digest", async () => {
     readLatestNemoClawDigestCacheMock.mockResolvedValue(null);
     const { handleNemoClawCommand } = await import("./command.js");
@@ -259,6 +271,18 @@ describe("handleNemoClawCommand", () => {
     const { handleNemoClawCommand } = await import("./command.js");
     await expect(handleNemoClawCommand("failures")).resolves.toEqual({
       text: "No failed jobs.",
+    });
+  });
+
+  it("returns help text for an unknown subcommand", async () => {
+    const { handleNemoClawCommand } = await import("./command.js");
+    await expect(handleNemoClawCommand("unknown")).resolves.toEqual({
+      text:
+        "NemoClaw commands\n" +
+        "- /nemoclaw digest      latest digest\n" +
+        "- /nemoclaw recent      recent jobs\n" +
+        "- /nemoclaw failures    recent failed jobs\n" +
+        "- /nemoclaw job <id>    show one job",
     });
   });
 });
