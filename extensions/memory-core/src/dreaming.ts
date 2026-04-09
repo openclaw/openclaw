@@ -584,9 +584,17 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     "gateway:startup",
     async (event: unknown) => {
       try {
+        const startupEvent = asRecord(event);
+        const startupContext = asRecord(startupEvent?.context);
+        const startupCfg = startupContext?.cfg
+          ? (asRecord(startupContext.cfg) as OpenClawConfig)
+          : api.config;
         const config = resolveShortTermPromotionDreamingConfig({
-          pluginConfig: resolveMemoryCorePluginConfig(api.config) ?? api.pluginConfig,
-          cfg: api.config,
+          pluginConfig:
+            resolveMemoryCorePluginConfig(startupCfg) ??
+            resolveMemoryCorePluginConfig(api.config) ??
+            api.pluginConfig,
+          cfg: startupCfg,
         });
         const cron = resolveCronServiceFromStartupEvent(event);
         if (!cron && config.enabled) {
