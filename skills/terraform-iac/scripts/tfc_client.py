@@ -960,7 +960,7 @@ data "terraform_remote_state" "vpc" {{
   backend = "remote"
   config = {{
     organization = "{org}"
-    workspaces {{ name = "{vpc_ws}" }}
+    workspaces = {{ name = "{vpc_ws}" }}
   }}
 }}
 """
@@ -1998,7 +1998,7 @@ data "terraform_remote_state" "vpc" {{
   backend = "remote"
   config = {{
     organization = "{org}"
-    workspaces {{ name = "{vpc_ws}" }}
+    workspaces = {{ name = "{vpc_ws}" }}
   }}
 }}
 """
@@ -2983,7 +2983,7 @@ data "terraform_remote_state" "vpc" {{
   backend = "remote"
   config = {{
     organization = "{org}"
-    workspaces {{ name = "{vpc_ws}" }}
+    workspaces = {{ name = "{vpc_ws}" }}
   }}
 }}
 """
