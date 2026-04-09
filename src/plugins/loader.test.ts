@@ -2164,6 +2164,35 @@ module.exports = { id: "throws-after-import", register() {} };`,
     ).toThrow("plugin load failed: configurable: invalid config: <root>: must be object");
   });
 
+  it("does not throw when only non-allowlisted plugins fail under strict loading", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "third-party",
+      filename: "third-party.cjs",
+      body: `module.exports = { id: "third-party", register() {} };`,
+    });
+
+    expect(() =>
+      loadOpenClawPlugins({
+        cache: false,
+        throwOnLoadError: true,
+        config: {
+          plugins: {
+            enabled: true,
+            load: { paths: [plugin.file] },
+            allow: ["trusted-only"],
+            entries: {
+              "third-party": {
+                enabled: true,
+                config: "invalid" as unknown as Record<string, unknown>,
+              },
+            },
+          },
+        },
+      }),
+    ).not.toThrow();
+  });
+
   it("does not suppress strict failures for explicitly enabled plugins omitted from plugins.allow", () => {
     setupBundledTelegramPlugin();
     expect(() =>
