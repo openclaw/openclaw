@@ -478,5 +478,21 @@
   {
     "source": "/cli/config",
     "target": "/cli/config"
+  },
+  {
+    "source": "Serper (Google Search)",
+    "target": "Serper (Google Search)"
+  },
+  {
+    "source": "Web Search overview",
+    "target": "Web Search 概览"
+  },
+  {
+    "source": "Brave Search",
+    "target": "Brave Search"
+  },
+  {
+    "source": "Perplexity Search",
+    "target": "Perplexity Search"
   }
 ]
