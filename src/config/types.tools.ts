@@ -487,6 +487,8 @@ export type ToolsConfig = {
       enabled?: boolean;
       /** Search provider id. */
       provider?: string;
+      /** Ordered list of provider ids to try when the primary provider fails. */
+      fallbacks?: string[];
       /** Shared API key slot used by providers that do not need nested config. */
       apiKey?: SecretInput;
       /** Default search results count (1-10). */

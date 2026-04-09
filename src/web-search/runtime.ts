@@ -301,24 +301,47 @@ export async function runWebSearch(
 ): Promise<{ provider: string; result: Record<string, unknown> }> {
   const search = resolveSearchConfig(params.config);
   const runtimeWebSearch = params.runtimeWebSearch ?? getActiveRuntimeWebToolsMetadata()?.search;
+  const configuredFallbacks: string[] =
+    search && "fallbacks" in search && Array.isArray(search.fallbacks)
+      ? search.fallbacks.filter((id): id is string => typeof id === "string")
+      : [];
+  const preferRuntimeProviders = params.preferRuntimeProviders ?? true;
+  let lastError: unknown;
+
+  // Get candidates first so we can call hasExplicitWebSearchSelection with populated providers
   const candidates = resolveWebSearchCandidates({
     ...params,
     runtimeWebSearch,
-    preferRuntimeProviders: params.preferRuntimeProviders ?? true,
+    preferRuntimeProviders: preferRuntimeProviders,
   });
   if (candidates.length === 0) {
     throw new Error("web_search is disabled or no provider is available.");
   }
-  const allowFallback = !hasExplicitWebSearchSelection({
+  const hasExplicitProvider = hasExplicitWebSearchSelection({
     search,
     runtimeWebSearch,
     providerId: params.providerId,
     providers: candidates,
   });
-  let lastError: unknown;
+
+  // When explicit + fallbacks: primary provider first, then fallbacks (deduped); otherwise use candidates
+  const primaryProviderId = candidates[0]?.id;
+  const effectiveCandidates =
+    hasExplicitProvider && configuredFallbacks.length > 0
+      ? [
+          candidates[0],
+          ...configuredFallbacks
+            .map((id) => candidates.find((p) => p.id === id))
+            .filter(
+              (p): p is PluginWebSearchProviderEntry => Boolean(p) && p?.id !== primaryProviderId,
+            ),
+        ]
+      : candidates;
+
+  const allowFallback = !hasExplicitProvider || configuredFallbacks.length > 0;
   let sawUnavailableProvider = false;
 
-  for (const candidate of candidates) {
+  for (const candidate of effectiveCandidates) {
     try {
       const definition = candidate.createTool({
         config: params.config,
