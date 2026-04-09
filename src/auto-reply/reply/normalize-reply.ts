@@ -47,7 +47,8 @@ export function normalizeReplyPayload(
       },
     );
   const trimmed = normalizeOptionalString(payload.text) ?? "";
-  if (!hasContent(trimmed)) {
+  const hasMediaContent = payload.mediaUrls?.some((u) => Boolean(u)) || Boolean(payload.mediaUrl);
+  if (!hasContent(trimmed) && !hasMediaContent && !payload.audioAsVoice) {
     opts.onSkip?.("empty");
     return null;
   }
@@ -98,7 +99,7 @@ export function normalizeReplyPayload(
   if (text) {
     text = sanitizeUserFacingText(text, { errorContext: Boolean(payload.isError) });
   }
-  if (!hasContent(text)) {
+  if (!hasContent(text) && !hasMediaContent && !payload.audioAsVoice) {
     opts.onSkip?.("empty");
     return null;
   }

@@ -7,6 +7,7 @@ import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../agents/tool-fs-policy.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
+import { POSIX_OPENCLAW_TMP_DIR } from "../../infra/tmp-openclaw-dir.js";
 import { saveMediaSource } from "../../media/store.js";
 import { resolveConfigDir } from "../../utils.js";
 import type { ReplyPayload } from "../types.js";
@@ -40,6 +41,11 @@ function isAllowedAbsoluteReplyMediaPath(params: {
   sandboxRoot?: string;
 }): boolean {
   if (isManagedGlobalReplyMediaPath(params.candidate)) {
+    return true;
+  }
+  // TTS tool outputs audio files to /tmp/openclaw/tts-* which is a
+  // well-known managed directory that persists across sessions.
+  if (isPathInside(POSIX_OPENCLAW_TMP_DIR, params.candidate)) {
     return true;
   }
   const volatileRoots = [params.workspaceDir, params.sandboxRoot]
