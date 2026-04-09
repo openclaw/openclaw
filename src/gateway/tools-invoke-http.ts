@@ -3,9 +3,11 @@ import { runBeforeToolCallHook } from "../agents/pi-tools.before-tool-call.js";
 import { resolveToolLoopDetectionConfig } from "../agents/pi-tools.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { applyOwnerOnlyToolPolicy } from "../agents/tool-policy.js";
+import { normalizeToolName } from "../agents/tool-policy-shared.js";
 import { ToolInputError, type AnyAgentTool } from "../agents/tools/common.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
 import {
@@ -32,6 +34,7 @@ import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
+const log = createSubsystemLogger("gateway/tools-invoke");
 
 type ToolsInvokeBody = {
   tool?: unknown;
@@ -231,25 +234,56 @@ export async function handleToolsInvokeHttpRequest(
   const accountId = normalizeOptionalString(getHeader(req, "x-openclaw-account-id"));
   const agentTo = normalizeOptionalString(getHeader(req, "x-openclaw-message-to"));
   const agentThreadId = normalizeOptionalString(getHeader(req, "x-openclaw-thread-id"));
-  const { agentId, tools } = resolveGatewayScopedTools({
-    cfg,
-    sessionKey,
-    messageProvider: messageChannel ?? undefined,
+  const { agentId, tools, allTools, policyFiltered, toolPolicyAudits, gatewayDenySet } =
+    resolveGatewayScopedTools({
+      cfg,
+      sessionKey,
+      messageProvider: messageChannel ?? undefined,
     accountId,
     agentTo,
     agentThreadId,
     allowGatewaySubagentBinding: true,
     allowMediaInvokeCommands: true,
-    surface: "http",
-    disablePluginTools: isKnownCoreToolId(toolName),
-  });
+      surface: "http",
+      disablePluginTools: isKnownCoreToolId(toolName),
+    });
   // Owner semantics intentionally follow the same shared-secret HTTP contract
   // on this direct tool surface; SECURITY.md documents this as designed-as-is.
   const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, requestAuth);
   const gatewayFiltered = applyOwnerOnlyToolPolicy(tools, senderIsOwner);
+  const normalizedToolName = normalizeToolName(toolName);
+  const policyAudit = toolPolicyAudits.get(toolName);
+
+  function emitToolPolicyAudit(params: { decision: "allow" | "deny"; matchedBy: string; rule?: string }) {
+    log.debug(
+      [
+        "tools-invoke policy:",
+        `sessionKey=${sessionKey}`,
+        `tool=${normalizedToolName}`,
+        `decision=${params.decision}`,
+        `matchedBy=${params.matchedBy}`,
+        params.rule ? `rule=${JSON.stringify(params.rule)}` : undefined,
+      ]
+        .filter(Boolean)
+        .join(" "),
+    );
+  }
 
   const tool = gatewayFiltered.find((t) => t.name === toolName);
   if (!tool) {
+    const wasKnownTool = allTools.some((candidate) => candidate.name === toolName);
+    const passedPolicy = policyFiltered.some((candidate) => candidate.name === toolName);
+    if (wasKnownTool && policyAudit?.decision === "deny") {
+      emitToolPolicyAudit(policyAudit);
+    } else if (passedPolicy && gatewayDenySet.has(toolName)) {
+      emitToolPolicyAudit({
+        decision: "deny",
+        matchedBy: cfg.gateway?.tools?.deny?.includes(toolName)
+          ? "gateway.tools.deny"
+          : "gateway.http.defaultDeny",
+        rule: toolName,
+      });
+    }
     sendJson(res, 404, {
       ok: false,
       error: { type: "not_found", message: `Tool not available: ${toolName}` },
@@ -258,6 +292,9 @@ export async function handleToolsInvokeHttpRequest(
   }
 
   try {
+    if (policyAudit) {
+      emitToolPolicyAudit(policyAudit);
+    }
     const gatewayTool: AnyAgentTool = tool;
     const toolCallId = `http-${Date.now()}`;
     const toolArgs = mergeActionIntoArgsIfSupported({
@@ -273,6 +310,7 @@ export async function handleToolsInvokeHttpRequest(
         agentId,
         sessionKey,
         loopDetection: resolveToolLoopDetectionConfig({ cfg, agentId }),
+        toolPolicyAudit: policyAudit,
       },
     });
     if (hookResult.blocked) {

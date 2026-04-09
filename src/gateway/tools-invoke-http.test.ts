@@ -17,6 +17,11 @@ const hookMocks = vi.hoisted(() => ({
   ),
 }));
 
+const loggerMocks = vi.hoisted(() => ({
+  logWarn: vi.fn(),
+  logDebug: vi.fn(),
+}));
+
 let cfg: Record<string, unknown> = {};
 let lastCreateOpenClawToolsContext: Record<string, unknown> | undefined;
 
@@ -52,7 +57,22 @@ vi.mock("./auth.js", () => ({
 }));
 
 vi.mock("../logger.js", () => ({
-  logWarn: () => {},
+  logWarn: loggerMocks.logWarn,
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({
+    debug: loggerMocks.logDebug,
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    child: () => ({
+      debug: loggerMocks.logDebug,
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    }),
+  }),
 }));
 
 vi.mock("../plugins/config-state.js", async (importOriginal) => {
@@ -255,6 +275,8 @@ beforeEach(() => {
   cfg = {};
   lastCreateOpenClawToolsContext = undefined;
   hookMocks.resolveToolLoopDetectionConfig.mockClear();
+  loggerMocks.logWarn.mockClear();
+  loggerMocks.logDebug.mockClear();
   hookMocks.resolveToolLoopDetectionConfig.mockImplementation(() => ({ warnAt: 3 }));
   hookMocks.runBeforeToolCallHook.mockClear();
   hookMocks.runBeforeToolCallHook.mockImplementation(
@@ -549,6 +571,9 @@ describe("POST /tools/invoke", () => {
     };
     const denyRes = await invokeAgentsListAuthed({ sessionKey: "main" });
     expect(denyRes.status).toBe(404);
+    expect(loggerMocks.logDebug).toHaveBeenCalledWith(
+      expect.stringContaining('decision=deny matchedBy=agents.main.tools.allow rule="agents_list"'),
+    );
 
     allowAgentsListForMain();
     cfg = {
@@ -558,6 +583,22 @@ describe("POST /tools/invoke", () => {
 
     const profileRes = await invokeAgentsListAuthed({ sessionKey: "main" });
     expect(profileRes.status).toBe(404);
+    expect(loggerMocks.logDebug).toHaveBeenCalledWith(
+      expect.stringContaining("decision=deny matchedBy=tools.profile (minimal)"),
+    );
+  });
+
+  it("logs allow decisions with matched policy source on the HTTP path", async () => {
+    allowAgentsListForMain();
+
+    const res = await invokeAgentsListAuthed({ sessionKey: "agent:main:main" });
+
+    expect(res.status).toBe(200);
+    expect(loggerMocks.logDebug).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'decision=allow matchedBy=agents.main.tools.allow rule="agents_list"',
+      ),
+    );
   });
 
   it("denies sessions_spawn via HTTP even when agent policy allows", async () => {

@@ -8,6 +8,8 @@ import {
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
+  explainToolPolicyPipelineDecision,
+  type ToolPolicyPipelineAudit,
 } from "../agents/tool-policy-pipeline.js";
 import {
   collectExplicitAllowlist,
@@ -91,27 +93,29 @@ export function resolveGatewayScopedTools(params: {
     ]),
   });
 
+  const policySteps = [
+    ...buildDefaultToolPolicyPipelineSteps({
+      profilePolicy: profilePolicyWithAlsoAllow,
+      profile,
+      profileUnavailableCoreWarningAllowlist: profilePolicy?.allow,
+      providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
+      providerProfile,
+      providerProfileUnavailableCoreWarningAllowlist: providerProfilePolicy?.allow,
+      globalPolicy,
+      globalProviderPolicy,
+      agentPolicy,
+      agentProviderPolicy,
+      groupPolicy,
+      agentId,
+    }),
+    { policy: subagentPolicy, label: "subagent tools.allow" },
+  ];
+  const toolMeta = (tool: AnyAgentTool) => getPluginToolMeta(tool);
   const policyFiltered = applyToolPolicyPipeline({
     tools: allTools,
-    toolMeta: (tool: AnyAgentTool) => getPluginToolMeta(tool),
+    toolMeta,
     warn: logWarn,
-    steps: [
-      ...buildDefaultToolPolicyPipelineSteps({
-        profilePolicy: profilePolicyWithAlsoAllow,
-        profile,
-        profileUnavailableCoreWarningAllowlist: profilePolicy?.allow,
-        providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
-        providerProfile,
-        providerProfileUnavailableCoreWarningAllowlist: providerProfilePolicy?.allow,
-        globalPolicy,
-        globalProviderPolicy,
-        agentPolicy,
-        agentProviderPolicy,
-        groupPolicy,
-        agentId,
-      }),
-      { policy: subagentPolicy, label: "subagent tools.allow" },
-    ],
+    steps: policySteps,
   });
 
   const surface = params.surface ?? "http";
@@ -126,8 +130,25 @@ export function resolveGatewayScopedTools(params: {
     ...(params.excludeToolNames ? Array.from(params.excludeToolNames) : []),
   ]);
 
+  const toolPolicyAudits = new Map<string, ToolPolicyPipelineAudit>();
+  for (const tool of allTools) {
+    toolPolicyAudits.set(
+      tool.name,
+      explainToolPolicyPipelineDecision({
+        toolName: tool.name,
+        tools: allTools,
+        toolMeta,
+        steps: policySteps,
+      }),
+    );
+  }
+
   return {
     agentId,
+    allTools,
+    policyFiltered,
+    toolPolicyAudits,
+    gatewayDenySet,
     tools: policyFiltered.filter((tool) => !gatewayDenySet.has(tool.name)),
   };
 }
