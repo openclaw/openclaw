@@ -52,6 +52,13 @@ function ensureObject(target: Record<string, unknown>, key: string): Record<stri
   return next;
 }
 
+function setTopLevelCredentialValue(
+  searchConfigTarget: Record<string, unknown>,
+  value: unknown,
+): void {
+  searchConfigTarget.apiKey = value;
+}
+
 function resolveSerperConfig(searchConfig?: SearchConfigRecord): SerperConfig {
   const serper = searchConfig?.serper;
   return serper && typeof serper === "object" && !Array.isArray(serper)
@@ -145,6 +152,9 @@ export function createSerperWebSearchProviderPlugin(): WebSearchProviderPlugin {
     signupUrl: "https://serper.dev",
     autoDetectOrder: 15,
     credentialPath,
+    inactiveSecretPaths: [`plugins.entries.${PLUGIN_ID}.config.webSearch.apiKey`],
+    getCredentialValue: (searchConfig) => searchConfig?.apiKey,
+    setCredentialValue: setTopLevelCredentialValue,
 
     getConfiguredCredentialValue(config: ConfigInput): unknown {
       return resolvePluginConfig(config, PLUGIN_ID)?.apiKey;
