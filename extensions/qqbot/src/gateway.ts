@@ -1151,7 +1151,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
                 },
               },
               replyOptions: {
-                disableBlockStreaming: true,
+                disableBlockStreaming: account.config.streaming?.mode === "off",
               },
             });
 
