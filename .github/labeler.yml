@@ -261,6 +261,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/arcee/**"
+"extensions: siliconflow":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/siliconflow/**"
+          - "docs/providers/siliconflow.md"
 "extensions: byteplus":
   - changed-files:
       - any-glob-to-any-file:

@@ -1267,6 +1267,7 @@
                   "providers/qwen",
                   "providers/runway",
                   "providers/sglang",
+                  "providers/siliconflow",
                   "providers/stepfun",
                   "providers/synthetic",
                   "providers/together",
