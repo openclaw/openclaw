@@ -19,7 +19,7 @@
       "choiceHint": "Browser sign-in",
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "API key here, or use separate OpenAI Codex (ChatGPT OAuth)"
+      "groupHint": "API key only (use separate OpenAI Codex for OAuth)"
     },
     {
       "provider": "openai",
@@ -28,7 +28,7 @@
       "choiceLabel": "OpenAI API key",
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "API key here, or use separate OpenAI Codex (ChatGPT OAuth)",
+      "groupHint": "API key only (use separate OpenAI Codex for OAuth)",
       "optionKey": "openaiApiKey",
       "cliFlag": "--openai-api-key",
       "cliOption": "--openai-api-key <key>",
