@@ -136,6 +136,9 @@ describe("runQaDockerUp", () => {
         {
           async runCommand(command, args, cwd) {
             calls.push([command, ...args, `@${cwd}`].join(" "));
+            if (args.join(" ").includes("ps --format json openclaw-qa-gateway")) {
+              return { stdout: '{"Health":"healthy","State":"running"}\n', stderr: "" };
+            }
             return { stdout: "", stderr: "" };
           },
           fetchImpl: vi.fn(async () => ({ ok: true })),
@@ -150,6 +153,7 @@ describe("runQaDockerUp", () => {
       expect(calls).toEqual([
         `docker compose -f ${path.join(repoRoot, ".artifacts/qa-docker/docker-compose.qa.yml")} down --remove-orphans @${repoRoot}`,
         `docker compose -f ${path.join(repoRoot, ".artifacts/qa-docker/docker-compose.qa.yml")} up -d @${repoRoot}`,
+        `docker compose -f ${path.join(repoRoot, ".artifacts/qa-docker/docker-compose.qa.yml")} ps --format json openclaw-qa-gateway @${repoRoot}`,
       ]);
     } finally {
       await rm(repoRoot, { recursive: true, force: true });

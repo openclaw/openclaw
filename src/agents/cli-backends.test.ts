@@ -1,9 +1,10 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
 import type { CliBundleMcpMode } from "../plugins/types.js";
 
 let createEmptyPluginRegistry: typeof import("../plugins/registry.js").createEmptyPluginRegistry;
+let resetPluginRuntimeStateForTest: typeof import("../plugins/runtime.js").resetPluginRuntimeStateForTest;
 let setActivePluginRegistry: typeof import("../plugins/runtime.js").setActivePluginRegistry;
 let normalizeClaudeBackendConfig: typeof import("./cli-backends.js").normalizeClaudeBackendConfig;
 let resolveCliBackendConfig: typeof import("./cli-backends.js").resolveCliBackendConfig;
@@ -96,9 +97,14 @@ beforeAll(async () => {
   vi.doUnmock("../plugins/setup-registry.js");
   vi.doUnmock("../plugins/cli-backends.runtime.js");
   ({ createEmptyPluginRegistry } = await import("../plugins/registry.js"));
-  ({ setActivePluginRegistry } = await import("../plugins/runtime.js"));
+  ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } =
+    await import("../plugins/runtime.js"));
   ({ normalizeClaudeBackendConfig, resolveCliBackendConfig, resolveCliBackendLiveTest } =
     await import("./cli-backends.js"));
+});
+
+afterEach(() => {
+  resetPluginRuntimeStateForTest();
 });
 
 beforeEach(() => {
@@ -177,6 +183,9 @@ beforeEach(() => {
           "--skip-git-repo-check",
         ],
         resumeArgs: ["exec", "resume", "{sessionId}", "--dangerously-bypass-approvals-and-sandbox"],
+        systemPromptFileConfigArg: "-c",
+        systemPromptFileConfigKey: "model_instructions_file",
+        systemPromptWhen: "first",
         reliability: {
           watchdog: {
             fresh: {
@@ -657,6 +666,9 @@ describe("resolveCliBackendConfig google-gemini-cli defaults", () => {
     expect(resolved).not.toBeNull();
     expect(resolved?.bundleMcp).toBe(true);
     expect(resolved?.bundleMcpMode).toBe("codex-config-overrides");
+    expect(resolved?.config.systemPromptFileConfigArg).toBe("-c");
+    expect(resolved?.config.systemPromptFileConfigKey).toBe("model_instructions_file");
+    expect(resolved?.config.systemPromptWhen).toBe("first");
   });
 });
 

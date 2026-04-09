@@ -1066,21 +1066,16 @@ function Invoke-Logged {
     [Parameter(Mandatory = $true)][scriptblock]$Command
   )
 
-  $output = $null
   $previousErrorActionPreference = $ErrorActionPreference
   $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
   try {
     $ErrorActionPreference = 'Continue'
     $PSNativeCommandUseErrorActionPreference = $false
-    $output = & $Command *>&1
+    & $Command *>&1 | Tee-Object -FilePath $LogPath -Append | Out-Null
     $exitCode = $LASTEXITCODE
   } finally {
     $ErrorActionPreference = $previousErrorActionPreference
     $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
-  }
-
-  if ($null -ne $output) {
-    $output | Tee-Object -FilePath $LogPath -Append | Out-Null
   }
 
   if ($exitCode -ne 0) {
@@ -1581,9 +1576,11 @@ try {
   $portableGit = Join-Path (Join-Path (Join-Path $env:LOCALAPPDATA 'OpenClaw\deps') 'portable-git') ''
   $shortRoot = 'C:\ocu'
   $shortTemp = Join-Path $shortRoot 'tmp'
+  $shimBin = Join-Path $shortRoot 'shims'
   $bootstrapRoot = Join-Path $shortRoot 'bootstrap'
   $bootstrapBin = Join-Path $bootstrapRoot 'node_modules\.bin'
-  $env:PATH = "$bootstrapBin;$portableGit\cmd;$portableGit\mingw64\bin;$env:PATH"
+  $previousNpmIgnoreScripts = [Environment]::GetEnvironmentVariable('npm_config_ignore_scripts', 'Process')
+  $env:PATH = "$shimBin;$bootstrapBin;$portableGit\cmd;$portableGit\mingw64\bin;$env:PATH"
   $env:ComSpec = Join-Path $env:SystemRoot 'System32\cmd.exe'
   $env:npm_config_ignore_scripts = 'true'
   $openclaw = Join-Path $env:APPDATA 'npm\openclaw.cmd'
@@ -1595,6 +1592,7 @@ try {
 
   Write-ProgressLog 'update.short-temp'
   New-Item -ItemType Directory -Path $shortTemp -Force | Out-Null
+  New-Item -ItemType Directory -Path $shimBin -Force | Out-Null
   New-Item -ItemType Directory -Path $bootstrapRoot -Force | Out-Null
   $env:TEMP = $shortTemp
   $env:TMP = $shortTemp
@@ -1622,6 +1620,38 @@ try {
   Write-ProgressLog 'update.bootstrap-toolchain'
   Invoke-Logged 'npm bootstrap node-gyp pnpm' {
     & npm install --prefix $bootstrapRoot --no-save node-gyp pnpm@10
+  }
+  $pnpmCli = Join-Path $bootstrapRoot 'node_modules\pnpm\bin\pnpm.cjs'
+  $pnpmCmdShim = Join-Path $shimBin 'pnpm.cmd'
+  $pnpmPsShim = Join-Path $shimBin 'pnpm.ps1'
+  @"
+@echo off
+set "NPM_CONFIG_SCRIPT_SHELL="
+set "npm_config_script_shell="
+node.exe "$pnpmCli" %*
+exit /b %ERRORLEVEL%
+"@ | Set-Content -Path $pnpmCmdShim -Encoding ASCII
+  @"
+Remove-Item Env:NPM_CONFIG_SCRIPT_SHELL -ErrorAction SilentlyContinue
+Remove-Item Env:npm_config_script_shell -ErrorAction SilentlyContinue
+& node.exe '$pnpmCli' @args
+exit `$LASTEXITCODE
+"@ | Set-Content -Path $pnpmPsShim -Encoding UTF8
+  Write-LoggedLine ("pnpm_shim=" + $pnpmCmdShim)
+  if ($null -eq $previousNpmIgnoreScripts) {
+    Remove-Item Env:npm_config_ignore_scripts -ErrorAction SilentlyContinue
+  } else {
+    $env:npm_config_ignore_scripts = $previousNpmIgnoreScripts
+  }
+  Write-LoggedLine 'npm_config_ignore_scripts=restored-after-bootstrap'
+
+  Write-ProgressLog 'update.where-pnpm-bootstrap'
+  $pnpmBootstrap = Get-Command pnpm -ErrorAction SilentlyContinue
+  if ($null -ne $pnpmBootstrap) {
+    Write-LoggedLine $pnpmBootstrap.Source
+    Invoke-Logged 'pnpm --version' { & pnpm --version }
+  } else {
+    throw 'pnpm missing after bootstrap'
   }
 
   Write-ProgressLog 'update.where-node-gyp-pre'
@@ -2038,7 +2068,10 @@ EOF
   pnpm_output="$(
     guest_powershell "$(cat <<'EOF'
 $portableGit = Join-Path (Join-Path (Join-Path $env:LOCALAPPDATA 'OpenClaw\deps') 'portable-git') ''
-$env:PATH = "$portableGit\cmd;$portableGit\mingw64\bin;$portableGit\usr\bin;$env:PATH"
+$shortRoot = 'C:\ocu'
+$shimBin = Join-Path $shortRoot 'shims'
+$bootstrapBin = Join-Path $shortRoot 'bootstrap\node_modules\.bin'
+$env:PATH = "$shimBin;$bootstrapBin;$portableGit\cmd;$portableGit\mingw64\bin;$portableGit\usr\bin;$env:PATH"
 $pnpmCommand = Get-Command pnpm -ErrorAction SilentlyContinue
 if ($null -eq $pnpmCommand) {
   throw 'pnpm missing after dev update'
@@ -2244,7 +2277,8 @@ run_upgrade_lane() {
   # onboard health probe fail against a stale daemon.
   phase_run "upgrade.gateway-stop" "$TIMEOUT_GATEWAY_S" stop_gateway || return $?
   phase_run "upgrade.onboard-ref" "$TIMEOUT_ONBOARD_PHASE_S" run_ref_onboard || return $?
-  phase_run "upgrade.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway || return $?
+  phase_run "upgrade.gateway-restart" "$TIMEOUT_GATEWAY_S" restart_gateway || return $?
+  phase_run "upgrade.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway_reachable || return $?
   UPGRADE_GATEWAY_STATUS="pass"
   phase_run "upgrade.first-agent-turn" "$TIMEOUT_AGENT_S" verify_turn || return $?
   UPGRADE_AGENT_STATUS="pass"

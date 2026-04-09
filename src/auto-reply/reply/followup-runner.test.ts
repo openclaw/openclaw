@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
@@ -16,6 +16,7 @@ let createFollowupRunner: typeof import("./followup-runner.js").createFollowupRu
 let clearRuntimeConfigSnapshot: typeof import("../../config/config.js").clearRuntimeConfigSnapshot;
 let loadSessionStore: typeof import("../../config/sessions/store.js").loadSessionStore;
 let saveSessionStore: typeof import("../../config/sessions/store.js").saveSessionStore;
+let clearSessionStoreCacheForTest: typeof import("../../config/sessions/store.js").clearSessionStoreCacheForTest;
 let clearFollowupQueue: typeof import("./queue.js").clearFollowupQueue;
 let enqueueFollowupRun: typeof import("./queue.js").enqueueFollowupRun;
 let sessionRunAccounting: typeof import("./session-run-accounting.js");
@@ -286,7 +287,8 @@ async function loadFreshFollowupRunnerModuleForTest() {
   ({ createFollowupRunner } = await import("./followup-runner.js"));
   ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
     await import("../../config/config.js"));
-  ({ loadSessionStore, saveSessionStore } = await import("../../config/sessions/store.js"));
+  ({ clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } =
+    await import("../../config/sessions/store.js"));
   ({ clearFollowupQueue, enqueueFollowupRun } = await import("./queue.js"));
   sessionRunAccounting = await import("./session-run-accounting.js");
   ({ createMockFollowupRun, createMockTypingController } = await import("./test-helpers.js"));
@@ -302,9 +304,11 @@ const ROUTABLE_TEST_CHANNELS = new Set([
   "feishu",
 ]);
 
-beforeEach(async () => {
+beforeAll(async () => {
   await loadFreshFollowupRunnerModuleForTest();
-  await loadFreshFollowupRunnerModuleForTest();
+});
+
+beforeEach(() => {
   clearRuntimeConfigSnapshot?.();
   runEmbeddedPiAgentMock.mockReset();
   compactEmbeddedPiSessionMock.mockReset();
@@ -330,14 +334,13 @@ beforeEach(async () => {
   FOLLOWUP_TEST_SESSION_STORES.clear();
 });
 
-afterEach(async () => {
+afterEach(() => {
   clearRuntimeConfigSnapshot?.();
   clearFollowupQueue("main");
   FOLLOWUP_TEST_QUEUES.clear();
   FOLLOWUP_TEST_SESSION_STORES.clear();
   vi.clearAllTimers();
   vi.useRealTimers();
-  const { clearSessionStoreCacheForTest } = await import("../../config/sessions/store.js");
   clearSessionStoreCacheForTest();
   if (!FOLLOWUP_DEBUG) {
     return;
