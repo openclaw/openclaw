@@ -50,6 +50,7 @@ gchar* mutation_skills_update_api_key(const gchar *skill_key, const gchar *api_k
 gchar* mutation_sessions_patch(const gchar *session_key,
                                const gchar *thinking_level,
                                const gchar *verbose_level,
+                               const gchar *model,
                                GatewayRpcCallback cb, gpointer data);
 
 gchar* mutation_sessions_reset(const gchar *session_key,

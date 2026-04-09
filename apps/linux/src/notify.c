@@ -64,3 +64,28 @@ void notify_on_transition(AppState old_state, AppState new_state) {
         OC_LOG_DEBUG(OPENCLAW_LOG_CAT_NOTIFY, "notify_on_transition no-send");
     }
 }
+
+void notify_on_gateway_connection_transition(gboolean connected) {
+    GApplication *app = g_application_get_default();
+
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_NOTIFY,
+                 "notify_on_gateway_connection_transition connected=%d app=%p registered=%d",
+                 connected,
+                 (void *)app,
+                 app ? g_application_get_is_registered(app) : 0);
+
+    if (!app || !g_application_get_is_registered(app)) {
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_NOTIFY,
+                     "notify_on_gateway_connection_transition skip (not registered)");
+        return;
+    }
+
+    const char *title = connected ? "Gateway Connected" : "Gateway Disconnected";
+    const char *body = connected
+                           ? "OpenClaw gateway connection is established."
+                           : "OpenClaw gateway connection was lost.";
+
+    g_autoptr(GNotification) notification = g_notification_new(title);
+    g_notification_set_body(notification, body);
+    g_application_send_notification(app, "openclaw-gateway-connection", notification);
+}

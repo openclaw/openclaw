@@ -42,3 +42,4 @@ typedef enum {
 void app_window_show(void);
 void app_window_navigate_to(AppSection section);
 gboolean app_window_is_visible(void);
+void app_window_refresh_snapshot(void);

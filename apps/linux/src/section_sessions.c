@@ -16,6 +16,7 @@
 #include "gateway_mutations.h"
 #include "gateway_config.h"
 #include "gateway_client.h"
+#include "json_access.h"
 #include <adwaita.h>
 
 /* ── State ───────────────────────────────────────────────────────── */
@@ -26,9 +27,25 @@ static GatewaySessionsData *sessions_data_cache = NULL;
 static gboolean sessions_fetch_in_flight = FALSE;
 static gint64 sessions_last_fetch_us = 0;
 
+typedef struct {
+    gchar *id;
+    gchar *label;
+} SessionModelChoice;
+
+static GPtrArray *session_model_choices = NULL;
+
+static void session_model_choice_free(SessionModelChoice *choice) {
+    if (!choice) return;
+    g_free(choice->id);
+    g_free(choice->label);
+    g_free(choice);
+}
+
 /* Forward declarations */
 static void sessions_rebuild_list(void);
 static void sessions_force_refresh(void);
+static void on_sessions_models_response(const GatewayRpcResponse *response, gpointer user_data);
+static void on_session_reset_response(GObject *source, GAsyncResult *result, gpointer user_data);
 
 /* ── Dashboard handoff ───────────────────────────────────────────── */
 
@@ -40,6 +57,13 @@ static void on_open_dashboard(GtkButton *b, gpointer d) {
     if (!cfg) return;
     g_autofree gchar *url = gateway_config_dashboard_url(cfg);
     if (url) g_app_info_launch_default_for_uri(url, NULL, NULL);
+}
+
+static gchar* sessions_default_model_label(void) {
+    if (sessions_data_cache && sessions_data_cache->defaults.model) {
+        return g_strdup_printf("Session default (%s)", sessions_data_cache->defaults.model);
+    }
+    return g_strdup("Session default");
 }
 
 /* ── Mutation callbacks ──────────────────────────────────────────── */
@@ -62,17 +86,40 @@ static void on_mutation_done(const GatewayRpcResponse *response, gpointer user_d
 static void on_session_reset(GtkButton *btn, gpointer user_data) {
     (void)user_data;
     const gchar *key = (const gchar *)g_object_get_data(G_OBJECT(btn), "session-key");
+    const gchar *name = (const gchar *)g_object_get_data(G_OBJECT(btn), "session-name");
     if (!key) return;
 
-    gtk_widget_set_sensitive(GTK_WIDGET(btn), FALSE);
+    g_autofree gchar *body = g_strdup_printf(
+        "Reset session \"%s\"? This clears its runtime context.", name ? name : key);
+
+    AdwAlertDialog *dialog = ADW_ALERT_DIALOG(
+        adw_alert_dialog_new("Reset Session", body));
+    adw_alert_dialog_add_responses(dialog, "cancel", "Cancel", "reset", "Reset", NULL);
+    adw_alert_dialog_set_response_appearance(dialog, "reset", ADW_RESPONSE_DESTRUCTIVE);
+    adw_alert_dialog_set_default_response(dialog, "cancel");
+    adw_alert_dialog_set_close_response(dialog, "cancel");
+    g_object_set_data_full(G_OBJECT(dialog), "session-key", g_strdup(key), g_free);
+
+    GtkWidget *toplevel = GTK_WIDGET(gtk_widget_get_root(GTK_WIDGET(btn)));
+    adw_alert_dialog_choose(dialog, toplevel, NULL, on_session_reset_response, NULL);
+}
+
+static void on_session_reset_response(GObject *source, GAsyncResult *result, gpointer user_data) {
+    AdwAlertDialog *dialog = ADW_ALERT_DIALOG(source);
+    (void)user_data;
+
+    const gchar *response_id = adw_alert_dialog_choose_finish(dialog, result);
+    if (g_strcmp0(response_id, "reset") != 0) return;
+
+    const gchar *key = g_object_get_data(G_OBJECT(dialog), "session-key");
+    if (!key) return;
+
     if (sessions_status_label)
-        gtk_label_set_text(GTK_LABEL(sessions_status_label), "Resetting\u2026");
+        gtk_label_set_text(GTK_LABEL(sessions_status_label), "Resetting…");
 
     g_autofree gchar *req = mutation_sessions_reset(key, on_mutation_done, NULL);
-    if (!req) {
-        gtk_widget_set_sensitive(GTK_WIDGET(btn), TRUE);
-        if (sessions_status_label)
-            gtk_label_set_text(GTK_LABEL(sessions_status_label), "Failed to send request");
+    if (!req && sessions_status_label) {
+        gtk_label_set_text(GTK_LABEL(sessions_status_label), "Failed to send request");
     }
 }
 
@@ -106,7 +153,7 @@ static void on_thinking_changed(GObject *gobject, GParamSpec *pspec, gpointer us
     if (sessions_status_label)
         gtk_label_set_text(GTK_LABEL(sessions_status_label), "Updating\u2026");
 
-    g_autofree gchar *req = mutation_sessions_patch(key, level, NULL, on_mutation_done, NULL);
+    g_autofree gchar *req = mutation_sessions_patch(key, level, NULL, NULL, on_mutation_done, NULL);
     if (!req && sessions_status_label) {
         gtk_label_set_text(GTK_LABEL(sessions_status_label), "Failed to send request");
     }
@@ -125,7 +172,28 @@ static void on_verbose_changed(GObject *gobject, GParamSpec *pspec, gpointer use
     if (sessions_status_label)
         gtk_label_set_text(GTK_LABEL(sessions_status_label), "Updating\u2026");
 
-    g_autofree gchar *req = mutation_sessions_patch(key, NULL, level, on_mutation_done, NULL);
+    g_autofree gchar *req = mutation_sessions_patch(key, NULL, level, NULL, on_mutation_done, NULL);
+    if (!req && sessions_status_label) {
+        gtk_label_set_text(GTK_LABEL(sessions_status_label), "Failed to send request");
+    }
+}
+
+static void on_model_changed(GObject *gobject, GParamSpec *pspec, gpointer user_data) {
+    (void)pspec;
+    (void)user_data;
+    const gchar *key = (const gchar *)g_object_get_data(gobject, "session-key");
+    gchar **model_ids = (gchar **)g_object_get_data(gobject, "session-model-ids");
+    if (!key || !model_ids) return;
+
+    gint idx = adw_combo_row_get_selected(ADW_COMBO_ROW(gobject));
+    if (idx < 0) return;
+    const gchar *model = model_ids[idx];
+    if (!model && idx > 0) return;
+
+    if (sessions_status_label)
+        gtk_label_set_text(GTK_LABEL(sessions_status_label), "Updating…");
+
+    g_autofree gchar *req = mutation_sessions_patch(key, NULL, NULL, model, on_mutation_done, NULL);
     if (!req && sessions_status_label) {
         gtk_label_set_text(GTK_LABEL(sessions_status_label), "Failed to send request");
     }
@@ -333,6 +401,57 @@ static void build_session_card(GatewaySession *s) {
     GtkWidget *actions = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     gtk_widget_set_margin_top(actions, 6);
 
+    GtkStringList *model_dropdown = gtk_string_list_new(NULL);
+    g_autofree gchar *default_model_label = sessions_default_model_label();
+    gtk_string_list_append(model_dropdown, default_model_label);
+
+    guint selected_model_idx = 0;
+    gboolean has_model_match = FALSE;
+    guint model_count = 1;
+    if (session_model_choices) {
+        model_count += session_model_choices->len;
+    }
+
+    gchar **model_ids = g_new0(gchar *, model_count + 2);
+    model_ids[0] = NULL;
+
+    guint write_idx = 1;
+    if (session_model_choices) {
+        for (guint i = 0; i < session_model_choices->len; i++) {
+            SessionModelChoice *choice = g_ptr_array_index(session_model_choices, i);
+            if (!choice || !choice->id) continue;
+            gtk_string_list_append(model_dropdown, choice->label ? choice->label : choice->id);
+            model_ids[write_idx] = g_strdup(choice->id);
+            if (s->model && g_strcmp0(s->model, choice->id) == 0) {
+                selected_model_idx = write_idx;
+                has_model_match = TRUE;
+            }
+            write_idx++;
+        }
+    }
+
+    if (s->model && !has_model_match) {
+        g_autofree gchar *current_label = g_strdup_printf("Current (%s)", s->model);
+        gtk_string_list_append(model_dropdown, current_label);
+        model_ids[write_idx] = g_strdup(s->model);
+        selected_model_idx = write_idx;
+    }
+
+    if (s->model && sessions_data_cache && sessions_data_cache->defaults.model &&
+        g_strcmp0(s->model, sessions_data_cache->defaults.model) == 0) {
+        selected_model_idx = 0;
+    }
+
+    GtkWidget *model_combo = adw_combo_row_new();
+    adw_combo_row_set_model(ADW_COMBO_ROW(model_combo), G_LIST_MODEL(model_dropdown));
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(model_combo), "Model");
+    gtk_widget_add_css_class(model_combo, "flat");
+    adw_combo_row_set_selected(ADW_COMBO_ROW(model_combo), selected_model_idx);
+    g_object_set_data_full(G_OBJECT(model_combo), "session-key", g_strdup(s->key), g_free);
+    g_object_set_data_full(G_OBJECT(model_combo), "session-model-ids", model_ids, (GDestroyNotify)g_strfreev);
+    g_signal_connect(model_combo, "notify::selected", G_CALLBACK(on_model_changed), NULL);
+    gtk_box_append(GTK_BOX(actions), model_combo);
+
     /* Thinking level dropdown */
     GtkStringList *think_model = gtk_string_list_new((const char * const[]){
         "low", "medium", "high", NULL
@@ -375,6 +494,7 @@ static void build_session_card(GatewaySession *s) {
     GtkWidget *btn_reset = gtk_button_new_with_label("Reset");
     gtk_widget_add_css_class(btn_reset, "flat");
     g_object_set_data_full(G_OBJECT(btn_reset), "session-key", g_strdup(s->key), g_free);
+    g_object_set_data_full(G_OBJECT(btn_reset), "session-name", g_strdup(name_str), g_free);
     g_signal_connect(btn_reset, "clicked", G_CALLBACK(on_session_reset), NULL);
     gtk_box_append(GTK_BOX(actions), btn_reset);
 
@@ -425,6 +545,52 @@ static void sessions_rebuild_list(void) {
     }
 }
 
+static void on_sessions_models_response(const GatewayRpcResponse *response, gpointer user_data) {
+    (void)user_data;
+
+    if (session_model_choices) g_ptr_array_unref(session_model_choices);
+    session_model_choices = g_ptr_array_new_with_free_func((GDestroyNotify)session_model_choice_free);
+
+    if (!response || !response->ok || !response->payload || !JSON_NODE_HOLDS_OBJECT(response->payload)) {
+        sessions_rebuild_list();
+        return;
+    }
+
+    JsonObject *obj = json_node_get_object(response->payload);
+    JsonNode *models_node = json_object_get_member(obj, "models");
+    if (!models_node || !JSON_NODE_HOLDS_ARRAY(models_node)) {
+        sessions_rebuild_list();
+        return;
+    }
+
+    JsonArray *arr = json_node_get_array(models_node);
+    for (guint i = 0; i < json_array_get_length(arr); i++) {
+        JsonNode *node = json_array_get_element(arr, i);
+        if (!node || !JSON_NODE_HOLDS_OBJECT(node)) continue;
+
+        JsonObject *model_obj = json_node_get_object(node);
+        const gchar *id = oc_json_string_member(model_obj, "id");
+        if (!id || id[0] == '\0') continue;
+
+        SessionModelChoice *choice = g_new0(SessionModelChoice, 1);
+        choice->id = g_strdup(id);
+
+        const gchar *name = oc_json_string_member(model_obj, "name");
+        const gchar *provider = oc_json_string_member(model_obj, "provider");
+        if (name && provider) {
+            choice->label = g_strdup_printf("%s (%s)", name, provider);
+        } else if (name) {
+            choice->label = g_strdup(name);
+        } else {
+            choice->label = g_strdup(id);
+        }
+
+        g_ptr_array_add(session_model_choices, choice);
+    }
+
+    sessions_rebuild_list();
+}
+
 /* ── RPC callback ────────────────────────────────────────────────── */
 
 static void on_sessions_rpc_response(const GatewayRpcResponse *response, gpointer user_data) {
@@ -472,9 +638,12 @@ static void sessions_force_refresh(void) {
     sessions_fetch_in_flight = TRUE;
     g_autofree gchar *req_id = gateway_rpc_request(
         "sessions.list", NULL, 0, on_sessions_rpc_response, NULL);
+    g_autofree gchar *models_req_id = gateway_rpc_request(
+        "models.list", NULL, 0, on_sessions_models_response, NULL);
     if (!req_id) {
         sessions_fetch_in_flight = FALSE;
     }
+    (void)models_req_id;
 }
 
 /* ── SectionController callbacks ─────────────────────────────────── */
@@ -532,11 +701,14 @@ static void sessions_refresh(void) {
     sessions_fetch_in_flight = TRUE;
     g_autofree gchar *req_id = gateway_rpc_request(
         "sessions.list", NULL, 0, on_sessions_rpc_response, NULL);
+    g_autofree gchar *models_req_id = gateway_rpc_request(
+        "models.list", NULL, 0, on_sessions_models_response, NULL);
     if (!req_id) {
         sessions_fetch_in_flight = FALSE;
         if (sessions_status_label)
             gtk_label_set_text(GTK_LABEL(sessions_status_label), "Failed to send request");
     }
+    (void)models_req_id;
 }
 
 static void sessions_destroy(void) {
@@ -545,6 +717,8 @@ static void sessions_destroy(void) {
     sessions_fetch_in_flight = FALSE;
     gateway_sessions_data_free(sessions_data_cache);
     sessions_data_cache = NULL;
+    if (session_model_choices) g_ptr_array_unref(session_model_choices);
+    session_model_choices = NULL;
     sessions_last_fetch_us = 0;
 }
 

@@ -36,6 +36,7 @@ static GtkWidget *inst_state_label = NULL;
 /* Remote nodes */
 static GtkWidget *inst_remote_box = NULL;
 static GtkWidget *inst_remote_status_label = NULL;
+static GtkWidget *inst_copy_debug_btn = NULL;
 static GatewayNodesData *inst_nodes_cache = NULL;
 static gboolean inst_nodes_fetch_in_flight = FALSE;
 static gint64 inst_last_fetch_us = 0;
@@ -145,20 +146,57 @@ static void on_refresh_nodes(GtkButton *btn, gpointer user_data) {
     inst_force_refresh();
 }
 
+static gchar* inst_build_debug_summary(void) {
+    GString *s = g_string_new("OpenClaw Linux Instances Debug\n");
+
+    gint pending_count = 0;
+    gint paired_count = 0;
+    if (inst_pairing_cache) {
+        pending_count = inst_pairing_cache->n_pending;
+        paired_count = inst_pairing_cache->n_paired;
+    }
+    g_string_append_printf(s, "Pending pair requests: %d\n", pending_count);
+    g_string_append_printf(s, "Paired nodes: %d\n", paired_count);
+
+    gint total_nodes = inst_nodes_cache ? inst_nodes_cache->n_nodes : 0;
+    g_string_append_printf(s, "Nodes: %d\n", total_nodes);
+
+    if (inst_nodes_cache) {
+        for (gint i = 0; i < inst_nodes_cache->n_nodes; i++) {
+            GatewayNode *nd = &inst_nodes_cache->nodes[i];
+            g_string_append_printf(
+                s,
+                "- %s (%s) status=%s paired=%s platform=%s version=%s\n",
+                nd->display_name ? nd->display_name : "unknown",
+                nd->node_id ? nd->node_id : "unknown",
+                nd->connected ? "connected" : "disconnected",
+                nd->paired ? "true" : "false",
+                nd->platform ? nd->platform : "unknown",
+                nd->version ? nd->version : "unknown");
+        }
+    }
+
+    return g_string_free(s, FALSE);
+}
+
+static gboolean on_copy_debug_label_reset(gpointer data) {
+    GtkWidget *btn = GTK_WIDGET(data);
+    if (btn) {
+        gtk_button_set_label(GTK_BUTTON(btn), "Copy Debug Info");
+    }
+    return G_SOURCE_REMOVE;
+}
+
 static void on_copy_debug(GtkButton *btn, gpointer user_data) {
     (void)user_data;
-    const gchar *summary = (const gchar *)g_object_get_data(G_OBJECT(btn), "debug-summary");
+    g_autofree gchar *summary = inst_build_debug_summary();
     if (!summary) return;
 
     GdkClipboard *cb = gdk_display_get_clipboard(gdk_display_get_default());
     gdk_clipboard_set_text(cb, summary);
 
-    GtkWidget *toplevel = GTK_WIDGET(gtk_widget_get_root(GTK_WIDGET(btn)));
-    AdwToastOverlay *overlay = g_object_get_data(G_OBJECT(toplevel), "toast-overlay");
-    if (overlay) {
-        AdwToast *toast = adw_toast_new("Debug summary copied to clipboard");
-        adw_toast_overlay_add_toast(overlay, toast);
-    }
+    gtk_button_set_label(GTK_BUTTON(btn), "Copied!");
+    g_timeout_add_seconds(2, on_copy_debug_label_reset, btn);
 }
 
 /* ── Remote node card builder ────────────────────────────────────── */
@@ -220,42 +258,6 @@ static void build_node_card(GatewayNode *nd) {
         g_autofree gchar *at_text = g_strdup_printf("Approved %s", at);
         add_detail_row(card, "Approved", at_text);
     }
-
-    /* Action buttons */
-    GtkWidget *actions = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-    gtk_widget_set_margin_top(actions, 6);
-
-    GtkWidget *btn_copy = gtk_button_new_with_label("Copy Debug Info");
-    gtk_widget_add_css_class(btn_copy, "flat");
-
-    /* Build a debug summary string for the clipboard */
-    g_autofree gchar *debug_text = g_strdup_printf(
-        "Node: %s\n"
-        "ID: %s\n"
-        "Platform: %s\n"
-        "Core: %s\n"
-        "UI: %s\n"
-        "Device: %s\n"
-        "Model: %s\n"
-        "IP: %s\n"
-        "Paired: %s\n"
-        "Connected: %s",
-        nd->display_name ? nd->display_name : "unknown",
-        nd->node_id ? nd->node_id : "unknown",
-        nd->platform ? nd->platform : "unknown",
-        nd->core_version ? nd->core_version : "unknown",
-        nd->ui_version ? nd->ui_version : "unknown",
-        nd->device_family ? nd->device_family : "unknown",
-        nd->model_identifier ? nd->model_identifier : "unknown",
-        nd->remote_ip ? nd->remote_ip : "unknown",
-        nd->paired ? "true" : "false",
-        nd->connected ? "true" : "false");
-
-    g_object_set_data_full(G_OBJECT(btn_copy), "debug-summary", g_strdup(debug_text), g_free);
-    g_signal_connect(btn_copy, "clicked", G_CALLBACK(on_copy_debug), NULL);
-    gtk_box_append(GTK_BOX(actions), btn_copy);
-
-    gtk_box_append(GTK_BOX(card), actions);
 
     gtk_frame_set_child(GTK_FRAME(frame), card);
     gtk_box_append(GTK_BOX(inst_remote_box), frame);
@@ -626,6 +628,11 @@ static GtkWidget* instances_build(void) {
     g_signal_connect(btn_refresh, "clicked", G_CALLBACK(on_refresh_nodes), NULL);
     gtk_box_append(GTK_BOX(remote_hdr), btn_refresh);
 
+    inst_copy_debug_btn = gtk_button_new_with_label("Copy Debug Info");
+    gtk_widget_add_css_class(inst_copy_debug_btn, "flat");
+    g_signal_connect(inst_copy_debug_btn, "clicked", G_CALLBACK(on_copy_debug), NULL);
+    gtk_box_append(GTK_BOX(remote_hdr), inst_copy_debug_btn);
+
     gtk_box_append(GTK_BOX(page), remote_hdr);
 
     inst_remote_status_label = gtk_label_new("Loading\u2026");
@@ -694,6 +701,7 @@ static void instances_destroy(void) {
     inst_state_label = NULL;
     inst_remote_box = NULL;
     inst_remote_status_label = NULL;
+    inst_copy_debug_btn = NULL;
     inst_pairing_box = NULL;
     inst_pairing_status_label = NULL;
     inst_nodes_fetch_in_flight = FALSE;

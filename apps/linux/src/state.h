@@ -116,6 +116,11 @@ typedef struct {
     const char *explanation; /* human-readable detail for diagnostics */
 } RuntimeModePresentation;
 
+typedef struct {
+    gboolean initialized;
+    gboolean connected;
+} GatewayConnectionTransitionTracker;
+
 void state_init(void);
 void health_state_clear(HealthState *hs);
 void state_update_systemd(const SystemdState *sys_state);
@@ -128,6 +133,9 @@ guint64 state_get_health_generation(void);
 RuntimeMode state_get_runtime_mode(void);
 gboolean health_state_listener_proven(const HealthState *hs);
 void runtime_mode_describe(RuntimeMode mode, RuntimeModePresentation *out);
+gboolean state_connection_transition_step(GatewayConnectionTransitionTracker *tracker,
+                                          gboolean connected_now,
+                                          gboolean *out_connected_now);
 
 SystemdState* state_get_systemd(void);
 HealthState* state_get_health(void);
@@ -137,5 +145,6 @@ void systemd_get_runtime_context(gchar **out_profile, gchar **out_state_dir, gch
 
 /* Callbacks (implemented elsewhere) */
 void notify_on_transition(AppState old_state, AppState new_state);
+void notify_on_gateway_connection_transition(gboolean connected);
 void tray_update_from_state(AppState state);
 void state_on_gateway_refresh_requested(void);

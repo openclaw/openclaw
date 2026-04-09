@@ -190,7 +190,7 @@ static void test_skills_update_api_key(void) {
 
 static void test_sessions_patch(void) {
     stub_reset();
-    gchar *rid = mutation_sessions_patch("main", "high", "low", noop_cb, NULL);
+    gchar *rid = mutation_sessions_patch("main", "high", "low", NULL, noop_cb, NULL);
     ASSERT(rid != NULL, "sess_patch: rid");
     ASSERT(g_strcmp0(stub_last_method, "sessions.patch") == 0, "sess_patch: method");
     JsonObject *p = get_stub_params_obj();
@@ -202,11 +202,23 @@ static void test_sessions_patch(void) {
 
 static void test_sessions_patch_partial(void) {
     stub_reset();
-    gchar *rid = mutation_sessions_patch("main", "medium", NULL, noop_cb, NULL);
+    gchar *rid = mutation_sessions_patch("main", "medium", NULL, NULL, noop_cb, NULL);
     ASSERT(rid != NULL, "sess_patch_partial: rid");
     JsonObject *p = get_stub_params_obj();
     ASSERT(g_strcmp0(obj_get_string(p, "thinkingLevel"), "medium") == 0, "sess_patch_partial: thinking");
     ASSERT(!json_object_has_member(p, "verboseLevel"), "sess_patch_partial: no verbose");
+    ASSERT(!json_object_has_member(p, "model"), "sess_patch_partial: no model");
+    g_free(rid);
+}
+
+static void test_sessions_patch_model_only(void) {
+    stub_reset();
+    gchar *rid = mutation_sessions_patch("main", NULL, NULL, "anthropic/claude-sonnet-4", noop_cb, NULL);
+    ASSERT(rid != NULL, "sess_patch_model: rid");
+    JsonObject *p = get_stub_params_obj();
+    ASSERT(g_strcmp0(obj_get_string(p, "model"), "anthropic/claude-sonnet-4") == 0, "sess_patch_model: model");
+    ASSERT(!json_object_has_member(p, "thinkingLevel"), "sess_patch_model: no thinking");
+    ASSERT(!json_object_has_member(p, "verboseLevel"), "sess_patch_model: no verbose");
     g_free(rid);
 }
 
@@ -1278,6 +1290,7 @@ int main(void) {
     /* Sessions */
     test_sessions_patch();
     test_sessions_patch_partial();
+    test_sessions_patch_model_only();
     test_sessions_reset();
     test_sessions_delete();
     test_sessions_compact();
