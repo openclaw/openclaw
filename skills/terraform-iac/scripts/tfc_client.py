@@ -1752,6 +1752,11 @@ resource "aws_budgets_budget" "workload" {{
   limit_unit   = "USD"
   time_unit    = "MONTHLY"
 
+  cost_filter {{
+    name   = "LinkedAccount"
+    values = [aws_organizations_account.workload[each.key].id]
+  }}
+
   notification {{
     comparison_operator        = "GREATER_THAN"
     threshold                  = 80
