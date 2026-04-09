@@ -3906,4 +3906,64 @@ export const runtimeValue = helperValue;`,
       platformSpy.mockRestore();
     }
   });
+
+  // Regression for #62169: provider-resolution and similar narrowed loading
+  // contexts call loadOpenClawPlugins() without the user's full
+  // `plugins.entries`. The loader must not coerce a missing entry to {} and
+  // mark a plugin as failed for `must have required property`. Verified
+  // against production reports from @davidbordenwi (macOS upgrade hard-fail)
+  // and @mjamiv (Linux deploy pipeline #1 friction point).
+  it("does not fail discovery for plugins with required-field schemas when no entry is configured", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "required-field-plugin",
+      filename: "required-field-plugin.cjs",
+      body: simplePluginBody("required-field-plugin"),
+    });
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "required-field-plugin",
+          configSchema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              embedding: { type: "string" },
+            },
+            required: ["embedding"],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["required-field-plugin"],
+          // Note: no entries.required-field-plugin — discovery context
+          // doesn't carry user config. Pre-fix this would emit
+          // `[plugins] required-field-plugin invalid config: embedding: must
+          // have required property 'embedding'` and mark the plugin failed.
+        },
+      },
+    });
+
+    const record = registry.plugins.find((entry) => entry.id === "required-field-plugin");
+    expect(record?.status).not.toBe("error");
+    expect(record?.error).toBeUndefined();
+    const hasInvalidConfigDiagnostic = registry.diagnostics.some(
+      (entry) =>
+        entry.pluginId === "required-field-plugin" &&
+        typeof entry.message === "string" &&
+        entry.message.includes("invalid config"),
+    );
+    expect(hasInvalidConfigDiagnostic).toBe(false);
+  });
 });

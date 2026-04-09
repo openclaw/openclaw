@@ -24,6 +24,7 @@ async function writePluginFixture(params: {
   id: string;
   schema: Record<string, unknown>;
   channels?: string[];
+  kind?: string;
 }) {
   await mkdirSafe(params.dir);
   await fs.writeFile(
@@ -37,6 +38,9 @@ async function writePluginFixture(params: {
   };
   if (params.channels) {
     manifest.channels = params.channels;
+  }
+  if (params.kind) {
+    manifest.kind = params.kind;
   }
   await fs.writeFile(
     path.join(params.dir, "openclaw.plugin.json"),
@@ -103,6 +107,7 @@ describe("config plugin validation", () => {
   let voiceCallSchemaPluginDir = "";
   let bundlePluginDir = "";
   let manifestlessClaudeBundleDir = "";
+  let requiredFieldMemoryPluginDir = "";
   const suiteEnv = () =>
     ({
       HOME: suiteHome,
@@ -209,6 +214,20 @@ describe("config plugin validation", () => {
       id: "voice-call-schema-fixture",
       schema: voiceCallManifest.configSchema,
     });
+    requiredFieldMemoryPluginDir = path.join(suiteHome, "required-field-memory-plugin");
+    await writePluginFixture({
+      dir: requiredFieldMemoryPluginDir,
+      id: "required-field-memory",
+      kind: "memory",
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          embedding: { type: "string" },
+        },
+        required: ["embedding"],
+      },
+    });
     clearPluginManifestRegistryCache();
     // Warm the plugin manifest cache once so path-based validations can reuse
     // parsed manifests across test cases.
@@ -222,6 +241,7 @@ describe("config plugin validation", () => {
             bundlePluginDir,
             manifestlessClaudeBundleDir,
             voiceCallSchemaPluginDir,
+            requiredFieldMemoryPluginDir,
           ],
         },
       },
@@ -355,6 +375,44 @@ describe("config plugin validation", () => {
       );
       expect(hasIssue).toBe(true);
     }
+  });
+
+  // Regression for #62169: provider-resolution / narrowed validation paths
+  // can iterate discovered plugins without listing every one in
+  // `plugins.entries`. The validator must not coerce a missing entry to {}
+  // and surface a false `must have required property` error for plugins the
+  // user has not configured. Verified production reports from
+  // @davidbordenwi (macOS/arm64) and @mjamiv (Linux/x86_64).
+  it("does not validate absent plugin config against required-property schemas", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [badPluginDir] },
+        // Note: bad-plugin is discovered via load.paths but has no entry in
+        // `entries`. Pre-fix this would have failed validation against the
+        // empty object {} because the schema requires `value`.
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  // Regression for #62169: a memory plugin with required schema fields that
+  // is explicitly disabled (or not selected as the active memory slot) must
+  // not block startup by demanding its config. Mirrors @davidbordenwi's
+  // upgrade-blocker case where `plugins.entries.memory-lancedb.enabled =
+  // false` and another memory slot was active, yet 2026.4.8 still demanded
+  // `memory-lancedb.config.embedding`.
+  it("does not block startup when a memory plugin with required fields is disabled", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [requiredFieldMemoryPluginDir] },
+        entries: { "required-field-memory": { enabled: false } },
+      },
+    });
+    expect(res.ok).toBe(true);
   });
 
   it("does not require native config schemas for enabled bundle plugins", async () => {
