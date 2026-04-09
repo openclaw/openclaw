@@ -283,6 +283,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/deepseek/**"
+"extensions: serper":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/serper/**"
+          - "docs/tools/serper-search.md"
 "extensions: tencent":
   - changed-files:
       - any-glob-to-any-file:
