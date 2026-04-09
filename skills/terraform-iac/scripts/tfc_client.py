@@ -2843,7 +2843,15 @@ alert at 50%, 80%, and 100% thresholds.
     forecast = forecast == "yes"
     forecast_threshold = 100
     if forecast:
-        forecast_threshold = int(prompt("Forecast alert threshold (%)", default="100"))
+        ft_str = prompt("Forecast alert threshold (%)", default="100")
+        try:
+            forecast_threshold = int(ft_str)
+            if not (1 <= forecast_threshold <= 200):
+                print(f"  ❌ Forecast threshold must be 1-200%, got {forecast_threshold}")
+                sys.exit(1)
+        except ValueError:
+            print(f"  ❌ Forecast threshold must be a number, got '{ft_str}'")
+            sys.exit(1)
 
     # Notification
     print("\n  Notification method:")
