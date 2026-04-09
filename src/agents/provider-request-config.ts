@@ -665,7 +665,14 @@ export function resolveProviderRequestPolicyConfig(
     capabilities,
     allowPrivateNetwork:
       params.allowPrivateNetwork ??
-      (policy.endpointClass === "custom" || policy.endpointClass === "local"),
+      // Allow private-network access only when the operator explicitly provided a baseUrl
+      // that resolves to an unrecognized (custom) or local host. defaultBaseUrl values —
+      // which represent hard-coded provider defaults, not operator overrides — must not
+      // implicitly enable private-network access even if their host is not in the
+      // known-provider allowlist (e.g. api.deepgram.com resolves to "custom").
+      (params.baseUrl != null &&
+        params.baseUrl.trim() !== "" &&
+        (policy.endpointClass === "custom" || policy.endpointClass === "local")),
   };
 }
 

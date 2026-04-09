@@ -536,10 +536,9 @@ describe("provider request config", () => {
 
   it("sets allowPrivateNetwork to true for custom (operator-configured) baseUrl endpoints", () => {
     // Reproduces: STT/audio transcription blocked when provider is on a LAN IP.
-    // endpointClass is "custom" for any hostname not recognized as a known public LLM
-    // provider (including private-network addresses like 192.168.x.x). Operator-
-    // configured custom endpoints are trusted infrastructure, so private network access
-    // should be permitted by default.
+    // Private-network access is permitted only when the operator explicitly sets baseUrl
+    // to an address that resolves to endpointClass "custom" (unrecognized host, e.g.
+    // 192.168.x.x) or "local" (localhost). defaultBaseUrl-only callers are not affected.
     const resolved = resolveProviderRequestPolicyConfig({
       provider: "openai",
       api: "openai-audio-transcriptions",
@@ -553,7 +552,10 @@ describe("provider request config", () => {
     expect(resolved.policy.endpointClass).toBe("custom");
   });
 
-  it("keeps allowPrivateNetwork false for the default public OpenAI audio endpoint", () => {
+  it("keeps allowPrivateNetwork false when only defaultBaseUrl is provided", () => {
+    // defaultBaseUrl represents a hard-coded provider default, not an operator override.
+    // It must not implicitly enable private-network access even if the host is not in
+    // the known-provider allowlist (e.g. api.deepgram.com resolves to endpointClass "custom").
     const resolved = resolveProviderRequestPolicyConfig({
       provider: "openai",
       api: "openai-audio-transcriptions",
@@ -568,8 +570,8 @@ describe("provider request config", () => {
 
   it("keeps allowPrivateNetwork false for known public providers even with an explicit baseUrl", () => {
     // Known public LLM providers (groq-native, mistral-public, etc.) keep default-deny
-    // even when the operator explicitly passes a baseUrl. Only endpointClass "custom" and
-    // "local" permit private-network access.
+    // even when the operator explicitly passes a baseUrl. Only "custom" and "local" classes
+    // permit private-network access (and only when baseUrl is explicitly set).
     const resolved = resolveProviderRequestPolicyConfig({
       provider: "openai",
       api: "openai-audio-transcriptions",
