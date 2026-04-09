@@ -131,7 +131,7 @@ export function createCronPromptExecutor(params: {
           agentId: params.agentId,
           trigger: "cron",
           allowGatewaySubagentBinding: true,
-          senderIsOwner: true,
+          senderIsOwner: false,
           messageChannel: params.messageChannel,
           agentAccountId: params.resolvedDelivery.accountId,
           sessionFile,
