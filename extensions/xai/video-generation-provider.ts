@@ -13,6 +13,12 @@ import type {
   VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
 
+/** Check whether private network addresses should be allowed (TUN/fake-ip proxy support). */
+function shouldAllowPrivateNetwork(): boolean {
+  if (process.env.OPENCLAW_ALLOW_PRIVATE_NETWORK === "1") return true;
+  return false; // TODO: add config option when upstream supports it
+}
+
 const DEFAULT_XAI_VIDEO_BASE_URL = "https://api.x.ai/v1";
 const DEFAULT_XAI_VIDEO_MODEL = "grok-imagine-video";
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -309,7 +315,7 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
         resolveProviderHttpRequestConfig({
           baseUrl: resolveXaiVideoBaseUrl(req),
           defaultBaseUrl: DEFAULT_XAI_VIDEO_BASE_URL,
-          allowPrivateNetwork: false,
+          allowPrivateNetwork: shouldAllowPrivateNetwork(),
           defaultHeaders: {
             Authorization: `Bearer ${auth.apiKey}`,
             "Content-Type": "application/json",

@@ -8,6 +8,20 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 
 const DEFAULT_MINIMAX_IMAGE_BASE_URL = "https://api.minimax.io";
+
+/**
+ * Check whether private/reserved network addresses should be allowed.
+ * This supports TUN/fake-ip proxy environments where DNS resolves to
+ * private IPs (e.g. 198.18.0.0/15 used by transparent proxies).
+ *
+ * Enabled via:
+ *   1. Config: agents.defaults.network.dangerouslyAllowPrivateNetwork = true
+ *   2. Env: OPENCLAW_ALLOW_PRIVATE_NETWORK=1
+ */
+function shouldAllowPrivateNetwork(): boolean {
+  if (process.env.OPENCLAW_ALLOW_PRIVATE_NETWORK === "1") return true;
+  return false; // TODO: add config option when upstream supports it
+}
 const DEFAULT_MODEL = "image-01";
 const DEFAULT_OUTPUT_MIME = "image/png";
 const MINIMAX_SUPPORTED_ASPECT_RATIOS = [
@@ -102,7 +116,7 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
       } = resolveProviderHttpRequestConfig({
         baseUrl,
         defaultBaseUrl: DEFAULT_MINIMAX_IMAGE_BASE_URL,
-        allowPrivateNetwork: false,
+        allowPrivateNetwork: shouldAllowPrivateNetwork(),
         defaultHeaders: {
           Authorization: `Bearer ${auth.apiKey}`,
           "Content-Type": "application/json",

@@ -19,6 +19,12 @@ import type {
   VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
 
+/** Check whether private network addresses should be allowed (TUN/fake-ip proxy support). */
+function shouldAllowPrivateNetwork(): boolean {
+  if (process.env.OPENCLAW_ALLOW_PRIVATE_NETWORK === "1") return true;
+  return false; // TODO: add config option when upstream supports it
+}
+
 const DEFAULT_FAL_BASE_URL = "https://fal.run";
 const DEFAULT_FAL_QUEUE_BASE_URL = "https://queue.fal.run";
 const DEFAULT_FAL_VIDEO_MODEL = "fal-ai/minimax/video-01-live";
@@ -295,7 +301,7 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
         resolveProviderHttpRequestConfig({
           baseUrl: normalizeOptionalString(req.cfg?.models?.providers?.fal?.baseUrl),
           defaultBaseUrl: DEFAULT_FAL_BASE_URL,
-          allowPrivateNetwork: false,
+          allowPrivateNetwork: shouldAllowPrivateNetwork(),
           defaultHeaders: {
             Authorization: `Key ${auth.apiKey}`,
             "Content-Type": "application/json",

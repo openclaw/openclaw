@@ -14,6 +14,12 @@ import type {
 } from "openclaw/plugin-sdk/video-generation";
 import { TOGETHER_BASE_URL } from "./models.js";
 
+/** Check whether private network addresses should be allowed (TUN/fake-ip proxy support). */
+function shouldAllowPrivateNetwork(): boolean {
+  if (process.env.OPENCLAW_ALLOW_PRIVATE_NETWORK === "1") return true;
+  return false; // TODO: add config option when upstream supports it
+}
+
 const DEFAULT_TOGETHER_VIDEO_MODEL = "Wan-AI/Wan2.2-T2V-A14B";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const POLL_INTERVAL_MS = 5_000;
@@ -169,7 +175,7 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
         resolveProviderHttpRequestConfig({
           baseUrl: resolveTogetherVideoBaseUrl(req),
           defaultBaseUrl: TOGETHER_BASE_URL,
-          allowPrivateNetwork: false,
+          allowPrivateNetwork: shouldAllowPrivateNetwork(),
           defaultHeaders: {
             Authorization: `Bearer ${auth.apiKey}`,
             "Content-Type": "application/json",

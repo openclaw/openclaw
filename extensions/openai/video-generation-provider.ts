@@ -14,6 +14,12 @@ import type {
 } from "openclaw/plugin-sdk/video-generation";
 import { resolveConfiguredOpenAIBaseUrl, toOpenAIDataUrl } from "./shared.js";
 
+/** Check whether private network addresses should be allowed (TUN/fake-ip proxy support). */
+function shouldAllowPrivateNetwork(): boolean {
+  if (process.env.OPENCLAW_ALLOW_PRIVATE_NETWORK === "1") return true;
+  return false; // TODO: add config option when upstream supports it
+}
+
 const DEFAULT_OPENAI_VIDEO_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_OPENAI_VIDEO_MODEL = "sora-2";
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -231,7 +237,7 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
         resolveProviderHttpRequestConfig({
           baseUrl: resolveConfiguredOpenAIBaseUrl(req.cfg),
           defaultBaseUrl: DEFAULT_OPENAI_VIDEO_BASE_URL,
-          allowPrivateNetwork: false,
+          allowPrivateNetwork: shouldAllowPrivateNetwork(),
           defaultHeaders: {
             Authorization: `Bearer ${auth.apiKey}`,
           },

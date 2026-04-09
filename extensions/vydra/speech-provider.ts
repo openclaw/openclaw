@@ -102,7 +102,7 @@ export function buildVydraSpeechProvider(): SpeechProviderPlugin {
         resolveProviderHttpRequestConfig({
           baseUrl: config.baseUrl,
           defaultBaseUrl: DEFAULT_VYDRA_BASE_URL,
-          allowPrivateNetwork: false,
+          allowPrivateNetwork: process.env.OPENCLAW_ALLOW_PRIVATE_NETWORK === "1",
           defaultHeaders: {
             Authorization: `Bearer ${apiKey}`,
             "Content-Type": "application/json",

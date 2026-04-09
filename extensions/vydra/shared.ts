@@ -110,7 +110,7 @@ export async function resolveVydraRequestContext(params: {
     resolveProviderHttpRequestConfig({
       baseUrl: resolveVydraBaseUrlFromConfig(params.cfg),
       defaultBaseUrl: DEFAULT_VYDRA_BASE_URL,
-      allowPrivateNetwork: false,
+      allowPrivateNetwork: process.env.OPENCLAW_ALLOW_PRIVATE_NETWORK === "1",
       defaultHeaders: {
         Authorization: `Bearer ${auth.apiKey}`,
         "Content-Type": "application/json",

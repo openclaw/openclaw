@@ -14,6 +14,15 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
+/**
+ * Check whether private/reserved network addresses should be allowed.
+ * Supports TUN/fake-ip proxy environments.
+ */
+function shouldAllowPrivateNetwork(): boolean {
+  if (process.env.OPENCLAW_ALLOW_PRIVATE_NETWORK === "1") return true;
+  return false; // TODO: add config option when upstream supports it
+}
+
 const DEFAULT_MINIMAX_MUSIC_BASE_URL = "https://api.minimax.io";
 const DEFAULT_MINIMAX_MUSIC_MODEL = "music-2.5+";
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -170,7 +179,7 @@ export function buildMinimaxMusicGenerationProvider(): MusicGenerationProvider {
         resolveProviderHttpRequestConfig({
           baseUrl: resolveMinimaxMusicBaseUrl(req.cfg),
           defaultBaseUrl: DEFAULT_MINIMAX_MUSIC_BASE_URL,
-          allowPrivateNetwork: false,
+          allowPrivateNetwork: shouldAllowPrivateNetwork(),
           defaultHeaders: {
             Authorization: `Bearer ${auth.apiKey}`,
           },

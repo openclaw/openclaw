@@ -19,6 +19,12 @@ import {
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/text-runtime";
 
+/** Check whether private network addresses should be allowed (TUN/fake-ip proxy support). */
+function shouldAllowPrivateNetwork(): boolean {
+  if (process.env.OPENCLAW_ALLOW_PRIVATE_NETWORK === "1") return true;
+  return false; // TODO: add config option when upstream supports it
+}
+
 const DEFAULT_FAL_BASE_URL = "https://fal.run";
 const DEFAULT_FAL_IMAGE_MODEL = "fal-ai/flux/dev";
 const DEFAULT_FAL_EDIT_SUBPATH = "image-to-image";
@@ -352,7 +358,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         resolveProviderHttpRequestConfig({
           baseUrl: explicitBaseUrl,
           defaultBaseUrl: DEFAULT_FAL_BASE_URL,
-          allowPrivateNetwork: false,
+          allowPrivateNetwork: shouldAllowPrivateNetwork(),
           defaultHeaders: {
             Authorization: `Key ${auth.apiKey}`,
             "Content-Type": "application/json",
