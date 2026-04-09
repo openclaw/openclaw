@@ -1,37 +1,66 @@
-# 📧 Email Triage Skill
+---
+name: email-triage
+description: "Triage multi-account email via AI-powered sync, priority filtering, and pending-attention tracking. Trigger when asked to check, sync, or dismiss emails."
+metadata: { "openclaw": { "emoji": "📧", "requires": { "bins": ["python3"] } } }
+---
 
-该 Skill 基于 `email-ingest-integration` 项目，通过 AI 对多账号邮件进行抓取、分拣和待办管理。
+# Email Triage
 
-## 🛠️ 配置说明
-- **代码库**: `/home/node/.openclaw/workspace/email-ingest-integration`
-- **凭证**: 优先读取 `/home/node/.openclaw/workspace/email-ingest-integration/.env`
-- **状态维护**: `/home/node/.openclaw/workspace/memory/email_triage_state.json`
+Sync multi-account emails, filter high-priority items, and manage a pending-attention queue.
 
-## 🕹️ Tools
+## Prerequisites
 
-### `email_sync`
-同步最新邮件。
-- **逻辑**: 如果是首次运行，自动使用前一天的日期作为 `init-start-date`。
-- **自动化**: 建议在 OpenClaw Cron 中每 4 小时运行一次。
+1. The `email-ingest-integration` project must be set up at the path in `EMAIL_TRIAGE_WORKSPACE` (defaults to `~/.openclaw/workspace/email-ingest-integration`).
+2. A Python virtualenv with dependencies must exist at `<workspace>/venv`.
+3. Credentials configured in `<workspace>/.env`.
 
-### `email_pending`
-列出所有标记为 `High` 优先级且尚未处理的邮件。
-- **输出**: 包含邮件主题、发件人、AI 摘要及待办状态。
+## Commands
 
-### `email_dismiss` (id: number)
-将指定的邮件从待办清单中移除（标记为已处理）。
+### Sync emails
 
-## 🤖 Discord 交互 (Buttons)
-当报告新邮件时，每封邮件摘要下方会附带一个 `Ack` 按钮。
-- **Action**: 点击按钮后执行 `email_dismiss(id)`。
-- **反馈**: 按钮点击后消息会更新为“已确认处理”。
+```bash
+python3 {baseDir}/scripts/triage.py sync
+```
 
-## 📄 状态结构 (State)
+Ingests new emails from all configured accounts. On first run (empty database), automatically fetches from yesterday onward. After ingestion, queries for new emails and adds them to the pending-attention list. Outputs a JSON-formatted status summary.
+
+### List pending emails
+
+```bash
+python3 {baseDir}/scripts/triage.py pending
+```
+
+Prints all pending high-priority emails as JSON. Each entry includes `id`, `subject`, `sender`, `summary`, and `status`.
+
+### Dismiss an email
+
+```bash
+python3 {baseDir}/scripts/triage.py dismiss <email_id>
+```
+
+Removes the specified email from the pending-attention queue by ID.
+
+## Environment Variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `EMAIL_TRIAGE_WORKSPACE` | `~/.openclaw/workspace/email-ingest-integration` | Path to the email-ingest-integration project |
+| `EMAIL_TRIAGE_STATE` | `~/.openclaw/workspace/memory/email_triage_state.json` | Path to the state file |
+
+## State
+
+State is stored at the path configured by `EMAIL_TRIAGE_STATE`:
+
 ```json
 {
   "cursor": { "last_ingested_id": 123 },
   "pending_attention": [
-    { "id": 124, "subject": "...", "status": "notified" }
+    { "id": 124, "subject": "...", "sender": "...", "priority": "High", "summary": "...", "status": "pending" }
   ]
 }
 ```
+
+## Notes
+
+- Run `sync` periodically (every 4 hours recommended via OpenClaw Cron).
+- Dismissed items are permanently removed from the pending list.

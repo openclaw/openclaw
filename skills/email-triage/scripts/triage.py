@@ -1,91 +1,146 @@
 #!/usr/bin/env python3
-import os
 import json
+import os
 import sqlite3
 import subprocess
+import sys
 from datetime import datetime, timedelta
 
-WORKSPACE_DIR = "/home/node/.openclaw/workspace/email-ingest-integration"
-VENV_PYTHON = os.path.join(WORKSPACE_DIR, "venv/bin/python3")
-DB_PATH = os.path.join(WORKSPACE_DIR, "data/email_ingest.sqlite")
-STATE_PATH = "/home/node/.openclaw/workspace/memory/email_triage_state.json"
+_DEFAULT_WORKSPACE = os.path.join(
+    os.path.expanduser("~"), ".openclaw", "workspace", "email-ingest-integration"
+)
+WORKSPACE_DIR = os.environ.get("EMAIL_TRIAGE_WORKSPACE", _DEFAULT_WORKSPACE)
+VENV_PYTHON = os.path.join(WORKSPACE_DIR, "venv", "bin", "python3")
+DB_PATH = os.path.join(WORKSPACE_DIR, "data", "email_ingest.sqlite")
+STATE_PATH = os.environ.get(
+    "EMAIL_TRIAGE_STATE",
+    os.path.join(
+        os.path.expanduser("~"), ".openclaw", "workspace", "memory", "email_triage_state.json"
+    ),
+)
+
 
 def get_state():
     if os.path.exists(STATE_PATH):
-        with open(STATE_PATH, 'r') as f:
+        with open(STATE_PATH, "r") as f:
             return json.load(f)
     return {"cursor": {"last_ingested_id": 0}, "pending_attention": []}
 
+
 def save_state(state):
-    with open(STATE_PATH, 'w') as f:
+    os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
+    with open(STATE_PATH, "w") as f:
         json.dump(state, f, indent=2)
+
 
 def check_db_initialized():
     if not os.path.exists(DB_PATH):
         return False
+    conn = None
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM email_accounts")
         count = cursor.fetchone()[0]
-        conn.close()
         return count > 0
-    except:
+    except (sqlite3.Error, OSError):
         return False
+    finally:
+        if conn is not None:
+            conn.close()
+
 
 def sync():
     cmd = [VENV_PYTHON, "main.py", "ingest", "--format", "json"]
-    
-    # 首次运行逻辑：检查数据库是否已有游标
+
     if not check_db_initialized():
-        yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
         cmd.extend(["--init-start-date", yesterday])
-    
-    result = subprocess.run(cmd, cwd=WORKSPACE_DIR, capture_output=True, text=True)
+
+    try:
+        result = subprocess.run(
+            cmd, cwd=WORKSPACE_DIR, capture_output=True, text=True, timeout=300
+        )
+    except subprocess.TimeoutExpired:
+        print("Sync timed out after 300 seconds.")
+        return
     if result.returncode != 0:
         print(f"Sync failed: {result.stderr}")
         return
-    
-    # 自动获取本次运行的所有邮件进行报告
+
     state = get_state()
-    query_cmd = [VENV_PYTHON, "main.py", "query", "--after-id", str(state["cursor"]["last_ingested_id"]), "--format", "json"]
-    query_result = subprocess.run(query_cmd, cwd=WORKSPACE_DIR, capture_output=True, text=True)
-    
-    if query_result.returncode == 0:
+    query_cmd = [
+        VENV_PYTHON,
+        "main.py",
+        "query",
+        "--after-id",
+        str(state["cursor"]["last_ingested_id"]),
+        "--format",
+        "json",
+    ]
+    try:
+        query_result = subprocess.run(
+            query_cmd, cwd=WORKSPACE_DIR, capture_output=True, text=True, timeout=300
+        )
+    except subprocess.TimeoutExpired:
+        print("Query timed out after 300 seconds.")
+        return
+
+    if query_result.returncode != 0:
+        print(f"Query failed: {query_result.stderr}")
+        return
+
+    try:
         data = json.loads(query_result.stdout)
-        new_emails = data.get("results", [])
-        for email in new_emails:
-            # 避免重复
-            if not any(item["id"] == email["id"] for item in state["pending_attention"]):
-                state["pending_attention"].append({
+    except json.JSONDecodeError as exc:
+        print(f"Failed to parse query output: {exc}")
+        return
+
+    new_emails = data.get("results", [])
+    for email in new_emails:
+        if not any(item["id"] == email["id"] for item in state["pending_attention"]):
+            state["pending_attention"].append(
+                {
                     "id": email["id"],
                     "subject": email["subject"],
                     "priority": email["priority"],
                     "sender": email["sender"],
                     "summary": email.get("summary", ""),
-                    "status": "pending"
-                })
-        
-        if data.get("meta", {}).get("max_id"):
-            state["cursor"]["last_ingested_id"] = data["meta"]["max_id"]
-        
-        save_state(state)
-        print(f"Sync complete. Found {len(new_emails)} new emails.")
+                    "status": "pending",
+                }
+            )
+
+    if data.get("meta", {}).get("max_id"):
+        state["cursor"]["last_ingested_id"] = data["meta"]["max_id"]
+
+    save_state(state)
+    print(f"Sync complete. Found {len(new_emails)} new emails.")
+
+
+def pending():
+    state = get_state()
+    items = [item for item in state["pending_attention"] if item.get("status") == "pending"]
+    print(json.dumps(items, indent=2))
+
 
 def dismiss(email_id):
     state = get_state()
     original_len = len(state["pending_attention"])
-    state["pending_attention"] = [item for item in state["pending_attention"] if item["id"] != int(email_id)]
+    state["pending_attention"] = [
+        item for item in state["pending_attention"] if item["id"] != int(email_id)
+    ]
     if len(state["pending_attention"]) < original_len:
         save_state(state)
         return True
     return False
 
+
 if __name__ == "__main__":
-    import sys
     if len(sys.argv) > 1:
         if sys.argv[1] == "sync":
             sync()
+        elif sys.argv[1] == "pending":
+            pending()
         elif sys.argv[1] == "dismiss" and len(sys.argv) > 2:
             if dismiss(sys.argv[2]):
                 print(f"Email {sys.argv[2]} dismissed.")
