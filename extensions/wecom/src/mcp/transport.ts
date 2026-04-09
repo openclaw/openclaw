@@ -284,9 +284,12 @@ async function sendRawJsonRpc(
 
   // Handle SSE streaming response
   if (contentType.includes("text/event-stream")) {
-    const rpcResult = await parseSseResponse(response);
-    await releaseGuard?.();
-    return { response, rpcResult, newSessionId };
+    try {
+      const rpcResult = await parseSseResponse(response);
+      return { response, rpcResult, newSessionId };
+    } finally {
+      await releaseGuard?.();
+    }
   }
 
   // Plain JSON response — read text first to prevent JSON.parse error on empty content

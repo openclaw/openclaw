@@ -435,16 +435,20 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
             await releaseMedia();
           }
         } else {
-          // Local path — validate against allowed media roots
+          // Local path — validate against allowed media roots (resolve symlinks to prevent escapes)
           const pathMod = await import("node:path");
           const fsMod = await import("node:fs/promises");
-          const resolved = pathMod.resolve(mediaUrl);
+          const resolved = await fsMod.realpath(pathMod.resolve(mediaUrl)).catch(() => {
+            throw new Error(`Path "${mediaUrl}" does not exist or is not accessible`);
+          });
           const roots = mediaLocalRoots ?? [];
-          if (roots.length > 0 && !roots.some((r) => {
-            const root = pathMod.resolve(r);
-            return resolved === root || resolved.startsWith(root + pathMod.sep);
-          })) {
-            throw new Error(`Path "${mediaUrl}" outside allowed media roots`);
+          if (roots.length > 0) {
+            const realRoots = await Promise.all(
+              roots.map((r) => fsMod.realpath(pathMod.resolve(r)).catch(() => pathMod.resolve(r))),
+            );
+            if (!realRoots.some((root) => resolved === root || resolved.startsWith(root + pathMod.sep))) {
+              throw new Error(`Path "${mediaUrl}" outside allowed media roots`);
+            }
           }
           buffer = await fsMod.readFile(resolved);
           filename = pathMod.basename(resolved);
