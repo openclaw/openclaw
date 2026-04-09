@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { startHeartbeatRunner } from "./heartbeat-runner.js";
-import { requestHeartbeatNow, resetHeartbeatWakeStateForTests } from "./heartbeat-wake.js";
+import {
+  requestHeartbeatNow,
+  resetHeartbeatWakeStateForTests,
+  setHeartbeatsEnabled,
+} from "./heartbeat-wake.js";
 
 describe("startHeartbeatRunner", () => {
   type RunOnce = Parameters<typeof startHeartbeatRunner>[0]["runOnce"];
@@ -62,6 +66,7 @@ describe("startHeartbeatRunner", () => {
 
   afterEach(() => {
     resetHeartbeatWakeStateForTests();
+    setHeartbeatsEnabled(true);
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -280,6 +285,44 @@ describe("startHeartbeatRunner", () => {
       },
     });
     expect(runSpy.mock.calls.some((call) => call[0]?.agentId === "finance")).toBe(false);
+
+    runner.stop();
+  });
+
+  it("dispatches targeted ACP wake requests even when heartbeat is globally disabled", async () => {
+    useFakeHeartbeatTime();
+    setHeartbeatsEnabled(false);
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: {
+          defaults: {
+            heartbeat: {
+              every: "0",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    requestHeartbeatNow({
+      reason: "acp:spawn:stream",
+      sessionKey: "agent:main:main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(runSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "acp:spawn:stream",
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        allowEventWakeWithoutHeartbeat: true,
+      }),
+    );
 
     runner.stop();
   });

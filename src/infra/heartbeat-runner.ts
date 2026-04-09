@@ -589,6 +589,7 @@ export async function runHeartbeatOnce(opts: {
   sessionKey?: string;
   heartbeat?: HeartbeatConfig;
   reason?: string;
+  allowEventWakeWithoutHeartbeat?: boolean;
   deps?: HeartbeatDeps;
 }): Promise<HeartbeatRunResult> {
   const cfg = opts.cfg ?? loadConfig();
@@ -599,14 +600,25 @@ export async function runHeartbeatOnce(opts: {
     explicitAgentId || forcedSessionAgentId || resolveDefaultAgentId(cfg),
   );
   const heartbeat = opts.heartbeat ?? resolveHeartbeatConfig(cfg, agentId);
-  if (!areHeartbeatsEnabled()) {
-    return { status: "skipped", reason: "disabled" };
-  }
-  if (!isHeartbeatEnabledForAgent(cfg, agentId)) {
-    return { status: "skipped", reason: "disabled" };
-  }
-  if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
-    return { status: "skipped", reason: "disabled" };
+  const reasonKind = resolveHeartbeatReasonKind(opts.reason);
+  const isSessionScopedEventWake =
+    Boolean(opts.sessionKey?.trim()) &&
+    (reasonKind === "exec-event" ||
+      reasonKind === "cron" ||
+      reasonKind === "wake" ||
+      reasonKind === "hook");
+  const allowEventWakeWithoutHeartbeat =
+    opts.allowEventWakeWithoutHeartbeat === true && isSessionScopedEventWake;
+  if (!allowEventWakeWithoutHeartbeat) {
+    if (!areHeartbeatsEnabled()) {
+      return { status: "skipped", reason: "disabled" };
+    }
+    if (!isHeartbeatEnabledForAgent(cfg, agentId)) {
+      return { status: "skipped", reason: "disabled" };
+    }
+    if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
+      return { status: "skipped", reason: "disabled" };
+    }
   }
 
   const startedAt = opts.deps?.nowMs?.() ?? Date.now();
@@ -1180,18 +1192,6 @@ export function startHeartbeatRunner(opts: {
         reason: "disabled",
       } satisfies HeartbeatRunResult;
     }
-    if (!areHeartbeatsEnabled()) {
-      return {
-        status: "skipped",
-        reason: "disabled",
-      } satisfies HeartbeatRunResult;
-    }
-    if (state.agents.size === 0) {
-      return {
-        status: "skipped",
-        reason: "disabled",
-      } satisfies HeartbeatRunResult;
-    }
 
     const reason = params?.reason;
     const requestedAgentId = params?.agentId ? normalizeAgentId(params.agentId) : undefined;
@@ -1206,22 +1206,24 @@ export function startHeartbeatRunner(opts: {
 
     try {
       if (requestedSessionKey || requestedAgentId) {
-        const targetAgentId = requestedAgentId ?? resolveAgentIdFromSessionKey(requestedSessionKey);
-        const targetAgent = state.agents.get(targetAgentId);
-        if (!targetAgent) {
-          return { status: "skipped", reason: "disabled" };
-        }
+        const targetAgentId = normalizeAgentId(
+          requestedAgentId ?? resolveAgentIdFromSessionKey(requestedSessionKey),
+        );
+        const scheduledAgent = state.agents.get(targetAgentId);
+        const targetHeartbeat =
+          scheduledAgent?.heartbeat ?? resolveHeartbeatConfig(state.cfg, targetAgentId);
         try {
           const res = await runOnce({
             cfg: state.cfg,
-            agentId: targetAgent.agentId,
-            heartbeat: targetAgent.heartbeat,
+            agentId: targetAgentId,
+            heartbeat: targetHeartbeat,
             reason,
             sessionKey: requestedSessionKey,
+            allowEventWakeWithoutHeartbeat: true,
             deps: { runtime: state.runtime },
           });
-          if (res.status !== "skipped" || res.reason !== "disabled") {
-            advanceAgentSchedule(targetAgent, now);
+          if (scheduledAgent && (res.status !== "skipped" || res.reason !== "disabled")) {
+            advanceAgentSchedule(scheduledAgent, now);
           }
           return res.status === "ran" ? { status: "ran", durationMs: Date.now() - startedAt } : res;
         } catch (err) {
@@ -1229,9 +1231,24 @@ export function startHeartbeatRunner(opts: {
           log.error(`heartbeat runner: targeted runOnce threw unexpectedly: ${errMsg}`, {
             error: errMsg,
           });
-          advanceAgentSchedule(targetAgent, now);
+          if (scheduledAgent) {
+            advanceAgentSchedule(scheduledAgent, now);
+          }
           return { status: "failed", reason: errMsg };
         }
+      }
+
+      if (!areHeartbeatsEnabled()) {
+        return {
+          status: "skipped",
+          reason: "disabled",
+        } satisfies HeartbeatRunResult;
+      }
+      if (state.agents.size === 0) {
+        return {
+          status: "skipped",
+          reason: "disabled",
+        } satisfies HeartbeatRunResult;
       }
 
       for (const agent of state.agents.values()) {
