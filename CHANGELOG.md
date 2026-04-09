@@ -13,10 +13,11 @@ Docs: https://docs.openclaw.ai
 
 - CLI/live status: treat an inactive watcher as a normal stable-mode state instead of a live-lane issue, show clean vs dirty state for each draft worktree, and document the control-plane workflow in the CLI docs plus repo-local operator guidance.
 - CLI/live sync and upstream PR prep now pin GitHub operations to the fork remote, ignore cross-repository sync PRs, and keep `--dry-run` isolated in a temporary worktree so preview runs stop mutating the caller checkout.
+- CLI/live sync now reports the runtime-loaded commit in `openclaw live status` and `openclaw live sync`, and only treats `applied: true` as success once the live checkout, promotion metadata, and running runtime all converge on the same commit.
 
 ### Fixes
 
-- Telegram/live task control: move Telegram DM operator messages onto a dedicated controller lane, persist idempotent controller actions plus browser-lease ownership, suppress legacy queue-lane spam, and expose clearer `/status`, `/tasks`, and `/help` operator recovery guidance so live steering stays responsive under load.
+- Telegram/live task control: move Telegram DM operator messages onto a dedicated controller lane, persist idempotent controller actions plus browser-lease ownership, suppress legacy queue-lane spam, classify queue-summary and bulk-cancel language without spawning new flows, and keep ordinary task requests from being misread as queue control so live steering stays responsive under load.
 - macOS/restart: when `scripts/restart-mac.sh` is running in attach-only mode and the local Swift toolchain is older than `apps/macos/Package.swift` requires, fall back to restarting the gateway daemon from the current checkout instead of failing mid-restart and leaving operators to recover manually.
 - Remote operator task updates now surface task IDs, progress, artifact hints, and next actions in Telegram-visible task/status replies, and audio-only mention-gated voice notes keep preflight transcription even when the local audio lane is busy.
 - Providers/Anthropic: skip `service_tier` injection for OAuth-authenticated stream wrapper requests so Claude OAuth requests stop failing with HTTP 401. (#60356) thanks @openperf.
