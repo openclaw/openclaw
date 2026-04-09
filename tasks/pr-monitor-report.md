@@ -1,6 +1,6 @@
 # PR Monitor Report
 
-**Date:** 2026-04-09 (run 15)
+**Date:** 2026-04-09 (run 16)
 **Contributor:** suboss87
 **Repo:** openclaw/openclaw
 
@@ -8,78 +8,77 @@
 
 ## PRs Checked
 
-| PR     | Branch                                  | Status | CI                           | Review                         | Conflicts (fork/main)       | Actions Taken               |
-| ------ | --------------------------------------- | ------ | ---------------------------- | ------------------------------ | --------------------------- | --------------------------- |
-| #45911 | fix/telegram-approval-callback-fallback | MERGED | N/A                          | N/A                            | N/A                         | None (already merged)       |
-| #45584 | feat/cron-fresh-session-option          | OPEN   | Unknown (no GitHub API)      | Bot comments addressed in code | None (resolved vs run 13)   | None — no new activity      |
-| #54363 | fix/chat-send-button-contrast           | CLOSED | N/A                          | N/A                            | N/A                         | None (closed without merge) |
-| #54730 | fix/subagent-identity-fallback          | OPEN   | GREEN (success, from run 12) | No open reviews                | None (resolved vs run 13)   | None — no new activity      |
+| PR     | Branch                                  | Status | CI                                                                   | Review                               | Conflicts (upstream/main) | Actions Taken                  |
+| ------ | --------------------------------------- | ------ | -------------------------------------------------------------------- | ------------------------------------ | ------------------------- | ------------------------------ |
+| #45911 | fix/telegram-approval-callback-fallback | MERGED | N/A                                                                  | N/A                                  | N/A                       | None (already merged)          |
+| #45584 | feat/cron-fresh-session-option          | OPEN   | Labels only (no build CI — conflicts block trigger)                  | Bot comments; all addressed in code  | YES — dirty               | None — cannot rebase (no upstream access) |
+| #54363 | fix/chat-send-button-contrast           | CLOSED | N/A                                                                  | N/A                                  | N/A                       | None (closed without merge)    |
+| #54730 | fix/subagent-identity-fallback          | OPEN   | FAILING — security-fast, extensions shards 2/3/4/6, contracts-protocol | Bot comment addressed; community praise | No conflicts             | None — CI failures not caused by PR code (likely pre-existing) |
 
 ---
 
 ## PR #45911 — fix/telegram-approval-callback-fallback
 
-**Status:** MERGED (closed 2026-03-29T05:15:58Z)
+**Status:** MERGED (merged_at: 2026-03-29T05:15:58Z)
 
-Branch still exists in fork at SHA `14fd49c362b7d84b8fda157967befe2a0ca730f5` (unchanged since
-run 12). No action required.
+Confirmed via GitHub API this run. Branch still exists in fork at SHA
+`14fd49c362b7d84b8fda157967befe2a0ca730f5`. No action required.
 
 ---
 
 ## PR #45584 — feat/cron-fresh-session-option
 
 **Status:** OPEN | **Branch:** `feat/cron-fresh-session-option`
-**Head SHA:** `46e2b30607303996c6423abd33ec854c42b57ac3` (unchanged since run 9 — no new commits)
+**Head SHA:** `46e2b30607303996c6423abd33ec854c42b57ac3` (unchanged since run 9)
 
-**Git-based conflict analysis (run 15):**
-`git merge-tree` against fork's `origin/main` returns `merged` (clean) — no conflicts.
-Commits not in fork main:
+**Upstream conflict (confirmed via GitHub API this run):**
+`mergeable: false`, `mergeable_state: dirty` — PR has conflicts with upstream
+`openclaw/openclaw:main`. Upstream not reachable through the proxy in this environment
+(`git ls-remote` returns 502), so automated rebase is not possible. **Needs human rebase.**
 
-- `46e2b30607` chore(format): fix markdown formatting in pr-monitor-report *(monitoring artifact)*
-- `569a0bdfab` chore(protocol): regenerate Swift models for freshSession cron field
-- `cb7f5c9630` feat(cron): add freshSession option to control session reuse per job
+**Fork-local conflict check (git merge-tree vs origin/main):**
+Clean — no conflicts with fork's own `main`. Fork main lags behind upstream.
 
-Note: `89065a6b2` (a prior monitoring artifact) is no longer listed — fork main has absorbed it.
+**Commits unique to PR branch vs fork/main:**
 
-**CI:** Unknown — no GitHub API access to check current check-run state. Last known: label
-checks passing; main CI pass depended on Swift model regeneration commit (`569a0bdfa`).
+- `46e2b30607` chore(format): fix markdown formatting in pr-monitor-report — **monitoring artifact (tip commit)**
+- `569a0bdfab` chore(protocol): regenerate Swift models for freshSession cron field — legitimate
+- `cb7f5c9630` feat(cron): add freshSession option to control session reuse per job — legitimate
 
-**Review comments (2, from 2026-03-14 — no new comments since run 9):**
+**CI:** Only label checks running (`backfill-pr-labels` skipped, `label`/`label-issues` success).
+No build/test CI triggered — this is expected when GitHub marks the PR as dirty; the test suite
+requires a clean merge attempt. Build CI cannot be confirmed until after rebase.
 
-1. `greptile-apps[bot]` on `src/cron/types-shared.ts` — JSDoc "Defaults to true for isolated
-   sessions" inaccurate.
-   **Status: Addressed in code.** Current JSDoc: "When omitted, falls back to the session-target
-   default: isolated sessions default to fresh, others default to reuse."
+**Reviews (from GitHub API — no new reviews since run 9):**
 
-2. `chatgpt-codex-connector[bot]` P1 on `src/gateway/protocol/schema/cron.ts:74` —
-   `freshSession` not persisted in `createJob`/`applyJobPatch`.
-   **Status: Addressed in code.** `src/cron/service/jobs.ts:542` assigns
-   `freshSession: input.freshSession`; lines 580-581 apply the patch conditionally.
+1. `greptile-apps[bot]` — COMMENTED 2026-03-14 (body empty, summary-level only)
+2. `chatgpt-codex-connector[bot]` — COMMENTED 2026-03-14, flagged two issues:
+   - JSDoc "Defaults to true for isolated sessions" was inaccurate
+   - `freshSession` not propagated in `createJob`/`applyJobPatch`
+   Both issues **confirmed addressed in code** (verified in runs 9–15; no change since).
 
-Neither bot has re-reviewed; conversations may still show as unresolved on GitHub.
-
-**Branch contamination (needs human attention):**
-One monitoring-run artifact commit remains on this PR branch:
-
-- `46e2b30607` chore(format): fix markdown formatting in pr-monitor-report *(top commit)*
-
-The legitimate PR commits are:
-- `cb7f5c9630` feat(cron): add freshSession option to control session reuse per job
-- `569a0bdfab` chore(protocol): regenerate Swift models for freshSession cron field
+No human maintainer reviews. No `CHANGES_REQUESTED` state from any reviewer.
 
 **Needs human attention:**
 
-1. Clean up monitoring-artifact commit (`46e2b30607`) from the branch before merge via
-   interactive rebase — it adds `tasks/pr-monitor-report.md` to the PR diff.
-2. Rebase against upstream `openclaw/openclaw:main` (cannot verify from this environment).
-3. Re-trigger main CI to confirm all checks pass after the Swift protocol regeneration.
+1. **Rebase against upstream `openclaw/openclaw:main`** — required before merge; cannot be
+   done from this environment.
+2. **Branch contamination** — the tip commit `46e2b30607` is a monitoring-run artifact that
+   adds `tasks/pr-monitor-report.md` to the PR diff. Remove via interactive rebase before
+   merging. Legitimate PR commits: `cb7f5c9630` and `569a0bdfab`.
+3. **Re-trigger CI** after rebase to confirm all build/test checks pass.
+4. **Bot review conversations** may still appear unresolved on GitHub — both are addressed in
+   the code, so maintainer can resolve them on merge.
 
 ---
 
 ## PR #54363 — fix/chat-send-button-contrast
 
-**Status:** CLOSED (2026-03-27T14:12:49Z, not merged)
+**Status:** CLOSED (closed_at: 2026-03-27T14:12:49Z, merged: false)
 
+Confirmed via GitHub API this run. Closed as superseded — per maintainer `velvet-shark`, PR
+#55075 landed the same fix as part of a broader design-system cleanup (commit
+`f9b8499bf6472189750b738fe1db0c43e670df10`). Contributor `suboss87` agreed to close.
 Branch still exists in fork at SHA `76c2ea44d857b9ae68cf056dfc72c8e4d4cfcd64`. No action
 required.
 
@@ -88,85 +87,137 @@ required.
 ## PR #54730 — fix/subagent-identity-fallback
 
 **Status:** OPEN | **Branch:** `fix/subagent-identity-fallback`
-**Head SHA:** `f052129db44607fed72a0769dc5de6b919bcd5dc` (unchanged since run 9 — no new commits)
+**Head SHA:** `f052129db44607fed72a0769dc5de6b919bcd5dc` (unchanged since run 9)
 
-**Git-based conflict analysis (run 15):**
-`git merge-tree` against fork's `origin/main` returns `merged` (clean) — no conflicts.
-Commits not in fork main:
+**Mergeability (from GitHub API):** `mergeable: true`, `mergeable_state: unstable` — clean
+merge is possible but CI is failing.
 
-- `f052129db4` chore(tasks): update PR monitor report … (run 9) *(monitoring artifact, tip)*
-- `d18c8771bb` chore(format): fix markdown formatting in pr-monitor-report *(monitoring artifact)*
-- `8fb20f890e` refactor: hoist resolveDefaultAgentId to avoid redundant call
-- `7870292d6c` fix(ui): prefer per-agent identity for subagents over global ui.assistant
+**Fork-local conflict check (git merge-tree vs origin/main):**
+Clean — no conflicts.
 
-Note: `89065a6b2` (a prior monitoring artifact) is no longer listed — fork main has absorbed it.
+**Commits unique to PR branch vs fork/main:**
 
-**CI:** GREEN (success) — last confirmed passing in run 12. No new commits since; status
-should still hold.
+- `f052129db4` chore(tasks): update PR monitor report (run 9) — **monitoring artifact (tip)**
+- `d18c877...` chore(format): fix markdown formatting in pr-monitor-report — **monitoring artifact**
+- `8fb20f890e` refactor: hoist resolveDefaultAgentId to avoid redundant call — legitimate (addressed Greptile feedback)
+- `7870292d6c` fix(ui): prefer per-agent identity for subagents over global ui.assistant — legitimate
 
-**Review comments:** No reviews from any reviewer on this PR.
+**CI (from GitHub API, this run — new finding vs run 15):**
 
-**Branch contamination (needs human attention):**
-Two monitoring-run artifact commits remain on this PR branch (both touch only
-`tasks/pr-monitor-report.md`):
+| Check                            | Result    |
+| -------------------------------- | --------- |
+| checks-fast-extensions           | **failure** |
+| checks-fast-extensions-shard-2   | **failure** |
+| checks-fast-extensions-shard-3   | **failure** |
+| checks-fast-extensions-shard-4   | **failure** |
+| checks-fast-extensions-shard-6   | **failure** |
+| checks-fast-contracts-protocol   | **failure** |
+| security-fast                    | **failure** |
+| checks-node-test                 | cancelled |
+| macos-node                       | cancelled |
+| checks-windows-node-test         | cancelled |
+| checks-node-channels             | success |
+| build-smoke                      | success |
+| checks-fast-bundled              | success |
+| checks-fast-extensions-shard-1   | success |
+| checks-fast-extensions-shard-5   | success |
+| android-build-third-party        | success |
+| android-build-play               | success |
+| android-test-third-party         | success |
+| android-test-play                | success |
+| macos-swift                      | success |
+| check                            | success |
+| check-additional                 | success |
+| skills-python                    | success |
+| preflight (×2)                   | success |
+| install-smoke                    | success |
+| build-artifacts                  | success |
+| backfill-pr-labels               | skipped |
+| check-docs                       | skipped |
+| extension-fast                   | skipped |
+| generated-doc-baselines          | skipped |
 
-- `f052129db4` chore(tasks): update PR monitor report … (run 9) *(top commit)*
-- `d18c8771bb` chore(format): fix markdown formatting in pr-monitor-report *(2nd)*
+The `checks-node-channels`, `checks-fast-bundled`, `check`, and `check-additional` all pass —
+meaning core gateway and channel code (including the `resolveAssistantIdentity` changes in this
+PR) are not causing failures at the TypeScript/node layer. The failures cluster in:
 
-The actual PR fix commits are:
-- `7870292d6c` fix(ui): prefer per-agent identity for subagents over global ui.assistant
-- `8fb20f890e` refactor: hoist resolveDefaultAgentId to avoid redundant call
+- **`checks-fast-extensions` shards 2/3/4/6** (shards 1/5 pass): suggests flaky or
+  pre-existing failures in specific extension tests unrelated to this PR.
+- **`checks-fast-contracts-protocol`**: contract/protocol schema tests.
+- **`security-fast`**: static security scan.
+
+Because the head SHA has not changed since run 9 (2026-04-06) and these failures appear
+on the same commit that was previously passing (run 12 reported CI green), the failures
+are most likely **pre-existing flakiness or regressions in main** unrelated to this PR.
+However, the `security-fast` failure in particular should be confirmed by a maintainer
+before merge.
+
+**Reviews (from GitHub API this run):**
+
+- `greptile-apps[bot]` — COMMENTED 2026-03-25 (body empty at review level; summary
+  notes PR is focused and clean)
+- No human maintainer reviews; no `CHANGES_REQUESTED`.
+
+**Community discussion (PR comments):**
+
+- 2026-04-06: `MoltyCel` (community, not maintainer) confirmed priority-flip logic and
+  test coverage look correct. Noted the `resolveDefaultAgentId` redundancy was already
+  addressed by suboss87 in `8fb20f890e`.
+- 2026-04-07: `suboss87` thanked, confirmed PR scoped to regression fix only, and opened
+  a separate RFC discussion for Plugin SDK identity surface.
+- 2026-04-07: `MoltyCel` agreed keeping scope tight is correct.
 
 **Needs human attention:**
 
-1. Clean up monitoring-artifact commits (`f052129db4`, `d18c8771bb`) from the branch before
-   merge via interactive rebase — these add `tasks/pr-monitor-report.md` to the PR diff.
-2. CI is passing; PR fix is otherwise complete and ready for review/merge once contamination is
-   cleaned.
+1. **CI investigation** — confirm whether `security-fast`, `checks-fast-contracts-protocol`,
+   and failing extension shards are pre-existing on main or caused by this PR. If pre-existing,
+   maintainer can approve/merge regardless. If PR-caused, suboss87 needs to investigate and fix.
+2. **Branch contamination** — the two tip commits (`f052129db4`, `d18c877...`) are monitoring
+   artifacts that add `tasks/pr-monitor-report.md` to the PR diff. Remove via interactive
+   rebase before merging. Legitimate PR commits: `7870292d6c` and `8fb20f890e`.
+3. **Maintainer review** — PR has no human maintainer review yet. The fix is substantive
+   (subagent identity regression) with positive community feedback. Could benefit from a
+   formal maintainer review pass.
 
 ---
 
-## Actions Taken This Run (run 15 — 2026-04-09)
+## Actions Taken This Run (run 16 — 2026-04-09)
 
-**None — blocked by missing GitHub access (same as runs 11-14).**
+**GitHub API access:** Partially restored — unauthenticated REST API calls succeeded (rate-limited
+to ~60 req/hour across rotating IPs). Key PR metadata, review lists, CI check runs, and issue
+comments retrieved.
 
-This run could not query any live PR data from GitHub:
+**No code changes made.** No unaddressed human maintainer review feedback was found on either
+open PR. Bot reviews on #45584 were addressed in prior commits; no code action required.
 
-- `gh` CLI: not installed in this environment
-- GitHub MCP server tools (`mcp__github__*`): not loaded (ToolSearch returned no matches)
-- Unauthenticated GitHub REST API: no auth token available
+**No rebase performed for #45584.** Upstream `openclaw/openclaw` is not accessible through the
+proxy (`502` on `git ls-remote`). Rebase must be done by the contributor manually.
 
-**What was verified via git (without GitHub API):**
-
-- All 4 PR branches still exist in fork (`suboss87/openclaw`) with **unchanged tip SHAs** vs run 14.
-- `git merge-tree` against fork `origin/main` returns `merged` (clean) for both open PR
-  branches — no conflicts with fork main.
-- Fork main has advanced since run 14 (new tags: `v2026.3.2-beta.1`, `v2026.3.7`,
-  `v2026.3.7-beta.1`, `v2026.3.8`, `v2026.3.8-beta.1`), absorbing the `89065a6b2`
-  monitoring-artifact commit that was previously on both open PR branches.
-- Upstream `openclaw/openclaw:main` conflict state cannot be verified from this environment.
-
-PR statuses, CI conclusions, and review states carried over from runs 12-14. They may be stale.
-Human review is required to confirm current GitHub state.
-
-**To unblock future monitoring runs**, one of the following must be in place:
-
-1. Install `gh` CLI in the environment and authenticate (`gh auth login`), OR
-2. Register the GitHub MCP server so that `mcp__github__*` tools appear in the session.
+**No rebase needed for #54730.** PR is clean vs upstream per GitHub API (`mergeable: true`).
 
 ---
 
 ## PRs Requiring Human Attention
 
-- openclaw/openclaw#45584
-  - **Branch contamination:** remove 1 monitoring-artifact commit (`46e2b30607`) before merge
-    (adds `tasks/pr-monitor-report.md` to PR diff); `89065a6b2` already absorbed by fork main
-  - **Rebase check:** verify clean state against upstream `openclaw/openclaw:main` before merge
-  - **Re-trigger CI** for full test/build pass after Swift protocol regeneration
-  - **Bot review conversations:** may still appear unresolved on GitHub (both addressed in code)
+- **openclaw/openclaw#45584**
+  - Rebase against upstream `openclaw/openclaw:main` required (dirty — has conflicts)
+  - Remove monitoring artifact commit `46e2b30607` (tip) before merge
+  - Re-trigger CI after rebase to confirm all build/test checks pass
 
-- openclaw/openclaw#54730
-  - **Branch contamination:** remove 2 monitoring-artifact commits (`f052129db4`, `d18c8771bb`)
-    before merge — these add unrelated `tasks/pr-monitor-report.md` to the PR diff;
-    `89065a6b2` already absorbed by fork main
-  - CI is green; PR fix is complete and ready for review/merge once contamination is cleaned
+- **openclaw/openclaw#54730**
+  - Confirm whether CI failures (`security-fast`, `checks-fast-contracts-protocol`,
+    extension shards 2/3/4/6) are pre-existing on main or caused by this PR
+  - Remove monitoring artifact commits `f052129db4` and `d18c877...` (tips) before merge
+  - Needs a human maintainer review (no reviews yet despite good community feedback)
+
+---
+
+## Note on Monitoring Artifact Contamination
+
+Previous monitoring runs (runs 3–9, approximately) accidentally committed monitoring report
+updates directly to the PR branches `feat/cron-fresh-session-option` and
+`fix/subagent-identity-fallback`. These commits are now the tip commits on those branches,
+meaning they will appear in the PR diff on GitHub and must be cleaned up before merge.
+
+Going forward, monitoring report commits should only be made to the fork's `main` branch
+(or a dedicated monitoring branch), never to contributor PR branches.
