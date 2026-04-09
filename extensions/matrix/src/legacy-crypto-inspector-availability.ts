@@ -6,8 +6,8 @@ const LEGACY_CRYPTO_INSPECTOR_BASENAME_RE = /^legacy-crypto-inspector(?:[-.].*)?
 
 function hasSourceInspectorArtifact(currentDir: string): boolean {
   return [
-    path.resolve(currentDir, "..", "legacy-crypto-inspector.ts"),
-    path.resolve(currentDir, "..", "legacy-crypto-inspector.js"),
+    path.resolve(currentDir, "matrix", "legacy-crypto-inspector.ts"),
+    path.resolve(currentDir, "matrix", "legacy-crypto-inspector.js"),
   ].some((candidate) => fs.existsSync(candidate));
 }
 

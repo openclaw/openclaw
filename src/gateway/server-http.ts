@@ -265,6 +265,20 @@ function writeUpgradeAuthFailure(
   socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
 }
 
+function writeUpgradeServiceUnavailable(
+  socket: { write: (chunk: string) => void },
+  responseBody: string,
+) {
+  socket.write(
+    "HTTP/1.1 503 Service Unavailable\r\n" +
+      "Connection: close\r\n" +
+      "Content-Type: text/plain; charset=utf-8\r\n" +
+      `Content-Length: ${Buffer.byteLength(responseBody, "utf8")}\r\n` +
+      "\r\n" +
+      responseBody,
+  );
+}
+
 export type HooksRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 
 type GatewayHttpRequestStage = {
@@ -1050,29 +1064,15 @@ export function attachGatewayUpgradeHandler(opts: {
         }
       }
       const preauthBudgetKey = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback);
-      if (wss.listenerCount("connection") === 0) {
-        const responseBody = "Gateway websocket handlers unavailable";
-        socket.write(
-          "HTTP/1.1 503 Service Unavailable\r\n" +
-            "Connection: close\r\n" +
-            "Content-Type: text/plain; charset=utf-8\r\n" +
-            `Content-Length: ${Buffer.byteLength(responseBody, "utf8")}\r\n` +
-            "\r\n" +
-            responseBody,
-        );
+      // Keep startup upgrades inside the pre-auth budget until WS handlers attach.
+      if (!preauthConnectionBudget.acquire(preauthBudgetKey)) {
+        writeUpgradeServiceUnavailable(socket, "Too many unauthenticated sockets");
         socket.destroy();
         return;
       }
-      if (!preauthConnectionBudget.acquire(preauthBudgetKey)) {
-        const responseBody = "Too many unauthenticated sockets";
-        socket.write(
-          "HTTP/1.1 503 Service Unavailable\r\n" +
-            "Connection: close\r\n" +
-            "Content-Type: text/plain; charset=utf-8\r\n" +
-            `Content-Length: ${Buffer.byteLength(responseBody, "utf8")}\r\n` +
-            "\r\n" +
-            responseBody,
-        );
+      if (wss.listenerCount("connection") === 0) {
+        preauthConnectionBudget.release(preauthBudgetKey);
+        writeUpgradeServiceUnavailable(socket, "Gateway websocket handlers unavailable");
         socket.destroy();
         return;
       }

@@ -169,6 +169,28 @@ export function resolvePersistedSelectedModelRef(params: {
   });
 }
 
+export function normalizeStoredOverrideModel(params: {
+  providerOverride?: string | null;
+  modelOverride?: string | null;
+}): { providerOverride?: string; modelOverride?: string } {
+  const providerOverride = params.providerOverride?.trim();
+  const modelOverride = params.modelOverride?.trim();
+  if (!providerOverride || !modelOverride) {
+    return {
+      providerOverride,
+      modelOverride,
+    };
+  }
+
+  const providerPrefix = `${providerOverride.toLowerCase()}/`;
+  return {
+    providerOverride,
+    modelOverride: modelOverride.toLowerCase().startsWith(providerPrefix)
+      ? modelOverride.slice(providerOverride.length + 1).trim() || modelOverride
+      : modelOverride,
+  };
+}
+
 export function inferUniqueProviderFromConfiguredModels(params: {
   cfg: OpenClawConfig;
   model: string;
@@ -292,6 +314,84 @@ export function buildModelAliasIndex(params: {
   }
 
   return { byAlias, byKey };
+}
+
+type ModelCatalogMetadata = {
+  configuredByKey: Map<string, ModelCatalogEntry>;
+  aliasByKey: Map<string, string>;
+};
+
+function buildModelCatalogMetadata(params: {
+  cfg: OpenClawConfig;
+  defaultProvider: string;
+}): ModelCatalogMetadata {
+  const configuredByKey = new Map<string, ModelCatalogEntry>();
+  for (const entry of buildConfiguredModelCatalog({ cfg: params.cfg })) {
+    configuredByKey.set(modelKey(entry.provider, entry.id), entry);
+  }
+
+  const aliasByKey = new Map<string, string>();
+  const configuredModels = params.cfg.agents?.defaults?.models ?? {};
+  for (const [rawKey, entryRaw] of Object.entries(configuredModels)) {
+    const key = resolveAllowlistModelKey(String(rawKey ?? ""), params.defaultProvider);
+    if (!key) {
+      continue;
+    }
+    const alias = String((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
+    if (!alias) {
+      continue;
+    }
+    aliasByKey.set(key, alias);
+  }
+
+  return { configuredByKey, aliasByKey };
+}
+
+function applyModelCatalogMetadata(params: {
+  entry: ModelCatalogEntry;
+  metadata: ModelCatalogMetadata;
+}): ModelCatalogEntry {
+  const key = modelKey(params.entry.provider, params.entry.id);
+  const configuredEntry = params.metadata.configuredByKey.get(key);
+  const alias = params.metadata.aliasByKey.get(key);
+  if (!configuredEntry && !alias) {
+    return params.entry;
+  }
+  const nextAlias = alias ?? params.entry.alias;
+  const nextContextWindow = configuredEntry?.contextWindow ?? params.entry.contextWindow;
+  const nextReasoning = configuredEntry?.reasoning ?? params.entry.reasoning;
+  const nextInput = configuredEntry?.input ?? params.entry.input;
+
+  return {
+    ...params.entry,
+    name: configuredEntry?.name ?? params.entry.name,
+    ...(nextAlias ? { alias: nextAlias } : {}),
+    ...(nextContextWindow !== undefined ? { contextWindow: nextContextWindow } : {}),
+    ...(nextReasoning !== undefined ? { reasoning: nextReasoning } : {}),
+    ...(nextInput ? { input: nextInput } : {}),
+  };
+}
+
+function buildSyntheticAllowedCatalogEntry(params: {
+  parsed: ModelRef;
+  metadata: ModelCatalogMetadata;
+}): ModelCatalogEntry {
+  const key = modelKey(params.parsed.provider, params.parsed.model);
+  const configuredEntry = params.metadata.configuredByKey.get(key);
+  const alias = params.metadata.aliasByKey.get(key);
+  const nextContextWindow = configuredEntry?.contextWindow;
+  const nextReasoning = configuredEntry?.reasoning;
+  const nextInput = configuredEntry?.input;
+
+  return {
+    id: params.parsed.model,
+    name: configuredEntry?.name ?? params.parsed.model,
+    provider: params.parsed.provider,
+    ...(alias ? { alias } : {}),
+    ...(nextContextWindow !== undefined ? { contextWindow: nextContextWindow } : {}),
+    ...(nextReasoning !== undefined ? { reasoning: nextReasoning } : {}),
+    ...(nextInput ? { input: nextInput } : {}),
+  };
 }
 
 export function resolveModelRefFromString(params: {
@@ -472,6 +572,11 @@ export function buildAllowedModelSet(params: {
   allowedCatalog: ModelCatalogEntry[];
   allowedKeys: Set<string>;
 } {
+  const metadata = buildModelCatalogMetadata({
+    cfg: params.cfg,
+    defaultProvider: params.defaultProvider,
+  });
+  const catalog = params.catalog.map((entry) => applyModelCatalogMetadata({ entry, metadata }));
   const rawAllowlist = (() => {
     const modelMap = params.cfg.agents?.defaults?.models ?? {};
     return Object.keys(modelMap);
@@ -483,7 +588,7 @@ export function buildAllowedModelSet(params: {
       ? parseModelRef(defaultModel, params.defaultProvider)
       : null;
   const defaultKey = defaultRef ? modelKey(defaultRef.provider, defaultRef.model) : undefined;
-  const catalogKeys = new Set(params.catalog.map((entry) => modelKey(entry.provider, entry.id)));
+  const catalogKeys = new Set(catalog.map((entry) => modelKey(entry.provider, entry.id)));
 
   if (allowAny) {
     if (defaultKey) {
@@ -491,42 +596,13 @@ export function buildAllowedModelSet(params: {
     }
     return {
       allowAny: true,
-      allowedCatalog: params.catalog,
+      allowedCatalog: catalog,
       allowedKeys: catalogKeys,
     };
   }
 
   const allowedKeys = new Set<string>();
   const syntheticCatalogEntries = new Map<string, ModelCatalogEntry>();
-  const resolveConfiguredSyntheticEntry = (
-    provider: string,
-    model: string,
-  ): ModelCatalogEntry | null => {
-    const configuredModels = params.cfg.models?.providers?.[provider]?.models;
-    if (!Array.isArray(configuredModels)) {
-      return null;
-    }
-    const configured = configuredModels.find(
-      (entry) => typeof entry?.id === "string" && entry.id.trim() === model,
-    );
-    if (!configured) {
-      return null;
-    }
-    return {
-      provider,
-      id: model,
-      name:
-        typeof configured.name === "string" && configured.name.trim().length > 0
-          ? configured.name.trim()
-          : model,
-      contextWindow:
-        typeof configured.contextWindow === "number" && configured.contextWindow > 0
-          ? configured.contextWindow
-          : undefined,
-      reasoning: typeof configured.reasoning === "boolean" ? configured.reasoning : undefined,
-      input: Array.isArray(configured.input) ? configured.input : undefined,
-    };
-  };
   for (const raw of rawAllowlist) {
     const parsed = parseModelRef(String(raw), params.defaultProvider);
     if (!parsed) {
@@ -538,13 +614,7 @@ export function buildAllowedModelSet(params: {
     allowedKeys.add(key);
 
     if (!catalogKeys.has(key) && !syntheticCatalogEntries.has(key)) {
-      const configuredSynthetic = resolveConfiguredSyntheticEntry(parsed.provider, parsed.model);
-      syntheticCatalogEntries.set(key, {
-        ...configuredSynthetic,
-        id: parsed.model,
-        name: configuredSynthetic?.name ?? parsed.model,
-        provider: parsed.provider,
-      });
+      syntheticCatalogEntries.set(key, buildSyntheticAllowedCatalogEntry({ parsed, metadata }));
     }
   }
 
@@ -558,11 +628,7 @@ export function buildAllowedModelSet(params: {
       allowedKeys.add(key);
 
       if (!catalogKeys.has(key) && !syntheticCatalogEntries.has(key)) {
-        syntheticCatalogEntries.set(key, {
-          id: parsed.model,
-          name: parsed.model,
-          provider: parsed.provider,
-        });
+        syntheticCatalogEntries.set(key, buildSyntheticAllowedCatalogEntry({ parsed, metadata }));
       }
     }
   }
@@ -572,10 +638,7 @@ export function buildAllowedModelSet(params: {
   }
 
   const allowedCatalog = [
-    ...params.catalog.filter((entry) => {
-      const key = modelKey(entry.provider, entry.id);
-      return allowedKeys.has(key) && !syntheticCatalogEntries.has(key);
-    }),
+    ...catalog.filter((entry) => allowedKeys.has(modelKey(entry.provider, entry.id))),
     ...syntheticCatalogEntries.values(),
   ];
 
@@ -585,7 +648,7 @@ export function buildAllowedModelSet(params: {
     }
     return {
       allowAny: true,
-      allowedCatalog: params.catalog,
+      allowedCatalog: catalog,
       allowedKeys: catalogKeys,
     };
   }

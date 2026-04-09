@@ -10,6 +10,7 @@ import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.j
 import { loadConfig } from "../config/config.js";
 import { withSessionStoreLockForTest } from "../config/sessions/store.js";
 import { isSessionPatchEvent, type InternalHookEvent } from "../hooks/internal-hooks.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
@@ -20,6 +21,7 @@ import {
   installGatewayTestHooks,
   piSdkMock,
   rpcReq,
+  startConnectedServerWithClient,
   testState,
   trackConnectChallengeNonce,
   writeSessionStore,
@@ -1495,6 +1497,82 @@ describe("gateway server sessions", () => {
     expect(store["agent:main:main"]?.totalTokensFresh).toBe(true);
 
     ws.close();
+  });
+
+  test("sessions.patch preserves nested model ids under provider overrides", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-sessions-nested-"));
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      }),
+      "utf-8",
+    );
+
+    await withEnvAsync({ OPENCLAW_CONFIG_PATH: undefined }, async () => {
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
+      const cfg = {
+        session: { store: storePath, mainKey: "main" },
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-test-a" },
+          },
+          list: [{ id: "main", default: true, workspace: dir }],
+        },
+      };
+      const configPath = path.join(dir, "openclaw.json");
+      await fs.writeFile(configPath, JSON.stringify(cfg, null, 2), "utf-8");
+
+      await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
+        const started = await startConnectedServerWithClient();
+        const { server, ws } = started;
+        try {
+          piSdkMock.enabled = true;
+          piSdkMock.models = [
+            { id: "moonshotai/kimi-k2.5", name: "Kimi K2.5 (NVIDIA)", provider: "nvidia" },
+          ];
+
+          const patched = await rpcReq<{
+            ok: true;
+            entry: {
+              modelOverride?: string;
+              providerOverride?: string;
+              model?: string;
+              modelProvider?: string;
+            };
+            resolved?: { model?: string; modelProvider?: string };
+          }>(ws, "sessions.patch", {
+            key: "agent:main:main",
+            model: "nvidia/moonshotai/kimi-k2.5",
+          });
+          expect(patched.ok).toBe(true);
+          expect(patched.payload?.entry.modelOverride).toBe("moonshotai/kimi-k2.5");
+          expect(patched.payload?.entry.providerOverride).toBe("nvidia");
+          expect(patched.payload?.entry.model).toBeUndefined();
+          expect(patched.payload?.entry.modelProvider).toBeUndefined();
+          expect(patched.payload?.resolved?.modelProvider).toBe("nvidia");
+          expect(patched.payload?.resolved?.model).toBe("moonshotai/kimi-k2.5");
+
+          const listed = await rpcReq<{
+            sessions: Array<{ key: string; modelProvider?: string; model?: string }>;
+          }>(ws, "sessions.list", {});
+          expect(listed.ok).toBe(true);
+          const mainSession = listed.payload?.sessions.find(
+            (session) => session.key === "agent:main:main",
+          );
+          expect(mainSession?.modelProvider).toBe("nvidia");
+          expect(mainSession?.model).toBe("moonshotai/kimi-k2.5");
+        } finally {
+          ws.close();
+          await server.close();
+        }
+      });
+    });
   });
 
   test("sessions.preview returns transcript previews", async () => {

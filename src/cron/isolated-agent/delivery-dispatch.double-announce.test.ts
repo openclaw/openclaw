@@ -422,6 +422,26 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.deliveryAttempted).toBe(true);
   });
 
+  it("falls back to runStartedAt when nextRunAtMs=0", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-18T17:00:00.000Z"));
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+    vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
+
+    const params = makeBaseParams({ synthesizedText: "Long running report finished." });
+    params.runStartedAt = Date.now() - (3 * 60 * 60_000 + 1);
+    (params.job as { state?: { nextRunAtMs?: number } }).state = {
+      nextRunAtMs: 0,
+    };
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(state.delivered).toBe(true);
+    expect(state.deliveryAttempted).toBe(true);
+  });
+
   it("cleans up the direct cron session after a silent reply when deleteAfterRun is enabled", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
