@@ -468,7 +468,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
         timeoutMs:
           typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
             ? params.timeoutMs
-            : 60_000,
+            : 300_000,
       };
 
       switch (action) {

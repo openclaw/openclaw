@@ -42,7 +42,7 @@ import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
 export { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 
-const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
+const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 180_000;
 const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
 
 type SubagentAnnounceDeliveryDeps = {
