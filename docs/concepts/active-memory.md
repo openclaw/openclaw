@@ -327,6 +327,43 @@ Use `resolved-only` if you want Active Memory to skip recall instead of falling
 back to the built-in remote default when no explicit or inherited model is
 available.
 
+## Advanced escape hatches
+
+These options are intentionally not part of the recommended setup.
+
+`config.thinking` can override the blocking memory sub-agent thinking level:
+
+```json5
+thinking: "medium"
+```
+
+Default:
+
+```json5
+thinking: "off"
+```
+
+Do not enable this by default. Active Memory runs in the reply path, so extra
+thinking time directly increases user-visible latency.
+
+`config.promptAppend` adds extra operator instructions after the default Active
+Memory prompt and before the conversation context:
+
+```json5
+promptAppend: "Prefer stable long-term preferences over one-off events."
+```
+
+`config.promptOverride` replaces the default Active Memory prompt. OpenClaw
+still appends the conversation context afterward:
+
+```json5
+promptOverride: "You are a memory search agent. Return NONE or one compact user fact."
+```
+
+Prompt customization is not recommended unless you are deliberately testing a
+different recall contract. The default prompt is tuned to return either `NONE`
+or compact user-fact context for the main model.
+
 ### `message`
 
 Only the latest user message is sent.
@@ -462,6 +499,9 @@ The most important fields are:
 | `config.model`              | `string`                                                                                             | Optional blocking memory sub-agent model ref; when unset, active memory uses the current session model |
 | `config.queryMode`          | `"message" \| "recent" \| "full"`                                                                    | Controls how much conversation the blocking memory sub-agent sees                                      |
 | `config.promptStyle`        | `"balanced" \| "strict" \| "contextual" \| "recall-heavy" \| "precision-heavy" \| "preference-only"` | Controls how eager or strict the blocking memory sub-agent is when deciding whether to return memory   |
+| `config.thinking`           | `"off" \| "minimal" \| "low" \| "medium" \| "high" \| "xhigh" \| "adaptive"`                         | Advanced thinking override for the blocking memory sub-agent; default `off` for speed                  |
+| `config.promptOverride`     | `string`                                                                                             | Advanced full prompt replacement; not recommended for normal use                                       |
+| `config.promptAppend`       | `string`                                                                                             | Advanced extra instructions appended to the default or overridden prompt                               |
 | `config.timeoutMs`          | `number`                                                                                             | Hard timeout for the blocking memory sub-agent                                                         |
 | `config.maxSummaryChars`    | `number`                                                                                             | Maximum total characters allowed in the active-memory summary                                          |
 | `config.logging`            | `boolean`                                                                                            | Emits active memory logs while tuning                                                                  |

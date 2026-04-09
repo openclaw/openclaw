@@ -53,6 +53,7 @@ type ActiveRecallPluginConfig = {
   model?: string;
   modelFallbackPolicy?: "default-remote" | "resolved-only";
   allowedChatTypes?: Array<"direct" | "group" | "channel">;
+  thinking?: ActiveMemoryThinkingLevel;
   promptStyle?:
     | "balanced"
     | "strict"
@@ -60,6 +61,8 @@ type ActiveRecallPluginConfig = {
     | "recall-heavy"
     | "precision-heavy"
     | "preference-only";
+  promptOverride?: string;
+  promptAppend?: string;
   timeoutMs?: number;
   queryMode?: "message" | "recent" | "full";
   maxSummaryChars?: number;
@@ -78,6 +81,7 @@ type ResolvedActiveRecallPluginConfig = {
   model?: string;
   modelFallbackPolicy: "default-remote" | "resolved-only";
   allowedChatTypes: Array<"direct" | "group" | "channel">;
+  thinking: ActiveMemoryThinkingLevel;
   promptStyle:
     | "balanced"
     | "strict"
@@ -85,6 +89,8 @@ type ResolvedActiveRecallPluginConfig = {
     | "recall-heavy"
     | "precision-heavy"
     | "preference-only";
+  promptOverride?: string;
+  promptAppend?: string;
   timeoutMs: number;
   queryMode: "message" | "recent" | "full";
   maxSummaryChars: number;
@@ -122,6 +128,14 @@ type CachedActiveRecallResult = {
 };
 
 type ActiveMemoryChatType = "direct" | "group" | "channel";
+type ActiveMemoryThinkingLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "adaptive";
 type ActiveMemoryPromptStyle =
   | "balanced"
   | "strict"
@@ -170,6 +184,11 @@ function normalizeTranscriptDir(value: unknown): string {
   const parts = normalized.split("/").map((part) => part.trim());
   const safeParts = parts.filter((part) => part.length > 0 && part !== "." && part !== "..");
   return safeParts.length > 0 ? path.join(...safeParts) : DEFAULT_TRANSCRIPT_DIR;
+}
+
+function normalizePromptConfigText(value: unknown): string | undefined {
+  const text = typeof value === "string" ? value.trim() : "";
+  return text ? text : undefined;
 }
 
 function resolveSafeTranscriptDir(baseSessionsDir: string, transcriptDir: string): string {
@@ -251,7 +270,10 @@ function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPlugi
     modelFallbackPolicy:
       raw.modelFallbackPolicy === "resolved-only" ? "resolved-only" : "default-remote",
     allowedChatTypes: allowedChatTypes.length > 0 ? allowedChatTypes : ["direct"],
+    thinking: resolveThinkingLevel(raw.thinking),
     promptStyle: resolvePromptStyle(raw.promptStyle, raw.queryMode),
+    promptOverride: normalizePromptConfigText(raw.promptOverride),
+    promptAppend: normalizePromptConfigText(raw.promptAppend),
     timeoutMs: clampInt(
       parseOptionalPositiveInt(raw.timeoutMs, DEFAULT_TIMEOUT_MS),
       DEFAULT_TIMEOUT_MS,
@@ -277,6 +299,21 @@ function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPlugi
     persistTranscripts: raw.persistTranscripts === true,
     transcriptDir: normalizeTranscriptDir(raw.transcriptDir),
   };
+}
+
+function resolveThinkingLevel(thinking: unknown): ActiveMemoryThinkingLevel {
+  if (
+    thinking === "off" ||
+    thinking === "minimal" ||
+    thinking === "low" ||
+    thinking === "medium" ||
+    thinking === "high" ||
+    thinking === "xhigh" ||
+    thinking === "adaptive"
+  ) {
+    return thinking;
+  }
+  return "off";
 }
 
 function resolvePromptStyle(
@@ -349,6 +386,67 @@ function buildPromptStyleLines(style: ActiveMemoryPromptStyle): string[] {
         "If recent context and the latest user message point to different memory domains, prefer the domain that best matches the latest user message.",
       ];
   }
+}
+
+function buildRecallPrompt(params: {
+  config: ResolvedActiveRecallPluginConfig;
+  query: string;
+}): string {
+  const defaultInstructions = [
+    "You are a memory search agent.",
+    "Another model is preparing the final user-facing answer.",
+    "Your job is to search memory and return only the most relevant memory context for that model.",
+    "You receive conversation context, including the user's latest message.",
+    "Use only memory_search and memory_get.",
+    "Do not answer the user directly.",
+    `Prompt style: ${params.config.promptStyle}.`,
+    ...buildPromptStyleLines(params.config.promptStyle),
+    "If the user is directly asking about favorites, preferences, habits, routines, or personal facts, treat that as a strong recall signal.",
+    "Questions like 'what is my favorite food', 'do you remember my flight preferences', or 'what do i usually get' should normally return memory when relevant results exist.",
+    "If the provided conversation context already contains recalled-memory summaries, debug output, or prior memory/tool traces, ignore that surfaced text unless the latest user message clearly requires re-checking it.",
+    "Return memory only when it would materially help the other model answer the user's latest message.",
+    "If the connection is weak, broad, or only vaguely related, reply with NONE.",
+    "If nothing clearly useful is found, reply with NONE.",
+    "Return exactly one of these two forms:",
+    "1. NONE",
+    "2. one compact plain-text summary",
+    `If something is useful, reply with one compact plain-text summary under ${params.config.maxSummaryChars} characters total.`,
+    "Write the summary as a memory note about the user, not as a reply to the user.",
+    "Do not explain your reasoning.",
+    "Do not return bullets, numbering, labels, XML, JSON, or markdown list formatting.",
+    "Do not prefix the summary with 'Memory:' or any other label.",
+    "",
+    "Good examples:",
+    "User message: What is my favorite food?",
+    "Return: User's favorite food is ramen; tacos also come up often.",
+    "User message: Do you remember my flight preferences?",
+    "Return: User prefers aisle seats and extra buffer over tight connections.",
+    "Recent context: user was discussing flights and airport planning.",
+    "Latest user message: I might see a movie while I wait for the flight.",
+    "Return: User's favorite movie snack is buttery popcorn with extra salt.",
+    "User message: Explain DNS over HTTPS.",
+    "Return: NONE",
+    "",
+    "Bad examples:",
+    "Return: - Favorite food is ramen",
+    "Return: 1. Favorite food is ramen",
+    "Return: Memory: Favorite food is ramen",
+    'Return: {"memory":"Favorite food is ramen"}',
+    "Return: <memory>Favorite food is ramen</memory>",
+    "Return: Ramen seems to be your favorite food.",
+    "Return: You like aisle seats and extra buffer.",
+    "Return: I prefer aisle seats and extra buffer.",
+    "Recent context: user was discussing flights and airport planning. Latest user message: I might see a movie while I wait for the flight. Return: User prefers aisle seats and extra buffer over tight connections.",
+  ].join("\n");
+  const instructionBlock = [
+    params.config.promptOverride ?? defaultInstructions,
+    params.config.promptAppend
+      ? `Additional operator instructions:\n${params.config.promptAppend}`
+      : "",
+  ]
+    .filter((section) => section.length > 0)
+    .join("\n\n");
+  return `${instructionBlock}\n\nConversation context:\n${params.query}`;
 }
 
 function isEnabledForAgent(
@@ -910,55 +1008,10 @@ async function runRecallSubagent(params: {
   const sessionFile = params.config.persistTranscripts
     ? path.join(persistedDir!, `${subagentSessionId}.jsonl`)
     : path.join(tempDir!, "session.jsonl");
-  const prompt = [
-    "You are a memory search agent.",
-    "Another model is preparing the final user-facing answer.",
-    "Your job is to search memory and return only the most relevant memory context for that model.",
-    "You receive conversation context, including the user's latest message.",
-    "Use only memory_search and memory_get.",
-    "Do not answer the user directly.",
-    `Prompt style: ${params.config.promptStyle}.`,
-    ...buildPromptStyleLines(params.config.promptStyle),
-    "If the user is directly asking about favorites, preferences, habits, routines, or personal facts, treat that as a strong recall signal.",
-    "Questions like 'what is my favorite food', 'do you remember my flight preferences', or 'what do i usually get' should normally return memory when relevant results exist.",
-    "If the provided conversation context already contains recalled-memory summaries, debug output, or prior memory/tool traces, ignore that surfaced text unless the latest user message clearly requires re-checking it.",
-    "Return memory only when it would materially help the other model answer the user's latest message.",
-    "If the connection is weak, broad, or only vaguely related, reply with NONE.",
-    "If nothing clearly useful is found, reply with NONE.",
-    "Return exactly one of these two forms:",
-    "1. NONE",
-    "2. one compact plain-text summary",
-    `If something is useful, reply with one compact plain-text summary under ${params.config.maxSummaryChars} characters total.`,
-    "Write the summary as a memory note about the user, not as a reply to the user.",
-    "Do not explain your reasoning.",
-    "Do not return bullets, numbering, labels, XML, JSON, or markdown list formatting.",
-    "Do not prefix the summary with 'Memory:' or any other label.",
-    "",
-    "Good examples:",
-    "User message: What is my favorite food?",
-    "Return: User's favorite food is ramen; tacos also come up often.",
-    "User message: Do you remember my flight preferences?",
-    "Return: User prefers aisle seats and extra buffer over tight connections.",
-    "Recent context: user was discussing flights and airport planning.",
-    "Latest user message: I might see a movie while I wait for the flight.",
-    "Return: User's favorite movie snack is buttery popcorn with extra salt.",
-    "User message: Explain DNS over HTTPS.",
-    "Return: NONE",
-    "",
-    "Bad examples:",
-    "Return: - Favorite food is ramen",
-    "Return: 1. Favorite food is ramen",
-    "Return: Memory: Favorite food is ramen",
-    'Return: {"memory":"Favorite food is ramen"}',
-    "Return: <memory>Favorite food is ramen</memory>",
-    "Return: Ramen seems to be your favorite food.",
-    "Return: You like aisle seats and extra buffer.",
-    "Return: I prefer aisle seats and extra buffer.",
-    "Recent context: user was discussing flights and airport planning. Latest user message: I might see a movie while I wait for the flight. Return: User prefers aisle seats and extra buffer over tight connections.",
-    "",
-    "Conversation context:",
-    params.query,
-  ].join("\n");
+  const prompt = buildRecallPrompt({
+    config: params.config,
+    query: params.query,
+  });
 
   try {
     const result = await params.api.runtime.agent.runEmbeddedPiAgent({
@@ -979,7 +1032,7 @@ async function runRecallSubagent(params: {
       disableMessageTool: true,
       bootstrapContextMode: "lightweight",
       verboseLevel: "off",
-      thinkLevel: "off",
+      thinkLevel: params.config.thinking,
       reasoningLevel: "off",
       silentExpected: true,
       abortSignal: params.abortSignal,

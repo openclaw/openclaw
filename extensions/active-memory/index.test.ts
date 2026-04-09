@@ -322,6 +322,108 @@ describe("active-memory plugin", () => {
     );
   });
 
+  it("keeps thinking off by default but allows an explicit thinking override", async () => {
+    await hooks.before_prompt_build(
+      {
+        prompt: "What is my favorite food? default-thinking-check",
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]).toMatchObject({
+      thinkLevel: "off",
+      reasoningLevel: "off",
+    });
+
+    api.pluginConfig = {
+      agents: ["main"],
+      thinking: "medium",
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      {
+        prompt: "What is my favorite food? thinking-override-check",
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]).toMatchObject({
+      thinkLevel: "medium",
+      reasoningLevel: "off",
+    });
+  });
+
+  it("allows appending extra prompt instructions without replacing the base prompt", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      promptAppend: "Prefer stable long-term preferences over one-off events.",
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      {
+        prompt: "What is my favorite food? prompt-append-check",
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const prompt = runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.prompt ?? "";
+    expect(prompt).toContain("You are a memory search agent.");
+    expect(prompt).toContain("Additional operator instructions:");
+    expect(prompt).toContain("Prefer stable long-term preferences over one-off events.");
+    expect(prompt).toContain("Conversation context:");
+    expect(prompt).toContain("What is my favorite food? prompt-append-check");
+  });
+
+  it("allows replacing the base prompt while still appending conversation context", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      promptOverride: "Custom memory prompt. Return NONE or one user fact.",
+      promptAppend: "Extra custom instruction.",
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      {
+        prompt: "What is my favorite food? prompt-override-check",
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const prompt = runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.prompt ?? "";
+    expect(prompt).toContain("Custom memory prompt. Return NONE or one user fact.");
+    expect(prompt).not.toContain("You are a memory search agent.");
+    expect(prompt).toContain("Additional operator instructions:");
+    expect(prompt).toContain("Extra custom instruction.");
+    expect(prompt).toContain("Conversation context:");
+    expect(prompt).toContain("What is my favorite food? prompt-override-check");
+  });
+
   it("preserves leading digits in a plain-text summary", async () => {
     runEmbeddedPiAgent.mockResolvedValueOnce({
       payloads: [{ text: "2024 trip to tokyo and 2% milk both matter here." }],
