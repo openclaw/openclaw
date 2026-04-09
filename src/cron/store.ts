@@ -86,9 +86,10 @@ async function loadStateFile(statePath: string): Promise<CronStateFile | null> {
   }
 }
 
-function hasInlineState(jobs: Array<Record<string, unknown>>): boolean {
+function hasInlineState(jobs: Array<Record<string, unknown> | null | undefined>): boolean {
   return jobs.some(
     (job) =>
+      job != null &&
       job.state !== undefined &&
       typeof job.state === "object" &&
       job.state !== null &&
