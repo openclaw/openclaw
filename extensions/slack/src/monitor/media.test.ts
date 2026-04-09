@@ -2,9 +2,12 @@ import * as ssrf from "openclaw/plugin-sdk/infra-runtime";
 import * as mediaFetch from "openclaw/plugin-sdk/media-runtime";
 import type { SavedMedia } from "openclaw/plugin-sdk/media-runtime";
 import * as mediaStore from "openclaw/plugin-sdk/media-runtime";
-import { type FetchMock, withFetchPreconnect } from "openclaw/plugin-sdk/testing";
+import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mockPinnedHostnameResolution } from "../../../../src/test-helpers/ssrf.js";
+import {
+  type FetchMock,
+  withFetchPreconnect,
+} from "../../../../test/helpers/plugins/fetch-mock.js";
 import {
   fetchWithSlackAuth,
   resolveSlackAttachmentContent,
@@ -15,17 +18,16 @@ import {
 // Store original fetch
 const originalFetch = globalThis.fetch;
 let mockFetch: ReturnType<typeof vi.fn<FetchMock>>;
+const originalResolvePinnedHostnameWithPolicy = ssrf.resolvePinnedHostnameWithPolicy;
+type LookupFn = NonNullable<
+  Parameters<typeof ssrf.resolvePinnedHostnameWithPolicy>[1]["lookupFn"]
+>;
 const createSavedMedia = (filePath: string, contentType: string): SavedMedia => ({
   id: "saved-media-id",
   path: filePath,
   size: 128,
   contentType,
 });
-
-function getRequestHeader(callIndex: number, headerName: string): string | null {
-  const init = mockFetch.mock.calls[callIndex]?.[1];
-  return new Headers(init?.headers).get(headerName);
-}
 
 describe("fetchWithSlackAuth", () => {
   beforeEach(() => {
@@ -34,11 +36,17 @@ describe("fetchWithSlackAuth", () => {
       async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(),
     );
     globalThis.fetch = withFetchPreconnect(mockFetch);
+    const lookupMock = vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]) as unknown as
+      LookupFn;
+    vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation((hostname, params) =>
+      originalResolvePinnedHostnameWithPolicy(hostname, { ...params, lookupFn: lookupMock }),
+    );
   });
 
   afterEach(() => {
     // Restore original fetch
     globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
   });
 
   it("sends Authorization header on initial request with manual redirect", async () => {
@@ -51,14 +59,22 @@ describe("fetchWithSlackAuth", () => {
 
     const result = await fetchWithSlackAuth("https://files.slack.com/test.jpg", "xoxb-test-token");
 
-    expect(result).toBe(mockResponse);
+    expect(result.status).toBe(200);
+    expect(result.headers.get("content-type")).toBe("image/jpeg");
+    await expect(result.arrayBuffer()).resolves.toSatisfy(
+      (body) => Buffer.from(body).toString("utf8") === "image data",
+    );
 
     // Verify fetch was called with correct params
     expect(mockFetch).toHaveBeenCalledTimes(1);
-    expect(mockFetch).toHaveBeenCalledWith("https://files.slack.com/test.jpg", {
-      headers: { Authorization: "Bearer xoxb-test-token" },
-      redirect: "manual",
-    });
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      1,
+      "https://files.slack.com/test.jpg",
+      expect.objectContaining({ redirect: "manual" }),
+    );
+    expect(new Headers(mockFetch.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
+      "Bearer xoxb-test-token",
+    );
   });
 
   it("rejects non-Slack hosts to avoid leaking tokens", async () => {
@@ -70,7 +86,7 @@ describe("fetchWithSlackAuth", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it("strips Authorization header on cross-origin redirects", async () => {
+  it("keeps Authorization on redirects that stay on Slack hosts", async () => {
     // First call: redirect response from Slack
     const redirectResponse = new Response(null, {
       status: 302,
@@ -87,24 +103,32 @@ describe("fetchWithSlackAuth", () => {
 
     const result = await fetchWithSlackAuth("https://files.slack.com/test.jpg", "xoxb-test-token");
 
-    expect(result).toBe(fileResponse);
+    expect(result.status).toBe(200);
     expect(mockFetch).toHaveBeenCalledTimes(2);
 
     // First call should have Authorization header and manual redirect
-    expect(mockFetch).toHaveBeenNthCalledWith(1, "https://files.slack.com/test.jpg", {
-      headers: { Authorization: "Bearer xoxb-test-token" },
-      redirect: "manual",
-    });
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      1,
+      "https://files.slack.com/test.jpg",
+      expect.objectContaining({ redirect: "manual" }),
+    );
+    expect(new Headers(mockFetch.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
+      "Bearer xoxb-test-token",
+    );
 
-    // Second call should follow the redirect without Authorization
+    // Second call should keep Authorization for Slack-owned redirect targets.
     expect(mockFetch).toHaveBeenNthCalledWith(
       2,
       "https://cdn.slack-edge.com/presigned-url?sig=abc123",
-      { redirect: "follow" },
+      expect.objectContaining({ redirect: "manual" }),
+    );
+    expect(new Headers(mockFetch.mock.calls[1]?.[1]?.headers).get("authorization")).toBe(
+      "Bearer xoxb-test-token",
     );
   });
 
-  it("preserves Authorization header on same-origin redirects", async () => {
+  it("handles relative redirect URLs", async () => {
+    // Redirect with relative URL
     const redirectResponse = new Response(null, {
       status: 302,
       headers: { location: "/files/redirect-target" },
@@ -119,10 +143,53 @@ describe("fetchWithSlackAuth", () => {
 
     await fetchWithSlackAuth("https://files.slack.com/original.jpg", "xoxb-test-token");
 
-    expect(mockFetch).toHaveBeenNthCalledWith(2, "https://files.slack.com/files/redirect-target", {
-      headers: { Authorization: "Bearer xoxb-test-token" },
-      redirect: "follow",
+    // Second call should resolve the relative URL against the original
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      2,
+      "https://files.slack.com/files/redirect-target",
+      expect.objectContaining({ redirect: "manual" }),
+    );
+    expect(new Headers(mockFetch.mock.calls[1]?.[1]?.headers).get("authorization")).toBe(
+      "Bearer xoxb-test-token",
+    );
+  });
+
+  it("drops Authorization when redirects leave Slack-owned hosts", async () => {
+    const redirectResponse = new Response(null, {
+      status: 302,
+      headers: { location: "https://example.com/presigned-url?sig=abc123" },
     });
+
+    const fileResponse = new Response(Buffer.from("image data"), {
+      status: 200,
+      headers: { "content-type": "image/jpeg" },
+    });
+
+    mockFetch.mockResolvedValueOnce(redirectResponse).mockResolvedValueOnce(fileResponse);
+
+    const result = await fetchWithSlackAuth("https://files.slack.com/test.jpg", "xoxb-test-token");
+
+    expect(result.status).toBe(200);
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      2,
+      "https://example.com/presigned-url?sig=abc123",
+      expect.objectContaining({ redirect: "manual" }),
+    );
+    expect(new Headers(mockFetch.mock.calls[1]?.[1]?.headers).get("authorization")).toBeNull();
+  });
+
+  it("rejects redirects that downgrade to HTTP", async () => {
+    const redirectResponse = new Response(null, {
+      status: 302,
+      headers: { location: "http://example.com/presigned-url?sig=abc123" },
+    });
+
+    mockFetch.mockResolvedValueOnce(redirectResponse);
+
+    await expect(
+      fetchWithSlackAuth("https://files.slack.com/test.jpg", "xoxb-test-token"),
+    ).rejects.toThrow(/non-HTTPS protocol/i);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
   it("returns redirect response when no location header is provided", async () => {
@@ -134,10 +201,9 @@ describe("fetchWithSlackAuth", () => {
 
     mockFetch.mockResolvedValueOnce(redirectResponse);
 
-    const result = await fetchWithSlackAuth("https://files.slack.com/test.jpg", "xoxb-test-token");
-
-    // Should return the redirect response directly
-    expect(result).toBe(redirectResponse);
+    await expect(
+      fetchWithSlackAuth("https://files.slack.com/test.jpg", "xoxb-test-token"),
+    ).rejects.toThrow(/missing location header/i);
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
@@ -150,7 +216,8 @@ describe("fetchWithSlackAuth", () => {
 
     const result = await fetchWithSlackAuth("https://files.slack.com/test.jpg", "xoxb-test-token");
 
-    expect(result).toBe(errorResponse);
+    expect(result.status).toBe(404);
+    await expect(result.text()).resolves.toBe("Not Found");
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
@@ -169,9 +236,43 @@ describe("fetchWithSlackAuth", () => {
     await fetchWithSlackAuth("https://files.slack.com/test.jpg", "xoxb-test-token");
 
     expect(mockFetch).toHaveBeenCalledTimes(2);
-    expect(mockFetch).toHaveBeenNthCalledWith(2, "https://cdn.slack.com/new-url", {
-      redirect: "follow",
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      2,
+      "https://cdn.slack.com/new-url",
+      expect.objectContaining({ redirect: "manual" }),
+    );
+    expect(new Headers(mockFetch.mock.calls[1]?.[1]?.headers).get("authorization")).toBe(
+      "Bearer xoxb-test-token",
+    );
+  });
+
+  it("blocks redirect targets that fail Slack media SSRF policy", async () => {
+    const redirectResponse = new Response(null, {
+      status: 302,
+      headers: { location: "https://cdn.slack-edge.com/presigned-url?sig=abc123" },
     });
+
+    vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation(
+      async (hostname, params) => {
+        const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
+        if (normalized === "cdn.slack-edge.com") {
+          throw new Error("Blocked: resolves to private/internal/special-use IP address");
+        }
+        const lookupFn = vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]) as unknown as
+          LookupFn;
+        return await originalResolvePinnedHostnameWithPolicy(hostname, {
+          ...params,
+          lookupFn,
+        });
+      },
+    );
+
+    mockFetch.mockResolvedValueOnce(redirectResponse);
+
+    await expect(
+      fetchWithSlackAuth("https://files.slack.com/test.jpg", "xoxb-test-token"),
+    ).rejects.toThrow(/private\/internal\/special-use/i);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -214,74 +315,6 @@ describe("resolveSlackMedia", () => {
       "https://files.slack.com/download.jpg",
       expect.anything(),
     );
-  });
-
-  it("preserves Authorization on same-origin redirects for private downloads", async () => {
-    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
-      createSavedMedia("/tmp/test.jpg", "image/jpeg"),
-    );
-
-    mockFetch
-      .mockResolvedValueOnce(
-        new Response(null, {
-          status: 302,
-          headers: { location: "/files/redirect-target" },
-        }),
-      )
-      .mockResolvedValueOnce(
-        new Response(Buffer.from("image data"), {
-          status: 200,
-          headers: { "content-type": "image/jpeg" },
-        }),
-      );
-
-    const result = await resolveSlackMedia({
-      files: [{ url_private_download: "https://files.slack.com/download.jpg", name: "test.jpg" }],
-      token: "xoxb-test-token",
-      maxBytes: 1024 * 1024,
-    });
-
-    expect(result).not.toBeNull();
-    expect(mockFetch).toHaveBeenCalledTimes(2);
-    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://files.slack.com/download.jpg");
-    expect(mockFetch.mock.calls[1]?.[0]).toBe("https://files.slack.com/files/redirect-target");
-    expect(getRequestHeader(0, "Authorization")).toBe("Bearer xoxb-test-token");
-    expect(getRequestHeader(1, "Authorization")).toBe("Bearer xoxb-test-token");
-  });
-
-  it("strips Authorization on cross-origin redirects for private downloads", async () => {
-    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
-      createSavedMedia("/tmp/test.jpg", "image/jpeg"),
-    );
-
-    mockFetch
-      .mockResolvedValueOnce(
-        new Response(null, {
-          status: 302,
-          headers: { location: "https://downloads.slack-edge.com/presigned-url?sig=abc123" },
-        }),
-      )
-      .mockResolvedValueOnce(
-        new Response(Buffer.from("image data"), {
-          status: 200,
-          headers: { "content-type": "image/jpeg" },
-        }),
-      );
-
-    const result = await resolveSlackMedia({
-      files: [{ url_private_download: "https://files.slack.com/download.jpg", name: "test.jpg" }],
-      token: "xoxb-test-token",
-      maxBytes: 1024 * 1024,
-    });
-
-    expect(result).not.toBeNull();
-    expect(mockFetch).toHaveBeenCalledTimes(2);
-    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://files.slack.com/download.jpg");
-    expect(mockFetch.mock.calls[1]?.[0]).toBe(
-      "https://downloads.slack-edge.com/presigned-url?sig=abc123",
-    );
-    expect(getRequestHeader(0, "Authorization")).toBe("Bearer xoxb-test-token");
-    expect(getRequestHeader(1, "Authorization")).toBeNull();
   });
 
   it("returns null when download fails", async () => {
@@ -588,39 +621,6 @@ describe("resolveSlackMedia", () => {
     expect(result).toHaveLength(8);
     expect(saveMediaBufferMock).toHaveBeenCalledTimes(8);
     expect(mockFetch).toHaveBeenCalledTimes(8);
-  });
-
-  it("routes dispatcher-backed Slack media requests through runtime fetch", async () => {
-    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
-      createSavedMedia("/tmp/test.jpg", "image/jpeg"),
-    );
-    globalThis.fetch = (async () => {
-      throw new Error("global fetch should not receive dispatcher-backed Slack media requests");
-    }) as typeof fetch;
-    const runtimeFetchSpy = vi
-      .spyOn(ssrf, "fetchWithRuntimeDispatcher")
-      .mockImplementation(async () => {
-        return new Response(Buffer.from("image data"), {
-          status: 200,
-          headers: { "content-type": "image/jpeg" },
-        });
-      });
-
-    const result = await resolveSlackMedia({
-      files: [{ url_private: "https://files.slack.com/test.jpg", name: "test.jpg" }],
-      token: "xoxb-test-token",
-      maxBytes: 1024 * 1024,
-    });
-
-    expect(result).not.toBeNull();
-    expect(runtimeFetchSpy).toHaveBeenCalled();
-    expect(runtimeFetchSpy.mock.calls[0]?.[1]).toMatchObject({ redirect: "manual" });
-    expect(
-      runtimeFetchSpy.mock.calls[0]?.[1] && "dispatcher" in runtimeFetchSpy.mock.calls[0][1],
-    ).toBe(true);
-    expect(new Headers(runtimeFetchSpy.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
-      "Bearer xoxb-test-token",
-    );
   });
 });
 
