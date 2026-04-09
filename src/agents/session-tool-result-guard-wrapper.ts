@@ -98,7 +98,9 @@ export function guardSessionManager(
     missingToolResultText?: string;
     allowedToolNames?: Iterable<string>;
     suppressNextUserMessagePersistence?: boolean;
-    onUserMessagePersisted?: () => void | Promise<void>;
+    onUserMessagePersisted?: (
+      message: Extract<AgentMessage, { role: "user" }>,
+    ) => void | Promise<void>;
   },
 ): GuardedSessionManager {
   if (typeof (sessionManager as GuardedSessionManager).flushPendingToolResults === "function") {

@@ -303,7 +303,9 @@ export function installSessionToolResultGuard(
     ) => PluginHookBeforeMessageWriteResult | undefined;
     maxToolResultChars?: number;
     suppressNextUserMessagePersistence?: boolean;
-    onUserMessagePersisted?: () => void | Promise<void>;
+    onUserMessagePersisted?: (
+      message: Extract<AgentMessage, { role: "user" }>,
+    ) => void | Promise<void>;
   },
 ): {
   flushPendingToolResults: () => void;
@@ -478,7 +480,7 @@ export function installSessionToolResultGuard(
       pendingState.trackToolCalls(toolCalls);
     }
     if ((finalMessage as { role?: unknown }).role === "user") {
-      void opts?.onUserMessagePersisted?.();
+      void opts?.onUserMessagePersisted?.(finalMessage as Extract<AgentMessage, { role: "user" }>);
     }
 
     return result;

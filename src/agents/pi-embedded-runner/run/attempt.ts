@@ -1433,8 +1433,8 @@ export async function runEmbeddedAttempt(
             : undefined,
         allowedToolNames,
         suppressNextUserMessagePersistence: params.suppressNextUserMessagePersistence,
-        onUserMessagePersisted: () => {
-          params.onUserMessagePersisted?.();
+        onUserMessagePersisted: (message) => {
+          params.onUserMessagePersisted?.(message);
         },
       });
       trackSessionManagerAccess(params.sessionFile);

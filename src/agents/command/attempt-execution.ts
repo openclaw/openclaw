@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
@@ -358,7 +359,7 @@ export function runAgentAttempt(params: {
   modelFallbacksOverride?: string[];
   sessionHasHistory?: boolean;
   suppressPromptPersistenceOnRetry?: boolean;
-  onUserMessagePersisted?: () => void;
+  onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
 }) {
   const isRawModelRun = params.opts.modelRun === true || params.opts.promptMode === "none";
   const claudeCliFallbackPrelude =
