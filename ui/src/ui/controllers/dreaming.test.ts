@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  backfillDreamDiary,
   loadDreamDiary,
   loadDreamingStatus,
+  resetGroundedShortTerm,
+  resetDreamDiary,
+  resolveConfiguredDreaming,
   updateDreamingEnabled,
   type DreamingState,
 } from "./dreaming.ts";
@@ -20,12 +24,20 @@ function createState(): { state: DreamingState; request: ReturnType<typeof vi.fn
     dreamingStatus: null,
     dreamingModeSaving: false,
     dreamDiaryLoading: false,
+    dreamDiaryActionLoading: false,
     dreamDiaryError: null,
     dreamDiaryPath: null,
     dreamDiaryContent: null,
     lastError: null,
   };
   return { state, request };
+}
+
+function getConfigPatchRawPayload(request: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  const patchCall = request.mock.calls.find((entry) => entry[0] === "config.patch");
+  expect(patchCall).toBeDefined();
+  const requestPayload = patchCall?.[1] as { raw?: string };
+  return JSON.parse(String(requestPayload.raw)) as Record<string, unknown>;
 }
 
 describe("dreaming controller", () => {
@@ -41,12 +53,63 @@ describe("dreaming controller", () => {
         shortTermCount: 8,
         recallSignalCount: 14,
         dailySignalCount: 6,
+        groundedSignalCount: 5,
         totalSignalCount: 20,
         phaseSignalCount: 11,
         lightPhaseHitCount: 7,
         remPhaseHitCount: 4,
         promotedTotal: 21,
         promotedToday: 2,
+        shortTermEntries: [
+          {
+            key: "memory:memory/2026-04-05.md:1:2",
+            path: "memory/2026-04-05.md",
+            startLine: 1,
+            endLine: 2,
+            snippet: "Emma prefers shorter, lower-pressure check-ins.",
+            recallCount: 2,
+            dailyCount: 1,
+            groundedCount: 1,
+            totalSignalCount: 3,
+            lightHits: 1,
+            remHits: 2,
+            phaseHitCount: 3,
+            lastRecalledAt: "2026-04-05T01:02:03.000Z",
+          },
+        ],
+        signalEntries: [
+          {
+            key: "memory:memory/2026-04-05.md:1:2",
+            path: "memory/2026-04-05.md",
+            startLine: 1,
+            endLine: 2,
+            snippet: "Emma prefers shorter, lower-pressure check-ins.",
+            recallCount: 2,
+            dailyCount: 1,
+            groundedCount: 1,
+            totalSignalCount: 3,
+            lightHits: 1,
+            remHits: 2,
+            phaseHitCount: 3,
+          },
+        ],
+        promotedEntries: [
+          {
+            key: "memory:memory/2026-04-04.md:4:5",
+            path: "memory/2026-04-04.md",
+            startLine: 4,
+            endLine: 5,
+            snippet: "Use the Happy Together calendar for flights.",
+            recallCount: 3,
+            dailyCount: 2,
+            groundedCount: 0,
+            totalSignalCount: 5,
+            lightHits: 0,
+            remHits: 0,
+            phaseHitCount: 0,
+            promotedAt: "2026-04-05T04:00:00.000Z",
+          },
+        ],
         phases: {
           light: {
             enabled: true,
@@ -88,9 +151,23 @@ describe("dreaming controller", () => {
       expect.objectContaining({
         enabled: true,
         shortTermCount: 8,
+        groundedSignalCount: 5,
         totalSignalCount: 20,
         phaseSignalCount: 11,
         promotedToday: 2,
+        shortTermEntries: [
+          expect.objectContaining({
+            snippet: "Emma prefers shorter, lower-pressure check-ins.",
+            totalSignalCount: 3,
+            groundedCount: 1,
+            phaseHitCount: 3,
+          }),
+        ],
+        promotedEntries: [
+          expect.objectContaining({
+            snippet: "Use the Happy Together calendar for flights.",
+          }),
+        ],
         phases: expect.objectContaining({
           deep: expect.objectContaining({
             minScore: 0.8,
@@ -105,6 +182,25 @@ describe("dreaming controller", () => {
 
   it("patches config to update global dreaming enablement", async () => {
     const { state, request } = createState();
+    state.configSnapshot = {
+      hash: "hash-1",
+      config: {
+        plugins: {
+          slots: {
+            memory: "memos-local-openclaw-plugin",
+          },
+          entries: {
+            "memos-local-openclaw-plugin": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    };
     request.mockResolvedValue({ ok: true });
 
     const ok = await updateDreamingEnabled(state, false);
@@ -117,8 +213,150 @@ describe("dreaming controller", () => {
         sessionKey: "main",
       }),
     );
+    expect(getConfigPatchRawPayload(request)).toEqual({
+      plugins: {
+        entries: {
+          "memos-local-openclaw-plugin": {
+            config: {
+              dreaming: {
+                enabled: false,
+              },
+            },
+          },
+        },
+      },
+    });
     expect(state.dreamingModeSaving).toBe(false);
     expect(state.dreamingStatusError).toBeNull();
+  });
+
+  it("falls back to memory-core when selected memory slot is blank", async () => {
+    const { state, request } = createState();
+    state.configSnapshot = {
+      hash: "hash-1",
+      config: {
+        plugins: {
+          slots: {
+            memory: "   ",
+          },
+        },
+      },
+    };
+    request.mockResolvedValue({ ok: true });
+
+    const ok = await updateDreamingEnabled(state, true);
+
+    expect(ok).toBe(true);
+    expect(getConfigPatchRawPayload(request)).toEqual({
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("blocks dreaming patch when selected plugin config rejects unknown keys", async () => {
+    const { state, request } = createState();
+    state.configSnapshot = {
+      hash: "hash-1",
+      config: {
+        plugins: {
+          slots: {
+            memory: "memory-lancedb",
+          },
+        },
+      },
+    };
+    request.mockImplementation(async (method: string) => {
+      if (method === "config.schema.lookup") {
+        return {
+          path: "plugins.entries.memory-lancedb.config",
+          schema: {
+            type: "object",
+            additionalProperties: false,
+          },
+          children: [
+            { key: "retentionDays", path: "plugins.entries.memory-lancedb.config.retentionDays" },
+          ],
+        };
+      }
+      if (method === "config.patch") {
+        return { ok: true };
+      }
+      return {};
+    });
+
+    const ok = await updateDreamingEnabled(state, true);
+
+    expect(ok).toBe(false);
+    expect(request).toHaveBeenCalledWith("config.schema.lookup", {
+      path: "plugins.entries.memory-lancedb.config",
+    });
+    expect(request).not.toHaveBeenCalledWith("config.patch", expect.anything());
+    expect(state.dreamingStatusError).toContain("memory-lancedb");
+    expect(state.dreamingStatusError).toContain("does not support dreaming settings");
+  });
+
+  it("reads dreaming enabled state from the selected memory slot plugin", () => {
+    expect(
+      resolveConfiguredDreaming({
+        plugins: {
+          slots: {
+            memory: "memos-local-openclaw-plugin",
+          },
+          entries: {
+            "memos-local-openclaw-plugin": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                },
+              },
+            },
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: false,
+                },
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      pluginId: "memos-local-openclaw-plugin",
+      enabled: true,
+    });
+  });
+
+  it('falls back to memory-core when selected memory slot is "none"', () => {
+    expect(
+      resolveConfiguredDreaming({
+        plugins: {
+          slots: {
+            memory: "none",
+          },
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      pluginId: "memory-core",
+      enabled: true,
+    });
   });
 
   it("fails gracefully when config hash is missing", async () => {
@@ -170,5 +408,121 @@ describe("dreaming controller", () => {
 
     expect(state.dreamDiaryError).toContain("dream diary read failed");
     expect(state.dreamDiaryLoading).toBe(false);
+  });
+
+  it("backfills and reloads dream diary state", async () => {
+    const { state, request } = createState();
+    request.mockImplementation(async (method: string) => {
+      if (method === "doctor.memory.backfillDreamDiary") {
+        return { action: "backfill", written: 79, replaced: 79 };
+      }
+      if (method === "doctor.memory.dreamDiary") {
+        return { found: true, path: "DREAMS.md", content: "backfilled diary" };
+      }
+      if (method === "doctor.memory.status") {
+        return {
+          dreaming: {
+            enabled: true,
+            shortTermCount: 1,
+            recallSignalCount: 0,
+            dailySignalCount: 0,
+            totalSignalCount: 1,
+            phaseSignalCount: 0,
+            lightPhaseHitCount: 0,
+            remPhaseHitCount: 0,
+            promotedTotal: 0,
+            promotedToday: 0,
+            shortTermEntries: [],
+            signalEntries: [],
+            promotedEntries: [],
+            phases: {
+              light: {
+                enabled: false,
+                cron: "",
+                managedCronPresent: false,
+                lookbackDays: 0,
+                limit: 0,
+              },
+              deep: {
+                enabled: false,
+                cron: "",
+                managedCronPresent: false,
+                limit: 0,
+                minScore: 0,
+                minRecallCount: 0,
+                minUniqueQueries: 0,
+                recencyHalfLifeDays: 0,
+              },
+              rem: {
+                enabled: false,
+                cron: "",
+                managedCronPresent: false,
+                lookbackDays: 0,
+                limit: 0,
+                minPatternStrength: 0,
+              },
+            },
+          },
+        };
+      }
+      return {};
+    });
+
+    const ok = await backfillDreamDiary(state);
+
+    expect(ok).toBe(true);
+    expect(request).toHaveBeenCalledWith("doctor.memory.backfillDreamDiary", {});
+    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", {});
+    expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
+    expect(state.dreamDiaryContent).toBe("backfilled diary");
+    expect(state.dreamDiaryActionLoading).toBe(false);
+  });
+
+  it("resets and reloads dream diary state", async () => {
+    const { state, request } = createState();
+    request.mockImplementation(async (method: string) => {
+      if (method === "doctor.memory.resetDreamDiary") {
+        return { action: "reset", removedEntries: 79 };
+      }
+      if (method === "doctor.memory.dreamDiary") {
+        return { found: false, path: "DREAMS.md" };
+      }
+      if (method === "doctor.memory.status") {
+        return { dreaming: null };
+      }
+      return {};
+    });
+
+    const ok = await resetDreamDiary(state);
+
+    expect(ok).toBe(true);
+    expect(request).toHaveBeenCalledWith("doctor.memory.resetDreamDiary", {});
+    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", {});
+    expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
+    expect(state.dreamDiaryContent).toBeNull();
+    expect(state.dreamDiaryActionLoading).toBe(false);
+  });
+
+  it("clears grounded staged entries and reloads only dreaming status", async () => {
+    const { state, request } = createState();
+    state.dreamDiaryContent = "keep existing diary";
+    request.mockImplementation(async (method: string) => {
+      if (method === "doctor.memory.resetGroundedShortTerm") {
+        return { action: "resetGroundedShortTerm", removedShortTermEntries: 2 };
+      }
+      if (method === "doctor.memory.status") {
+        return { dreaming: null };
+      }
+      return {};
+    });
+
+    const ok = await resetGroundedShortTerm(state);
+
+    expect(ok).toBe(true);
+    expect(request).toHaveBeenCalledWith("doctor.memory.resetGroundedShortTerm", {});
+    expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
+    expect(request).not.toHaveBeenCalledWith("doctor.memory.dreamDiary", {});
+    expect(state.dreamDiaryContent).toBe("keep existing diary");
+    expect(state.dreamDiaryActionLoading).toBe(false);
   });
 });

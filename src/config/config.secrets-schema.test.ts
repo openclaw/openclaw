@@ -171,6 +171,36 @@ describe("config secret refs schema", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts model provider header SecretRef values", () => {
+    const result = validateConfigObjectRaw({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            headers: {
+              Authorization: {
+                source: "env",
+                provider: "default",
+                id: "OPENAI_HEADER_TOKEN",
+              },
+            },
+            models: [],
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.models?.providers?.openai?.headers?.Authorization).toEqual({
+        source: "env",
+        provider: "default",
+        id: "OPENAI_HEADER_TOKEN",
+      });
+    }
+  });
+
   it("rejects model provider request proxy url secret refs", () => {
     const result = validateConfigObjectRaw({
       models: {

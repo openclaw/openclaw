@@ -75,7 +75,6 @@ describe("anthropic-vertex provider plugin", () => {
       repairToolUseResultPairing: true,
       validateAnthropicTurns: true,
       allowSyntheticToolResults: true,
-      dropThinkingBlocks: true,
     });
   });
 });

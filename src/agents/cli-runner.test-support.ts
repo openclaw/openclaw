@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import type { Mock } from "vitest";
 import { beforeEach, vi } from "vitest";
-import { buildAnthropicCliBackend } from "../../extensions/anthropic/test-api.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import type { enqueueSystemEvent } from "../infra/system-events.js";
@@ -13,6 +12,7 @@ import {
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
+import { setCliAuthEpochTestDeps } from "./cli-auth-epoch.js";
 import { setCliRunnerExecuteTestDeps } from "./cli-runner/execute.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
@@ -34,6 +34,7 @@ export const enqueueSystemEventMock: UnknownMock = vi.fn();
 export const requestHeartbeatNowMock: UnknownMock = vi.fn();
 export const SMALL_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+let cliRunnerModulePromise: Promise<typeof import("./cli-runner.js")> | undefined;
 
 const hoisted = vi.hoisted(
   (): {
@@ -68,6 +69,7 @@ setCliRunnerExecuteTestDeps({
 setCliRunnerPrepareTestDeps({
   makeBootstrapWarn: () => () => {},
   resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
+  resolveOpenClawDocsPath: async () => null,
 });
 
 type MockRunExit = {
@@ -105,6 +107,8 @@ type ManagedRunMock = {
 function buildOpenAICodexCliBackendFixture(): CliBackendPlugin {
   return {
     id: "codex-cli",
+    bundleMcp: true,
+    bundleMcpMode: "codex-config-overrides",
     config: {
       command: "codex",
       args: [
@@ -132,8 +136,111 @@ function buildOpenAICodexCliBackendFixture(): CliBackendPlugin {
       modelArg: "--model",
       sessionIdFields: ["thread_id"],
       sessionMode: "existing",
+      systemPromptFileConfigArg: "-c",
+      systemPromptFileConfigKey: "model_instructions_file",
+      systemPromptWhen: "first",
       imageArg: "--image",
       imageMode: "repeat",
+      reliability: {
+        watchdog: {
+          fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
+          resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
+        },
+      },
+      serialize: true,
+    },
+  };
+}
+
+function buildAnthropicCliBackendFixture(): CliBackendPlugin {
+  const clearEnv = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_API_KEY_OLD",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_UNIX_SOCKET",
+    "CLAUDE_CONFIG_DIR",
+    "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+    "CLAUDE_CODE_OAUTH_SCOPES",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+    "CLAUDE_CODE_PLUGIN_CACHE_DIR",
+    "CLAUDE_CODE_PLUGIN_SEED_DIR",
+    "CLAUDE_CODE_REMOTE",
+    "CLAUDE_CODE_USE_COWORK_PLUGINS",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_USE_VERTEX",
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_HEADERS",
+    "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+    "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
+    "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+    "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
+    "OTEL_EXPORTER_OTLP_PROTOCOL",
+    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+    "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+    "OTEL_LOGS_EXPORTER",
+    "OTEL_METRICS_EXPORTER",
+    "OTEL_SDK_DISABLED",
+    "OTEL_TRACES_EXPORTER",
+  ] as const;
+  return {
+    id: "claude-cli",
+    bundleMcp: true,
+    bundleMcpMode: "claude-config-file",
+    config: {
+      command: "claude",
+      args: [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--include-partial-messages",
+        "--verbose",
+        "--setting-sources",
+        "user",
+        "--permission-mode",
+        "bypassPermissions",
+      ],
+      resumeArgs: [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--include-partial-messages",
+        "--verbose",
+        "--setting-sources",
+        "user",
+        "--permission-mode",
+        "bypassPermissions",
+        "--resume",
+        "{sessionId}",
+      ],
+      output: "jsonl",
+      input: "stdin",
+      modelArg: "--model",
+      modelAliases: {
+        opus: "opus",
+        "claude-opus-4-6": "opus",
+        sonnet: "sonnet",
+        "claude-sonnet-4-6": "sonnet",
+        "claude-sonnet-4-5": "sonnet",
+        haiku: "haiku",
+      },
+      sessionArg: "--session-id",
+      sessionMode: "always",
+      sessionIdFields: ["session_id", "sessionId", "conversation_id", "conversationId"],
+      systemPromptArg: "--append-system-prompt",
+      systemPromptMode: "append",
+      systemPromptWhen: "first",
+      env: {
+        CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
+      },
+      clearEnv: [...clearEnv],
       reliability: {
         watchdog: {
           fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
@@ -148,12 +255,16 @@ function buildOpenAICodexCliBackendFixture(): CliBackendPlugin {
 function buildGoogleGeminiCliBackendFixture(): CliBackendPlugin {
   return {
     id: "google-gemini-cli",
+    bundleMcp: true,
+    bundleMcpMode: "gemini-system-settings",
     config: {
       command: "gemini",
-      args: ["--prompt", "--output-format", "json"],
-      resumeArgs: ["--resume", "{sessionId}", "--prompt", "--output-format", "json"],
+      args: ["--output-format", "json", "--prompt", "{prompt}"],
+      resumeArgs: ["--resume", "{sessionId}", "--output-format", "json", "--prompt", "{prompt}"],
       output: "json",
       input: "arg",
+      imageArg: "@",
+      imagePathScope: "workspace",
       modelArg: "--model",
       modelAliases: {
         pro: "gemini-3.1-pro-preview",
@@ -220,11 +331,22 @@ export const EXISTING_CODEX_CONFIG = {
 } satisfies OpenClawConfig;
 
 export async function setupCliRunnerTestModule() {
+  setupCliRunnerTestRegistry();
+  cliRunnerModulePromise ??= import("./cli-runner.js");
+  return (await cliRunnerModulePromise).runCliAgent;
+}
+
+export function setupCliRunnerTestRegistry() {
+  setCliAuthEpochTestDeps({
+    readClaudeCliCredentialsCached: () => null,
+    readCodexCliCredentialsCached: () => null,
+    loadAuthProfileStoreForRuntime: () => ({ version: 1, profiles: {} }),
+  });
   const registry = createEmptyPluginRegistry();
   registry.cliBackends = [
     {
       pluginId: "anthropic",
-      backend: buildAnthropicCliBackend(),
+      backend: buildAnthropicCliBackendFixture(),
       source: "test",
     },
     {
@@ -246,16 +368,6 @@ export async function setupCliRunnerTestModule() {
     bootstrapFiles: [],
     contextFiles: [],
   });
-  return (await import("./cli-runner.js")).runCliAgent;
-}
-
-export async function setupClaudeCliRunnerTestModule() {
-  const runCliAgent = await setupCliRunnerTestModule();
-  return (params: Parameters<typeof import("./claude-cli-runner.js").runClaudeCliAgent>[0]) =>
-    runCliAgent({
-      ...params,
-      provider: params.provider ?? "claude-cli",
-    });
 }
 
 export function stubBootstrapContext(params: {
@@ -269,6 +381,7 @@ export function restoreCliRunnerPrepareTestDeps() {
   setCliRunnerPrepareTestDeps({
     makeBootstrapWarn: () => () => {},
     resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
+    resolveOpenClawDocsPath: async () => null,
   });
 }
 

@@ -55,6 +55,12 @@ export function applyLocalOxlintPolicy(args, env, hostResources) {
 
   insertBeforeSeparator(nextArgs, "--type-aware");
   insertBeforeSeparator(nextArgs, "--tsconfig", "tsconfig.oxlint.json");
+  if (
+    !hasFlag(nextArgs, "--report-unused-disable-directives") &&
+    !hasFlag(nextArgs, "--report-unused-disable-directives-severity")
+  ) {
+    insertBeforeSeparator(nextArgs, "--report-unused-disable-directives-severity", "error");
+  }
 
   if (shouldThrottleLocalHeavyChecks(nextEnv, hostResources)) {
     insertBeforeSeparator(nextArgs, "--threads=1");

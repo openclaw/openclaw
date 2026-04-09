@@ -6,6 +6,7 @@ import {
   type RequestData,
   type RequestClientOptions,
 } from "@buape/carbon";
+import { isRecord } from "openclaw/plugin-sdk/text-runtime";
 
 export type ProxyRequestClientOptions = RequestClientOptions & {
   fetch?: typeof fetch;
@@ -43,11 +44,10 @@ const defaultOptions = {
   maxQueueSize: 1000,
   runtimeProfile: "persistent",
   scheduler: {},
-} satisfies Omit<ProxyRequestClientOptions, "fetch">;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
+} satisfies Omit<ProxyRequestClientOptions, "fetch"> & {
+  runtimeProfile: string;
+  scheduler: object;
+};
 
 function getMultipartFiles(payload: unknown): MultipartFile[] {
   if (!isRecord(payload)) {

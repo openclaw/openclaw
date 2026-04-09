@@ -1,12 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as imageGenerationRuntime from "../../image-generation/runtime.js";
-import * as imageOps from "../../media/image-ops.js";
-import * as mediaStore from "../../media/store.js";
-import * as webMedia from "../../media/web-media.js";
-import {
-  createImageGenerateTool,
-  resolveImageGenerationModelConfigForTool,
-} from "./image-generate-tool.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+let imageGenerationRuntime: typeof import("../../image-generation/runtime.js");
+let imageOps: typeof import("../../media/image-ops.js");
+let mediaStore: typeof import("../../media/store.js");
+let webMedia: typeof import("../../media/web-media.js");
+let createImageGenerateTool: typeof import("./image-generate-tool.js").createImageGenerateTool;
+let resolveImageGenerationModelConfigForTool: typeof import("./image-generate-tool.js").resolveImageGenerationModelConfigForTool;
 
 function stubImageGenerationProviders() {
   vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
@@ -172,6 +171,16 @@ function createFalEditProvider(params?: {
 }
 
 describe("createImageGenerateTool", () => {
+  beforeAll(async () => {
+    vi.doUnmock("../../secrets/provider-env-vars.js");
+    imageGenerationRuntime = await import("../../image-generation/runtime.js");
+    imageOps = await import("../../media/image-ops.js");
+    mediaStore = await import("../../media/store.js");
+    webMedia = await import("../../media/web-media.js");
+    ({ createImageGenerateTool, resolveImageGenerationModelConfigForTool } =
+      await import("./image-generate-tool.js"));
+  });
+
   beforeEach(() => {
     vi.stubEnv("OPENAI_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEYS", "");
@@ -555,6 +564,36 @@ describe("createImageGenerateTool", () => {
     );
   });
 
+  it("ignores non-finite mediaMaxMb when loading reference images", async () => {
+    stubImageGenerationProviders();
+    stubEditedImageFlow({ width: 3200, height: 1800 });
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "google/gemini-3-pro-image-preview",
+              },
+              mediaMaxMb: Number.POSITIVE_INFINITY,
+            },
+          },
+        },
+        workspaceDir: process.cwd(),
+      }),
+    );
+
+    await tool.execute("call-edit-infinity-cap", {
+      prompt: "Add a dramatic stormy sky but keep everything else identical.",
+      image: "./fixtures/reference.png",
+    });
+
+    expect(webMedia.loadWebMedia).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ maxBytes: undefined }),
+    );
+  });
+
   it("does not treat inferred edit resolution as an OpenAI override", async () => {
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
       {
@@ -732,7 +771,62 @@ describe("createImageGenerateTool", () => {
     });
   });
 
+  it("surfaces normalized image geometry from runtime metadata", async () => {
+    vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "minimax",
+      model: "image-01",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [
+        {
+          buffer: Buffer.from("png-out"),
+          mimeType: "image/png",
+          fileName: "generated.png",
+        },
+      ],
+      normalization: {
+        aspectRatio: {
+          applied: "16:9",
+          derivedFrom: "size",
+        },
+      },
+      metadata: {
+        requestedSize: "1280x720",
+        normalizedAspectRatio: "16:9",
+      },
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/generated.png",
+      id: "generated.png",
+      size: 7,
+      contentType: "image/png",
+    });
+
+    const tool = createToolWithPrimaryImageModel("minimax/image-01");
+    const result = await tool.execute("call-minimax-generate", {
+      prompt: "A lobster at the movies",
+      size: "1280x720",
+    });
+
+    expect(result.details).toMatchObject({
+      aspectRatio: "16:9",
+      normalization: {
+        aspectRatio: {
+          applied: "16:9",
+          derivedFrom: "size",
+        },
+      },
+      metadata: {
+        requestedSize: "1280x720",
+        normalizedAspectRatio: "16:9",
+      },
+    });
+    expect(result.details).not.toHaveProperty("size");
+  });
+
   it("rejects unsupported aspect ratios", async () => {
+    stubImageGenerationProviders();
+
     const tool = createImageGenerateTool({
       config: {
         agents: {

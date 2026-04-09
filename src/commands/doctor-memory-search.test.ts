@@ -1,7 +1,7 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { checkQmdBinaryAvailability as checkQmdBinaryAvailabilityFn } from "../plugin-sdk/memory-core-host-engine-qmd.js";
+import type { checkQmdBinaryAvailability as checkQmdBinaryAvailabilityFn } from "../memory-host-sdk/engine-qmd.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const note = vi.hoisted(() => vi.fn());
@@ -42,7 +42,7 @@ vi.mock("../plugins/memory-runtime.js", () => ({
   getActiveMemorySearchManager,
 }));
 
-vi.mock("../plugin-sdk/memory-core-host-engine-qmd.js", () => ({
+vi.mock("../memory-host-sdk/engine-qmd.js", () => ({
   checkQmdBinaryAvailability,
 }));
 
@@ -393,7 +393,7 @@ describe("noteMemorySearchHealth", () => {
     expect(note).toHaveBeenCalledTimes(1);
     const providerCalls = resolveApiKeyForProvider.mock.calls as Array<[{ provider: string }]>;
     const providersChecked = providerCalls.map(([arg]) => arg.provider);
-    expect(providersChecked).toEqual(["openai", "google", "voyage", "mistral"]);
+    expect(providersChecked).toEqual(["openai"]);
   });
 
   it("uses runtime-derived env var hints for explicit providers", async () => {
@@ -421,15 +421,34 @@ describe("noteMemorySearchHealth", () => {
 
     const message = String(note.mock.calls[0]?.[0] ?? "");
     expect(message).toContain("OPENAI_API_KEY");
-    expect(message).toContain("GEMINI_API_KEY");
-    expect(message).toContain("GOOGLE_API_KEY");
-    expect(message).toContain("VOYAGE_API_KEY");
-    expect(message).toContain("MISTRAL_API_KEY");
   });
 });
 
 describe("memory recall doctor integration", () => {
   const cfg = {} as OpenClawConfig;
+
+  beforeEach(() => {
+    note.mockClear();
+    auditShortTermPromotionArtifacts.mockReset();
+    auditShortTermPromotionArtifacts.mockResolvedValue({
+      storePath: "/tmp/agent-default/workspace/memory/.dreams/short-term-recall.json",
+      lockPath: "/tmp/agent-default/workspace/memory/.dreams/short-term-promotion.lock",
+      exists: true,
+      entryCount: 1,
+      promotedCount: 0,
+      spacedEntryCount: 0,
+      conceptTaggedEntryCount: 1,
+      invalidEntryCount: 0,
+      issues: [],
+    });
+    repairShortTermPromotionArtifacts.mockReset();
+    repairShortTermPromotionArtifacts.mockResolvedValue({
+      changed: false,
+      removedInvalidEntries: 0,
+      rewroteStore: false,
+      removedStaleLock: false,
+    });
+  });
 
   function createPrompter(overrides: Partial<DoctorPrompter> = {}): DoctorPrompter {
     return {

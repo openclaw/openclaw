@@ -20,6 +20,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import * as claudeCliAuth from "./cli-auth-seam.js";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import { buildAnthropicCliMigrationResult } from "./cli-migration.js";
@@ -59,7 +60,8 @@ const _ANTHROPIC_OAUTH_ALLOWLIST = [
   "anthropic/claude-haiku-4-5",
 ] as const;
 const ANTHROPIC_SETUP_TOKEN_NOTE_LINES = [
-  "Anthropic setup-token auth is a legacy/manual path in OpenClaw.",
+  "Anthropic setup-token auth is supported in OpenClaw.",
+  "OpenClaw prefers Claude CLI reuse when it is available on the host.",
   "Anthropic staff told us this OpenClaw path is allowed again.",
   `If you want a direct API billing path instead, use ${formatCliCommand("openclaw models auth login --provider anthropic --method api-key --set-default")} or ${formatCliCommand("openclaw models auth login --provider anthropic --method cli --set-default")}.`,
 ] as const;
@@ -191,7 +193,7 @@ function resolveAnthropic46ForwardCompatModel(params: {
   fallbackTemplateIds: readonly string[];
 }): ProviderRuntimeModel | undefined {
   const trimmedModelId = params.ctx.modelId.trim();
-  const lower = trimmedModelId.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmedModelId);
   const is46Model =
     lower === params.dashModelId ||
     lower === params.dotModelId ||
@@ -216,7 +218,7 @@ function resolveAnthropic46ForwardCompatModel(params: {
     templateIds,
     ctx: params.ctx,
     patch:
-      params.ctx.provider.trim().toLowerCase() === CLAUDE_CLI_BACKEND_ID
+      normalizeLowercaseStringOrEmpty(params.ctx.provider) === CLAUDE_CLI_BACKEND_ID
         ? { provider: CLAUDE_CLI_BACKEND_ID }
         : undefined,
   });
@@ -245,8 +247,18 @@ function resolveAnthropicForwardCompatModel(
   );
 }
 
+function shouldUseAnthropicAdaptiveThinkingDefault(modelId: string): boolean {
+  const lowerModelId = normalizeLowercaseStringOrEmpty(modelId);
+  return (
+    lowerModelId.startsWith(ANTHROPIC_OPUS_46_MODEL_ID) ||
+    lowerModelId.startsWith(ANTHROPIC_OPUS_46_DOT_MODEL_ID) ||
+    lowerModelId.startsWith(ANTHROPIC_SONNET_46_MODEL_ID) ||
+    lowerModelId.startsWith(ANTHROPIC_SONNET_46_DOT_MODEL_ID)
+  );
+}
+
 function matchesAnthropicModernModel(modelId: string): boolean {
-  const lower = modelId.trim().toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(modelId);
   return ANTHROPIC_MODERN_MODEL_PREFIXES.some((prefix) => lower.startsWith(prefix));
 }
 
@@ -419,16 +431,16 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
       {
         id: "setup-token",
         label: "Anthropic setup-token",
-        hint: "Legacy/manual bearer token path",
+        hint: "Manual bearer token path",
         kind: "token",
         wizard: {
           choiceId: "setup-token",
           choiceLabel: "Anthropic setup-token",
-          choiceHint: "Legacy/manual path",
+          choiceHint: "Manual token path",
           assistantPriority: 40,
           groupId: "anthropic",
           groupLabel: "Anthropic",
-          groupHint: "Claude CLI + API key + legacy token",
+          groupHint: "Claude CLI + API key + token",
         },
         run: async (ctx: ProviderAuthContext) => await runAnthropicSetupTokenAuth(ctx),
         runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) =>
@@ -458,7 +470,7 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
     applyConfigDefaults: ({ config, env }) => applyAnthropicConfigDefaults({ config, env }),
     resolveDynamicModel: (ctx) => resolveAnthropicForwardCompatModel(ctx),
     resolveSyntheticAuth: ({ provider }) =>
-      provider.trim().toLowerCase() === CLAUDE_CLI_BACKEND_ID
+      normalizeLowercaseStringOrEmpty(provider) === CLAUDE_CLI_BACKEND_ID
         ? resolveClaudeCliSyntheticAuth()
         : undefined,
     buildReplayPolicy: buildAnthropicReplayPolicy,
@@ -466,11 +478,7 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
     resolveReasoningOutputMode: () => "native",
     wrapStreamFn: wrapAnthropicProviderStream,
     resolveDefaultThinkingLevel: ({ modelId }) =>
-      matchesAnthropicModernModel(modelId) &&
-      (modelId.toLowerCase().startsWith(ANTHROPIC_OPUS_46_MODEL_ID) ||
-        modelId.toLowerCase().startsWith(ANTHROPIC_OPUS_46_DOT_MODEL_ID) ||
-        modelId.toLowerCase().startsWith(ANTHROPIC_SONNET_46_MODEL_ID) ||
-        modelId.toLowerCase().startsWith(ANTHROPIC_SONNET_46_DOT_MODEL_ID))
+      matchesAnthropicModernModel(modelId) && shouldUseAnthropicAdaptiveThinkingDefault(modelId)
         ? "adaptive"
         : undefined,
     resolveUsageAuth: async (ctx) => await ctx.resolveOAuthToken(),

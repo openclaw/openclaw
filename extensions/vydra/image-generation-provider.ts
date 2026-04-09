@@ -1,21 +1,14 @@
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { assertOkOrThrowHttpError, postJsonRequest } from "openclaw/plugin-sdk/provider-http";
 import {
-  assertOkOrThrowHttpError,
-  postJsonRequest,
-  resolveProviderHttpRequestConfig,
-} from "openclaw/plugin-sdk/provider-http";
-import {
-  DEFAULT_VYDRA_BASE_URL,
   DEFAULT_VYDRA_IMAGE_MODEL,
   downloadVydraAsset,
   extractVydraResultUrls,
-  resolveVydraBaseUrlFromConfig,
-  resolveVydraErrorMessage,
+  resolveCompletedVydraPayload,
   resolveVydraResponseJobId,
   resolveVydraResponseStatus,
-  waitForVydraJob,
+  resolveVydraRequestContext,
 } from "./shared.js";
 
 export function buildVydraImageGenerationProvider(): ImageGenerationProvider {
@@ -55,29 +48,12 @@ export function buildVydraImageGenerationProvider(): ImageGenerationProvider {
         throw new Error("Vydra image generation supports at most one image per request.");
       }
 
-      const auth = await resolveApiKeyForProvider({
-        provider: "vydra",
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
-      });
-      if (!auth.apiKey) {
-        throw new Error("Vydra API key missing");
-      }
-
-      const fetchFn = fetch;
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: resolveVydraBaseUrlFromConfig(req.cfg),
-          defaultBaseUrl: DEFAULT_VYDRA_BASE_URL,
-          allowPrivateNetwork: false,
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-            "Content-Type": "application/json",
-          },
-          provider: "vydra",
+      const { fetchFn, baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
+        await resolveVydraRequestContext({
+          cfg: req.cfg,
+          agentDir: req.agentDir,
+          authStore: req.authStore,
           capability: "image",
-          transport: "http",
         });
 
       const model = req.model?.trim() || DEFAULT_VYDRA_IMAGE_MODEL;
@@ -97,27 +73,15 @@ export function buildVydraImageGenerationProvider(): ImageGenerationProvider {
       try {
         await assertOkOrThrowHttpError(response, "Vydra image generation failed");
         const submitted = await response.json();
-        const completedPayload =
-          resolveVydraResponseStatus(submitted) === "completed" ||
-          extractVydraResultUrls(submitted, "image").length > 0
-            ? submitted
-            : await (() => {
-                const jobId = resolveVydraResponseJobId(submitted);
-                if (!jobId) {
-                  throw new Error(
-                    resolveVydraErrorMessage(submitted) ??
-                      "Vydra image generation response missing job id",
-                  );
-                }
-                return waitForVydraJob({
-                  baseUrl,
-                  jobId,
-                  headers,
-                  timeoutMs: req.timeoutMs,
-                  fetchFn,
-                  kind: "image",
-                });
-              })();
+        const completedPayload = await resolveCompletedVydraPayload({
+          submitted,
+          baseUrl,
+          headers,
+          timeoutMs: req.timeoutMs,
+          fetchFn,
+          kind: "image",
+          missingJobIdMessage: "Vydra image generation response missing job id",
+        });
         const imageUrl = extractVydraResultUrls(completedPayload, "image")[0];
         if (!imageUrl) {
           throw new Error("Vydra image generation completed without an image URL");

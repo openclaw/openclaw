@@ -6,6 +6,7 @@ import { resolveGatewayProbeSurfaceAuth } from "../../gateway/auth-surface-resol
 import { isLoopbackHost } from "../../gateway/net.js";
 import type { GatewayProbeResult } from "../../gateway/probe.js";
 import { inspectBestEffortPrimaryTailnetIPv4 } from "../../infra/network-discovery-display.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { colorize, theme } from "../../terminal/theme.js";
 import { pickGatewaySelfPresence } from "../gateway-presence.js";
 
@@ -106,10 +107,11 @@ export function resolveTargets(cfg: OpenClawConfig, explicitUrl?: string): Gatew
   }
 
   const port = resolveGatewayPort(cfg);
+  const localScheme = cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
   add({
     id: "localLoopback",
     kind: "localLoopback",
-    url: `ws://127.0.0.1:${port}`,
+    url: `${localScheme}://127.0.0.1:${port}`,
     active: cfg.gateway?.mode !== "remote",
   });
 
@@ -162,8 +164,8 @@ export async function resolveAuthForTarget(
   target: GatewayStatusTarget,
   overrides: { token?: string; password?: string },
 ): Promise<{ token?: string; password?: string; diagnostics?: string[] }> {
-  const tokenOverride = overrides.token?.trim() ? overrides.token.trim() : undefined;
-  const passwordOverride = overrides.password?.trim() ? overrides.password.trim() : undefined;
+  const tokenOverride = normalizeOptionalString(overrides.token);
+  const passwordOverride = normalizeOptionalString(overrides.password);
   if (tokenOverride || passwordOverride) {
     return { token: tokenOverride, password: passwordOverride };
   }
@@ -243,9 +245,10 @@ export function extractConfigSummary(snapshotUnknown: unknown): GatewayConfigSum
 export function buildNetworkHints(cfg: OpenClawConfig) {
   const { tailnetIPv4 } = inspectBestEffortPrimaryTailnetIPv4();
   const port = resolveGatewayPort(cfg);
+  const localScheme = cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
   return {
-    localLoopbackUrl: `ws://127.0.0.1:${port}`,
-    localTailnetUrl: tailnetIPv4 ? `ws://${tailnetIPv4}:${port}` : null,
+    localLoopbackUrl: `${localScheme}://127.0.0.1:${port}`,
+    localTailnetUrl: tailnetIPv4 ? `${localScheme}://${tailnetIPv4}:${port}` : null,
     tailnetIPv4: tailnetIPv4 ?? null,
   };
 }

@@ -1,3 +1,4 @@
+import { coerceNativeSetting, normalizeAllowFromList } from "openclaw/plugin-sdk/channel-policy";
 import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
@@ -5,20 +6,6 @@ import {
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import type { ResolvedSlackAccount } from "./accounts.js";
 import type { OpenClawConfig } from "./runtime-api.js";
-
-function normalizeAllowFromList(list: Array<string | number> | undefined | null): string[] {
-  if (!Array.isArray(list)) {
-    return [];
-  }
-  return list.map((value) => String(value).trim()).filter(Boolean);
-}
-
-function coerceNativeSetting(value: unknown): boolean | "auto" | undefined {
-  if (value === true || value === false || value === "auto") {
-    return value;
-  }
-  return undefined;
-}
 
 export async function collectSlackSecurityAuditFindings(params: {
   cfg: OpenClawConfig;

@@ -29,6 +29,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
 import type { OutboundIdentity } from "./identity.js";
@@ -560,9 +561,7 @@ export async function deliverOutboundPayloads(
       if (isAbortError(err)) {
         await ackDelivery(queueId).catch(() => {});
       } else {
-        await failDelivery(queueId, err instanceof Error ? err.message : String(err)).catch(
-          () => {},
-        );
+        await failDelivery(queueId, formatErrorMessage(err)).catch(() => {});
       }
     }
     throw err;
@@ -790,7 +789,7 @@ async function deliverOutboundPayloadsCore(
       emitMessageSent({
         success: false,
         content: payloadSummary.text,
-        error: err instanceof Error ? err.message : String(err),
+        error: formatErrorMessage(err),
       });
       if (!params.bestEffort) {
         throw err;

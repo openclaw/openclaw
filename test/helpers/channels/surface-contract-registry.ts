@@ -3,10 +3,6 @@ import {
   listBundledChannelPlugins,
   setBundledChannelRuntime,
 } from "../../../src/channels/plugins/bundled.js";
-import {
-  channelPluginSurfaceKeys,
-  type ChannelPluginSurface,
-} from "../../../src/channels/plugins/contracts/manifest.js";
 import type { ChannelPlugin } from "../../../src/channels/plugins/types.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import {
@@ -14,6 +10,7 @@ import {
   resolveDefaultLineAccountId,
   resolveLineAccount,
 } from "../../../src/plugin-sdk/line.js";
+import { channelPluginSurfaceKeys, type ChannelPluginSurface } from "./manifest.js";
 
 function buildBundledPluginModuleId(pluginId: string, artifactBasename: string): string {
   return ["..", "..", "..", "extensions", pluginId, artifactBasename].join("/");

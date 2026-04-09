@@ -62,7 +62,6 @@ describe("signal createSignalEventHandler inbound context", () => {
   it("passes a finalized MsgContext to dispatchInboundMessage", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        // oxlint-disable-next-line typescript/no-explicit-any
         cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
         historyLimit: 0,
       }),
@@ -79,8 +78,11 @@ describe("signal createSignalEventHandler inbound context", () => {
     );
 
     expect(capture.ctx).toBeTruthy();
-    expectInboundContextContract(capture.ctx!);
-    const contextWithBody = capture.ctx!;
+    const contextWithBody = capture.ctx;
+    if (!contextWithBody) {
+      throw new Error("expected inbound MsgContext");
+    }
+    expectInboundContextContract(contextWithBody);
     // Sender should appear as prefix in group messages (no redundant [from:] suffix)
     expect(String(contextWithBody.Body ?? "")).toContain("Alice");
     expect(String(contextWithBody.Body ?? "")).toMatch(/Alice.*:/);
@@ -90,7 +92,6 @@ describe("signal createSignalEventHandler inbound context", () => {
   it("normalizes direct chat To/OriginatingTo targets to canonical Signal ids", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        // oxlint-disable-next-line typescript/no-explicit-any
         cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
         historyLimit: 0,
       }),

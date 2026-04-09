@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/cli-backend";
 import {
   CLAUDE_CLI_BACKEND_ID,
+  CLAUDE_CLI_DEFAULT_MODEL_REF,
   CLAUDE_CLI_CLEAR_ENV,
   CLAUDE_CLI_HOST_MANAGED_ENV,
   CLAUDE_CLI_MODEL_ALIASES,
@@ -15,7 +16,17 @@ import {
 export function buildAnthropicCliBackend(): CliBackendPlugin {
   return {
     id: CLAUDE_CLI_BACKEND_ID,
+    liveTest: {
+      defaultModelRef: CLAUDE_CLI_DEFAULT_MODEL_REF,
+      defaultImageProbe: true,
+      defaultMcpProbe: true,
+      docker: {
+        npmPackage: "@anthropic-ai/claude-code",
+        binaryName: "claude",
+      },
+    },
     bundleMcp: true,
+    bundleMcpMode: "claude-config-file",
     config: {
       command: "claude",
       args: [

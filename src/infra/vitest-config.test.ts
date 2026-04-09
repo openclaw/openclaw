@@ -226,7 +226,14 @@ describe("test scripts", () => {
     expect(pkg.scripts?.["test:fast"]).toBe(
       "node scripts/run-vitest.mjs run --config vitest.unit.config.ts",
     );
-    expect(pkg.scripts?.["test"]).toBe("node scripts/run-vitest.mjs run --config vitest.config.ts");
+    expect(pkg.scripts?.["test:unit"]).toBe(
+      "pnpm test:unit:fast && node scripts/run-vitest.mjs run --config vitest.unit.config.ts",
+    );
+    expect(pkg.scripts?.["test:unit:fast"]).toBe(
+      "node scripts/run-vitest.mjs run --config vitest.unit-fast.config.ts",
+    );
+    expect(pkg.scripts?.["test:unit:fast:audit"]).toBe("node scripts/test-unit-fast-audit.mjs");
+    expect(pkg.scripts?.["test"]).toBe("node scripts/test-projects.mjs");
     expect(pkg.scripts?.["test:gateway"]).toBe(
       "node scripts/run-vitest.mjs run --config vitest.gateway.config.ts",
     );

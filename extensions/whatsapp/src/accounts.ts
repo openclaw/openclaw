@@ -8,6 +8,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-core";
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveMergedWhatsAppAccountConfig } from "./account-config.js";
 import { hasWebCredsSync } from "./creds-files.js";
 import type { DmPolicy, GroupPolicy, WhatsAppAccountConfig } from "./runtime-api.js";
@@ -127,7 +128,7 @@ export function resolveWhatsAppAccount(params: {
   });
   return {
     accountId,
-    name: merged.name?.trim() || undefined,
+    name: normalizeOptionalString(merged.name),
     enabled,
     sendReadReceipts: merged.sendReadReceipts ?? true,
     messagePrefix: merged.messagePrefix ?? params.cfg.messages?.messagePrefix,

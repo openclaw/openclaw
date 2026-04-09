@@ -6,6 +6,7 @@ import {
   resolveCodexAccessTokenExpiry,
   resolveCodexAuthIdentity,
 } from "./openai-codex-auth-identity.js";
+import { trimNonEmptyString } from "./openai-codex-shared.js";
 
 const PROVIDER_ID = "openai-codex";
 
@@ -20,14 +21,6 @@ type CodexCliAuthFile = {
     account_id?: unknown;
   };
 };
-
-function trimNonEmptyString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
 
 function resolveCodexCliHome(env: NodeJS.ProcessEnv): string {
   const configured = trimNonEmptyString(env.CODEX_HOME);

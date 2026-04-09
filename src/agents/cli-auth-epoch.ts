@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { loadAuthProfileStoreForRuntime } from "./auth-profiles/store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import {
@@ -137,7 +138,7 @@ export async function resolveCliAuthEpoch(params: {
   authProfileId?: string;
 }): Promise<string | undefined> {
   const provider = params.provider.trim();
-  const authProfileId = params.authProfileId?.trim() || undefined;
+  const authProfileId = normalizeOptionalString(params.authProfileId);
   const parts: string[] = [];
 
   const localFingerprint = getLocalCliCredentialFingerprint(provider);

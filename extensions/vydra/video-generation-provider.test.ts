@@ -91,4 +91,68 @@ describe("vydra video-generation provider", () => {
       }),
     ).rejects.toThrow("Vydra kling currently requires a remote image URL reference.");
   });
+
+  it("submits kling jobs with a remote image url", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "vydra-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ jobId: "job-kling", status: "processing" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            jobId: "job-kling",
+            status: "completed",
+            videoUrl: "https://cdn.vydra.ai/generated/kling.mp4",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(Buffer.from("mp4-data"), {
+          status: 200,
+          headers: { "Content-Type": "video/mp4" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = buildVydraVideoGenerationProvider();
+    const result = await provider.generateVideo({
+      provider: "vydra",
+      model: "kling",
+      prompt: "animate this image",
+      cfg: {},
+      inputImages: [{ url: "https://example.com/reference.png" }],
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "https://www.vydra.ai/api/v1/models/kling",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          prompt: "animate this image",
+          image_url: "https://example.com/reference.png",
+          video_url: "https://example.com/reference.png",
+        }),
+      }),
+    );
+    expect(result.videos[0]?.mimeType).toBe("video/mp4");
+    expect(result.metadata).toEqual({
+      jobId: "job-kling",
+      videoUrl: "https://cdn.vydra.ai/generated/kling.mp4",
+      status: "completed",
+    });
+  });
 });

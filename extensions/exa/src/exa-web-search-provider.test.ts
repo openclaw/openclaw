@@ -10,6 +10,7 @@ describe("exa web search provider", () => {
     const applied = provider.applySelectionConfig({});
 
     expect(provider.id).toBe("exa");
+    expect(provider.onboardingScopes).toEqual(["text-inference"]);
     expect(provider.credentialPath).toBe("plugins.entries.exa.config.webSearch.apiKey");
     expect(applied.plugins?.entries?.exa?.enabled).toBe(true);
   });

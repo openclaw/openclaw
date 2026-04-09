@@ -3,10 +3,7 @@ import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
 } from "../../../config/validation.js";
-import {
-  applyLegacyDoctorMigrations,
-  migrateLegacyConfig,
-} from "./legacy-config-migrate.js";
+import { applyLegacyDoctorMigrations, migrateLegacyConfig } from "./legacy-config-migrate.js";
 
 describe("legacy migrate audio transcription", () => {
   it("does not rewrite removed routing.transcribeAudio migrations", () => {
@@ -139,7 +136,10 @@ describe("legacy migrate mention routing", () => {
     });
 
     expect(res.config).toBeNull();
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toEqual([
+      "Skipped channels.telegram.groupMentionsOnly migration because channels.telegram.groups already has an incompatible shape; fix remaining issues manually.",
+      "Migration applied, but config still invalid; fix remaining issues manually.",
+    ]);
   });
 
   it('does not overwrite invalid channels.telegram.groups."*" when migrating groupMentionsOnly', () => {
@@ -155,7 +155,10 @@ describe("legacy migrate mention routing", () => {
     });
 
     expect(res.config).toBeNull();
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toEqual([
+      "Skipped channels.telegram.groupMentionsOnly migration because channels.telegram.groups already has an incompatible shape; fix remaining issues manually.",
+      "Migration applied, but config still invalid; fix remaining issues manually.",
+    ]);
   });
 });
 
@@ -369,7 +372,7 @@ describe("legacy migrate channel streaming aliases", () => {
     });
   });
 
-  it("removes legacy googlechat streamMode aliases", () => {
+  it("rejects legacy googlechat streamMode aliases during validation and removes them in migration", () => {
     const raw = {
       channels: {
         googlechat: {
@@ -384,18 +387,16 @@ describe("legacy migrate channel streaming aliases", () => {
     };
 
     const validated = validateConfigObjectWithPlugins(raw);
-    expect(validated.ok).toBe(true);
-    if (!validated.ok) {
+    expect(validated.ok).toBe(false);
+    if (validated.ok) {
       return;
     }
-    expect(
-      (validated.config.channels?.googlechat as Record<string, unknown> | undefined)?.streamMode,
-    ).toBeUndefined();
-    expect(
-      (validated.config.channels?.googlechat?.accounts?.work as Record<string, unknown> | undefined)
-        ?.streamMode,
-    ).toBeUndefined();
-
+    expect(validated.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: "channels.googlechat" }),
+        expect.objectContaining({ path: "channels.googlechat.accounts" }),
+      ]),
+    );
     const res = migrateLegacyConfig(raw);
     expect(res.changes).toContain(
       "Removed channels.googlechat.streamMode (legacy key no longer used).",
@@ -414,7 +415,7 @@ describe("legacy migrate channel streaming aliases", () => {
 });
 
 describe("legacy migrate nested channel enabled aliases", () => {
-  it("accepts legacy allow aliases through with-plugins validation and normalizes them", () => {
+  it("rejects legacy allow aliases during validation and normalizes them in migration", () => {
     const raw = {
       channels: {
         slack: {
@@ -446,26 +447,39 @@ describe("legacy migrate nested channel enabled aliases", () => {
     };
 
     const validated = validateConfigObjectWithPlugins(raw);
-    expect(validated.ok).toBe(true);
-    if (!validated.ok) {
+    expect(validated.ok).toBe(false);
+    if (validated.ok) {
       return;
     }
-    expect(validated.config.channels?.slack?.channels?.ops).toEqual({
-      enabled: false,
-    });
-    expect(validated.config.channels?.googlechat?.groups?.["spaces/aaa"]).toEqual({
-      enabled: true,
-    });
-    expect(validated.config.channels?.discord?.guilds?.["100"]?.channels?.general).toEqual({
-      enabled: false,
-    });
+    expect(validated.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: "channels.slack" }),
+        expect.objectContaining({ path: "channels.googlechat" }),
+        expect.objectContaining({ path: "channels.discord" }),
+      ]),
+    );
 
     const rawValidated = validateConfigObjectRawWithPlugins(raw);
-    expect(rawValidated.ok).toBe(true);
-    if (!rawValidated.ok) {
+    expect(rawValidated.ok).toBe(false);
+    if (rawValidated.ok) {
       return;
     }
-    expect(rawValidated.config.channels?.slack?.channels?.ops).toEqual({
+    expect(rawValidated.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: "channels.slack" }),
+        expect.objectContaining({ path: "channels.googlechat" }),
+        expect.objectContaining({ path: "channels.discord" }),
+      ]),
+    );
+
+    const migrated = migrateLegacyConfig(raw);
+    expect(migrated.config?.channels?.slack?.channels?.ops).toEqual({
+      enabled: false,
+    });
+    expect(migrated.config?.channels?.googlechat?.groups?.["spaces/aaa"]).toEqual({
+      enabled: true,
+    });
+    expect(migrated.config?.channels?.discord?.guilds?.["100"]?.channels?.general).toEqual({
       enabled: false,
     });
   });
@@ -606,13 +620,25 @@ describe("legacy migrate nested channel enabled aliases", () => {
     expect(res.config?.channels?.matrix?.groups?.["!ops:example.org"]).toEqual({
       enabled: false,
     });
-    expect(res.config?.channels?.matrix?.accounts?.work?.rooms?.["!legacy:example.org"]).toEqual({
+    expect(
+      (
+        res.config?.channels?.matrix?.accounts?.work as
+          | { rooms?: Record<string, unknown> }
+          | undefined
+      )?.rooms?.["!legacy:example.org"],
+    ).toEqual({
       enabled: true,
     });
     expect(res.config?.channels?.zalouser?.groups?.["group:trusted"]).toEqual({
       enabled: false,
     });
-    expect(res.config?.channels?.zalouser?.accounts?.work?.groups?.["group:legacy"]).toEqual({
+    expect(
+      (
+        res.config?.channels?.zalouser?.accounts?.work as
+          | { groups?: Record<string, unknown> }
+          | undefined
+      )?.groups?.["group:legacy"],
+    ).toEqual({
       enabled: true,
     });
   });
@@ -641,7 +667,7 @@ describe("legacy migrate nested channel enabled aliases", () => {
 });
 
 describe("legacy migrate bundled channel private-network aliases", () => {
-  it("accepts legacy Mattermost private-network aliases through validation and normalizes them", () => {
+  it("rejects legacy Mattermost private-network aliases during validation and normalizes them in migration", () => {
     const raw = {
       channels: {
         mattermost: {
@@ -656,50 +682,44 @@ describe("legacy migrate bundled channel private-network aliases", () => {
     };
 
     const validated = validateConfigObjectWithPlugins(raw);
-    expect(validated.ok).toBe(true);
-    if (!validated.ok) {
+    expect(validated.ok).toBe(false);
+    if (validated.ok) {
       return;
     }
-    expect(validated.config.channels?.mattermost).toEqual({
-      dmPolicy: "pairing",
-      groupPolicy: "allowlist",
-      network: {
-        dangerouslyAllowPrivateNetwork: true,
-      },
-      accounts: {
-        work: {
-          dmPolicy: "pairing",
-          groupPolicy: "allowlist",
-          network: {
-            dangerouslyAllowPrivateNetwork: false,
-          },
-        },
-      },
-    });
+    expect(validated.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: "channels.mattermost" }),
+        expect.objectContaining({ path: "channels.mattermost.accounts" }),
+      ]),
+    );
 
     const rawValidated = validateConfigObjectRawWithPlugins(raw);
-    expect(rawValidated.ok).toBe(true);
-    if (!rawValidated.ok) {
+    expect(rawValidated.ok).toBe(false);
+    if (rawValidated.ok) {
       return;
     }
-    expect(rawValidated.config.channels?.mattermost).toEqual({
-      dmPolicy: "pairing",
-      groupPolicy: "allowlist",
-      network: {
-        dangerouslyAllowPrivateNetwork: true,
-      },
-      accounts: {
-        work: {
-          dmPolicy: "pairing",
-          groupPolicy: "allowlist",
-          network: {
-            dangerouslyAllowPrivateNetwork: false,
-          },
-        },
-      },
-    });
+    expect(rawValidated.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: "channels.mattermost" }),
+        expect.objectContaining({ path: "channels.mattermost.accounts" }),
+      ]),
+    );
 
     const res = migrateLegacyConfig(raw);
+    expect(res.config?.channels?.mattermost).toEqual(
+      expect.objectContaining({
+        network: {
+          dangerouslyAllowPrivateNetwork: true,
+        },
+        accounts: {
+          work: expect.objectContaining({
+            network: {
+              dangerouslyAllowPrivateNetwork: false,
+            },
+          }),
+        },
+      }),
+    );
     expect(res.changes).toEqual(
       expect.arrayContaining([
         "Moved channels.mattermost.allowPrivateNetwork → channels.mattermost.network.dangerouslyAllowPrivateNetwork (true).",

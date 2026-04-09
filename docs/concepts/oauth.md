@@ -87,7 +87,7 @@ Plan](/providers/qwen), [MiniMax Coding Plan](/providers/minimax),
 and [Z.AI / GLM Coding Plan](/providers/glm).
 </Warning>
 
-OpenClaw now exposes Anthropic setup-token again as a legacy/manual path.
+OpenClaw also exposes Anthropic setup-token as a supported token-auth path, but it now prefers Claude CLI reuse and `claude -p` when available.
 
 ## Anthropic Claude CLI migration
 

@@ -399,7 +399,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
 
     - explicit app mention (`<@botId>`)
     - mention regex patterns (`agents.list[].groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
-    - implicit reply-to-bot thread behavior
+    - implicit reply-to-bot thread behavior (disabled when `thread.requireExplicitMention` is `true`)
 
     Per-channel controls (`channels.slack.channels.<id>`; names only via startup resolution or `dangerouslyAllowNameMatching`):
 
@@ -423,6 +423,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
 - Thread replies can create thread session suffixes (`:thread:<threadTs>`) when applicable.
 - `channels.slack.thread.historyScope` default is `thread`; `thread.inheritParent` default is `false`.
 - `channels.slack.thread.initialHistoryLimit` controls how many existing thread messages are fetched when a new thread session starts (default `20`; set `0` to disable).
+- `channels.slack.thread.requireExplicitMention` (default `false`): when `true`, suppress implicit thread mentions so the bot only responds to explicit `@bot` mentions inside threads, even when the bot already participated in the thread. Without this, replies in a bot-participated thread bypass `requireMention` gating.
 
 Reply threading controls:
 
@@ -462,9 +463,11 @@ Notes:
 - `block`: append chunked preview updates.
 - `progress`: show progress status text while generating, then send final text.
 
-`channels.slack.nativeStreaming` controls Slack native text streaming when `streaming` is `partial` (default: `true`).
+`channels.slack.streaming.nativeTransport` controls Slack native text streaming when `channels.slack.streaming.mode` is `partial` (default: `true`).
 
-- A reply thread must be available for native text streaming to appear. Thread selection still follows `replyToMode`. Without one, the normal draft preview is used.
+- A reply thread must be available for native text streaming and Slack assistant thread status to appear. Thread selection still follows `replyToMode`.
+- Channel and group-chat roots can still use the normal draft preview when native streaming is unavailable.
+- Top-level Slack DMs stay off-thread by default, so they do not show the thread-style preview; use thread replies or `typingReaction` if you want visible progress there.
 - Media and non-text payloads fall back to normal delivery.
 - If streaming fails mid-reply, OpenClaw falls back to normal delivery for remaining payloads.
 
@@ -474,8 +477,10 @@ Use draft preview instead of Slack native text streaming:
 {
   channels: {
     slack: {
-      streaming: "partial",
-      nativeStreaming: false,
+      streaming: {
+        mode: "partial",
+        nativeTransport: false,
+      },
     },
   },
 }
@@ -483,8 +488,9 @@ Use draft preview instead of Slack native text streaming:
 
 Legacy keys:
 
-- `channels.slack.streamMode` (`replace | status_final | append`) is auto-migrated to `channels.slack.streaming`.
-- boolean `channels.slack.streaming` is auto-migrated to `channels.slack.nativeStreaming`.
+- `channels.slack.streamMode` (`replace | status_final | append`) is auto-migrated to `channels.slack.streaming.mode`.
+- boolean `channels.slack.streaming` is auto-migrated to `channels.slack.streaming.mode` and `channels.slack.streaming.nativeTransport`.
+- legacy `channels.slack.nativeStreaming` is auto-migrated to `channels.slack.streaming.nativeTransport`.
 
 ## Typing reaction fallback
 
@@ -686,7 +692,7 @@ Primary reference:
   - compatibility toggle: `dangerouslyAllowNameMatching` (break-glass; keep off unless needed)
   - channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`
   - threading/history: `replyToMode`, `replyToModeByChatType`, `thread.*`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
-  - delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `streaming`, `nativeStreaming`
+  - delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `streaming`, `streaming.nativeTransport`
   - ops/features: `configWrites`, `commands.native`, `slashCommand.*`, `actions.*`, `userToken`, `userTokenReadOnly`
 
 ## Troubleshooting

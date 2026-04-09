@@ -96,8 +96,8 @@ function parseSnapshotPayload(data: string): IdbDatabaseSnapshot[] | null {
 
 function idbReq<T>(req: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.addEventListener("success", () => resolve(req.result), { once: true });
+    req.addEventListener("error", () => reject(req.error), { once: true });
   });
 }
 
@@ -116,8 +116,8 @@ async function dumpIndexedDatabases(databasePrefix?: string): Promise<IdbDatabas
     }
     const db: IDBDatabase = await new Promise((resolve, reject) => {
       const r = idb.open(name, version);
-      r.onsuccess = () => resolve(r.result);
-      r.onerror = () => reject(r.error);
+      r.addEventListener("success", () => resolve(r.result), { once: true });
+      r.addEventListener("error", () => reject(r.error), { once: true });
     });
 
     const stores: IdbStoreSnapshot[] = [];
@@ -156,7 +156,7 @@ async function restoreIndexedDatabases(snapshot: IdbDatabaseSnapshot[]): Promise
   for (const dbSnap of snapshot) {
     await new Promise<void>((resolve, reject) => {
       const r = idb.open(dbSnap.name, dbSnap.version);
-      r.onupgradeneeded = () => {
+      r.addEventListener("upgradeneeded", () => {
         const db = r.result;
         for (const storeSnap of dbSnap.stores) {
           const opts: IDBObjectStoreParameters = {};
@@ -174,34 +174,36 @@ async function restoreIndexedDatabases(snapshot: IdbDatabaseSnapshot[]): Promise
             });
           }
         }
-      };
-      r.onsuccess = async () => {
-        try {
-          const db = r.result;
-          for (const storeSnap of dbSnap.stores) {
-            if (storeSnap.records.length === 0) {
-              continue;
-            }
-            const tx = db.transaction(storeSnap.name, "readwrite");
-            const store = tx.objectStore(storeSnap.name);
-            for (const rec of storeSnap.records) {
-              if (storeSnap.keyPath !== null) {
-                store.put(rec.value);
-              } else {
-                store.put(rec.value, rec.key);
+      });
+      r.addEventListener(
+        "success",
+        () => {
+          void (async () => {
+            const db = r.result;
+            for (const storeSnap of dbSnap.stores) {
+              if (storeSnap.records.length === 0) {
+                continue;
               }
+              const tx = db.transaction(storeSnap.name, "readwrite");
+              const store = tx.objectStore(storeSnap.name);
+              for (const rec of storeSnap.records) {
+                if (storeSnap.keyPath !== null) {
+                  store.put(rec.value);
+                } else {
+                  store.put(rec.value, rec.key);
+                }
+              }
+              await new Promise<void>((res) => {
+                tx.addEventListener("complete", () => res(), { once: true });
+              });
             }
-            await new Promise<void>((res) => {
-              tx.oncomplete = () => res();
-            });
-          }
-          db.close();
-          resolve();
-        } catch (err) {
-          reject(err);
-        }
-      };
-      r.onerror = () => reject(r.error);
+            db.close();
+            resolve();
+          })().catch(reject);
+        },
+        { once: true },
+      );
+      r.addEventListener("error", () => reject(r.error), { once: true });
     });
   }
 }

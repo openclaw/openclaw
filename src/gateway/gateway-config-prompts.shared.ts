@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { getTailnetHostname } from "../infra/tailscale.js";
 import { isIpv6Address, parseCanonicalIpAddress } from "../shared/net/ip.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export const TAILSCALE_EXPOSURE_OPTIONS = [
   { value: "off", label: "Off", hint: "No Tailscale exposure" },
@@ -37,7 +38,7 @@ function normalizeTailnetHostForUrl(rawHost: string): string | null {
   }
   const parsed = parseCanonicalIpAddress(trimmed);
   if (parsed && isIpv6Address(parsed)) {
-    return `[${parsed.toString().toLowerCase()}]`;
+    return `[${normalizeLowercaseStringOrEmpty(parsed.toString())}]`;
   }
   return trimmed;
 }
@@ -56,8 +57,8 @@ export function buildTailnetHttpsOrigin(rawHost: string): string | null {
 
 export function appendAllowedOrigin(existing: string[] | undefined, origin: string): string[] {
   const current = existing ?? [];
-  const normalized = origin.toLowerCase();
-  if (current.some((entry) => entry.toLowerCase() === normalized)) {
+  const normalized = normalizeLowercaseStringOrEmpty(origin);
+  if (current.some((entry) => normalizeLowercaseStringOrEmpty(entry) === normalized)) {
     return current;
   }
   return [...current, origin];

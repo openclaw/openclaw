@@ -2,6 +2,9 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { asRecord, readString } from "../config-record-shared.js";
 import { debugLog, debugError, debugWarn } from "./debug-log.js";
 import { detectFfmpeg, isWindows } from "./platform.js";
 
@@ -14,7 +17,7 @@ function loadSilkWasm(): Promise<SilkWasm | null> {
   }
   _silkWasmPromise = import("silk-wasm").catch((err) => {
     debugWarn(
-      `[audio-convert] silk-wasm not available; SILK encode/decode disabled (${err instanceof Error ? err.message : String(err)})`,
+      `[audio-convert] silk-wasm not available; SILK encode/decode disabled (${formatErrorMessage(err)})`,
     );
     return null;
   });
@@ -114,7 +117,7 @@ export function isVoiceAttachment(att: { content_type?: string; filename?: strin
   if (att.content_type === "voice" || att.content_type?.startsWith("audio/")) {
     return true;
   }
-  const ext = att.filename ? path.extname(att.filename).toLowerCase() : "";
+  const ext = att.filename ? normalizeLowercaseStringOrEmpty(path.extname(att.filename)) : "";
   return [".amr", ".silk", ".slk", ".slac"].includes(ext);
 }
 
@@ -136,7 +139,7 @@ export function isAudioFile(filePath: string, mimeType?: string): boolean {
       return true;
     }
   }
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
   return [
     ".silk",
     ".slk",
@@ -172,10 +175,10 @@ const QQ_NATIVE_VOICE_EXTS = new Set([".silk", ".slk", ".amr", ".wav", ".mp3"]);
  */
 export function shouldTranscodeVoice(filePath: string, mimeType?: string): boolean {
   // Prefer MIME when it is available.
-  if (mimeType && QQ_NATIVE_VOICE_MIMES.has(mimeType.toLowerCase())) {
+  if (mimeType && QQ_NATIVE_VOICE_MIMES.has(normalizeLowercaseStringOrEmpty(mimeType))) {
     return false;
   }
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
   if (QQ_NATIVE_VOICE_EXTS.has(ext)) {
     return false;
   }
@@ -194,27 +197,57 @@ export interface TTSConfig {
   speed?: number;
 }
 
+type QQBotTtsProviderConfig = {
+  baseUrl?: string;
+  apiKey?: string;
+  authStyle?: string;
+  queryParams?: Record<string, string>;
+};
+
+type QQBotTtsBlock = QQBotTtsProviderConfig & {
+  model?: string;
+  voice?: string;
+  speed?: number;
+};
+
+function readNumber(record: Record<string, unknown> | undefined, key: string): number | undefined {
+  const value = record?.[key];
+  return typeof value === "number" ? value : undefined;
+}
+
+function readStringMap(value: unknown): Record<string, string> {
+  const record = asRecord(value);
+  if (!record) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(record).flatMap(([key, entryValue]) =>
+      typeof entryValue === "string" ? [[key, entryValue]] : [],
+    ),
+  );
+}
+
 function resolveTTSFromBlock(
-  block: Record<string, unknown>,
-  providerCfg: Record<string, unknown> | undefined,
+  block: QQBotTtsBlock,
+  providerCfg: QQBotTtsProviderConfig | undefined,
 ): TTSConfig | null {
-  const baseUrl: string | undefined = block?.baseUrl || providerCfg?.baseUrl;
-  const apiKey: string | undefined = block?.apiKey || providerCfg?.apiKey;
-  const model: string = block?.model || "tts-1";
-  const voice: string = block?.voice || "alloy";
+  const baseUrl = readString(block, "baseUrl") ?? readString(providerCfg, "baseUrl");
+  const apiKey = readString(block, "apiKey") ?? readString(providerCfg, "apiKey");
+  const model = readString(block, "model") ?? "tts-1";
+  const voice = readString(block, "voice") ?? "alloy";
   if (!baseUrl || !apiKey) {
     return null;
   }
 
   const authStyle =
-    (block?.authStyle || providerCfg?.authStyle) === "api-key"
+    (readString(block, "authStyle") ?? readString(providerCfg, "authStyle")) === "api-key"
       ? ("api-key" as const)
       : ("bearer" as const);
   const queryParams: Record<string, string> = {
-    ...providerCfg?.queryParams,
-    ...block?.queryParams,
+    ...readStringMap(providerCfg?.queryParams),
+    ...readStringMap(block.queryParams),
   };
-  const speed: number | undefined = block?.speed;
+  const speed = readNumber(block, "speed");
 
   return {
     baseUrl: baseUrl.replace(/\/+$/, ""),
@@ -228,13 +261,16 @@ function resolveTTSFromBlock(
 }
 
 export function resolveTTSConfig(cfg: Record<string, unknown>): TTSConfig | null {
-  const c = cfg as unknown;
+  const models = asRecord(cfg.models);
+  const providers = asRecord(models?.providers);
 
   // Prefer plugin-specific TTS config first.
-  const channelTts = c?.channels?.qqbot?.tts;
+  const channels = asRecord(cfg.channels);
+  const qqbot = asRecord(channels?.qqbot);
+  const channelTts = asRecord(qqbot?.tts);
   if (channelTts && channelTts.enabled !== false) {
-    const providerId: string = channelTts?.provider || "openai";
-    const providerCfg = c?.models?.providers?.[providerId];
+    const providerId = readString(channelTts, "provider") ?? "openai";
+    const providerCfg = asRecord(providers?.[providerId]);
     const result = resolveTTSFromBlock(channelTts, providerCfg);
     if (result) {
       return result;
@@ -242,12 +278,14 @@ export function resolveTTSConfig(cfg: Record<string, unknown>): TTSConfig | null
   }
 
   // Fall back to framework-level TTS config.
-  const msgTts = c?.messages?.tts;
-  if (msgTts && msgTts.auto !== "off" && msgTts.auto !== "disabled") {
-    const providerId: string = msgTts?.provider || "openai";
-    const providerBlock = msgTts?.[providerId];
-    const providerCfg = c?.models?.providers?.[providerId];
-    const result = resolveTTSFromBlock(providerBlock ?? {}, providerCfg);
+  const messages = asRecord(cfg.messages);
+  const msgTts = asRecord(messages?.tts);
+  const autoMode = readString(msgTts, "auto");
+  if (msgTts && autoMode !== "off" && autoMode !== "disabled") {
+    const providerId = readString(msgTts, "provider") ?? "openai";
+    const providerBlock = asRecord(msgTts[providerId]) ?? {};
+    const providerCfg = asRecord(providers?.[providerId]);
+    const result = resolveTTSFromBlock(providerBlock, providerCfg);
     if (result) {
       return result;
     }
@@ -472,7 +510,7 @@ export async function audioFileToSilkBase64(
     return null;
   }
 
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
 
   const uploadFormats = directUploadFormats
     ? normalizeFormats(directUploadFormats)
@@ -525,9 +563,7 @@ export async function audioFileToSilkBase64(
       debugLog(`[audio-convert] ffmpeg: ${ext} → SILK done (${silkBuffer.length} bytes)`);
       return silkBuffer.toString("base64");
     } catch (err) {
-      debugError(
-        `[audio-convert] ffmpeg conversion failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      debugError(`[audio-convert] ffmpeg conversion failed: ${formatErrorMessage(err)}`);
     }
   }
 
@@ -762,9 +798,7 @@ async function wasmDecodeMp3ToPCM(buf: Buffer, targetRate: number): Promise<Buff
 
     return Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength);
   } catch (err) {
-    debugError(
-      `[audio-convert] WASM MP3 decode failed: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    debugError(`[audio-convert] WASM MP3 decode failed: ${formatErrorMessage(err)}`);
     if (err instanceof Error && err.stack) {
       debugError(`[audio-convert] stack: ${err.stack}`);
     }
@@ -775,7 +809,7 @@ async function wasmDecodeMp3ToPCM(buf: Buffer, targetRate: number): Promise<Buff
 /** Normalize file extensions to lowercased dotted form. */
 function normalizeFormats(formats: string[]): string[] {
   return formats.map((f) => {
-    const lower = f.toLowerCase().trim();
+    const lower = normalizeLowercaseStringOrEmpty(f);
     return lower.startsWith(".") ? lower : `.${lower}`;
   });
 }

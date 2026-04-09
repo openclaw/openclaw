@@ -20,8 +20,18 @@ describe("updateSessionStoreAfterAgentRun", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("persists claude-cli session bindings without explicit cliBackends config", async () => {
-    const cfg = {} as OpenClawConfig;
+  it("persists claude-cli session bindings when the backend is configured", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": {
+              command: "claude",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
     const sessionKey = "agent:main:explicit:test-claude-cli";
     const sessionId = "test-openclaw-session";
     const sessionStore: Record<string, SessionEntry> = {

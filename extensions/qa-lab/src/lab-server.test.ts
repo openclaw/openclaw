@@ -1,7 +1,8 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { startQaLabServer } from "./lab-server.js";
 
@@ -12,6 +13,56 @@ afterEach(async () => {
     await cleanups.pop()?.();
   }
 });
+
+function isRetryableLocalFetchError(error: unknown) {
+  if (!(error instanceof TypeError)) {
+    return false;
+  }
+  const cause = (error as TypeError & { cause?: unknown }).cause;
+  if (!cause || typeof cause !== "object") {
+    return false;
+  }
+  const code = "code" in cause ? (cause as { code?: unknown }).code : undefined;
+  return code === "ECONNRESET" || code === "UND_ERR_SOCKET";
+}
+
+async function fetchWithRetry(input: string, init?: RequestInit, attempts = 3) {
+  const method = init?.method?.toUpperCase() ?? "GET";
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await fetch(input, init);
+    } catch (error) {
+      lastError = error;
+      if ((method !== "GET" && method !== "HEAD") || !isRetryableLocalFetchError(error)) {
+        throw error;
+      }
+      if (attempt === attempts) {
+        throw error;
+      }
+      await sleep(50);
+    }
+  }
+  throw lastError;
+}
+
+async function waitForRunnerCatalog(baseUrl: string, timeoutMs = 5_000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const response = await fetchWithRetry(`${baseUrl}/api/bootstrap`);
+    const bootstrap = (await response.json()) as {
+      runnerCatalog: {
+        status: "loading" | "ready" | "failed";
+        real: Array<{ key: string; name: string }>;
+      };
+    };
+    if (bootstrap.runnerCatalog.status !== "loading") {
+      return bootstrap.runnerCatalog;
+    }
+    await sleep(50);
+  }
+  throw new Error("runner catalog stayed loading");
+}
 
 describe("qa-lab server", () => {
   it("serves bootstrap state and writes a self-check report", async () => {
@@ -32,7 +83,7 @@ describe("qa-lab server", () => {
       await lab.stop();
     });
 
-    const bootstrapResponse = await fetch(`${lab.baseUrl}/api/bootstrap`);
+    const bootstrapResponse = await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`);
     expect(bootstrapResponse.status).toBe(200);
     const bootstrap = (await bootstrapResponse.json()) as {
       controlUiUrl: string | null;
@@ -40,6 +91,7 @@ describe("qa-lab server", () => {
       kickoffTask: string;
       scenarios: Array<{ id: string; title: string }>;
       defaults: { conversationId: string; senderId: string };
+      runner: { status: string; selection: { providerMode: string; scenarioIds: string[] } };
     };
     expect(bootstrap.defaults.conversationId).toBe("qa-operator");
     expect(bootstrap.defaults.senderId).toBe("qa-operator");
@@ -48,6 +100,9 @@ describe("qa-lab server", () => {
     expect(bootstrap.kickoffTask).toContain("Lobster Invaders");
     expect(bootstrap.scenarios.length).toBeGreaterThanOrEqual(10);
     expect(bootstrap.scenarios.some((scenario) => scenario.id === "dm-chat-baseline")).toBe(true);
+    expect(bootstrap.runner.status).toBe("idle");
+    expect(bootstrap.runner.selection.providerMode).toBe("mock-openai");
+    expect(bootstrap.runner.selection.scenarioIds).toHaveLength(bootstrap.scenarios.length);
 
     const messageResponse = await fetch(`${lab.baseUrl}/api/inbound/message`, {
       method: "POST",
@@ -63,7 +118,7 @@ describe("qa-lab server", () => {
     });
     expect(messageResponse.status).toBe(200);
 
-    const stateResponse = await fetch(`${lab.baseUrl}/api/state`);
+    const stateResponse = await fetchWithRetry(`${lab.baseUrl}/api/state`);
     expect(stateResponse.status).toBe(200);
     const snapshot = (await stateResponse.json()) as {
       messages: Array<{ direction: string; text: string }>;
@@ -77,6 +132,26 @@ describe("qa-lab server", () => {
     expect(markdown).toContain("- Status: pass");
   });
 
+  it("anchors direct self-check runs under the explicit repo root by default", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-lab-self-check-root-"));
+    cleanups.push(async () => {
+      await rm(repoRoot, { recursive: true, force: true });
+    });
+
+    const lab = await startQaLabServer({
+      host: "127.0.0.1",
+      port: 0,
+      repoRoot,
+    });
+    cleanups.push(async () => {
+      await lab.stop();
+    });
+
+    const result = await lab.runSelfCheck();
+    expect(result.outputPath).toBe(path.join(repoRoot, ".artifacts", "qa-e2e", "self-check.md"));
+    expect(await readFile(result.outputPath, "utf8")).toContain("Synthetic Slack-class roundtrip");
+  });
+
   it("injects the kickoff task on demand and on startup", async () => {
     const autoKickoffLab = await startQaLabServer({
       host: "127.0.0.1",
@@ -87,7 +162,9 @@ describe("qa-lab server", () => {
       await autoKickoffLab.stop();
     });
 
-    const autoSnapshot = (await (await fetch(`${autoKickoffLab.baseUrl}/api/state`)).json()) as {
+    const autoSnapshot = (await (
+      await fetchWithRetry(`${autoKickoffLab.baseUrl}/api/state`)
+    ).json()) as {
       messages: Array<{ text: string }>;
     };
     expect(autoSnapshot.messages.some((message) => message.text.includes("QA mission:"))).toBe(
@@ -107,7 +184,9 @@ describe("qa-lab server", () => {
     });
     expect(kickoffResponse.status).toBe(200);
 
-    const manualSnapshot = (await (await fetch(`${manualLab.baseUrl}/api/state`)).json()) as {
+    const manualSnapshot = (await (
+      await fetchWithRetry(`${manualLab.baseUrl}/api/state`)
+    ).json()) as {
       messages: Array<{ text: string }>;
     };
     expect(
@@ -157,7 +236,7 @@ describe("qa-lab server", () => {
       await lab.stop();
     });
 
-    const bootstrap = (await (await fetch(`${lab.listenUrl}/api/bootstrap`)).json()) as {
+    const bootstrap = (await (await fetchWithRetry(`${lab.listenUrl}/api/bootstrap`)).json()) as {
       controlUiUrl: string | null;
       controlUiEmbeddedUrl: string | null;
     };
@@ -166,11 +245,11 @@ describe("qa-lab server", () => {
       "http://127.0.0.1:43124/control-ui/#token=proxy-token",
     );
 
-    const healthResponse = await fetch(`${lab.listenUrl}/control-ui/healthz`);
+    const healthResponse = await fetchWithRetry(`${lab.listenUrl}/control-ui/healthz`);
     expect(healthResponse.status).toBe(200);
     expect(await healthResponse.json()).toEqual({ ok: true, status: "live" });
 
-    const rootResponse = await fetch(`${lab.listenUrl}/control-ui/`);
+    const rootResponse = await fetchWithRetry(`${lab.listenUrl}/control-ui/`);
     expect(rootResponse.status).toBe(200);
     expect(rootResponse.headers.get("x-frame-options")).toBeNull();
     expect(rootResponse.headers.get("content-security-policy")).toContain("frame-ancestors 'self'");
@@ -178,19 +257,152 @@ describe("qa-lab server", () => {
   });
 
   it("serves the built QA UI bundle when available", async () => {
+    const uiDistDir = await mkdtemp(path.join(os.tmpdir(), "qa-lab-ui-dist-"));
+    cleanups.push(async () => {
+      await rm(uiDistDir, { recursive: true, force: true });
+    });
+    await writeFile(
+      path.join(uiDistDir, "index.html"),
+      "<!doctype html><html><head><title>QA Lab</title></head><body><div id='app'></div></body></html>",
+      "utf8",
+    );
+
     const lab = await startQaLabServer({
       host: "127.0.0.1",
       port: 0,
+      uiDistDir,
     });
     cleanups.push(async () => {
       await lab.stop();
     });
 
-    const rootResponse = await fetch(`${lab.baseUrl}/`);
+    const rootResponse = await fetchWithRetry(`${lab.baseUrl}/`);
     expect(rootResponse.status).toBe(200);
     const html = await rootResponse.text();
     expect(html).not.toContain("QA Lab UI not built");
     expect(html).toContain("<title>");
+
+    const version1 = (await (await fetch(`${lab.baseUrl}/api/ui-version`)).json()) as {
+      version: string | null;
+    };
+    expect(version1.version).toMatch(/^[0-9a-f]{12}$/);
+
+    await writeFile(
+      path.join(uiDistDir, "index.html"),
+      "<!doctype html><html><head><title>QA Lab Updated</title></head><body><div id='app'></div></body></html>",
+      "utf8",
+    );
+
+    const version2 = (await (await fetch(`${lab.baseUrl}/api/ui-version`)).json()) as {
+      version: string | null;
+    };
+    expect(version2.version).toMatch(/^[0-9a-f]{12}$/);
+    expect(version2.version).not.toBe(version1.version);
+  });
+
+  it("uses the explicit repo root for ui assets and runner model discovery", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-lab-repo-root-"));
+    cleanups.push(async () => {
+      await rm(repoRoot, { recursive: true, force: true });
+    });
+    await mkdir(path.join(repoRoot, "dist"), { recursive: true });
+    await mkdir(path.join(repoRoot, "extensions/qa-lab/web/dist"), { recursive: true });
+    await writeFile(
+      path.join(repoRoot, "dist/index.js"),
+      [
+        "process.stdout.write(JSON.stringify({",
+        "  models: [{",
+        '    key: "anthropic/qa-temp-model",',
+        '    name: "QA Temp Model",',
+        '    input: "anthropic/qa-temp-model",',
+        "    available: true,",
+        "    missing: false,",
+        "  }],",
+        "}));",
+      ].join("\n"),
+      "utf8",
+    );
+    await writeFile(
+      path.join(repoRoot, "extensions/qa-lab/web/dist/index.html"),
+      "<!doctype html><html><head><title>Temp QA Lab UI</title></head><body>repo-root-ui</body></html>",
+      "utf8",
+    );
+
+    const lab = await startQaLabServer({
+      host: "127.0.0.1",
+      port: 0,
+      repoRoot,
+    });
+    cleanups.push(async () => {
+      await lab.stop();
+    });
+
+    const rootResponse = await fetchWithRetry(`${lab.baseUrl}/`);
+    expect(rootResponse.status).toBe(200);
+    expect(await rootResponse.text()).toContain("repo-root-ui");
+
+    const runnerCatalog = await waitForRunnerCatalog(lab.baseUrl);
+    expect(runnerCatalog.status).toBe("ready");
+    expect(runnerCatalog.real).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "anthropic/qa-temp-model",
+          name: "QA Temp Model",
+        }),
+      ]),
+    );
+  });
+
+  it("does not eagerly load the runner model catalog before bootstrap is requested", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-lab-lazy-catalog-"));
+    cleanups.push(async () => {
+      await rm(repoRoot, { recursive: true, force: true });
+    });
+    const markerPath = path.join(repoRoot, "runner-catalog-hit.txt");
+
+    await mkdir(path.join(repoRoot, "dist"), { recursive: true });
+    await mkdir(path.join(repoRoot, "extensions/qa-lab/web/dist"), { recursive: true });
+    await writeFile(
+      path.join(repoRoot, "dist/index.js"),
+      [
+        'const fs = require("node:fs");',
+        `fs.writeFileSync(${JSON.stringify(markerPath)}, process.argv.slice(2).join(" "), "utf8");`,
+        "process.stdout.write(JSON.stringify({",
+        "  models: [{",
+        '    key: "openai/gpt-5.4",',
+        '    name: "GPT-5.4",',
+        '    input: "openai/gpt-5.4",',
+        "    available: true,",
+        "    missing: false,",
+        "  }],",
+        "}));",
+      ].join("\n"),
+      "utf8",
+    );
+    await writeFile(
+      path.join(repoRoot, "extensions/qa-lab/web/dist/index.html"),
+      "<!doctype html><html><body>lazy catalog</body></html>",
+      "utf8",
+    );
+
+    const lab = await startQaLabServer({
+      host: "127.0.0.1",
+      port: 0,
+      repoRoot,
+    });
+    cleanups.push(async () => {
+      await lab.stop();
+    });
+
+    await sleep(150);
+    await expect(readFile(markerPath, "utf8")).rejects.toThrow();
+
+    const bootstrapResponse = await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`);
+    expect(bootstrapResponse.status).toBe(200);
+
+    const runnerCatalog = await waitForRunnerCatalog(lab.baseUrl);
+    expect(runnerCatalog.status).toBe("ready");
+    expect(await readFile(markerPath, "utf8")).toContain("models list --all --json");
   });
 
   it("can disable the embedded echo gateway for real-suite runs", async () => {
@@ -217,7 +429,7 @@ describe("qa-lab server", () => {
     });
 
     await new Promise((resolve) => setTimeout(resolve, 800));
-    const snapshot = (await (await fetch(`${lab.baseUrl}/api/state`)).json()) as {
+    const snapshot = (await (await fetchWithRetry(`${lab.baseUrl}/api/state`)).json()) as {
       messages: Array<{ direction: string }>;
     };
     expect(snapshot.messages.filter((message) => message.direction === "outbound")).toHaveLength(0);
@@ -233,7 +445,9 @@ describe("qa-lab server", () => {
       await lab.stop();
     });
 
-    const initialOutcomes = (await (await fetch(`${lab.baseUrl}/api/outcomes`)).json()) as {
+    const initialOutcomes = (await (
+      await fetchWithRetry(`${lab.baseUrl}/api/outcomes`)
+    ).json()) as {
       run: null | unknown;
     };
     expect(initialOutcomes.run).toBeNull();
@@ -263,12 +477,12 @@ describe("qa-lab server", () => {
       controlUiToken: "late-token",
     });
 
-    const bootstrap = (await (await fetch(`${lab.baseUrl}/api/bootstrap`)).json()) as {
+    const bootstrap = (await (await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`)).json()) as {
       controlUiEmbeddedUrl: string | null;
     };
     expect(bootstrap.controlUiEmbeddedUrl).toBe("http://127.0.0.1:18789/#token=late-token");
 
-    const outcomes = (await (await fetch(`${lab.baseUrl}/api/outcomes`)).json()) as {
+    const outcomes = (await (await fetchWithRetry(`${lab.baseUrl}/api/outcomes`)).json()) as {
       run: {
         status: string;
         counts: { total: number; passed: number; running: number };

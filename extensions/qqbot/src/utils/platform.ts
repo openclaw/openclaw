@@ -9,6 +9,7 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { debugLog, debugWarn } from "./debug-log.js";
 
 // Basic platform information.
@@ -223,7 +224,7 @@ export function sanitizeFileName(name: string): string {
   result = result.normalize("NFC");
 
   // Drop ASCII control characters while keeping printable Unicode content.
-  result = result.replace(/[\x00-\x1F\x7F]/g, "");
+  result = result.replace(/\p{Cc}/gu, "");
 
   return result;
 }
@@ -372,9 +373,7 @@ export async function checkSilkWasmAvailable(): Promise<boolean> {
     debugLog("[platform] silk-wasm: available");
   } catch (err) {
     _silkWasmAvailable = false;
-    debugWarn(
-      `[platform] silk-wasm: NOT available (${err instanceof Error ? err.message : String(err)})`,
-    );
+    debugWarn(`[platform] silk-wasm: NOT available (${formatErrorMessage(err)})`);
   }
   return _silkWasmAvailable;
 }

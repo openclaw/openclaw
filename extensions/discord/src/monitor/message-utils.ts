@@ -1,15 +1,15 @@
 import type { ChannelType, Client, Message } from "@buape/carbon";
-import {
-  MessageReferenceType,
-  StickerFormatType,
-  type APIAttachment,
-  type APIStickerItem,
-} from "discord-api-types/v10";
+import { StickerFormatType, type APIAttachment, type APIStickerItem } from "discord-api-types/v10";
 import { fetchRemoteMedia, type FetchLike } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { buildMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  normalizeOptionalStringifiedId,
+} from "openclaw/plugin-sdk/text-runtime";
 import { mergeAbortSignals } from "./timeouts.js";
 
 const DISCORD_CDN_HOSTNAMES = [
@@ -103,6 +103,8 @@ type DiscordSnapshotMessage = {
   author?: DiscordSnapshotAuthor | null;
 };
 
+const FORWARD_MESSAGE_REFERENCE_TYPE = 1;
+
 type DiscordMessageSnapshot = {
   message?: DiscordSnapshotMessage | null;
 };
@@ -120,13 +122,7 @@ export function __resetDiscordChannelInfoCacheForTest() {
 }
 
 function normalizeDiscordChannelId(value: unknown): string {
-  if (typeof value === "string") {
-    return value.trim();
-  }
-  if (typeof value === "number" || typeof value === "bigint") {
-    return String(value).trim();
-  }
-  return "";
+  return normalizeOptionalStringifiedId(value) ?? "";
 }
 
 export function resolveDiscordMessageChannelId(params: {
@@ -567,7 +563,7 @@ function isImageAttachment(attachment: APIAttachment): boolean {
   if (mime.startsWith("image/")) {
     return true;
   }
-  const name = attachment.filename?.toLowerCase() ?? "";
+  const name = normalizeLowercaseStringOrEmpty(attachment.filename);
   if (!name) {
     return false;
   }
@@ -610,8 +606,8 @@ function buildDiscordMediaPlaceholder(params: {
 export function resolveDiscordEmbedText(
   embed?: { title?: string | null; description?: string | null } | null,
 ): string {
-  const title = embed?.title?.trim() || "";
-  const description = embed?.description?.trim() || "";
+  const title = normalizeOptionalString(embed?.title) ?? "";
+  const description = normalizeOptionalString(embed?.description) ?? "";
   if (title && description) {
     return `${title}\n${description}`;
   }
@@ -627,13 +623,13 @@ export function resolveDiscordMessageText(
       null,
   );
   const rawText =
-    message.content?.trim() ||
+    normalizeOptionalString(message.content) ||
     buildDiscordMediaPlaceholder({
       attachments: message.attachments ?? undefined,
       stickers: resolveDiscordMessageStickers(message),
     }) ||
     embedText ||
-    options?.fallbackText?.trim() ||
+    normalizeOptionalString(options?.fallbackText) ||
     "";
   const baseText = resolveDiscordMentions(rawText, message);
   if (!options?.includeForwarded) {
@@ -727,13 +723,14 @@ function buildDiscordForwardedMessageBlock(
 }
 
 function resolveDiscordReferencedForwardMessage(message: Message): Message | null {
-  return message.messageReference?.type === MessageReferenceType.Forward
+  const referenceType = message.messageReference?.type;
+  return Number(referenceType) === FORWARD_MESSAGE_REFERENCE_TYPE
     ? message.referencedMessage
     : null;
 }
 
 function resolveDiscordSnapshotMessageText(snapshot: DiscordSnapshotMessage): string {
-  const content = snapshot.content?.trim() ?? "";
+  const content = normalizeOptionalString(snapshot.content) ?? "";
   const attachmentText = buildDiscordMediaPlaceholder({
     attachments: snapshot.attachments ?? undefined,
     stickers: resolveDiscordSnapshotStickers(snapshot),

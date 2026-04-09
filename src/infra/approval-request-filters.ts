@@ -1,5 +1,6 @@
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { compileSafeRegex, testRegexWithBoundedInput } from "../security/safe-regex.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export type ApprovalRequestFilterInput = {
   agentId?: string | null;
@@ -26,7 +27,7 @@ export function matchesApprovalRequestFilters(params: {
   fallbackAgentIdFromSessionKey?: boolean;
 }): boolean {
   if (params.agentFilter?.length) {
-    const explicitAgentId = params.request.agentId?.trim() || undefined;
+    const explicitAgentId = normalizeOptionalString(params.request.agentId);
     const sessionAgentId = params.fallbackAgentIdFromSessionKey
       ? (parseAgentSessionKey(params.request.sessionKey)?.agentId ?? undefined)
       : undefined;
@@ -37,7 +38,7 @@ export function matchesApprovalRequestFilters(params: {
   }
 
   if (params.sessionFilter?.length) {
-    const sessionKey = params.request.sessionKey?.trim();
+    const sessionKey = normalizeOptionalString(params.request.sessionKey);
     if (!sessionKey || !matchesApprovalRequestSessionFilter(sessionKey, params.sessionFilter)) {
       return false;
     }

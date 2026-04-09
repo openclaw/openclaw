@@ -1,8 +1,28 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+const INLINE_EVAL_HIT = {
+  executable: "python3",
+  normalizedExecutable: "python3",
+  flag: "-c",
+  argv: ["python3", "-c", "print(1)"],
+};
+
 const createAndRegisterDefaultExecApprovalRequestMock = vi.hoisted(() => vi.fn());
 const buildExecApprovalPendingToolResultMock = vi.hoisted(() => vi.fn());
 const buildExecApprovalFollowupTargetMock = vi.hoisted(() => vi.fn(() => null));
+const createExecApprovalDecisionStateMock = vi.hoisted(() =>
+  vi.fn(
+    (): {
+      baseDecision: { timedOut: boolean };
+      approvedByAsk: boolean;
+      deniedReason: string | null;
+    } => ({
+      baseDecision: { timedOut: false },
+      approvedByAsk: false,
+      deniedReason: "approval-required",
+    }),
+  ),
+);
 const evaluateShellAllowlistMock = vi.hoisted(() =>
   vi.fn(() => ({
     allowlistMatches: [],
@@ -20,6 +40,9 @@ const buildEnforcedShellCommandMock = vi.hoisted(() =>
   })),
 );
 const recordAllowlistMatchesUseMock = vi.hoisted(() => vi.fn());
+const resolveApprovalDecisionOrUndefinedMock = vi.hoisted(() =>
+  vi.fn(async (): Promise<string | null | undefined> => undefined),
+);
 const resolveExecHostApprovalContextMock = vi.hoisted(() =>
   vi.fn(() => ({
     approvals: { allowlist: [], file: { version: 1, agents: {} } },
@@ -27,6 +50,29 @@ const resolveExecHostApprovalContextMock = vi.hoisted(() =>
     hostAsk: "off",
     askFallback: "deny",
   })),
+);
+const runExecProcessMock = vi.hoisted(() => vi.fn());
+const sendExecApprovalFollowupResultMock = vi.hoisted(() => vi.fn(async () => undefined));
+const enforceStrictInlineEvalApprovalBoundaryMock = vi.hoisted(() =>
+  vi.fn(
+    (value: {
+      approvedByAsk: boolean;
+      deniedReason: string | null;
+    }): {
+      approvedByAsk: boolean;
+      deniedReason: string | null;
+    } => value,
+  ),
+);
+const detectInterpreterInlineEvalArgvMock = vi.hoisted(() =>
+  vi.fn(
+    (): {
+      executable: string;
+      normalizedExecutable: string;
+      flag: string;
+      argv: string[];
+    } | null => null,
+  ),
 );
 
 vi.mock("../infra/exec-approvals.js", () => ({
@@ -55,14 +101,11 @@ vi.mock("./bash-tools.exec-host-shared.js", () => ({
   buildHeadlessExecApprovalDeniedMessage: vi.fn(() => "denied"),
   buildExecApprovalFollowupTarget: buildExecApprovalFollowupTargetMock,
   buildExecApprovalPendingToolResult: buildExecApprovalPendingToolResultMock,
-  createExecApprovalDecisionState: vi.fn(() => ({
-    baseDecision: { timedOut: false },
-    approvedByAsk: false,
-    deniedReason: "approval-required",
-  })),
+  createExecApprovalDecisionState: createExecApprovalDecisionStateMock,
   createAndRegisterDefaultExecApprovalRequest: createAndRegisterDefaultExecApprovalRequestMock,
-  resolveApprovalDecisionOrUndefined: vi.fn(async () => undefined),
-  sendExecApprovalFollowupResult: vi.fn(async () => undefined),
+  enforceStrictInlineEvalApprovalBoundary: enforceStrictInlineEvalApprovalBoundaryMock,
+  resolveApprovalDecisionOrUndefined: resolveApprovalDecisionOrUndefinedMock,
+  sendExecApprovalFollowupResult: sendExecApprovalFollowupResultMock,
   shouldResolveExecApprovalUnavailableInline: vi.fn(() => false),
 }));
 
@@ -70,7 +113,7 @@ vi.mock("./bash-tools.exec-runtime.js", () => ({
   DEFAULT_NOTIFY_TAIL_CHARS: 1000,
   createApprovalSlug: vi.fn(() => "slug"),
   normalizeNotifyOutput: vi.fn((value) => value),
-  runExecProcess: vi.fn(),
+  runExecProcess: runExecProcessMock,
 }));
 
 vi.mock("./bash-process-registry.js", () => ({
@@ -80,7 +123,7 @@ vi.mock("./bash-process-registry.js", () => ({
 
 vi.mock("../infra/exec-inline-eval.js", () => ({
   describeInterpreterInlineEval: vi.fn(() => "python -c"),
-  detectInterpreterInlineEvalArgv: vi.fn(() => null),
+  detectInterpreterInlineEvalArgv: detectInterpreterInlineEvalArgvMock,
 }));
 
 let processGatewayAllowlist: typeof import("./bash-tools.exec-host-gateway.js").processGatewayAllowlist;
@@ -94,6 +137,12 @@ describe("processGatewayAllowlist", () => {
     buildExecApprovalPendingToolResultMock.mockReset();
     buildExecApprovalFollowupTargetMock.mockReset();
     buildExecApprovalFollowupTargetMock.mockReturnValue(null);
+    createExecApprovalDecisionStateMock.mockReset();
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: false,
+      deniedReason: "approval-required",
+    });
     evaluateShellAllowlistMock.mockReset();
     evaluateShellAllowlistMock.mockReturnValue({
       allowlistMatches: [],
@@ -110,6 +159,8 @@ describe("processGatewayAllowlist", () => {
       reason: "segment execution plan unavailable",
     });
     recordAllowlistMatchesUseMock.mockReset();
+    resolveApprovalDecisionOrUndefinedMock.mockReset();
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(undefined);
     resolveExecHostApprovalContextMock.mockReset();
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: { allowlist: [], file: { version: 1, agents: {} } },
@@ -117,6 +168,14 @@ describe("processGatewayAllowlist", () => {
       hostAsk: "off",
       askFallback: "deny",
     });
+    runExecProcessMock.mockReset();
+    sendExecApprovalFollowupResultMock.mockReset();
+    enforceStrictInlineEvalApprovalBoundaryMock.mockReset();
+    enforceStrictInlineEvalApprovalBoundaryMock.mockImplementation(
+      (value: { approvedByAsk: boolean; deniedReason: string | null }) => value,
+    );
+    detectInterpreterInlineEvalArgvMock.mockReset();
+    detectInterpreterInlineEvalArgvMock.mockReturnValue(null);
     buildExecApprovalPendingToolResultMock.mockReturnValue({
       details: { status: "approval-pending" },
       content: [],
@@ -241,5 +300,97 @@ describe("processGatewayAllowlist", () => {
         sessionKey: "agent:main:telegram:direct:123",
       }),
     );
+  });
+
+  it("denies timed-out inline-eval requests instead of auto-running them", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "full",
+      hostAsk: "always",
+      askFallback: "full",
+    });
+    detectInterpreterInlineEvalArgvMock.mockReturnValue(INLINE_EVAL_HIT);
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(null);
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: true },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    enforceStrictInlineEvalApprovalBoundaryMock.mockReturnValue({
+      approvedByAsk: false,
+      deniedReason: "approval-timeout",
+    });
+
+    const result = await processGatewayAllowlist({
+      command: "python3 -c 'print(1)'",
+      workdir: process.cwd(),
+      env: process.env as Record<string, string>,
+      pty: false,
+      defaultTimeoutSec: 30,
+      security: "full",
+      ask: "always",
+      safeBins: new Set(),
+      safeBinProfiles: {},
+      strictInlineEval: true,
+      warnings: [],
+      approvalRunningNoticeMs: 0,
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+    });
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
+        null,
+        "Exec denied (gateway id=req-1, approval-timeout): python3 -c 'print(1)'",
+      );
+    });
+    expect(runExecProcessMock).not.toHaveBeenCalled();
+  });
+
+  it("denies allowlist timeout fallback for strict inline-eval commands", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "always",
+      askFallback: "allowlist",
+    });
+    detectInterpreterInlineEvalArgvMock.mockReturnValue(INLINE_EVAL_HIT);
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(null);
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: true },
+      approvedByAsk: false,
+      deniedReason: null,
+    });
+    enforceStrictInlineEvalApprovalBoundaryMock.mockReturnValue({
+      approvedByAsk: false,
+      deniedReason: "approval-timeout",
+    });
+
+    const result = await processGatewayAllowlist({
+      command: "python3 -c 'print(1)'",
+      workdir: process.cwd(),
+      env: process.env as Record<string, string>,
+      pty: false,
+      defaultTimeoutSec: 30,
+      security: "allowlist",
+      ask: "always",
+      safeBins: new Set(),
+      safeBinProfiles: {},
+      strictInlineEval: true,
+      warnings: [],
+      approvalRunningNoticeMs: 0,
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+    });
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
+        null,
+        "Exec denied (gateway id=req-1, approval-timeout): python3 -c 'print(1)'",
+      );
+    });
+    expect(runExecProcessMock).not.toHaveBeenCalled();
   });
 });

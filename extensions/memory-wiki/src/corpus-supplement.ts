@@ -11,6 +11,7 @@ export function createWikiCorpusSupplement(params: {
       await searchMemoryWiki({
         config: params.config,
         appConfig: params.appConfig,
+        agentSessionKey: input.agentSessionKey,
         query: input.query,
         maxResults: input.maxResults,
         searchBackend: "local",
@@ -25,6 +26,7 @@ export function createWikiCorpusSupplement(params: {
       await getMemoryWikiPage({
         config: params.config,
         appConfig: params.appConfig,
+        agentSessionKey: input.agentSessionKey,
         lookup: input.lookup,
         fromLine: input.fromLine,
         lineCount: input.lineCount,

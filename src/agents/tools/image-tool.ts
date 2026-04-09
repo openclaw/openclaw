@@ -282,7 +282,7 @@ export function createImageTool(options?: {
         );
 
         const media = isDataUrl
-          ? decodeDataUrl(resolvedImage)
+          ? decodeDataUrl(resolvedImage, { maxBytes })
           : sandboxConfig
             ? await loadWebMedia(resolvedPath ?? resolvedImage, {
                 maxBytes,

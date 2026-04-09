@@ -26,6 +26,7 @@ import { readSessionMessages } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { resolveMemoryFlushPlan } from "../../plugins/memory-state.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions } from "../types.js";
@@ -45,8 +46,35 @@ import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
+const memoryDeps = {
+  compactEmbeddedPiSession,
+  runWithModelFallback,
+  runEmbeddedPiAgent,
+  registerAgentRunContext,
+  refreshQueuedFollowupSession,
+  incrementCompactionCount,
+  updateSessionStoreEntry,
+  randomUUID: () => crypto.randomUUID(),
+  now: () => Date.now(),
+};
+
+export function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDeps>): void {
+  Object.assign(memoryDeps, {
+    runWithModelFallback,
+    compactEmbeddedPiSession,
+    runEmbeddedPiAgent,
+    registerAgentRunContext,
+    refreshQueuedFollowupSession,
+    incrementCompactionCount,
+    updateSessionStoreEntry,
+    randomUUID: () => crypto.randomUUID(),
+    now: () => Date.now(),
+    ...overrides,
+  });
+}
+
 export function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
-  const trimmed = prompt?.trim();
+  const trimmed = normalizeOptionalString(prompt);
   if (!trimmed) {
     return undefined;
   }
@@ -113,10 +141,10 @@ function resolveSessionLogPath(
   }
 
   try {
-    const transcriptPath = (
-      sessionEntry as (SessionEntry & { transcriptPath?: string }) | undefined
-    )?.transcriptPath?.trim();
-    const sessionFile = sessionEntry?.sessionFile?.trim() || transcriptPath;
+    const transcriptPath = normalizeOptionalString(
+      (sessionEntry as (SessionEntry & { transcriptPath?: string }) | undefined)?.transcriptPath,
+    );
+    const sessionFile = normalizeOptionalString(sessionEntry?.sessionFile) || transcriptPath;
     const agentId = resolveAgentIdFromSessionKey(sessionKey);
     const pathOpts = resolveSessionFilePathOptions({
       agentId,
@@ -172,7 +200,7 @@ async function appendPostCompactionRefreshPrompt(params: {
     return;
   }
 
-  const existingPrompt = params.followupRun.run.extraSystemPrompt?.trim();
+  const existingPrompt = normalizeOptionalString(params.followupRun.run.extraSystemPrompt);
   if (existingPrompt?.includes(refreshPrompt)) {
     return;
   }
@@ -261,7 +289,7 @@ function estimatePromptTokensFromSessionTranscript(params: {
   storePath?: string;
   sessionFile?: string;
 }): number | undefined {
-  const sessionId = params.sessionId?.trim();
+  const sessionId = normalizeOptionalString(params.sessionId);
   if (!sessionId) {
     return undefined;
   }
@@ -331,6 +359,8 @@ export async function runPreflightCompactionIfNeeded(params: {
   }
 
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
+    cfg: params.cfg,
+    provider: params.followupRun.run.provider,
     modelId: params.followupRun.run.model ?? params.defaultModel,
     agentCfgContextTokens: params.agentCfgContextTokens,
   });
@@ -407,7 +437,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     params.sessionKey ?? params.followupRun.run.sessionKey,
     { storePath: params.storePath },
   );
-  const result = await compactEmbeddedPiSession({
+  const result = await memoryDeps.compactEmbeddedPiSession({
     sessionId: entry.sessionId,
     sessionKey: params.sessionKey,
     allowGatewaySubagentBinding: true,
@@ -509,6 +539,8 @@ export async function runMemoryFlushIfNeeded(params: {
     params.sessionEntry ??
     (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
+    cfg: params.cfg,
+    provider: params.followupRun.run.provider,
     modelId: params.followupRun.run.model ?? params.defaultModel,
     agentCfgContextTokens: params.agentCfgContextTokens,
   });
@@ -676,15 +708,15 @@ export async function runMemoryFlushIfNeeded(params: {
     activeSessionEntry?.systemPromptReport ??
       (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.systemPromptReport : undefined),
   );
-  const flushRunId = crypto.randomUUID();
+  const flushRunId = memoryDeps.randomUUID();
   if (params.sessionKey) {
-    registerAgentRunContext(flushRunId, {
+    memoryDeps.registerAgentRunContext(flushRunId, {
       sessionKey: params.sessionKey,
       verboseLevel: params.resolvedVerboseLevel,
     });
   }
   let memoryCompactionCompleted = false;
-  const memoryFlushNowMs = Date.now();
+  const memoryFlushNowMs = memoryDeps.now();
   const activeMemoryFlushPlan =
     resolveMemoryFlushPlan({
       cfg: params.cfg,
@@ -699,7 +731,7 @@ export async function runMemoryFlushIfNeeded(params: {
     .join("\n\n");
   let postCompactionSessionId: string | undefined;
   try {
-    await runWithModelFallback({
+    await memoryDeps.runWithModelFallback({
       ...resolveModelFallbackOptions(params.followupRun.run),
       runId: flushRunId,
       run: async (provider, model, runOptions) => {
@@ -712,7 +744,7 @@ export async function runMemoryFlushIfNeeded(params: {
           runId: flushRunId,
           allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
         });
-        const result = await runEmbeddedPiAgent({
+        const result = await memoryDeps.runEmbeddedPiAgent({
           ...embeddedContext,
           ...senderContext,
           ...runBaseParams,
@@ -751,7 +783,7 @@ export async function runMemoryFlushIfNeeded(params: {
       0;
     if (memoryCompactionCompleted) {
       const previousSessionId = activeSessionEntry?.sessionId ?? params.followupRun.run.sessionId;
-      const nextCount = await incrementCompactionCount({
+      const nextCount = await memoryDeps.incrementCompactionCount({
         cfg: params.cfg,
         sessionEntry: activeSessionEntry,
         sessionStore: activeSessionStore,
@@ -769,7 +801,7 @@ export async function runMemoryFlushIfNeeded(params: {
         }
         const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
         if (queueKey) {
-          refreshQueuedFollowupSession({
+          memoryDeps.refreshQueuedFollowupSession({
             key: queueKey,
             previousSessionId,
             nextSessionId: updatedEntry.sessionId,
@@ -783,11 +815,11 @@ export async function runMemoryFlushIfNeeded(params: {
     }
     if (params.storePath && params.sessionKey) {
       try {
-        const updatedEntry = await updateSessionStoreEntry({
+        const updatedEntry = await memoryDeps.updateSessionStoreEntry({
           storePath: params.storePath,
           sessionKey: params.sessionKey,
           update: async () => ({
-            memoryFlushAt: Date.now(),
+            memoryFlushAt: memoryDeps.now(),
             memoryFlushCompactionCount,
           }),
         });

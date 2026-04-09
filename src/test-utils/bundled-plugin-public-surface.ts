@@ -1,10 +1,11 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadBundledPluginPublicSurfaceModuleSync } from "../plugin-sdk/facade-runtime.js";
+import { loadBundledPluginPublicSurfaceModuleSync } from "../plugin-sdk/facade-loader.js";
 import {
   findBundledPluginMetadataById,
   type BundledPluginMetadata,
 } from "../plugins/bundled-plugin-metadata.js";
+import { normalizeBundledPluginArtifactSubpath } from "../plugins/public-surface-runtime.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 
 const OPENCLAW_PACKAGE_ROOT =
@@ -28,7 +29,7 @@ export function loadBundledPluginPublicSurfaceSync<T extends object>(params: {
   const metadata = findBundledPluginMetadata(params.pluginId);
   return loadBundledPluginPublicSurfaceModuleSync<T>({
     dirName: metadata.dirName,
-    artifactBasename: params.artifactBasename,
+    artifactBasename: normalizeBundledPluginArtifactSubpath(params.artifactBasename),
   });
 }
 
@@ -46,11 +47,12 @@ export function resolveRelativeBundledPluginPublicModuleId(params: {
 }): string {
   const metadata = findBundledPluginMetadata(params.pluginId);
   const fromFilePath = fileURLToPath(params.fromModuleUrl);
+  const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
   const targetPath = path.resolve(
     OPENCLAW_PACKAGE_ROOT,
     "extensions",
     metadata.dirName,
-    params.artifactBasename,
+    artifactBasename,
   );
   const relativePath = path
     .relative(path.dirname(fromFilePath), targetPath)

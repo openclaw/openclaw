@@ -12,6 +12,7 @@ import {
   postJsonRequest,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
 const DEFAULT_MINIMAX_MUSIC_BASE_URL = "https://api.minimax.io";
 const DEFAULT_MINIMAX_MUSIC_MODEL = "music-2.5+";
@@ -38,7 +39,7 @@ type MinimaxMusicCreateResponse = {
 function resolveMinimaxMusicBaseUrl(
   cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"],
 ): string {
-  const direct = cfg?.models?.providers?.minimax?.baseUrl?.trim();
+  const direct = normalizeOptionalString(cfg?.models?.providers?.minimax?.baseUrl);
   if (!direct) {
     return DEFAULT_MINIMAX_MUSIC_BASE_URL;
   }
@@ -77,6 +78,11 @@ function decodePossibleText(data: string): string {
   return trimmed;
 }
 
+function isLikelyRemoteUrl(value: string | undefined): boolean {
+  const trimmed = normalizeOptionalString(value);
+  return Boolean(trimmed && /^https?:\/\//iu.test(trimmed));
+}
+
 async function downloadTrackFromUrl(params: {
   url: string;
   timeoutMs?: number;
@@ -89,7 +95,7 @@ async function downloadTrackFromUrl(params: {
     params.fetchFn,
   );
   await assertOkOrThrowHttpError(response, "MiniMax generated music download failed");
-  const mimeType = response.headers.get("content-type")?.trim() || "audio/mpeg";
+  const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "audio/mpeg";
   const ext = extensionForMime(mimeType)?.replace(/^\./u, "") || "mp3";
   return {
     buffer: Buffer.from(await response.arrayBuffer()),
@@ -106,6 +112,14 @@ function buildPrompt(req: MusicGenerationRequest): string {
   return parts.join("\n\n");
 }
 
+function resolveMinimaxMusicModel(model: string | undefined): string {
+  const trimmed = normalizeOptionalString(model);
+  if (!trimmed) {
+    return DEFAULT_MINIMAX_MUSIC_MODEL;
+  }
+  return trimmed;
+}
+
 export function buildMinimaxMusicGenerationProvider(): MusicGenerationProvider {
   return {
     id: "minimax",
@@ -118,18 +132,23 @@ export function buildMinimaxMusicGenerationProvider(): MusicGenerationProvider {
         agentDir,
       }),
     capabilities: {
-      maxTracks: 1,
-      supportsLyrics: true,
-      supportsInstrumental: true,
-      supportsDuration: true,
-      supportsFormat: true,
-      supportedFormats: ["mp3"],
+      generate: {
+        maxTracks: 1,
+        supportsLyrics: true,
+        supportsInstrumental: true,
+        supportsDuration: true,
+        supportsFormat: true,
+        supportedFormats: ["mp3"],
+      },
+      edit: {
+        enabled: false,
+      },
     },
     async generateMusic(req) {
       if ((req.inputImages?.length ?? 0) > 0) {
         throw new Error("MiniMax music generation does not support image reference inputs.");
       }
-      if (req.instrumental === true && req.lyrics?.trim()) {
+      if (req.instrumental === true && normalizeOptionalString(req.lyrics)) {
         throw new Error("MiniMax music generation cannot use lyrics when instrumental=true.");
       }
       if (req.format && req.format !== "mp3") {
@@ -156,26 +175,27 @@ export function buildMinimaxMusicGenerationProvider(): MusicGenerationProvider {
             Authorization: `Bearer ${auth.apiKey}`,
           },
         });
+      const jsonHeaders = new Headers(headers);
+      jsonHeaders.set("Content-Type", "application/json");
 
-      const model = req.model?.trim() || DEFAULT_MINIMAX_MUSIC_MODEL;
+      const model = resolveMinimaxMusicModel(req.model);
+      const lyrics = normalizeOptionalString(req.lyrics);
       const body = {
         model,
         prompt: buildPrompt(req),
         ...(req.instrumental === true ? { is_instrumental: true } : {}),
-        ...(req.lyrics?.trim()
-          ? { lyrics: req.lyrics.trim() }
-          : req.instrumental === true
-            ? {}
-            : { lyrics_optimizer: true }),
+        ...(lyrics ? { lyrics } : req.instrumental === true ? {} : { lyrics_optimizer: true }),
         output_format: "url",
         audio_setting: {
+          sample_rate: 44_100,
+          bitrate: 256_000,
           format: "mp3",
         },
       };
 
       const { response: res, release } = await postJsonRequest({
         url: `${baseUrl}/v1/music_generation`,
-        headers,
+        headers: jsonHeaders,
         body,
         timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         fetchFn,
@@ -189,8 +209,13 @@ export function buildMinimaxMusicGenerationProvider(): MusicGenerationProvider {
         const payload = (await res.json()) as MinimaxMusicCreateResponse;
         assertMinimaxBaseResp(payload.base_resp, "MiniMax music generation failed");
 
-        const audioUrl = payload.audio_url?.trim() || payload.data?.audio_url?.trim();
-        const inlineAudio = payload.audio?.trim() || payload.data?.audio?.trim();
+        const audioCandidate =
+          normalizeOptionalString(payload.audio) ?? normalizeOptionalString(payload.data?.audio);
+        const audioUrl =
+          normalizeOptionalString(payload.audio_url) ||
+          normalizeOptionalString(payload.data?.audio_url) ||
+          (isLikelyRemoteUrl(audioCandidate) ? audioCandidate : undefined);
+        const inlineAudio = isLikelyRemoteUrl(audioCandidate) ? undefined : audioCandidate;
         const lyrics = decodePossibleText(payload.lyrics ?? payload.data?.lyrics ?? "");
 
         const track = audioUrl
@@ -215,10 +240,12 @@ export function buildMinimaxMusicGenerationProvider(): MusicGenerationProvider {
           ...(lyrics ? { lyrics: [lyrics] } : {}),
           model,
           metadata: {
-            ...(payload.task_id?.trim() ? { taskId: payload.task_id.trim() } : {}),
+            ...(normalizeOptionalString(payload.task_id)
+              ? { taskId: normalizeOptionalString(payload.task_id) }
+              : {}),
             ...(audioUrl ? { audioUrl } : {}),
             instrumental: req.instrumental === true,
-            ...(req.lyrics?.trim() ? { requestedLyrics: true } : {}),
+            ...(lyrics ? { requestedLyrics: true } : {}),
             ...(typeof req.durationSeconds === "number"
               ? { requestedDurationSeconds: req.durationSeconds }
               : {}),

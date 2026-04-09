@@ -1,3 +1,4 @@
+import { Type } from "@sinclair/typebox";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_TIMEOUT_SECONDS,
@@ -14,12 +15,10 @@ import {
   resolveWebSearchProviderCredential,
   setProviderWebSearchPluginConfigValue,
   setScopedCredentialValue,
-  type SearchConfigRecord,
   type WebSearchProviderSetupContext,
   type WebSearchProviderPlugin,
   writeCache,
-} from "@openclaw/plugin-sdk/provider-web-search";
-import { Type } from "@sinclair/typebox";
+} from "openclaw/plugin-sdk/provider-web-search";
 import {
   buildXaiWebSearchPayload,
   extractXaiWebSearchContent,
@@ -168,15 +167,15 @@ function runXaiWebSearch(params: {
 function resolveXaiToolSearchConfig(ctx: {
   config?: Record<string, unknown>;
   searchConfig?: Record<string, unknown>;
-}): SearchConfigRecord | undefined {
+}) {
   return mergeScopedSearchConfig(
-    ctx.searchConfig as SearchConfigRecord | undefined,
+    ctx.searchConfig,
     "grok",
     resolveProviderWebSearchPluginConfig(ctx.config, "xai"),
   );
 }
 
-function resolveXaiWebSearchCredential(searchConfig?: SearchConfigRecord): string | undefined {
+function resolveXaiWebSearchCredential(searchConfig?: Record<string, unknown>): string | undefined {
   return resolveWebSearchProviderCredential({
     credentialValue: getScopedCredentialValue(searchConfig, "grok"),
     path: "tools.web.search.grok.apiKey",
@@ -243,14 +242,11 @@ export function createXaiWebSearchProvider(): WebSearchProviderPlugin {
             model: resolveXaiWebSearchModel(searchConfig),
             apiKey,
             timeoutSeconds: resolveTimeoutSeconds(
-              (searchConfig?.timeoutSeconds) ?? undefined,
+              searchConfig?.timeoutSeconds,
               DEFAULT_TIMEOUT_SECONDS,
             ),
             inlineCitations: resolveXaiInlineCitations(searchConfig),
-            cacheTtlMs: resolveCacheTtlMs(
-              (searchConfig?.cacheTtlMinutes) ?? undefined,
-              DEFAULT_CACHE_TTL_MINUTES,
-            ),
+            cacheTtlMs: resolveCacheTtlMs(searchConfig?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
           });
         },
       };

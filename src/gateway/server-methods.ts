@@ -106,6 +106,17 @@ export async function handleGatewayRequest(
     respond(false, undefined, authError);
     return;
   }
+  if (context.unavailableGatewayMethods?.has(req.method)) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, `${req.method} unavailable during gateway startup`, {
+        retryable: true,
+        details: { method: req.method },
+      }),
+    );
+    return;
+  }
   if (CONTROL_PLANE_WRITE_METHODS.has(req.method)) {
     const budget = consumeControlPlaneWriteBudget({ client });
     if (!budget.allowed) {

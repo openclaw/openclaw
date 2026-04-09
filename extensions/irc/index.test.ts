@@ -3,13 +3,14 @@ import entry from "./index.js";
 import setupEntry from "./setup-entry.js";
 
 describe("irc bundled entries", () => {
-  it("loads the channel plugin without importing the broad api barrel", () => {
-    const plugin = entry.loadChannelPlugin();
-    expect(plugin.id).toBe("irc");
+  it("declares the channel plugin without importing the broad api barrel", () => {
+    expect(entry.kind).toBe("bundled-channel-entry");
+    expect(entry.id).toBe("irc");
+    expect(entry.name).toBe("IRC");
   });
 
-  it("loads the setup plugin without importing the broad api barrel", () => {
-    const plugin = setupEntry.loadSetupPlugin();
-    expect(plugin.id).toBe("irc");
+  it("declares the setup plugin without importing the broad api barrel", () => {
+    expect(setupEntry.kind).toBe("bundled-channel-setup-entry");
+    expect(typeof setupEntry.loadSetupPlugin).toBe("function");
   });
 });

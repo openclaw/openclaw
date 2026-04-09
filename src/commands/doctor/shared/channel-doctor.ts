@@ -1,3 +1,4 @@
+import { listBundledChannelPlugins } from "../../../channels/plugins/bundled.js";
 import { listChannelPlugins } from "../../../channels/plugins/registry.js";
 import type {
   ChannelDoctorAdapter,
@@ -12,14 +13,51 @@ type ChannelDoctorEntry = {
   doctor: ChannelDoctorAdapter;
 };
 
-function listChannelDoctorEntries(): ChannelDoctorEntry[] {
+function collectConfiguredChannelIds(cfg: OpenClawConfig): string[] {
+  const channels =
+    cfg.channels && typeof cfg.channels === "object" && !Array.isArray(cfg.channels)
+      ? cfg.channels
+      : null;
+  if (!channels) {
+    return [];
+  }
+  return Object.keys(channels)
+    .filter((channelId) => channelId !== "defaults")
+    .toSorted();
+}
+
+function safeListActiveChannelPlugins() {
   try {
-    return listChannelPlugins()
-      .flatMap((plugin) => (plugin.doctor ? [{ channelId: plugin.id, doctor: plugin.doctor }] : []))
-      .filter((entry) => entry.doctor);
+    return listChannelPlugins();
   } catch {
     return [];
   }
+}
+
+function safeListBundledChannelPlugins() {
+  try {
+    return listBundledChannelPlugins();
+  } catch {
+    return [];
+  }
+}
+
+function listChannelDoctorEntries(channelIds?: readonly string[]): ChannelDoctorEntry[] {
+  const byId = new Map<string, ChannelDoctorEntry>();
+  const selectedIds = channelIds ? new Set(channelIds) : null;
+  for (const plugin of [...safeListActiveChannelPlugins(), ...safeListBundledChannelPlugins()]) {
+    if (selectedIds && !selectedIds.has(plugin.id)) {
+      continue;
+    }
+    if (!plugin.doctor) {
+      continue;
+    }
+    const existing = byId.get(plugin.id);
+    if (!existing) {
+      byId.set(plugin.id, { channelId: plugin.id, doctor: plugin.doctor });
+    }
+  }
+  return [...byId.values()];
 }
 
 export async function runChannelDoctorConfigSequences(params: {
@@ -43,9 +81,13 @@ export async function runChannelDoctorConfigSequences(params: {
 export function collectChannelDoctorCompatibilityMutations(
   cfg: OpenClawConfig,
 ): ChannelDoctorConfigMutation[] {
+  const channelIds = collectConfiguredChannelIds(cfg);
+  if (channelIds.length === 0) {
+    return [];
+  }
   const mutations: ChannelDoctorConfigMutation[] = [];
   let nextCfg = cfg;
-  for (const entry of listChannelDoctorEntries()) {
+  for (const entry of listChannelDoctorEntries(channelIds)) {
     const mutation = entry.doctor.normalizeCompatibilityConfig?.({ cfg: nextCfg });
     if (!mutation || mutation.changes.length === 0) {
       continue;

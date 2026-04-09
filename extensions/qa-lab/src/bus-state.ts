@@ -10,6 +10,7 @@ import {
 } from "./bus-queries.js";
 import { createQaBusWaiterStore } from "./bus-waiters.js";
 import type {
+  QaBusAttachment,
   QaBusConversation,
   QaBusCreateThreadInput,
   QaBusDeleteMessageInput,
@@ -86,6 +87,7 @@ export function createQaBusState() {
     threadId?: string;
     threadTitle?: string;
     replyToId?: string;
+    attachments?: QaBusAttachment[];
   }): QaBusMessage => {
     const conversation = ensureConversation(params.conversation);
     const message: QaBusMessage = {
@@ -100,6 +102,7 @@ export function createQaBusState() {
       threadId: params.threadId,
       threadTitle: params.threadTitle,
       replyToId: params.replyToId,
+      attachments: params.attachments?.map((attachment) => ({ ...attachment })) ?? [],
       reactions: [],
     };
     messages.set(message.id, message);
@@ -138,6 +141,7 @@ export function createQaBusState() {
         threadId: input.threadId,
         threadTitle: input.threadTitle,
         replyToId: input.replyToId,
+        attachments: input.attachments,
       });
       pushEvent({
         kind: "inbound-message",
@@ -159,6 +163,7 @@ export function createQaBusState() {
         timestamp: input.timestamp,
         threadId: input.threadId ?? threadId,
         replyToId: input.replyToId,
+        attachments: input.attachments,
       });
       pushEvent({
         kind: "outbound-message",

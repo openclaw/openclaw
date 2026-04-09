@@ -3,16 +3,16 @@ import path from "node:path";
 import { createJiti } from "jiti";
 import { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.plugin.js";
+import {
+  normalizeBundledPluginStringList,
+  trimBundledPluginString,
+} from "./bundled-plugin-scan.js";
 import type {
   OpenClawPackageManifest,
   PluginManifest,
   PluginManifestChannelConfig,
 } from "./manifest.js";
-import {
-  buildPluginLoaderAliasMap,
-  buildPluginLoaderJitiOptions,
-  shouldPreferNativeJiti,
-} from "./sdk-alias.js";
+import { buildPluginLoaderJitiOptions, resolvePluginLoaderJitiConfig } from "./sdk-alias.js";
 import type { PluginConfigUiHint } from "./types.js";
 
 const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"] as const;
@@ -33,17 +33,6 @@ type ChannelConfigSurface = {
 };
 
 const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
-
-function trimString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
-function normalizeStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.map((entry) => trimString(entry) ?? "").filter(Boolean);
-}
 
 function isBuiltChannelConfigSchema(value: unknown): value is ChannelConfigSurface {
   if (!value || typeof value !== "object") {
@@ -82,12 +71,11 @@ function resolveConfigSchemaExport(imported: Record<string, unknown>): ChannelCo
 }
 
 function getJiti(modulePath: string) {
-  const tryNative =
-    shouldPreferNativeJiti(modulePath) || modulePath.includes(`${path.sep}dist${path.sep}`);
-  const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
-  const cacheKey = JSON.stringify({
-    tryNative,
-    aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
+  const { tryNative, aliasMap, cacheKey } = resolvePluginLoaderJitiConfig({
+    modulePath,
+    argv1: process.argv[1],
+    moduleUrl: import.meta.url,
+    preferBuiltDist: true,
   });
   const cached = jitiLoaders.get(cacheKey);
   if (cached) {
@@ -141,7 +129,7 @@ export function collectBundledChannelConfigs(params: {
   manifest: PluginManifest;
   packageManifest?: OpenClawPackageManifest;
 }): Record<string, PluginManifestChannelConfig> | undefined {
-  const channelIds = normalizeStringList(params.manifest.channels);
+  const channelIds = normalizeBundledPluginStringList(params.manifest.channels);
   const existingChannelConfigs: Record<string, PluginManifestChannelConfig> =
     params.manifest.channelConfigs && Object.keys(params.manifest.channelConfigs).length > 0
       ? { ...params.manifest.channelConfigs }
@@ -156,7 +144,7 @@ export function collectBundledChannelConfigs(params: {
   for (const channelId of channelIds) {
     const existing = existingChannelConfigs[channelId];
     const channelMeta = resolvePackageChannelMeta(params.packageManifest, channelId);
-    const preferOver = normalizeStringList(channelMeta?.preferOver);
+    const preferOver = normalizeBundledPluginStringList(channelMeta?.preferOver);
     const uiHints: Record<string, PluginConfigUiHint> | undefined =
       surface?.uiHints || existing?.uiHints
         ? {
@@ -177,12 +165,19 @@ export function collectBundledChannelConfigs(params: {
       ...((surface?.runtime ?? existing?.runtime)
         ? { runtime: surface?.runtime ?? existing?.runtime }
         : {}),
-      ...((trimString(existing?.label) ?? trimString(channelMeta?.label))
-        ? { label: trimString(existing?.label) ?? trimString(channelMeta?.label)! }
-        : {}),
-      ...((trimString(existing?.description) ?? trimString(channelMeta?.blurb))
+      ...((trimBundledPluginString(existing?.label) ?? trimBundledPluginString(channelMeta?.label))
         ? {
-            description: trimString(existing?.description) ?? trimString(channelMeta?.blurb)!,
+            label:
+              trimBundledPluginString(existing?.label) ??
+              trimBundledPluginString(channelMeta?.label)!,
+          }
+        : {}),
+      ...((trimBundledPluginString(existing?.description) ??
+      trimBundledPluginString(channelMeta?.blurb))
+        ? {
+            description:
+              trimBundledPluginString(existing?.description) ??
+              trimBundledPluginString(channelMeta?.blurb)!,
           }
         : {}),
       ...(existing?.preferOver?.length

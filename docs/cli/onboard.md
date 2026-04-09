@@ -115,7 +115,7 @@ Interactive onboarding behavior with reference mode:
 
 Non-interactive Z.AI endpoint choices:
 
-Note: `--auth-choice zai-api-key` now auto-detects the best Z.AI endpoint for your key (prefers the general API with `zai/glm-5`).
+Note: `--auth-choice zai-api-key` now auto-detects the best Z.AI endpoint for your key (prefers the general API with `zai/glm-5.1`).
 If you specifically want the GLM Coding Plan endpoints, pick `zai-coding-global` or `zai-coding-cn`.
 
 ```bash

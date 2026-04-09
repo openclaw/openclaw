@@ -23,8 +23,9 @@ vi.mock("./cli-runner/helpers.js", async () => {
 });
 
 // This e2e spins a real stdio MCP server plus a spawned CLI process, which is
-// notably slower under Docker and cold Vitest imports.
-const E2E_TIMEOUT_MS = 40_000;
+// notably slower under Docker and cold Vitest imports. The plugins Docker lane
+// also reaches this test after several gateway/plugin restart exercises.
+const E2E_TIMEOUT_MS = 90_000;
 
 describe("runCliAgent bundle MCP e2e", () => {
   it(
@@ -76,7 +77,7 @@ describe("runCliAgent bundle MCP e2e", () => {
           prompt: "Use your configured MCP tools and report the bundle probe text.",
           provider: "claude-cli",
           model: "test-bundle",
-          timeoutMs: 10_000,
+          timeoutMs: 20_000,
           runId: "bundle-mcp-e2e",
         });
 

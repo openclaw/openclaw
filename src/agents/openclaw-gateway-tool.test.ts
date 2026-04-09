@@ -192,6 +192,129 @@ describe("gateway tool", () => {
     );
   });
 
+  it("rejects config.patch when it changes safe bin approval paths", async () => {
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-protected-safe-bins-patch", {
+        action: "config.patch",
+        raw: '{ tools: { exec: { safeBins: ["bash"], safeBinProfiles: { bash: { allowedValueFlags: ["-c"] } } } } }',
+      }),
+    ).rejects.toThrow(
+      "gateway config.patch cannot change protected config paths: tools.exec.safeBins, tools.exec.safeBinProfiles",
+    );
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
+  it("passes config.patch through gateway call when protected exec arrays and objects are unchanged", async () => {
+    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          hash: "hash-1",
+          config: {
+            tools: {
+              exec: {
+                ask: "on-miss",
+                security: "allowlist",
+                safeBins: ["bash"],
+                safeBinProfiles: {
+                  bash: {
+                    allowedValueFlags: ["-c"],
+                  },
+                },
+                safeBinTrustedDirs: ["/tmp/openclaw-bin"],
+                strictInlineEval: true,
+              },
+            },
+          },
+        };
+      }
+      return { ok: true };
+    });
+    const tool = requireGatewayTool("agent:main:whatsapp:dm:+15555550123");
+
+    const raw = `{
+      tools: {
+        exec: {
+          safeBins: ["bash"],
+          safeBinProfiles: {
+            bash: {
+              allowedValueFlags: ["-c"],
+            },
+          },
+          safeBinTrustedDirs: ["/tmp/openclaw-bin"],
+          strictInlineEval: true,
+        },
+      },
+    }`;
+    await tool.execute("call-same-protected-patch", {
+      action: "config.patch",
+      raw,
+    });
+
+    expectConfigMutationCall({
+      callGatewayTool: vi.mocked(callGatewayTool),
+      action: "config.patch",
+      raw,
+      sessionKey: "agent:main:whatsapp:dm:+15555550123",
+    });
+  });
+
+  it("rejects config.patch when it changes strict inline eval directly", async () => {
+    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
+      if (method === "config.get") {
+        return { hash: "hash-1", config: {} };
+      }
+      return { ok: true };
+    });
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-protected-inline-eval-direct", {
+        action: "config.patch",
+        raw: "{ tools: { exec: { strictInlineEval: false } } }",
+      }),
+    ).rejects.toThrow(
+      "gateway config.patch cannot change protected config paths: tools.exec.strictInlineEval",
+    );
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
+  it("rejects config.patch when a legacy tools.bash alias changes strict inline eval", async () => {
+    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
+      if (method === "config.get") {
+        return { hash: "hash-1", config: {} };
+      }
+      return { ok: true };
+    });
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-legacy-protected-inline-eval", {
+        action: "config.patch",
+        raw: "{ tools: { bash: { strictInlineEval: false } } }",
+      }),
+    ).rejects.toThrow(
+      "gateway config.patch cannot change protected config paths: tools.exec.strictInlineEval",
+    );
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
   it("rejects config.patch when a legacy tools.bash alias changes exec security", async () => {
     vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
       if (method === "config.get") {
@@ -246,6 +369,25 @@ describe("gateway tool", () => {
       }),
     ).rejects.toThrow(
       "gateway config.apply cannot change protected config paths: tools.exec.ask, tools.exec.security",
+    );
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.apply",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
+  it("rejects config.apply when it changes safe bin trusted directories", async () => {
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-protected-safe-bin-trust-apply", {
+        action: "config.apply",
+        raw: '{ tools: { exec: { ask: "on-miss", security: "allowlist", safeBinTrustedDirs: ["/tmp/openclaw-bin"] } } }',
+      }),
+    ).rejects.toThrow(
+      "gateway config.apply cannot change protected config paths: tools.exec.safeBinTrustedDirs",
     );
     expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
     expect(callGatewayTool).not.toHaveBeenCalledWith(

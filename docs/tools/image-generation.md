@@ -68,7 +68,9 @@ Use `action: "list"` to inspect available providers and models at runtime:
 | `count`       | number   | Number of images to generate (1–4)                                                    |
 | `filename`    | string   | Output filename hint                                                                  |
 
-Not all providers support all parameters. The tool passes what each provider supports, ignores the rest, and reports dropped overrides in the tool result.
+Not all providers support all parameters. When a fallback provider supports a nearby geometry option instead of the exact requested one, OpenClaw remaps to the closest supported size, aspect ratio, or resolution before submission. Truly unsupported overrides are still reported in the tool result.
+
+Tool results report the applied settings. When OpenClaw remaps geometry during provider fallback, the returned `size`, `aspectRatio`, and `resolution` values reflect what was actually sent, and `details.normalization` captures the requested-to-applied translation.
 
 ## Configuration
 
@@ -104,6 +106,10 @@ Notes:
 
 - Auto-detection is auth-aware. A provider default only enters the candidate list
   when OpenClaw can actually authenticate that provider.
+- Auto-detection is enabled by default. Set
+  `agents.defaults.mediaGenerationAutoProviderFallback: false` if you want image
+  generation to use only the explicit `model`, `primary`, and `fallbacks`
+  entries.
 - Use `action: "list"` to inspect the currently registered providers, their
   default models, and auth env-var hints.
 

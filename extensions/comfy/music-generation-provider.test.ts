@@ -12,7 +12,7 @@ describe("comfy music-generation provider", () => {
 
     expect(provider.defaultModel).toBe("workflow");
     expect(provider.models).toEqual(["workflow"]);
-    expect(provider.capabilities.maxInputImages).toBe(1);
+    expect(provider.capabilities.edit?.maxInputImages).toBe(1);
   });
 
   it("runs a music workflow and returns audio outputs", async () => {

@@ -7,6 +7,7 @@ import type {
 } from "openclaw/plugin-sdk/music-generation";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeGoogleApiBaseUrl } from "./api.js";
 
 const DEFAULT_GOOGLE_MUSIC_MODEL = "lyria-3-clip-preview";
@@ -33,13 +34,13 @@ type GoogleGenerateMusicResponse = {
 };
 
 function resolveConfiguredGoogleMusicBaseUrl(req: MusicGenerationRequest): string | undefined {
-  const configured = req.cfg?.models?.providers?.google?.baseUrl?.trim();
+  const configured = normalizeOptionalString(req.cfg?.models?.providers?.google?.baseUrl);
   return configured ? normalizeGoogleApiBaseUrl(configured) : undefined;
 }
 
 function buildMusicPrompt(req: MusicGenerationRequest): string {
   const parts = [req.prompt.trim()];
-  const lyrics = req.lyrics?.trim();
+  const lyrics = normalizeOptionalString(req.lyrics);
   if (req.instrumental === true) {
     parts.push("Instrumental only. No vocals, no sung lyrics, no spoken word.");
   }
@@ -66,26 +67,32 @@ function extractTracks(params: { payload: GoogleGenerateMusicResponse; model: st
 } {
   const lyrics: string[] = [];
   const tracks: GeneratedMusicAsset[] = [];
-  for (const part of params.payload.candidates?.[0]?.content?.parts ?? []) {
-    if (part.text?.trim()) {
-      lyrics.push(part.text.trim());
-      continue;
-    }
-    const inline = part.inlineData ?? part.inline_data;
-    const data = inline?.data?.trim();
-    if (!data) {
-      continue;
-    }
-    const mimeType = inline?.mimeType?.trim() || inline?.mime_type?.trim() || "audio/mpeg";
-    tracks.push({
-      buffer: Buffer.from(data, "base64"),
-      mimeType,
-      fileName: resolveTrackFileName({
-        index: tracks.length,
+  for (const candidate of params.payload.candidates ?? []) {
+    for (const part of candidate.content?.parts ?? []) {
+      const text = normalizeOptionalString(part.text);
+      if (text) {
+        lyrics.push(text);
+        continue;
+      }
+      const inline = part.inlineData ?? part.inline_data;
+      const data = normalizeOptionalString(inline?.data);
+      if (!data) {
+        continue;
+      }
+      const mimeType =
+        normalizeOptionalString(inline?.mimeType) ||
+        normalizeOptionalString(inline?.mime_type) ||
+        "audio/mpeg";
+      tracks.push({
+        buffer: Buffer.from(data, "base64"),
         mimeType,
-        model: params.model,
-      }),
-    });
+        fileName: resolveTrackFileName({
+          index: tracks.length,
+          mimeType,
+          model: params.model,
+        }),
+      });
+    }
   }
   return { tracks, lyrics };
 }
@@ -102,14 +109,27 @@ export function buildGoogleMusicGenerationProvider(): MusicGenerationProvider {
         agentDir,
       }),
     capabilities: {
-      maxTracks: 1,
-      maxInputImages: GOOGLE_MAX_INPUT_IMAGES,
-      supportsLyrics: true,
-      supportsInstrumental: true,
-      supportsFormat: true,
-      supportedFormatsByModel: {
-        [DEFAULT_GOOGLE_MUSIC_MODEL]: ["mp3"],
-        [GOOGLE_PRO_MUSIC_MODEL]: ["mp3", "wav"],
+      generate: {
+        maxTracks: 1,
+        supportsLyrics: true,
+        supportsInstrumental: true,
+        supportsFormat: true,
+        supportedFormatsByModel: {
+          [DEFAULT_GOOGLE_MUSIC_MODEL]: ["mp3"],
+          [GOOGLE_PRO_MUSIC_MODEL]: ["mp3", "wav"],
+        },
+      },
+      edit: {
+        enabled: true,
+        maxTracks: 1,
+        maxInputImages: GOOGLE_MAX_INPUT_IMAGES,
+        supportsLyrics: true,
+        supportsInstrumental: true,
+        supportsFormat: true,
+        supportedFormatsByModel: {
+          [DEFAULT_GOOGLE_MUSIC_MODEL]: ["mp3"],
+          [GOOGLE_PRO_MUSIC_MODEL]: ["mp3", "wav"],
+        },
       },
     },
     async generateMusic(req) {
@@ -128,7 +148,7 @@ export function buildGoogleMusicGenerationProvider(): MusicGenerationProvider {
         throw new Error("Google API key missing");
       }
 
-      const model = req.model?.trim() || DEFAULT_GOOGLE_MUSIC_MODEL;
+      const model = normalizeOptionalString(req.model) || DEFAULT_GOOGLE_MUSIC_MODEL;
       if (req.format) {
         const supportedFormats = resolveSupportedFormats(model);
         if (!supportedFormats.includes(req.format)) {
@@ -153,7 +173,7 @@ export function buildGoogleMusicGenerationProvider(): MusicGenerationProvider {
           { text: buildMusicPrompt(req) },
           ...(req.inputImages ?? []).map((image) => ({
             inlineData: {
-              mimeType: image.mimeType?.trim() || "image/png",
+              mimeType: normalizeOptionalString(image.mimeType) || "image/png",
               data: image.buffer?.toString("base64") ?? "",
             },
           })),
@@ -177,7 +197,7 @@ export function buildGoogleMusicGenerationProvider(): MusicGenerationProvider {
         metadata: {
           inputImageCount: req.inputImages?.length ?? 0,
           instrumental: req.instrumental === true,
-          ...(req.lyrics?.trim() ? { requestedLyrics: true } : {}),
+          ...(normalizeOptionalString(req.lyrics) ? { requestedLyrics: true } : {}),
           ...(req.format ? { requestedFormat: req.format } : {}),
         },
       };

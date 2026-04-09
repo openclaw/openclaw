@@ -5,6 +5,7 @@ import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
 import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import type { ResolvedDiscordAccount } from "./accounts.js";
 import type { OpenClawConfig } from "./runtime-api.js";
+import * as sendModule from "./send.js";
 let discordPlugin: typeof import("./channel.js").discordPlugin;
 let setDiscordRuntime: typeof import("./runtime.js").setDiscordRuntime;
 
@@ -214,7 +215,6 @@ describe("discordPlugin outbound", () => {
       channelId: "channel:thread-123",
       messageId: "poll-1",
     }));
-    const sendModule = await import("./send.js");
     const sendPollSpy = vi.spyOn(sendModule, "sendPollDiscord").mockImplementation(sendPollDiscord);
     try {
       const result = await discordPlugin.outbound!.sendPoll!({
@@ -359,6 +359,20 @@ describe("discordPlugin outbound", () => {
 });
 
 describe("discordPlugin bindings", () => {
+  it("derives DM current conversation ids from direct sender context", () => {
+    const result = discordPlugin.bindings?.resolveCommandConversation?.({
+      accountId: "default",
+      chatType: "direct",
+      from: "discord:123456789012345678",
+      originatingTo: "channel:dm-channel-1",
+      fallbackTo: "channel:dm-channel-1",
+    });
+
+    expect(result).toEqual({
+      conversationId: "user:123456789012345678",
+    });
+  });
+
   it("preserves user-prefixed current conversation ids for DM binds", () => {
     const result = discordPlugin.bindings?.resolveCommandConversation?.({
       accountId: "default",

@@ -1,10 +1,11 @@
 import os from "node:os";
 import path from "node:path";
 import { normalizeAccountId as normalizeSharedAccountId } from "openclaw/plugin-sdk/account-id";
-import { normalizeProviderId } from "openclaw/plugin-sdk/agent-runtime";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
+import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
 const MODEL_PICKER_PREFERENCES_LOCK_OPTIONS = {
   retries: {
@@ -63,7 +64,7 @@ function resolvePreferencesStorePath(env: NodeJS.ProcessEnv = process.env): stri
 }
 
 function normalizeId(value?: string): string {
-  return value?.trim() ?? "";
+  return normalizeOptionalString(value) ?? "";
 }
 
 export function buildDiscordModelPickerPreferenceKey(
@@ -118,7 +119,7 @@ function sanitizeRecentModels(models: string[] | undefined, limit: number): stri
 async function readPreferencesStore(filePath: string): Promise<ModelPickerPreferencesStore> {
   const { value } = await readJsonFileWithFallback(filePath, {
     version: 1,
-    entries: {},
+    entries: {} as Record<string, ModelPickerPreferencesEntry>,
   });
   if (!value || typeof value !== "object" || value.version !== 1) {
     return { version: 1, entries: {} };

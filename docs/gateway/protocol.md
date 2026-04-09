@@ -381,16 +381,18 @@ implemented in `src/gateway/server-methods/*.ts`.
 
 #### Approval families
 
-- `exec.approval.request` and `exec.approval.resolve` cover one-shot exec
-  approval requests.
+- `exec.approval.request`, `exec.approval.get`, `exec.approval.list`, and
+  `exec.approval.resolve` cover one-shot exec approval requests plus pending
+  approval lookup/replay.
 - `exec.approval.waitDecision` waits on one pending exec approval and returns
   the final decision (or `null` on timeout).
 - `exec.approvals.get` and `exec.approvals.set` manage gateway exec approval
   policy snapshots.
 - `exec.approvals.node.get` and `exec.approvals.node.set` manage node-local exec
   approval policy via node relay commands.
-- `plugin.approval.request`, `plugin.approval.waitDecision`, and
-  `plugin.approval.resolve` cover plugin-defined approval flows.
+- `plugin.approval.request`, `plugin.approval.list`,
+  `plugin.approval.waitDecision`, and `plugin.approval.resolve` cover
+  plugin-defined approval flows.
 
 #### Other major families
 

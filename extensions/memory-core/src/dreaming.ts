@@ -10,9 +10,16 @@ import {
   resolveMemoryDeepDreamingConfig,
   resolveMemoryDreamingWorkspaces,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { writeDeepDreamingReport } from "./dreaming-markdown.js";
 import { generateAndAppendDreamNarrative, type NarrativePhaseData } from "./dreaming-narrative.js";
 import { runDreamingSweepPhases } from "./dreaming-phases.js";
+import {
+  asRecord,
+  formatErrorMessage,
+  includesSystemEventToken,
+  normalizeTrimmedString,
+} from "./dreaming-shared.js";
 import {
   applyShortTermPromotions,
   repairShortTermPromotionArtifacts,
@@ -103,27 +110,7 @@ type ReconcileResult =
   | { status: "updated"; removed: number }
   | { status: "noop"; removed: number };
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
-
-function normalizeTrimmedString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function formatErrorMessage(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  return String(err);
-}
+type LegacyPhaseMigrationMode = "enabled" | "disabled";
 
 function formatRepairSummary(repair: {
   rewroteStore: boolean;
@@ -199,6 +186,39 @@ function compareOptionalStrings(a: string | undefined, b: string | undefined): b
   return a === b;
 }
 
+async function migrateLegacyPhaseDreamingCronJobs(params: {
+  cron: CronServiceLike;
+  legacyJobs: ManagedCronJobLike[];
+  logger: Logger;
+  mode: LegacyPhaseMigrationMode;
+}): Promise<number> {
+  let migrated = 0;
+  for (const job of params.legacyJobs) {
+    try {
+      const result = await params.cron.remove(job.id);
+      if (result.removed === true) {
+        migrated += 1;
+      }
+    } catch (err) {
+      params.logger.warn(
+        `memory-core: failed to migrate legacy phase dreaming cron job ${job.id}: ${formatErrorMessage(err)}`,
+      );
+    }
+  }
+  if (migrated > 0) {
+    if (params.mode === "enabled") {
+      params.logger.info(
+        `memory-core: migrated ${migrated} legacy phase dreaming cron job(s) to the unified dreaming controller.`,
+      );
+    } else {
+      params.logger.info(
+        `memory-core: completed legacy phase dreaming cron migration while unified dreaming is disabled (${migrated} job(s) removed).`,
+      );
+    }
+  }
+  return migrated;
+}
+
 function buildManagedDreamingPatch(
   job: ManagedCronJobLike,
   desired: ManagedCronJobCreate,
@@ -215,7 +235,7 @@ function buildManagedDreamingPatch(
     patch.enabled = true;
   }
 
-  const scheduleKind = normalizeTrimmedString(job.schedule?.kind)?.toLowerCase();
+  const scheduleKind = normalizeLowercaseStringOrEmpty(normalizeTrimmedString(job.schedule?.kind));
   const scheduleExpr = normalizeTrimmedString(job.schedule?.expr);
   const scheduleTz = normalizeTrimmedString(job.schedule?.tz);
   if (
@@ -226,16 +246,16 @@ function buildManagedDreamingPatch(
     patch.schedule = desired.schedule;
   }
 
-  const sessionTarget = normalizeTrimmedString(job.sessionTarget)?.toLowerCase();
+  const sessionTarget = normalizeLowercaseStringOrEmpty(normalizeTrimmedString(job.sessionTarget));
   if (sessionTarget !== "main") {
     patch.sessionTarget = "main";
   }
-  const wakeMode = normalizeTrimmedString(job.wakeMode)?.toLowerCase();
+  const wakeMode = normalizeLowercaseStringOrEmpty(normalizeTrimmedString(job.wakeMode));
   if (wakeMode !== "next-heartbeat") {
     patch.wakeMode = "next-heartbeat";
   }
 
-  const payloadKind = normalizeTrimmedString(job.payload?.kind)?.toLowerCase();
+  const payloadKind = normalizeLowercaseStringOrEmpty(normalizeTrimmedString(job.payload?.kind));
   const payloadText = normalizeTrimmedString(job.payload?.text);
   if (payloadKind !== "systemevent" || !compareOptionalStrings(payloadText, desired.payload.text)) {
     patch.payload = desired.payload;
@@ -321,25 +341,13 @@ export async function reconcileShortTermDreamingCronJob(params: {
   const managed = allJobs.filter(isManagedDreamingJob);
   const legacyPhaseJobs = allJobs.filter(isLegacyPhaseDreamingJob);
 
-  let removedLegacy = 0;
-  for (const job of legacyPhaseJobs) {
-    try {
-      const result = await cron.remove(job.id);
-      if (result.removed === true) {
-        removedLegacy += 1;
-      }
-    } catch (err) {
-      params.logger.warn(
-        `memory-core: failed to remove legacy managed dreaming cron job ${job.id}: ${formatErrorMessage(err)}`,
-      );
-    }
-  }
-  if (removedLegacy > 0) {
-    params.logger.info(`memory-core: removed ${removedLegacy} legacy phase dreaming cron job(s).`);
-  }
-
   if (!params.config.enabled) {
-    let removed = removedLegacy;
+    let removed = await migrateLegacyPhaseDreamingCronJobs({
+      cron,
+      legacyJobs: legacyPhaseJobs,
+      logger: params.logger,
+      mode: "disabled",
+    });
     for (const job of managed) {
       try {
         const result = await cron.remove(job.id);
@@ -361,12 +369,23 @@ export async function reconcileShortTermDreamingCronJob(params: {
   const desired = buildManagedDreamingCronJob(params.config);
   if (managed.length === 0) {
     await cron.add(desired);
+    const migratedLegacy = await migrateLegacyPhaseDreamingCronJobs({
+      cron,
+      legacyJobs: legacyPhaseJobs,
+      logger: params.logger,
+      mode: "enabled",
+    });
     params.logger.info("memory-core: created managed dreaming cron job.");
-    return { status: "added", removed: removedLegacy };
+    return { status: "added", removed: migratedLegacy };
   }
 
   const [primary, ...duplicates] = sortManagedJobs(managed);
-  let removed = removedLegacy;
+  let removed = await migrateLegacyPhaseDreamingCronJobs({
+    cron,
+    legacyJobs: legacyPhaseJobs,
+    logger: params.logger,
+    mode: "enabled",
+  });
   for (const duplicate of duplicates) {
     try {
       const result = await cron.remove(duplicate.id);
@@ -405,7 +424,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   if (params.trigger !== "heartbeat") {
     return undefined;
   }
-  if (params.cleanedBody.trim() !== DREAMING_SYSTEM_EVENT_TEXT) {
+  if (!includesSystemEventToken(params.cleanedBody, DREAMING_SYSTEM_EVENT_TEXT)) {
     return undefined;
   }
   if (!params.config.enabled) {

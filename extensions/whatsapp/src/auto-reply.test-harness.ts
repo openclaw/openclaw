@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, vi, type Mock } from "vitest";
 import type { WebInboundMessage, WebListenerCloseReason } from "./inbound.js";
 import {
@@ -14,7 +15,6 @@ import {
 export { resetBaileysMocks, resetLoadConfigMock, setLoadConfigMock } from "./test-helpers.js";
 
 // Avoid exporting inferred vitest mock types (TS2742 under pnpm + d.ts emit).
-// oxlint-disable-next-line typescript/no-explicit-any
 type AnyExport = any;
 type MockWebListener = {
   close: () => Promise<void>;
@@ -153,7 +153,7 @@ export function installWebAutoReplyUnitTestHooks(opts?: { pinDns?: boolean }) {
         .spyOn(ssrf, "resolvePinnedHostname")
         .mockImplementation(async (hostname) => {
           // SSRF guard pins DNS; stub resolution to avoid live lookups in unit tests.
-          const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
+          const normalized = normalizeLowercaseStringOrEmpty(hostname).replace(/\.$/, "");
           const addresses = [TEST_NET_IP];
           return {
             hostname: normalized,

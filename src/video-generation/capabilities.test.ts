@@ -19,17 +19,13 @@ function createProvider(
 }
 
 describe("video-generation capabilities", () => {
-  it("derives legacy modes from aggregate input limits", () => {
+  it("requires explicit transform capabilities before advertising transform modes", () => {
     const provider = createProvider({
       maxInputImages: 1,
       maxInputVideos: 2,
     });
 
-    expect(listSupportedVideoGenerationModes(provider)).toEqual([
-      "generate",
-      "imageToVideo",
-      "videoToVideo",
-    ]);
+    expect(listSupportedVideoGenerationModes(provider)).toEqual(["generate"]);
   });
 
   it("prefers explicit mode capabilities for image-to-video requests", () => {
@@ -60,7 +56,7 @@ describe("video-generation capabilities", () => {
     });
   });
 
-  it("falls back to aggregate capabilities for mixed reference requests", () => {
+  it("does not infer transform capabilities for mixed reference requests", () => {
     const provider = createProvider({
       maxInputImages: 1,
       maxInputVideos: 4,
@@ -76,19 +72,7 @@ describe("video-generation capabilities", () => {
       }),
     ).toEqual({
       mode: null,
-      capabilities: {
-        maxVideos: undefined,
-        maxInputImages: 1,
-        maxInputVideos: 4,
-        maxDurationSeconds: undefined,
-        supportedDurationSeconds: undefined,
-        supportedDurationSecondsByModel: undefined,
-        supportsSize: undefined,
-        supportsAspectRatio: undefined,
-        supportsResolution: undefined,
-        supportsAudio: true,
-        supportsWatermark: undefined,
-      },
+      capabilities: undefined,
     });
   });
 });

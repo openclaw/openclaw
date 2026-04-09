@@ -124,6 +124,9 @@ The provider id becomes the left side of your model ref:
           sessionMode: "existing",
           sessionIdFields: ["session_id", "conversation_id"],
           systemPromptArg: "--system",
+          // Codex-style CLIs can point at a prompt file instead:
+          // systemPromptFileConfigArg: "-c",
+          // systemPromptFileConfigKey: "model_instructions_file",
           systemPromptWhen: "first",
           imageArg: "--image",
           imageMode: "repeat",
@@ -149,6 +152,12 @@ told us OpenClaw-style Claude CLI usage is allowed again, so OpenClaw treats
 `claude -p` usage as sanctioned for this integration unless Anthropic publishes
 a new policy.
 </Note>
+
+The bundled OpenAI `codex-cli` backend passes OpenClaw's system prompt through
+Codex's `model_instructions_file` config override (`-c
+model_instructions_file="..."`). Codex does not expose a Claude-style
+`--append-system-prompt` flag, so OpenClaw writes the assembled prompt to a
+temporary file for each fresh Codex CLI session.
 
 ## Sessions
 
@@ -214,8 +223,10 @@ The bundled OpenAI plugin also registers a default for `codex-cli`:
 The bundled Google plugin also registers a default for `google-gemini-cli`:
 
 - `command: "gemini"`
-- `args: ["--prompt", "--output-format", "json"]`
-- `resumeArgs: ["--resume", "{sessionId}", "--prompt", "--output-format", "json"]`
+- `args: ["--output-format", "json", "--prompt", "{prompt}"]`
+- `resumeArgs: ["--resume", "{sessionId}", "--output-format", "json", "--prompt", "{prompt}"]`
+- `imageArg: "@"`
+- `imagePathScope: "workspace"`
 - `modelArg: "--model"`
 - `sessionMode: "existing"`
 - `sessionIdFields: ["session_id", "sessionId"]`
@@ -251,8 +262,9 @@ opt into a generated MCP config overlay with `bundleMcp: true`.
 
 Current bundled behavior:
 
-- `codex-cli`: no bundle MCP overlay
-- `google-gemini-cli`: no bundle MCP overlay
+- `claude-cli`: generated strict MCP config file
+- `codex-cli`: inline config overrides for `mcp_servers`
+- `google-gemini-cli`: generated Gemini system settings file
 
 When bundle MCP is enabled, OpenClaw:
 
@@ -260,8 +272,8 @@ When bundle MCP is enabled, OpenClaw:
 - authenticates the bridge with a per-session token (`OPENCLAW_MCP_TOKEN`)
 - scopes tool access to the current session, account, and channel context
 - loads enabled bundle-MCP servers for the current workspace
-- merges them with any existing backend `--mcp-config`
-- rewrites the CLI args to pass `--strict-mcp-config --mcp-config <generated-file>`
+- merges them with any existing backend MCP config/settings shape
+- rewrites the launch config using the backend-owned integration mode from the owning extension
 
 If no MCP servers are enabled, OpenClaw still injects a strict config when a
 backend opts into bundle MCP so background runs stay isolated.

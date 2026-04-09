@@ -4,6 +4,10 @@ import path from "node:path";
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore } from "../config/sessions.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
@@ -18,11 +22,8 @@ import {
   resolveTrustedHttpOperatorScopes,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
-import {
-  DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-  sanitizeChatHistoryMessages,
-} from "./server-methods/chat.js";
-import { paginateSessionMessages, SessionHistorySseState } from "./session-history-state.js";
+import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./server-methods/chat.js";
+import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
 import {
   readSessionMessages,
   resolveFreshestSessionEntryFromStoreKeys,
@@ -39,14 +40,14 @@ function resolveSessionHistoryPath(req: IncomingMessage): string | null {
     return null;
   }
   try {
-    return decodeURIComponent(match[1] ?? "").trim() || null;
+    return normalizeOptionalString(decodeURIComponent(match[1] ?? "")) ?? null;
   } catch {
     return "";
   }
 }
 
 function shouldStreamSse(req: IncomingMessage): boolean {
-  const accept = getHeader(req, "accept")?.toLowerCase() ?? "";
+  const accept = normalizeLowercaseStringOrEmpty(getHeader(req, "accept"));
   return accept.includes("text/event-stream");
 }
 
@@ -66,14 +67,8 @@ function resolveLimit(req: IncomingMessage): number | undefined {
   return Math.min(MAX_SESSION_HISTORY_LIMIT, Math.max(1, value));
 }
 
-function resolveCursor(req: IncomingMessage): string | undefined {
-  const raw = getRequestUrl(req).searchParams.get("cursor");
-  const trimmed = raw?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 function canonicalizePath(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }
@@ -155,18 +150,24 @@ export async function handleSessionHistoryHttpRequest(
     return true;
   }
   const limit = resolveLimit(req);
-  const cursor = resolveCursor(req);
+  const cursor = normalizeOptionalString(getRequestUrl(req).searchParams.get("cursor"));
   const effectiveMaxChars =
     typeof cfg.gateway?.webchat?.chatHistoryMaxChars === "number"
       ? cfg.gateway.webchat.chatHistoryMaxChars
       : DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
-  const sanitizedMessages = sanitizeChatHistoryMessages(
-    entry?.sessionId
-      ? readSessionMessages(entry.sessionId, target.storePath, entry.sessionFile)
-      : [],
-    effectiveMaxChars,
-  );
-  const history = paginateSessionMessages(sanitizedMessages, limit, cursor);
+  // Read the transcript once and derive both sanitized and raw views from the
+  // same snapshot, eliminating the theoretical race window where a concurrent
+  // write between two separate reads could cause seq/content divergence.
+  const rawSnapshot = entry?.sessionId
+    ? readSessionMessages(entry.sessionId, target.storePath, entry.sessionFile)
+    : [];
+  const historySnapshot = buildSessionHistorySnapshot({
+    rawMessages: rawSnapshot,
+    maxChars: effectiveMaxChars,
+    limit,
+    cursor,
+  });
+  const history = historySnapshot.history;
 
   if (!shouldStreamSse(req)) {
     sendJson(res, 200, {
@@ -190,12 +191,13 @@ export async function handleSessionHistoryHttpRequest(
     : new Set<string>();
 
   let sentHistory = history;
-  const sseState = new SessionHistorySseState({
+  const sseState = SessionHistorySseState.fromRawSnapshot({
     target: {
       sessionId: entry.sessionId,
       storePath: target.storePath,
       sessionFile: entry.sessionFile,
     },
+    rawMessages: rawSnapshot,
     maxChars: effectiveMaxChars,
     limit,
     cursor,

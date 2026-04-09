@@ -5,10 +5,16 @@ const hoisted = vi.hoisted(() => ({
   matchesProviderContextOverflowWithPlugin: vi.fn(() => false),
 }));
 
-vi.mock("../../plugins/provider-runtime.js", () => ({
-  classifyProviderFailoverReasonWithPlugin: hoisted.classifyProviderFailoverReasonWithPlugin,
-  matchesProviderContextOverflowWithPlugin: hoisted.matchesProviderContextOverflowWithPlugin,
-}));
+vi.mock("../../plugins/provider-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../../plugins/provider-runtime.js")>(
+    "../../plugins/provider-runtime.js",
+  );
+  return {
+    ...actual,
+    classifyProviderFailoverReasonWithPlugin: hoisted.classifyProviderFailoverReasonWithPlugin,
+    matchesProviderContextOverflowWithPlugin: hoisted.matchesProviderContextOverflowWithPlugin,
+  };
+});
 
 import { classifyFailoverReason, isContextOverflowError } from "./errors.js";
 import {

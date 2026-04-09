@@ -18,6 +18,9 @@ const runEmbeddedAttemptMock = vi.fn();
 const disposeSessionMcpRuntimeMock = vi.fn<(sessionId: string) => Promise<void>>(async () => {
   return undefined;
 });
+const resolveSessionKeyForRequestMock = vi.fn();
+const resolveStoredSessionKeyForSessionIdMock = vi.fn();
+const loggerWarnMock = vi.fn();
 let refreshRuntimeAuthOnFirstPromptError = false;
 
 vi.mock("@mariozechner/pi-ai", async () => {
@@ -95,6 +98,28 @@ const installRunEmbeddedMocks = () => {
   vi.doMock("./runtime-plugins.js", () => ({
     ensureRuntimePluginsLoaded: vi.fn(),
   }));
+  vi.doMock("./command/session.js", async () => {
+    const actual =
+      await vi.importActual<typeof import("./command/session.js")>("./command/session.js");
+    return {
+      ...actual,
+      resolveSessionKeyForRequest: (opts: unknown) => resolveSessionKeyForRequestMock(opts),
+      resolveStoredSessionKeyForSessionId: (opts: unknown) =>
+        resolveStoredSessionKeyForSessionIdMock(opts),
+    };
+  });
+  vi.doMock("./pi-embedded-runner/logger.js", async () => {
+    const actual = await vi.importActual<typeof import("./pi-embedded-runner/logger.js")>(
+      "./pi-embedded-runner/logger.js",
+    );
+    return {
+      ...actual,
+      log: {
+        ...actual.log,
+        warn: (...args: unknown[]) => loggerWarnMock(...args),
+      },
+    };
+  });
   vi.doMock("./pi-embedded-runner/run/attempt.js", () => ({
     runEmbeddedAttempt: (params: unknown) => runEmbeddedAttemptMock(params),
   }));
@@ -166,6 +191,9 @@ beforeEach(() => {
   vi.useRealTimers();
   runEmbeddedAttemptMock.mockReset();
   disposeSessionMcpRuntimeMock.mockReset();
+  resolveSessionKeyForRequestMock.mockReset();
+  resolveStoredSessionKeyForSessionIdMock.mockReset();
+  loggerWarnMock.mockReset();
   refreshRuntimeAuthOnFirstPromptError = false;
   runEmbeddedAttemptMock.mockImplementation(async () => {
     throw new Error("unexpected extra runEmbeddedAttempt call");
@@ -268,6 +296,165 @@ const runDefaultEmbeddedTurn = async (sessionFile: string, prompt: string, sessi
 };
 
 describe("runEmbeddedPiAgent", () => {
+  it("backfills a trimmed session key from sessionId when the embedded run omits it", async () => {
+    const sessionFile = nextSessionFile();
+    const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);
+    resolveSessionKeyForRequestMock.mockReturnValue({
+      sessionKey: "agent:test:resolved",
+      sessionStore: {},
+      storePath: "/tmp/session-store.json",
+    });
+    runEmbeddedAttemptMock.mockResolvedValueOnce(
+      makeEmbeddedRunnerAttempt({
+        assistantTexts: ["ok"],
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          content: [{ type: "text", text: "ok" }],
+        }),
+      }),
+    );
+
+    await runEmbeddedPiAgent({
+      sessionId: "resume-123",
+      sessionKey: "   ",
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "hello",
+      provider: "openai",
+      model: "mock-1",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("backfill"),
+      enqueue: immediateEnqueue,
+    });
+
+    expect(resolveSessionKeyForRequestMock).toHaveBeenCalledWith({
+      cfg,
+      sessionId: "resume-123",
+      agentId: undefined,
+    });
+    const firstCall = runEmbeddedAttemptMock.mock.calls[0]?.[0] as { sessionKey?: string };
+    expect(firstCall.sessionKey).toBe("agent:test:resolved");
+  });
+
+  it("drops whitespace-only session keys when backfill cannot resolve a session key", async () => {
+    const sessionFile = nextSessionFile();
+    const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);
+    resolveSessionKeyForRequestMock.mockReturnValue({
+      sessionKey: undefined,
+      sessionStore: {},
+      storePath: "/tmp/session-store.json",
+    });
+    runEmbeddedAttemptMock.mockResolvedValueOnce(
+      makeEmbeddedRunnerAttempt({
+        assistantTexts: ["ok"],
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          content: [{ type: "text", text: "ok" }],
+        }),
+      }),
+    );
+
+    await runEmbeddedPiAgent({
+      sessionId: "resume-124",
+      sessionKey: "   ",
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "hello",
+      provider: "openai",
+      model: "mock-1",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("backfill-empty"),
+      enqueue: immediateEnqueue,
+    });
+
+    expect(resolveSessionKeyForRequestMock).toHaveBeenCalledWith({
+      cfg,
+      sessionId: "resume-124",
+      agentId: undefined,
+    });
+    const firstCall = runEmbeddedAttemptMock.mock.calls[0]?.[0] as { sessionKey?: string };
+    expect(firstCall.sessionKey).toBeUndefined();
+  });
+
+  it("logs when embedded session-key backfill resolution fails", async () => {
+    const sessionFile = nextSessionFile();
+    const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);
+    resolveSessionKeyForRequestMock.mockImplementation(() => {
+      throw new Error("resolver exploded");
+    });
+    runEmbeddedAttemptMock.mockResolvedValueOnce(
+      makeEmbeddedRunnerAttempt({
+        assistantTexts: ["ok"],
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          content: [{ type: "text", text: "ok" }],
+        }),
+      }),
+    );
+
+    await runEmbeddedPiAgent({
+      sessionId: "resume-456",
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "hello",
+      provider: "openai",
+      model: "mock-1",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("backfill-warn"),
+      enqueue: immediateEnqueue,
+    });
+
+    expect(
+      loggerWarnMock.mock.calls.some(([message]) =>
+        String(message ?? "").includes("[backfillSessionKey] Failed to resolve sessionKey"),
+      ),
+    ).toBe(true);
+  });
+
+  it("passes the current agentId when backfilling a session key", async () => {
+    const sessionFile = nextSessionFile();
+    const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);
+    resolveStoredSessionKeyForSessionIdMock.mockReturnValue({
+      sessionKey: "agent:test:resolved",
+      sessionStore: {},
+      storePath: "/tmp/session-store.json",
+    });
+    runEmbeddedAttemptMock.mockResolvedValueOnce(
+      makeEmbeddedRunnerAttempt({
+        assistantTexts: ["ok"],
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          content: [{ type: "text", text: "ok" }],
+        }),
+      }),
+    );
+
+    await runEmbeddedPiAgent({
+      sessionId: "resume-agent-1",
+      sessionKey: undefined,
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "hello",
+      provider: "openai",
+      model: "mock-1",
+      timeoutMs: 5_000,
+      agentDir,
+      agentId: "embedded-agent",
+      runId: nextRunId("backfill-agent-scope"),
+      enqueue: immediateEnqueue,
+    });
+
+    expect(resolveStoredSessionKeyForSessionIdMock).toHaveBeenCalledWith({
+      cfg,
+      sessionId: "resume-agent-1",
+      agentId: "embedded-agent",
+    });
+    expect(resolveSessionKeyForRequestMock).not.toHaveBeenCalled();
+  });
+
   it("disposes bundle MCP once when a one-shot local run completes", async () => {
     const sessionFile = nextSessionFile();
     const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);
@@ -353,7 +540,7 @@ describe("runEmbeddedPiAgent", () => {
 
     runEmbeddedAttemptMock
       .mockImplementationOnce(async (params: unknown) => {
-        expect((params as { prompt?: string }).prompt).toBe("ship it");
+        expect((params as { prompt?: string }).prompt).toMatch(/^ship it(?:\n\n|$)/);
         return makeEmbeddedRunnerAttempt({
           assistantTexts: ["I'll inspect the files, make the change, and run the checks."],
           lastAssistant: buildEmbeddedRunnerAssistant({

@@ -9,6 +9,10 @@ import {
   type SsrFPolicy,
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
@@ -63,10 +67,10 @@ function buildPolicy(allowPrivateNetwork: boolean): SsrFPolicy | undefined {
 }
 
 function extractFalVideoEntry(payload: FalVideoResponse) {
-  if (payload.video?.url?.trim()) {
+  if (normalizeOptionalString(payload.video?.url)) {
     return payload.video;
   }
-  return payload.videos?.find((entry) => entry.url?.trim());
+  return payload.videos?.find((entry) => normalizeOptionalString(entry.url));
 }
 
 async function downloadFalVideo(
@@ -81,7 +85,7 @@ async function downloadFalVideo(
   });
   try {
     await assertOkOrThrowHttpError(response, "fal generated video download failed");
-    const mimeType = response.headers.get("content-type")?.trim() || "video/mp4";
+    const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
     const arrayBuffer = await response.arrayBuffer();
     return {
       buffer: Buffer.from(arrayBuffer),
@@ -107,7 +111,7 @@ function resolveFalQueueBaseUrl(baseUrl: string): string {
 }
 
 function isFalMiniMaxLiveModel(model: string): boolean {
-  return model.trim().toLowerCase() === DEFAULT_FAL_VIDEO_MODEL;
+  return normalizeLowercaseStringOrEmpty(model) === DEFAULT_FAL_VIDEO_MODEL;
 }
 
 function buildFalVideoRequestBody(params: {
@@ -119,10 +123,10 @@ function buildFalVideoRequestBody(params: {
   };
   const input = params.req.inputImages?.[0];
   if (input) {
-    requestBody.image_url = input.url?.trim()
-      ? input.url.trim()
+    requestBody.image_url = normalizeOptionalString(input.url)
+      ? normalizeOptionalString(input.url)
       : input.buffer
-        ? toDataUrl(input.buffer, input.mimeType?.trim() || "image/png")
+        ? toDataUrl(input.buffer, normalizeOptionalString(input.mimeType) ?? "image/png")
         : undefined;
   }
   // MiniMax Live on fal currently documents prompt + optional image_url only.
@@ -131,11 +135,13 @@ function buildFalVideoRequestBody(params: {
   if (isFalMiniMaxLiveModel(params.model)) {
     return requestBody;
   }
-  if (params.req.aspectRatio?.trim()) {
-    requestBody.aspect_ratio = params.req.aspectRatio.trim();
+  const aspectRatio = normalizeOptionalString(params.req.aspectRatio);
+  if (aspectRatio) {
+    requestBody.aspect_ratio = aspectRatio;
   }
-  if (params.req.size?.trim()) {
-    requestBody.size = params.req.size.trim();
+  const size = normalizeOptionalString(params.req.size);
+  if (size) {
+    requestBody.size = size;
   }
   if (params.req.resolution) {
     requestBody.resolution = params.req.resolution;
@@ -197,7 +203,7 @@ async function waitForFalQueueResult(params: {
       auditContext: "fal-video-status",
       errorContext: "fal video status request failed",
     })) as FalQueueResponse;
-    const status = payload.status?.trim().toUpperCase();
+    const status = normalizeOptionalString(payload.status)?.toUpperCase();
     if (status) {
       lastStatus = status;
     }
@@ -217,9 +223,9 @@ async function waitForFalQueueResult(params: {
     }
     if (status === "FAILED" || status === "CANCELLED") {
       throw new Error(
-        payload.detail?.trim() ||
-          payload.error?.message?.trim() ||
-          `fal video generation ${status.toLowerCase()}`,
+        normalizeOptionalString(payload.detail) ||
+          normalizeOptionalString(payload.error?.message) ||
+          `fal video generation ${normalizeLowercaseStringOrEmpty(status)}`,
       );
     }
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
@@ -251,12 +257,23 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
         agentDir,
       }),
     capabilities: {
-      maxVideos: 1,
-      maxInputImages: 1,
-      maxInputVideos: 0,
-      supportsAspectRatio: true,
-      supportsResolution: true,
-      supportsSize: true,
+      generate: {
+        maxVideos: 1,
+        supportsAspectRatio: true,
+        supportsResolution: true,
+        supportsSize: true,
+      },
+      imageToVideo: {
+        enabled: true,
+        maxVideos: 1,
+        maxInputImages: 1,
+        supportsAspectRatio: true,
+        supportsResolution: true,
+        supportsSize: true,
+      },
+      videoToVideo: {
+        enabled: false,
+      },
     },
     async generateVideo(req) {
       if ((req.inputVideos?.length ?? 0) > 0) {
@@ -276,7 +293,7 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
       }
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
-          baseUrl: req.cfg?.models?.providers?.fal?.baseUrl?.trim(),
+          baseUrl: normalizeOptionalString(req.cfg?.models?.providers?.fal?.baseUrl),
           defaultBaseUrl: DEFAULT_FAL_BASE_URL,
           allowPrivateNetwork: false,
           defaultHeaders: {
@@ -287,7 +304,7 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
           capability: "video",
           transport: "http",
         });
-      const model = req.model?.trim() || DEFAULT_FAL_VIDEO_MODEL;
+      const model = normalizeOptionalString(req.model) || DEFAULT_FAL_VIDEO_MODEL;
       const requestBody = buildFalVideoRequestBody({ req, model });
       const policy = buildPolicy(allowPrivateNetwork);
       const queueBaseUrl = resolveFalQueueBaseUrl(baseUrl);
@@ -304,8 +321,8 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
         auditContext: "fal-video-submit",
         errorContext: "fal video generation failed",
       })) as FalQueueResponse;
-      const statusUrl = submitted.status_url?.trim();
-      const responseUrl = submitted.response_url?.trim();
+      const statusUrl = normalizeOptionalString(submitted.status_url);
+      const responseUrl = normalizeOptionalString(submitted.response_url);
       if (!statusUrl || !responseUrl) {
         throw new Error("fal video generation response missing queue URLs");
       }
@@ -319,7 +336,7 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
       });
       const videoPayload = extractFalVideoPayload(payload);
       const entry = extractFalVideoEntry(videoPayload);
-      const url = entry?.url?.trim();
+      const url = normalizeOptionalString(entry?.url);
       if (!url) {
         throw new Error("fal video generation response missing output URL");
       }
@@ -328,7 +345,9 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
         videos: [video],
         model,
         metadata: {
-          ...(submitted.request_id?.trim() ? { requestId: submitted.request_id.trim() } : {}),
+          ...(normalizeOptionalString(submitted.request_id)
+            ? { requestId: normalizeOptionalString(submitted.request_id) }
+            : {}),
           ...(videoPayload.prompt ? { prompt: videoPayload.prompt } : {}),
         },
       };

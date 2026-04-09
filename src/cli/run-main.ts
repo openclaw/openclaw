@@ -12,6 +12,11 @@ import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { enableConsoleCapture } from "../logging.js";
 import { hasMemoryRuntime } from "../plugins/memory-state.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import {
   shouldRegisterPrimaryCommandOnly,
@@ -62,7 +67,7 @@ export function resolveMissingPluginCommandMessage(
   pluginId: string,
   config?: OpenClawConfig,
 ): string | null {
-  const normalizedPluginId = pluginId.trim().toLowerCase();
+  const normalizedPluginId = normalizeLowercaseStringOrEmpty(pluginId);
   if (!normalizedPluginId) {
     return null;
   }
@@ -70,7 +75,8 @@ export function resolveMissingPluginCommandMessage(
     Array.isArray(config?.plugins?.allow) && config.plugins.allow.length > 0
       ? config.plugins.allow
           .filter((entry): entry is string => typeof entry === "string")
-          .map((entry) => entry.trim().toLowerCase())
+          .map((entry) => normalizeOptionalLowercaseString(entry))
+          .filter(Boolean)
       : [];
   if (allow.length > 0 && !allow.includes(normalizedPluginId)) {
     return (
@@ -110,7 +116,7 @@ export async function runCli(argv: string[] = process.argv) {
     applyCliProfileEnv({ profile: parsedProfile.profile });
   }
   const containerTargetName =
-    parsedContainer.container ?? process.env.OPENCLAW_CONTAINER?.trim() ?? null;
+    parsedContainer.container ?? normalizeOptionalString(process.env.OPENCLAW_CONTAINER) ?? null;
   if (containerTargetName && parsedProfile.profile) {
     throw new Error("--container cannot be combined with --profile/--dev");
   }
@@ -153,9 +159,13 @@ export async function runCli(argv: string[] = process.argv) {
     // Capture all console output into structured logs while keeping stdout/stderr behavior.
     enableConsoleCapture();
 
-    const { buildProgram } = await import("./program.js");
+    const [{ buildProgram }, { installUnhandledRejectionHandler }, { restoreTerminalState }] =
+      await Promise.all([
+        import("./program.js"),
+        import("../infra/unhandled-rejections.js"),
+        import("../terminal/restore.js"),
+      ]);
     const program = buildProgram();
-    const { installUnhandledRejectionHandler } = await import("../infra/unhandled-rejections.js");
 
     // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
     // These log the error and exit gracefully instead of crashing without trace.
@@ -163,6 +173,7 @@ export async function runCli(argv: string[] = process.argv) {
 
     process.on("uncaughtException", (error) => {
       console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
+      restoreTerminalState("uncaught exception", { resumeStdinIfPaused: false });
       process.exit(1);
     });
 

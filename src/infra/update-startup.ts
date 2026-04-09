@@ -5,6 +5,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { VERSION } from "../version.js";
 import { writeJsonAtomic } from "./json-files.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
@@ -236,7 +237,7 @@ async function runAutoUpdateCommand(params: {
   const baseArgs = ["update", "--yes", "--channel", params.channel, "--json"];
   const execPath = process.execPath?.trim();
   const argv1 = process.argv[1]?.trim();
-  const lowerExecBase = execPath ? path.basename(execPath).toLowerCase() : "";
+  const lowerExecBase = execPath ? normalizeLowercaseStringOrEmpty(path.basename(execPath)) : "";
   const runtimeIsNodeOrBun =
     lowerExecBase === "node" ||
     lowerExecBase === "node.exe" ||

@@ -77,13 +77,26 @@ describe("local-heavy-check-runtime", () => {
   it("serializes local oxlint runs onto one thread on constrained hosts", () => {
     const { args } = applyLocalOxlintPolicy([], makeEnv(), CONSTRAINED_HOST);
 
-    expect(args).toEqual(["--type-aware", "--tsconfig", "tsconfig.oxlint.json", "--threads=1"]);
+    expect(args).toEqual([
+      "--type-aware",
+      "--tsconfig",
+      "tsconfig.oxlint.json",
+      "--report-unused-disable-directives-severity",
+      "error",
+      "--threads=1",
+    ]);
   });
 
   it("keeps local oxlint parallel on roomy hosts in auto mode", () => {
     const { args } = applyLocalOxlintPolicy([], makeEnv(), ROOMY_HOST);
 
-    expect(args).toEqual(["--type-aware", "--tsconfig", "tsconfig.oxlint.json"]);
+    expect(args).toEqual([
+      "--type-aware",
+      "--tsconfig",
+      "tsconfig.oxlint.json",
+      "--report-unused-disable-directives-severity",
+      "error",
+    ]);
   });
 
   it("reclaims stale local heavy-check locks from dead pids", () => {

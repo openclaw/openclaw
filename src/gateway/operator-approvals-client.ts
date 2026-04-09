@@ -32,3 +32,59 @@ export async function createOperatorApprovalsGatewayClient(
     onClose: params.onClose,
   });
 }
+
+export async function withOperatorApprovalsGatewayClient<T>(
+  params: {
+    config: OpenClawConfig;
+    gatewayUrl?: string;
+    clientDisplayName: string;
+  },
+  run: (client: GatewayClient) => Promise<T>,
+): Promise<T> {
+  let readySettled = false;
+  let resolveReady!: () => void;
+  let rejectReady!: (err: unknown) => void;
+  const ready = new Promise<void>((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+  const markReady = () => {
+    if (readySettled) {
+      return;
+    }
+    readySettled = true;
+    resolveReady();
+  };
+  const failReady = (err: unknown) => {
+    if (readySettled) {
+      return;
+    }
+    readySettled = true;
+    rejectReady(err);
+  };
+
+  const gatewayClient = await createOperatorApprovalsGatewayClient({
+    config: params.config,
+    gatewayUrl: params.gatewayUrl,
+    clientDisplayName: params.clientDisplayName,
+    onHelloOk: () => {
+      markReady();
+    },
+    onConnectError: (err) => {
+      failReady(err);
+    },
+    onClose: (code, reason) => {
+      failReady(new Error(`gateway closed (${code}): ${reason}`));
+    },
+  });
+
+  try {
+    gatewayClient.start();
+    await ready;
+    return await run(gatewayClient);
+  } finally {
+    await gatewayClient.stopAndWait().catch(() => {
+      gatewayClient.stop();
+    });
+  }
+}

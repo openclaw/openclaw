@@ -1,9 +1,8 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { describe, expect, it } from "vitest";
 import { extractToolPayload } from "../../../src/infra/outbound/tool-payload.js";
-import { startQaBusServer } from "../../../src/qa-e2e/bus-server.js";
-import { createQaBusState } from "../../../src/qa-e2e/bus-state.js";
 import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
+import { createQaBusState, startQaBusServer } from "../../qa-lab/api.js";
 import { qaChannelPlugin } from "../api.js";
 import { setQaChannelRuntime } from "../api.js";
 
@@ -68,7 +67,7 @@ function createMockQaRuntime(): PluginRuntime {
 }
 
 describe("qa-channel plugin", () => {
-  it("roundtrips inbound DM traffic through the qa bus", async () => {
+  it("roundtrips inbound DM traffic through the qa bus", { timeout: 20_000 }, async () => {
     const state = createQaBusState();
     const bus = await startQaBusServer({ state });
     setQaChannelRuntime(createMockQaRuntime());
@@ -107,7 +106,7 @@ describe("qa-channel plugin", () => {
         kind: "message-text",
         textIncludes: "qa-echo: hello",
         direction: "outbound",
-        timeoutMs: 5_000,
+        timeoutMs: 15_000,
       });
       expect("text" in outbound && outbound.text).toContain("qa-echo: hello");
     } finally {

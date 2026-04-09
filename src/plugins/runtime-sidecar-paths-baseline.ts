@@ -9,7 +9,10 @@ function buildBundledDistArtifactPath(dirName: string, artifact: string): string
 export function collectBundledRuntimeSidecarPaths(params?: {
   rootDir?: string;
 }): readonly string[] {
-  return listBundledPluginMetadata(params)
+  return listBundledPluginMetadata({
+    rootDir: params?.rootDir,
+    includeChannelConfigs: false,
+  })
     .flatMap((entry) =>
       (entry.runtimeSidecarArtifacts ?? []).map((artifact) =>
         buildBundledDistArtifactPath(entry.dirName, artifact),
