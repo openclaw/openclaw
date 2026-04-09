@@ -49,31 +49,124 @@ const SRC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = resolve(SRC_ROOT, "..");
 const PLUGIN_SDK_DIR = resolve(SRC_ROOT, "plugin-sdk");
 const sourceCache = new Map<string, string>();
-const repoSourceCache = new Map<string, string>();
 const representativeRuntimeSmokeSubpaths = ["channel-runtime", "conversation-runtime"] as const;
 
 const importResolvedPluginSdkSubpath = async (specifier: string) => import(specifier);
 
-function readPluginSdkSource(subpath: string): string {
-  const file = resolve(PLUGIN_SDK_DIR, `${subpath}.ts`);
-  const cached = sourceCache.get(file);
-  if (cached !== undefined) {
-    return cached;
-  }
-  const text = readFileSync(file, "utf8");
-  sourceCache.set(file, text);
-  return text;
-}
+type BrowserFacadeSourceContract = {
+  subpath: string;
+  artifactBasename: string;
+  mentions: readonly string[];
+  omits: readonly string[];
+};
 
-function readRepoSource(relativePath: string): string {
-  const absolutePath = resolve(REPO_ROOT, relativePath);
-  const cached = repoSourceCache.get(absolutePath);
+type BrowserHelperExportParityContract = {
+  corePath: string;
+  extensionPath: string;
+  expectedExports: readonly string[];
+};
+
+const BROWSER_FACADE_SOURCE_CONTRACTS: readonly BrowserFacadeSourceContract[] = [
+  {
+    subpath: "browser-control-auth",
+    artifactBasename: "browser-control-auth.js",
+    mentions: [
+      "loadBundledPluginPublicSurfaceModuleSync",
+      "resolveBrowserControlAuth",
+      "shouldAutoGenerateBrowserAuth",
+      "ensureBrowserControlAuth",
+    ],
+    omits: [
+      "resolveGatewayAuth",
+      "writeConfigFile",
+      "generateBrowserControlToken",
+      "ensureGatewayStartupAuth",
+    ],
+  },
+  {
+    subpath: "browser-profiles",
+    artifactBasename: "browser-profiles.js",
+    mentions: [
+      "loadBundledPluginPublicSurfaceModuleSync",
+      "resolveBrowserConfig",
+      "resolveProfile",
+    ],
+    omits: [
+      "resolveBrowserSsrFPolicy",
+      "ensureDefaultProfile",
+      "ensureDefaultUserBrowserProfile",
+      "normalizeHexColor",
+    ],
+  },
+  {
+    subpath: "browser-host-inspection",
+    artifactBasename: "browser-host-inspection.js",
+    mentions: [
+      "loadBundledPluginPublicSurfaceModuleSync",
+      "resolveGoogleChromeExecutableForPlatform",
+      "readBrowserVersion",
+      "parseBrowserMajorVersion",
+    ],
+    omits: ["findFirstChromeExecutable", "findGoogleChromeExecutableLinux", "execText"],
+  },
+];
+
+const BROWSER_HELPER_EXPORT_PARITY_CONTRACTS: readonly BrowserHelperExportParityContract[] = [
+  {
+    corePath: "src/plugin-sdk/browser-control-auth.ts",
+    extensionPath: "extensions/browser/browser-control-auth.ts",
+    expectedExports: [
+      "BrowserControlAuth",
+      "ensureBrowserControlAuth",
+      "resolveBrowserControlAuth",
+      "shouldAutoGenerateBrowserAuth",
+    ],
+  },
+  {
+    corePath: "src/plugin-sdk/browser-profiles.ts",
+    extensionPath: "extensions/browser/browser-profiles.ts",
+    expectedExports: [
+      "DEFAULT_AI_SNAPSHOT_MAX_CHARS",
+      "DEFAULT_BROWSER_DEFAULT_PROFILE_NAME",
+      "DEFAULT_BROWSER_EVALUATE_ENABLED",
+      "DEFAULT_OPENCLAW_BROWSER_COLOR",
+      "DEFAULT_OPENCLAW_BROWSER_ENABLED",
+      "DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME",
+      "DEFAULT_UPLOAD_DIR",
+      "ResolvedBrowserConfig",
+      "ResolvedBrowserProfile",
+      "resolveBrowserConfig",
+      "resolveProfile",
+    ],
+  },
+  {
+    corePath: "src/plugin-sdk/browser-host-inspection.ts",
+    extensionPath: "extensions/browser/browser-host-inspection.ts",
+    expectedExports: [
+      "BrowserExecutable",
+      "parseBrowserMajorVersion",
+      "readBrowserVersion",
+      "resolveGoogleChromeExecutableForPlatform",
+    ],
+  },
+];
+
+function readCachedSource(absolutePath: string): string {
+  const cached = sourceCache.get(absolutePath);
   if (cached !== undefined) {
     return cached;
   }
   const text = readFileSync(absolutePath, "utf8");
-  repoSourceCache.set(absolutePath, text);
+  sourceCache.set(absolutePath, text);
   return text;
+}
+
+function readPluginSdkSource(subpath: string): string {
+  return readCachedSource(resolve(PLUGIN_SDK_DIR, `${subpath}.ts`));
+}
+
+function readRepoSource(relativePath: string): string {
+  return readCachedSource(resolve(REPO_ROOT, relativePath));
 }
 
 function collectNamedExportsFromClause(clause: string): string[] {
@@ -123,11 +216,7 @@ function collectNamedExportsFromRepoFile(relativePath: string): string[] {
   return collectNamedExportsFromSource(readRepoSource(relativePath));
 }
 
-function expectNamedExportParity(params: {
-  corePath: string;
-  extensionPath: string;
-  expectedExports: readonly string[];
-}) {
+function expectNamedExportParity(params: BrowserHelperExportParityContract) {
   const coreExports = collectNamedExportsFromRepoFile(params.corePath);
   const extensionExports = collectNamedExportsFromRepoFile(params.extensionPath);
   expect(coreExports, `${params.corePath} exports changed`).toEqual([...params.expectedExports]);
@@ -234,6 +323,12 @@ function expectSourceOmitsImportPattern(subpath: string, specifier: string) {
   expect(source).not.toMatch(new RegExp(`\\bimport\\(\\s*["']${escapedSpecifier}["']\\s*\\)`, "u"));
 }
 
+function expectBrowserFacadeSourceContract(contract: BrowserFacadeSourceContract) {
+  expectSourceMentions(contract.subpath, contract.mentions);
+  expectSourceContains(contract.subpath, `artifactBasename: "${contract.artifactBasename}"`);
+  expectSourceOmits(contract.subpath, contract.omits);
+}
+
 function isGeneratedBundledFacadeSubpath(subpath: string): boolean {
   const source = readPluginSdkSource(subpath);
   return (
@@ -286,90 +381,15 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("keeps browser compatibility helper subpaths as thin facades", () => {
-    expectSourceMentions("browser-control-auth", [
-      "loadBundledPluginPublicSurfaceModuleSync",
-      "resolveBrowserControlAuth",
-      "shouldAutoGenerateBrowserAuth",
-      "ensureBrowserControlAuth",
-    ]);
-    expectSourceContains("browser-control-auth", 'artifactBasename: "browser-control-auth.js"');
-    expectSourceOmits("browser-control-auth", [
-      "resolveGatewayAuth",
-      "writeConfigFile",
-      "generateBrowserControlToken",
-      "ensureGatewayStartupAuth",
-    ]);
-
-    expectSourceMentions("browser-profiles", [
-      "loadBundledPluginPublicSurfaceModuleSync",
-      "resolveBrowserConfig",
-      "resolveProfile",
-    ]);
-    expectSourceContains("browser-profiles", 'artifactBasename: "browser-profiles.js"');
-    expectSourceOmits("browser-profiles", [
-      "resolveBrowserSsrFPolicy",
-      "ensureDefaultProfile",
-      "ensureDefaultUserBrowserProfile",
-      "normalizeHexColor",
-    ]);
-
-    expectSourceMentions("browser-host-inspection", [
-      "loadBundledPluginPublicSurfaceModuleSync",
-      "resolveGoogleChromeExecutableForPlatform",
-      "readBrowserVersion",
-      "parseBrowserMajorVersion",
-    ]);
-    expectSourceContains(
-      "browser-host-inspection",
-      'artifactBasename: "browser-host-inspection.js"',
-    );
-    expectSourceOmits("browser-host-inspection", [
-      "findFirstChromeExecutable",
-      "findGoogleChromeExecutableLinux",
-      "execText",
-    ]);
+    for (const contract of BROWSER_FACADE_SOURCE_CONTRACTS) {
+      expectBrowserFacadeSourceContract(contract);
+    }
   });
 
   it("keeps browser helper facade exports aligned with extension public wrappers", () => {
-    expectNamedExportParity({
-      corePath: "src/plugin-sdk/browser-control-auth.ts",
-      extensionPath: "extensions/browser/browser-control-auth.ts",
-      expectedExports: [
-        "BrowserControlAuth",
-        "ensureBrowserControlAuth",
-        "resolveBrowserControlAuth",
-        "shouldAutoGenerateBrowserAuth",
-      ],
-    });
-
-    expectNamedExportParity({
-      corePath: "src/plugin-sdk/browser-profiles.ts",
-      extensionPath: "extensions/browser/browser-profiles.ts",
-      expectedExports: [
-        "DEFAULT_AI_SNAPSHOT_MAX_CHARS",
-        "DEFAULT_BROWSER_DEFAULT_PROFILE_NAME",
-        "DEFAULT_BROWSER_EVALUATE_ENABLED",
-        "DEFAULT_OPENCLAW_BROWSER_COLOR",
-        "DEFAULT_OPENCLAW_BROWSER_ENABLED",
-        "DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME",
-        "DEFAULT_UPLOAD_DIR",
-        "ResolvedBrowserConfig",
-        "ResolvedBrowserProfile",
-        "resolveBrowserConfig",
-        "resolveProfile",
-      ],
-    });
-
-    expectNamedExportParity({
-      corePath: "src/plugin-sdk/browser-host-inspection.ts",
-      extensionPath: "extensions/browser/browser-host-inspection.ts",
-      expectedExports: [
-        "BrowserExecutable",
-        "parseBrowserMajorVersion",
-        "readBrowserVersion",
-        "resolveGoogleChromeExecutableForPlatform",
-      ],
-    });
+    for (const contract of BROWSER_HELPER_EXPORT_PARITY_CONTRACTS) {
+      expectNamedExportParity(contract);
+    }
   });
 
   it("keeps helper subpaths aligned", () => {
