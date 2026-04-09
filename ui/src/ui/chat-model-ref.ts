@@ -276,13 +276,6 @@ export function buildChatModelOptionFromLookup(
   displayLookup: ChatModelDisplayLookup,
 ): { value: string; label: string } {
   const provider = entry.provider?.trim();
-  const value = (() => {
-    if (!provider) {
-      return entry.id;
-    }
-    const providerPrefix = `${provider.toLowerCase()}/`;
-    return entry.id.toLowerCase().startsWith(providerPrefix) ? entry.id : `${provider}/${entry.id}`;
-  })();
   return {
     value: buildQualifiedChatModelValue(entry.id, provider),
     label: formatCatalogEntryDisplay(entry, displayLookup),

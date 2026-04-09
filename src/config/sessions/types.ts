@@ -103,6 +103,11 @@ export type SessionCompactionCheckpoint = {
   postCompaction: SessionCompactionTranscriptReference;
 };
 
+export type SessionPluginDebugEntry = {
+  pluginId: string;
+  lines: string[];
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -238,8 +243,27 @@ export type SessionEntry = {
   lastThreadId?: string | number;
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
+  /**
+   * Generic plugin-owned runtime debug entries shown in verbose status surfaces.
+   * Each plugin owns and may overwrite only its own entry between turns.
+   */
+  pluginDebugEntries?: SessionPluginDebugEntry[];
   acp?: SessionAcpMeta;
 };
+
+export function resolveSessionPluginDebugLines(
+  entry: Pick<SessionEntry, "pluginDebugEntries"> | undefined,
+): string[] {
+  return Array.isArray(entry?.pluginDebugEntries)
+    ? entry.pluginDebugEntries.flatMap((pluginEntry) =>
+        Array.isArray(pluginEntry?.lines)
+          ? pluginEntry.lines.filter(
+              (line): line is string => typeof line === "string" && line.trim().length > 0,
+            )
+          : [],
+      )
+    : [];
+}
 
 export function normalizeSessionRuntimeModelFields(entry: SessionEntry): SessionEntry {
   const normalizedModel = normalizeOptionalString(entry.model);

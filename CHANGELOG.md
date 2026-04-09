@@ -6,10 +6,13 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Memory/Active Memory: add a new optional Active Memory plugin that gives OpenClaw a dedicated memory sub-agent right before the main reply, so ongoing chats can automatically pull in relevant preferences, context, and past details without making users remember to manually say "remember this" or "search memory" first. Includes configurable message/recent/full context modes, live `/verbose` inspection, advanced prompt/thinking overrides for tuning, and opt-in transcript persistence for debugging.
 - macOS/Talk: add an experimental local MLX speech provider for Talk Mode, with explicit provider selection, local utterance playback, interruption handling, and system-voice fallback. (#63539) Thanks @ImLukeF.
+- Docs i18n: chunk raw doc translation, reject truncated tagged outputs, avoid ambiguous body-only wrapper unwrapping, and recover from terminated Pi translation sessions without changing the default `openai/gpt-5.4` path. (#62969, #63808) Thanks @hxy91819.
 
 ### Fixes
 
+- fix(agents): guard nodes tool outPath against workspace boundary [AI-assisted]. (#63551) Thanks @pgondhi987.
 - fix(qqbot): enforce media storage boundary for all outbound local file paths [AI]. (#63271) Thanks @pgondhi987.
 - iMessage/self-chat: distinguish normal DM outbound rows from true self-chat using `destination_caller_id` plus chat participants, while preserving multi-handle self-chat aliases so outbound DM replies stop looping back as inbound messages. (#61619) Thanks @neeravmakwana.
 - fix(browser): auto-generate browser control auth token for none/trusted-proxy modes [AI]. (#63280) Thanks @pgondhi987.
@@ -194,6 +197,7 @@ Docs: https://docs.openclaw.ai
 - Cron/isolated: resolve auth profiles without treating every isolated run as a brand-new auth session, so profile-based providers (for example OpenRouter) keep a stable credential choice instead of rotating or ignoring stored keys. (#62783) Thanks @neeravmakwana.
 - CLI/tasks: `openclaw tasks cancel` now records operator cancellation for CLI runtime tasks instead of returning "Task runtime does not support cancellation yet", so stuck `running` CLI tasks can be cleared. (#62419) Thanks @neeravmakwana.
 - Sessions/context: resolve context window limits using the active provider plus model (not bare model id alone) when persisting session usage, applying inline directives, and sizing memory-flush / preflight compaction thresholds, so duplicate model ids across providers no longer leak the wrong `contextTokens` into the session store or `/status`. (#62472) Thanks @neeravmakwana.
+- Channels/setup: exclude workspace shadow entries from channel setup catalog lookups and align trust checks with auto-enable so workspace-scoped overrides no longer bypass the trusted catalog. (`GHSA-82qx-6vj7-p8m2`) Thanks @zsxsoft.
 
 ## 2026.4.5
 
