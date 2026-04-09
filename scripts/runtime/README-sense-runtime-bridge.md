@@ -1082,6 +1082,11 @@ service state, worker health, model hint, and a thin busy/idle/unknown signal fr
 runner journal activity. If any of that is unavailable, it still returns a minimal text
 response instead of failing.
 
+`/nemoclaw run` is the first read-only task launcher. It does not introduce a new execution
+plane; it simply aliases a safe subset of the existing status commands (`health`, `digest`,
+`recent`, `failures`, and `gpu`) so Slack can evolve from a pure notification surface into a
+lightweight operator task surface without allowing write or destructive actions.
+
 The runtime entrypoint now also emits a lightweight feedback layer for the next turn:
 
 - `feedback_summary`

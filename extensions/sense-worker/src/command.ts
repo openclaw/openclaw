@@ -10,6 +10,16 @@ const NEMOCLAW_HELP_TEXT = [
   "- /nemoclaw failures    recent failed jobs",
   "- /nemoclaw job <id>    show one job",
   "- /nemoclaw gpu         runner and GPU status",
+  "- /nemoclaw run <task>  launch a safe read-only check",
+].join("\n");
+
+const NEMOCLAW_RUN_HELP_TEXT = [
+  "NemoClaw run tasks",
+  "- /nemoclaw run health",
+  "- /nemoclaw run digest",
+  "- /nemoclaw run recent",
+  "- /nemoclaw run failures",
+  "- /nemoclaw run gpu",
 ].join("\n");
 
 function normalizeArgs(value: string | undefined): string {
@@ -147,6 +157,16 @@ async function formatGpuStatus(config: OpenClawConfig | undefined): Promise<stri
   return lines.join("\n");
 }
 
+async function formatRunHealth(config: OpenClawConfig | undefined): Promise<string> {
+  const status = await getNemoClawGpuStatus(resolveSenseWorkerConfig(config));
+  return [
+    "NemoClaw health",
+    `- runner: ${status.runner}`,
+    `- worker health: ${status.workerHealth}`,
+    `- gpu: ${status.gpu}`,
+  ].join("\n");
+}
+
 export async function handleNemoClawCommand(
   args: string | undefined,
   config?: OpenClawConfig,
@@ -186,6 +206,31 @@ export async function handleNemoClawCommand(
   }
   if (normalized === "gpu") {
     return { text: await formatGpuStatus(config) };
+  }
+  if (normalized === "run") {
+    return { text: NEMOCLAW_RUN_HELP_TEXT };
+  }
+  if (normalized.startsWith("run ")) {
+    const task = normalized.slice(4).trim();
+    if (!task) {
+      return { text: NEMOCLAW_RUN_HELP_TEXT };
+    }
+    if (task === "health") {
+      return { text: await formatRunHealth(config) };
+    }
+    if (task === "digest") {
+      return await handleNemoClawCommand("digest", config);
+    }
+    if (task === "recent") {
+      return await handleNemoClawCommand("recent", config);
+    }
+    if (task === "failures") {
+      return await handleNemoClawCommand("failures", config);
+    }
+    if (task === "gpu") {
+      return await handleNemoClawCommand("gpu", config);
+    }
+    return { text: NEMOCLAW_RUN_HELP_TEXT };
   }
   if (normalized === "job") {
     return { text: "Usage: /nemoclaw job <id>" };

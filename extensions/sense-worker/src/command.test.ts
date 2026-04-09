@@ -58,7 +58,8 @@ describe("handleNemoClawCommand", () => {
         "- /nemoclaw recent      recent jobs\n" +
         "- /nemoclaw failures    recent failed jobs\n" +
         "- /nemoclaw job <id>    show one job\n" +
-        "- /nemoclaw gpu         runner and GPU status",
+        "- /nemoclaw gpu         runner and GPU status\n" +
+        "- /nemoclaw run <task>  launch a safe read-only check",
     });
   });
 
@@ -298,6 +299,122 @@ describe("handleNemoClawCommand", () => {
     });
   });
 
+  it("returns run help text", async () => {
+    const { handleNemoClawCommand } = await import("./command.js");
+    await expect(handleNemoClawCommand("run")).resolves.toEqual({
+      text:
+        "NemoClaw run tasks\n" +
+        "- /nemoclaw run health\n" +
+        "- /nemoclaw run digest\n" +
+        "- /nemoclaw run recent\n" +
+        "- /nemoclaw run failures\n" +
+        "- /nemoclaw run gpu",
+    });
+  });
+
+  it("returns run gpu via the existing gpu contract", async () => {
+    getNemoClawGpuStatusMock.mockResolvedValue({
+      runner: "up",
+      worker: "http://192.168.11.11:8787",
+      workerHealth: "up",
+      model: "gpt-oss:20b",
+      gpu: "idle",
+    });
+    const { handleNemoClawCommand } = await import("./command.js");
+    await expect(handleNemoClawCommand("run gpu")).resolves.toEqual({
+      text:
+        "NemoClaw GPU status\n" +
+        "- runner: up\n" +
+        "- worker: http://192.168.11.11:8787\n" +
+        "- worker health: up\n" +
+        "- model: gpt-oss:20b\n" +
+        "- gpu: idle",
+    });
+  });
+
+  it("returns run recent via the existing recent contract", async () => {
+    getRecentSenseJobRefsMock.mockResolvedValue([
+      { jobId: "9fb06324-8f9d-4c6b-bac5-57af00bc8207", source: "completed" },
+    ]);
+    getSenseJobStatusMock.mockResolvedValue({
+      body: {
+        status: "done",
+        result: {
+          exit_code: 1,
+          error: "<urlopen error [Errno 111] Connection refused>",
+        },
+      },
+    });
+    const { handleNemoClawCommand } = await import("./command.js");
+    await expect(handleNemoClawCommand("run recent")).resolves.toEqual({
+      text:
+        "recent jobs\n" +
+        "1) 9fb06324... done exit=1\n" +
+        "   error=<urlopen error [Errno 111] Connection refused>",
+    });
+  });
+
+  it("returns run failures via the existing failures contract", async () => {
+    getRecentSenseJobRefsMock.mockResolvedValue([
+      { jobId: "9fb06324-8f9d-4c6b-bac5-57af00bc8207", source: "completed" },
+    ]);
+    getSenseJobStatusMock.mockResolvedValue({
+      body: {
+        status: "done",
+        result: {
+          exit_code: 1,
+          error: "<urlopen error [Errno 111] Connection refused>",
+        },
+      },
+    });
+    const { handleNemoClawCommand } = await import("./command.js");
+    await expect(handleNemoClawCommand("run failures")).resolves.toEqual({
+      text:
+        "failed jobs\n" +
+        "1) 9fb06324... done exit=1\n" +
+        "   error=<urlopen error [Errno 111] Connection refused>",
+    });
+  });
+
+  it("returns run digest via the existing digest contract", async () => {
+    readLatestNemoClawDigestCacheMock.mockResolvedValue({
+      notification_digest_summary: [
+        {
+          digest_title: "Auth failures (immediate)",
+          digest_bucket_ui_layouts: {
+            meta: {
+              summary_parts: {
+                display: {
+                  badge: { short: "MAJ" },
+                  leader: { compact: "Leader ★" },
+                },
+                percent: "50.0%",
+                share: 0.5,
+              },
+            },
+          },
+        },
+      ],
+    });
+    const { handleNemoClawCommand } = await import("./command.js");
+    await expect(handleNemoClawCommand("run digest")).resolves.toEqual({
+      text: "Auth failures (immediate)\nMAJ | 50.0% | Leader ★ | share=0.5",
+    });
+  });
+
+  it("returns run health text", async () => {
+    getNemoClawGpuStatusMock.mockResolvedValue({
+      runner: "up",
+      worker: "http://192.168.11.11:8787",
+      workerHealth: "up",
+      gpu: "idle",
+    });
+    const { handleNemoClawCommand } = await import("./command.js");
+    await expect(handleNemoClawCommand("run health")).resolves.toEqual({
+      text: "NemoClaw health\n" + "- runner: up\n" + "- worker health: up\n" + "- gpu: idle",
+    });
+  });
+
   it("returns unavailable gpu status text", async () => {
     getNemoClawGpuStatusMock.mockResolvedValue({
       runner: "unknown",
@@ -325,7 +442,21 @@ describe("handleNemoClawCommand", () => {
         "- /nemoclaw recent      recent jobs\n" +
         "- /nemoclaw failures    recent failed jobs\n" +
         "- /nemoclaw job <id>    show one job\n" +
-        "- /nemoclaw gpu         runner and GPU status",
+        "- /nemoclaw gpu         runner and GPU status\n" +
+        "- /nemoclaw run <task>  launch a safe read-only check",
+    });
+  });
+
+  it("returns run help text for an unknown run task", async () => {
+    const { handleNemoClawCommand } = await import("./command.js");
+    await expect(handleNemoClawCommand("run unknown")).resolves.toEqual({
+      text:
+        "NemoClaw run tasks\n" +
+        "- /nemoclaw run health\n" +
+        "- /nemoclaw run digest\n" +
+        "- /nemoclaw run recent\n" +
+        "- /nemoclaw run failures\n" +
+        "- /nemoclaw run gpu",
     });
   });
 });
