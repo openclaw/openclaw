@@ -1,3 +1,4 @@
+import { isChannelVisibleInConfiguredLists } from "../channels/plugins/exposure.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import {
   getChannelPlugin,
@@ -104,7 +105,7 @@ function shouldShowProviderEntry(entry: ProviderAccountStatus, cfg: OpenClawConf
   if (!plugin) {
     return Boolean(entry.configured);
   }
-  if (plugin.meta.showConfigured === false) {
+  if (!isChannelVisibleInConfiguredLists(plugin.meta)) {
     const providerConfig = (cfg as Record<string, unknown>)[plugin.id];
     return Boolean(entry.configured) || Boolean(providerConfig);
   }

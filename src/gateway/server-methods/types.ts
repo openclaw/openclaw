@@ -1,7 +1,9 @@
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { createDefaultDeps } from "../../cli/deps.js";
 import type { HealthSummary } from "../../commands/health.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronService } from "../../cron/service.js";
+import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { WizardSession } from "../../wizard/session.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
@@ -21,6 +23,10 @@ export type GatewayClient = {
   canvasHostUrl?: string;
   canvasCapability?: string;
   canvasCapabilityExpiresAtMs?: number;
+  /** Internal-only auth context that cannot be supplied through gateway RPC payloads. */
+  internal?: {
+    allowModelOverride?: boolean;
+  };
 };
 
 export type RespondFn = (
@@ -35,6 +41,7 @@ export type GatewayRequestContext = {
   cron: CronService;
   cronStorePath: string;
   execApprovalManager?: ExecApprovalManager;
+  pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
   loadGatewayModelCatalog: () => Promise<ModelCatalogEntry[]>;
   getHealthCache: () => HealthSummary | null;
   refreshHealthSnapshot: (opts?: { probe?: boolean }) => Promise<HealthSummary>;
@@ -50,19 +57,29 @@ export type GatewayRequestContext = {
   nodeUnsubscribe: (nodeId: string, sessionKey: string) => void;
   nodeUnsubscribeAll: (nodeId: string) => void;
   hasConnectedMobileNode: () => boolean;
-  hasExecApprovalClients?: () => boolean;
+  hasExecApprovalClients?: (excludeConnId?: string) => boolean;
+  disconnectClientsForDevice?: (deviceId: string, opts?: { role?: string }) => void;
+  disconnectClientsUsingSharedGatewayAuth?: () => void;
+  enforceSharedGatewayAuthGenerationForConfigWrite?: (nextConfig: OpenClawConfig) => void;
   nodeRegistry: NodeRegistry;
   agentRunSeq: Map<string, number>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatAbortedRuns: Map<string, number>;
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
+  chatDeltaLastBroadcastLen: Map<string, number>;
   addChatRun: (sessionId: string, entry: { sessionKey: string; clientRunId: string }) => void;
   removeChatRun: (
     sessionId: string,
     clientRunId: string,
     sessionKey?: string,
   ) => { sessionKey: string; clientRunId: string } | undefined;
+  subscribeSessionEvents: (connId: string) => void;
+  unsubscribeSessionEvents: (connId: string) => void;
+  subscribeSessionMessageEvents: (connId: string, sessionKey: string) => void;
+  unsubscribeSessionMessageEvents: (connId: string, sessionKey: string) => void;
+  unsubscribeAllSessionEvents: (connId: string) => void;
+  getSessionEventSubscriberConnIds: () => ReadonlySet<string>;
   registerToolEventRecipient: (runId: string, connId: string) => void;
   dedupe: Map<string, DedupeEntry>;
   wizardSessions: Map<string, WizardSession>;
@@ -88,6 +105,7 @@ export type GatewayRequestContext = {
     prompter: import("../../wizard/prompts.js").WizardPrompter,
   ) => Promise<void>;
   broadcastVoiceWakeChanged: (triggers: string[]) => void;
+  unavailableGatewayMethods?: ReadonlySet<string>;
 };
 
 export type GatewayRequestOptions = {

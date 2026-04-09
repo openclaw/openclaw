@@ -2,17 +2,27 @@ import { describe, expect, it } from "vitest";
 import { isPlainObject } from "./plain-object.js";
 
 describe("isPlainObject", () => {
-  it("accepts plain objects", () => {
-    expect(isPlainObject({})).toBe(true);
-    expect(isPlainObject({ a: 1 })).toBe(true);
+  it.each([
+    {},
+    { a: 1 },
+    Object.create(null),
+    new (class X {})(),
+    { [Symbol.toStringTag]: "Object" },
+  ])("accepts object-tag values: %j", (value) => {
+    expect(isPlainObject(value)).toBe(true);
   });
 
-  it("rejects non-plain values", () => {
-    expect(isPlainObject(null)).toBe(false);
-    expect(isPlainObject([])).toBe(false);
-    expect(isPlainObject(new Date())).toBe(false);
-    expect(isPlainObject(/re/)).toBe(false);
-    expect(isPlainObject("x")).toBe(false);
-    expect(isPlainObject(42)).toBe(false);
+  it.each([
+    null,
+    [],
+    new Date(),
+    /re/,
+    "x",
+    42,
+    () => null,
+    new Map(),
+    { [Symbol.toStringTag]: "Array" },
+  ])("rejects non-plain values: %j", (value) => {
+    expect(isPlainObject(value)).toBe(false);
   });
 });

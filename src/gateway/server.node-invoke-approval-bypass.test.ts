@@ -83,7 +83,7 @@ async function requestAllowOnceApproval(
     systemRunPlan: {
       argv: commandArgv,
       cwd: null,
-      rawCommand: command,
+      commandText: command,
       agentId: null,
       sessionKey: null,
     },
@@ -117,7 +117,9 @@ describe("node.invoke approval bypass", () => {
     const { approveDevicePairing, listDevicePairing } = await import("../infra/device-pairing.js");
     const list = await listDevicePairing();
     for (const pending of list.pending) {
-      await approveDevicePairing(pending.requestId);
+      await approveDevicePairing(pending.requestId, {
+        callerScopes: pending.scopes ?? ["operator.admin"],
+      });
     }
   };
 
@@ -205,6 +207,7 @@ describe("node.invoke approval bypass", () => {
   const connectLinuxNode = async (
     onInvoke: (payload: unknown) => void,
     deviceIdentity?: DeviceIdentity,
+    commands: string[] = ["system.run"],
   ) => {
     let readyResolve: (() => void) | null = null;
     const ready = new Promise<void>((resolve) => {
@@ -216,7 +219,7 @@ describe("node.invoke approval bypass", () => {
       url: `ws://127.0.0.1:${port}`,
       // Keep challenge timeout realistic in tests; 0 maps to a 250ms timeout and can
       // trigger reconnect backoff loops under load.
-      connectDelayMs: 2_000,
+      connectChallengeTimeoutMs: 2_000,
       token: "secret",
       role: "node",
       clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
@@ -224,7 +227,7 @@ describe("node.invoke approval bypass", () => {
       platform: "linux",
       mode: GATEWAY_CLIENT_MODES.NODE,
       scopes: [],
-      commands: ["system.run"],
+      commands,
       deviceIdentity: resolvedDeviceIdentity,
       onHelloOk: () => readyResolve?.(),
       onEvent: (evt) => {
@@ -314,6 +317,39 @@ describe("node.invoke approval bypass", () => {
         expect(res.error?.message ?? "", testCase.name).toContain(testCase.expectedError);
         await expectNoForwardedInvoke(() => sawInvoke);
       }
+    } finally {
+      ws.close();
+      node.stop();
+    }
+  });
+
+  test("rejects browser.proxy persistent profile mutations before forwarding", async () => {
+    let sawInvoke = false;
+    const node = await connectLinuxNode(
+      () => {
+        sawInvoke = true;
+      },
+      undefined,
+      ["browser.proxy"],
+    );
+    const ws = await connectOperator(["operator.write"]);
+    try {
+      const nodeId = await getConnectedNodeId(ws);
+      const res = await rpcReq(ws, "node.invoke", {
+        nodeId,
+        command: "browser.proxy",
+        params: {
+          method: "POST",
+          path: "/profiles/create",
+          body: { name: "poc", cdpUrl: "http://127.0.0.1:9222" },
+        },
+        idempotencyKey: crypto.randomUUID(),
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toContain(
+        "node.invoke cannot mutate persistent browser profiles via browser.proxy",
+      );
+      await expectNoForwardedInvoke(() => sawInvoke);
     } finally {
       ws.close();
       node.stop();

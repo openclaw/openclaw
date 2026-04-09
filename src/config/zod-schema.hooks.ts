@@ -49,19 +49,10 @@ export const HookMappingSchema = z
     textTemplate: z.string().optional(),
     deliver: z.boolean().optional(),
     allowUnsafeExternalContent: z.boolean().optional(),
-    channel: z
-      .union([
-        z.literal("last"),
-        z.literal("whatsapp"),
-        z.literal("telegram"),
-        z.literal("discord"),
-        z.literal("irc"),
-        z.literal("slack"),
-        z.literal("signal"),
-        z.literal("imessage"),
-        z.literal("msteams"),
-      ])
-      .optional(),
+    // Keep this open-ended so runtime channel plugins (for example feishu) can be
+    // referenced without hard-coding every channel id in the config schema.
+    // Runtime still validates the resolved value against currently registered channels.
+    channel: z.string().trim().min(1).optional(),
     to: z.string().optional(),
     model: z.string().optional(),
     thinking: z.string().optional(),

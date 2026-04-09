@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { hasConfiguredSecretInput } from "./types.secrets.js";
 
 type TelegramAccountLike = {
@@ -25,11 +26,26 @@ type SlackConfigLike = {
   accounts?: Record<string, SlackAccountLike | undefined>;
 };
 
+function forEachEnabledAccount<T extends { enabled?: unknown }>(
+  accounts: Record<string, T | undefined> | undefined,
+  run: (accountId: string, account: T) => void,
+): void {
+  if (!accounts) {
+    return;
+  }
+  for (const [accountId, account] of Object.entries(accounts)) {
+    if (!account || account.enabled === false) {
+      continue;
+    }
+    run(accountId, account);
+  }
+}
+
 export function validateTelegramWebhookSecretRequirements(
   value: TelegramConfigLike,
   ctx: z.RefinementCtx,
 ): void {
-  const baseWebhookUrl = typeof value.webhookUrl === "string" ? value.webhookUrl.trim() : "";
+  const baseWebhookUrl = normalizeOptionalString(value.webhookUrl) ?? "";
   const hasBaseWebhookSecret = hasConfiguredSecretInput(value.webhookSecret);
   if (baseWebhookUrl && !hasBaseWebhookSecret) {
     ctx.addIssue({
@@ -38,20 +54,10 @@ export function validateTelegramWebhookSecretRequirements(
       path: ["webhookSecret"],
     });
   }
-  if (!value.accounts) {
-    return;
-  }
-  for (const [accountId, account] of Object.entries(value.accounts)) {
-    if (!account) {
-      continue;
-    }
-    if (account.enabled === false) {
-      continue;
-    }
-    const accountWebhookUrl =
-      typeof account.webhookUrl === "string" ? account.webhookUrl.trim() : "";
+  forEachEnabledAccount(value.accounts, (accountId, account) => {
+    const accountWebhookUrl = normalizeOptionalString(account.webhookUrl) ?? "";
     if (!accountWebhookUrl) {
-      continue;
+      return;
     }
     const hasAccountSecret = hasConfiguredSecretInput(account.webhookSecret);
     if (!hasAccountSecret && !hasBaseWebhookSecret) {
@@ -62,7 +68,7 @@ export function validateTelegramWebhookSecretRequirements(
         path: ["accounts", accountId, "webhookSecret"],
       });
     }
-  }
+  });
 }
 
 export function validateSlackSigningSecretRequirements(
@@ -77,20 +83,11 @@ export function validateSlackSigningSecretRequirements(
       path: ["signingSecret"],
     });
   }
-  if (!value.accounts) {
-    return;
-  }
-  for (const [accountId, account] of Object.entries(value.accounts)) {
-    if (!account) {
-      continue;
-    }
-    if (account.enabled === false) {
-      continue;
-    }
+  forEachEnabledAccount(value.accounts, (accountId, account) => {
     const accountMode =
       account.mode === "http" || account.mode === "socket" ? account.mode : baseMode;
     if (accountMode !== "http") {
-      continue;
+      return;
     }
     const accountSecret = account.signingSecret ?? value.signingSecret;
     if (!hasConfiguredSecretInput(accountSecret)) {
@@ -101,5 +98,5 @@ export function validateSlackSigningSecretRequirements(
         path: ["accounts", accountId, "signingSecret"],
       });
     }
-  }
+  });
 }

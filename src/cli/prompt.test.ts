@@ -1,24 +1,27 @@
-import { describe, expect, it, vi } from "vitest";
+import readline from "node:readline/promises";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { isYes, setVerbose, setYes } from "../globals.js";
+import { promptYesNo } from "./prompt.js";
 
-vi.mock("node:readline/promises", () => {
+const readlineState = vi.hoisted(() => {
   const question = vi.fn(async () => "");
   const close = vi.fn();
   const createInterface = vi.fn(() => ({ question, close }));
-  return { default: { createInterface } };
+  return { question, close, createInterface };
 });
 
-type ReadlineMock = {
-  default: {
-    createInterface: () => {
-      question: ReturnType<typeof vi.fn>;
-      close: ReturnType<typeof vi.fn>;
-    };
-  };
-};
+vi.mock("node:readline/promises", () => ({
+  default: { createInterface: readlineState.createInterface },
+}));
 
-const { promptYesNo } = await import("./prompt.js");
-const readline = (await import("node:readline/promises")) as unknown as ReadlineMock;
+beforeEach(() => {
+  setYes(false);
+  setVerbose(false);
+  readlineState.question.mockReset();
+  readlineState.question.mockResolvedValue("");
+  readlineState.close.mockClear();
+  readlineState.createInterface.mockClear();
+});
 
 describe("promptYesNo", () => {
   it("returns true when global --yes is set", async () => {
@@ -32,16 +35,16 @@ describe("promptYesNo", () => {
   it("asks the question and respects default", async () => {
     setYes(false);
     setVerbose(false);
-    const { question: questionMock } = readline.default.createInterface();
-    questionMock.mockResolvedValueOnce("");
+    expect(readline).toBeTruthy();
+    readlineState.question.mockResolvedValueOnce("");
     const resultDefaultYes = await promptYesNo("Continue?", true);
     expect(resultDefaultYes).toBe(true);
 
-    questionMock.mockResolvedValueOnce("n");
+    readlineState.question.mockResolvedValueOnce("n");
     const resultNo = await promptYesNo("Continue?", true);
     expect(resultNo).toBe(false);
 
-    questionMock.mockResolvedValueOnce("y");
+    readlineState.question.mockResolvedValueOnce("y");
     const resultYes = await promptYesNo("Continue?", false);
     expect(resultYes).toBe(true);
   });

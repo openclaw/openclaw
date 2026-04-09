@@ -1,18 +1,23 @@
 import { Type } from "@sinclair/typebox";
-import { INPUT_PROVENANCE_KIND_VALUES } from "../../../sessions/input-provenance.js";
-import { NonEmptyString, SessionLabelString } from "./primitives.js";
+import {
+  AGENT_INTERNAL_EVENT_SOURCES,
+  AGENT_INTERNAL_EVENT_STATUSES,
+  AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
+} from "../../../agents/internal-event-contract.js";
+import { InputProvenanceSchema, NonEmptyString, SessionLabelString } from "./primitives.js";
 
 export const AgentInternalEventSchema = Type.Object(
   {
-    type: Type.Literal("task_completion"),
-    source: Type.String({ enum: ["subagent", "cron"] }),
+    type: Type.Literal(AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION),
+    source: Type.String({ enum: [...AGENT_INTERNAL_EVENT_SOURCES] }),
     childSessionKey: Type.String(),
     childSessionId: Type.Optional(Type.String()),
     announceType: Type.String(),
     taskLabel: Type.String(),
-    status: Type.String({ enum: ["ok", "timeout", "error", "unknown"] }),
+    status: Type.String({ enum: [...AGENT_INTERNAL_EVENT_STATUSES] }),
     statusLabel: Type.String(),
     result: Type.String(),
+    mediaUrls: Type.Optional(Type.Array(Type.String())),
     statsLine: Type.Optional(Type.String()),
     replyInstruction: Type.String(),
   },
@@ -76,6 +81,8 @@ export const AgentParamsSchema = Type.Object(
   {
     message: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
+    provider: Type.Optional(Type.String()),
+    model: Type.Optional(Type.String()),
     to: Type.Optional(Type.String()),
     replyTo: Type.Optional(Type.String()),
     sessionId: Type.Optional(Type.String()),
@@ -95,21 +102,16 @@ export const AgentParamsSchema = Type.Object(
     bestEffortDeliver: Type.Optional(Type.Boolean()),
     lane: Type.Optional(Type.String()),
     extraSystemPrompt: Type.Optional(Type.String()),
-    internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
-    inputProvenance: Type.Optional(
-      Type.Object(
-        {
-          kind: Type.String({ enum: [...INPUT_PROVENANCE_KIND_VALUES] }),
-          sourceSessionKey: Type.Optional(Type.String()),
-          sourceChannel: Type.Optional(Type.String()),
-          sourceTool: Type.Optional(Type.String()),
-        },
-        { additionalProperties: false },
-      ),
+    bootstrapContextMode: Type.Optional(
+      Type.Union([Type.Literal("full"), Type.Literal("lightweight")]),
     ),
+    bootstrapContextRunKind: Type.Optional(
+      Type.Union([Type.Literal("default"), Type.Literal("heartbeat"), Type.Literal("cron")]),
+    ),
+    internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
+    inputProvenance: Type.Optional(InputProvenanceSchema),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),
-    spawnedBy: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );

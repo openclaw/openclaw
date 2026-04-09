@@ -15,13 +15,13 @@ Native Linux companion apps are planned. Contributions are welcome if you want t
 
 ## Beginner quick path (VPS)
 
-1. Install Node 22+
+1. Install Node 24 (recommended; Node 22 LTS, currently `22.14+`, still works for compatibility)
 2. `npm i -g openclaw@latest`
 3. `openclaw onboard --install-daemon`
 4. From your laptop: `ssh -N -L 18789:127.0.0.1:18789 <user>@<host>`
-5. Open `http://127.0.0.1:18789/` and paste your token
+5. Open `http://127.0.0.1:18789/` and authenticate with the configured shared secret (token by default; password if you set `gateway.auth.mode: "password"`)
 
-Step-by-step VPS guide: [exe.dev](/install/exe-dev)
+Full Linux server guide: [Linux Server](/vps). Step-by-step VPS example: [exe.dev](/install/exe-dev)
 
 ## Install
 
@@ -65,8 +65,10 @@ openclaw doctor
 ## System control (systemd user unit)
 
 OpenClaw installs a systemd **user** service by default. Use a **system**
-service for shared or always-on servers. The full unit example and guidance
-live in the [Gateway runbook](/gateway).
+service for shared or always-on servers. `openclaw gateway install` and
+`openclaw onboard --install-daemon` already render the current canonical unit
+for you; write one by hand only when you need a custom system/service-manager
+setup. The full service guidance lives in the [Gateway runbook](/gateway).
 
 Minimal setup:
 
@@ -82,6 +84,10 @@ Wants=network-online.target
 ExecStart=/usr/local/bin/openclaw gateway --port 18789
 Restart=always
 RestartSec=5
+TimeoutStopSec=30
+TimeoutStartSec=30
+SuccessExitStatus=0 143
+KillMode=control-group
 
 [Install]
 WantedBy=default.target

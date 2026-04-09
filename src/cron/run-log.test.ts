@@ -95,6 +95,47 @@ describe("cron run log", () => {
     });
   });
 
+  it.skipIf(process.platform === "win32")(
+    "writes run log files with secure permissions",
+    async () => {
+      await withRunLogDir("openclaw-cron-log-perms-", async (dir) => {
+        const logPath = path.join(dir, "runs", "job-1.jsonl");
+
+        await appendCronRunLog(logPath, {
+          ts: 1,
+          jobId: "job-1",
+          action: "finished",
+          status: "ok",
+        });
+
+        const mode = (await fs.stat(logPath)).mode & 0o777;
+        expect(mode).toBe(0o600);
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "hardens an existing run-log directory to owner-only permissions",
+    async () => {
+      await withRunLogDir("openclaw-cron-log-dir-perms-", async (dir) => {
+        const runDir = path.join(dir, "runs");
+        const logPath = path.join(runDir, "job-1.jsonl");
+        await fs.mkdir(runDir, { recursive: true, mode: 0o755 });
+        await fs.chmod(runDir, 0o755);
+
+        await appendCronRunLog(logPath, {
+          ts: 1,
+          jobId: "job-1",
+          action: "finished",
+          status: "ok",
+        });
+
+        const runDirMode = (await fs.stat(runDir)).mode & 0o777;
+        expect(runDirMode).toBe(0o700);
+      });
+    },
+  );
+
   it("reads newest entries and filters by jobId", async () => {
     await withRunLogDir("openclaw-cron-log-read-", async (dir) => {
       const logPathA = path.join(dir, "runs", "a.jsonl");
@@ -191,7 +232,7 @@ describe("cron run log", () => {
         jobId: "job-1",
         action: "finished",
         status: "ok",
-        model: "gpt-5.2",
+        model: "gpt-5.4",
         provider: "openai",
         usage: {
           input_tokens: 10,
@@ -217,7 +258,7 @@ describe("cron run log", () => {
       );
 
       const entries = await readCronRunLogEntries(logPath, { limit: 10, jobId: "job-1" });
-      expect(entries[0]?.model).toBe("gpt-5.2");
+      expect(entries[0]?.model).toBe("gpt-5.4");
       expect(entries[0]?.provider).toBe("openai");
       expect(entries[0]?.usage).toEqual({
         input_tokens: 10,

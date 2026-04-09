@@ -26,7 +26,7 @@ enum GatewaySettingsStore {
     private static let preferredGatewayStableIDAccount = "preferredStableID"
     private static let lastDiscoveredGatewayStableIDAccount = "lastDiscoveredStableID"
     private static let lastGatewayConnectionAccount = "lastConnection"
-    private static let talkProviderApiKeyAccountPrefix = "provider.apiKey."
+    private static let talkProviderApiKeyAccountPrefix = "provider.apiKey." // pragma: allowlist secret
 
     static func bootstrapPersistence() {
         self.ensureStableInstanceID()
@@ -69,6 +69,13 @@ enum GatewaySettingsStore {
             account: self.preferredGatewayStableIDAccount)
     }
 
+    static func clearPreferredGatewayStableID(defaults: UserDefaults = .standard) {
+        _ = KeychainStore.delete(
+            service: self.gatewayService,
+            account: self.preferredGatewayStableIDAccount)
+        defaults.removeObject(forKey: self.preferredGatewayStableIDDefaultsKey)
+    }
+
     static func loadLastDiscoveredGatewayStableID() -> String? {
         if let value = KeychainStore.loadString(
             service: self.gatewayService,
@@ -89,6 +96,13 @@ enum GatewaySettingsStore {
             account: self.lastDiscoveredGatewayStableIDAccount)
     }
 
+    static func clearLastDiscoveredGatewayStableID(defaults: UserDefaults = .standard) {
+        _ = KeychainStore.delete(
+            service: self.gatewayService,
+            account: self.lastDiscoveredGatewayStableIDAccount)
+        defaults.removeObject(forKey: self.lastDiscoveredGatewayStableIDDefaultsKey)
+    }
+
     static func loadGatewayToken(instanceId: String) -> String? {
         let account = self.gatewayTokenAccount(instanceId: instanceId)
         let token = KeychainStore.loadString(service: self.gatewayService, account: account)?
@@ -102,6 +116,27 @@ enum GatewaySettingsStore {
             token,
             service: self.gatewayService,
             account: self.gatewayTokenAccount(instanceId: instanceId))
+    }
+
+    static func loadGatewayBootstrapToken(instanceId: String) -> String? {
+        let account = self.gatewayBootstrapTokenAccount(instanceId: instanceId)
+        let token = KeychainStore.loadString(service: self.gatewayService, account: account)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if token?.isEmpty == false { return token }
+        return nil
+    }
+
+    static func saveGatewayBootstrapToken(_ token: String, instanceId: String) {
+        _ = KeychainStore.saveString(
+            token,
+            service: self.gatewayService,
+            account: self.gatewayBootstrapTokenAccount(instanceId: instanceId))
+    }
+
+    static func clearGatewayBootstrapToken(instanceId: String) {
+        _ = KeychainStore.delete(
+            service: self.gatewayService,
+            account: self.gatewayBootstrapTokenAccount(instanceId: instanceId))
     }
 
     static func loadGatewayPassword(instanceId: String) -> String? {
@@ -280,6 +315,9 @@ enum GatewaySettingsStore {
             account: self.gatewayTokenAccount(instanceId: trimmed))
         _ = KeychainStore.delete(
             service: self.gatewayService,
+            account: self.gatewayBootstrapTokenAccount(instanceId: trimmed))
+        _ = KeychainStore.delete(
+            service: self.gatewayService,
             account: self.gatewayPasswordAccount(instanceId: trimmed))
     }
 
@@ -329,6 +367,10 @@ enum GatewaySettingsStore {
 
     private static func gatewayTokenAccount(instanceId: String) -> String {
         "gateway-token.\(instanceId)"
+    }
+
+    private static func gatewayBootstrapTokenAccount(instanceId: String) -> String {
+        "gateway-bootstrap-token.\(instanceId)"
     }
 
     private static func gatewayPasswordAccount(instanceId: String) -> String {
@@ -412,11 +454,11 @@ enum GatewayDiagnostics {
     private static let keepLogBytes: Int64 = 256 * 1024
     private static let logSizeCheckEveryWrites = 50
     private static let logWritesSinceCheck = OSAllocatedUnfairLock(initialState: 0)
-    private static let isoFormatter: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f
-    }()
+    private static func isoTimestamp() -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: Date())
+    }
 
     private static var fileURL: URL? {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
@@ -476,7 +518,7 @@ enum GatewayDiagnostics {
         guard let url = fileURL else { return }
         queue.async {
             self.truncateLogIfNeeded(url: url)
-            let timestamp = self.isoFormatter.string(from: Date())
+            let timestamp = self.isoTimestamp()
             let line = "[\(timestamp)] gateway diagnostics started\n"
             if let data = line.data(using: .utf8) {
                 self.appendToLog(url: url, data: data)
@@ -486,7 +528,7 @@ enum GatewayDiagnostics {
     }
 
     static func log(_ message: String) {
-        let timestamp = self.isoFormatter.string(from: Date())
+        let timestamp = self.isoTimestamp()
         let line = "[\(timestamp)] \(message)"
         logger.info("\(line, privacy: .public)")
 

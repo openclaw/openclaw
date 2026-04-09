@@ -2,15 +2,16 @@ import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
   OpenClawConfig,
-} from "openclaw/plugin-sdk";
+} from "../runtime-api.js";
 import {
   createActionGate,
   extractToolSend,
   jsonResult,
+  loadOutboundMediaFromUrl,
   readNumberParam,
   readReactionParams,
   readStringParam,
-} from "openclaw/plugin-sdk";
+} from "../runtime-api.js";
 import { listEnabledGoogleChatAccounts, resolveGoogleChatAccount } from "./accounts.js";
 import {
   createGoogleChatReaction,
@@ -30,15 +31,9 @@ function listEnabledAccounts(cfg: OpenClawConfig) {
   );
 }
 
-function isReactionsEnabled(accounts: ReturnType<typeof listEnabledAccounts>, cfg: OpenClawConfig) {
+function isReactionsEnabled(accounts: Array<{ config: { actions?: unknown } }>) {
   for (const account of accounts) {
-    const gate = createActionGate(
-      (account.config.actions ??
-        (cfg.channels?.["googlechat"] as { actions?: unknown })?.actions) as Record<
-        string,
-        boolean | undefined
-      >,
-    );
+    const gate = createActionGate(account.config.actions as Record<string, boolean | undefined>);
     if (gate("reactions")) {
       return true;
     }
@@ -50,24 +45,61 @@ function resolveAppUserNames(account: { config: { botUser?: string | null } }) {
   return new Set(["users/app", account.config.botUser?.trim()].filter(Boolean) as string[]);
 }
 
+async function loadGoogleChatActionMedia(params: {
+  mediaUrl: string;
+  maxBytes: number;
+  mediaAccess?: {
+    localRoots?: readonly string[];
+    readFile?: (filePath: string) => Promise<Buffer>;
+  };
+  mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
+}) {
+  const runtime = getGoogleChatRuntime();
+  return /^https?:\/\//i.test(params.mediaUrl)
+    ? await runtime.channel.media.fetchRemoteMedia({
+        url: params.mediaUrl,
+        maxBytes: params.maxBytes,
+      })
+    : await loadOutboundMediaFromUrl(params.mediaUrl, {
+        maxBytes: params.maxBytes,
+        mediaAccess: params.mediaAccess,
+        mediaLocalRoots: params.mediaLocalRoots,
+        mediaReadFile: params.mediaReadFile,
+      });
+}
+
 export const googlechatMessageActions: ChannelMessageActionAdapter = {
-  listActions: ({ cfg }) => {
-    const accounts = listEnabledAccounts(cfg);
+  describeMessageTool: ({ cfg, accountId }) => {
+    const accounts = accountId
+      ? [resolveGoogleChatAccount({ cfg, accountId })].filter(
+          (account) => account.enabled && account.credentialSource !== "none",
+        )
+      : listEnabledAccounts(cfg);
     if (accounts.length === 0) {
-      return [];
+      return null;
     }
     const actions = new Set<ChannelMessageActionName>([]);
     actions.add("send");
-    if (isReactionsEnabled(accounts, cfg)) {
+    actions.add("upload-file");
+    if (isReactionsEnabled(accounts)) {
       actions.add("react");
       actions.add("reactions");
     }
-    return Array.from(actions);
+    return { actions: Array.from(actions) };
   },
   extractToolSend: ({ args }) => {
     return extractToolSend(args, "sendMessage");
   },
-  handleAction: async ({ action, params, cfg, accountId }) => {
+  handleAction: async ({
+    action,
+    params,
+    cfg,
+    accountId,
+    mediaAccess,
+    mediaLocalRoots,
+    mediaReadFile,
+  }) => {
     const account = resolveGoogleChatAccount({
       cfg: cfg,
       accountId,
@@ -76,24 +108,42 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
       throw new Error("Google Chat credentials are missing.");
     }
 
-    if (action === "send") {
+    if (action === "send" || action === "upload-file") {
       const to = readStringParam(params, "to", { required: true });
-      const content = readStringParam(params, "message", {
-        required: true,
-        allowEmpty: true,
-      });
-      const mediaUrl = readStringParam(params, "media", { trim: false });
+      const content =
+        readStringParam(params, "message", {
+          required: action === "send",
+          allowEmpty: true,
+        }) ??
+        readStringParam(params, "initialComment", {
+          allowEmpty: true,
+        }) ??
+        "";
+      const mediaUrl =
+        readStringParam(params, "media", { trim: false }) ??
+        readStringParam(params, "filePath", { trim: false }) ??
+        readStringParam(params, "path", { trim: false });
       const threadId = readStringParam(params, "threadId") ?? readStringParam(params, "replyTo");
       const space = await resolveGoogleChatOutboundSpace({ account, target: to });
 
       if (mediaUrl) {
-        const core = getGoogleChatRuntime();
         const maxBytes = (account.config.mediaMaxMb ?? 20) * 1024 * 1024;
-        const loaded = await core.channel.media.fetchRemoteMedia({ url: mediaUrl, maxBytes });
+        const loaded = await loadGoogleChatActionMedia({
+          mediaUrl,
+          maxBytes,
+          mediaAccess,
+          mediaLocalRoots,
+          mediaReadFile,
+        });
+        const uploadFileName =
+          readStringParam(params, "filename") ??
+          readStringParam(params, "title") ??
+          loaded.fileName ??
+          "attachment";
         const upload = await uploadGoogleChatAttachment({
           account,
           space,
-          filename: loaded.fileName ?? "attachment",
+          filename: uploadFileName,
           buffer: loaded.buffer,
           contentType: loaded.contentType,
         });
@@ -106,12 +156,16 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
             ? [
                 {
                   attachmentUploadToken: upload.attachmentUploadToken,
-                  contentName: loaded.fileName,
+                  contentName: uploadFileName,
                 },
               ]
             : undefined,
         });
         return jsonResult({ ok: true, to: space });
+      }
+
+      if (action === "upload-file") {
+        throw new Error("upload-file requires media, filePath, or path");
       }
 
       await sendGoogleChatMessage({

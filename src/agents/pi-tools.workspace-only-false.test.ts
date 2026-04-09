@@ -1,8 +1,36 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createOpenClawCodingTools } from "./pi-tools.js";
+import { createReadTool } from "@mariozechner/pi-coding-agent";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@mariozechner/pi-ai", async () => {
+  const original =
+    await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
+  return {
+    ...original,
+  };
+});
+
+vi.mock("@mariozechner/pi-ai/oauth", async () => {
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
+    "@mariozechner/pi-ai/oauth",
+  );
+  return {
+    ...actual,
+    getOAuthApiKey: () => undefined,
+    getOAuthProviders: () => [],
+  };
+});
+
+import {
+  createHostWorkspaceEditTool,
+  createHostWorkspaceWriteTool,
+  createOpenClawReadTool,
+  wrapToolMemoryFlushAppendOnlyWrite,
+  wrapToolWorkspaceRootGuard,
+} from "./pi-tools.read.js";
+import type { AnyAgentTool } from "./tools/common.js";
 
 describe("FS tools with workspaceOnly=false", () => {
   let tmpDir: string;
@@ -17,20 +45,15 @@ describe("FS tools with workspaceOnly=false", () => {
       return content.text?.toLowerCase().includes("error") ?? false;
     });
 
-  const toolsFor = (workspaceOnly: boolean | undefined) =>
-    createOpenClawCodingTools({
-      workspaceDir,
-      config:
-        workspaceOnly === undefined
-          ? {}
-          : {
-              tools: {
-                fs: {
-                  workspaceOnly,
-                },
-              },
-            },
-    });
+  const toolsFor = (workspaceOnly: boolean | undefined): AnyAgentTool[] => {
+    const read = createOpenClawReadTool(createReadTool(workspaceDir) as unknown as AnyAgentTool);
+    const write = createHostWorkspaceWriteTool(workspaceDir, { workspaceOnly });
+    const edit = createHostWorkspaceEditTool(workspaceDir, { workspaceOnly });
+    const tools = [read, write, edit];
+    return workspaceOnly
+      ? tools.map((tool) => wrapToolWorkspaceRootGuard(tool, workspaceDir))
+      : tools;
+  };
 
   const runFsTool = async (
     toolName: "write" | "edit" | "read",
@@ -95,8 +118,7 @@ describe("FS tools with workspaceOnly=false", () => {
       "test-call-2",
       {
         path: outsideFile,
-        oldText: "old content",
-        newText: "new content",
+        edits: [{ oldText: "old content", newText: "new content" }],
       },
       false,
     );
@@ -114,8 +136,7 @@ describe("FS tools with workspaceOnly=false", () => {
       "test-call-2b",
       {
         path: relativeOutsidePath,
-        oldText: "old relative content",
-        newText: "new relative content",
+        edits: [{ oldText: "old relative content", newText: "new relative content" }],
       },
       false,
     );
@@ -159,8 +180,7 @@ describe("FS tools with workspaceOnly=false", () => {
       "test-call-3b",
       {
         path: outsideUnsetFile,
-        oldText: "before",
-        newText: "after",
+        edits: [{ oldText: "before", newText: "after" }],
       },
       undefined,
     );
@@ -180,5 +200,42 @@ describe("FS tools with workspaceOnly=false", () => {
         content: "test content",
       }),
     ).rejects.toThrow(/Path escapes (workspace|sandbox) root/);
+  });
+
+  it("restricts memory-triggered writes to append-only canonical memory files", async () => {
+    const allowedRelativePath = "memory/2026-03-07.md";
+    const allowedAbsolutePath = path.join(workspaceDir, allowedRelativePath);
+    await fs.mkdir(path.dirname(allowedAbsolutePath), { recursive: true });
+    await fs.writeFile(allowedAbsolutePath, "seed");
+
+    const tools = [
+      createOpenClawReadTool(createReadTool(workspaceDir) as unknown as AnyAgentTool),
+      wrapToolMemoryFlushAppendOnlyWrite(createHostWorkspaceWriteTool(workspaceDir), {
+        root: workspaceDir,
+        relativePath: allowedRelativePath,
+      }),
+    ];
+
+    const writeTool = tools.find((tool) => tool.name === "write");
+    expect(writeTool).toBeDefined();
+    expect(tools.map((tool) => tool.name).toSorted()).toEqual(["read", "write"]);
+
+    await expect(
+      writeTool!.execute("test-call-memory-deny", {
+        path: outsideFile,
+        content: "should not write here",
+      }),
+    ).rejects.toThrow(/Memory flush writes are restricted to memory\/2026-03-07\.md/);
+
+    const result = await writeTool!.execute("test-call-memory-append", {
+      path: allowedRelativePath,
+      content: "new note",
+    });
+    expect(hasToolError(result)).toBe(false);
+    expect(result.content).toContainEqual({
+      type: "text",
+      text: "Appended content to memory/2026-03-07.md.",
+    });
+    await expect(fs.readFile(allowedAbsolutePath, "utf-8")).resolves.toBe("seed\nnew note");
   });
 });

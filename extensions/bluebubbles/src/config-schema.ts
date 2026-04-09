@@ -1,8 +1,15 @@
-import { MarkdownConfigSchema, ToolPolicySchema } from "openclaw/plugin-sdk";
-import { z } from "zod";
+import {
+  AllowFromListSchema,
+  buildChannelConfigSchema,
+  buildCatchallMultiAccountChannelSchema,
+  DmPolicySchema,
+  GroupPolicySchema,
+  MarkdownConfigSchema,
+  ToolPolicySchema,
+} from "openclaw/plugin-sdk/channel-config-schema";
+import { z } from "openclaw/plugin-sdk/zod";
+import { bluebubblesChannelConfigUiHints } from "./config-ui-hints.js";
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
-
-const allowFromEntry = z.union([z.string(), z.number()]);
 
 const bluebubblesActionSchema = z
   .object({
@@ -25,18 +32,28 @@ const bluebubblesGroupConfigSchema = z.object({
   tools: ToolPolicySchema,
 });
 
+const bluebubblesNetworkSchema = z
+  .object({
+    /** Dangerous opt-in for same-host or trusted private/internal BlueBubbles deployments. */
+    dangerouslyAllowPrivateNetwork: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 const bluebubblesAccountSchema = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
     markdown: MarkdownConfigSchema,
+    actions: bluebubblesActionSchema,
     serverUrl: z.string().optional(),
     password: buildSecretInputSchema().optional(),
     webhookPath: z.string().optional(),
-    dmPolicy: z.enum(["pairing", "allowlist", "open", "disabled"]).optional(),
-    allowFrom: z.array(allowFromEntry).optional(),
-    groupAllowFrom: z.array(allowFromEntry).optional(),
-    groupPolicy: z.enum(["open", "disabled", "allowlist"]).optional(),
+    dmPolicy: DmPolicySchema.optional(),
+    allowFrom: AllowFromListSchema,
+    groupAllowFrom: AllowFromListSchema,
+    groupPolicy: GroupPolicySchema.optional(),
+    enrichGroupParticipantsFromContacts: z.boolean().optional().default(true),
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
     textChunkLimit: z.number().int().positive().optional(),
@@ -44,7 +61,7 @@ const bluebubblesAccountSchema = z
     mediaMaxMb: z.number().int().positive().optional(),
     mediaLocalRoots: z.array(z.string()).optional(),
     sendReadReceipts: z.boolean().optional(),
-    allowPrivateNetwork: z.boolean().optional(),
+    network: bluebubblesNetworkSchema,
     blockStreaming: z.boolean().optional(),
     groups: z.object({}).catchall(bluebubblesGroupConfigSchema).optional(),
   })
@@ -60,8 +77,12 @@ const bluebubblesAccountSchema = z
     }
   });
 
-export const BlueBubblesConfigSchema = bluebubblesAccountSchema.extend({
-  accounts: z.object({}).catchall(bluebubblesAccountSchema).optional(),
-  defaultAccount: z.string().optional(),
+export const BlueBubblesConfigSchema = buildCatchallMultiAccountChannelSchema(
+  bluebubblesAccountSchema,
+).safeExtend({
   actions: bluebubblesActionSchema,
+});
+
+export const BlueBubblesChannelConfigSchema = buildChannelConfigSchema(BlueBubblesConfigSchema, {
+  uiHints: bluebubblesChannelConfigUiHints,
 });

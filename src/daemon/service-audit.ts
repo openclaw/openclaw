@@ -1,5 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { resolveLaunchAgentPlistPath } from "./launchd.js";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 import {
@@ -14,6 +18,7 @@ export type GatewayServiceCommand = {
   programArguments: string[];
   workingDirectory?: string;
   environment?: Record<string, string>;
+  environmentValueSources?: Record<string, "inline" | "file">;
   sourcePath?: string;
 } | null;
 
@@ -35,6 +40,7 @@ export const SERVICE_AUDIT_CODES = {
   gatewayPathMissing: "gateway-path-missing",
   gatewayPathMissingDirs: "gateway-path-missing-dirs",
   gatewayPathNonMinimal: "gateway-path-nonminimal",
+  gatewayTokenEmbedded: "gateway-token-embedded",
   gatewayTokenMismatch: "gateway-token-mismatch",
   gatewayRuntimeBun: "gateway-runtime-bun",
   gatewayRuntimeNodeVersionManager: "gateway-runtime-node-version-manager",
@@ -208,21 +214,37 @@ function auditGatewayToken(
   issues: ServiceConfigIssue[],
   expectedGatewayToken?: string,
 ) {
-  const expectedToken = expectedGatewayToken?.trim();
-  if (!expectedToken) {
+  const serviceToken = readEmbeddedGatewayToken(command);
+  if (!serviceToken) {
     return;
   }
-  const serviceToken = command?.environment?.OPENCLAW_GATEWAY_TOKEN?.trim();
-  if (serviceToken === expectedToken) {
+  issues.push({
+    code: SERVICE_AUDIT_CODES.gatewayTokenEmbedded,
+    message: "Gateway service embeds OPENCLAW_GATEWAY_TOKEN and should be reinstalled.",
+    detail: "Run `openclaw gateway install --force` to remove embedded service token.",
+    level: "recommended",
+  });
+  const expectedToken = normalizeOptionalString(expectedGatewayToken);
+  if (!expectedToken || serviceToken === expectedToken) {
     return;
   }
   issues.push({
     code: SERVICE_AUDIT_CODES.gatewayTokenMismatch,
     message:
       "Gateway service OPENCLAW_GATEWAY_TOKEN does not match gateway.auth.token in openclaw.json",
-    detail: serviceToken ? "service token is stale" : "service token is missing",
+    detail: "service token is stale",
     level: "recommended",
   });
+}
+
+export function readEmbeddedGatewayToken(command: GatewayServiceCommand): string | undefined {
+  if (!command) {
+    return undefined;
+  }
+  if (command.environmentValueSources?.OPENCLAW_GATEWAY_TOKEN === "file") {
+    return undefined;
+  }
+  return normalizeOptionalString(command.environment?.OPENCLAW_GATEWAY_TOKEN);
 }
 
 function getPathModule(platform: NodeJS.Platform) {
@@ -233,7 +255,7 @@ function normalizePathEntry(entry: string, platform: NodeJS.Platform): string {
   const pathModule = getPathModule(platform);
   const normalized = pathModule.normalize(entry).replaceAll("\\", "/");
   if (platform === "win32") {
-    return normalized.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(normalized);
   }
   return normalized;
 }
@@ -344,7 +366,7 @@ async function auditGatewayRuntime(
         issues.push({
           code: SERVICE_AUDIT_CODES.gatewayRuntimeNodeSystemMissing,
           message:
-            "System Node 22+ not found; install it before migrating away from version managers.",
+            "System Node 22 LTS (22.14+) or Node 24 not found; install it before migrating away from version managers.",
           level: "recommended",
         });
       }
@@ -360,14 +382,14 @@ export function checkTokenDrift(params: {
   serviceToken: string | undefined;
   configToken: string | undefined;
 }): ServiceConfigIssue | null {
-  const { serviceToken, configToken } = params;
+  const serviceToken = normalizeOptionalString(params.serviceToken);
+  const configToken = normalizeOptionalString(params.configToken);
 
-  // No drift if both are undefined/empty
-  if (!serviceToken && !configToken) {
+  // Tokenless service units are canonical; no drift to report.
+  if (!serviceToken) {
     return null;
   }
 
-  // Drift: config has token, service has different or no token
   if (configToken && serviceToken !== configToken) {
     return {
       code: SERVICE_AUDIT_CODES.gatewayTokenDrift,

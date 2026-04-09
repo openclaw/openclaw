@@ -1,8 +1,9 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { PluginLogger } from "openclaw/plugin-sdk";
-import type { DiffArtifactMeta, DiffOutputFormat } from "./types.js";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import type { PluginLogger } from "../api.js";
+import type { DiffArtifactContext, DiffArtifactMeta, DiffOutputFormat } from "./types.js";
 
 const DEFAULT_TTL_MS = 30 * 60 * 1000;
 const MAX_TTL_MS = 6 * 60 * 60 * 1000;
@@ -16,11 +17,13 @@ type CreateArtifactParams = {
   inputKind: DiffArtifactMeta["inputKind"];
   fileCount: number;
   ttlMs?: number;
+  context?: DiffArtifactContext;
 };
 
 type CreateStandaloneFileArtifactParams = {
   format?: DiffOutputFormat;
   ttlMs?: number;
+  context?: DiffArtifactContext;
 };
 
 type StandaloneFileMeta = {
@@ -29,6 +32,7 @@ type StandaloneFileMeta = {
   createdAt: string;
   expiresAt: string;
   filePath: string;
+  context?: DiffArtifactContext;
 };
 
 type ArtifactMetaFileName = "meta.json" | "file-meta.json";
@@ -69,6 +73,7 @@ export class DiffArtifactStore {
       expiresAt: expiresAt.toISOString(),
       viewerPath: `${VIEWER_PREFIX}/${id}/${token}`,
       htmlPath,
+      ...(params.context ? { context: params.context } : {}),
     };
 
     await fs.mkdir(artifactDir, { recursive: true });
@@ -127,7 +132,7 @@ export class DiffArtifactStore {
 
   async createStandaloneFileArtifact(
     params: CreateStandaloneFileArtifactParams = {},
-  ): Promise<{ id: string; filePath: string; expiresAt: string }> {
+  ): Promise<{ id: string; filePath: string; expiresAt: string; context?: DiffArtifactContext }> {
     await this.ensureRoot();
 
     const id = crypto.randomBytes(10).toString("hex");
@@ -143,6 +148,7 @@ export class DiffArtifactStore {
       createdAt: createdAt.toISOString(),
       expiresAt,
       filePath: this.normalizeStoredPath(filePath, "filePath"),
+      ...(params.context ? { context: params.context } : {}),
     };
 
     await fs.mkdir(artifactDir, { recursive: true });
@@ -152,6 +158,7 @@ export class DiffArtifactStore {
       id,
       filePath: meta.filePath,
       expiresAt: meta.expiresAt,
+      ...(meta.context ? { context: meta.context } : {}),
     };
   }
 
@@ -268,6 +275,7 @@ export class DiffArtifactStore {
         createdAt: value.createdAt,
         expiresAt: value.expiresAt,
         filePath: this.normalizeStoredPath(value.filePath, "filePath"),
+        ...(value.context ? { context: normalizeArtifactContext(value.context) } : {}),
       };
     } catch (error) {
       this.logger?.warn(`Failed to normalize standalone diff metadata for ${id}: ${String(error)}`);
@@ -291,7 +299,7 @@ export class DiffArtifactStore {
     id: string,
     fileName: ArtifactMetaFileName,
     context: string,
-  ): Promise<unknown | null> {
+  ): Promise<unknown> {
     try {
       const raw = await fs.readFile(this.metaFilePath(id, fileName), "utf8");
       return JSON.parse(raw) as unknown;
@@ -355,4 +363,20 @@ function isExpired(meta: { expiresAt: string }): boolean {
 
 function isFileNotFound(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+
+function normalizeArtifactContext(value: unknown): DiffArtifactContext | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const raw = value as Record<string, unknown>;
+  const context = {
+    agentId: normalizeOptionalString(raw.agentId),
+    sessionId: normalizeOptionalString(raw.sessionId),
+    messageChannel: normalizeOptionalString(raw.messageChannel),
+    agentAccountId: normalizeOptionalString(raw.agentAccountId),
+  };
+
+  return Object.values(context).some((entry) => entry !== undefined) ? context : undefined;
 }

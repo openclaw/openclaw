@@ -4,7 +4,7 @@ import type {
   DmPolicy,
   GroupPolicy,
   SecretInput,
-} from "openclaw/plugin-sdk";
+} from "../runtime-api.js";
 
 export type { DmPolicy, GroupPolicy };
 
@@ -20,6 +20,11 @@ export type NextcloudTalkRoomConfig = {
   allowFrom?: string[];
   /** Optional system prompt snippet for this room. */
   systemPrompt?: string;
+};
+
+export type NextcloudTalkNetworkConfig = {
+  /** Dangerous opt-in for self-hosted Nextcloud Talk on trusted private/internal hosts. */
+  dangerouslyAllowPrivateNetwork?: boolean;
 };
 
 export type NextcloudTalkAccountConfig = {
@@ -75,6 +80,8 @@ export type NextcloudTalkAccountConfig = {
   responsePrefix?: string;
   /** Media upload max size in MB. */
   mediaMaxMb?: number;
+  /** Network policy overrides for self-hosted Nextcloud Talk on trusted private/internal hosts. */
+  network?: NextcloudTalkNetworkConfig;
 };
 
 export type NextcloudTalkConfig = {

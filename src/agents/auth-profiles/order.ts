@@ -1,9 +1,10 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
+import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import {
-  findNormalizedProviderValue,
-  normalizeProviderId,
-  normalizeProviderIdForAuth,
-} from "../model-selection.js";
+  evaluateStoredCredentialEligibility,
+  type AuthCredentialReasonCode,
+} from "./credential-state.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profiles.js";
 import type { AuthProfileStore } from "./types.js";
 import {
@@ -11,6 +12,56 @@ import {
   isProfileInCooldown,
   resolveProfileUnusableUntil,
 } from "./usage.js";
+
+export type AuthProfileEligibilityReasonCode =
+  | AuthCredentialReasonCode
+  | "profile_missing"
+  | "provider_mismatch"
+  | "mode_mismatch";
+
+export type AuthProfileEligibility = {
+  eligible: boolean;
+  reasonCode: AuthProfileEligibilityReasonCode;
+};
+
+export function resolveAuthProfileEligibility(params: {
+  cfg?: OpenClawConfig;
+  store: AuthProfileStore;
+  provider: string;
+  profileId: string;
+  now?: number;
+}): AuthProfileEligibility {
+  const providerAuthKey = resolveProviderIdForAuth(params.provider, { config: params.cfg });
+  const cred = params.store.profiles[params.profileId];
+  if (!cred) {
+    return { eligible: false, reasonCode: "profile_missing" };
+  }
+  if (resolveProviderIdForAuth(cred.provider, { config: params.cfg }) !== providerAuthKey) {
+    return { eligible: false, reasonCode: "provider_mismatch" };
+  }
+  const profileConfig = params.cfg?.auth?.profiles?.[params.profileId];
+  if (profileConfig) {
+    if (
+      resolveProviderIdForAuth(profileConfig.provider, { config: params.cfg }) !== providerAuthKey
+    ) {
+      return { eligible: false, reasonCode: "provider_mismatch" };
+    }
+    if (profileConfig.mode !== cred.type) {
+      const oauthCompatible = profileConfig.mode === "oauth" && cred.type === "token";
+      if (!oauthCompatible) {
+        return { eligible: false, reasonCode: "mode_mismatch" };
+      }
+    }
+  }
+  const credentialEligibility = evaluateStoredCredentialEligibility({
+    credential: cred,
+    now: params.now,
+  });
+  return {
+    eligible: credentialEligibility.eligible,
+    reasonCode: credentialEligibility.reasonCode,
+  };
+}
 
 export function resolveAuthProfileOrder(params: {
   cfg?: OpenClawConfig;
@@ -20,7 +71,7 @@ export function resolveAuthProfileOrder(params: {
 }): string[] {
   const { cfg, store, provider, preferredProfile } = params;
   const providerKey = normalizeProviderId(provider);
-  const providerAuthKey = normalizeProviderIdForAuth(provider);
+  const providerAuthKey = resolveProviderIdForAuth(provider, { config: cfg });
   const now = Date.now();
 
   // Clear any cooldowns that have expired since the last check so profiles
@@ -32,7 +83,10 @@ export function resolveAuthProfileOrder(params: {
   const explicitOrder = storedOrder ?? configuredOrder;
   const explicitProfiles = cfg?.auth?.profiles
     ? Object.entries(cfg.auth.profiles)
-        .filter(([, profile]) => normalizeProviderIdForAuth(profile.provider) === providerAuthKey)
+        .filter(
+          ([, profile]) =>
+            resolveProviderIdForAuth(profile.provider, { config: cfg }) === providerAuthKey,
+        )
         .map(([profileId]) => profileId)
     : [];
   const baseOrder =
@@ -42,51 +96,17 @@ export function resolveAuthProfileOrder(params: {
     return [];
   }
 
-  const isValidProfile = (profileId: string): boolean => {
-    const cred = store.profiles[profileId];
-    if (!cred) {
-      return false;
-    }
-    if (normalizeProviderIdForAuth(cred.provider) !== providerAuthKey) {
-      return false;
-    }
-    const profileConfig = cfg?.auth?.profiles?.[profileId];
-    if (profileConfig) {
-      if (normalizeProviderIdForAuth(profileConfig.provider) !== providerAuthKey) {
-        return false;
-      }
-      if (profileConfig.mode !== cred.type) {
-        const oauthCompatible = profileConfig.mode === "oauth" && cred.type === "token";
-        if (!oauthCompatible) {
-          return false;
-        }
-      }
-    }
-    if (cred.type === "api_key") {
-      return Boolean(cred.key?.trim());
-    }
-    if (cred.type === "token") {
-      if (!cred.token?.trim()) {
-        return false;
-      }
-      if (
-        typeof cred.expires === "number" &&
-        Number.isFinite(cred.expires) &&
-        cred.expires > 0 &&
-        now >= cred.expires
-      ) {
-        return false;
-      }
-      return true;
-    }
-    if (cred.type === "oauth") {
-      return Boolean(cred.access?.trim() || cred.refresh?.trim());
-    }
-    return false;
-  };
+  const isValidProfile = (profileId: string): boolean =>
+    resolveAuthProfileEligibility({
+      cfg,
+      store,
+      provider,
+      profileId,
+      now,
+    }).eligible;
   let filtered = baseOrder.filter(isValidProfile);
 
-  // Repair config/store profile-id drift from older onboarding flows:
+  // Repair config/store profile-id drift from older setup flows:
   // if configured profile ids no longer exist in auth-profiles.json, scan the
   // provider's stored credentials and use any valid entries.
   const allBaseProfilesMissing = baseOrder.every((profileId) => !store.profiles[profileId]);

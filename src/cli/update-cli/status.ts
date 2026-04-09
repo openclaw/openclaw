@@ -10,7 +10,7 @@ import {
 } from "../../infra/update-channels.js";
 import { checkUpdateStatus } from "../../infra/update-check.js";
 import { defaultRuntime } from "../../runtime.js";
-import { renderTable } from "../../terminal/table.js";
+import { getTerminalTableWidth, renderTable } from "../../terminal/table.js";
 import { theme } from "../../terminal/theme.js";
 import { parseTimeoutMsOrExit, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
 
@@ -70,26 +70,20 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   const updateLine = formatUpdateOneLiner(update).replace(/^Update:\s*/i, "");
 
   if (opts.json) {
-    defaultRuntime.log(
-      JSON.stringify(
-        {
-          update,
-          channel: {
-            value: channelInfo.channel,
-            source: channelInfo.source,
-            label: channelLabel,
-            config: configChannel,
-          },
-          availability: updateAvailability,
-        },
-        null,
-        2,
-      ),
-    );
+    defaultRuntime.writeJson({
+      update,
+      channel: {
+        value: channelInfo.channel,
+        source: channelInfo.source,
+        label: channelLabel,
+        config: configChannel,
+      },
+      availability: updateAvailability,
+    });
     return;
   }
 
-  const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+  const tableWidth = getTerminalTableWidth();
   const installLabel =
     update.installKind === "git"
       ? `git (${update.root ?? "unknown"})`

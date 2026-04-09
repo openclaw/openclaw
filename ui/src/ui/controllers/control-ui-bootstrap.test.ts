@@ -12,7 +12,6 @@ describe("loadControlUiBootstrapConfig", () => {
         basePath: "/openclaw",
         assistantName: "Ops",
         assistantAvatar: "O",
-        assistantAgentId: "main",
       }),
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
@@ -22,6 +21,7 @@ describe("loadControlUiBootstrapConfig", () => {
       assistantName: "Assistant",
       assistantAvatar: null,
       assistantAgentId: null,
+      serverVersion: null,
     };
 
     await loadControlUiBootstrapConfig(state);
@@ -32,7 +32,8 @@ describe("loadControlUiBootstrapConfig", () => {
     );
     expect(state.assistantName).toBe("Ops");
     expect(state.assistantAvatar).toBe("O");
-    expect(state.assistantAgentId).toBe("main");
+    expect(state.assistantAgentId).toBeNull();
+    expect(state.serverVersion).toBeNull();
 
     vi.unstubAllGlobals();
   });
@@ -46,6 +47,7 @@ describe("loadControlUiBootstrapConfig", () => {
       assistantName: "Assistant",
       assistantAvatar: null,
       assistantAgentId: null,
+      serverVersion: null,
     };
 
     await loadControlUiBootstrapConfig(state);
@@ -55,6 +57,8 @@ describe("loadControlUiBootstrapConfig", () => {
       expect.objectContaining({ method: "GET" }),
     );
     expect(state.assistantName).toBe("Assistant");
+    expect(state.assistantAgentId).toBeNull();
+    expect(state.serverVersion).toBeNull();
 
     vi.unstubAllGlobals();
   });
@@ -68,6 +72,7 @@ describe("loadControlUiBootstrapConfig", () => {
       assistantName: "Assistant",
       assistantAvatar: null,
       assistantAgentId: null,
+      serverVersion: null,
     };
 
     await loadControlUiBootstrapConfig(state);
@@ -76,6 +81,8 @@ describe("loadControlUiBootstrapConfig", () => {
       `/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`,
       expect.objectContaining({ method: "GET" }),
     );
+    expect(state.assistantAgentId).toBeNull();
+    expect(state.serverVersion).toBeNull();
 
     vi.unstubAllGlobals();
   });

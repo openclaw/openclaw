@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export const INPUT_PROVENANCE_KIND_VALUES = [
   "external_user",
@@ -10,18 +11,11 @@ export type InputProvenanceKind = (typeof INPUT_PROVENANCE_KIND_VALUES)[number];
 
 export type InputProvenance = {
   kind: InputProvenanceKind;
+  originSessionId?: string;
   sourceSessionKey?: string;
   sourceChannel?: string;
   sourceTool?: string;
 };
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
 
 function isInputProvenanceKind(value: unknown): value is InputProvenanceKind {
   return (
@@ -39,6 +33,7 @@ export function normalizeInputProvenance(value: unknown): InputProvenance | unde
   }
   return {
     kind: record.kind,
+    originSessionId: normalizeOptionalString(record.originSessionId),
     sourceSessionKey: normalizeOptionalString(record.sourceSessionKey),
     sourceChannel: normalizeOptionalString(record.sourceChannel),
     sourceTool: normalizeOptionalString(record.sourceTool),
