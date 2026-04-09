@@ -1080,16 +1080,29 @@ export async function runEmbeddedAttempt(
         // ── QUEUEFLOOD-02: Strip trailing infrastructure-error turns ────────
         // See attempt.strip-error-turns.ts for full documentation.
         // Runs pre-sanitize so error turns don't consume token budget in the
-        // sanitize→validate→limit→context pipeline. After stripping, the
-        // orphan-user repair (~line 1470) handles the exposed trailing user.
+        // sanitize→validate→limit→context pipeline.
+        //
+        // If stripping exposes a trailing user turn, that turn is also removed
+        // and its text is prepended to the prompt. This prevents silent message
+        // loss: the platform marks GUI messages read on delivery (before run
+        // completion), so no replay source exists for the failed user request.
         {
-          const strippedCount = stripTrailingErrorTurns(activeSession);
-          if (strippedCount > 0) {
+          const stripResult = stripTrailingErrorTurns(activeSession);
+          if (stripResult.errorCount > 0) {
+            const recoveredNote = stripResult.recoveredUserText
+              ? ` (recovered user prompt: ${stripResult.recoveredUserText.length} chars)`
+              : "";
             log.warn(
-              `Stripped ${strippedCount} infrastructure-error assistant turn(s) from session. ` +
+              `Stripped ${stripResult.errorCount} infrastructure-error assistant turn(s) from session${recoveredNote}. ` +
                 `runId=${params.runId} sessionId=${params.sessionId}`,
             );
-            stripTrailingErrorFileEntries(sessionManager);
+            stripTrailingErrorFileEntries(sessionManager, stripResult.recoveredUserText !== null);
+          }
+          if (stripResult.recoveredUserText) {
+            // Re-inject the failed user prompt so it's re-sent to the LLM.
+            // Prepend to effectivePrompt so the recovered text appears before
+            // any new trigger content (heartbeat, steer, etc).
+            params.prompt = stripResult.recoveredUserText;
           }
         }
 

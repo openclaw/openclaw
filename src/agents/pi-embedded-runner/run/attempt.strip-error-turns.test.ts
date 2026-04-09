@@ -102,7 +102,7 @@ describe("stripTrailingErrorTurns", () => {
     };
   }
 
-  it("strips trailing pure infrastructure errors", () => {
+  it("strips trailing pure infrastructure errors and recovers exposed user turn", () => {
     const session = makeSession([
       { role: "user", content: [{ type: "text", text: "hey" }] },
       { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "hi" }] },
@@ -110,12 +110,14 @@ describe("stripTrailingErrorTurns", () => {
       { role: "assistant", stopReason: "error", content: [] },
       { role: "assistant", stopReason: "error", content: [] },
     ]);
-    const count = stripTrailingErrorTurns(session);
-    expect(count).toBe(2);
+    const result = stripTrailingErrorTurns(session);
+    expect(result.errorCount).toBe(2);
+    // The exposed trailing user turn is also stripped and its text recovered.
+    expect(result.recoveredUserText).toBe("again");
     expect(session.agent.replaceMessages).toHaveBeenCalledTimes(1);
     const replaced = session.agent.replaceMessages.mock.calls[0][0];
-    expect(replaced).toHaveLength(3);
-    expect(replaced[2].role).toBe("user");
+    expect(replaced).toHaveLength(2);
+    expect(replaced[1].role).toBe("assistant");
   });
 
   it("preserves errored turns with ToolCall content", () => {
@@ -127,55 +129,74 @@ describe("stripTrailingErrorTurns", () => {
         content: [{ type: "toolCall", id: "c1", name: "exec", arguments: {} }],
       },
     ]);
-    const count = stripTrailingErrorTurns(session);
-    expect(count).toBe(0);
+    const result = stripTrailingErrorTurns(session);
+    expect(result.errorCount).toBe(0);
+    expect(result.recoveredUserText).toBeNull();
     expect(session.agent.replaceMessages).not.toHaveBeenCalled();
   });
 
   it("preserves non-trailing error turns", () => {
-    // Error in the middle followed by a successful turn — should not be touched.
     const session = makeSession([
       { role: "user", content: [{ type: "text", text: "hey" }] },
       { role: "assistant", stopReason: "error", content: [] },
       { role: "user", content: [{ type: "text", text: "retry" }] },
       { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "ok" }] },
     ]);
-    const count = stripTrailingErrorTurns(session);
-    expect(count).toBe(0);
+    const result = stripTrailingErrorTurns(session);
+    expect(result.errorCount).toBe(0);
+    expect(result.recoveredUserText).toBeNull();
     expect(session.agent.replaceMessages).not.toHaveBeenCalled();
   });
 
-  it("returns 0 and does not call replaceMessages when no errors present", () => {
+  it("returns zero counts when no errors present", () => {
     const session = makeSession([
       { role: "user", content: [{ type: "text", text: "hey" }] },
       { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "hi" }] },
     ]);
-    const count = stripTrailingErrorTurns(session);
-    expect(count).toBe(0);
+    const result = stripTrailingErrorTurns(session);
+    expect(result.errorCount).toBe(0);
+    expect(result.recoveredUserText).toBeNull();
     expect(session.agent.replaceMessages).not.toHaveBeenCalled();
   });
 
   it("handles empty message array", () => {
     const session = makeSession([]);
-    const count = stripTrailingErrorTurns(session);
-    expect(count).toBe(0);
+    const result = stripTrailingErrorTurns(session);
+    expect(result.errorCount).toBe(0);
+    expect(result.recoveredUserText).toBeNull();
   });
 
-  it("exposes trailing user turn after stripping (orphan-user interaction)", () => {
-    // After stripping the error, the user turn becomes the tail.
-    // This is intentional — the orphan-user repair in attempt.ts handles it.
+  it("recovers user text when error follows user turn directly", () => {
+    // The user's original prompt must be recovered, not silently lost.
+    // Platform marks GUI messages read on delivery (before run completion),
+    // so no replay source exists for the failed user request.
     const session = makeSession([
       { role: "user", content: [{ type: "text", text: "hey" }] },
       { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "hi" }] },
       { role: "user", content: [{ type: "text", text: "more" }] },
       { role: "assistant", stopReason: "error", content: [] },
     ]);
-    const count = stripTrailingErrorTurns(session);
-    expect(count).toBe(1);
+    const result = stripTrailingErrorTurns(session);
+    expect(result.errorCount).toBe(1);
+    expect(result.recoveredUserText).toBe("more");
     const replaced = session.agent.replaceMessages.mock.calls[0][0];
-    expect(replaced).toHaveLength(3);
-    // The trailing message is now the user turn — orphan-user repair handles this.
-    expect(replaced[2].role).toBe("user");
+    // Both the error AND the user turn are stripped.
+    expect(replaced).toHaveLength(2);
+    expect(replaced[1].role).toBe("assistant");
+  });
+
+  it("returns null recoveredUserText when error follows assistant (not user)", () => {
+    // Error after a successful assistant turn — no user turn to recover.
+    const session = makeSession([
+      { role: "user", content: [{ type: "text", text: "hey" }] },
+      { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "hi" }] },
+      { role: "assistant", stopReason: "error", content: [] },
+    ]);
+    const result = stripTrailingErrorTurns(session);
+    expect(result.errorCount).toBe(1);
+    expect(result.recoveredUserText).toBeNull();
+    const replaced = session.agent.replaceMessages.mock.calls[0][0];
+    expect(replaced).toHaveLength(2);
   });
 });
 
@@ -326,5 +347,48 @@ describe("stripTrailingErrorFileEntries", () => {
     const changed = stripTrailingErrorFileEntries(sm);
     expect(changed).toBe(false);
     expect(sm.fileEntries).toHaveLength(5);
+  });
+
+  it("strips trailing user turn when stripUserTurn=true", () => {
+    const sm = makeSessionManager([
+      { type: "session", id: "s1" },
+      { type: "message", id: "m1", parentId: "s1", message: { role: "user" } },
+      {
+        type: "message",
+        id: "m2",
+        parentId: "m1",
+        message: { role: "assistant", stopReason: "error", content: [] },
+      },
+    ]);
+
+    const changed = stripTrailingErrorFileEntries(sm, true);
+    expect(changed).toBe(true);
+    // Both error entry AND user entry stripped
+    expect(sm.fileEntries).toHaveLength(1);
+    expect(sm.byId.has("m1")).toBe(false);
+    expect(sm.byId.has("m2")).toBe(false);
+    expect(sm.leafId).toBe("s1");
+    expect(sm._rewriteFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT strip trailing user turn when stripUserTurn=false (default)", () => {
+    const sm = makeSessionManager([
+      { type: "session", id: "s1" },
+      { type: "message", id: "m1", parentId: "s1", message: { role: "user" } },
+      {
+        type: "message",
+        id: "m2",
+        parentId: "m1",
+        message: { role: "assistant", stopReason: "error", content: [] },
+      },
+    ]);
+
+    const changed = stripTrailingErrorFileEntries(sm);
+    expect(changed).toBe(true);
+    // Only error entry stripped, user entry preserved
+    expect(sm.fileEntries).toHaveLength(2);
+    expect(sm.byId.has("m1")).toBe(true);
+    expect(sm.byId.has("m2")).toBe(false);
+    expect(sm.leafId).toBe("m1");
   });
 });
