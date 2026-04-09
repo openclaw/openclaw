@@ -3704,12 +3704,16 @@ def cmd_list_workspaces(args):
     _require_requests()
     from urllib.parse import quote
     org = get_org()
-    r = requests.get(f"{TFC_API}/organizations/{quote(org, safe='')}/workspaces", headers=api_headers())
-    r.raise_for_status()
+    url = f"{TFC_API}/organizations/{quote(org, safe='')}/workspaces?page[size]=100"
     print(f"\n--- Workspaces in {org} ---")
-    for ws in r.json().get("data", []):
-        a = ws["attributes"]
-        print(f"  {a['name']:<40} {a.get('execution-mode','?'):<10} tf:{a.get('terraform-version','?')}")
+    while url:
+        r = requests.get(url, headers=api_headers())
+        r.raise_for_status()
+        body = r.json()
+        for ws in body.get("data", []):
+            a = ws["attributes"]
+            print(f"  {a['name']:<40} {a.get('execution-mode','?'):<10} tf:{a.get('terraform-version','?')}")
+        url = body.get("links", {}).get("next")
 
 
 def main():
