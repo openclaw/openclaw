@@ -299,6 +299,11 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
   if (result.kind === "send") {
     if (result.handledBy === "core" && result.sendResult) {
       const send = result.sendResult;
+      if (send.blocked) {
+        return [
+          `🚫 Send blocked via ${resolveChannelLabel(result.channel)}. ${send.blockedReason ?? "blocked by message_sending hook"}`,
+        ];
+      }
       if (send.via === "direct") {
         const directResult = send.result as OutboundDeliveryResult | undefined;
         return [ok(formatOutboundDeliverySummary(send.channel, directResult))];

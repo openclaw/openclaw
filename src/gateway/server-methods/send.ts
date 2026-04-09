@@ -6,7 +6,7 @@ import { loadConfig } from "../../config/config.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
-import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
+import { sendResolvedDirectMessage } from "../../infra/outbound/message.js";
 import {
   ensureOutboundSessionEntry,
   resolveOutboundSessionRoute,
@@ -130,12 +130,20 @@ function buildGatewayDeliveryPayload(params: {
   runId: string;
   channel: string;
   result: Record<string, unknown>;
+  agentId?: string;
+  sessionKey?: string;
 }): Record<string, unknown> {
   const payload: Record<string, unknown> = {
     runId: params.runId,
     messageId: params.result.messageId,
     channel: params.channel,
   };
+  if (params.agentId) {
+    payload.agentId = params.agentId;
+  }
+  if (params.sessionKey) {
+    payload.sessionKey = params.sessionKey;
+  }
   if ("chatId" in params.result) {
     payload.chatId = params.result.chatId;
   }
@@ -334,16 +342,21 @@ export const sendHandlers: GatewayRequestHandlers = {
           agentId: effectiveAgentId,
           sessionKey: outboundSessionKey,
         });
-        const results = await deliverOutboundPayloads({
+        const sendResult = await sendResolvedDirectMessage({
           cfg,
           channel: outboundChannel,
-          to: deliveryTarget,
+          to,
+          resolvedTo: deliveryTarget,
+          normalizedPayloads: [{ text: message, mediaUrl, mediaUrls }],
+          mediaUrl: mediaUrl ?? null,
+          mediaUrls: mirrorMediaUrls,
+          agentId: effectiveAgentId,
           accountId,
-          payloads: [{ text: message, mediaUrl, mediaUrls }],
           session: outboundSession,
           gifPlayback: request.gifPlayback,
-          threadId: threadId ?? null,
+          threadId: threadId ?? undefined,
           deps: outboundDeps,
+          requestId: idem,
           gatewayClientScopes: client?.connect?.scopes ?? [],
           mirror: outboundSessionKey
             ? {
@@ -352,15 +365,44 @@ export const sendHandlers: GatewayRequestHandlers = {
                 text: mirrorText || message,
                 mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
                 idempotencyKey: idem,
-              }
-            : undefined,
+                }
+              : undefined,
         });
 
-        const result = results.at(-1);
+        if (sendResult.blocked) {
+          const error = errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            sendResult.blockedReason ?? "message.send blocked",
+            {
+              details: {
+                blocked: true,
+                agentId: sendResult.agentId,
+                sessionKey: sendResult.sessionKey,
+                requestId: sendResult.requestId,
+                channel,
+                to: deliveryTarget,
+              },
+            },
+          );
+          cacheGatewayDedupeFailure({ context, dedupeKey, error });
+          return {
+            ok: false,
+            error,
+            meta: { channel },
+          };
+        }
+
+        const result = sendResult.result;
         if (!result) {
           throw new Error("No delivery result");
         }
-        const payload = buildGatewayDeliveryPayload({ runId: idem, channel, result });
+        const payload = buildGatewayDeliveryPayload({
+          runId: idem,
+          channel,
+          result,
+          agentId: sendResult.agentId,
+          sessionKey: sendResult.sessionKey,
+        });
         cacheGatewayDedupeSuccess({ context, dedupeKey, payload });
         return {
           ok: true,

@@ -90,7 +90,24 @@ vi.mock("../../infra/outbound/channel-selection.js", () => ({
 
 vi.mock("../../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+  deliverOutboundPayloadsWithStatus: async (...args: unknown[]) => {
+    const results = await mocks.deliverOutboundPayloads(...args);
+    return {
+      results,
+      blockedByHook: Array.isArray(results) && results.length === 0,
+    };
+  },
 }));
+
+vi.mock("../../infra/outbound/message.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/outbound/message.js")>(
+    "../../infra/outbound/message.js",
+  );
+  return {
+    ...actual,
+    sendResolvedDirectMessage: actual.sendResolvedDirectMessage,
+  };
+});
 
 vi.mock("../../config/sessions.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
@@ -824,6 +841,35 @@ describe("gateway send mirroring", () => {
       true,
       expect.objectContaining({ messageId: "m-threaded" }),
       undefined,
+      expect.objectContaining({ channel: "slack" }),
+    );
+  });
+
+  it("returns explicit blocked denial when message_sending cancels gateway send delivery", async () => {
+    mocks.deliverOutboundPayloads.mockResolvedValue([]);
+
+    const { respond } = await runSend({
+      to: "channel:C1",
+      message: "blocked",
+      channel: "slack",
+      agentId: "work",
+      sessionKey: "agent:work:slack:channel:c1",
+      idempotencyKey: "idem-blocked-send",
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: "blocked by message_sending hook",
+        details: expect.objectContaining({
+          blocked: true,
+          agentId: "work",
+          sessionKey: "agent:work:slack:channel:c1",
+          requestId: "idem-blocked-send",
+        }),
+      }),
       expect.objectContaining({ channel: "slack" }),
     );
   });
