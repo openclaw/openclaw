@@ -42,14 +42,19 @@ export function shouldAutoGenerateBrowserAuth(env: NodeJS.ProcessEnv): boolean {
   return true;
 }
 
-function hasExplicitNonStringGatewayCredential(cfg?: OpenClawConfig): boolean {
+function hasExplicitNonStringGatewayCredentialForMode(params: {
+  cfg?: OpenClawConfig;
+  mode: "none" | "trusted-proxy";
+}): boolean {
+  const { cfg, mode } = params;
   const auth = cfg?.gateway?.auth;
   if (!auth) {
     return false;
   }
-  const tokenConfiguredAsNonString = auth.token != null && typeof auth.token !== "string";
-  const passwordConfiguredAsNonString = auth.password != null && typeof auth.password !== "string";
-  return tokenConfiguredAsNonString || passwordConfiguredAsNonString;
+  if (mode === "none") {
+    return auth.token != null && typeof auth.token !== "string";
+  }
+  return auth.password != null && typeof auth.password !== "string";
 }
 
 function generateBrowserControlToken(): string {
@@ -150,16 +155,19 @@ export async function ensureBrowserControlAuth(params: {
   if (latestCfg.gateway?.auth?.mode === "password") {
     return { auth: latestAuth };
   }
-  if (
-    latestCfg.gateway?.auth?.mode === "none" ||
-    latestCfg.gateway?.auth?.mode === "trusted-proxy"
-  ) {
-    if (hasExplicitNonStringGatewayCredential(latestCfg)) {
+  const latestMode = latestCfg.gateway?.auth?.mode;
+  if (latestMode === "none" || latestMode === "trusted-proxy") {
+    if (
+      hasExplicitNonStringGatewayCredentialForMode({
+        cfg: latestCfg,
+        mode: latestMode,
+      })
+    ) {
       // Avoid silently overwriting SecretRef-style gateway auth inputs with generated plaintext.
       // Startup will fail closed if no resolved browser auth is available.
       return { auth: latestAuth };
     }
-    if (latestCfg.gateway?.auth?.mode === "trusted-proxy") {
+    if (latestMode === "trusted-proxy") {
       // gateway.auth.mode=trusted-proxy must never be persisted with gateway.auth.token.
       // Persist a browser-only shared secret through gateway.auth.password instead so
       // out-of-process loopback clients can resolve it from config/env.
