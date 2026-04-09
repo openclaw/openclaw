@@ -403,6 +403,13 @@ function clearCronEditState(state: CronState) {
   state.cronEditingJobId = null;
 }
 
+function clearCronRunsPage(state: CronState) {
+  state.cronRuns = [];
+  state.cronRunsTotal = 0;
+  state.cronRunsHasMore = false;
+  state.cronRunsNextOffset = null;
+}
+
 function resetCronFormToDefaults(state: CronState) {
   state.cronForm = { ...DEFAULT_CRON_FORM };
   state.cronFieldErrors = validateCronForm(state.cronForm);
@@ -737,11 +744,7 @@ export async function toggleCronJob(state: CronState, job: CronJob, enabled: boo
 export async function runCronJob(state: CronState, job: CronJob, mode: "force" | "due" = "force") {
   await withCronBusy(state, async (client) => {
     await client.request("cron.run", { id: job.id, mode });
-    if (state.cronRunsScope === "all") {
-      await loadCronRuns(state, null);
-    } else {
-      await loadCronRuns(state, job.id);
-    }
+    await loadCronRuns(state, state.cronRunsScope === "all" ? null : job.id);
   });
 }
 
@@ -753,10 +756,7 @@ export async function removeCronJob(state: CronState, job: CronJob) {
     }
     if (state.cronRunsJobId === job.id) {
       state.cronRunsJobId = null;
-      state.cronRuns = [];
-      state.cronRunsTotal = 0;
-      state.cronRunsHasMore = false;
-      state.cronRunsNextOffset = null;
+      clearCronRunsPage(state);
     }
     await loadCronJobs(state);
     await loadCronStatus(state);
@@ -774,10 +774,7 @@ export async function loadCronRuns(
   const scope = state.cronRunsScope;
   const activeJobId = jobId ?? state.cronRunsJobId;
   if (scope === "job" && !activeJobId) {
-    state.cronRuns = [];
-    state.cronRunsTotal = 0;
-    state.cronRunsHasMore = false;
-    state.cronRunsNextOffset = null;
+    clearCronRunsPage(state);
     return;
   }
   const append = opts?.append === true;
