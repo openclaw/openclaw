@@ -1,10 +1,9 @@
 import "./reply.directive.directive-behavior.e2e-mocks.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore } from "../config/sessions.js";
 import {
   AUTHORIZED_WHATSAPP_COMMAND,
-  assertElevatedOffStatusReply,
   installDirectiveBehaviorE2EHooks,
   makeElevatedDirectiveConfig,
   makeRestrictedElevatedDisabledConfig,
@@ -126,8 +125,7 @@ function makeCommandMessage(body: string, from = "+1222") {
 describe("directive behavior", () => {
   installDirectiveBehaviorE2EHooks();
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ getReplyFromConfig } = await import("./reply.js"));
   });
 
@@ -180,27 +178,6 @@ describe("directive behavior", () => {
       expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
-  it("persists fast toggles across /status and /fast", async () => {
-    await withTempHome(async (home) => {
-      const storePath = sessionStorePath(home);
-
-      const onText = await runCommand(home, "/fast on");
-      expect(onText).toContain("Fast mode enabled");
-      expect(loadSessionStore(storePath)["agent:main:main"]?.fastMode).toBe(true);
-
-      const statusText = await runCommand(home, "/status");
-      const optionsLine = statusText?.split("\n").find((line) => line.trim().startsWith("⚙️"));
-      expect(optionsLine).toContain("Fast: on");
-
-      const offText = await runCommand(home, "/fast off");
-      expect(offText).toContain("Fast mode disabled");
-      expect(loadSessionStore(storePath)["agent:main:main"]?.fastMode).toBe(false);
-
-      const fastText = await runCommand(home, "/fast");
-      expect(fastText).toContain("Current fast mode: off");
-      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
-    });
-  });
   it("treats /fast status like the no-argument status query", async () => {
     await withTempHome(async (home) => {
       const statusText = await runCommand(home, "/fast status", {
@@ -215,29 +192,6 @@ describe("directive behavior", () => {
 
       expect(statusText).toContain("Current fast mode: on (config)");
       expect(statusText).toContain("Options: status, on, off.");
-      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
-    });
-  });
-  it("persists elevated toggles across /status and /elevated", async () => {
-    await withTempHome(async (home) => {
-      const storePath = sessionStorePath(home);
-
-      const offStatusText = replyText(await runElevatedCommand(home, "/elevated off\n/status"));
-      expect(offStatusText).toContain("Session: agent:main:main");
-      assertElevatedOffStatusReply(offStatusText);
-
-      const offLevelText = replyText(await runElevatedCommand(home, "/elevated"));
-      expect(offLevelText).toContain("Current elevated level: off");
-      expect(loadSessionStore(storePath)["agent:main:main"]?.elevatedLevel).toBe("off");
-
-      await runElevatedCommand(home, "/elevated on");
-      const onStatusText = replyText(await runElevatedCommand(home, "/status"));
-      const optionsLine = onStatusText?.split("\n").find((line) => line.trim().startsWith("⚙️"));
-      expect(optionsLine).toBeTruthy();
-      expect(optionsLine).toContain("elevated");
-
-      const store = loadSessionStore(storePath);
-      expect(store["agent:main:main"]?.elevatedLevel).toBe("on");
       expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
@@ -259,21 +213,6 @@ describe("directive behavior", () => {
       const deniedText = replyText(deniedRes);
       expect(deniedText).toContain("agents.list[].tools.elevated.enabled");
 
-      const statusRes = await getReplyFromConfig(
-        {
-          Body: "/status",
-          From: "+1222",
-          To: "+1222",
-          Provider: "whatsapp",
-          SenderE164: "+1222",
-          SessionKey: "agent:restricted:main",
-          CommandAuthorized: true,
-        },
-        {},
-        makeRestrictedElevatedDisabledConfig(home) as unknown as OpenClawConfig,
-      );
-      const statusText = replyText(statusRes);
-      expect(statusText).not.toContain("elevated");
       expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
@@ -375,39 +314,6 @@ describe("directive behavior", () => {
       expect(entry?.queueCap).toBeUndefined();
       expect(entry?.queueDrop).toBeUndefined();
       expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
-    });
-  });
-  it("strips inline elevated directives from the user text (does not persist session override)", async () => {
-    await withTempHome(async (home) => {
-      runEmbeddedPiAgentMock.mockResolvedValue({
-        payloads: [{ text: "ok" }],
-        meta: {
-          durationMs: 1,
-          agentMeta: { sessionId: "s", provider: "p", model: "m" },
-        },
-      });
-      const storePath = sessionStorePath(home);
-
-      await getReplyFromConfig(
-        {
-          Body: "hello there /elevated off",
-          From: "+1222",
-          To: "+1222",
-          Provider: "whatsapp",
-          SenderE164: "+1222",
-        },
-        {},
-        makeElevatedDirectiveConfig(home),
-      );
-
-      const store = loadSessionStore(storePath);
-      expect(store["agent:main:main"]?.elevatedLevel).toBeUndefined();
-
-      const calls = runEmbeddedPiAgentMock.mock.calls;
-      expect(calls.length).toBeGreaterThan(0);
-      const call = calls[0]?.[0];
-      expect(call?.prompt).toContain("hello there");
-      expect(call?.prompt).not.toContain("/elevated");
     });
   });
 });

@@ -1,67 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resetGenerationRuntimeMocks } from "../../test/helpers/media-generation/runtime-test-mocks.js";
+import {
+  getMediaGenerationRuntimeMocks,
+  resetImageGenerationRuntimeMocks,
+} from "../../test/helpers/media-generation/runtime-module-mocks.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { generateImage, listRuntimeImageGenerationProviders } from "./runtime.js";
 import type { ImageGenerationProvider } from "./types.js";
 
-const mocks = vi.hoisted(() => {
-  const debug = vi.fn();
-  return {
-    createSubsystemLogger: vi.fn(() => ({ debug })),
-    describeFailoverError: vi.fn(),
-    getImageGenerationProvider: vi.fn<
-      (providerId: string, config?: OpenClawConfig) => ImageGenerationProvider | undefined
-    >(() => undefined),
-    getProviderEnvVars: vi.fn<(providerId: string) => string[]>(() => []),
-    resolveProviderAuthEnvVarCandidates: vi.fn(() => ({})),
-    isFailoverError: vi.fn<(err: unknown) => boolean>(() => false),
-    listImageGenerationProviders: vi.fn<(config?: OpenClawConfig) => ImageGenerationProvider[]>(
-      () => [],
-    ),
-    parseImageGenerationModelRef: vi.fn<
-      (raw?: string) => { provider: string; model: string } | undefined
-    >((raw?: string) => {
-      const trimmed = raw?.trim();
-      if (!trimmed) {
-        return undefined;
-      }
-      const slash = trimmed.indexOf("/");
-      if (slash <= 0 || slash === trimmed.length - 1) {
-        return undefined;
-      }
-      return {
-        provider: trimmed.slice(0, slash),
-        model: trimmed.slice(slash + 1),
-      };
-    }),
-    resolveAgentModelFallbackValues: vi.fn<(value: unknown) => string[]>(() => []),
-    resolveAgentModelPrimaryValue: vi.fn<(value: unknown) => string | undefined>(() => undefined),
-    debug,
-  };
-});
+const mocks = getMediaGenerationRuntimeMocks();
 
-vi.mock("../agents/failover-error.js", () => ({
-  describeFailoverError: mocks.describeFailoverError,
-  isFailoverError: mocks.isFailoverError,
-}));
-vi.mock("../config/model-input.js", () => ({
-  resolveAgentModelFallbackValues: mocks.resolveAgentModelFallbackValues,
-  resolveAgentModelPrimaryValue: mocks.resolveAgentModelPrimaryValue,
-}));
-vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: mocks.createSubsystemLogger,
-}));
-vi.mock("../secrets/provider-env-vars.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../secrets/provider-env-vars.js")>();
-  return {
-    ...actual,
-    getProviderEnvVars: mocks.getProviderEnvVars,
-    resolveProviderAuthEnvVarCandidates: mocks.resolveProviderAuthEnvVarCandidates,
-  };
-});
 vi.mock("./model-ref.js", () => ({
   parseImageGenerationModelRef: mocks.parseImageGenerationModelRef,
 }));
+
 vi.mock("./provider-registry.js", () => ({
   getImageGenerationProvider: mocks.getImageGenerationProvider,
   listImageGenerationProviders: mocks.listImageGenerationProviders,
@@ -69,12 +20,7 @@ vi.mock("./provider-registry.js", () => ({
 
 describe("image-generation runtime", () => {
   beforeEach(() => {
-    resetGenerationRuntimeMocks({
-      ...mocks,
-      getProvider: mocks.getImageGenerationProvider,
-      listProviders: mocks.listImageGenerationProviders,
-      parseModelRef: mocks.parseImageGenerationModelRef,
-    });
+    resetImageGenerationRuntimeMocks();
   });
 
   it("generates images through the active image-generation provider", async () => {

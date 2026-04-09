@@ -34,13 +34,6 @@
     },
     "bundle": {
       "stageRuntimeDependencies": true
-    },
-    "releaseChecks": {
-      "rootDependencyMirrorAllowlist": [
-        "@slack/bolt",
-        "@slack/web-api",
-        "https-proxy-agent"
-      ]
     }
   }
 }

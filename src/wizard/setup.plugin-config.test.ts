@@ -215,6 +215,63 @@ describe("discoverUnconfiguredPlugins", () => {
 });
 
 describe("setupPluginConfig", () => {
+  it("allows skipping plugin setup from the multiselect prompt", async () => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          ...makeManifestPlugin("device-pairing", {
+            enabled: { label: "Enable pairing" },
+          }),
+          enabledByDefault: true,
+        },
+      ],
+    });
+
+    const note = vi.fn(async () => {});
+    const select = vi.fn(async () => {
+      throw new Error("select should not run when plugin setup is skipped");
+    });
+    const text = vi.fn(async () => {
+      throw new Error("text should not run when plugin setup is skipped");
+    });
+    const confirm = vi.fn(async () => {
+      throw new Error("confirm should not run when plugin setup is skipped");
+    });
+
+    const result = await setupPluginConfig({
+      config: {
+        plugins: {
+          entries: {
+            "device-pairing": {
+              enabled: true,
+            },
+          },
+        },
+      },
+      prompter: {
+        intro: vi.fn(async () => {}),
+        outro: vi.fn(async () => {}),
+        note,
+        select: select as unknown as WizardPrompter["select"],
+        multiselect: vi.fn(async () => ["__skip__"]) as unknown as WizardPrompter["multiselect"],
+        text,
+        confirm,
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      },
+    });
+
+    expect(result).toEqual({
+      plugins: {
+        entries: {
+          "device-pairing": {
+            enabled: true,
+          },
+        },
+      },
+    });
+    expect(note).not.toHaveBeenCalled();
+  });
+
   it("writes dotted uiHint values into nested plugin config", async () => {
     loadPluginManifestRegistry.mockReturnValue({
       plugins: [

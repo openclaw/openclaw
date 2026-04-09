@@ -7,6 +7,7 @@ import {
   createVitestRunSpecs,
   parseTestProjectsArgs,
   resolveChangedTargetArgs,
+  shouldUseLocalFullSuiteParallelByDefault,
   writeVitestIncludeFile,
 } from "./test-projects.test-support.mjs";
 import {
@@ -125,10 +126,15 @@ function resolveParallelFullSuiteConcurrency(specCount, env) {
   if (override !== null) {
     return Math.min(override, specCount);
   }
+  if (env.OPENCLAW_TEST_PROJECTS_SERIAL === "1") {
+    return 1;
+  }
+  if (env.CI === "true" || env.GITHUB_ACTIONS === "true") {
+    return 1;
+  }
   if (
-    env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS !== "1" ||
-    env.CI === "true" ||
-    env.GITHUB_ACTIONS === "true"
+    env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS !== "1" &&
+    !shouldUseLocalFullSuiteParallelByDefault(env)
   ) {
     return 1;
   }

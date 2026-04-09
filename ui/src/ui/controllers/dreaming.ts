@@ -1,5 +1,4 @@
 import type { GatewayBrowserClient } from "../gateway.ts";
-import { normalizeOptionalLowercaseString } from "../string-coerce.ts";
 import type { ConfigSnapshot } from "../types.ts";
 
 export type DreamingPhaseId = "light" | "deep" | "rem";
@@ -33,6 +32,23 @@ type RemDreamingStatus = DreamingPhaseStatusBase & {
   minPatternStrength: number;
 };
 
+export type DreamingEntry = {
+  key: string;
+  path: string;
+  startLine: number;
+  endLine: number;
+  snippet: string;
+  recallCount: number;
+  dailyCount: number;
+  groundedCount: number;
+  totalSignalCount: number;
+  lightHits: number;
+  remHits: number;
+  phaseHitCount: number;
+  promotedAt?: string;
+  lastRecalledAt?: string;
+};
+
 export type DreamingStatus = {
   enabled: boolean;
   timezone?: string;
@@ -42,6 +58,7 @@ export type DreamingStatus = {
   shortTermCount: number;
   recallSignalCount: number;
   dailySignalCount: number;
+  groundedSignalCount: number;
   totalSignalCount: number;
   phaseSignalCount: number;
   lightPhaseHitCount: number;
@@ -52,6 +69,9 @@ export type DreamingStatus = {
   phaseSignalPath?: string;
   storeError?: string;
   phaseSignalError?: string;
+  shortTermEntries: DreamingEntry[];
+  signalEntries: DreamingEntry[];
+  promotedEntries: DreamingEntry[];
   phases: {
     light: LightDreamingStatus;
     deep: DeepDreamingStatus;
@@ -69,6 +89,14 @@ type DoctorMemoryDreamDiaryPayload = {
   content?: unknown;
 };
 
+type DoctorMemoryDreamActionPayload = {
+  action?: unknown;
+  removedEntries?: unknown;
+  written?: unknown;
+  replaced?: unknown;
+  removedShortTermEntries?: unknown;
+};
+
 export type DreamingState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -79,6 +107,7 @@ export type DreamingState = {
   dreamingStatus: DreamingStatus | null;
   dreamingModeSaving: boolean;
   dreamDiaryLoading: boolean;
+  dreamDiaryActionLoading: boolean;
   dreamDiaryError: string | null;
   dreamDiaryPath: string | null;
   dreamDiaryContent: string | null;
@@ -119,7 +148,7 @@ function normalizeFiniteScore(value: unknown, fallback = 0): number {
 }
 
 function normalizeStorageMode(value: unknown): DreamingStatus["storageMode"] {
-  const normalized = normalizeOptionalLowercaseString(normalizeTrimmedString(value));
+  const normalized = normalizeTrimmedString(value)?.toLowerCase();
   if (normalized === "inline" || normalized === "separate" || normalized === "both") {
     return normalized;
   }
@@ -145,7 +174,7 @@ function resolveDreamingPluginId(configValue: Record<string, unknown> | null): s
   const plugins = asRecord(configValue?.plugins);
   const slots = asRecord(plugins?.slots);
   const configuredSlot = normalizeTrimmedString(slots?.memory);
-  if (configuredSlot && normalizeOptionalLowercaseString(configuredSlot) !== "none") {
+  if (configuredSlot && configuredSlot.toLowerCase() !== "none") {
     return configuredSlot;
   }
   return DEFAULT_DREAMING_PLUGIN_ID;
@@ -167,6 +196,42 @@ export function resolveConfiguredDreaming(configValue: Record<string, unknown> |
   };
 }
 
+function normalizeDreamingEntry(raw: unknown): DreamingEntry | null {
+  const record = asRecord(raw);
+  const key = normalizeTrimmedString(record?.key);
+  const path = normalizeTrimmedString(record?.path);
+  const snippet = normalizeTrimmedString(record?.snippet);
+  if (!key || !path || !snippet) {
+    return null;
+  }
+  const promotedAt = normalizeTrimmedString(record?.promotedAt);
+  const lastRecalledAt = normalizeTrimmedString(record?.lastRecalledAt);
+  return {
+    key,
+    path,
+    startLine: Math.max(1, normalizeFiniteInt(record?.startLine, 1)),
+    endLine: Math.max(1, normalizeFiniteInt(record?.endLine, 1)),
+    snippet,
+    recallCount: normalizeFiniteInt(record?.recallCount, 0),
+    dailyCount: normalizeFiniteInt(record?.dailyCount, 0),
+    groundedCount: normalizeFiniteInt(record?.groundedCount, 0),
+    totalSignalCount: normalizeFiniteInt(record?.totalSignalCount, 0),
+    lightHits: normalizeFiniteInt(record?.lightHits, 0),
+    remHits: normalizeFiniteInt(record?.remHits, 0),
+    phaseHitCount: normalizeFiniteInt(record?.phaseHitCount, 0),
+    ...(promotedAt ? { promotedAt } : {}),
+    ...(lastRecalledAt ? { lastRecalledAt } : {}),
+  };
+}
+
+function normalizeDreamingEntries(raw: unknown): DreamingEntry[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw
+    .map((entry) => normalizeDreamingEntry(entry))
+    .filter((entry): entry is DreamingEntry => entry !== null);
+}
 function normalizeDreamingStatus(raw: unknown): DreamingStatus | null {
   const record = asRecord(raw);
   if (!record) {
@@ -191,6 +256,7 @@ function normalizeDreamingStatus(raw: unknown): DreamingStatus | null {
     shortTermCount: normalizeFiniteInt(record.shortTermCount, 0),
     recallSignalCount: normalizeFiniteInt(record.recallSignalCount, 0),
     dailySignalCount: normalizeFiniteInt(record.dailySignalCount, 0),
+    groundedSignalCount: normalizeFiniteInt(record.groundedSignalCount, 0),
     totalSignalCount: normalizeFiniteInt(record.totalSignalCount, 0),
     phaseSignalCount: normalizeFiniteInt(record.phaseSignalCount, 0),
     lightPhaseHitCount: normalizeFiniteInt(record.lightPhaseHitCount, 0),
@@ -201,6 +267,9 @@ function normalizeDreamingStatus(raw: unknown): DreamingStatus | null {
     ...(phaseSignalPath ? { phaseSignalPath } : {}),
     ...(storeError ? { storeError } : {}),
     ...(phaseSignalError ? { phaseSignalError } : {}),
+    shortTermEntries: normalizeDreamingEntries(record.shortTermEntries),
+    signalEntries: normalizeDreamingEntries(record.signalEntries),
+    promotedEntries: normalizeDreamingEntries(record.promotedEntries),
     phases: {
       light: {
         ...normalizePhaseStatusBase(lightRecord),
@@ -272,6 +341,53 @@ export async function loadDreamDiary(state: DreamingState): Promise<void> {
   } finally {
     state.dreamDiaryLoading = false;
   }
+}
+
+async function runDreamDiaryAction(
+  state: DreamingState,
+  method:
+    | "doctor.memory.backfillDreamDiary"
+    | "doctor.memory.resetDreamDiary"
+    | "doctor.memory.resetGroundedShortTerm",
+  options?: {
+    reloadDiary?: boolean;
+  },
+): Promise<boolean> {
+  if (!state.client || !state.connected || state.dreamDiaryActionLoading) {
+    return false;
+  }
+  state.dreamDiaryActionLoading = true;
+  state.dreamingStatusError = null;
+  state.dreamDiaryError = null;
+  try {
+    await state.client.request<DoctorMemoryDreamActionPayload>(method, {});
+    if (options?.reloadDiary !== false) {
+      await loadDreamDiary(state);
+    }
+    await loadDreamingStatus(state);
+    return true;
+  } catch (err) {
+    const message = String(err);
+    state.dreamingStatusError = message;
+    state.lastError = message;
+    return false;
+  } finally {
+    state.dreamDiaryActionLoading = false;
+  }
+}
+
+export async function backfillDreamDiary(state: DreamingState): Promise<boolean> {
+  return runDreamDiaryAction(state, "doctor.memory.backfillDreamDiary");
+}
+
+export async function resetDreamDiary(state: DreamingState): Promise<boolean> {
+  return runDreamDiaryAction(state, "doctor.memory.resetDreamDiary");
+}
+
+export async function resetGroundedShortTerm(state: DreamingState): Promise<boolean> {
+  return runDreamDiaryAction(state, "doctor.memory.resetGroundedShortTerm", {
+    reloadDiary: false,
+  });
 }
 
 async function writeDreamingPatch(

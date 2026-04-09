@@ -5,6 +5,7 @@ type MockManifestRegistry = {
     id: string;
     origin: string;
     providerAuthEnvVars?: Record<string, string[]>;
+    providerAuthAliases?: Record<string, string>;
   }>;
   diagnostics: unknown[];
 };
@@ -33,6 +34,9 @@ describe("provider env vars dynamic manifest metadata", () => {
           providerAuthEnvVars: {
             fireworks: ["FIREWORKS_ALT_API_KEY"],
           },
+          providerAuthAliases: {
+            "fireworks-plan": "fireworks",
+          },
         },
       ],
       diagnostics: [],
@@ -41,6 +45,7 @@ describe("provider env vars dynamic manifest metadata", () => {
     const mod = await import("./provider-env-vars.js");
 
     expect(mod.getProviderEnvVars("fireworks")).toEqual(["FIREWORKS_ALT_API_KEY"]);
+    expect(mod.getProviderEnvVars("fireworks-plan")).toEqual(["FIREWORKS_ALT_API_KEY"]);
     expect(mod.listKnownProviderAuthEnvVarNames()).toContain("FIREWORKS_ALT_API_KEY");
     expect(mod.listKnownSecretEnvVarNames()).toContain("FIREWORKS_ALT_API_KEY");
   });

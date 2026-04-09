@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let imageGenerationRuntime: typeof import("../../image-generation/runtime.js");
 let imageOps: typeof import("../../media/image-ops.js");
@@ -171,8 +171,7 @@ function createFalEditProvider(params?: {
 }
 
 describe("createImageGenerateTool", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     vi.doUnmock("../../secrets/provider-env-vars.js");
     imageGenerationRuntime = await import("../../image-generation/runtime.js");
     imageOps = await import("../../media/image-ops.js");
@@ -180,7 +179,9 @@ describe("createImageGenerateTool", () => {
     webMedia = await import("../../media/web-media.js");
     ({ createImageGenerateTool, resolveImageGenerationModelConfigForTool } =
       await import("./image-generate-tool.js"));
+  });
 
+  beforeEach(() => {
     vi.stubEnv("OPENAI_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEYS", "");
     vi.stubEnv("GEMINI_API_KEY", "");
@@ -824,6 +825,8 @@ describe("createImageGenerateTool", () => {
   });
 
   it("rejects unsupported aspect ratios", async () => {
+    stubImageGenerationProviders();
+
     const tool = createImageGenerateTool({
       config: {
         agents: {

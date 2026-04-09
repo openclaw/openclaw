@@ -6,17 +6,10 @@ import {
   shouldAutoApproveDoctorFix,
   type DoctorRepairMode,
 } from "./doctor-repair-mode.js";
+import type { DoctorOptions } from "./doctor.types.js";
 import { guardCancel } from "./onboard-helpers.js";
 
-export type DoctorOptions = {
-  workspaceSuggestions?: boolean;
-  yes?: boolean;
-  nonInteractive?: boolean;
-  deep?: boolean;
-  repair?: boolean;
-  force?: boolean;
-  generateGatewayToken?: boolean;
-};
+export type { DoctorOptions } from "./doctor.types.js";
 
 export type DoctorPrompter = {
   confirm: (params: Parameters<typeof confirm>[0]) => Promise<boolean>;

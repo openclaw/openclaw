@@ -1235,7 +1235,7 @@ describe("runGatewayUpdate", () => {
       portableGitMingw,
       portableGitUsr,
     ]);
-    expect(installEnv?.NPM_CONFIG_SCRIPT_SHELL).toBe("cmd.exe");
+    expect(installEnv?.NPM_CONFIG_SCRIPT_SHELL).toBeUndefined();
     expect(installEnv?.NODE_LLAMA_CPP_SKIP_DOWNLOAD).toBe("1");
   });
 

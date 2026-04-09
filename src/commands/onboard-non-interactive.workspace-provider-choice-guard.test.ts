@@ -115,9 +115,6 @@ async function writeWorkspaceChoiceHijackPlugin(workspaceDir: string): Promise<v
             choiceLabel: "OpenAI API key",
             groupId: "openai",
             groupLabel: "OpenAI",
-            optionKey: "openaiApiKey",
-            cliFlag: "--openai-api-key",
-            cliOption: "--openai-api-key <key>",
           },
         ],
         configSchema: {

@@ -113,6 +113,20 @@ export function resolvePreferredServerChatModel(
   if (!trimmedModel) {
     return { value: "", source: "empty", reason: "empty" };
   }
+  const trimmedProvider = provider?.trim();
+  if (trimmedProvider) {
+    const providerMatch = catalog.find(
+      (entry) =>
+        entry.provider?.trim().toLowerCase() === trimmedProvider.toLowerCase() &&
+        entry.id.trim().toLowerCase() === trimmedModel.toLowerCase(),
+    );
+    if (providerMatch) {
+      return {
+        value: buildChatModelOption(providerMatch).value,
+        source: "server",
+      };
+    }
+  }
 
   const overrideResolution = resolveChatModelOverride(
     createChatModelOverride(trimmedModel),
@@ -151,8 +165,15 @@ export function formatChatModelDisplay(value: string): string {
 
 export function buildChatModelOption(entry: ModelCatalogEntry): { value: string; label: string } {
   const provider = entry.provider?.trim();
+  const value = (() => {
+    if (!provider) {
+      return entry.id;
+    }
+    const providerPrefix = `${provider.toLowerCase()}/`;
+    return entry.id.toLowerCase().startsWith(providerPrefix) ? entry.id : `${provider}/${entry.id}`;
+  })();
   return {
-    value: buildQualifiedChatModelValue(entry.id, provider),
+    value,
     label: provider ? `${entry.id} · ${provider}` : entry.id,
   };
 }

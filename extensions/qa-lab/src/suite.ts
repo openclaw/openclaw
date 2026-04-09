@@ -33,6 +33,8 @@ import {
   type QaProviderMode,
 } from "./model-selection.js";
 import { hasModelSwitchContinuityEvidence } from "./model-switch-eval.js";
+import type { QaThinkingLevel } from "./qa-gateway-config.js";
+import { extractQaFailureReplyText } from "./reply-failure.js";
 import { renderQaMarkdownReport, type QaReportCheck, type QaReportScenario } from "./report.js";
 import { qaChannelPlugin, type QaBusMessage } from "./runtime-api.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
@@ -164,21 +166,73 @@ async function waitForCondition<T>(
   throw new Error(`timed out after ${timeoutMs}ms`);
 }
 
+function findFailureOutboundMessage(
+  state: QaBusState,
+  options?: { sinceIndex?: number; cursorSpace?: "all" | "outbound" },
+) {
+  const cursorSpace = options?.cursorSpace ?? "outbound";
+  const observedMessages =
+    cursorSpace === "all"
+      ? state.getSnapshot().messages.slice(options?.sinceIndex ?? 0)
+      : state
+          .getSnapshot()
+          .messages.filter((message) => message.direction === "outbound")
+          .slice(options?.sinceIndex ?? 0);
+  return observedMessages.find(
+    (message) =>
+      message.direction === "outbound" && Boolean(extractQaFailureReplyText(message.text)),
+  );
+}
+
+function createScenarioWaitForCondition(state: QaBusState) {
+  const sinceIndex = state.getSnapshot().messages.length;
+  return async function waitForScenarioCondition<T>(
+    check: () => T | Promise<T | null | undefined> | null | undefined,
+    timeoutMs = 15_000,
+    intervalMs = 100,
+  ): Promise<T> {
+    return await waitForCondition(
+      async () => {
+        const failureMessage = findFailureOutboundMessage(state, {
+          sinceIndex,
+          cursorSpace: "all",
+        });
+        if (failureMessage) {
+          throw new Error(extractQaFailureReplyText(failureMessage.text) ?? failureMessage.text);
+        }
+        return await check();
+      },
+      timeoutMs,
+      intervalMs,
+    );
+  };
+}
+
 async function waitForOutboundMessage(
   state: QaBusState,
   predicate: (message: QaBusMessage) => boolean,
   timeoutMs = 15_000,
   options?: { sinceIndex?: number },
 ) {
-  return await waitForCondition(
-    () =>
-      state
-        .getSnapshot()
-        .messages.filter((message) => message.direction === "outbound")
-        .slice(options?.sinceIndex ?? 0)
-        .find(predicate),
-    timeoutMs,
-  );
+  return await waitForCondition(() => {
+    const failureMessage = findFailureOutboundMessage(state, options);
+    if (failureMessage) {
+      throw new Error(extractQaFailureReplyText(failureMessage.text) ?? failureMessage.text);
+    }
+    const match = state
+      .getSnapshot()
+      .messages.filter((message) => message.direction === "outbound")
+      .slice(options?.sinceIndex ?? 0)
+      .find(predicate);
+    if (!match) {
+      return undefined;
+    }
+    const failureReply = extractQaFailureReplyText(match.text);
+    if (failureReply) {
+      throw new Error(failureReply);
+    }
+    return match;
+  }, timeoutMs);
 }
 
 async function waitForNoOutbound(state: QaBusState, timeoutMs = 1_200) {
@@ -1026,7 +1080,7 @@ function createScenarioFlowApi(
     sleep,
     randomUUID,
     runScenario,
-    waitForCondition,
+    waitForCondition: createScenarioWaitForCondition(env.lab.state),
     waitForOutboundMessage,
     waitForNoOutbound,
     recentOutboundSummary,
@@ -1085,6 +1139,12 @@ function createScenarioFlowApi(
   };
 }
 
+export const qaSuiteTesting = {
+  createScenarioWaitForCondition,
+  findFailureOutboundMessage,
+  waitForOutboundMessage,
+};
+
 async function runScenarioDefinition(
   env: QaSuiteEnvironment,
   scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number],
@@ -1107,6 +1167,7 @@ export async function runQaSuite(params?: {
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
+  thinkingDefault?: QaThinkingLevel;
   scenarioIds?: string[];
   lab?: Awaited<ReturnType<typeof startQaLabServer>>;
 }) {
@@ -1149,6 +1210,8 @@ export async function runQaSuite(params?: {
     providerMode,
     primaryModel,
     alternateModel,
+    fastMode,
+    thinkingDefault: params?.thinkingDefault,
     controlUiEnabled: true,
   });
   lab.setControlUi({

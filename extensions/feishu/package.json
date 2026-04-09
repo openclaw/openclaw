@@ -51,11 +51,6 @@
     "bundle": {
       "stageRuntimeDependencies": true
     },
-    "releaseChecks": {
-      "rootDependencyMirrorAllowlist": [
-        "@larksuiteoapi/node-sdk"
-      ]
-    },
     "release": {
       "publishToClawHub": true,
       "publishToNpm": true

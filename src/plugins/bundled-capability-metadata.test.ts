@@ -6,8 +6,9 @@ import {
   BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS,
   BUNDLED_LEGACY_PLUGIN_ID_ALIASES,
   BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS,
+  buildBundledPluginContractSnapshot,
+  hasBundledPluginContractSnapshotCapabilities,
 } from "./contracts/inventory/bundled-capability-metadata.js";
-import { uniqueStrings } from "./contracts/shared.js";
 import { pluginTestRepoRoot as repoRoot } from "./generated-plugin-test-helpers.js";
 import type { PluginManifest } from "./manifest.js";
 
@@ -39,60 +40,8 @@ function readManifestRecords(): PluginManifest[] {
 describe("bundled capability metadata", () => {
   it("keeps contract snapshots aligned with bundled plugin manifests", () => {
     const expected = readManifestRecords()
-      .map((manifest) => ({
-        pluginId: manifest.id,
-        cliBackendIds: uniqueStrings(manifest.cliBackends, (value) => value.trim()),
-        providerIds: uniqueStrings(manifest.providers, (value) => value.trim()),
-        speechProviderIds: uniqueStrings(manifest.contracts?.speechProviders, (value) =>
-          value.trim(),
-        ),
-        realtimeTranscriptionProviderIds: uniqueStrings(
-          manifest.contracts?.realtimeTranscriptionProviders,
-          (value) => value.trim(),
-        ),
-        realtimeVoiceProviderIds: uniqueStrings(
-          manifest.contracts?.realtimeVoiceProviders,
-          (value) => value.trim(),
-        ),
-        mediaUnderstandingProviderIds: uniqueStrings(
-          manifest.contracts?.mediaUnderstandingProviders,
-          (value) => value.trim(),
-        ),
-        imageGenerationProviderIds: uniqueStrings(
-          manifest.contracts?.imageGenerationProviders,
-          (value) => value.trim(),
-        ),
-        videoGenerationProviderIds: uniqueStrings(
-          manifest.contracts?.videoGenerationProviders,
-          (value) => value.trim(),
-        ),
-        musicGenerationProviderIds: uniqueStrings(
-          manifest.contracts?.musicGenerationProviders,
-          (value) => value.trim(),
-        ),
-        webFetchProviderIds: uniqueStrings(manifest.contracts?.webFetchProviders, (value) =>
-          value.trim(),
-        ),
-        webSearchProviderIds: uniqueStrings(manifest.contracts?.webSearchProviders, (value) =>
-          value.trim(),
-        ),
-        toolNames: uniqueStrings(manifest.contracts?.tools, (value) => value.trim()),
-      }))
-      .filter(
-        (entry) =>
-          entry.cliBackendIds.length > 0 ||
-          entry.providerIds.length > 0 ||
-          entry.speechProviderIds.length > 0 ||
-          entry.realtimeTranscriptionProviderIds.length > 0 ||
-          entry.realtimeVoiceProviderIds.length > 0 ||
-          entry.mediaUnderstandingProviderIds.length > 0 ||
-          entry.imageGenerationProviderIds.length > 0 ||
-          entry.videoGenerationProviderIds.length > 0 ||
-          entry.musicGenerationProviderIds.length > 0 ||
-          entry.webFetchProviderIds.length > 0 ||
-          entry.webSearchProviderIds.length > 0 ||
-          entry.toolNames.length > 0,
-      )
+      .map(buildBundledPluginContractSnapshot)
+      .filter(hasBundledPluginContractSnapshotCapabilities)
       .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
 
     expect(BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS).toEqual(expected);

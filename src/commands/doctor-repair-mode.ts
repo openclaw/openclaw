@@ -1,5 +1,5 @@
 import { isTruthyEnvValue } from "../infra/env.js";
-import type { DoctorOptions } from "./doctor-prompter.js";
+import type { DoctorOptions } from "./doctor.types.js";
 
 export type DoctorRepairMode = {
   shouldRepair: boolean;
