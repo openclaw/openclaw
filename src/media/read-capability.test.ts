@@ -21,4 +21,64 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
 
     expect(result).toMatchObject({ workspaceDir: "/tmp/explicit-workspace" });
   });
+
+  it("does not enable host reads when sender group policy denies read", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        allow: ["read"],
+      },
+      channels: {
+        whatsapp: {
+          groups: {
+            ops: {
+              toolsBySender: {
+                "id:attacker": {
+                  deny: ["read"],
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const result = resolveAgentScopedOutboundMediaAccess({
+      cfg,
+      sessionKey: "agent:main:whatsapp:group:ops",
+      messageProvider: "whatsapp",
+      requesterSenderId: "attacker",
+    });
+
+    expect(result.readFile).toBeUndefined();
+  });
+
+  it("keeps host reads enabled when sender group policy allows read", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        allow: ["read"],
+      },
+      channels: {
+        whatsapp: {
+          groups: {
+            ops: {
+              toolsBySender: {
+                "id:trusted-user": {
+                  allow: ["read"],
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const result = resolveAgentScopedOutboundMediaAccess({
+      cfg,
+      sessionKey: "agent:main:whatsapp:group:ops",
+      messageProvider: "whatsapp",
+      requesterSenderId: "trusted-user",
+    });
+
+    expect(result.readFile).toBeTypeOf("function");
+  });
 });

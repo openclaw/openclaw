@@ -777,6 +777,10 @@ export async function runMessageAction(
     cfg,
     agentId: resolvedAgentId,
     mediaSources: collectActionMediaSourceHints(params),
+    sessionKey: input.sessionKey,
+    messageProvider: channel,
+    accountId,
+    requesterSenderId: input.requesterSenderId,
   });
   const mediaPolicy = resolveAttachmentMediaPolicy({
     sandboxRoot: input.sandboxRoot,
