@@ -252,6 +252,33 @@ func TestParseTaggedDocumentRejectsTrailingTextOutsideTags(t *testing.T) {
 	}
 }
 
+func TestFindTaggedBodyEndSearchesFromBodyStart(t *testing.T) {
+	t.Parallel()
+
+	text := strings.Join([]string{
+		"<frontmatter>",
+		"summary: literal </body> token in frontmatter",
+		"</frontmatter>",
+		"<body>",
+		"Translated body",
+		"</body>",
+	}, "\n")
+	bodyStart := strings.Index(text, bodyTagStart)
+	if bodyStart == -1 {
+		t.Fatal("expected body tag in test input")
+	}
+	bodyStart += len(bodyTagStart)
+
+	bodyEnd := findTaggedBodyEnd(text, bodyStart)
+	if bodyEnd == -1 {
+		t.Fatal("expected closing body tag to be found")
+	}
+	body := trimTagNewlines(text[bodyStart:bodyEnd])
+	if body != "Translated body" {
+		t.Fatalf("expected body slice to ignore pre-body literal token, got %q", body)
+	}
+}
+
 func TestSplitDocBodyIntoBlocksKeepsFenceTogether(t *testing.T) {
 	t.Parallel()
 
@@ -509,6 +536,30 @@ func TestSanitizeDocChunkProtocolWrappersKeepsLegitimateTopLevelBodyBlock(t *tes
 	got := sanitizeDocChunkProtocolWrappers(source, translated)
 	if got != translated {
 		t.Fatalf("expected legitimate top-level body block to remain unchanged\nwant:\n%s\ngot:\n%s", translated, got)
+	}
+}
+
+func TestSanitizeDocChunkProtocolWrappersKeepsAmbiguousTaggedWrapperForRetry(t *testing.T) {
+	t.Parallel()
+
+	source := strings.Join([]string{
+		"Paragraph mentioning literal tokens `<body>` and `</body>`.",
+		"",
+		"Closing example:",
+		"</body>",
+	}, "\n")
+	translated := strings.Join([]string{
+		"<frontmatter>",
+		"title: leaked",
+		"</frontmatter>",
+		"",
+		"<body>",
+		"提到字面量 `<body>` 和 `</body>` 的段落。",
+	}, "\n")
+
+	got := sanitizeDocChunkProtocolWrappers(source, translated)
+	if got != translated {
+		t.Fatalf("expected ambiguous tagged wrapper to remain unchanged for retry\nwant:\n%s\ngot:\n%s", translated, got)
 	}
 }
 

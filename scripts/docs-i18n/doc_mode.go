@@ -91,8 +91,8 @@ func parseTaggedDocument(text string) (string, string, error) {
 	}
 	bodyStart += frontEnd + len(bodyTagStart)
 
-	bodyEnd := strings.LastIndex(text, bodyTagEnd)
-	if bodyEnd == -1 || bodyEnd < bodyStart {
+	bodyEnd := findTaggedBodyEnd(text, bodyStart)
+	if bodyEnd == -1 {
 		return "", "", fmt.Errorf("missing %s", bodyTagEnd)
 	}
 	body := trimTagNewlines(text[bodyStart:bodyEnd])
@@ -105,6 +105,31 @@ func parseTaggedDocument(text string) (string, string, error) {
 
 	frontMatter := trimTagNewlines(text[frontStart:frontEnd])
 	return frontMatter, body, nil
+}
+
+func findTaggedBodyEnd(text string, bodyStart int) int {
+	if bodyStart < 0 || bodyStart > len(text) {
+		return -1
+	}
+	search := text[bodyStart:]
+	candidate := -1
+	offset := 0
+	for {
+		index := strings.Index(search[offset:], bodyTagEnd)
+		if index == -1 {
+			return candidate
+		}
+		index += offset
+		absolute := bodyStart + index
+		suffix := strings.TrimSpace(text[absolute+len(bodyTagEnd):])
+		if suffix == "" {
+			candidate = absolute
+		}
+		offset = index + len(bodyTagEnd)
+		if offset >= len(search) {
+			return candidate
+		}
+	}
 }
 
 func trimTagNewlines(value string) string {

@@ -222,12 +222,14 @@ func sanitizeDocChunkProtocolWrappers(source, translated string) string {
 	if !hasUnexpectedTopLevelProtocolWrapper(source, trimmedTranslated) {
 		return translated
 	}
-	_, body, err := parseTaggedDocument(trimmedTranslated)
-	if err == nil {
-		if strings.TrimSpace(body) == "" {
-			return translated
+	if !hasAmbiguousTaggedBodyClose(source, trimmedTranslated) {
+		_, body, err := parseTaggedDocument(trimmedTranslated)
+		if err == nil {
+			if strings.TrimSpace(body) == "" {
+				return translated
+			}
+			return body
 		}
-		return body
 	}
 	body, ok := stripBodyOnlyWrapper(trimmedTranslated)
 	if !ok || strings.TrimSpace(body) == "" {
@@ -249,6 +251,18 @@ func stripBodyOnlyWrapper(text string) (string, bool) {
 		return "", false
 	}
 	return trimTagNewlines(body), true
+}
+
+func hasAmbiguousTaggedBodyClose(source, translated string) bool {
+	sourceLower := strings.ToLower(source)
+	if !strings.Contains(sourceLower, strings.ToLower(bodyTagStart)) && !strings.Contains(sourceLower, strings.ToLower(bodyTagEnd)) {
+		return false
+	}
+	translatedLower := strings.ToLower(translated)
+	if !strings.Contains(translatedLower, strings.ToLower(frontmatterTagStart)) {
+		return false
+	}
+	return strings.Count(translatedLower, strings.ToLower(bodyTagEnd)) == 1
 }
 
 func maskDocComponentTags(text string) (string, []string) {
