@@ -110,6 +110,76 @@ function splitLongLine(
 }
 
 /**
+ * Discord renders `> ` blockquote bars only for each physical line.
+ * A long `> ...` paragraph that wraps visually will lose the bar after
+ * the first visual line break.  Pre-split long blockquote lines at
+ * word boundaries so every rendered line gets its own `> ` prefix.
+ *
+ * Target ~80 chars per physical line to stay well within typical desktop
+ * and mobile column widths while keeping the content readable.
+ */
+const BQ_LINE_TARGET = 90;
+
+function presplitBlockquoteLines(text: string): string {
+  const lines = text.split("\n");
+  const out: string[] = [];
+  let insideFence = false;
+
+  for (const line of lines) {
+    // Don't touch lines inside code fences
+    if (FENCE_RE.test(line)) {
+      insideFence = !insideFence;
+      out.push(line);
+      continue;
+    }
+    if (insideFence) {
+      out.push(line);
+      continue;
+    }
+
+    const bqMatch = line.match(BQ_PREFIX_RE);
+    if (!bqMatch || line.length <= BQ_LINE_TARGET) {
+      out.push(line);
+      continue;
+    }
+
+    const prefix = bqMatch[1]; // e.g. "> " or ">> "
+    const content = line.slice(prefix.length);
+    // Split on whitespace boundaries, keeping words intact.
+    const words = content.split(" ");
+    let cur = prefix;
+
+    for (let wi = 0; wi < words.length; wi++) {
+      const word = words[wi];
+      if (!word) {
+        continue;
+      } // skip empty from consecutive spaces
+      const sep = cur.length > prefix.length ? " " : "";
+      if (
+        cur.length + sep.length + word.length > BQ_LINE_TARGET &&
+        cur.length > prefix.length
+      ) {
+        // Don't break if this word would start the new line looking like a
+        // Discord list marker (e.g. "> - we" renders as a bullet item).
+        if (/^[-*+]/.test(word)) {
+          cur += `${sep}${word}`;
+          continue;
+        }
+        out.push(cur);
+        cur = `${prefix}${word}`;
+      } else {
+        cur += `${sep}${word}`;
+      }
+    }
+    if (cur.length > prefix.length) {
+      out.push(cur);
+    }
+  }
+
+  return out.join("\n");
+}
+
+/**
  * Chunks outbound Discord text by both character count and (soft) line count,
  * while keeping fenced code blocks balanced across chunks.
  */
@@ -117,10 +187,14 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
   const maxChars = Math.max(1, Math.floor(opts.maxChars ?? DEFAULT_MAX_CHARS));
   const maxLines = Math.max(1, Math.floor(opts.maxLines ?? DEFAULT_MAX_LINES));
 
-  const body = text ?? "";
-  if (!body) {
+  const raw = text ?? "";
+  if (!raw) {
     return [];
   }
+
+  // Pre-split long blockquote lines so Discord renders the quote bar on
+  // every physical line instead of losing it after the first wrap.
+  const body = presplitBlockquoteLines(raw);
 
   const alreadyOk = body.length <= maxChars && countLines(body) <= maxLines;
   if (alreadyOk) {
@@ -138,6 +212,13 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
   let pendingTableHeader = false; // true when next line might be a separator
   let lastLineWasTableCandidate = ""; // stash the potential header line
 
+  // Track table headers inside code fences so we can repeat them when
+  // a code-fenced table is split across chunks.
+  let fenceTableHeader: TableHeader | null = null;
+  let fencePendingTableHeader = false;
+  let fenceLastTableCandidate = "";
+  let fenceLinesAfterOpen = 0; // how many content lines seen since fence opened
+
   const flush = () => {
     if (!current) {
       return;
@@ -152,6 +233,16 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
     if (openFence) {
       current = openFence.openLine;
       currentLines = 1;
+      // If we detected a table header inside this code fence, repeat it
+      if (fenceTableHeader) {
+        current += `\n${fenceTableHeader.headerLine}\n${fenceTableHeader.separatorLine}`;
+        currentLines += 2;
+      } else if (fencePendingTableHeader && fenceLastTableCandidate) {
+        // Header candidate seen but separator hasn't landed yet;
+        // repeat the candidate so the separator appears in the same chunk.
+        current += `\n${fenceLastTableCandidate}`;
+        currentLines += 1;
+      }
     }
     // Reopen table context: repeat header + separator
     if (openTable && !openFence) {
@@ -179,9 +270,15 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
 
   // Helper: apply blockquote prefix to a line if we're inside a blockquote
   const applyBlockquoteToSegment = (segment: string, prefix: string | null): string => {
-    if (!prefix) { return segment; }
-    if (segment.trim() === "") { return segment; }
-    if (segment.startsWith(prefix.trimEnd())) { return segment; }
+    if (!prefix) {
+      return segment;
+    }
+    if (segment.trim() === "") {
+      return segment;
+    }
+    if (segment.startsWith(prefix.trimEnd())) {
+      return segment;
+    }
     return `${prefix}${segment}`;
   };
 
@@ -220,24 +317,77 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
       insideBlockquote = null;
     }
 
-    // Track table state
+    // Track table state (outside fences)
     if (!wasInsideFence) {
       if (pendingTableHeader && TABLE_SEPARATOR_RE.test(originalLine.trim())) {
-        // Confirmed: previous line was header, this line is separator
         openTable = { headerLine: lastLineWasTableCandidate, separatorLine: originalLine };
         pendingTableHeader = false;
         lastLineWasTableCandidate = "";
-      } else if (openTable && originalLine.trim().startsWith("|") && originalLine.trim().endsWith("|")) {
+      } else if (
+        openTable &&
+        originalLine.trim().startsWith("|") &&
+        originalLine.trim().endsWith("|")
+      ) {
         // Still inside a table (data row)
-      } else if (originalLine.trim().startsWith("|") && originalLine.trim().endsWith("|") && !openTable) {
-        // Potential table header - stash it and check next line
+      } else if (
+        originalLine.trim().startsWith("|") &&
+        originalLine.trim().endsWith("|") &&
+        !openTable
+      ) {
         pendingTableHeader = true;
         lastLineWasTableCandidate = originalLine;
       } else {
-        // Not a table line - clear table state
         openTable = null;
         pendingTableHeader = false;
         lastLineWasTableCandidate = "";
+      }
+    }
+
+    // Track table state inside code fences: detect pipe-delimited tables
+    // so we can repeat the header when a code-fenced table splits.
+    if (wasInsideFence && !fenceInfo) {
+      fenceLinesAfterOpen++;
+      const trimmed = originalLine.trim();
+      if (fencePendingTableHeader && TABLE_SEPARATOR_RE.test(trimmed)) {
+        fenceTableHeader = { headerLine: fenceLastTableCandidate, separatorLine: originalLine };
+        fencePendingTableHeader = false;
+        fenceLastTableCandidate = "";
+      } else if (fenceTableHeader && trimmed.startsWith("|") && trimmed.endsWith("|")) {
+        // Still inside a fenced table (data row)
+      } else if (
+        trimmed.startsWith("|") &&
+        trimmed.endsWith("|") &&
+        !fenceTableHeader &&
+        fenceLinesAfterOpen <= 2
+      ) {
+        // Only treat the first content line as a candidate header
+        fencePendingTableHeader = true;
+        fenceLastTableCandidate = originalLine;
+      } else if (fenceTableHeader && !(trimmed.startsWith("|") && trimmed.endsWith("|"))) {
+        // Non-table line inside fence - clear fence table state
+        fenceTableHeader = null;
+        fencePendingTableHeader = false;
+        fenceLastTableCandidate = "";
+      }
+    }
+
+    // Reset fence-table state when a fence opens or closes
+    if (fenceInfo) {
+      if (!openFence) {
+        // Fence opening: reset fence-table tracking
+        fenceTableHeader = null;
+        fencePendingTableHeader = false;
+        fenceLastTableCandidate = "";
+        fenceLinesAfterOpen = 0;
+      } else if (
+        openFence.markerChar === fenceInfo.markerChar &&
+        fenceInfo.markerLen >= openFence.markerLen
+      ) {
+        // Fence closing: clear fence-table state
+        fenceTableHeader = null;
+        fencePendingTableHeader = false;
+        fenceLastTableCandidate = "";
+        fenceLinesAfterOpen = 0;
       }
     }
 
@@ -259,7 +409,11 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
 
       // After flush, if we're inside a blockquote, prefix the segment.
       // Recompute addition so the prefixed segment is used when appending.
-      if (current.length === 0 && insideBlockquote && !segment.startsWith(insideBlockquote.trimEnd())) {
+      if (
+        current.length === 0 &&
+        insideBlockquote &&
+        !segment.startsWith(insideBlockquote.trimEnd())
+      ) {
         segment = applyBlockquoteToSegment(segment, insideBlockquote);
         addition = `${delimiter}${segment}`;
       }
