@@ -358,6 +358,15 @@ export function createExecApprovalHandlers(
         client,
         exposeAmbiguousPrefixError: true,
         validateDecision: (snapshot) => {
+          // Self-approval prevention: requester cannot approve their own exec request (CWE-284)
+          if (
+            decision !== "deny" &&
+            snapshot.requestedByConnId != null &&
+            client?.connId != null &&
+            client.connId === snapshot.requestedByConnId
+          ) {
+            return { message: "requester cannot approve their own exec request" };
+          }
           const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(snapshot.request);
           return allowedDecisions.includes(decision)
             ? null
