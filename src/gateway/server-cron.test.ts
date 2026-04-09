@@ -260,4 +260,70 @@ describe("buildGatewayCronService", () => {
       state.cron.stop();
     }
   });
+
+  it("honors job.sessionKey for isolated agentTurn jobs (#63442)", async () => {
+    const cfg = createCronConfig("server-cron-session-key");
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "isolated-with-session-key",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        sessionKey: "my-shared-context",
+        payload: { kind: "agentTurn", message: "check status" },
+      });
+
+      expect(job.sessionKey).toBe("my-shared-context");
+
+      await state.cron.run(job.id, "force");
+
+      expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          job: expect.objectContaining({ id: job.id }),
+          sessionKey: "my-shared-context",
+        }),
+      );
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("falls back to cron:<id> when no sessionKey is set on isolated jobs", async () => {
+    const cfg = createCronConfig("server-cron-fallback");
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "isolated-no-key",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "check status" },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: `cron:${job.id}`,
+        }),
+      );
+    } finally {
+      state.cron.stop();
+    }
+  });
 });
