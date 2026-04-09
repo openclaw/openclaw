@@ -790,10 +790,10 @@ export async function updateLastRoute(params: {
       inlineContext?.channel ||
       inlineContext?.to,
     );
-    const clearThreadFromFallback = explicitRouteProvided && explicitThreadValue == null;
-    const fallbackContext = clearThreadFromFallback
-      ? removeThreadFromDeliveryContext(deliveryContextFromSession(existing))
-      : deliveryContextFromSession(existing);
+    // Preserve threadId from existing session — do not strip it when no explicit
+    // thread override is provided.  Subagent results need the originating
+    // thread_ts to stay in the correct DM assistant thread.  Fixes #63659.
+    const fallbackContext = deliveryContextFromSession(existing);
     const merged = mergeDeliveryContext(mergedInput, fallbackContext);
     const normalized = normalizeSessionDeliveryFields({
       deliveryContext: {

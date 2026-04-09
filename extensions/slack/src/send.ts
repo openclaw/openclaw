@@ -105,10 +105,19 @@ async function postSlackMessageBestEffort(params: {
   identity?: SlackSendIdentity;
   blocks?: (Block | KnownBlock)[];
 }) {
+  // Restore cached DM thread_ts for subagent result turns. Fixes #63659.
+  const dmCache: Record<string, string> =
+    ((globalThis as any).__openclaw_dm_thread_cache ??= {});
+  if (params.threadTs && params.channelId?.startsWith("D")) {
+    dmCache[params.channelId] = params.threadTs;
+  }
+  const effectiveThreadTs =
+    params.threadTs ?? (params.channelId?.startsWith("D") ? dmCache[params.channelId] : undefined);
+
   const basePayload = {
     channel: params.channelId,
     text: params.text,
-    thread_ts: params.threadTs,
+    thread_ts: effectiveThreadTs,
     ...(params.blocks?.length ? { blocks: params.blocks } : {}),
   };
   try {

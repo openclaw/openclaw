@@ -299,7 +299,14 @@ function resolveSlackRoutingContext(params: {
   // Before this fix, every channel message used its own ts as threadId, creating
   // isolated sessions per message (regression from #10686).
   const roomThreadId = isThreadReply && threadTs ? threadTs : undefined;
-  const canonicalThreadId = isRoomish ? roomThreadId : isThreadReply ? threadTs : autoThreadId;
+  // Keep DMs on stable per-peer session keys (no thread suffix). Fixes #63659.
+  const canonicalThreadId = isDirectMessage
+    ? undefined
+    : isRoomish
+      ? roomThreadId
+      : isThreadReply
+        ? threadTs
+        : autoThreadId;
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey: route.sessionKey,
     threadId: canonicalThreadId,
