@@ -171,6 +171,44 @@ describe("cron service timer regressions", () => {
     expect(overloadedResult.runIsolatedAgentJob).toHaveBeenCalledTimes(2);
   });
 
+  it("honors deleteAfterRun for every and cron schedule kinds", async () => {
+    const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
+
+    for (const scheduleKind of ["every", "cron"] as const) {
+      const store = timerRegressionFixtures.makeStorePath();
+      const schedule =
+        scheduleKind === "every"
+          ? ({ kind: "every" as const, everyMs: 60_000 } as const)
+          : ({ kind: "cron" as const, cron: "0 10 * * * *", timezone: "UTC" } as const);
+
+      const cronJob = createIsolatedRegressionJob({
+        id: `deleteAfterRun-${scheduleKind}`,
+        name: "test",
+        scheduledAt,
+        schedule,
+        payload: { kind: "agentTurn", message: "test" },
+        state: { nextRunAtMs: scheduledAt },
+      });
+      cronJob.deleteAfterRun = true;
+      await writeCronJobs(store.storePath, [cronJob]);
+
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => scheduledAt,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeatNow: vi.fn(),
+        runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "done" }),
+      });
+
+      await onTimer(state);
+
+      const jobAfterRun = state.store?.jobs.find((j) => j.id === `deleteAfterRun-${scheduleKind}`);
+      expect(jobAfterRun).toBeUndefined();
+    }
+  });
+
   it("#24355: one-shot job disabled after max transient retries", async () => {
     const store = timerRegressionFixtures.makeStorePath();
     const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
