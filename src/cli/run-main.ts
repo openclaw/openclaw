@@ -10,11 +10,6 @@ import { formatUncaughtError } from "../infra/errors.js";
 import { isMainModule } from "../infra/is-main.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
-import {
-  isAbortError,
-  isTransientNetworkError,
-  isUncaughtExceptionHandled,
-} from "../infra/unhandled-rejections.js";
 import { enableConsoleCapture } from "../logging.js";
 import { hasMemoryRuntime } from "../plugins/memory-state.js";
 import {
@@ -164,12 +159,20 @@ export async function runCli(argv: string[] = process.argv) {
     // Capture all console output into structured logs while keeping stdout/stderr behavior.
     enableConsoleCapture();
 
-    const [{ buildProgram }, { installUnhandledRejectionHandler }, { restoreTerminalState }] =
-      await Promise.all([
-        import("./program.js"),
-        import("../infra/unhandled-rejections.js"),
-        import("../terminal/restore.js"),
-      ]);
+    const [
+      { buildProgram },
+      {
+        installUnhandledRejectionHandler,
+        isAbortError,
+        isTransientNetworkError,
+        isUncaughtExceptionHandled,
+      },
+      { restoreTerminalState },
+    ] = await Promise.all([
+      import("./program.js"),
+      import("../infra/unhandled-rejections.js"),
+      import("../terminal/restore.js"),
+    ]);
     const program = buildProgram();
 
     // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
