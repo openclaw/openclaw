@@ -160,6 +160,51 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("logs group participant identity and quoted reply context", async () => {
+    const { listener } = await runSingleUpsertAndCapture({
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: "grp-log-1",
+            fromMe: false,
+            remoteJid: "99999@g.us",
+            participant: "777@s.whatsapp.net",
+          },
+          pushName: "Alice",
+          message: {
+            extendedTextMessage: {
+              text: "reply",
+              contextInfo: {
+                stanzaId: "q1",
+                participant: "111@s.whatsapp.net",
+                quotedMessage: { conversation: "original" },
+              },
+            },
+          },
+          messageTimestamp: 1_700_000_000,
+        },
+      ],
+    });
+
+    expect(inboundLoggerInfoMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: "99999@g.us",
+        senderJid: "777@s.whatsapp.net",
+        senderE164: "+777",
+        senderName: "Alice",
+        replyToId: "q1",
+        replyToBody: "original",
+        replyToSender: "+111",
+        replyToSenderJid: "111@s.whatsapp.net",
+        replyToSenderE164: "+111",
+      }),
+      "inbound message",
+    );
+
+    await listener.close();
+  });
+
   it("includes participant when marking group messages read", async () => {
     const { listener, sock } = await runSingleUpsertAndCapture({
       type: "notify",
