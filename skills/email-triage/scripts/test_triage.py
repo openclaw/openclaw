@@ -56,6 +56,13 @@ class TestState(TestCase):
         self.assertEqual(state["cursor"]["last_ingested_id"], 0)
         self.assertEqual(state["pending_attention"], [])
 
+    def test_save_state_bare_filename(self):
+        """save_state should work when STATE_PATH has no directory component."""
+        bare_path = os.path.join(self.tmpdir, "state.json")
+        with patch.object(triage, "STATE_PATH", bare_path):
+            triage.save_state({"cursor": {"last_ingested_id": 0}, "pending_attention": []})
+            self.assertTrue(os.path.exists(bare_path))
+
 
 class TestCheckDb(TestCase):
     def setUp(self):
@@ -231,6 +238,14 @@ class TestSync(TestCase):
             "R", (), {"returncode": 0, "stdout": "not json", "stderr": ""}
         )()
         mock_run.side_effect = [ingest_result, query_result]
+
+        # Should print error, not raise
+        triage.sync()
+
+    @patch("triage.subprocess.run")
+    def test_sync_missing_workspace(self, mock_run):
+        """Sync should handle missing workspace/venv gracefully."""
+        mock_run.side_effect = FileNotFoundError("No such file or directory: 'python3'")
 
         # Should print error, not raise
         triage.sync()

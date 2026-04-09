@@ -34,7 +34,9 @@ def get_state():
 
 
 def save_state(state):
-    os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
+    parent = os.path.dirname(STATE_PATH)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     with open(STATE_PATH, "w") as f:
         json.dump(state, f, indent=2)
 
@@ -70,6 +72,9 @@ def sync():
     except subprocess.TimeoutExpired:
         print("Sync timed out after 300 seconds.")
         return
+    except OSError as exc:
+        print(f"Sync failed to start: {exc}")
+        return
     if result.returncode != 0:
         print(f"Sync failed: {result.stderr}")
         return
@@ -90,6 +95,9 @@ def sync():
         )
     except subprocess.TimeoutExpired:
         print("Query timed out after 300 seconds.")
+        return
+    except OSError as exc:
+        print(f"Query failed to start: {exc}")
         return
 
     if query_result.returncode != 0:
