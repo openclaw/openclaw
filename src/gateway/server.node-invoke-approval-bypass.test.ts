@@ -70,13 +70,14 @@ async function getConnectedNodeIds(ws: WebSocket): Promise<string[]> {
 }
 
 async function requestAllowOnceApproval(
-  ws: WebSocket,
+  wsRequester: WebSocket,
+  wsResolver: WebSocket,
   command: string,
   nodeId: string,
 ): Promise<string> {
   const approvalId = crypto.randomUUID();
   const commandArgv = command.split(/\s+/).filter((part) => part.length > 0);
-  const requestP = rpcReq(ws, "exec.approval.request", {
+  const requestP = rpcReq(wsRequester, "exec.approval.request", {
     id: approvalId,
     command,
     commandArgv,
@@ -92,7 +93,7 @@ async function requestAllowOnceApproval(
     host: "node",
     timeoutMs: 30_000,
   });
-  await rpcReq(ws, "exec.approval.resolve", { id: approvalId, decision: "allow-once" });
+  await rpcReq(wsResolver, "exec.approval.resolve", { id: approvalId, decision: "allow-once" });
   const requested = await requestP;
   expect(requested.ok).toBe(true);
   return approvalId;
@@ -371,13 +372,14 @@ describe("node.invoke approval bypass", () => {
     });
 
     const wsApprover = await connectOperator(["operator.write", "operator.approvals"]);
+    const wsResolver = await connectOperator(["operator.write", "operator.approvals"]);
     const wsCaller = await connectOperator(["operator.write"]);
     const wsOtherDevice = await connectOperatorWithNewDevice(["operator.write"]);
 
     try {
       const nodeId = await getConnectedNodeId(wsApprover);
 
-      const approvalId = await requestAllowOnceApproval(wsApprover, "echo hi", nodeId);
+      const approvalId = await requestAllowOnceApproval(wsApprover, wsResolver, "echo hi", nodeId);
       // Separate caller connection simulates per-call clients.
       const invoke = await rpcReq(wsCaller, "node.invoke", {
         nodeId,
@@ -398,7 +400,7 @@ describe("node.invoke approval bypass", () => {
       expect(lastInvokeParams?.["approvalDecision"]).toBe("allow-once");
       expect(lastInvokeParams?.["injected"]).toBeUndefined();
 
-      const replayApprovalId = await requestAllowOnceApproval(wsApprover, "echo hi", nodeId);
+      const replayApprovalId = await requestAllowOnceApproval(wsApprover, wsResolver, "echo hi", nodeId);
       const invokeCountBeforeReplay = invokeCount;
       const replay = await rpcReq(wsOtherDevice, "node.invoke", {
         nodeId,
@@ -417,6 +419,7 @@ describe("node.invoke approval bypass", () => {
       await expectNoForwardedInvoke(() => invokeCount > invokeCountBeforeReplay);
     } finally {
       wsApprover.close();
+      wsResolver.close();
       wsCaller.close();
       wsOtherDevice.close();
       node.stop();
@@ -437,6 +440,7 @@ describe("node.invoke approval bypass", () => {
     const nodeB = await connectLinuxNode(onInvoke, createDeviceIdentity());
 
     const wsApprover = await connectOperator(["operator.write", "operator.approvals"]);
+    const wsResolver = await connectOperator(["operator.write", "operator.approvals"]);
     const wsCaller = await connectOperator(["operator.write"]);
 
     try {
@@ -452,7 +456,7 @@ describe("node.invoke approval bypass", () => {
       expect(approvedNodeId).toBeTruthy();
       expect(replayNodeId).toBeTruthy();
 
-      const approvalId = await requestAllowOnceApproval(wsApprover, "echo hi", approvedNodeId);
+      const approvalId = await requestAllowOnceApproval(wsApprover, wsResolver, "echo hi", approvedNodeId);
       const beforeReplayApprovedNode = invokeCounts.get(approvedNodeId) ?? 0;
       const beforeReplayOtherNode = invokeCounts.get(replayNodeId) ?? 0;
       const replay = await rpcReq(wsCaller, "node.invoke", {
@@ -476,6 +480,7 @@ describe("node.invoke approval bypass", () => {
       );
     } finally {
       wsApprover.close();
+      wsResolver.close();
       wsCaller.close();
       nodeA.stop();
       nodeB.stop();
