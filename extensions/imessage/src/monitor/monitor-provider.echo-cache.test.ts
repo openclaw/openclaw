@@ -29,6 +29,8 @@ describe("iMessage sent-message echo cache", () => {
         text: "\uFFFD\uFFFE\uFFFF\uFEFFDelayed echo reply",
       }),
     ).toBe(true);
+    expect(cache.has("acct:imessage:+1555", { text: "\0Delayed echo reply" })).toBe(true);
+    expect(cache.has("acct:imessage:+1555", { text: "\0\0Delayed echo reply" })).toBe(true);
   });
 
   it("keeps attributedBody corruption cleanup leading-only", () => {
@@ -43,6 +45,7 @@ describe("iMessage sent-message echo cache", () => {
         text: "Delayed \uFFFD echo reply",
       }),
     ).toBe(false);
+    expect(cache.has("acct:imessage:+1555", { text: "Delayed\0echo reply" })).toBe(false);
     expect(cache.has("acct:imessage:+1555", { text: "Delayed\techo reply" })).toBe(false);
     expect(cache.has("acct:imessage:+1555", { text: "Delayed\necho reply" })).toBe(false);
   });
