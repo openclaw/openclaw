@@ -5,7 +5,6 @@ import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "../../test/helpers/plugins/provider-registration.js";
-import { normalizeMinimaxAnthropicBaseUrl } from "./provider-catalog.js";
 import { registerMinimaxProviders } from "./provider-registration.js";
 import { createMiniMaxWebSearchProvider } from "./src/minimax-web-search-provider.js";
 
@@ -186,75 +185,5 @@ describe("minimax provider hooks", () => {
 
     expect(resolveOAuthToken).toHaveBeenCalledWith({ provider: "minimax-portal" });
     expect(resolveApiKeyFromConfigAndStore).not.toHaveBeenCalled();
-  });
-
-  it("normalizes OpenAI-compatible baseUrl to Anthropic path for Anthropic transport", async () => {
-    const { providers } = await registerProviderPlugin({
-      plugin: minimaxProviderPlugin,
-      id: "minimax",
-      name: "MiniMax Provider",
-    });
-    const apiProvider = requireRegisteredProvider(providers, "minimax");
-    const portalProvider = requireRegisteredProvider(providers, "minimax-portal");
-
-    // OpenAI-style baseUrl (missing /anthropic) should be corrected
-    for (const provider of [apiProvider, portalProvider]) {
-      expect(
-        provider.normalizeConfig?.({
-          provider: provider.id,
-          providerConfig: {
-            baseUrl: "https://api.minimaxi.com/v1",
-            api: "anthropic-messages",
-            apiKey: "sk-test",
-            models: [],
-          },
-        } as never),
-      ).toMatchObject({ baseUrl: "https://api.minimaxi.com/anthropic" });
-
-      // Already-correct /anthropic path should return undefined (no-op)
-      expect(
-        provider.normalizeConfig?.({
-          provider: provider.id,
-          providerConfig: {
-            baseUrl: "https://api.minimaxi.com/anthropic",
-            api: "anthropic-messages",
-            apiKey: "sk-test",
-            models: [],
-          },
-        } as never),
-      ).toBeUndefined();
-
-      // Explicit openai-completions api should not be touched
-      expect(
-        provider.normalizeConfig?.({
-          provider: provider.id,
-          providerConfig: {
-            baseUrl: "https://api.minimaxi.com/v1",
-            api: "openai-completions",
-            apiKey: "sk-test",
-            models: [],
-          },
-        } as never),
-      ).toBeUndefined();
-    }
-  });
-});
-
-describe("normalizeMinimaxAnthropicBaseUrl", () => {
-  it.each([
-    // Non-anthropic paths get /anthropic appended
-    ["https://api.minimaxi.com/v1", "https://api.minimaxi.com/anthropic"],
-    ["https://api.minimax.io/v1", "https://api.minimax.io/anthropic"],
-    ["https://api.minimax.io", "https://api.minimax.io/anthropic"],
-    ["https://api.minimax.io/", "https://api.minimax.io/anthropic"],
-    // Already-correct paths return undefined (no change)
-    ["https://api.minimaxi.com/anthropic", undefined],
-    ["https://api.minimax.io/anthropic", undefined],
-    ["https://api.minimax.io/anthropic/", undefined],
-    // Unparseable/missing input returns undefined
-    [undefined, undefined],
-    ["not-a-url", undefined],
-  ])("normalizeMinimaxAnthropicBaseUrl(%s) === %s", (input, expected) => {
-    expect(normalizeMinimaxAnthropicBaseUrl(input)).toBe(expected);
   });
 });

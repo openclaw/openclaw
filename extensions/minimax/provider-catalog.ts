@@ -28,34 +28,6 @@ function resolveMinimaxCatalogBaseUrl(env: NodeJS.ProcessEnv = process.env): str
   }
 }
 
-/**
- * Normalize a user-supplied MiniMax baseUrl to the Anthropic-compatible path.
- *
- * Users sometimes set baseUrl to the OpenAI-compatible path (e.g.
- * https://api.minimaxi.com/v1) while keeping the default
- * api: "anthropic-messages" transport. Without the /anthropic path prefix the
- * Anthropic client hits the wrong endpoint and MiniMax responds with OpenAI-
- * format tool_calls, causing tool_call_id mismatches (error 2013).
- *
- * Returns the corrected URL, or undefined if the input is already correct or
- * cannot be parsed.
- */
-export function normalizeMinimaxAnthropicBaseUrl(baseUrl: string | undefined): string | undefined {
-  if (!baseUrl) {
-    return undefined;
-  }
-  try {
-    const url = new URL(baseUrl);
-    const basePath = url.pathname.replace(/\/+$/, "");
-    if (basePath.endsWith("/anthropic")) {
-      return undefined; // already correct
-    }
-    return `${url.origin}/anthropic`;
-  } catch {
-    return undefined;
-  }
-}
-
 function buildMinimaxModel(params: {
   id: string;
   name: string;
