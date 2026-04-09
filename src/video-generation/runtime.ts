@@ -32,10 +32,15 @@ const log = createSubsystemLogger("video-generation");
  * schema. Returns a human-readable skip reason when the candidate cannot
  * accept the supplied options, or undefined when everything checks out.
  *
- * Strict by default: a provider that declares no providerOptions schema is
- * treated as "accepts none" and any non-empty providerOptions object skips
- * the candidate. This prevents silently forwarding `{seed: 42}` to a
- * provider that would ignore it and succeed without the caller's intent.
+ * Backward-compatible behavior:
+ * - Provider declares no schema (undefined): pass options through as-is.
+ *   The provider receives them and may silently ignore unknown keys. This is
+ *   the safe default for legacy / not-yet-migrated providers.
+ * - Provider explicitly declares an empty schema ({}): rejects any options.
+ *   This is the opt-in signal that the provider has been audited and truly
+ *   supports no provider-specific options.
+ * - Provider declares a typed schema: validates each key name and value type,
+ *   skipping the candidate on any mismatch.
  */
 function validateProviderOptionsAgainstDeclaration(params: {
   providerId: string;
@@ -48,8 +53,13 @@ function validateProviderOptionsAgainstDeclaration(params: {
   if (keys.length === 0) {
     return undefined;
   }
-  if (!declaration || Object.keys(declaration).length === 0) {
-    return `${providerId}/${model} does not accept providerOptions (caller supplied: ${keys.join(", ")}); skipping to avoid silent provider-option drop`;
+  // Undeclared schema: pass through for backward compatibility.
+  if (declaration === undefined) {
+    return undefined;
+  }
+  // Explicitly declared empty schema: provider accepts no options.
+  if (Object.keys(declaration).length === 0) {
+    return `${providerId}/${model} does not accept providerOptions (caller supplied: ${keys.join(", ")}); skipping`;
   }
   const unknown = keys.filter((key) => !Object.hasOwn(declaration, key));
   if (unknown.length > 0) {

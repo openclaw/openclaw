@@ -25,7 +25,7 @@ const mediaRuntimeMocks = vi.hoisted(() => {
     };
   };
   return {
-    createSubsystemLogger: vi.fn(() => ({ debug, warn })),
+    createSubsystemLogger: vi.fn(() => ({ debug, warn: vi.fn() })),
     describeFailoverError: vi.fn(),
     getImageGenerationProvider: vi.fn<
       (providerId: string, config?: OpenClawConfig) => ImageGenerationProvider | undefined

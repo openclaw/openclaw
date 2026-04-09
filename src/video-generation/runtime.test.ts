@@ -5,7 +5,7 @@ import {
 } from "../../test/helpers/media-generation/runtime-module-mocks.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { generateVideo, listRuntimeVideoGenerationProviders } from "./runtime.js";
-import type { VideoGenerationProvider } from "./types.js";
+import type { VideoGenerationProvider, VideoGenerationProviderOptionType } from "./types.js";
 
 const mocks = getMediaGenerationRuntimeMocks();
 
@@ -144,7 +144,7 @@ describe("video-generation runtime", () => {
         providerOptions: {
           seed: "number",
           draft: "boolean",
-          camerafixed: "boolean",
+          camera_fixed: "boolean",
         },
       },
       async generateVideo(req) {
@@ -159,17 +159,44 @@ describe("video-generation runtime", () => {
         agents: { defaults: { videoGenerationModel: { primary: "video-plugin/vid-v1" } } },
       } as OpenClawConfig,
       prompt: "test",
-      providerOptions: { seed: 42, draft: true, camerafixed: false },
+      providerOptions: { seed: 42, draft: true, camera_fixed: false },
     });
 
-    expect(seenProviderOptions).toEqual({ seed: 42, draft: true, camerafixed: false });
+    expect(seenProviderOptions).toEqual({ seed: 42, draft: true, camera_fixed: false });
   });
 
-  it("skips candidates that do not declare any providerOptions schema", async () => {
+  it("passes providerOptions through to providers that do not declare any schema", async () => {
+    // Undeclared schema = backward-compatible pass-through: the provider receives the
+    // options and can handle or ignore them. No skip occurs.
     mocks.resolveAgentModelPrimaryValue.mockReturnValue("video-plugin/vid-v1");
+    let seenProviderOptions: unknown;
     const provider: VideoGenerationProvider = {
       id: "video-plugin",
       capabilities: {}, // no providerOptions declared
+      async generateVideo(req) {
+        seenProviderOptions = req.providerOptions;
+        return { videos: [{ buffer: Buffer.from("x"), mimeType: "video/mp4" }] };
+      },
+    };
+    mocks.getVideoGenerationProvider.mockReturnValue(provider);
+
+    await generateVideo({
+      cfg: {
+        agents: { defaults: { videoGenerationModel: { primary: "video-plugin/vid-v1" } } },
+      } as OpenClawConfig,
+      prompt: "test",
+      providerOptions: { seed: 42 },
+    });
+
+    expect(seenProviderOptions).toEqual({ seed: 42 });
+  });
+
+  it("skips candidates that explicitly declare an empty providerOptions schema", async () => {
+    // Explicitly declared empty schema ({}) = provider has opted in and supports no options.
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue("video-plugin/vid-v1");
+    const provider: VideoGenerationProvider = {
+      id: "video-plugin",
+      capabilities: { providerOptions: {} as Record<string, VideoGenerationProviderOptionType> }, // explicitly empty
       async generateVideo() {
         throw new Error("should not be called");
       },
@@ -235,13 +262,17 @@ describe("video-generation runtime", () => {
     ).rejects.toThrow(/expects providerOptions\.seed to be a finite number, got string/);
   });
 
-  it("falls over from a provider without providerOptions support to one that has it", async () => {
+  it("falls over from a provider with explicitly empty providerOptions schema to one that has it", async () => {
+    // Explicitly empty schema ({}) causes a skip; undeclared schema passes through.
+    // Here "openai" declares {} to signal it has been audited and truly accepts no options.
     mocks.getVideoGenerationProvider.mockImplementation((providerId: string) => {
       if (providerId === "openai") {
         return {
           id: "openai",
           defaultModel: "sora-2",
-          capabilities: {}, // no providerOptions
+          capabilities: {
+            providerOptions: {} as Record<string, VideoGenerationProviderOptionType>,
+          }, // explicitly empty: accepts no options
           isConfigured: () => true,
           async generateVideo() {
             throw new Error("should not be called");
@@ -271,7 +302,7 @@ describe("video-generation runtime", () => {
       {
         id: "openai",
         defaultModel: "sora-2",
-        capabilities: {},
+        capabilities: { providerOptions: {} as Record<string, VideoGenerationProviderOptionType> },
         isConfigured: () => true,
         generateVideo: async () => ({ videos: [] }),
       },

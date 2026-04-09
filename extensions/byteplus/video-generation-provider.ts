@@ -245,7 +245,7 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
       const opts = req.providerOptions ?? {};
       const seed = typeof opts.seed === "number" ? opts.seed : undefined;
       const draft = opts.draft === true;
-      // Official API field is camera_fixed (JSON body method); legacy text uses --camerafixed.
+      // Official JSON body field is camera_fixed (with underscore).
       const cameraFixed = typeof opts.camera_fixed === "boolean" ? opts.camera_fixed : undefined;
       if (seed != null) {
         body.seed = seed;

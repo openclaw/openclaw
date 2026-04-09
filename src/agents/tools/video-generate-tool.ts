@@ -5,6 +5,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
+import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { resolveUserPath } from "../../utils.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import {
@@ -252,23 +253,6 @@ function normalizeAspectRatio(raw: string | undefined): string | undefined {
   throw new ToolInputError(
     "aspectRatio must be one of 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9, or adaptive",
   );
-}
-
-function readBooleanToolParam(params: Record<string, unknown>, key: string): boolean | undefined {
-  const raw = readSnakeCaseParamRaw(params, key);
-  if (typeof raw === "boolean") {
-    return raw;
-  }
-  if (typeof raw === "string") {
-    const normalized = normalizeOptionalLowercaseString(raw);
-    if (normalized === "true") {
-      return true;
-    }
-    if (normalized === "false") {
-      return false;
-    }
-  }
-  return undefined;
 }
 
 /**
