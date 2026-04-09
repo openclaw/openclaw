@@ -75,6 +75,21 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
+  it("validates in-workdir scripts whose names start with '..'", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const jsPath = path.join(tmp, "..bad.js");
+      await fs.writeFile(jsPath, "const value = $DM_JSON;", "utf-8");
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      await expect(
+        tool.execute("call-dotdot-prefix-script", {
+          command: "node ..bad.js",
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
+    });
+  });
+
   it("validates scripts under literal tilde directories in workdir", async () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const literalTildeDir = path.join(tmp, "~");

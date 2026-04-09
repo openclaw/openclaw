@@ -134,7 +134,7 @@ function resolvePreflightRelativePath(params: { rootDir: string; absPath: string
   const root = path.resolve(params.rootDir);
   const candidate = path.resolve(params.absPath);
   const relative = path.relative(root, candidate);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (/^\.\.(?:[\\/]|$)/u.test(relative) || path.isAbsolute(relative)) {
     return null;
   }
   // Preserve literal "~" path segments under the workdir. `readFileWithinRoot`
