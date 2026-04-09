@@ -270,10 +270,7 @@ export const __test = {
 };
 
 export async function loadSessionTimeSeries(state: UsageState, sessionKey: string) {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  if (state.usageTimeSeriesLoading) {
+  if (!state.client || !state.connected || state.usageTimeSeriesLoading) {
     return;
   }
   state.usageTimeSeriesLoading = true;
@@ -292,10 +289,7 @@ export async function loadSessionTimeSeries(state: UsageState, sessionKey: strin
 }
 
 export async function loadSessionLogs(state: UsageState, sessionKey: string) {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  if (state.usageSessionLogsLoading) {
+  if (!state.client || !state.connected || state.usageSessionLogsLoading) {
     return;
   }
   state.usageSessionLogsLoading = true;
