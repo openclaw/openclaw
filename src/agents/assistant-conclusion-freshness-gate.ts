@@ -141,7 +141,7 @@ function inferDiagnosticTypeFromHistoricalToolCall(params: {
   messages: AgentMessage[];
   toolResultIndex: number;
   toolResult: AgentMessage;
-}): string | undefined {
+}): { diagnosticType?: string; diagnosticTarget?: string } | undefined {
   const toolResult = params.toolResult as {
     toolCallId?: unknown;
     toolUseId?: unknown;
@@ -175,7 +175,13 @@ function inferDiagnosticTypeFromHistoricalToolCall(params: {
         args: normalized.args,
         taggedAt: getMessageTimestamp(params.toolResult) ?? Date.now(),
       });
-      return inferred?.diagnosticType;
+      if (!inferred?.diagnosticType) {
+        return undefined;
+      }
+      return {
+        diagnosticType: inferred.diagnosticType,
+        diagnosticTarget: inferred.diagnosticTarget,
+      };
     }
   }
   return undefined;
@@ -193,11 +199,11 @@ function inferReplayDiagnosticType(params: {
       diagnosticTarget: replayMeta.diagnosticTarget,
     };
   }
-  const diagnosticType = inferDiagnosticTypeFromHistoricalToolCall(params);
-  if (!diagnosticType) {
+  const inferred = inferDiagnosticTypeFromHistoricalToolCall(params);
+  if (!inferred?.diagnosticType) {
     return undefined;
   }
-  return { diagnosticType };
+  return inferred;
 }
 
 function extractConfigTargetHint(normalizedPrompt: string): string | undefined {

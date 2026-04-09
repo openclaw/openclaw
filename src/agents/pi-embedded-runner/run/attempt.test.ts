@@ -387,6 +387,50 @@ describe("resolveAssistantConclusionFreshnessGate", () => {
     expect(result.prependSystemContext).toBeUndefined();
   });
 
+  it("does not treat unrelated config target as fresh via toolCall fallback", () => {
+    const now = 4_100_000;
+    const result = resolveAssistantConclusionFreshnessGate({
+      prompt: "当前配置里有没有 plugins.installs.openclaw-qqbot 这一项？",
+      now,
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_cfg_gateway_mismatch_1",
+              name: "gateway",
+              arguments: {
+                action: "config.get",
+                path: "gateway.mode",
+              },
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_cfg_gateway_mismatch_1",
+          toolName: "gateway",
+          content: [{ type: "text", text: '{"ok":true}' }],
+          details: {
+            ok: true,
+            result: {
+              path: "gateway.mode",
+            },
+          },
+          timestamp: now - 5_000,
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      questionType: "config_key_presence",
+      diagnosticType: "openclaw.config_snapshot",
+      freshnessState: "missing",
+      prependSystemContext: ASSISTANT_FRESHNESS_GATE_TEMPLATE_A,
+    });
+  });
+
   it("treats recent gateway plugins.entries history as fresh evidence via toolCall fallback", () => {
     const now = 5_000_000;
     const result = resolveAssistantConclusionFreshnessGate({
