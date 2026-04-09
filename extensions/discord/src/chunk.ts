@@ -216,9 +216,9 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
         openTable = { headerLine: lastLineWasTableCandidate, separatorLine: originalLine };
         pendingTableHeader = false;
         lastLineWasTableCandidate = "";
-      } else if (openTable && originalLine.includes("|")) {
+      } else if (openTable && originalLine.trim().startsWith("|") && originalLine.trim().endsWith("|")) {
         // Still inside a table (data row)
-      } else if (originalLine.includes("|") && !openTable) {
+      } else if (originalLine.trim().startsWith("|") && originalLine.trim().endsWith("|") && !openTable) {
         // Potential table header - stash it and check next line
         pendingTableHeader = true;
         lastLineWasTableCandidate = originalLine;
@@ -235,7 +235,7 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
       const isLineContinuation = segIndex > 0;
 
       const delimiter = isLineContinuation ? "" : current.length > 0 ? "\n" : "";
-      const addition = `${delimiter}${segment}`;
+      let addition = `${delimiter}${segment}`;
       const nextLen = current.length + addition.length;
       const nextLines = currentLines + (isLineContinuation ? 0 : 1);
 
@@ -246,9 +246,11 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
         flush();
       }
 
-      // After flush, if we're inside a blockquote, prefix the segment
+      // After flush, if we're inside a blockquote, prefix the segment.
+      // Recompute addition so the prefixed segment is used when appending.
       if (current.length === 0 && insideBlockquote && !segment.startsWith(insideBlockquote.trimEnd())) {
         segment = applyBlockquoteToSegment(segment, insideBlockquote);
+        addition = `${delimiter}${segment}`;
       }
 
       if (current.length > 0) {
