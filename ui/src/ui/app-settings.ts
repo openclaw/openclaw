@@ -171,10 +171,8 @@ export function applySettingsFromUrl(host: SettingsHost) {
     shouldCleanUrl = true;
   }
 
-  if (sessionRaw != null) {
-    if (session) {
-      applySessionSelection(host, session);
-    }
+  if (sessionRaw != null && session) {
+    applySessionSelection(host, session);
   }
 
   if (gatewayUrlRaw != null) {
@@ -224,9 +222,7 @@ export function setTheme(host: SettingsHost, next: ThemeName, context?: ThemeTra
   applyThemeTransition(
     host,
     resolveTheme(next, host.themeMode),
-    () => {
-      applySettings(host, { ...host.settings, theme: next });
-    },
+    () => applySettings(host, { ...host.settings, theme: next }),
     context,
   );
 }
@@ -239,9 +235,7 @@ export function setThemeMode(
   applyThemeTransition(
     host,
     resolveTheme(host.theme, next),
-    () => {
-      applySettings(host, { ...host.settings, themeMode: next });
-    },
+    () => applySettings(host, { ...host.settings, themeMode: next }),
     context,
   );
 }
@@ -336,8 +330,6 @@ export async function refreshActiveTab(host: SettingsHost) {
       host.logsAtBottom = true;
       await loadLogs(app, { reset: true });
       scheduleLogsScroll(host as unknown as Parameters<typeof scheduleLogsScroll>[0], true);
-      return;
-    default:
       return;
   }
 }
