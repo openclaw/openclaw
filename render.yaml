@@ -8,12 +8,9 @@ services:
       - key: OPENCLAW_GATEWAY_PORT
         value: "8080"
       - key: OPENCLAW_STATE_DIR
-        value: /data/.openclaw
+        value: /tmp/.openclaw
       - key: OPENCLAW_WORKSPACE_DIR
-        value: /data/workspace
+        value: /tmp/workspace
       - key: OPENCLAW_GATEWAY_TOKEN
         generateValue: true
-    disk:
-      name: openclaw-data
-      mountPath: /data
-      sizeGB: 1
+    # REMOVE THE ENTIRE DISK SECTION BELOW
