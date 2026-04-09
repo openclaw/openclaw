@@ -1,9 +1,11 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { ContextEngine } from "../../context-engine/types.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   CONTEXT_LIMIT_TRUNCATION_NOTICE,
   formatContextLimitTruncationNotice,
+  installContextEngineLoopHook,
   installToolResultContextGuard,
   PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE,
 } from "./tool-result-context-guard.js";
@@ -237,5 +239,319 @@ describe("installToolResultContextGuard", () => {
     )) as AgentMessage[];
 
     expectPiStyleTruncation(getToolResultText(transformed[0]));
+  });
+});
+
+type MockedEngine = ContextEngine & {
+  afterTurn: ReturnType<typeof vi.fn>;
+  assemble: ReturnType<typeof vi.fn>;
+};
+
+function makeMockEngine(
+  overrides: {
+    assemble?: (
+      params: Parameters<ContextEngine["assemble"]>[0],
+    ) => Promise<{ messages: AgentMessage[]; estimatedTokens: number }>;
+    afterTurn?: (params: Parameters<NonNullable<ContextEngine["afterTurn"]>>[0]) => Promise<void>;
+    omitAfterTurn?: boolean;
+  } = {},
+): MockedEngine {
+  const defaultAfterTurn = vi.fn(async () => {});
+  const defaultAssemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
+    messages: params.messages,
+    estimatedTokens: 0,
+  }));
+  const afterTurn = overrides.omitAfterTurn
+    ? undefined
+    : overrides.afterTurn
+      ? vi.fn(overrides.afterTurn)
+      : defaultAfterTurn;
+  const assemble = overrides.assemble ? vi.fn(overrides.assemble) : defaultAssemble;
+  const engine = {
+    info: {
+      id: "test-engine",
+      name: "Test Engine",
+      version: "0.0.1",
+      ownsCompaction: true,
+    },
+    ingest: async () => ({ ingested: true }),
+    assemble,
+    ...(afterTurn ? { afterTurn } : {}),
+  } as unknown as MockedEngine;
+  return engine;
+}
+
+async function callTransform(
+  agent: { transformContext?: (messages: AgentMessage[], signal: AbortSignal) => unknown },
+  messages: AgentMessage[],
+) {
+  return await agent.transformContext?.(messages, new AbortController().signal);
+}
+
+describe("installContextEngineLoopHook", () => {
+  const sessionId = "test-session-id";
+  const sessionKey = "agent:main:subagent:test";
+  const sessionFile = "/tmp/test-session.jsonl";
+  const tokenBudget = 4096;
+  const modelId = "test-model";
+
+  it("forwards new messages to engine.afterTurn with prePromptMessageCount=0 on first call", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installContextEngineLoopHook({
+      agent,
+      contextEngine: engine,
+      sessionId,
+      sessionKey,
+      sessionFile,
+      tokenBudget,
+      modelId,
+    });
+
+    const messages = [makeUser("first"), makeToolResult("call_1", "result")];
+    await callTransform(agent, messages);
+
+    expect(engine.afterTurn).toHaveBeenCalledTimes(1);
+    expect(engine.afterTurn.mock.calls[0]?.[0]).toMatchObject({
+      sessionId,
+      sessionKey,
+      sessionFile,
+      messages,
+      prePromptMessageCount: 0,
+      tokenBudget,
+    });
+  });
+
+  it("advances prePromptMessageCount on subsequent calls based on the previous high-water mark", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installContextEngineLoopHook({
+      agent,
+      contextEngine: engine,
+      sessionId,
+      sessionKey,
+      sessionFile,
+      tokenBudget,
+      modelId,
+    });
+
+    const firstBatch = [makeUser("first"), makeToolResult("call_1", "result")];
+    await callTransform(agent, firstBatch);
+
+    const secondBatch = [
+      makeUser("first"),
+      makeToolResult("call_1", "result"),
+      makeUser("second"),
+      makeToolResult("call_2", "result two"),
+    ];
+    await callTransform(agent, secondBatch);
+
+    expect(engine.afterTurn).toHaveBeenCalledTimes(2);
+    expect(engine.afterTurn.mock.calls[1]?.[0]).toMatchObject({
+      prePromptMessageCount: 2,
+      messages: secondBatch,
+    });
+  });
+
+  it("does not call engine.afterTurn when no new messages have been appended", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installContextEngineLoopHook({
+      agent,
+      contextEngine: engine,
+      sessionId,
+      sessionKey,
+      sessionFile,
+      tokenBudget,
+      modelId,
+    });
+
+    const messages = [makeUser("first"), makeToolResult("call_1", "result")];
+    await callTransform(agent, messages);
+    await callTransform(agent, messages);
+
+    expect(engine.afterTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns the engine's assembled view when its length differs from the source", async () => {
+    const agent = makeGuardableAgent();
+    const compactedView = [makeUser("compacted")];
+    const engine = makeMockEngine({
+      assemble: async () => ({ messages: compactedView, estimatedTokens: 0 }),
+    });
+    installContextEngineLoopHook({
+      agent,
+      contextEngine: engine,
+      sessionId,
+      sessionKey,
+      sessionFile,
+      tokenBudget,
+      modelId,
+    });
+
+    const sourceMessages = [
+      makeUser("first"),
+      makeToolResult("call_1", "result"),
+      makeToolResult("call_2", "result two"),
+    ];
+    const transformed = await callTransform(agent, sourceMessages);
+
+    expect(transformed).toBe(compactedView);
+    expect(transformed).not.toBe(sourceMessages);
+  });
+
+  it("returns the source messages when the engine's assembled view has the same length", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installContextEngineLoopHook({
+      agent,
+      contextEngine: engine,
+      sessionId,
+      sessionKey,
+      sessionFile,
+      tokenBudget,
+      modelId,
+    });
+
+    const sourceMessages = [makeUser("first"), makeToolResult("call_1", "result")];
+    const transformed = await callTransform(agent, sourceMessages);
+
+    expect(transformed).toBe(sourceMessages);
+  });
+
+  it("does not mutate the source messages array even when the engine returns a different view", async () => {
+    const agent = makeGuardableAgent();
+    const compactedView = [makeUser("compacted")];
+    const engine = makeMockEngine({
+      assemble: async () => ({ messages: compactedView, estimatedTokens: 0 }),
+    });
+    installContextEngineLoopHook({
+      agent,
+      contextEngine: engine,
+      sessionId,
+      sessionKey,
+      sessionFile,
+      tokenBudget,
+      modelId,
+    });
+
+    const sourceMessages = [makeUser("first"), makeToolResult("call_1", "result")];
+    const sourceCopy = [...sourceMessages];
+    await callTransform(agent, sourceMessages);
+
+    expect(sourceMessages).toEqual(sourceCopy);
+    expect(sourceMessages).toHaveLength(2);
+  });
+
+  it("skips the afterTurn call when the engine does not implement it", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine({ omitAfterTurn: true });
+    installContextEngineLoopHook({
+      agent,
+      contextEngine: engine,
+      sessionId,
+      sessionKey,
+      sessionFile,
+      tokenBudget,
+      modelId,
+    });
+
+    const messages = [makeUser("first"), makeToolResult("call_1", "result")];
+    const transformed = await callTransform(agent, messages);
+
+    expect(transformed).toBe(messages);
+    expect(engine.assemble).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls through to the source messages when engine.afterTurn throws", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine({
+      afterTurn: async () => {
+        throw new Error("engine afterTurn boom");
+      },
+    });
+    installContextEngineLoopHook({
+      agent,
+      contextEngine: engine,
+      sessionId,
+      sessionKey,
+      sessionFile,
+      tokenBudget,
+      modelId,
+    });
+
+    const messages = [makeUser("first"), makeToolResult("call_1", "result")];
+    const transformed = await callTransform(agent, messages);
+
+    expect(transformed).toBe(messages);
+  });
+
+  it("falls through to the source messages when engine.assemble throws", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine({
+      assemble: async () => {
+        throw new Error("engine assemble boom");
+      },
+    });
+    installContextEngineLoopHook({
+      agent,
+      contextEngine: engine,
+      sessionId,
+      sessionKey,
+      sessionFile,
+      tokenBudget,
+      modelId,
+    });
+
+    const messages = [makeUser("first"), makeToolResult("call_1", "result")];
+    const transformed = await callTransform(agent, messages);
+
+    expect(transformed).toBe(messages);
+  });
+
+  it("invokes any pre-existing transformContext before passing the result to the engine", async () => {
+    const upstream = vi.fn(async (messages: AgentMessage[]) => [...messages, makeUser("appended")]);
+    const agent = makeGuardableAgent(upstream);
+    const compactedView = [makeUser("compacted")];
+    const engine = makeMockEngine({
+      assemble: async (params) => {
+        expect(params.messages).toHaveLength(2);
+        return { messages: compactedView, estimatedTokens: 0 };
+      },
+    });
+    installContextEngineLoopHook({
+      agent,
+      contextEngine: engine,
+      sessionId,
+      sessionKey,
+      sessionFile,
+      tokenBudget,
+      modelId,
+    });
+
+    const sourceMessages = [makeUser("first")];
+    const transformed = await callTransform(agent, sourceMessages);
+
+    expect(upstream).toHaveBeenCalledTimes(1);
+    expect(transformed).toBe(compactedView);
+  });
+
+  it("restores the previous transformContext when the returned dispose is called", async () => {
+    const upstream = vi.fn(async (messages: AgentMessage[]) => messages);
+    const agent = makeGuardableAgent(upstream);
+    const engine = makeMockEngine();
+    const dispose = installContextEngineLoopHook({
+      agent,
+      contextEngine: engine,
+      sessionId,
+      sessionKey,
+      sessionFile,
+      tokenBudget,
+      modelId,
+    });
+
+    dispose();
+
+    expect(agent.transformContext).toBe(upstream);
   });
 });
