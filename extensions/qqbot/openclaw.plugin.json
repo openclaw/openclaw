@@ -100,6 +100,17 @@
           "upgradeMode": {
             "type": "string",
             "enum": ["doc", "hot-reload"]
+          },
+          "streaming": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": ["off", "partial"],
+                "default": "partial"
+              }
+            }
           }
         }
       }
@@ -128,6 +139,17 @@
       "upgradeMode": {
         "type": "string",
         "enum": ["doc", "hot-reload"]
+      },
+      "streaming": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["off", "partial"],
+            "default": "partial"
+          }
+        }
       },
       "accounts": {
         "type": "object",
