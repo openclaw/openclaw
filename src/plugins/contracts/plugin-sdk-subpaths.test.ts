@@ -49,6 +49,7 @@ const SRC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = resolve(SRC_ROOT, "..");
 const PLUGIN_SDK_DIR = resolve(SRC_ROOT, "plugin-sdk");
 const sourceCache = new Map<string, string>();
+const repoSourceCache = new Map<string, string>();
 const representativeRuntimeSmokeSubpaths = ["channel-runtime", "conversation-runtime"] as const;
 
 const importResolvedPluginSdkSubpath = async (specifier: string) => import(specifier);
@@ -62,6 +63,77 @@ function readPluginSdkSource(subpath: string): string {
   const text = readFileSync(file, "utf8");
   sourceCache.set(file, text);
   return text;
+}
+
+function readRepoSource(relativePath: string): string {
+  const absolutePath = resolve(REPO_ROOT, relativePath);
+  const cached = repoSourceCache.get(absolutePath);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const text = readFileSync(absolutePath, "utf8");
+  repoSourceCache.set(absolutePath, text);
+  return text;
+}
+
+function collectNamedExportsFromClause(clause: string): string[] {
+  return clause
+    .split(",")
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0)
+    .map((segment) => segment.replace(/^type\s+/u, ""))
+    .map((segment) => {
+      const aliasMatch = segment.match(/\s+as\s+([A-Za-z_$][\w$]*)$/u);
+      if (aliasMatch?.[1]) {
+        return aliasMatch[1];
+      }
+      return segment;
+    });
+}
+
+function collectNamedExportsFromSource(source: string): string[] {
+  const names = new Set<string>();
+
+  const exportClausePattern =
+    /export\s+(?:type\s+)?\{([^}]*)\}\s*(?:from\s+["'][^"']+["'])?\s*;?/gms;
+  for (const match of source.matchAll(exportClausePattern)) {
+    for (const name of collectNamedExportsFromClause(match[1] ?? "")) {
+      names.add(name);
+    }
+  }
+
+  for (const pattern of [
+    /\bexport\s+(?:declare\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/gu,
+    /\bexport\s+(?:declare\s+)?const\s+([A-Za-z_$][\w$]*)/gu,
+    /\bexport\s+type\s+([A-Za-z_$][\w$]*)\s*=/gu,
+    /\bexport\s+interface\s+([A-Za-z_$][\w$]*)/gu,
+    /\bexport\s+class\s+([A-Za-z_$][\w$]*)/gu,
+  ]) {
+    for (const match of source.matchAll(pattern)) {
+      if (match[1]) {
+        names.add(match[1]);
+      }
+    }
+  }
+
+  return [...names].toSorted();
+}
+
+function collectNamedExportsFromRepoFile(relativePath: string): string[] {
+  return collectNamedExportsFromSource(readRepoSource(relativePath));
+}
+
+function expectNamedExportParity(params: {
+  corePath: string;
+  extensionPath: string;
+  expectedExports: readonly string[];
+}) {
+  const coreExports = collectNamedExportsFromRepoFile(params.corePath);
+  const extensionExports = collectNamedExportsFromRepoFile(params.extensionPath);
+  expect(coreExports, `${params.corePath} exports changed`).toEqual([...params.expectedExports]);
+  expect(extensionExports, `${params.extensionPath} exports changed`).toEqual([
+    ...params.expectedExports,
+  ]);
 }
 
 function listRepoTsFiles(dir: string): string[] {
@@ -256,6 +328,48 @@ describe("plugin-sdk subpath exports", () => {
       "findGoogleChromeExecutableLinux",
       "execText",
     ]);
+  });
+
+  it("keeps browser helper facade exports aligned with extension public wrappers", () => {
+    expectNamedExportParity({
+      corePath: "src/plugin-sdk/browser-control-auth.ts",
+      extensionPath: "extensions/browser/browser-control-auth.ts",
+      expectedExports: [
+        "BrowserControlAuth",
+        "ensureBrowserControlAuth",
+        "resolveBrowserControlAuth",
+        "shouldAutoGenerateBrowserAuth",
+      ],
+    });
+
+    expectNamedExportParity({
+      corePath: "src/plugin-sdk/browser-profiles.ts",
+      extensionPath: "extensions/browser/browser-profiles.ts",
+      expectedExports: [
+        "DEFAULT_AI_SNAPSHOT_MAX_CHARS",
+        "DEFAULT_BROWSER_DEFAULT_PROFILE_NAME",
+        "DEFAULT_BROWSER_EVALUATE_ENABLED",
+        "DEFAULT_OPENCLAW_BROWSER_COLOR",
+        "DEFAULT_OPENCLAW_BROWSER_ENABLED",
+        "DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME",
+        "DEFAULT_UPLOAD_DIR",
+        "ResolvedBrowserConfig",
+        "ResolvedBrowserProfile",
+        "resolveBrowserConfig",
+        "resolveProfile",
+      ],
+    });
+
+    expectNamedExportParity({
+      corePath: "src/plugin-sdk/browser-host-inspection.ts",
+      extensionPath: "extensions/browser/browser-host-inspection.ts",
+      expectedExports: [
+        "BrowserExecutable",
+        "parseBrowserMajorVersion",
+        "readBrowserVersion",
+        "resolveGoogleChromeExecutableForPlatform",
+      ],
+    });
   });
 
   it("keeps helper subpaths aligned", () => {
