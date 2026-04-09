@@ -244,6 +244,91 @@ describe("createMSTeamsAdapter", () => {
       },
     });
   });
+  it("preserves the full conversation reference in proactive sendActivity calls", async () => {
+    const clientState = {
+      constructorArgs: [] as Array<{ serviceUrl: string; options: unknown }>,
+      createCalls: [] as Array<{
+        conversationId: string;
+        activity: Record<string, unknown>;
+      }>,
+    };
+
+    class AppStub {
+      async getBotToken() {
+        return {
+          toString() {
+            return "bot-token";
+          },
+        };
+      }
+    }
+
+    class ClientStub {
+      constructor(serviceUrl: string, options: unknown) {
+        clientState.constructorArgs.push({ serviceUrl, options });
+      }
+
+      conversations = {
+        activities: (conversationId: string) => ({
+          create: async (activity: Record<string, unknown>) => {
+            clientState.createCalls.push({ conversationId, activity });
+            return { id: "created" };
+          },
+        }),
+      };
+    }
+
+    const creds = {
+      appId: "app-id",
+      appPassword: "secret",
+      tenantId: "tenant-id",
+    } satisfies MSTeamsCredentials;
+    const sdk = {
+      App: AppStub as unknown as MSTeamsTeamsSdk["App"],
+      Client: ClientStub as unknown as MSTeamsTeamsSdk["Client"],
+    };
+    const app = new sdk.App({
+      clientId: creds.appId,
+      clientSecret: creds.appPassword,
+      tenantId: creds.tenantId,
+    });
+    const adapter = createMSTeamsAdapter(app, sdk);
+
+    await adapter.continueConversation(
+      creds.appId,
+      {
+        serviceUrl: "https://service.example.com/",
+        conversation: {
+          id: "19:conversation@thread.tacv2",
+          conversationType: "channel",
+          tenantId: "tenant-123",
+        },
+        agent: { id: "bot-123", name: "Bot" },
+        channelId: "msteams",
+      },
+      async (ctx) => {
+        await ctx.sendActivity({ type: "message", text: "hello" });
+      },
+    );
+
+    expect(clientState.constructorArgs).toHaveLength(1);
+    expect(clientState.constructorArgs[0]?.serviceUrl).toBe("https://service.example.com/");
+    expect(clientState.createCalls).toEqual([
+      {
+        conversationId: "19:conversation@thread.tacv2",
+        activity: {
+          type: "message",
+          text: "hello",
+          from: { id: "bot-123", name: "Bot", role: "bot" },
+          conversation: {
+            id: "19:conversation@thread.tacv2",
+            conversationType: "channel",
+            tenantId: "tenant-123",
+          },
+        },
+      },
+    ]);
+  });
 });
 
 describe("createBotFrameworkJwtValidator", () => {

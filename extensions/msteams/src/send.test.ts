@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
+import { createMSTeamsAdapter, type MSTeamsTeamsSdk } from "./sdk.js";
 import { deleteMessageMSTeams, editMessageMSTeams, sendMessageMSTeams } from "./send.js";
 
 const mockState = vi.hoisted(() => ({
@@ -189,6 +190,137 @@ describe("sendMessageMSTeams", () => {
       sharePointSiteId: undefined,
     });
     mockState.sendMSTeamsMessages.mockResolvedValue(["message-1"]);
+  });
+
+  it("uses adapter.continueConversation with the stored Teams conversation payload", async () => {
+    const clientState = {
+      createCalls: [] as Array<{
+        conversationId: string;
+        activity: Record<string, unknown>;
+      }>,
+    };
+
+    class AppStub {
+      async getBotToken() {
+        return {
+          toString() {
+            return "bot-token";
+          },
+        };
+      }
+    }
+
+    class ClientStub {
+      conversations = {
+        activities: (conversationId: string) => ({
+          create: async (activity: Record<string, unknown>) => {
+            clientState.createCalls.push({ conversationId, activity });
+            return { id: "message-transport-1" };
+          },
+        }),
+      };
+    }
+
+    const sdk = {
+      App: AppStub as unknown as MSTeamsTeamsSdk["App"],
+      Client: ClientStub as unknown as MSTeamsTeamsSdk["Client"],
+    };
+    const app = new sdk.App({
+      clientId: "app-id",
+      clientSecret: "secret",
+      tenantId: "tenant-id",
+    });
+    const adapter = createMSTeamsAdapter(app, sdk);
+    const continueConversationSpy = vi.spyOn(adapter, "continueConversation");
+
+    mockState.resolveMSTeamsSendContext.mockResolvedValue({
+      adapter,
+      appId: "app-id",
+      conversationId: "19:conversation@thread.tacv2",
+      ref: {
+        user: { id: "user-1" },
+        agent: { id: "agent-1", name: "Agent" },
+        conversation: {
+          id: "19:conversation@thread.tacv2",
+          conversationType: "channel",
+          tenantId: "tenant-123",
+        },
+        channelId: "msteams",
+        serviceUrl: "https://service.example.com/",
+      },
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      conversationType: "channel",
+      tokenProvider: { getAccessToken: vi.fn(async () => "token") },
+      mediaMaxBytes: 8 * 1024,
+      sharePointSiteId: undefined,
+    });
+    mockState.sendMSTeamsMessages.mockImplementation(async (params) => {
+      const proactiveRef = {
+        serviceUrl: params.conversationRef.serviceUrl,
+        conversation: params.conversationRef.conversation,
+        agent: params.conversationRef.agent ?? params.conversationRef.bot ?? undefined,
+        channelId: params.conversationRef.channelId ?? "msteams",
+      };
+      const messageIds: string[] = [];
+      await params.adapter.continueConversation(
+        params.appId,
+        proactiveRef,
+        async (ctx: {
+          sendActivity: (activity: Record<string, unknown>) => Promise<{ id?: string }>;
+        }) => {
+          for (const message of params.messages) {
+            const response = await ctx.sendActivity({
+              type: "message",
+              text: message.text,
+            });
+            messageIds.push((response as { id?: string }).id ?? "unknown");
+          }
+        },
+      );
+      return messageIds;
+    });
+
+    await expect(
+      sendMessageMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: "conversation:19:conversation@thread.tacv2",
+        text: "hello",
+      }),
+    ).resolves.toEqual({
+      messageId: "message-transport-1",
+      conversationId: "19:conversation@thread.tacv2",
+    });
+
+    expect(continueConversationSpy).toHaveBeenCalledTimes(1);
+    expect(clientState.createCalls).toEqual([
+      {
+        conversationId: "19:conversation@thread.tacv2",
+        activity: {
+          type: "message",
+          text: "hello",
+          from: { id: "agent-1", name: "Agent", role: "bot" },
+          conversation: {
+            id: "19:conversation@thread.tacv2",
+            conversationType: "channel",
+            tenantId: "tenant-123",
+          },
+        },
+      },
+    ]);
+  });
+
+  it("wraps proactive 403 failures with the Teams send context", async () => {
+    mockState.sendMSTeamsMessages.mockRejectedValue(
+      Object.assign(new Error("Forbidden"), { statusCode: 403 }),
+    );
+
+    await expect(
+      sendMessageMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: "conversation:19:conversation@thread.tacv2",
+        text: "hello",
+      }),
+    ).rejects.toThrow("msteams send failed (HTTP 403): Forbidden");
   });
 
   it("loads media through shared helper and forwards mediaLocalRoots", async () => {
