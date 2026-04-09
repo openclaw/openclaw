@@ -449,6 +449,33 @@ describe("memory search config", () => {
     expect(resolved?.model).toBe("nomic-embed-text");
   });
 
+  it("merges memorySearch input_type overrides", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            inputType: "passage",
+            queryInputType: "query",
+          },
+        },
+        list: [
+          {
+            id: "main",
+            default: true,
+            memorySearch: {
+              documentInputType: "document",
+            },
+          },
+        ],
+      },
+    });
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.inputType).toBe("passage");
+    expect(resolved?.queryInputType).toBe("query");
+    expect(resolved?.documentInputType).toBe("document");
+  });
+
   it("defaults session delta thresholds", () => {
     const cfg = asConfig({
       agents: {

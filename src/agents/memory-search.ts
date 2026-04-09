@@ -36,6 +36,9 @@ export type ResolvedMemorySearchConfig = {
   };
   fallback: string;
   model: string;
+  inputType?: string;
+  queryInputType?: string;
+  documentInputType?: string;
   outputDimensionality?: number;
   local: {
     modelPath?: string;
@@ -192,6 +195,11 @@ function mergeConfig(
     : undefined;
   const modelDefault = provider === "auto" ? undefined : primaryAdapter?.defaultModel;
   const model = overrides?.model ?? defaults?.model ?? modelDefault ?? "";
+  const inputType = overrides?.inputType?.trim() || defaults?.inputType?.trim() || undefined;
+  const queryInputType =
+    overrides?.queryInputType?.trim() || defaults?.queryInputType?.trim() || undefined;
+  const documentInputType =
+    overrides?.documentInputType?.trim() || defaults?.documentInputType?.trim() || undefined;
   const outputDimensionality = overrides?.outputDimensionality ?? defaults?.outputDimensionality;
   const local = {
     modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,
@@ -304,6 +312,9 @@ function mergeConfig(
     },
     fallback,
     model,
+    inputType,
+    queryInputType,
+    documentInputType,
     outputDimensionality,
     local,
     store,
