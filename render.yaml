@@ -4,9 +4,12 @@ services:
     runtime: docker
     plan: free
     healthCheckPath: /health
+    # Explicitly tell Render which port to proxy to
+    port: 10000 
     envVars:
+      - key: PORT
+        value: 10000
       - key: OPENCLAW_GATEWAY_PORT
-        # CHANGE THIS LINE:
         fromContext: PORT
       - key: OPENCLAW_STATE_DIR
         value: /tmp/.openclaw
@@ -14,3 +17,6 @@ services:
         value: /tmp/workspace
       - key: OPENCLAW_GATEWAY_TOKEN
         generateValue: true
+      # ADD ANY OTHER MISSING KEYS HERE:
+      # - key: DATABASE_URL
+      #   value: your_db_url_here
