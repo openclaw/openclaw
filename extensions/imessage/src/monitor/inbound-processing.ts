@@ -204,15 +204,11 @@ export function resolveIMessageInboundDecision(params: {
     text: bodyText,
     createdAt,
   };
-  const chatIdentifierNormalized =
-    chatIdentifier != null ? normalizeIMessageHandle(chatIdentifier) : undefined;
+  const chatIdentifierNormalized = normalizeIMessageHandle(chatIdentifier ?? "") || undefined;
   const destinationCallerIdNormalized =
-    destinationCallerId != null ? normalizeIMessageHandle(destinationCallerId) : undefined;
-  // Self-chat detection: older imsg payloads only let us compare sender and
-  // chat_identifier, but current payloads also expose destination_caller_id.
-  // In a normal DM false positive, sender/chat_identifier can both be the peer
-  // handle while destination_caller_id is the local account handle. Treat that
-  // as a normal DM, not self-chat.
+    normalizeIMessageHandle(destinationCallerId ?? "") || undefined;
+  // destination_caller_id distinguishes true self-chat from DM rows where imsg
+  // repeats the peer handle in sender/chat_identifier.
   const isSelfChat =
     !isGroup &&
     chatIdentifierNormalized != null &&

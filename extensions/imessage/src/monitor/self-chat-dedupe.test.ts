@@ -344,7 +344,6 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
   });
 
   it("processes real user self-chat message (is_from_me=true, no echo cache match)", () => {
-    // User sends "Hello" to themselves — is_from_me=true, sender==chat_identifier
     const echoCache = createSentMessageCache();
     const selfChatCache = createSelfChatCache();
 
@@ -366,7 +365,31 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
       }),
     );
 
-    // Real user message — should be dispatched, not dropped
+    expect(decision.kind).toBe("dispatch");
+  });
+
+  it("treats blank destination_caller_id as missing for real self-chat", () => {
+    const echoCache = createSentMessageCache();
+    const selfChatCache = createSelfChatCache();
+
+    const decision = resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 123704,
+          sender: "+15551234567",
+          chat_identifier: "+15551234567",
+          destination_caller_id: "",
+          text: "Hello this is a test message",
+          is_from_me: true,
+          is_group: false,
+        },
+        messageText: "Hello this is a test message",
+        bodyText: "Hello this is a test message",
+        echoCache,
+        selfChatCache,
+      }),
+    );
+
     expect(decision.kind).toBe("dispatch");
   });
 
@@ -576,7 +599,6 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
       }),
     );
 
-    // sender != chat_identifier → not self-chat → dropped as "from me"
     expect(decision).toEqual({ kind: "drop", reason: "from me" });
   });
 
