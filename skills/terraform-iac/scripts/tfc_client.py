@@ -41,11 +41,31 @@ def _require_requests():
 TFC_API = "https://app.terraform.io/api/v2"
 
 
+def sanitize_hcl(value):
+    """Escape a user-provided string for safe interpolation into HCL templates."""
+    if not isinstance(value, str):
+        return str(value)
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "")
+
+
+def validate_dir(path_str):
+    """Validate --dir is a safe path under /tmp or the user's home directory."""
+    resolved = Path(path_str).resolve()
+    allowed_roots = [Path("/tmp").resolve(), Path.home().resolve()]
+    if not any(str(resolved).startswith(str(root)) for root in allowed_roots):
+        print(f"ERROR: --dir must be under /tmp or $HOME, got '{resolved}'")
+        sys.exit(1)
+    return str(resolved)
+
+
 def get_token():
     token = os.environ.get("TFC_TOKEN")
     if not token:
         credfile = Path.home() / ".terraform.d" / "credentials.tfrc.json"
         if credfile.exists():
+            mode = credfile.stat().st_mode & 0o777
+            if mode & 0o077:
+                print(f"WARNING: {credfile} is accessible by other users (mode {oct(mode)}). Run: chmod 600 {credfile}")
             try:
                 data = json.loads(credfile.read_text())
                 token = data.get("credentials", {}).get("app.terraform.io", {}).get("token")
@@ -72,15 +92,26 @@ def api_headers():
     }
 
 
+def _resolve_terraform():
+    """Resolve terraform binary to an absolute path."""
+    import shutil
+    tf = shutil.which("terraform")
+    if not tf:
+        print("ERROR: terraform not found on PATH")
+        sys.exit(1)
+    return tf
+
+
 def run_tf(cmd, cwd):
     """Run a terraform command, streaming output."""
     env = os.environ.copy()
     env["TF_TOKEN_app_terraform_io"] = get_token()
     env["TF_CLI_ARGS"] = "-no-color"
     result = subprocess.run(
-        ["terraform"] + cmd,
+        [_resolve_terraform()] + cmd,
         cwd=cwd,
         env=env,
+        shell=False,
     )
     return result.returncode
 
@@ -519,6 +550,8 @@ Supported runtimes: Python 3.12, Node.js 20, Go (AL2023)
 
     # Environment variables
     env_vars = {}
+    print("\n  ⚠️  Do NOT put secrets (passwords, API keys) here — use TFC workspace")
+    print("    variables or AWS SSM Parameter Store references instead.")
     add_env = prompt("Add environment variables to the function?", default="no", choices=["yes", "no"])
     while add_env == "yes":
         ev_key = prompt("Variable name (e.g. DB_HOST)")
@@ -3261,10 +3294,11 @@ def validate_azure_rg_name(name):
 
 
 def cmd_generate(args):
+    validate_dir(args.dir)
     outdir = Path(args.dir)
     outdir.mkdir(parents=True, exist_ok=True)
-    org = get_org()
-    workspace = args.workspace
+    org = sanitize_hcl(get_org())
+    workspace = sanitize_hcl(args.workspace)
 
     if args.resource == "s3":
         name = args.name.lower().replace(" ", "-").replace("_", "-")
@@ -3304,6 +3338,14 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "this" {{
   rule {{
     apply_server_side_encryption_by_default {{ sse_algorithm = "AES256" }}
   }}
+}}
+
+resource "aws_s3_bucket_public_access_block" "this" {{
+  bucket                  = aws_s3_bucket.this.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
 }}
 
 output "bucket_arn" {{ value = aws_s3_bucket.this.arn }}
@@ -3431,10 +3473,11 @@ output "role_name" {{ value = aws_iam_role.this.name }}
 
 
 def cmd_plan(args):
-    tf_init(args.dir)
-    plan_file = str(Path(args.dir).resolve() / "tfplan")
+    work_dir = validate_dir(args.dir)
+    tf_init(work_dir)
+    plan_file = str(Path(work_dir).resolve() / "tfplan")
     print("\nRunning terraform plan...")
-    rc = run_tf(["plan", f"-out={plan_file}"], cwd=args.dir)
+    rc = run_tf(["plan", f"-out={plan_file}"], cwd=work_dir)
     if rc != 0:
         print("ERROR: Plan failed")
         sys.exit(1)
@@ -3443,13 +3486,14 @@ def cmd_plan(args):
 
 
 def cmd_apply(args):
-    plan_file = str(Path(args.dir).resolve() / "tfplan")
+    work_dir = validate_dir(args.dir)
+    plan_file = str(Path(work_dir).resolve() / "tfplan")
     if not Path(plan_file).exists():
         print(f"ERROR: No saved plan found at {plan_file}")
         print("Run 'plan' first before apply.")
         sys.exit(1)
     print("\nRunning terraform apply...")
-    rc = run_tf(["apply", plan_file], cwd=args.dir)
+    rc = run_tf(["apply", plan_file], cwd=work_dir)
     if rc != 0:
         print("ERROR: Apply failed")
         sys.exit(1)
@@ -3462,8 +3506,10 @@ def cmd_destroy(args):
         print("ERROR: Destroy requires explicit confirmation.")
         print("Pass --confirm DESTROY to proceed.")
         sys.exit(1)
-    print("\nRunning terraform destroy...")
-    rc = run_tf(["destroy", "-auto-approve"], cwd=args.dir)
+    work_dir = validate_dir(args.dir)
+    print(f"\n⚠️  DESTROYING all resources in {work_dir}")
+    print("Running terraform destroy...")
+    rc = run_tf(["destroy", "-auto-approve"], cwd=work_dir)
     if rc != 0:
         print("ERROR: Destroy failed")
         sys.exit(1)
@@ -3472,9 +3518,11 @@ def cmd_destroy(args):
 
 def cmd_state(args):
     _require_requests()
+    from urllib.parse import quote
     org = get_org()
+    ws_name = quote(args.workspace, safe="")
     r = requests.get(
-        f"{TFC_API}/organizations/{org}/workspaces/{args.workspace}",
+        f"{TFC_API}/organizations/{quote(org, safe='')}/workspaces/{ws_name}",
         headers=api_headers()
     )
     r.raise_for_status()
@@ -3499,9 +3547,11 @@ def cmd_state(args):
 
 def cmd_outputs(args):
     _require_requests()
+    from urllib.parse import quote
     org = get_org()
+    ws_name = quote(args.workspace, safe="")
     r = requests.get(
-        f"{TFC_API}/organizations/{org}/workspaces/{args.workspace}",
+        f"{TFC_API}/organizations/{quote(org, safe='')}/workspaces/{ws_name}",
         headers=api_headers()
     )
     r.raise_for_status()
@@ -3523,8 +3573,9 @@ def cmd_outputs(args):
 
 def cmd_list_workspaces(args):
     _require_requests()
+    from urllib.parse import quote
     org = get_org()
-    r = requests.get(f"{TFC_API}/organizations/{org}/workspaces", headers=api_headers())
+    r = requests.get(f"{TFC_API}/organizations/{quote(org, safe='')}/workspaces", headers=api_headers())
     r.raise_for_status()
     print(f"\n--- Workspaces in {org} ---")
     for ws in r.json().get("data", []):

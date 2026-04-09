@@ -105,12 +105,20 @@ resource "aws_db_instance" "this" {
   allocated_storage = 20
   db_name           = var.db_name
   username          = var.db_username
-  password          = var.db_password  # SECURITY: Set as sensitive TFC workspace variable, never commit actual value
+  password          = var.db_password  # SECURITY: Must be a sensitive TFC workspace variable — never set a default value
 
   skip_final_snapshot = true
   tags              = local.tags
 }
 ```
+
+> **⚠️ Security:** Define `db_password` as a sensitive variable with no default. Set the value exclusively in TFC workspace variables:
+> ```hcl
+> variable "db_password" {
+>   type      = string
+>   sensitive = true
+> }
+> ```
 
 ### Lambda
 
