@@ -11,10 +11,28 @@ Config helpers for non-interactive edits in `openclaw.json`: get/set/unset/file/
 values by path and print the active config file. Run without a subcommand to
 open the configure wizard (same as `openclaw configure`).
 
+Root options:
+
+- `--section <section>`: repeatable guided-setup section filter when you run `openclaw config` without a subcommand
+
+Supported guided sections:
+
+- `workspace`
+- `model`
+- `web`
+- `gateway`
+- `daemon`
+- `channels`
+- `plugins`
+- `skills`
+- `health`
+
 ## Examples
 
 ```bash
 openclaw config file
+openclaw config --section model
+openclaw config --section gateway --section daemon
 openclaw config schema
 openclaw config get browser.executablePath
 openclaw config set browser.executablePath "/usr/bin/google-chrome"
@@ -30,7 +48,23 @@ openclaw config validate --json
 
 ### `config schema`
 
-Print the generated JSON schema for `openclaw.json` to stdout as plain text.
+Print the generated JSON schema for `openclaw.json` to stdout as JSON.
+
+What it includes:
+
+- The current root config schema, plus a root `$schema` string field for editor tooling
+- Field `title` and `description` docs metadata used by the Control UI
+- Nested object, wildcard (`*`), and array-item (`[]`) nodes inherit the same `title` / `description` metadata when matching field documentation exists
+- `anyOf` / `oneOf` / `allOf` branches inherit the same docs metadata too when matching field documentation exists
+- Best-effort live plugin + channel schema metadata when runtime manifests can be loaded
+- A clean fallback schema even when the current config is invalid
+
+Related runtime RPC:
+
+- `config.schema.lookup` returns one normalized config path with a shallow
+  schema node (`title`, `description`, `type`, `enum`, `const`, common bounds),
+  matched UI hint metadata, and immediate child summaries. Use it for
+  path-scoped drill-down in Control UI or custom clients.
 
 ```bash
 openclaw config schema
@@ -68,6 +102,8 @@ openclaw config set agents.defaults.heartbeat.every "0m"
 openclaw config set gateway.port 19001 --strict-json
 openclaw config set channels.whatsapp.groups '["*"]' --strict-json
 ```
+
+`config get <path> --json` prints the raw value as JSON instead of terminal-formatted text.
 
 ## `config set` modes
 

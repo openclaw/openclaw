@@ -1,9 +1,10 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { installModelsConfigTestHooks, withModelsTempHome } from "./models-config.e2e-harness.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
-import { readGeneratedModelsJson } from "./models-config.test-utils.js";
 
 function createGoogleModelsConfig(models: ModelDefinitionConfig[]): OpenClawConfig {
   return {
@@ -20,18 +21,19 @@ function createGoogleModelsConfig(models: ModelDefinitionConfig[]): OpenClawConf
   };
 }
 
-async function readGeneratedProvider(providerKey: string) {
-  const parsed = await readGeneratedModelsJson<{
+async function readGeneratedProvider(agentDir: string, providerKey: string) {
+  const parsed = JSON.parse(await fs.readFile(path.join(agentDir, "models.json"), "utf8")) as {
     providers: Record<string, { baseUrl?: string; models: Array<{ id: string }> }>;
-  }>();
+  };
   return parsed.providers[providerKey];
 }
 
 async function expectGeneratedProvider(
+  agentDir: string,
   providerKey: string,
   params: { ids: string[]; baseUrl?: string },
 ) {
-  const provider = await readGeneratedProvider(providerKey);
+  const provider = await readGeneratedProvider(agentDir, providerKey);
   expect(provider?.models?.map((model) => model.id)).toEqual(params.ids);
   if (params.baseUrl !== undefined) {
     expect(provider?.baseUrl).toBe(params.baseUrl);
@@ -66,8 +68,8 @@ describe("models-config", () => {
         },
       ]);
 
-      await ensureOpenClawModelsJson(cfg);
-      await expectGeneratedProvider("google", {
+      const { agentDir } = await ensureOpenClawModelsJson(cfg);
+      await expectGeneratedProvider(agentDir, "google", {
         ids: ["gemini-3-pro-preview", "gemini-3-flash-preview"],
       });
     });
@@ -88,8 +90,8 @@ describe("models-config", () => {
         },
       ]);
 
-      await ensureOpenClawModelsJson(cfg);
-      await expectGeneratedProvider("google", {
+      const { agentDir } = await ensureOpenClawModelsJson(cfg);
+      await expectGeneratedProvider(agentDir, "google", {
         ids: ["gemini-3-flash-preview"],
       });
     });
@@ -121,8 +123,8 @@ describe("models-config", () => {
         },
       } satisfies OpenClawConfig;
 
-      await ensureOpenClawModelsJson(cfg);
-      await expectGeneratedProvider("google-paid", {
+      const { agentDir } = await ensureOpenClawModelsJson(cfg);
+      await expectGeneratedProvider(agentDir, "google-paid", {
         ids: ["gemini-3-pro-preview"],
         baseUrl: "https://generativelanguage.googleapis.com/v1beta",
       });
@@ -154,8 +156,8 @@ describe("models-config", () => {
         },
       } satisfies OpenClawConfig;
 
-      await ensureOpenClawModelsJson(cfg);
-      await expectGeneratedProvider("google", {
+      const { agentDir } = await ensureOpenClawModelsJson(cfg);
+      await expectGeneratedProvider(agentDir, "google", {
         ids: ["gemini-3-flash-preview"],
         baseUrl: "https://generativelanguage.googleapis.com/v1beta",
       });

@@ -1,14 +1,16 @@
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
-import { nextcloudTalkPlugin } from "./src/channel.js";
-import { setNextcloudTalkRuntime } from "./src/runtime.js";
+import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
-export { nextcloudTalkPlugin } from "./src/channel.js";
-export { setNextcloudTalkRuntime } from "./src/runtime.js";
-
-export default defineChannelPluginEntry({
+export default defineBundledChannelEntry({
   id: "nextcloud-talk",
   name: "Nextcloud Talk",
   description: "Nextcloud Talk channel plugin",
-  plugin: nextcloudTalkPlugin,
-  setRuntime: setNextcloudTalkRuntime,
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./api.js",
+    exportName: "nextcloudTalkPlugin",
+  },
+  runtime: {
+    specifier: "./runtime-api.js",
+    exportName: "setNextcloudTalkRuntime",
+  },
 });

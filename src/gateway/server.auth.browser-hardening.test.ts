@@ -277,6 +277,77 @@ describe("gateway auth browser hardening", () => {
     });
   });
 
+  test("isolates loopback browser-origin auth lockouts per origin", async () => {
+    testState.gatewayAuth = {
+      mode: "token",
+      token: "secret",
+      rateLimit: { maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000, exemptLoopback: true },
+    };
+    await withGatewayServer(async ({ port }) => {
+      const firstOrigin = originForPort(port);
+      const secondOrigin = "http://localhost:5173";
+
+      const firstWs = await openWs(port, { origin: firstOrigin });
+      try {
+        const first = await connectReq(firstWs, { token: "wrong" });
+        expect(first.ok).toBe(false);
+        expect(first.error?.message ?? "").not.toContain("retry later");
+      } finally {
+        firstWs.close();
+      }
+
+      const secondWs = await openWs(port, { origin: secondOrigin });
+      try {
+        const second = await connectReq(secondWs, { token: "wrong" });
+        expect(second.ok).toBe(false);
+        expect(second.error?.message ?? "").not.toContain("retry later");
+      } finally {
+        secondWs.close();
+      }
+
+      const thirdWs = await openWs(port, { origin: firstOrigin });
+      try {
+        const third = await connectReq(thirdWs, { token: "wrong" });
+        expect(third.ok).toBe(false);
+        expect(third.error?.message ?? "").toContain("retry later");
+      } finally {
+        thirdWs.close();
+      }
+    });
+  });
+
+  test("omits sensitive gateway paths from low-privilege hello-ok snapshots", async () => {
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    await withGatewayServer(async ({ port }) => {
+      const ws = await openWs(port, { origin: originForPort(port) });
+      try {
+        const payload = (await connectOk(ws, {
+          token: "secret",
+          scopes: ["operator.read"],
+          device: null,
+        })) as {
+          type: "hello-ok";
+          snapshot?: {
+            configPath?: unknown;
+            stateDir?: unknown;
+            authMode?: unknown;
+          };
+        };
+        // connectReq scopes are evaluated after auth and unbound-scope clearing, so this assertion
+        // verifies the effective low-privilege session view rather than self-declared client scopes.
+        const snapshot = payload.snapshot as
+          | { configPath?: unknown; stateDir?: unknown; authMode?: unknown }
+          | undefined;
+        expect(snapshot).toBeDefined();
+        expect(snapshot?.configPath).toBeUndefined();
+        expect(snapshot?.stateDir).toBeUndefined();
+        expect(snapshot?.authMode).toBeUndefined();
+      } finally {
+        ws.close();
+      }
+    });
+  });
+
   test("does not silently auto-pair non-control-ui browser clients on loopback", async () => {
     const { listDevicePairing } = await import("../infra/device-pairing.js");
     testState.gatewayAuth = { mode: "token", token: "secret" };

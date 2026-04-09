@@ -1,4 +1,7 @@
-import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  isBlockedHostnameOrIp,
+  isPrivateNetworkOptInEnabled,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { normalizeResolvedSecretInputString } from "./secret-input.js";
@@ -58,6 +61,6 @@ export function resolveBlueBubblesServerAccount(params: BlueBubblesAccountResolv
     baseUrl,
     password,
     accountId: account.accountId,
-    allowPrivateNetwork: account.config.allowPrivateNetwork === true || autoAllowPrivateNetwork,
+    allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config) || autoAllowPrivateNetwork,
   };
 }

@@ -36,8 +36,8 @@ vi.mock("ajv", () => ({
   },
 }));
 
-vi.mock("../api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../api.js")>();
+vi.mock("../api.js", async () => {
+  const actual = await vi.importActual<typeof import("../api.js")>("../api.js");
   return {
     ...actual,
     resolvePreferredOpenClawTmpDir: () => "/tmp",

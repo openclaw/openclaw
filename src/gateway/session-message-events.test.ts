@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { testState } from "./test-helpers.mocks.js";
+import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectOk,
   createGatewaySuiteHarness,

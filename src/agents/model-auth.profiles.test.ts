@@ -13,14 +13,22 @@ import {
 } from "./model-auth.js";
 
 vi.mock("../plugins/provider-runtime.js", () => ({
-  buildProviderMissingAuthMessageWithPlugin: () => undefined,
+  buildProviderMissingAuthMessageWithPlugin: (params: {
+    provider: string;
+    context: { listProfileIds: (providerId: string) => string[] };
+  }) => {
+    if (params.provider === "openai" && params.context.listProfileIds("openai-codex").length > 0) {
+      return 'No API key found for provider "openai". Use openai-codex/gpt-5.4.';
+    }
+    return undefined;
+  },
   formatProviderAuthProfileApiKeyWithPlugin: async () => undefined,
   refreshProviderOAuthCredentialWithPlugin: async () => null,
   resolveProviderSyntheticAuthWithPlugin: (params: {
     provider: string;
     context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };
   }) => {
-    if (params.provider !== "ollama") {
+    if (params.provider !== "ollama" && params.provider !== "demo-local") {
       return undefined;
     }
     const providerConfig = params.context.providerConfig;
@@ -32,10 +40,22 @@ vi.mock("../plugins/provider-runtime.js", () => ({
       return undefined;
     }
     return {
-      apiKey: "ollama-local",
-      source: "models.providers.ollama (synthetic local key)",
+      apiKey: params.provider === "ollama" ? "ollama-local" : "demo-local",
+      source: `models.providers.${params.provider} (synthetic local key)`,
       mode: "api-key" as const,
     };
+  },
+  shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
+    provider: string;
+    context: { resolvedApiKey?: string };
+  }) => {
+    const expectedMarker =
+      params.provider === "ollama"
+        ? "ollama-local"
+        : params.provider === "demo-local"
+          ? "demo-local"
+          : undefined;
+    return Boolean(expectedMarker && params.context.resolvedApiKey?.trim() === expectedMarker);
   },
 }));
 
@@ -299,13 +319,13 @@ describe("getApiKeyForModel", () => {
     });
   });
 
-  it("resolves Model Studio API key from env", async () => {
+  it("resolves Qwen API key from env", async () => {
     await withEnvAsync(
       { [envVar("MODELSTUDIO", "API", "KEY")]: "modelstudio-test-key" },
       async () => {
         // pragma: allowlist secret
         const resolved = await resolveApiKeyForProvider({
-          provider: "modelstudio",
+          provider: "qwen",
           store: { version: 1, profiles: {} },
         });
         expect(resolved.apiKey).toBe("modelstudio-test-key");
@@ -358,6 +378,207 @@ describe("getApiKeyForModel", () => {
       expect(resolved.apiKey).toBe("env-ollama-key");
       expect(resolved.source).toContain("OLLAMA_API_KEY");
     });
+  });
+
+  it("prefers explicit OLLAMA_API_KEY over the stored ollama-local profile", async () => {
+    await withEnvAsync({ OLLAMA_API_KEY: "env-ollama-key" }, async () => {
+      const resolved = await resolveApiKeyForProvider({
+        provider: "ollama",
+        store: {
+          version: 1,
+          profiles: {
+            "ollama:default": {
+              type: "api_key",
+              provider: "ollama",
+              key: "ollama-local",
+            },
+          },
+        },
+        cfg: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "https://ollama.com",
+                api: "ollama",
+                apiKey: "OLLAMA_API_KEY",
+                models: [],
+              },
+            },
+          },
+        },
+      });
+      expect(resolved.apiKey).toBe("env-ollama-key");
+      expect(resolved.source).toContain("OLLAMA_API_KEY");
+      expect(resolved.profileId).toBeUndefined();
+    });
+  });
+
+  it("prefers explicit configured ollama apiKey over the stored ollama-local profile", async () => {
+    await withEnvAsync({ OLLAMA_API_KEY: undefined }, async () => {
+      const resolved = await resolveApiKeyForProvider({
+        provider: "ollama",
+        store: {
+          version: 1,
+          profiles: {
+            "ollama:default": {
+              type: "api_key",
+              provider: "ollama",
+              key: "ollama-local",
+            },
+          },
+        },
+        cfg: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "https://ollama.com",
+                api: "ollama",
+                apiKey: "config-ollama-key",
+                models: [],
+              },
+            },
+          },
+        },
+      });
+      expect(resolved.apiKey).toBe("config-ollama-key");
+      expect(resolved.source).toBe("models.json");
+      expect(resolved.profileId).toBeUndefined();
+    });
+  });
+
+  it("falls back to the stored ollama-local profile when no real ollama auth exists", async () => {
+    await withEnvAsync({ OLLAMA_API_KEY: undefined }, async () => {
+      const resolved = await resolveApiKeyForProvider({
+        provider: "ollama",
+        store: {
+          version: 1,
+          profiles: {
+            "ollama:default": {
+              type: "api_key",
+              provider: "ollama",
+              key: "ollama-local",
+            },
+          },
+        },
+        cfg: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "https://ollama.com",
+                api: "ollama",
+                apiKey: "OLLAMA_API_KEY",
+                models: [],
+              },
+            },
+          },
+        },
+      });
+      expect(resolved.apiKey).toBe("ollama-local");
+      expect(resolved.source).toBe("profile:ollama:default");
+      expect(resolved.profileId).toBe("ollama:default");
+    });
+  });
+
+  it("keeps a real stored ollama profile ahead of env auth", async () => {
+    await withEnvAsync({ OLLAMA_API_KEY: "env-ollama-key" }, async () => {
+      const resolved = await resolveApiKeyForProvider({
+        provider: "ollama",
+        store: {
+          version: 1,
+          profiles: {
+            "ollama:default": {
+              type: "api_key",
+              provider: "ollama",
+              key: "stored-ollama-key",
+            },
+          },
+        },
+        cfg: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "https://ollama.com",
+                api: "ollama",
+                apiKey: "OLLAMA_API_KEY",
+                models: [],
+              },
+            },
+          },
+        },
+      });
+      expect(resolved.apiKey).toBe("stored-ollama-key");
+      expect(resolved.source).toBe("profile:ollama:default");
+      expect(resolved.profileId).toBe("ollama:default");
+    });
+  });
+
+  it("defers every stored ollama-local profile until real auth sources are checked", async () => {
+    await withEnvAsync({ OLLAMA_API_KEY: "env-ollama-key" }, async () => {
+      const resolved = await resolveApiKeyForProvider({
+        provider: "ollama",
+        store: {
+          version: 1,
+          profiles: {
+            "ollama:default": {
+              type: "api_key",
+              provider: "ollama",
+              key: "ollama-local",
+            },
+            "ollama:secondary": {
+              type: "api_key",
+              provider: "ollama",
+              key: "ollama-local",
+            },
+          },
+        },
+        cfg: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "https://ollama.com",
+                api: "ollama",
+                apiKey: "OLLAMA_API_KEY",
+                models: [],
+              },
+            },
+          },
+        },
+      });
+      expect(resolved.apiKey).toBe("env-ollama-key");
+      expect(resolved.source).toContain("OLLAMA_API_KEY");
+      expect(resolved.profileId).toBeUndefined();
+    });
+  });
+
+  it("defers plugin-owned synthetic profile markers without core provider branching", async () => {
+    const resolved = await resolveApiKeyForProvider({
+      provider: "demo-local",
+      store: {
+        version: 1,
+        profiles: {
+          "demo-local:default": {
+            type: "api_key",
+            provider: "demo-local",
+            key: "demo-local",
+          },
+        },
+      },
+      cfg: {
+        models: {
+          providers: {
+            "demo-local": {
+              baseUrl: "http://localhost:11434",
+              api: "openai-completions",
+              apiKey: "config-demo-key",
+              models: [],
+            },
+          },
+        },
+      },
+    });
+    expect(resolved.apiKey).toBe("config-demo-key");
+    expect(resolved.source).toBe("models.json");
+    expect(resolved.profileId).toBeUndefined();
   });
 
   it("still throws for ollama when no env/profile/config provider is available", async () => {

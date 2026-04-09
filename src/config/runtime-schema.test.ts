@@ -8,8 +8,8 @@ const mockLoadPluginManifestRegistry = vi.hoisted(() => vi.fn());
 let readBestEffortRuntimeConfigSchema: typeof import("./runtime-schema.js").readBestEffortRuntimeConfigSchema;
 let loadGatewayRuntimeConfigSchema: typeof import("./runtime-schema.js").loadGatewayRuntimeConfigSchema;
 
-vi.mock("./config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./config.js")>();
+vi.mock("./config.js", async () => {
+  const actual = await vi.importActual<typeof import("./config.js")>("./config.js");
   return {
     ...actual,
     loadConfig: () => mockLoadConfig(),

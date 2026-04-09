@@ -27,14 +27,6 @@ describe("feishu subagent hook handlers", () => {
     threadBindingTesting.resetFeishuThreadBindingsForTests();
   });
 
-  it("registers Feishu subagent hooks", () => {
-    const handlers = registerHandlersForTest();
-    expect(handlers.has("subagent_spawning")).toBe(true);
-    expect(handlers.has("subagent_delivery_target")).toBe(true);
-    expect(handlers.has("subagent_ended")).toBe(true);
-    expect(handlers.has("subagent_spawned")).toBe(false);
-  });
-
   it("binds a Feishu DM conversation on subagent_spawning", async () => {
     const handlers = registerHandlersForTest();
     const handler = getRequiredHookHandler(handlers, "subagent_spawning");

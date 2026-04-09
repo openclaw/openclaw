@@ -8,7 +8,12 @@ import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { clearRuntimeConfigSnapshot, loadConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import {
+  pinActivePluginChannelRegistry,
+  releasePinnedPluginChannelRegistry,
+} from "../plugins/runtime.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { sleep } from "../utils.js";
 import { GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
@@ -20,6 +25,22 @@ const describeLive = LIVE && ACP_BIND_LIVE ? describe : describe.skip;
 
 const CONNECT_TIMEOUT_MS = 90_000;
 const LIVE_TIMEOUT_MS = 240_000;
+
+function createSlackCurrentConversationBindingRegistry() {
+  return createTestRegistry([
+    {
+      pluginId: "slack",
+      source: "test",
+      plugin: {
+        id: "slack",
+        meta: { aliases: [] },
+        conversationBindings: {
+          supportsCurrentConversationBinding: true,
+        },
+      },
+    },
+  ]);
+}
 
 function normalizeAcpAgent(raw: string | undefined): "claude" | "codex" {
   const normalized = raw?.trim().toLowerCase();
@@ -42,6 +63,11 @@ function extractAssistantTexts(messages: unknown[]): string[] {
       return extractFirstTextBlock(entry);
     })
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+}
+
+function extractLastAssistantText(messages: unknown[]): string | null {
+  const texts = extractAssistantTexts(messages);
+  return texts.at(-1) ?? null;
 }
 
 function extractSpawnedAcpSessionKey(texts: string[]): string | null {
@@ -100,8 +126,39 @@ async function waitForGatewayPort(params: {
 
 async function connectClient(params: { url: string; token: string; timeoutMs?: number }) {
   const timeoutMs = params.timeoutMs ?? CONNECT_TIMEOUT_MS;
+  const startedAt = Date.now();
+  let attempt = 0;
+  let lastError: Error | null = null;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    attempt += 1;
+    const remainingMs = timeoutMs - (Date.now() - startedAt);
+    if (remainingMs <= 0) {
+      break;
+    }
+    try {
+      return await connectClientOnce({
+        ...params,
+        timeoutMs: Math.min(remainingMs, 35_000),
+      });
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (!isRetryableGatewayConnectError(lastError) || remainingMs <= 5_000) {
+        throw lastError;
+      }
+      logLiveStep(`gateway connect warmup retry ${attempt}: ${lastError.message}`);
+      await sleep(Math.min(1_000 * attempt, 5_000));
+    }
+  }
+
+  throw lastError ?? new Error("gateway connect timeout");
+}
+
+async function connectClientOnce(params: { url: string; token: string; timeoutMs?: number }) {
+  const timeoutMs = params.timeoutMs ?? CONNECT_TIMEOUT_MS;
   return await new Promise<GatewayClient>((resolve, reject) => {
     let done = false;
+    let client: GatewayClient | undefined;
     const finish = (result: { client?: GatewayClient; error?: Error }) => {
       if (done) {
         return;
@@ -109,13 +166,16 @@ async function connectClient(params: { url: string; token: string; timeoutMs?: n
       done = true;
       clearTimeout(connectTimeout);
       if (result.error) {
+        if (client) {
+          void client.stopAndWait({ timeoutMs: 1_000 }).catch(() => {});
+        }
         reject(result.error);
         return;
       }
       resolve(result.client as GatewayClient);
     };
 
-    const client = new GatewayClient({
+    client = new GatewayClient({
       url: params.url,
       token: params.token,
       clientName: GATEWAY_CLIENT_NAMES.TEST,
@@ -138,16 +198,94 @@ async function connectClient(params: { url: string; token: string; timeoutMs?: n
   });
 }
 
-async function waitForAcpBackendHealthy(timeoutMs = 60_000): Promise<void> {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    const backend = getAcpRuntimeBackend("acpx");
-    if (backend && (!backend.healthy || backend.healthy())) {
-      return;
-    }
-    await sleep(250);
+function isRetryableGatewayConnectError(error: Error): boolean {
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("gateway closed during connect (1000)") ||
+    message.includes("gateway connect timeout") ||
+    message.includes("gateway connect challenge timeout")
+  );
+}
+
+function isRetryableAcpBindWarmupText(texts: string[]): boolean {
+  const combined = texts.join("\n\n").toLowerCase();
+  return (
+    combined.includes("acp runtime backend is currently unavailable") ||
+    combined.includes("try again in a moment") ||
+    combined.includes("acp runtime backend is not configured") ||
+    combined.includes("acp dispatch is disabled")
+  );
+}
+
+function formatAssistantTextPreview(texts: string[], maxChars = 600): string {
+  const combined = texts.join("\n\n").trim();
+  if (!combined) {
+    return "<empty>";
   }
-  throw new Error("timed out waiting for the acpx runtime backend to become healthy");
+  if (combined.length <= maxChars) {
+    return combined;
+  }
+  return combined.slice(-maxChars);
+}
+
+async function bindConversationAndWait(params: {
+  client: GatewayClient;
+  sessionKey: string;
+  liveAgent: "claude" | "codex";
+  originatingChannel: string;
+  originatingTo: string;
+  originatingAccountId: string;
+  timeoutMs?: number;
+}): Promise<{ mainAssistantTexts: string[]; spawnedSessionKey: string }> {
+  const timeoutMs = params.timeoutMs ?? 90_000;
+  const startedAt = Date.now();
+  let attempt = 0;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    attempt += 1;
+    const backend = getAcpRuntimeBackend("acpx");
+    const runtime = backend?.runtime as { probeAvailability?: () => Promise<void> } | undefined;
+    if (runtime?.probeAvailability) {
+      await runtime.probeAvailability().catch(() => {});
+    }
+    if (!(backend?.healthy?.() ?? false)) {
+      logLiveStep(`acpx backend still unhealthy before bind attempt ${attempt}`);
+      await sleep(5_000);
+      continue;
+    }
+
+    await sendChatAndWait({
+      client: params.client,
+      sessionKey: params.sessionKey,
+      idempotencyKey: `idem-bind-${randomUUID()}`,
+      message: `/acp spawn ${params.liveAgent} --bind here`,
+      originatingChannel: params.originatingChannel,
+      originatingTo: params.originatingTo,
+      originatingAccountId: params.originatingAccountId,
+    });
+
+    const mainHistory = await params.client.request<{ messages?: unknown[] }>("chat.history", {
+      sessionKey: params.sessionKey,
+      limit: 16,
+    });
+    const mainAssistantTexts = extractAssistantTexts(mainHistory.messages ?? []);
+    const spawnedSessionKey = extractSpawnedAcpSessionKey(mainAssistantTexts);
+    if (
+      mainAssistantTexts.join("\n\n").includes("Bound this conversation to") &&
+      spawnedSessionKey
+    ) {
+      return { mainAssistantTexts, spawnedSessionKey };
+    }
+    if (!isRetryableAcpBindWarmupText(mainAssistantTexts)) {
+      throw new Error(
+        `bind command did not produce an ACP session: ${formatAssistantTextPreview(mainAssistantTexts)}`,
+      );
+    }
+    logLiveStep(`acpx backend still warming up; retrying bind (${attempt})`);
+    await sleep(5_000);
+  }
+
+  throw new Error("timed out waiting for the ACP bind command to succeed");
 }
 
 async function waitForAgentRunOk(
@@ -208,7 +346,8 @@ describeLive("gateway live (ACP bind)", () => {
         skipCanvas: process.env.OPENCLAW_SKIP_CANVAS_HOST,
       };
       const liveAgent = normalizeAcpAgent(process.env.OPENCLAW_LIVE_ACP_BIND_AGENT);
-      const acpxCommand = process.env.OPENCLAW_LIVE_ACP_BIND_ACPX_COMMAND?.trim() || undefined;
+      const agentCommandOverride =
+        process.env.OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND?.trim() || undefined;
       const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-acp-bind-"));
       const tempStateDir = path.join(tempRoot, "state");
       const tempConfigPath = path.join(tempRoot, "openclaw.json");
@@ -219,6 +358,7 @@ describeLive("gateway live (ACP bind)", () => {
       const conversationId = `user:${slackUserId}`;
       const accountId = "default";
       const followupNonce = randomBytes(4).toString("hex").toUpperCase();
+      const memoryNonce = randomBytes(4).toString("hex").toUpperCase();
 
       clearRuntimeConfigSnapshot();
       process.env.OPENCLAW_STATE_DIR = tempStateDir;
@@ -231,6 +371,13 @@ describeLive("gateway live (ACP bind)", () => {
 
       const cfg = loadConfig();
       const acpxEntry = cfg.plugins?.entries?.acpx;
+      const existingAgentOverrides: Record<string, { command?: string }> =
+        typeof acpxEntry?.config === "object" &&
+        acpxEntry.config &&
+        typeof acpxEntry.config.agents === "object" &&
+        acpxEntry.config.agents
+          ? (acpxEntry.config.agents as Record<string, { command?: string }>)
+          : {};
       const nextCfg = {
         ...cfg,
         gateway: {
@@ -261,10 +408,14 @@ describeLive("gateway live (ACP bind)", () => {
                 ...acpxEntry?.config,
                 permissionMode: "approve-all",
                 nonInteractivePermissions: "deny",
-                ...(acpxCommand
+                ...(agentCommandOverride
                   ? {
-                      command: acpxCommand,
-                      expectedVersion: "any",
+                      agents: {
+                        ...existingAgentOverrides,
+                        [liveAgent]: {
+                          command: agentCommandOverride,
+                        },
+                      },
                     }
                   : {}),
               },
@@ -290,55 +441,60 @@ describeLive("gateway live (ACP bind)", () => {
         timeoutMs: CONNECT_TIMEOUT_MS,
       });
       logLiveStep("gateway websocket connected");
+      const channelRegistry = createSlackCurrentConversationBindingRegistry();
+      pinActivePluginChannelRegistry(channelRegistry);
 
       try {
-        logLiveStep("waiting for acpx backend health");
-        await waitForAcpBackendHealthy();
-        logLiveStep("acpx backend healthy");
-
-        await sendChatAndWait({
+        const { mainAssistantTexts, spawnedSessionKey } = await bindConversationAndWait({
           client,
           sessionKey: originalSessionKey,
-          idempotencyKey: `idem-bind-${randomUUID()}`,
-          message: `/acp spawn ${liveAgent} --bind here`,
+          liveAgent,
           originatingChannel: "slack",
           originatingTo: conversationId,
           originatingAccountId: accountId,
         });
         logLiveStep("bind command completed");
-
-        const mainHistory = await client.request<{ messages?: unknown[] }>("chat.history", {
-          sessionKey: originalSessionKey,
-          limit: 12,
-        });
-        const mainAssistantTexts = extractAssistantTexts(mainHistory.messages ?? []);
-        const spawnedSessionKey = extractSpawnedAcpSessionKey(mainAssistantTexts);
         expect(mainAssistantTexts.join("\n\n")).toContain("Bound this conversation to");
         expect(spawnedSessionKey).toMatch(new RegExp(`^agent:${liveAgent}:acp:`));
-        if (!spawnedSessionKey) {
-          throw new Error("bind response did not expose the spawned ACP session key");
-        }
         logLiveStep(`binding announced for session ${spawnedSessionKey ?? "missing"}`);
 
         await sendChatAndWait({
           client,
           sessionKey: originalSessionKey,
           idempotencyKey: `idem-followup-${randomUUID()}`,
-          message: `Please include the token ACP-BIND-${followupNonce} in your reply.`,
+          message: `Reply with exactly this token and nothing else: ACP-BIND-${followupNonce}`,
           originatingChannel: "slack",
           originatingTo: conversationId,
           originatingAccountId: accountId,
         });
         logLiveStep("follow-up turn completed");
 
+        await sendChatAndWait({
+          client,
+          sessionKey: originalSessionKey,
+          idempotencyKey: `idem-memory-${randomUUID()}`,
+          message:
+            "Reply with exactly two uppercase tokens separated by a single space: " +
+            "first, the token from your immediately previous assistant reply; " +
+            `second, ACP-BIND-MEMORY-${memoryNonce}. No extra text.`,
+          originatingChannel: "slack",
+          originatingTo: conversationId,
+          originatingAccountId: accountId,
+        });
+        logLiveStep("memory follow-up turn completed");
+
         const boundHistory = await client.request<{ messages?: unknown[] }>("chat.history", {
           sessionKey: spawnedSessionKey,
-          limit: 12,
+          limit: 16,
         });
         const assistantTexts = extractAssistantTexts(boundHistory.messages ?? []);
+        const lastAssistantText = extractLastAssistantText(boundHistory.messages ?? []);
         expect(assistantTexts.join("\n\n")).toContain(`ACP-BIND-${followupNonce}`);
+        expect(lastAssistantText).toContain(`ACP-BIND-${followupNonce}`);
+        expect(lastAssistantText).toContain(`ACP-BIND-MEMORY-${memoryNonce}`);
         logLiveStep("bound session transcript contains follow-up token");
       } finally {
+        releasePinnedPluginChannelRegistry(channelRegistry);
         clearRuntimeConfigSnapshot();
         await client.stopAndWait({ timeoutMs: 2_000 }).catch(() => {});
         await server.close();

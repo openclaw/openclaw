@@ -3,17 +3,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Bot } from "grammy";
-import {
-  normalizeTelegramCommandName,
-  TELEGRAM_COMMAND_NAME_PATTERN,
-} from "openclaw/plugin-sdk/config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
+import { normalizeTelegramCommandName, TELEGRAM_COMMAND_NAME_PATTERN } from "./command-config.js";
 
 export const TELEGRAM_MAX_COMMANDS = 100;
+export const TELEGRAM_TOTAL_COMMAND_TEXT_BUDGET = 5700;
 const TELEGRAM_COMMAND_RETRY_RATIO = 0.8;
+const TELEGRAM_MIN_COMMAND_DESCRIPTION_LENGTH = 1;
 
 export type TelegramMenuCommand = {
   command: string;
@@ -24,6 +23,73 @@ type TelegramPluginCommandSpec = {
   name: unknown;
   description: unknown;
 };
+
+function countTelegramCommandText(value: string): number {
+  return Array.from(value).length;
+}
+
+function truncateTelegramCommandText(value: string, maxLength: number): string {
+  if (maxLength <= 0) {
+    return "";
+  }
+  const chars = Array.from(value);
+  if (chars.length <= maxLength) {
+    return value;
+  }
+  if (maxLength === 1) {
+    return chars[0] ?? "";
+  }
+  return `${chars.slice(0, maxLength - 1).join("")}…`;
+}
+
+function fitTelegramCommandsWithinTextBudget(
+  commands: TelegramMenuCommand[],
+  maxTotalChars: number,
+): {
+  commands: TelegramMenuCommand[];
+  descriptionTrimmed: boolean;
+  textBudgetDropCount: number;
+} {
+  let candidateCommands = [...commands];
+  while (candidateCommands.length > 0) {
+    const commandNameChars = candidateCommands.reduce(
+      (total, command) => total + countTelegramCommandText(command.command),
+      0,
+    );
+    const descriptionBudget = maxTotalChars - commandNameChars;
+    const minimumDescriptionBudget =
+      candidateCommands.length * TELEGRAM_MIN_COMMAND_DESCRIPTION_LENGTH;
+    if (descriptionBudget < minimumDescriptionBudget) {
+      candidateCommands = candidateCommands.slice(0, -1);
+      continue;
+    }
+
+    const descriptionCap = Math.max(
+      TELEGRAM_MIN_COMMAND_DESCRIPTION_LENGTH,
+      Math.floor(descriptionBudget / candidateCommands.length),
+    );
+    let descriptionTrimmed = false;
+    const fittedCommands = candidateCommands.map((command) => {
+      const description = truncateTelegramCommandText(command.description, descriptionCap);
+      if (description !== command.description) {
+        descriptionTrimmed = true;
+        return { ...command, description };
+      }
+      return command;
+    });
+    return {
+      commands: fittedCommands,
+      descriptionTrimmed,
+      textBudgetDropCount: commands.length - fittedCommands.length,
+    };
+  }
+
+  return {
+    commands: [],
+    descriptionTrimmed: false,
+    textBudgetDropCount: commands.length,
+  };
+}
 
 function readErrorTextField(value: unknown, key: "description" | "message"): string | undefined {
   if (!value || typeof value !== "object" || !(key in value)) {
@@ -112,18 +178,35 @@ export function buildPluginTelegramMenuCommands(params: {
 export function buildCappedTelegramMenuCommands(params: {
   allCommands: TelegramMenuCommand[];
   maxCommands?: number;
+  maxTotalChars?: number;
 }): {
   commandsToRegister: TelegramMenuCommand[];
   totalCommands: number;
   maxCommands: number;
   overflowCount: number;
+  maxTotalChars: number;
+  descriptionTrimmed: boolean;
+  textBudgetDropCount: number;
 } {
   const { allCommands } = params;
   const maxCommands = params.maxCommands ?? TELEGRAM_MAX_COMMANDS;
+  const maxTotalChars = params.maxTotalChars ?? TELEGRAM_TOTAL_COMMAND_TEXT_BUDGET;
   const totalCommands = allCommands.length;
   const overflowCount = Math.max(0, totalCommands - maxCommands);
-  const commandsToRegister = allCommands.slice(0, maxCommands);
-  return { commandsToRegister, totalCommands, maxCommands, overflowCount };
+  const {
+    commands: commandsToRegister,
+    descriptionTrimmed,
+    textBudgetDropCount,
+  } = fitTelegramCommandsWithinTextBudget(allCommands.slice(0, maxCommands), maxTotalChars);
+  return {
+    commandsToRegister,
+    totalCommands,
+    maxCommands,
+    overflowCount,
+    maxTotalChars,
+    descriptionTrimmed,
+    textBudgetDropCount,
+  };
 }
 
 /** Compute a stable hash of the command list for change detection. */

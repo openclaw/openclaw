@@ -29,16 +29,18 @@ const {
   fetchMock,
 } = hoisted;
 
-vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+vi.mock("@mariozechner/pi-ai", async () => {
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
   return {
     ...actual,
     complete: completeMock,
   };
 });
 
-vi.mock("../agents/models-config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../agents/models-config.js")>()),
+vi.mock("../agents/models-config.js", async () => ({
+  ...(await vi.importActual<typeof import("../agents/models-config.js")>(
+    "../agents/models-config.js",
+  )),
   ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
 }));
 

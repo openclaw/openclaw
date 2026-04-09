@@ -11,13 +11,17 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
-  AUTO_IMAGE_KEY_PROVIDERS: ["openai"],
-  DEFAULT_IMAGE_MODELS: { openai: "gpt-4.1-mini" },
   resolveAutoImageModel: vi.fn(async () => null),
+  resolveAutoMediaKeyProviders: vi.fn(() => ["openai"]),
+  resolveDefaultMediaModel: vi.fn(() => "gpt-4.1-mini"),
 }));
 
-vi.mock("openclaw/plugin-sdk/media-understanding-runtime", () => ({
-  describeImageFileWithModel: vi.fn(),
+vi.mock("./runtime.js", () => ({
+  getTelegramRuntime: () => ({
+    mediaUnderstanding: {
+      describeImageFileWithModel: vi.fn(),
+    },
+  }),
 }));
 
 const TEST_CACHE_DIR = "/tmp/openclaw-test-sticker-cache/telegram";

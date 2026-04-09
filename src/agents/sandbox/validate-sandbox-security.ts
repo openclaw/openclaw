@@ -7,7 +7,6 @@
 
 import os from "node:os";
 import path from "node:path";
-import { resolveStateDir } from "../../config/paths.js";
 import { resolveRequiredHomeDir, resolveRequiredOsHomeDir } from "../../infra/home-dir.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
@@ -17,9 +16,8 @@ import {
 } from "./host-paths.js";
 import { getBlockedNetworkModeReason } from "./network-mode.js";
 
-// Static portion of the targeted denylist: host paths that should never be exposed
-// inside sandbox containers. The full runtime set also includes sensitive home
-// subdirectories and the resolved OpenClaw state directory.
+// Targeted denylist: host paths that should never be exposed inside sandbox containers.
+// Exported for reuse in security audit collectors.
 export const BLOCKED_HOST_PATHS = [
   "/etc",
   "/private/etc",
@@ -35,10 +33,6 @@ export const BLOCKED_HOST_PATHS = [
   "/var/run/docker.sock",
   "/private/var/run/docker.sock",
   "/run/docker.sock",
-  "/var/lib/docker",
-  "/private/var/lib/docker",
-  "/var/log",
-  "/private/var/log",
 ];
 
 const BLOCKED_HOME_SUBPATHS = [
@@ -47,10 +41,8 @@ const BLOCKED_HOME_SUBPATHS = [
   ".config",
   ".docker",
   ".gnupg",
-  ".kube",
   ".netrc",
   ".npm",
-  ".openclaw",
   ".ssh",
 ] as const;
 
@@ -122,7 +114,18 @@ export function getBlockedBindReason(bind: string): BlockedBindReason | null {
   }
 
   const normalized = normalizeHostPath(sourceRaw);
-  return getBlockedReasonForSourcePath(normalized, getBlockedHostPaths());
+  const blockedHostPaths = getBlockedHostPaths();
+  const directReason = getBlockedReasonForSourcePath(normalized, blockedHostPaths);
+  if (directReason) {
+    return directReason;
+  }
+
+  const canonical = resolveSandboxHostPathViaExistingAncestor(normalized);
+  if (canonical !== normalized) {
+    return getBlockedReasonForSourcePath(canonical, blockedHostPaths);
+  }
+
+  return null;
 }
 
 export function getBlockedReasonForSourcePath(
@@ -141,19 +144,14 @@ export function getBlockedReasonForSourcePath(
   return null;
 }
 
-export function getBlockedHostPaths(): string[] {
+function getBlockedHostPaths(): string[] {
   const blocked = new Set(BLOCKED_HOST_PATHS.map(normalizeHostPath));
   for (const home of getBlockedHomeRoots()) {
     for (const suffix of BLOCKED_HOME_SUBPATHS) {
       blocked.add(normalizeHostPath(path.posix.join(home, suffix)));
     }
   }
-  const stateDir = normalizeHostPath(resolveStateDir());
-  blocked.add(stateDir);
-  const canonicalStateDir = resolveSandboxHostPathViaExistingAncestor(stateDir);
-  if (canonicalStateDir !== stateDir) {
-    blocked.add(canonicalStateDir);
-  }
+
   return [...blocked];
 }
 

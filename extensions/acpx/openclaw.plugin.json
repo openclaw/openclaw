@@ -1,21 +1,18 @@
 {
   "id": "acpx",
+  "enabledByDefault": true,
   "name": "ACPX Runtime",
-  "description": "ACP runtime backend powered by acpx with configurable command path and version policy.",
+  "description": "Embedded ACP runtime backend with plugin-owned session and transport management.",
   "skills": ["./skills"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "command": {
-        "type": "string",
-        "minLength": 1
-      },
-      "expectedVersion": {
-        "type": "string",
-        "minLength": 1
-      },
       "cwd": {
+        "type": "string",
+        "minLength": 1
+      },
+      "stateDir": {
         "type": "string",
         "minLength": 1
       },
@@ -64,33 +61,42 @@
           },
           "required": ["command"]
         }
+      },
+      "agents": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": ["command"]
+        }
       }
     }
   },
   "uiHints": {
-    "command": {
-      "label": "acpx Command",
-      "help": "Optional path/command override for acpx (for example /home/user/repos/acpx/dist/cli.js). Leave unset to use plugin-local bundled acpx."
-    },
-    "expectedVersion": {
-      "label": "Expected acpx Version",
-      "help": "Exact version to enforce or \"any\" to skip strict version matching."
-    },
     "cwd": {
       "label": "Default Working Directory",
-      "help": "Default cwd for ACP session operations when not set per session."
+      "help": "Default working directory for embedded ACP session operations when not set per session."
+    },
+    "stateDir": {
+      "label": "State Directory",
+      "help": "Directory used for embedded ACP session state and persistence."
     },
     "permissionMode": {
       "label": "Permission Mode",
-      "help": "Default acpx permission policy for runtime prompts."
+      "help": "Default permission policy for embedded ACP runtime prompts."
     },
     "nonInteractivePermissions": {
       "label": "Non-Interactive Permission Policy",
-      "help": "acpx policy when interactive permission prompts are unavailable."
+      "help": "Policy when interactive permission prompts are unavailable."
     },
     "pluginToolsMcpBridge": {
       "label": "Plugin Tools MCP Bridge",
-      "help": "Default off. When enabled, inject the built-in OpenClaw plugin-tools MCP server into ACPX sessions so ACP agents can call plugin-registered tools.",
+      "help": "Default off. When enabled, inject the built-in OpenClaw plugin-tools MCP server into embedded ACP sessions so ACP agents can call plugin-registered tools.",
       "advanced": true
     },
     "strictWindowsCmdWrapper": {
@@ -100,17 +106,22 @@
     },
     "timeoutSeconds": {
       "label": "Prompt Timeout Seconds",
-      "help": "Optional acpx timeout for each runtime turn.",
+      "help": "Optional timeout for each embedded runtime turn.",
       "advanced": true
     },
     "queueOwnerTtlSeconds": {
       "label": "Queue Owner TTL Seconds",
-      "help": "Idle queue-owner TTL for acpx prompt turns. Keep this short in OpenClaw to avoid delayed completion after each turn.",
+      "help": "Reserved compatibility field for future queued embedded prompt ownership.",
       "advanced": true
     },
     "mcpServers": {
       "label": "MCP Servers",
-      "help": "Named MCP server definitions to inject into ACPX-backed session bootstrap. Each entry needs a command and can include args and env.",
+      "help": "Named MCP server definitions to inject into embedded ACP session bootstrap. Each entry needs a command and can include args and env.",
+      "advanced": true
+    },
+    "agents": {
+      "label": "Agent Commands",
+      "help": "Optional per-agent command overrides for the embedded ACP runtime.",
       "advanced": true
     }
   }

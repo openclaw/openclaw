@@ -1,15 +1,15 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { loadConfig } from "../config/config.js";
+import { extractTextFromChatContent } from "../shared/chat-content.js";
 import {
+  callGateway,
+  loadConfig,
   loadSessionStore,
   resolveAgentIdFromSessionKey,
   resolveStorePath,
-} from "../config/sessions.js";
-import { callGateway } from "../gateway/call.js";
-import { extractTextFromChatContent } from "../shared/chat-content.js";
+} from "./subagent-announce.runtime.js";
 import { readLatestAssistantReply } from "./tools/agent-step.js";
-import { sanitizeTextContent, extractAssistantText } from "./tools/sessions-helpers.js";
-import { isAnnounceSkip } from "./tools/sessions-send-helpers.js";
+import { extractAssistantText, sanitizeTextContent } from "./tools/session-message-text.js";
+import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
 
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
 
@@ -328,10 +328,14 @@ export function applySubagentWaitOutcome(params: {
 
 export async function captureSubagentCompletionReply(
   sessionKey: string,
+  options?: { waitForReply?: boolean },
 ): Promise<string | undefined> {
   const immediate = await readSubagentOutput(sessionKey);
   if (immediate?.trim()) {
     return immediate;
+  }
+  if (options?.waitForReply === false) {
+    return undefined;
   }
   return await readLatestSubagentOutputWithRetry({
     sessionKey,

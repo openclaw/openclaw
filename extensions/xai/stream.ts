@@ -1,5 +1,10 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
+import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  composeProviderStreamWrappers,
+  createToolStreamWrapper,
+} from "openclaw/plugin-sdk/provider-stream-shared";
 
 const XAI_FAST_MODEL_IDS = new Map<string, string>([
   ["grok-3", "grok-3-fast"],
@@ -293,4 +298,18 @@ export function createXaiToolCallArgumentDecodingWrapper(baseStreamFn: StreamFn)
     }
     return wrapStreamDecodeXaiToolCallArguments(maybeStream);
   };
+}
+
+export function wrapXaiProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
+  const extraParams = ctx.extraParams;
+  const fastMode = extraParams?.fastMode;
+  const toolStreamEnabled = extraParams?.tool_stream !== false;
+  return composeProviderStreamWrappers(ctx.streamFn, (streamFn) => {
+    let wrappedStreamFn = createXaiToolPayloadCompatibilityWrapper(streamFn);
+    if (typeof fastMode === "boolean") {
+      wrappedStreamFn = createXaiFastModeWrapper(wrappedStreamFn, fastMode);
+    }
+    wrappedStreamFn = createXaiToolCallArgumentDecodingWrapper(wrappedStreamFn);
+    return createToolStreamWrapper(wrappedStreamFn, toolStreamEnabled);
+  });
 }

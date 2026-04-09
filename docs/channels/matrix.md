@@ -6,14 +6,18 @@ read_when:
 title: "Matrix"
 ---
 
-# Matrix (plugin)
+# Matrix
 
-Matrix is the Matrix channel plugin for OpenClaw.
+Matrix is the Matrix bundled channel plugin for OpenClaw.
 It uses the official `matrix-js-sdk` and supports DMs, rooms, threads, media, reactions, polls, location, and E2EE.
 
-## Plugin required
+## Bundled plugin
 
-Matrix is a plugin and is not bundled with core OpenClaw.
+Matrix ships as a bundled plugin in current OpenClaw releases, so normal
+packaged builds do not need a separate install.
+
+If you are on an older build or a custom install that excludes Matrix, install
+it manually:
 
 Install from npm:
 
@@ -31,7 +35,9 @@ See [Plugins](/tools/plugin) for plugin behavior and install rules.
 
 ## Setup
 
-1. Install the plugin.
+1. Ensure the Matrix plugin is available.
+   - Current packaged OpenClaw releases already bundle it.
+   - Older/custom installs can add it manually with the commands above.
 2. Create a Matrix account on your homeserver.
 3. Configure `channels.matrix` with either:
    - `homeserver` + `accessToken`, or
@@ -97,6 +103,7 @@ Password-based setup (token is cached after login):
 
 Matrix stores cached credentials in `~/.openclaw/credentials/matrix/`.
 The default account uses `credentials.json`; named accounts use `credentials-<account>.json`.
+When cached credentials exist there, OpenClaw treats Matrix as configured for setup, doctor, and channel-status discovery even if current auth is not set directly in config.
 
 Environment variable equivalents (used when the config key is not set):
 
@@ -123,8 +130,11 @@ Example for account `ops`:
 
 For normalized account ID `ops-bot`, use:
 
-- `MATRIX_OPS_BOT_HOMESERVER`
-- `MATRIX_OPS_BOT_ACCESS_TOKEN`
+- `MATRIX_OPS_X2D_BOT_HOMESERVER`
+- `MATRIX_OPS_X2D_BOT_ACCESS_TOKEN`
+
+Matrix escapes punctuation in account IDs to keep scoped env vars collision-free.
+For example, `-` becomes `_X2D_`, so `ops-prod` maps to `MATRIX_OPS_X2D_PROD_*`.
 
 The interactive wizard only offers the env-var shortcut when those auth env vars are already present and the selected account does not already have Matrix auth saved in config.
 
@@ -143,6 +153,7 @@ This is a practical baseline config with DM pairing, room allowlist, and E2EE en
 
       dm: {
         policy: "pairing",
+        sessionScope: "per-room",
         threadReplies: "off",
       },
 
@@ -168,9 +179,9 @@ This is a practical baseline config with DM pairing, room allowlist, and E2EE en
 
 Matrix reply streaming is opt-in.
 
-Set `channels.matrix.streaming` to `"partial"` when you want OpenClaw to send a single draft reply,
-edit that draft in place while the model is generating text, and then finalize it when the reply is
-done:
+Set `channels.matrix.streaming` to `"partial"` when you want OpenClaw to send a single live preview
+reply, edit that preview in place while the model is generating text, and then finalize it when the
+reply is done:
 
 ```json5
 {
@@ -183,10 +194,179 @@ done:
 ```
 
 - `streaming: "off"` is the default. OpenClaw waits for the final reply and sends it once.
-- `streaming: "partial"` creates one editable preview message instead of sending multiple partial messages.
+- `streaming: "partial"` creates one editable preview message for the current assistant block using normal Matrix text messages. This preserves Matrix's legacy preview-first notification behavior, so stock clients may notify on the first streamed preview text instead of the finished block.
+- `streaming: "quiet"` creates one editable quiet preview notice for the current assistant block. Use this only when you also configure recipient push rules for finalized preview edits.
+- `blockStreaming: true` enables separate Matrix progress messages. With preview streaming enabled, Matrix keeps the live draft for the current block and preserves completed blocks as separate messages.
+- When preview streaming is on and `blockStreaming` is off, Matrix edits the live draft in place and finalizes that same event when the block or turn finishes.
 - If the preview no longer fits in one Matrix event, OpenClaw stops preview streaming and falls back to normal final delivery.
 - Media replies still send attachments normally. If a stale preview can no longer be reused safely, OpenClaw redacts it before sending the final media reply.
 - Preview edits cost extra Matrix API calls. Leave streaming off if you want the most conservative rate-limit behavior.
+
+`blockStreaming` does not enable draft previews by itself.
+Use `streaming: "partial"` or `streaming: "quiet"` for preview edits; then add `blockStreaming: true` only if you also want completed assistant blocks to remain visible as separate progress messages.
+
+If you need stock Matrix notifications without custom push rules, use `streaming: "partial"` for preview-first behavior or leave `streaming` off for final-only delivery. With `streaming: "off"`:
+
+- `blockStreaming: true` sends each finished block as a normal notifying Matrix message.
+- `blockStreaming: false` sends only the final completed reply as a normal notifying Matrix message.
+
+### Self-hosted push rules for quiet finalized previews
+
+If you run your own Matrix infrastructure and want quiet previews to notify only when a block or
+final reply is done, set `streaming: "quiet"` and add a per-user push rule for finalized preview edits.
+
+This is usually a recipient-user setup, not a homeserver-global config change:
+
+Quick map before you start:
+
+- recipient user = the person who should receive the notification
+- bot user = the OpenClaw Matrix account that sends the reply
+- use the recipient user's access token for the API calls below
+- match `sender` in the push rule against the bot user's full MXID
+
+1. Configure OpenClaw to use quiet previews:
+
+```json5
+{
+  channels: {
+    matrix: {
+      streaming: "quiet",
+    },
+  },
+}
+```
+
+2. Make sure the recipient account already receives normal Matrix push notifications. Quiet preview
+   rules only work if that user already has working pushers/devices.
+
+3. Get the recipient user's access token.
+   - Use the receiving user's token, not the bot's token.
+   - Reusing an existing client session token is usually easiest.
+   - If you need to mint a fresh token, you can log in through the standard Matrix Client-Server API:
+
+```bash
+curl -sS -X POST \
+  "https://matrix.example.org/_matrix/client/v3/login" \
+  -H "Content-Type: application/json" \
+  --data '{
+    "type": "m.login.password",
+    "identifier": {
+      "type": "m.id.user",
+      "user": "@alice:example.org"
+    },
+    "password": "REDACTED"
+  }'
+```
+
+4. Verify the recipient account already has pushers:
+
+```bash
+curl -sS \
+  -H "Authorization: Bearer $USER_ACCESS_TOKEN" \
+  "https://matrix.example.org/_matrix/client/v3/pushers"
+```
+
+If this returns no active pushers/devices, fix normal Matrix notifications first before adding the
+OpenClaw rule below.
+
+OpenClaw marks finalized text-only preview edits with:
+
+```json
+{
+  "com.openclaw.finalized_preview": true
+}
+```
+
+5. Create an override push rule for each recipient account which should receive these notifications:
+
+```bash
+curl -sS -X PUT \
+  "https://matrix.example.org/_matrix/client/v3/pushrules/global/override/openclaw-finalized-preview-botname" \
+  -H "Authorization: Bearer $USER_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{
+    "conditions": [
+      { "kind": "event_match", "key": "type", "pattern": "m.room.message" },
+      {
+        "kind": "event_property_is",
+        "key": "content.m\\.relates_to.rel_type",
+        "value": "m.replace"
+      },
+      {
+        "kind": "event_property_is",
+        "key": "content.com\\.openclaw\\.finalized_preview",
+        "value": true
+      },
+      { "kind": "event_match", "key": "sender", "pattern": "@bot:example.org" }
+    ],
+    "actions": [
+      "notify",
+      { "set_tweak": "sound", "value": "default" },
+      { "set_tweak": "highlight", "value": false }
+    ]
+  }'
+```
+
+Replace these values before you run the command:
+
+- `https://matrix.example.org`: your homeserver base URL
+- `$USER_ACCESS_TOKEN`: the receiving user's access token
+- `openclaw-finalized-preview-botname`: a rule ID unique to this bot for this receiving user
+- `@bot:example.org`: your OpenClaw Matrix bot MXID, not the receiving user's MXID
+
+Important for multi-bot setups:
+
+- Push rules are keyed by `ruleId`. Re-running `PUT` against the same rule ID updates that one rule.
+- If one receiving user should notify for multiple OpenClaw Matrix bot accounts, create one rule per bot with a unique rule ID for each sender match.
+- A simple pattern is `openclaw-finalized-preview-<botname>`, such as `openclaw-finalized-preview-ops` or `openclaw-finalized-preview-support`.
+
+The rule is evaluated against the event sender:
+
+- authenticate with the receiving user's token
+- match `sender` against the OpenClaw bot MXID
+
+6. Verify the rule exists:
+
+```bash
+curl -sS \
+  -H "Authorization: Bearer $USER_ACCESS_TOKEN" \
+  "https://matrix.example.org/_matrix/client/v3/pushrules/global/override/openclaw-finalized-preview-botname"
+```
+
+7. Test a streamed reply. In quiet mode, the room should show a quiet draft preview and the final
+   in-place edit should notify once the block or turn finishes.
+
+If you need to remove the rule later, delete that same rule ID with the receiving user's token:
+
+```bash
+curl -sS -X DELETE \
+  -H "Authorization: Bearer $USER_ACCESS_TOKEN" \
+  "https://matrix.example.org/_matrix/client/v3/pushrules/global/override/openclaw-finalized-preview-botname"
+```
+
+Notes:
+
+- Create the rule with the receiving user's access token, not the bot's.
+- New user-defined `override` rules are inserted ahead of default suppress rules, so no extra ordering parameter is needed.
+- This only affects text-only preview edits that OpenClaw can safely finalize in place. Media fallbacks and stale-preview fallbacks still use normal Matrix delivery.
+- If `GET /_matrix/client/v3/pushers` shows no pushers, the user does not yet have working Matrix push delivery for this account/device.
+
+#### Synapse
+
+For Synapse, the setup above is usually enough by itself:
+
+- No special `homeserver.yaml` change is required for finalized OpenClaw preview notifications.
+- If your Synapse deployment already sends normal Matrix push notifications, the user token + `pushrules` call above is the main setup step.
+- If you run Synapse behind a reverse proxy or workers, make sure `/_matrix/client/.../pushrules/` reaches Synapse correctly.
+- If you run Synapse workers, make sure pushers are healthy. Push delivery is handled by the main process or `synapse.app.pusher` / configured pusher workers.
+
+#### Tuwunel
+
+For Tuwunel, use the same setup flow and push-rule API call shown above:
+
+- No Tuwunel-specific config is required for the finalized preview marker itself.
+- If normal Matrix notifications already work for that user, the user token + `pushrules` call above is the main setup step.
+- If notifications seem to disappear while the user is active on another device, check whether `suppress_push_when_active` is enabled. Tuwunel added this option in Tuwunel 1.4.2 on September 12, 2025, and it can intentionally suppress pushes to other devices while one device is active.
 
 ## Encryption and verification
 
@@ -311,7 +491,9 @@ Verbose restore diagnostics:
 openclaw matrix verify backup restore --verbose
 ```
 
-Delete the current server backup and create a fresh backup baseline:
+Delete the current server backup and create a fresh backup baseline. If the stored
+backup key cannot be loaded cleanly, this reset can also recreate secret storage so
+future cold starts can load the new backup key:
 
 ```bash
 openclaw matrix verify backup reset --yes
@@ -358,8 +540,11 @@ If the homeserver requires interactive auth to upload cross-signing keys, OpenCl
 
 Use `--force-reset-cross-signing` only when you intentionally want to discard the current cross-signing identity and create a new one.
 
-If you intentionally want to discard the current room-key backup and start a new backup baseline for future messages, use `openclaw matrix verify backup reset --yes`.
-Do this only when you accept that unrecoverable old encrypted history will stay unavailable.
+If you intentionally want to discard the current room-key backup and start a new
+backup baseline for future messages, use `openclaw matrix verify backup reset --yes`.
+Do this only when you accept that unrecoverable old encrypted history will stay
+unavailable and that OpenClaw may recreate secret storage if the current backup
+secret cannot be loaded safely.
 
 ### Fresh backup baseline
 
@@ -420,6 +605,7 @@ OpenClaw currently provides that in Node by:
 - using `fake-indexeddb` as the IndexedDB API shim expected by the SDK
 - restoring the Rust crypto IndexedDB contents from `crypto-idb-snapshot.json` before `initRustCrypto`
 - persisting the updated IndexedDB contents back to `crypto-idb-snapshot.json` after init and during runtime
+- serializing snapshot restore and persist against `crypto-idb-snapshot.json` with an advisory file lock so gateway runtime persistence and CLI maintenance do not race on the same snapshot file
 
 This is compatibility/storage plumbing, not a custom crypto implementation.
 The snapshot file is sensitive runtime state and is stored with restrictive file permissions.
@@ -502,12 +688,17 @@ The repair flow does not delete old rooms automatically. It only picks the healt
 
 Matrix supports native Matrix threads for both automatic replies and message-tool sends.
 
+- `dm.sessionScope: "per-user"` (default) keeps Matrix DM routing sender-scoped, so multiple DM rooms can share one session when they resolve to the same peer.
+- `dm.sessionScope: "per-room"` isolates each Matrix DM room into its own session key while still using normal DM auth and allowlist checks.
+- Explicit Matrix conversation bindings still win over `dm.sessionScope`, so bound rooms and threads keep their chosen target session.
 - `threadReplies: "off"` keeps replies top-level and keeps inbound threaded messages on the parent session.
 - `threadReplies: "inbound"` replies inside a thread only when the inbound message was already in that thread.
 - `threadReplies: "always"` keeps room replies in a thread rooted at the triggering message and routes that conversation through the matching thread-scoped session from the first triggering message.
 - `dm.threadReplies` overrides the top-level setting for DMs only. For example, you can keep room threads isolated while keeping DMs flat.
 - Inbound threaded messages include the thread root message as extra agent context.
 - Message-tool sends now auto-inherit the current Matrix thread when the target is the same room, or the same DM user target, unless an explicit `threadId` is provided.
+- Same-session DM user-target reuse only kicks in when the current session metadata proves the same DM peer on the same Matrix account; otherwise OpenClaw falls back to normal user-scoped routing.
+- When OpenClaw sees a Matrix DM room collide with another DM room on the same shared Matrix DM session, it posts a one-time `m.notice` in that room with the `/focus` escape hatch when thread bindings are enabled and the `dm.sessionScope` hint.
 - Runtime thread bindings are supported for Matrix. `/focus`, `/unfocus`, `/agents`, `/session idle`, `/session max-age`, and thread-bound `/acp spawn` now work in Matrix rooms and DMs.
 - Top-level Matrix room/DM `/focus` creates a new Matrix thread and binds it to the target session when `threadBindings.spawnSubagentSessions=true`.
 - Running `/focus` or `/acp spawn --thread here` inside an existing Matrix thread binds that current thread instead.
@@ -590,6 +781,17 @@ Current behavior:
 - Fetched room context (including reply and thread context lookups) is filtered by sender allowlists (`groupAllowFrom`), so non-allowlisted messages are excluded from agent context.
 - This filtering is channel-level hardening behavior. Other channels may still expose supplemental context as received.
 
+## Context visibility
+
+Matrix supports the shared `contextVisibility` control for supplemental room context such as fetched reply text, thread roots, and pending history.
+
+- `contextVisibility: "all"` is the default. Supplemental context is kept as received.
+- `contextVisibility: "allowlist"` filters supplemental context to senders allowed by the active room/user allowlist checks.
+- `contextVisibility: "allowlist_quote"` behaves like `allowlist`, but still keeps one explicit quoted reply.
+
+This setting affects supplemental context visibility, not whether the inbound message itself can trigger a reply.
+Trigger authorization still comes from `groupPolicy`, `groups`, `groupAllowFrom`, and DM policy settings.
+
 ## DM and room policy example
 
 ```json5
@@ -626,6 +828,48 @@ If an unapproved Matrix user keeps messaging you before approval, OpenClaw reuse
 
 See [Pairing](/channels/pairing) for the shared DM pairing flow and storage layout.
 
+## Exec approvals
+
+Matrix can act as an exec approval client for a Matrix account.
+
+- `channels.matrix.execApprovals.enabled`
+- `channels.matrix.execApprovals.approvers` (optional; falls back to `channels.matrix.dm.allowFrom`)
+- `channels.matrix.execApprovals.target` (`dm` | `channel` | `both`, default: `dm`)
+- `channels.matrix.execApprovals.agentFilter`
+- `channels.matrix.execApprovals.sessionFilter`
+
+Approvers must be Matrix user IDs such as `@owner:example.org`. Matrix auto-enables native exec approvals when `enabled` is unset or `"auto"` and at least one approver can be resolved, either from `execApprovals.approvers` or from `channels.matrix.dm.allowFrom`. Set `enabled: false` to disable Matrix as a native approval client explicitly. Approval requests otherwise fall back to other configured approval routes or the exec approval fallback policy.
+
+Native Matrix routing is exec-only today:
+
+- `channels.matrix.execApprovals.*` controls native DM/channel routing for exec approvals only.
+- Plugin approvals still use shared same-chat `/approve` plus any configured `approvals.plugin` forwarding.
+- Matrix can still reuse `channels.matrix.dm.allowFrom` for plugin-approval authorization when it can infer approvers safely, but it does not expose a separate native plugin-approval DM/channel fanout path.
+
+Delivery rules:
+
+- `target: "dm"` sends approval prompts to approver DMs
+- `target: "channel"` sends the prompt back to the originating Matrix room or DM
+- `target: "both"` sends to approver DMs and the originating Matrix room or DM
+
+Matrix approval prompts seed reaction shortcuts on the primary approval message:
+
+- `✅` = allow once
+- `❌` = deny
+- `♾️` = allow always when that decision is allowed by the effective exec policy
+
+Approvers can react on that message or use the fallback slash commands: `/approve <id> allow-once`, `/approve <id> allow-always`, or `/approve <id> deny`.
+
+Only resolved approvers can approve or deny. Channel delivery includes the command text, so only enable `channel` or `both` in trusted rooms.
+
+Matrix approval prompts reuse the shared core approval planner. The Matrix-specific native surface is transport only for exec approvals: room/DM routing and message send/update/delete behavior.
+
+Per-account override:
+
+- `channels.matrix.accounts.<account>.execApprovals`
+
+Related docs: [Exec approvals](/tools/exec-approvals)
+
 ## Multi-account example
 
 ```json5
@@ -657,6 +901,10 @@ See [Pairing](/channels/pairing) for the shared DM pairing flow and storage layo
 ```
 
 Top-level `channels.matrix` values act as defaults for named accounts unless an account overrides them.
+You can scope inherited room entries to one Matrix account with `groups.<room>.account` (or legacy `rooms.<room>.account`).
+Entries without `account` stay shared across all Matrix accounts, and entries with `account: "default"` still work when the default account is configured directly on top-level `channels.matrix.*`.
+Partial shared auth defaults do not create a separate implicit default account by themselves. OpenClaw only synthesizes the top-level `default` account when that default has fresh auth (`homeserver` plus `accessToken`, or `homeserver` plus `userId` and `password`); named accounts can still stay discoverable from `homeserver` plus `userId` when cached credentials satisfy auth later.
+If Matrix already has exactly one named account, or `defaultAccount` points at an existing named account key, single-account-to-multi-account repair/setup promotion preserves that account instead of creating a fresh `accounts.default` entry. Only Matrix auth/bootstrap keys move into that promoted account; shared delivery-policy keys stay at the top level.
 Set `defaultAccount` when you want OpenClaw to prefer one named Matrix account for implicit routing, probing, and CLI operations.
 If you configure multiple named accounts, set `defaultAccount` or pass `--account <id>` for CLI commands that rely on implicit account selection.
 Pass `--account <id>` to `openclaw matrix verify ...` and `openclaw matrix devices ...` when you want to override that implicit selection for one command.
@@ -744,12 +992,16 @@ Live directory lookup uses the logged-in Matrix account:
 - `initialSyncLimit`: startup sync event limit.
 - `encryption`: enable E2EE.
 - `allowlistOnly`: force allowlist-only behavior for DMs and rooms.
+- `allowBots`: allow messages from other configured OpenClaw Matrix accounts (`true` or `"mentions"`).
 - `groupPolicy`: `open`, `allowlist`, or `disabled`.
+- `contextVisibility`: supplemental room-context visibility mode (`all`, `allowlist`, `allowlist_quote`).
 - `groupAllowFrom`: allowlist of user IDs for room traffic.
 - `groupAllowFrom` entries should be full Matrix user IDs. Unresolved names are ignored at runtime.
 - `historyLimit`: max room messages to include as group history context. Falls back to `messages.groupChat.historyLimit`. Set `0` to disable.
 - `replyToMode`: `off`, `first`, or `all`.
-- `streaming`: `off` (default) or `partial`. `partial` enables single-message draft previews with edit-in-place updates.
+- `markdown`: optional Markdown rendering configuration for outbound Matrix text.
+- `streaming`: `off` (default), `partial`, `quiet`, `true`, or `false`. `partial` and `true` enable preview-first draft updates with normal Matrix text messages. `quiet` uses non-notifying preview notices for self-hosted push-rule setups.
+- `blockStreaming`: `true` enables separate progress messages for completed assistant blocks while draft preview streaming is active.
 - `threadReplies`: `off`, `inbound`, or `always`.
 - `threadBindings`: per-channel overrides for thread-bound session routing and lifecycle.
 - `startupVerification`: automatic self-verification request mode on startup (`if-unverified`, `off`).
@@ -763,11 +1015,22 @@ Live directory lookup uses the logged-in Matrix account:
 - `mediaMaxMb`: media size cap in MB for Matrix media handling. It applies to outbound sends and inbound media processing.
 - `autoJoin`: invite auto-join policy (`always`, `allowlist`, `off`). Default: `off`.
 - `autoJoinAllowlist`: rooms/aliases allowed when `autoJoin` is `allowlist`. Alias entries are resolved to room IDs during invite handling; OpenClaw does not trust alias state claimed by the invited room.
-- `dm`: DM policy block (`enabled`, `policy`, `allowFrom`, `threadReplies`).
+- `dm`: DM policy block (`enabled`, `policy`, `allowFrom`, `sessionScope`, `threadReplies`).
 - `dm.allowFrom` entries should be full Matrix user IDs unless you already resolved them through live directory lookup.
+- `dm.sessionScope`: `per-user` (default) or `per-room`. Use `per-room` when you want each Matrix DM room to keep separate context even if the peer is the same.
 - `dm.threadReplies`: DM-only thread policy override (`off`, `inbound`, `always`). It overrides the top-level `threadReplies` setting for both reply placement and session isolation in DMs.
+- `execApprovals`: Matrix-native exec approval delivery (`enabled`, `approvers`, `target`, `agentFilter`, `sessionFilter`).
+- `execApprovals.approvers`: Matrix user IDs allowed to approve exec requests. Optional when `dm.allowFrom` already identifies the approvers.
+- `execApprovals.target`: `dm | channel | both` (default: `dm`).
 - `accounts`: named per-account overrides. Top-level `channels.matrix` values act as defaults for these entries.
 - `groups`: per-room policy map. Prefer room IDs or aliases; unresolved room names are ignored at runtime. Session/group identity uses the stable room ID after resolution, while human-readable labels still come from room names.
+- `groups.<room>.account`: restrict one inherited room entry to a specific Matrix account in multi-account setups.
+- `groups.<room>.allowBots`: room-level override for configured-bot senders (`true` or `"mentions"`).
+- `groups.<room>.users`: per-room sender allowlist.
+- `groups.<room>.tools`: per-room tool allow/deny overrides.
+- `groups.<room>.autoReply`: room-level mention-gating override. `true` disables mention requirements for that room; `false` forces them back on.
+- `groups.<room>.skills`: optional room-level skill filter.
+- `groups.<room>.systemPrompt`: optional room-level system prompt snippet.
 - `rooms`: legacy alias for `groups`.
 - `actions`: per-action tool gating (`messages`, `reactions`, `pins`, `profile`, `memberInfo`, `channelInfo`, `verification`).
 

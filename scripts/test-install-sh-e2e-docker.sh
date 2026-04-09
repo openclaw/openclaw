@@ -14,7 +14,7 @@ echo "==> Build image: $IMAGE_NAME"
 docker build \
   -t "$IMAGE_NAME" \
   -f "$ROOT_DIR/scripts/docker/install-sh-e2e/Dockerfile" \
-  "$ROOT_DIR/scripts/docker/install-sh-e2e"
+  "$ROOT_DIR/scripts/docker"
 
 echo "==> Run E2E installer test"
 docker run --rm \

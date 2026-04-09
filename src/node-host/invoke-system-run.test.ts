@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1319,6 +1320,36 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     }
   });
 
+  it("prefers strict inline-eval denial over generic allowlist prompts", async () => {
+    setRuntimeConfigSnapshot({
+      tools: {
+        exec: {
+          strictInlineEval: true,
+        },
+      },
+    });
+    try {
+      const { runCommand, sendInvokeResult, sendNodeEvent } = await runSystemInvoke({
+        preferMacAppExecHost: false,
+        command: ["awk", 'BEGIN{system("id")}', "/dev/null"],
+        security: "allowlist",
+        ask: "on-miss",
+      });
+
+      expect(runCommand).not.toHaveBeenCalled();
+      expect(sendNodeEvent).toHaveBeenCalledWith(
+        expect.anything(),
+        "exec.denied",
+        expect.objectContaining({ reason: "approval-required" }),
+      );
+      expectInvokeErrorMessage(sendInvokeResult, {
+        message: "awk inline program requires explicit approval in strictInlineEval mode",
+      });
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
   it.each([
     { executable: "python3", args: ["-c", "print('hi')"] },
     { executable: "awk", args: ['BEGIN{system("id")}', "/dev/null"] },
@@ -1478,6 +1509,62 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       });
     } finally {
       clearRuntimeConfigSnapshot();
+    }
+  });
+
+  it("reuses exact-command durable trust for shell-wrapper reruns", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-wrapper-allow-"));
+    try {
+      const prepared = buildSystemRunApprovalPlan({
+        command: ["/bin/sh", "-lc", "cd ."],
+        cwd: tempDir,
+      });
+      expect(prepared.ok).toBe(true);
+      if (!prepared.ok) {
+        throw new Error("unreachable");
+      }
+
+      await withTempApprovalsHome({
+        approvals: {
+          version: 1,
+          defaults: { security: "allowlist", ask: "on-miss", askFallback: "full" },
+          agents: {
+            main: {
+              allowlist: [
+                {
+                  pattern: `=command:${crypto
+                    .createHash("sha256")
+                    .update(prepared.plan.commandText)
+                    .digest("hex")
+                    .slice(0, 16)}`,
+                  source: "allow-always",
+                },
+              ],
+            },
+          },
+        },
+        run: async () => {
+          const rerun = await runSystemInvoke({
+            preferMacAppExecHost: false,
+            command: prepared.plan.argv,
+            rawCommand: prepared.plan.commandText,
+            systemRunPlan: prepared.plan,
+            cwd: prepared.plan.cwd ?? tempDir,
+            security: "allowlist",
+            ask: "on-miss",
+            runCommand: vi.fn(async () => createLocalRunResult("shell-wrapper-reused")),
+          });
+
+          expect(rerun.runCommand).toHaveBeenCalledTimes(1);
+          expectInvokeOk(rerun.sendInvokeResult, { payloadContains: "shell-wrapper-reused" });
+        },
+      });
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 });

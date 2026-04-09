@@ -14,7 +14,7 @@ import {
 } from "../plugins/provider-runtime.js";
 import type { ProviderRuntimeModel } from "../plugins/types.js";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
-import { PROVIDER_ENV_API_KEY_CANDIDATES } from "./model-auth-env-vars.js";
+import { resolveProviderEnvApiKeyCandidates } from "./model-auth-env-vars.js";
 import { resolveEnvApiKey } from "./model-auth-env.js";
 import { resolvePiCredentialMapFromStore, type PiCredentialMap } from "./pi-auth-credentials.js";
 
@@ -232,7 +232,7 @@ function resolvePiCredentials(agentDir: string): PiCredentialMap {
   // pi-coding-agent hides providers from its registry when auth storage lacks
   // a matching credential entry. Mirror env-backed provider auth here so
   // live/model discovery sees the same providers runtime auth can use.
-  for (const provider of Object.keys(PROVIDER_ENV_API_KEY_CANDIDATES)) {
+  for (const provider of Object.keys(resolveProviderEnvApiKeyCandidates())) {
     if (credentials[provider]) {
       continue;
     }

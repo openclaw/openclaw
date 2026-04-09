@@ -1,5 +1,8 @@
 export function normalizeProviderId(provider: string): string {
   const normalized = provider.trim().toLowerCase();
+  if (normalized === "modelstudio" || normalized === "qwencloud") {
+    return "qwen";
+  }
   if (normalized === "z.ai" || normalized === "z-ai") {
     return "zai";
   }

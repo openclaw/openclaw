@@ -1,4 +1,3 @@
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import {
   isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
@@ -9,15 +8,14 @@ import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
 } from "openclaw/plugin-sdk/config-runtime";
-import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import {
   resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMsForChannel,
   resolveThreadBindingSpawnPolicy,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
+import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -33,6 +31,7 @@ import {
   resolveTelegramUpdateId,
   type TelegramUpdateKeyContext,
 } from "./bot-updates.js";
+import { resolveDefaultAgentId } from "./bot.agent.runtime.js";
 import { apiThrottler, Bot, sequentialize, type ApiClientOptions } from "./bot.runtime.js";
 import { buildTelegramGroupPeerId, resolveTelegramStreamMode } from "./bot/helpers.js";
 import { resolveTelegramTransport, type TelegramTransport } from "./fetch.js";
@@ -74,6 +73,7 @@ type TelegramBotRuntime = {
   sequentialize: typeof sequentialize;
   apiThrottler: typeof apiThrottler;
 };
+type TelegramBotInstance = InstanceType<TelegramBotRuntime["Bot"]>;
 
 const DEFAULT_TELEGRAM_BOT_RUNTIME: TelegramBotRuntime = {
   Bot,
@@ -135,7 +135,7 @@ function extractTelegramApiMethod(input: TelegramFetchInput): string | null {
   }
 }
 
-export function createTelegramBot(opts: TelegramBotOptions) {
+export function createTelegramBot(opts: TelegramBotOptions): TelegramBotInstance {
   const botRuntime = telegramBotRuntimeForTest ?? DEFAULT_TELEGRAM_BOT_RUNTIME;
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
   const telegramDeps = opts.telegramDeps ?? defaultTelegramBotDeps;
@@ -437,9 +437,13 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     const sessionKey =
       params.sessionKey ??
       `agent:${agentId}:telegram:group:${buildTelegramGroupPeerId(params.chatId, params.messageThreadId)}`;
-    const storePath = resolveStorePath(cfg.session?.store, { agentId });
+    const storePath = telegramDeps.resolveStorePath(cfg.session?.store, { agentId });
     try {
-      const store = (telegramDeps.loadSessionStore ?? loadSessionStore)(storePath);
+      const loadSessionStore = telegramDeps.loadSessionStore;
+      if (!loadSessionStore) {
+        return undefined;
+      }
+      const store = loadSessionStore(storePath);
       const entry = store[sessionKey];
       if (entry?.groupActivation === "always") {
         return false;

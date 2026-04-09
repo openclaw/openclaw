@@ -64,6 +64,10 @@ describe("runGatewayHttpRequestStages", () => {
 
     expect(result).toBe(true);
     expect(stageC).toHaveBeenCalled();
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('stage "async-broken" threw'),
+      expect.any(Error),
+    );
 
     consoleSpy.mockRestore();
   });

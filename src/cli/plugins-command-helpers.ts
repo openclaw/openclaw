@@ -4,7 +4,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub.js";
 import { applyExclusiveSlotSelection } from "../plugins/slots.js";
-import { buildPluginStatusReport } from "../plugins/status.js";
+import { buildPluginDiagnosticsReport } from "../plugins/status.js";
 import { defaultRuntime } from "../runtime.js";
 import { theme } from "../terminal/theme.js";
 
@@ -40,7 +40,7 @@ export function applySlotSelectionForPlugin(
   config: OpenClawConfig,
   pluginId: string,
 ): { config: OpenClawConfig; warnings: string[] } {
-  const report = buildPluginStatusReport({ config });
+  const report = buildPluginDiagnosticsReport({ config });
   const plugin = report.plugins.find((entry) => entry.id === pluginId);
   if (!plugin) {
     return { config, warnings: [] };

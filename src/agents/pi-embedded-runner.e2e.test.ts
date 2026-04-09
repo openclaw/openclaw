@@ -20,8 +20,8 @@ const disposeSessionMcpRuntimeMock = vi.fn<(sessionId: string) => Promise<void>>
 });
 let refreshRuntimeAuthOnFirstPromptError = false;
 
-vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+vi.mock("@mariozechner/pi-ai", async () => {
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
 
   const buildAssistantMessage = (model: { api: string; provider: string; id: string }) => ({
     role: "assistant" as const,
@@ -101,8 +101,10 @@ const installRunEmbeddedMocks = () => {
   vi.doMock("./pi-bundle-mcp-tools.js", () => ({
     disposeSessionMcpRuntime: (sessionId: string) => disposeSessionMcpRuntimeMock(sessionId),
   }));
-  vi.doMock("./pi-embedded-runner/model.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("./pi-embedded-runner/model.js")>();
+  vi.doMock("./pi-embedded-runner/model.js", async () => {
+    const actual = await vi.importActual<typeof import("./pi-embedded-runner/model.js")>(
+      "./pi-embedded-runner/model.js",
+    );
     return {
       ...actual,
       resolveModelAsync: async (provider: string, modelId: string) =>
@@ -119,15 +121,17 @@ const installRunEmbeddedMocks = () => {
       stopRuntimeAuthRefreshTimer: vi.fn(),
     }),
   }));
-  vi.doMock("../plugins/provider-runtime.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
+  vi.doMock("../plugins/provider-runtime.js", async () => {
+    const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+      "../plugins/provider-runtime.js",
+    );
     return {
       ...actual,
       prepareProviderRuntimeAuth: vi.fn(async () => undefined),
     };
   });
-  vi.doMock("./models-config.js", async (importOriginal) => {
-    const mod = await importOriginal<typeof import("./models-config.js")>();
+  vi.doMock("./models-config.js", async () => {
+    const mod = await vi.importActual<typeof import("./models-config.js")>("./models-config.js");
     return {
       ...mod,
       ensureOpenClawModelsJson: vi.fn(async () => ({ wrote: false })),
@@ -340,6 +344,59 @@ describe("runEmbeddedPiAgent", () => {
     expect(result.payloads?.[0]).toMatchObject({ text: "ok" });
     expect(disposeSessionMcpRuntimeMock).toHaveBeenCalledTimes(1);
     expect(disposeSessionMcpRuntimeMock).toHaveBeenCalledWith("session:test");
+  });
+
+  it("retries a planning-only GPT turn once with an act-now steer", async () => {
+    const sessionFile = nextSessionFile();
+    const cfg = createEmbeddedPiRunnerOpenAiConfig(["gpt-5.4"]);
+    const sessionKey = nextSessionKey();
+
+    runEmbeddedAttemptMock
+      .mockImplementationOnce(async (params: unknown) => {
+        expect((params as { prompt?: string }).prompt).toBe("ship it");
+        return makeEmbeddedRunnerAttempt({
+          assistantTexts: ["I'll inspect the files, make the change, and run the checks."],
+          lastAssistant: buildEmbeddedRunnerAssistant({
+            model: "gpt-5.4",
+            content: [
+              {
+                type: "text",
+                text: "I'll inspect the files, make the change, and run the checks.",
+              },
+            ],
+          }),
+        });
+      })
+      .mockImplementationOnce(async (params: unknown) => {
+        expect((params as { prompt?: string }).prompt).toContain(
+          "Do not restate the plan. Act now",
+        );
+        return makeEmbeddedRunnerAttempt({
+          assistantTexts: ["done"],
+          lastAssistant: buildEmbeddedRunnerAssistant({
+            model: "gpt-5.4",
+            content: [{ type: "text", text: "done" }],
+          }),
+        });
+      });
+
+    const result = await runEmbeddedPiAgent({
+      sessionId: "session:test",
+      sessionKey,
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "ship it",
+      provider: "openai",
+      model: "gpt-5.4",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("planning-only-retry"),
+      enqueue: immediateEnqueue,
+    });
+
+    expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+    expect(result.payloads?.[0]).toMatchObject({ text: "done" });
   });
 
   it("handles prompt error paths without dropping user state", async () => {

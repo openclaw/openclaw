@@ -1,50 +1,16 @@
 import { describe, expect, it } from "vitest";
-import {
-  resolveChannelContextVisibilityMode,
-  resolveDefaultContextVisibility,
-} from "./context-visibility.js";
-
-describe("resolveDefaultContextVisibility", () => {
-  it("reads channels.defaults.contextVisibility", () => {
-    expect(
-      resolveDefaultContextVisibility({
-        channels: {
-          defaults: {
-            contextVisibility: "allowlist_quote",
-          },
-        },
-      }),
-    ).toBe("allowlist_quote");
-  });
-});
-
-describe("resolveChannelContextVisibilityMode", () => {
-  it("prefers explicitly provided mode", () => {
-    expect(
-      resolveChannelContextVisibilityMode({
-        cfg: {},
-        channel: "slack",
-        configuredContextVisibility: "allowlist",
-      }),
-    ).toBe("allowlist");
-  });
-
-  it("falls back to account mode then channel mode then defaults", () => {
-    const cfg = {
-      channels: {
-        defaults: {
-          contextVisibility: "allowlist_quote" as const,
+          contextVisibility: "allowlist_quote",
         },
         slack: {
-          contextVisibility: "allowlist" as const,
+          contextVisibility: "allowlist",
           accounts: {
             work: {
-              contextVisibility: "all" as const,
+              contextVisibility: "all",
             },
           },
         },
       },
-    };
+    } satisfies OpenClawConfig;
     expect(
       resolveChannelContextVisibilityMode({
         cfg,
@@ -61,7 +27,11 @@ describe("resolveChannelContextVisibilityMode", () => {
     ).toBe("allowlist");
     expect(
       resolveChannelContextVisibilityMode({
-        cfg: { channels: { defaults: { contextVisibility: "allowlist_quote" } } },
+        cfg: {
+          channels: {
+            defaults: { contextVisibility: "allowlist_quote" },
+          },
+        } satisfies OpenClawConfig,
         channel: "signal",
       }),
     ).toBe("allowlist_quote");

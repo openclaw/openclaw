@@ -9,6 +9,33 @@ import { resolveBrowserRateLimitMessage } from "./client-fetch.js";
 
 export { isLoopbackHost };
 
+export function parseBrowserHttpUrl(raw: string, label: string) {
+  const trimmed = raw.trim();
+  const parsed = new URL(trimmed);
+  const allowed = ["http:", "https:", "ws:", "wss:"];
+  if (!allowed.includes(parsed.protocol)) {
+    throw new Error(`${label} must be http(s) or ws(s), got: ${parsed.protocol.replace(":", "")}`);
+  }
+
+  const isSecure = parsed.protocol === "https:" || parsed.protocol === "wss:";
+  const port =
+    parsed.port && Number.parseInt(parsed.port, 10) > 0
+      ? Number.parseInt(parsed.port, 10)
+      : isSecure
+        ? 443
+        : 80;
+
+  if (Number.isNaN(port) || port <= 0 || port > 65535) {
+    throw new Error(`${label} has invalid port: ${parsed.port}`);
+  }
+
+  return {
+    parsed,
+    port,
+    normalized: parsed.toString().replace(/\/$/, ""),
+  };
+}
+
 /**
  * Returns true when the URL uses a WebSocket protocol (ws: or wss:).
  * Used to distinguish direct-WebSocket CDP endpoints

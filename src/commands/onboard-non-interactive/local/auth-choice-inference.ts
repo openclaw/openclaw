@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveManifestProviderOnboardAuthFlags } from "../../../plugins/provider-auth-choices.js";
 import { CORE_ONBOARD_AUTH_FLAGS } from "../../onboard-core-auth-flags.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
@@ -18,10 +19,22 @@ function hasStringValue(value: unknown): boolean {
 }
 
 // Infer auth choice from explicit provider API key flags.
-export function inferAuthChoiceFromFlags(opts: OnboardOptions): AuthChoiceInference {
+export function inferAuthChoiceFromFlags(
+  opts: OnboardOptions,
+  params?: {
+    config?: OpenClawConfig;
+    workspaceDir?: string;
+    env?: NodeJS.ProcessEnv;
+  },
+): AuthChoiceInference {
   const flags = [
     ...CORE_ONBOARD_AUTH_FLAGS,
-    ...resolveManifestProviderOnboardAuthFlags(),
+    ...resolveManifestProviderOnboardAuthFlags({
+      config: params?.config,
+      workspaceDir: params?.workspaceDir,
+      env: params?.env,
+      includeUntrustedWorkspacePlugins: false,
+    }),
   ] as ReadonlyArray<{
     optionKey: string;
     authChoice: string;

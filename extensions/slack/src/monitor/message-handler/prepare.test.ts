@@ -5,8 +5,8 @@ import type { App } from "@slack/bolt";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
-import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/testing";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../../../src/channels/plugins/contracts/test-helpers.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMonitorContext } from "../context.js";
@@ -377,6 +377,19 @@ describe("slack prepareSlackMessage inbound contract", () => {
     );
 
     expectMainScopedDmClassification(prepared, { includeFromCheck: true });
+  });
+
+  it("uses the concrete DM channel as the live reply target while keeping user-scoped routing", async () => {
+    const prepared = await prepareMessageWith(
+      createDmScopeMainSlackCtx(),
+      createSlackAccount(),
+      createMainScopedDmMessage({}),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.replyTarget).toBe("channel:D0ACP6B1T8V");
+    expect(prepared!.ctxPayload.To).toBe("user:U1");
+    expect(prepared!.ctxPayload.NativeChannelId).toBe("D0ACP6B1T8V");
   });
 
   it("classifies D-prefix DMs when channel_type is missing", async () => {

@@ -1,17 +1,24 @@
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { resolveReservedGatewayMethodScope } from "../shared/gateway-method-policy.js";
+import {
+  ADMIN_SCOPE,
+  APPROVALS_SCOPE,
+  PAIRING_SCOPE,
+  READ_SCOPE,
+  TALK_SECRETS_SCOPE,
+  WRITE_SCOPE,
+  type OperatorScope,
+} from "./operator-scopes.js";
 
-export const ADMIN_SCOPE = "operator.admin" as const;
-export const READ_SCOPE = "operator.read" as const;
-export const WRITE_SCOPE = "operator.write" as const;
-export const APPROVALS_SCOPE = "operator.approvals" as const;
-export const PAIRING_SCOPE = "operator.pairing" as const;
-
-export type OperatorScope =
-  | typeof ADMIN_SCOPE
-  | typeof READ_SCOPE
-  | typeof WRITE_SCOPE
-  | typeof APPROVALS_SCOPE
-  | typeof PAIRING_SCOPE;
+export {
+  ADMIN_SCOPE,
+  APPROVALS_SCOPE,
+  PAIRING_SCOPE,
+  READ_SCOPE,
+  TALK_SECRETS_SCOPE,
+  WRITE_SCOPE,
+  type OperatorScope,
+};
 
 export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
   ADMIN_SCOPE,
@@ -19,6 +26,7 @@ export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
   WRITE_SCOPE,
   APPROVALS_SCOPE,
   PAIRING_SCOPE,
+  TALK_SECRETS_SCOPE,
 ];
 
 const NODE_ROLE_METHODS = new Set([
@@ -33,6 +41,7 @@ const NODE_ROLE_METHODS = new Set([
 
 const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
   [APPROVALS_SCOPE]: [
+    "exec.approval.get",
     "exec.approval.request",
     "exec.approval.waitDecision",
     "exec.approval.resolve",
@@ -45,6 +54,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "node.pair.list",
     "node.pair.reject",
     "node.pair.verify",
+    "node.pair.approve",
     "device.pair.list",
     "device.pair.approve",
     "device.pair.reject",
@@ -56,6 +66,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
   [READ_SCOPE]: [
     "health",
     "doctor.memory.status",
+    "doctor.memory.dreamDiary",
     "logs.tail",
     "channels.status",
     "status",
@@ -69,6 +80,8 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "agents.list",
     "agent.identity.get",
     "skills.status",
+    "skills.search",
+    "skills.detail",
     "voicewake.get",
     "sessions.list",
     "sessions.get",
@@ -110,7 +123,6 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "tts.setProvider",
     "voicewake.set",
     "node.invoke",
-    "node.pair.approve",
     "chat.send",
     "chat.abort",
     "sessions.create",
@@ -144,30 +156,9 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "set-heartbeats",
     "system-event",
     "agents.files.set",
-    // Previously matched by prefix "exec.approvals." — now explicit
-    "exec.approvals.get",
-    "exec.approvals.set",
-    "exec.approvals.node.get",
-    "exec.approvals.node.set",
-    // Previously matched by prefix "config." — now explicit
-    "config.set",
-    "config.apply",
-    "config.patch",
-    "config.schema",
-    // Previously matched by prefix "wizard." — now explicit
-    "wizard.start",
-    "wizard.next",
-    "wizard.cancel",
-    "wizard.status",
-    // Previously matched by prefix "update." — now explicit
-    "update.run",
   ],
+  [TALK_SECRETS_SCOPE]: [],
 };
-
-// Kept as safety net for any newly registered methods not yet in the explicit list.
-// Logs a warning at scope resolution time when a method is matched only by prefix,
-// signaling that it should be added to METHOD_SCOPE_GROUPS explicitly.
-const ADMIN_METHOD_PREFIXES = ["exec.approvals.", "config.", "wizard.", "update."] as const;
 
 const METHOD_SCOPE_BY_NAME = new Map<string, OperatorScope>(
   Object.entries(METHOD_SCOPE_GROUPS).flatMap(([scope, methods]) =>
@@ -175,28 +166,18 @@ const METHOD_SCOPE_BY_NAME = new Map<string, OperatorScope>(
   ),
 );
 
-// Track prefix-match warnings to emit at most once per method
-const prefixMatchWarned = new Set<string>();
-
 function resolveScopedMethod(method: string): OperatorScope | undefined {
   const explicitScope = METHOD_SCOPE_BY_NAME.get(method);
   if (explicitScope) {
     return explicitScope;
   }
+  const reservedScope = resolveReservedGatewayMethodScope(method);
+  if (reservedScope) {
+    return reservedScope;
+  }
   const pluginScope = getActivePluginRegistry()?.gatewayMethodScopes?.[method];
   if (pluginScope) {
     return pluginScope;
-  }
-  if (ADMIN_METHOD_PREFIXES.some((prefix) => method.startsWith(prefix))) {
-    // Prefix fallback — method should be added to METHOD_SCOPE_GROUPS explicitly
-    if (!prefixMatchWarned.has(method)) {
-      prefixMatchWarned.add(method);
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[method-scopes] WARNING: "${method}" matched via prefix fallback — add it to METHOD_SCOPE_GROUPS[ADMIN_SCOPE] for explicit classification`,
-      );
-    }
-    return ADMIN_SCOPE;
   }
   return undefined;
 }

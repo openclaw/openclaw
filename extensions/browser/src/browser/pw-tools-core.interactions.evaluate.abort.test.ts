@@ -29,7 +29,7 @@ vi.mock("./pw-session.js", () => {
   };
 });
 
-let evaluateViaPlaywright: typeof import("./pw-tools-core.interactions.js").evaluateViaPlaywright;
+const { evaluateViaPlaywright } = await import("./pw-tools-core.interactions.js");
 
 function createPendingEval() {
   let evalCalled!: () => void;
@@ -43,12 +43,10 @@ function createPendingEval() {
 }
 
 describe("evaluateViaPlaywright (abort)", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeEach(() => {
     vi.clearAllMocks();
     page = null;
     locator = null;
-    ({ evaluateViaPlaywright } = await import("./pw-tools-core.interactions.js"));
   });
 
   it.each([

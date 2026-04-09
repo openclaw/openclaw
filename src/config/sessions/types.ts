@@ -7,7 +7,7 @@ import type { TtsAutoMode } from "../types.tts.js";
 
 export type SessionScope = "per-sender" | "global";
 
-export type SessionChannelId = ChannelId | "webchat";
+export type SessionChannelId = ChannelId;
 
 export type SessionChatType = ChatType;
 
@@ -18,6 +18,8 @@ export type SessionOrigin = {
   chatType?: SessionChatType;
   from?: string;
   to?: string;
+  nativeChannelId?: string;
+  nativeDirectUserId?: string;
   accountId?: string;
   threadId?: string | number;
 };
@@ -65,13 +67,6 @@ export type AcpSessionRuntimeOptions = {
   backendExtras?: Record<string, string>;
 };
 
-export type CliSessionBinding = {
-  sessionId: string;
-  authProfileId?: string;
-  extraSystemPromptHash?: string;
-  mcpConfigHash?: string;
-};
-
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -80,6 +75,8 @@ export type SessionEntry = {
   lastHeartbeatText?: string;
   /** Timestamp (ms) when lastHeartbeatText was delivered. */
   lastHeartbeatSentAt?: number;
+  /** Heartbeat task state (task name -> last run timestamp ms). */
+  heartbeatTaskState?: Record<string, number>;
   sessionId: string;
   updatedAt: number;
   sessionFile?: string;
@@ -132,6 +129,14 @@ export type SessionEntry = {
   authProfileOverride?: string;
   authProfileOverrideSource?: "auto" | "user";
   authProfileOverrideCompactionCount?: number;
+  /**
+   * Set on explicit user-driven session model changes (for example `/model`
+   * and `sessions.patch`) during an active run. The embedded runner checks
+   * this flag to decide whether to throw `LiveSessionModelSwitchError`.
+   * System-initiated fallbacks (rate-limit retry rotation) never set this
+   * flag, so they are never mistaken for user-initiated switches.
+   */
+  liveModelSwitchPending?: boolean;
   groupActivation?: "mention" | "always";
   groupActivationNeedsSystemIntro?: boolean;
   sendPolicy?: "allow" | "deny";
@@ -172,9 +177,6 @@ export type SessionEntry = {
   memoryFlushAt?: number;
   memoryFlushCompactionCount?: number;
   memoryFlushContextHash?: string;
-  cliSessionIds?: Record<string, string>;
-  cliSessionBindings?: Record<string, CliSessionBinding>;
-  claudeCliSessionId?: string;
   label?: string;
   displayName?: string;
   channel?: string;

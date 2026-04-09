@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { captureScreenshot } from "./cdp.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { shouldUsePlaywrightForScreenshot } from "./profile-capabilities.js";
 
@@ -77,29 +78,25 @@ const localProfile: ResolvedBrowserProfile = {
   attachOnly: false,
 };
 
-let captureScreenshot: typeof import("./cdp.js").captureScreenshot;
-
-beforeEach(async () => {
+beforeEach(() => {
   sentMessages.length = 0;
   mockState.emulationCleared = false;
   mockState.emulatedTab = true;
   mockState.viewport = { w: 800, h: 600, dpr: 2, sw: 800, sh: 600 };
   mockState.naturalViewport = { w: 1920, h: 1080, dpr: 1 };
-  vi.resetModules();
-  ({ captureScreenshot } = await import("./cdp.js"));
 });
 
 describe("CDP screenshot params", () => {
-  it("viewport screenshot uses fromSurface: false without clip or emulation override", async () => {
+  it("viewport screenshot omits fromSurface without clip or emulation override", async () => {
     await captureScreenshot({ wsUrl: "ws://localhost:9222/devtools/page/X", format: "png" });
 
     const call = sentMessages.find((m) => m.method === "Page.captureScreenshot");
     expect(call).toBeDefined();
     expect(call!.params).toMatchObject({
       format: "png",
-      fromSurface: false,
       captureBeyondViewport: true,
     });
+    expect(call!.params).not.toHaveProperty("fromSurface");
     expect(call!.params).not.toHaveProperty("clip");
 
     const emulationCalls = sentMessages.filter(

@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import type {
   ChannelAccountSnapshot,
@@ -75,11 +76,11 @@ export function renderChannels(props: ChannelsProps) {
     <section class="card" style="margin-top: 18px;">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Channel health</div>
-          <div class="card-sub">Channel status snapshots from the gateway.</div>
+          <div class="card-title">${t("channels.health.title")}</div>
+          <div class="card-sub">${t("channels.health.subtitle")}</div>
         </div>
         <div class="muted">
-          ${props.lastSuccessAt ? formatRelativeTimestamp(props.lastSuccessAt) : "n/a"}
+          ${props.lastSuccessAt ? formatRelativeTimestamp(props.lastSuccessAt) : t("common.na")}
         </div>
       </div>
       ${
@@ -88,7 +89,7 @@ export function renderChannels(props: ChannelsProps) {
           : nothing
       }
       <pre class="code-block" style="margin-top: 12px;">
-${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : "No snapshot yet."}
+${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : t("channels.health.noSnapshotYet")}
       </pre
       >
     </section>
@@ -198,7 +199,7 @@ function renderGenericChannelCard(
   return html`
     <div class="card">
       <div class="card-title">${label}</div>
-      <div class="card-sub">Channel status and configuration.</div>
+      <div class="card-sub">${t("channels.generic.subtitle")}</div>
       ${accountCountLabel}
       ${
         accounts.length > 0
@@ -210,15 +211,15 @@ function renderGenericChannelCard(
           : html`
             <div class="status-list" style="margin-top: 16px;">
               <div>
-                <span class="label">Configured</span>
+                <span class="label">${t("common.configured")}</span>
                 <span>${formatNullableBoolean(displayState.configured)}</span>
               </div>
               <div>
-                <span class="label">Running</span>
+                <span class="label">${t("common.running")}</span>
                 <span>${formatNullableBoolean(displayState.running)}</span>
               </div>
               <div>
-                <span class="label">Connected</span>
+                <span class="label">${t("common.connected")}</span>
                 <span>${formatNullableBoolean(displayState.connected)}</span>
               </div>
             </div>
@@ -257,29 +258,29 @@ function hasRecentActivity(account: ChannelAccountSnapshot): boolean {
   return Date.now() - account.lastInboundAt < RECENT_ACTIVITY_THRESHOLD_MS;
 }
 
-function deriveRunningStatus(account: ChannelAccountSnapshot): "Yes" | "No" | "Active" {
+function deriveRunningStatus(account: ChannelAccountSnapshot): string {
   if (account.running) {
-    return "Yes";
+    return t("common.yes");
   }
   // If we have recent inbound activity, the channel is effectively running
   if (hasRecentActivity(account)) {
-    return "Active";
+    return t("common.active");
   }
-  return "No";
+  return t("common.no");
 }
 
-function deriveConnectedStatus(account: ChannelAccountSnapshot): "Yes" | "No" | "Active" | "n/a" {
+function deriveConnectedStatus(account: ChannelAccountSnapshot): string {
   if (account.connected === true) {
-    return "Yes";
+    return t("common.yes");
   }
   if (account.connected === false) {
-    return "No";
+    return t("common.no");
   }
   // If connected is null/undefined but we have recent activity, show as active
   if (hasRecentActivity(account)) {
-    return "Active";
+    return t("common.active");
   }
-  return "n/a";
+  return t("common.na");
 }
 
 function renderGenericAccount(account: ChannelAccountSnapshot) {
@@ -294,21 +295,23 @@ function renderGenericAccount(account: ChannelAccountSnapshot) {
       </div>
       <div class="status-list account-card-status">
         <div>
-          <span class="label">Running</span>
+          <span class="label">${t("common.running")}</span>
           <span>${runningStatus}</span>
         </div>
         <div>
-          <span class="label">Configured</span>
-          <span>${account.configured ? "Yes" : "No"}</span>
+          <span class="label">${t("common.configured")}</span>
+          <span>${account.configured ? t("common.yes") : t("common.no")}</span>
         </div>
         <div>
-          <span class="label">Connected</span>
+          <span class="label">${t("common.connected")}</span>
           <span>${connectedStatus}</span>
         </div>
         <div>
-          <span class="label">Last inbound</span>
+          <span class="label">${t("common.lastInbound")}</span>
           <span
-            >${account.lastInboundAt ? formatRelativeTimestamp(account.lastInboundAt) : "n/a"}</span
+            >${account.lastInboundAt
+              ? formatRelativeTimestamp(account.lastInboundAt)
+              : t("common.na")}</span
           >
         </div>
         ${

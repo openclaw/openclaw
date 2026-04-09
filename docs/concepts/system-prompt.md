@@ -12,14 +12,31 @@ OpenClaw builds a custom system prompt for every agent run. The prompt is **Open
 
 The prompt is assembled by OpenClaw and injected into each agent run.
 
+Provider plugins can contribute cache-aware prompt guidance without replacing
+the full OpenClaw-owned prompt. The provider runtime can:
+
+- replace a small set of named core sections (`interaction_style`,
+  `tool_call_style`, `execution_bias`)
+- inject a **stable prefix** above the prompt cache boundary
+- inject a **dynamic suffix** below the prompt cache boundary
+
+Use provider-owned contributions for model-family-specific tuning. Keep legacy
+`before_prompt_build` prompt mutation for compatibility or truly global prompt
+changes, not normal provider behavior.
+
 ## Structure
 
 The prompt is intentionally compact and uses fixed sections:
 
-- **Tooling**: current tool list + short descriptions.
+- **Tooling**: structured-tool source-of-truth reminder plus runtime tool-use guidance.
 - **Safety**: short guardrail reminder to avoid power-seeking behavior or bypassing oversight.
 - **Skills** (when available): tells the model how to load skill instructions on demand.
-- **OpenClaw Self-Update**: how to run `config.apply` and `update.run`.
+- **OpenClaw Self-Update**: how to inspect config safely with
+  `config.schema.lookup`, patch config with `config.patch`, replace the full
+  config with `config.apply`, and run `update.run` only on explicit user
+  request. The owner-only `gateway` tool also refuses to rewrite
+  `tools.exec.ask` / `tools.exec.security`, including legacy `tools.bash.*`
+  aliases that normalize to those protected exec paths.
 - **Workspace**: working directory (`agents.defaults.workspace`).
 - **Documentation**: local path to OpenClaw docs (repo or npm package) and when to read them.
 - **Workspace Files (injected)**: indicates bootstrap files are included below.
@@ -30,7 +47,32 @@ The prompt is intentionally compact and uses fixed sections:
 - **Runtime**: host, OS, node, model, repo root (when detected), thinking level (one line).
 - **Reasoning**: current visibility level + /reasoning toggle hint.
 
+The Tooling section also includes runtime guidance for long-running work:
+
+- use cron for future follow-up (`check back later`, reminders, recurring work)
+  instead of `exec` sleep loops, `yieldMs` delay tricks, or repeated `process`
+  polling
+- use `exec` / `process` only for commands that start now and continue running
+  in the background
+- when automatic completion wake is enabled, start the command once and rely on
+  the push-based wake path when it emits output or fails
+- use `process` for logs, status, input, or intervention when you need to
+  inspect a running command
+- if the task is larger, prefer `sessions_spawn`; sub-agent completion is
+  push-based and auto-announces back to the requester
+- do not poll `subagents list` / `sessions_list` in a loop just to wait for
+  completion
+
+When the experimental `update_plan` tool is enabled, Tooling also tells the
+model to use it only for non-trivial multi-step work, keep exactly one
+`in_progress` step, and avoid repeating the whole plan after each update.
+
 Safety guardrails in the system prompt are advisory. They guide model behavior but do not enforce policy. Use tool policy, exec approvals, sandboxing, and channel allowlists for hard enforcement; operators can disable these by design.
+
+On channels with native approval cards/buttons, the runtime prompt now tells the
+agent to rely on that native approval UI first. It should only include a manual
+`/approve` command when the tool result says chat approvals are unavailable or
+manual approval is the only path.
 
 ## Prompt modes
 
@@ -84,6 +126,9 @@ are filtered out to keep the sub-agent context small).
 Internal hooks can intercept this step via `agent:bootstrap` to mutate or replace
 the injected bootstrap files (for example swapping `SOUL.md` for an alternate persona).
 
+If you want to make the agent sound less generic, start with
+[SOUL.md Personality Guide](/concepts/soul).
+
 To inspect how much each injected file contributes (raw vs injected, truncation, plus tool schema overhead), use `/context list` or `/context detail`. See [Context](/concepts/context).
 
 ## Time handling
@@ -93,7 +138,8 @@ user timezone is known. To keep the prompt cache-stable, it now only includes
 the **time zone** (no dynamic clock or time format).
 
 Use `session_status` when the agent needs the current time; the status card
-includes a timestamp line.
+includes a timestamp line. The same tool can optionally set a per-session model
+override (`model=default` clears it).
 
 Configure with:
 
@@ -109,6 +155,10 @@ When eligible skills exist, OpenClaw injects a compact **available skills list**
 prompt instructs the model to use `read` to load the SKILL.md at the listed
 location (workspace, managed, or bundled). If no skills are eligible, the
 Skills section is omitted.
+
+Eligibility includes skill metadata gates, runtime environment/config checks,
+and the effective agent skill allowlist when `agents.defaults.skills` or
+`agents.list[].skills` is configured.
 
 ```
 <available_skills>
@@ -127,6 +177,6 @@ This keeps the base prompt small while still enabling targeted skill usage.
 When available, the system prompt includes a **Documentation** section that points to the
 local OpenClaw docs directory (either `docs/` in the repo workspace or the bundled npm
 package docs) and also notes the public mirror, source repo, community Discord, and
-ClawHub ([https://clawhub.com](https://clawhub.com)) for skills discovery. The prompt instructs the model to consult local docs first
+ClawHub ([https://clawhub.ai](https://clawhub.ai)) for skills discovery. The prompt instructs the model to consult local docs first
 for OpenClaw behavior, commands, configuration, or architecture, and to run
 `openclaw status` itself when possible (asking the user only when it lacks access).

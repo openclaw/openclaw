@@ -13,10 +13,13 @@ import {
 const DEFAULT_ALLOWED_DECISIONS = ["allow-once", "allow-always", "deny"] as const;
 
 export function buildApprovalPendingReplyPayload(params: {
+  approvalKind?: "exec" | "plugin";
   approvalId: string;
   approvalSlug: string;
   text: string;
+  agentId?: string | null;
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
+  sessionKey?: string | null;
   channelData?: Record<string, unknown>;
 }): ReplyPayload {
   const allowedDecisions = params.allowedDecisions ?? DEFAULT_ALLOWED_DECISIONS;
@@ -30,7 +33,10 @@ export function buildApprovalPendingReplyPayload(params: {
       execApproval: {
         approvalId: params.approvalId,
         approvalSlug: params.approvalSlug,
+        approvalKind: params.approvalKind ?? "exec",
+        agentId: params.agentId?.trim() || undefined,
         allowedDecisions,
+        sessionKey: params.sessionKey?.trim() || undefined,
         state: "pending",
       },
       ...params.channelData,
@@ -66,6 +72,7 @@ export function buildPluginApprovalPendingReplyPayload(params: {
   channelData?: Record<string, unknown>;
 }): ReplyPayload {
   return buildApprovalPendingReplyPayload({
+    approvalKind: "plugin",
     approvalId: params.request.id,
     approvalSlug: params.approvalSlug ?? params.request.id.slice(0, 8),
     text: params.text ?? buildPluginApprovalRequestMessage(params.request, params.nowMs),

@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { WebhookRequestBody } from "@line/bot-sdk";
-import { danger, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import { danger, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,

@@ -78,6 +78,7 @@ function applyDescribedAccountFields(
   described: ChannelAccountSnapshot | undefined,
 ) {
   if (!described) {
+    next.configured ??= true;
     return next;
   }
   if (typeof described.configured === "boolean") {

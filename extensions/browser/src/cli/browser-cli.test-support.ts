@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import type { GatewayRpcOpts } from "openclaw/plugin-sdk/browser-support";
+import type { GatewayRpcOpts } from "openclaw/plugin-sdk/browser-node-runtime";
 import { createCliRuntimeCapture } from "../../test-support.js";
 import type { CliRuntimeCapture } from "../../test-support.js";
 

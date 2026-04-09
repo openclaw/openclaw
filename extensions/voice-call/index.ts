@@ -7,7 +7,11 @@ import {
 import { createVoiceCallRuntime, type VoiceCallRuntime } from "./runtime-entry.js";
 import { registerVoiceCallCli } from "./src/cli.js";
 import {
-  VoiceCallConfigSchema,
+  formatVoiceCallLegacyConfigWarnings,
+  normalizeVoiceCallLegacyConfigInput,
+  parseVoiceCallPluginConfig,
+} from "./src/config-compat.js";
+import {
   resolveVoiceCallConfig,
   validateProviderConfig,
   type VoiceCallConfig,
@@ -16,23 +20,12 @@ import type { CoreConfig } from "./src/core-bridge.js";
 
 const voiceCallConfigSchema = {
   parse(value: unknown): VoiceCallConfig {
-    const raw =
-      value && typeof value === "object" && !Array.isArray(value)
-        ? (value as Record<string, unknown>)
-        : {};
-
-    const twilio = raw.twilio as Record<string, unknown> | undefined;
-    const legacyFrom = typeof twilio?.from === "string" ? twilio.from : undefined;
-
-    const enabled = typeof raw.enabled === "boolean" ? raw.enabled : true;
-    const providerRaw = raw.provider === "log" ? "mock" : raw.provider;
-    const provider = providerRaw ?? (enabled ? "mock" : undefined);
-
-    return VoiceCallConfigSchema.parse({
-      ...raw,
+    const normalized = normalizeVoiceCallLegacyConfigInput(value);
+    const enabled = typeof normalized.enabled === "boolean" ? normalized.enabled : true;
+    return parseVoiceCallPluginConfig({
+      ...normalized,
       enabled,
-      provider,
-      fromNumber: raw.fromNumber ?? legacyFrom,
+      provider: normalized.provider ?? (enabled ? "mock" : undefined),
     });
   },
   uiHints: {
@@ -72,40 +65,39 @@ const voiceCallConfigSchema = {
       advanced: true,
     },
     "streaming.enabled": { label: "Enable Streaming", advanced: true },
-    "streaming.openaiApiKey": {
-      label: "OpenAI Realtime API Key",
-      sensitive: true,
+    "streaming.provider": {
+      label: "Streaming Provider",
+      help: "Uses the first registered realtime transcription provider when unset.",
       advanced: true,
     },
-    "streaming.sttModel": { label: "Realtime STT Model", advanced: true },
+    "streaming.providers": { label: "Streaming Provider Config", advanced: true },
     "streaming.streamPath": { label: "Media Stream Path", advanced: true },
+    "realtime.enabled": { label: "Enable Realtime Voice", advanced: true },
+    "realtime.provider": {
+      label: "Realtime Voice Provider",
+      help: "Uses the first registered realtime voice provider when unset.",
+      advanced: true,
+    },
+    "realtime.streamPath": { label: "Realtime Stream Path", advanced: true },
+    "realtime.instructions": { label: "Realtime Instructions", advanced: true },
+    "realtime.providers": { label: "Realtime Provider Config", advanced: true },
     "tts.provider": {
       label: "TTS Provider Override",
       help: "Deep-merges with messages.tts (Microsoft is ignored for calls).",
       advanced: true,
     },
-    "tts.providers.openai.model": { label: "OpenAI TTS Model", advanced: true },
-    "tts.providers.openai.voice": { label: "OpenAI TTS Voice", advanced: true },
-    "tts.providers.openai.apiKey": {
-      label: "OpenAI API Key",
-      sensitive: true,
-      advanced: true,
-    },
-    "tts.providers.elevenlabs.modelId": { label: "ElevenLabs Model ID", advanced: true },
-    "tts.providers.elevenlabs.voiceId": { label: "ElevenLabs Voice ID", advanced: true },
-    "tts.providers.elevenlabs.apiKey": {
-      label: "ElevenLabs API Key",
-      sensitive: true,
-      advanced: true,
-    },
-    "tts.providers.elevenlabs.baseUrl": { label: "ElevenLabs Base URL", advanced: true },
+    "tts.providers": { label: "TTS Provider Config", advanced: true },
     publicUrl: { label: "Public Webhook URL", advanced: true },
     skipSignatureVerification: {
       label: "Skip Signature Verification",
       advanced: true,
     },
     store: { label: "Call Log Store Path", advanced: true },
-    responseModel: { label: "Response Model", advanced: true },
+    responseModel: {
+      label: "Response Model",
+      help: "Optional override. Falls back to the runtime default model when unset.",
+      advanced: true,
+    },
     responseSystemPrompt: { label: "Response System Prompt", advanced: true },
     responseTimeoutMs: { label: "Response Timeout (ms)", advanced: true },
   },
@@ -154,13 +146,12 @@ export default definePluginEntry({
     const validation = validateProviderConfig(config);
 
     if (api.pluginConfig && typeof api.pluginConfig === "object") {
-      const raw = api.pluginConfig as Record<string, unknown>;
-      const twilio = raw.twilio as Record<string, unknown> | undefined;
-      if (raw.provider === "log") {
-        api.logger.warn('[voice-call] provider "log" is deprecated; use "mock" instead');
-      }
-      if (typeof twilio?.from === "string") {
-        api.logger.warn("[voice-call] twilio.from is deprecated; use fromNumber instead");
+      for (const warning of formatVoiceCallLegacyConfigWarnings({
+        value: api.pluginConfig,
+        configPathPrefix: "plugins.entries.voice-call.config",
+        doctorFixCommand: "openclaw doctor --fix",
+      })) {
+        api.logger.warn(warning);
       }
     }
 
@@ -181,6 +172,7 @@ export default definePluginEntry({
         runtimePromise = createVoiceCallRuntime({
           config,
           coreConfig: api.config as CoreConfig,
+          fullConfig: api.config,
           agentRuntime: api.runtime.agent,
           ttsRuntime: api.runtime.tts,
           logger: api.logger,

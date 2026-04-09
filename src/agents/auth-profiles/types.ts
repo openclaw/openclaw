@@ -46,6 +46,10 @@ export type OAuthCredential = OAuthCredentials & {
   clientId?: string;
   email?: string;
   displayName?: string;
+  /**
+   * Legacy metadata preserved for backwards compatibility with older stores.
+   */
+  managedBy?: string;
 };
 
 export type AuthProfileCredential = ApiKeyCredential | TokenCredential | OAuthCredential;

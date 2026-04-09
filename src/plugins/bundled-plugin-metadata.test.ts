@@ -5,6 +5,7 @@ import {
   clearBundledPluginMetadataCache,
   listBundledPluginMetadata,
   resolveBundledPluginGeneratedPath,
+  resolveBundledPluginRepoEntryPath,
 } from "./bundled-plugin-metadata.js";
 import {
   createGeneratedPluginTempRoot,
@@ -12,6 +13,8 @@ import {
   pluginTestRepoRoot as repoRoot,
   writeJson,
 } from "./generated-plugin-test-helpers.js";
+import { collectBundledRuntimeSidecarPaths } from "./runtime-sidecar-paths-baseline.js";
+import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "./runtime-sidecar-paths.js";
 
 const BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS = 300_000;
 
@@ -59,6 +62,16 @@ describe("bundled plugin metadata", () => {
     },
   );
 
+  it(
+    "matches the checked-in runtime sidecar path baseline",
+    { timeout: BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS },
+    () => {
+      expect(BUNDLED_RUNTIME_SIDECAR_PATHS).toEqual(
+        collectBundledRuntimeSidecarPaths({ rootDir: repoRoot }),
+      );
+    },
+  );
+
   it("captures setup-entry metadata for bundled channel plugins", () => {
     const discord = listBundledPluginMetadata().find((entry) => entry.dirName === "discord");
     expect(discord?.source).toEqual({ source: "./index.ts", built: "index.js" });
@@ -87,10 +100,69 @@ describe("bundled plugin metadata", () => {
     );
   });
 
+  it("keeps bundled persisted-auth metadata on channel package manifests", () => {
+    const whatsapp = listBundledPluginMetadata().find((entry) => entry.dirName === "whatsapp");
+    expect(whatsapp?.packageManifest?.channel?.persistedAuthState).toEqual({
+      specifier: "./auth-presence",
+      exportName: "hasAnyWhatsAppAuth",
+    });
+
+    const matrix = listBundledPluginMetadata().find((entry) => entry.dirName === "matrix");
+    expect(matrix?.packageManifest?.channel?.persistedAuthState).toEqual({
+      specifier: "./auth-presence",
+      exportName: "hasAnyMatrixAuth",
+    });
+  });
+
+  it("keeps bundled configured-state metadata on channel package manifests", () => {
+    const configuredChannels = listBundledPluginMetadata()
+      .filter((entry) => ["discord", "irc", "slack", "telegram"].includes(entry.dirName))
+      .map((entry) => ({
+        dir: entry.dirName,
+        configuredState: entry.packageManifest?.channel?.configuredState,
+      }));
+    expect(configuredChannels).toEqual([
+      {
+        dir: "discord",
+        configuredState: {
+          specifier: "./configured-state",
+          exportName: "hasDiscordConfiguredState",
+        },
+      },
+      {
+        dir: "irc",
+        configuredState: {
+          specifier: "./configured-state",
+          exportName: "hasIrcConfiguredState",
+        },
+      },
+      {
+        dir: "slack",
+        configuredState: {
+          specifier: "./configured-state",
+          exportName: "hasSlackConfiguredState",
+        },
+      },
+      {
+        dir: "telegram",
+        configuredState: {
+          specifier: "./configured-state",
+          exportName: "hasTelegramConfiguredState",
+        },
+      },
+    ]);
+  });
+
   it("excludes test-only public surface artifacts", () => {
     listBundledPluginMetadata().forEach((entry) =>
       expectTestOnlyArtifactsExcluded(entry.publicSurfaceArtifacts ?? []),
     );
+  });
+
+  it("keeps config schemas on all bundled plugin manifests", () => {
+    for (const entry of listBundledPluginMetadata()) {
+      expect(entry.manifest.configSchema).toEqual(expect.any(Object));
+    }
   });
 
   it("prefers built generated paths when present and falls back to source paths", () => {
@@ -102,6 +174,45 @@ describe("bundled plugin metadata", () => {
 
     fs.writeFileSync(path.join(tempRoot, "plugin", "index.js"), "export {};\n", "utf8");
     expectGeneratedPathResolution(tempRoot, path.join("plugin", "index.js"));
+  });
+
+  it("resolves bundled repo entry paths from dist before workspace source", () => {
+    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-repo-entry-");
+    const pluginRoot = path.join(tempRoot, "extensions", "alpha");
+    const distPluginRoot = path.join(tempRoot, "dist", "extensions", "alpha");
+
+    writeJson(path.join(pluginRoot, "package.json"), {
+      name: "@openclaw/alpha",
+      version: "0.0.1",
+      openclaw: {
+        extensions: ["./index.ts"],
+      },
+    });
+    writeJson(path.join(pluginRoot, "openclaw.plugin.json"), {
+      id: "alpha",
+      configSchema: { type: "object" },
+    });
+    fs.writeFileSync(path.join(pluginRoot, "index.ts"), "export const source = true;\n", "utf8");
+
+    expect(
+      resolveBundledPluginRepoEntryPath({
+        rootDir: tempRoot,
+        pluginId: "alpha",
+        preferBuilt: true,
+      }),
+    ).toBe(path.join(pluginRoot, "index.ts"));
+
+    fs.mkdirSync(distPluginRoot, { recursive: true });
+    fs.writeFileSync(path.join(distPluginRoot, "index.js"), "export const built = true;\n", "utf8");
+
+    clearBundledPluginMetadataCache();
+    expect(
+      resolveBundledPluginRepoEntryPath({
+        rootDir: tempRoot,
+        pluginId: "alpha",
+        preferBuilt: true,
+      }),
+    ).toBe(path.join(distPluginRoot, "index.js"));
   });
 
   it("merges runtime channel schema metadata with manifest-owned channel config fields", () => {

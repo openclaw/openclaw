@@ -1,11 +1,10 @@
-import type { CliSessionBinding, SessionSystemPromptReport } from "../../config/sessions/types.js";
+import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { MessagingToolSend } from "../pi-embedded-messaging.js";
 
 export type EmbeddedPiAgentMeta = {
   sessionId: string;
   provider: string;
   model: string;
-  cliSessionBinding?: CliSessionBinding;
   compactionCount?: number;
   promptTokens?: number;
   usage?: {

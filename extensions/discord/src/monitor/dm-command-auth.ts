@@ -1,4 +1,4 @@
-import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth";
+import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth-native";
 import {
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithLists,

@@ -11,6 +11,11 @@ title: "BlueBubbles"
 
 Status: bundled plugin that talks to the BlueBubbles macOS server over HTTP. **Recommended for iMessage integration** due to its richer API and easier setup compared to the legacy imsg channel.
 
+## Bundled plugin
+
+Current OpenClaw releases bundle BlueBubbles, so normal packaged builds do not
+need a separate `openclaw plugins install` step.
+
 ## Overview
 
 - Runs on macOS via the BlueBubbles helper app ([bluebubbles.app](https://bluebubbles.app)).
@@ -404,9 +409,9 @@ Prefer `chat_guid` for stable routing:
 
 ## Security
 
-- Webhook requests are authenticated by comparing `guid`/`password` query params or headers against `channels.bluebubbles.password`. Requests from `localhost` are also accepted.
+- Webhook requests are authenticated by comparing `guid`/`password` query params or headers against `channels.bluebubbles.password`.
 - Keep the API password and webhook endpoint secret (treat them like credentials).
-- Localhost trust means a same-host reverse proxy can unintentionally bypass the password. If you proxy the gateway, require auth at the proxy and configure `gateway.trustedProxies`. See [Gateway security](/gateway/security#reverse-proxy-configuration).
+- There is no localhost bypass for BlueBubbles webhook auth. If you proxy webhook traffic, keep the BlueBubbles password on the request end-to-end. `gateway.trustedProxies` does not replace `channels.bluebubbles.password` here. See [Gateway security](/gateway/security#reverse-proxy-configuration).
 - Enable HTTPS + firewall rules on the BlueBubbles server if exposing it outside your LAN.
 
 ## Troubleshooting

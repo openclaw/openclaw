@@ -295,7 +295,7 @@ export function registerModelsCli(program: Command) {
 
   auth
     .command("add")
-    .description("Interactive auth helper (setup-token or paste token)")
+    .description("Interactive auth helper (provider auth or paste token)")
     .action(async () => {
       await runModelsCommand(async () => {
         await modelsAuthAddCommand({}, defaultRuntime);
@@ -324,7 +324,7 @@ export function registerModelsCli(program: Command) {
   auth
     .command("setup-token")
     .description("Run a provider CLI to create/sync a token (TTY required)")
-    .option("--provider <name>", "Provider id (default: anthropic)")
+    .option("--provider <name>", "Provider id")
     .option("--yes", "Skip confirmation", false)
     .action(async (opts) => {
       await runModelsCommand(async () => {

@@ -38,7 +38,11 @@ function setupTelegramSchemaWithDefault() {
                   default: "pairing",
                 },
               },
-              additionalProperties: false,
+              // validateConfigObjectWithPlugins starts from the core validated
+              // config, which can already include bundled runtime defaults for
+              // the channel. Keep this mock schema focused on the plugin-owned
+              // default under test instead of rejecting unrelated core fields.
+              additionalProperties: true,
             },
             uiHints: {},
           },

@@ -3,13 +3,16 @@ import { getApiProvider, unregisterApiProviders } from "@mariozechner/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getCustomApiRegistrySourceId } from "../custom-api-registry.js";
 import {
+  applyExtraParamsToAgentMock,
   contextEngineCompactMock,
   ensureRuntimePluginsLoaded,
   estimateTokensMock,
   getMemorySearchManagerMock,
   hookRunner,
   loadCompactHooksHarness,
+  resolveAgentTransportOverrideMock,
   resolveContextEngineMock,
+  resolveEmbeddedAgentStreamFnMock,
   resolveMemorySearchConfigMock,
   resolveModelMock,
   resolveSessionAgentIdMock,
@@ -207,6 +210,48 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       workspaceDir: "/tmp/workspace",
       allowGatewaySubagentBinding: true,
     });
+  });
+
+  it("routes compaction through shared stream resolution and extra params", async () => {
+    const resolvedStreamFn = vi.fn();
+    resolveEmbeddedAgentStreamFnMock.mockReturnValue(resolvedStreamFn);
+    applyExtraParamsToAgentMock.mockReturnValue({
+      effectiveExtraParams: { transport: "websocket" },
+    });
+    resolveContextEngineMock.mockResolvedValue({ info: { ownsCompaction: false } } as never);
+    resolveAgentTransportOverrideMock.mockReturnValue("websocket");
+
+    await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+
+    expect(resolveEmbeddedAgentStreamFnMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        currentStreamFn: expect.any(Function),
+        sessionId: "session-1",
+      }),
+    );
+    expect(applyExtraParamsToAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        streamFn: resolvedStreamFn,
+      }),
+      undefined,
+      "openai",
+      "gpt-5.4",
+      undefined,
+      undefined,
+      "main",
+      "/tmp/workspace",
+      expect.objectContaining({
+        provider: "openai",
+        id: "fake",
+      }),
+      "/tmp",
+    );
   });
 
   it("emits internal + plugin compaction hooks with counts", async () => {
@@ -540,6 +585,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
   });
 
   it("registers the Ollama api provider before compaction", async () => {
+    resolveContextEngineMock.mockResolvedValue({ info: { ownsCompaction: false } } as never);
     resolveModelMock.mockReturnValue({
       model: {
         provider: "ollama",
@@ -710,6 +756,41 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
       maintain.mock.calls[0]?.[0] as { runtimeContext?: Record<string, unknown> } | undefined
     )?.runtimeContext;
     expect(typeof runtimeContext?.rewriteTranscriptEntries).toBe("function");
+  });
+
+  it("resolves the effective compaction model before manual engine-owned compaction", async () => {
+    await compactEmbeddedPiSession(
+      wrappedCompactionArgs({
+        config: {
+          agents: {
+            defaults: {
+              compaction: {
+                model: "anthropic/claude-opus-4-6",
+              },
+            },
+          },
+        },
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        authProfileId: "openai:p1",
+      }),
+    );
+
+    expect(resolveModelMock).toHaveBeenCalledWith(
+      "anthropic",
+      "claude-opus-4-6",
+      expect.any(String),
+      expect.anything(),
+    );
+    expect(contextEngineCompactMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeContext: expect.objectContaining({
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          authProfileId: undefined,
+        }),
+      }),
+    );
   });
 
   it("does not fire after_compaction when compaction fails", async () => {

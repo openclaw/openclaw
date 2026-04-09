@@ -5,6 +5,7 @@ import { resolveArchiveKind } from "../infra/archive.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
@@ -55,6 +56,7 @@ type LoadedMarketplace = {
   manifest: MarketplaceManifest;
   rootDir: string;
   sourceLabel: string;
+  origin: MarketplaceManifestOrigin;
   cleanup?: () => Promise<void>;
 };
 
@@ -362,9 +364,10 @@ async function resolveLocalMarketplaceSource(
 
   const stat = await fs.stat(resolved);
   if (stat.isFile()) {
+    const rootDir = deriveMarketplaceRootFromManifestPath(resolved);
     return {
       ok: true,
-      rootDir: deriveMarketplaceRootFromManifestPath(resolved),
+      rootDir,
       manifestPath: resolved,
     };
   }
@@ -485,7 +488,7 @@ async function loadMarketplace(params: {
     if (!parsed.ok) {
       return parsed;
     }
-    const validated = validateMarketplaceManifest({
+    const validated = await validateMarketplaceManifest({
       manifest: parsed.manifest,
       sourceLabel: local.manifestPath,
       rootDir: local.rootDir,
@@ -500,6 +503,7 @@ async function loadMarketplace(params: {
         manifest: validated.manifest,
         rootDir: local.rootDir,
         sourceLabel,
+        origin: "local",
       },
     };
   };
@@ -561,7 +565,7 @@ async function loadMarketplace(params: {
     await cloned.cleanup();
     return parsed;
   }
-  const validated = validateMarketplaceManifest({
+  const validated = await validateMarketplaceManifest({
     manifest: parsed.manifest,
     sourceLabel: cloned.label,
     rootDir: cloned.rootDir,
@@ -578,6 +582,7 @@ async function loadMarketplace(params: {
       manifest: validated.manifest,
       rootDir: cloned.rootDir,
       sourceLabel: cloned.label,
+      origin: "remote",
       cleanup: cloned.cleanup,
     },
   };
@@ -802,11 +807,13 @@ async function downloadUrlToTempFile(
   }
 }
 
-function ensureInsideMarketplaceRoot(
+async function ensureInsideMarketplaceRoot(
   rootDir: string,
   candidate: string,
-): { ok: true; path: string } | { ok: false; error: string } {
+  options?: { canonicalRootDir?: string },
+): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
   const resolved = path.resolve(rootDir, candidate);
+  const resolvedExists = await pathExists(resolved);
   const relative = path.relative(rootDir, resolved);
   if (relative === ".." || relative.startsWith(`..${path.sep}`)) {
     return {
@@ -814,19 +821,67 @@ function ensureInsideMarketplaceRoot(
       error: `plugin source escapes marketplace root: ${candidate}`,
     };
   }
+
+  if (options?.canonicalRootDir) {
+    try {
+      const rootLstat = await fs.lstat(options.canonicalRootDir);
+      if (!rootLstat.isDirectory()) {
+        throw new Error("invalid marketplace root");
+      }
+
+      const rootRealPath = await fs.realpath(options.canonicalRootDir);
+      let existingPath = resolved;
+      // `pathExists` uses `fs.access`, so dangling symlinks are treated as missing and we walk up
+      // to the nearest existing ancestor. Live symlinks stop here and are canonicalized below.
+      while (!(await pathExists(existingPath))) {
+        const parentPath = path.dirname(existingPath);
+        if (parentPath === existingPath) {
+          throw new Error("unreachable marketplace path");
+        }
+        existingPath = parentPath;
+      }
+
+      const existingRealPath = await fs.realpath(existingPath);
+      if (!isPathInside(rootRealPath, existingRealPath)) {
+        throw new Error("marketplace path escapes canonical root");
+      }
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        (error.message === "invalid marketplace root" ||
+          error.message === "unreachable marketplace path" ||
+          error.message === "marketplace path escapes canonical root")
+      ) {
+        return {
+          ok: false,
+          error: `plugin source escapes marketplace root: ${candidate}`,
+        };
+      }
+      throw error;
+    }
+  }
+
+  if (!resolvedExists) {
+    return {
+      ok: false,
+      error: `plugin source not found in marketplace root: ${candidate}`,
+    };
+  }
+
   return { ok: true, path: resolved };
 }
 
-function validateMarketplaceManifest(params: {
+async function validateMarketplaceManifest(params: {
   manifest: MarketplaceManifest;
   sourceLabel: string;
   rootDir: string;
   origin: MarketplaceManifestOrigin;
-}): { ok: true; manifest: MarketplaceManifest } | { ok: false; error: string } {
+}): Promise<{ ok: true; manifest: MarketplaceManifest } | { ok: false; error: string }> {
   if (params.origin === "local") {
     return { ok: true, manifest: params.manifest };
   }
 
+  const canonicalRootDir = await fs.realpath(params.rootDir);
   for (const plugin of params.manifest.plugins) {
     const source = plugin.source;
     if (source.kind === "path") {
@@ -846,7 +901,9 @@ function validateMarketplaceManifest(params: {
             "remote marketplaces may only use relative plugin paths",
         };
       }
-      const resolved = ensureInsideMarketplaceRoot(params.rootDir, source.path);
+      const resolved = await ensureInsideMarketplaceRoot(params.rootDir, source.path, {
+        canonicalRootDir,
+      });
       if (!resolved.ok) {
         return {
           ok: false,
@@ -870,6 +927,7 @@ function validateMarketplaceManifest(params: {
 async function resolveMarketplaceEntryInstallPath(params: {
   source: MarketplaceEntrySource;
   marketplaceRootDir: string;
+  marketplaceOrigin: MarketplaceManifestOrigin;
   logger?: MarketplaceLogger;
   timeoutMs?: number;
 }): Promise<
@@ -893,9 +951,15 @@ async function resolveMarketplaceEntryInstallPath(params: {
         error: `unsupported remote plugin path source: ${params.source.path}`,
       };
     }
+    const canonicalRootDir =
+      params.marketplaceOrigin === "remote"
+        ? await fs.realpath(params.marketplaceRootDir)
+        : undefined;
     const resolved = path.isAbsolute(params.source.path)
       ? { ok: true as const, path: params.source.path }
-      : ensureInsideMarketplaceRoot(params.marketplaceRootDir, params.source.path);
+      : await ensureInsideMarketplaceRoot(params.marketplaceRootDir, params.source.path, {
+          canonicalRootDir,
+        });
     if (!resolved.ok) {
       return resolved;
     }
@@ -923,7 +987,10 @@ async function resolveMarketplaceEntryInstallPath(params: {
       params.source.kind === "github" || params.source.kind === "git"
         ? params.source.path?.trim() || "."
         : params.source.path.trim();
-    const target = ensureInsideMarketplaceRoot(cloned.rootDir, subPath);
+    const canonicalRootDir = await fs.realpath(cloned.rootDir);
+    const target = await ensureInsideMarketplaceRoot(cloned.rootDir, subPath, {
+      canonicalRootDir,
+    });
     if (!target.ok) {
       await cloned.cleanup();
       return target;
@@ -1069,6 +1136,7 @@ export async function installPluginFromMarketplace(
     const resolved = await resolveMarketplaceEntryInstallPath({
       source: entry.source,
       marketplaceRootDir: loaded.marketplace.rootDir,
+      marketplaceOrigin: loaded.marketplace.origin,
       logger: params.logger,
       timeoutMs: params.timeoutMs,
     });

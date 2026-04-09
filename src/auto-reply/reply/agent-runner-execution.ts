@@ -5,11 +5,8 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
-import { runCliAgent } from "../../agents/cli-runner.js";
-import { getCliSessionBinding } from "../../agents/cli-session.js";
-import { LiveSessionModelSwitchError } from "../../agents/live-model-switch.js";
+import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
-import { isCliProvider } from "../../agents/model-selection.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   isCompactionFailureError,
@@ -21,6 +18,7 @@ import {
   isTransientHttpError,
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
+import { isLikelyExecutionAckPrompt } from "../../agents/pi-embedded-runner/run/incomplete-turn.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
   resolveGroupSessionKey,
@@ -29,7 +27,8 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
-import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import {
@@ -56,6 +55,7 @@ import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
 import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.runtime.js";
+import type { ReplyOperation } from "./reply-run-registry.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 // Maximum number of LiveSessionModelSwitchError retries before surfacing a
@@ -63,6 +63,10 @@ import type { TypingSignaler } from "./typing-mode.js";
 // selection keeps conflicting with fallback model choices.
 // See: https://github.com/openclaw/openclaw/issues/58348
 export const MAX_LIVE_SWITCH_RETRIES = 2;
+const GPT_CHAT_BREVITY_ACK_MAX_CHARS = 420;
+const GPT_CHAT_BREVITY_ACK_MAX_SENTENCES = 3;
+const GPT_CHAT_BREVITY_SOFT_MAX_CHARS = 900;
+const GPT_CHAT_BREVITY_SOFT_MAX_SENTENCES = 6;
 
 export type RuntimeFallbackAttempt = {
   provider: string;
@@ -256,10 +260,206 @@ function isPureTransientRateLimitSummary(err: unknown): boolean {
   );
 }
 
+function isToolResultTurnMismatchError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("toolresult") &&
+    lower.includes("tooluse") &&
+    lower.includes("exceeds the number") &&
+    lower.includes("previous turn")
+  );
+}
+
+function buildExternalRunFailureText(message: string): string {
+  if (isToolResultTurnMismatchError(message)) {
+    return "⚠️ Session history got out of sync. Please try again, or use /new to start a fresh session.";
+  }
+  return "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
+}
+
+function shouldApplyOpenAIGptChatGuard(params: { provider?: string; model?: string }): boolean {
+  if (params.provider !== "openai" && params.provider !== "openai-codex") {
+    return false;
+  }
+  return /^gpt-5(?:[.-]|$)/i.test(params.model ?? "");
+}
+
+function countChatReplySentences(text: string): number {
+  return text
+    .trim()
+    .split(/(?<=[.!?])\s+/u)
+    .map((part) => part.trim())
+    .filter(Boolean).length;
+}
+
+function scoreChattyFinalReplyText(text: string): number {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return 0;
+  }
+  let score = 0;
+  const sentenceCount = countChatReplySentences(trimmed);
+  if (trimmed.length > 900) {
+    score += 1;
+  }
+  if (trimmed.length > 1_500) {
+    score += 1;
+  }
+  if (sentenceCount > 6) {
+    score += 1;
+  }
+  if (sentenceCount > 10) {
+    score += 1;
+  }
+  if (trimmed.split(/\n{2,}/u).filter(Boolean).length >= 3) {
+    score += 1;
+  }
+  if (
+    /\b(?:in summary|to summarize|here(?:'s| is) what|what changed|what I verified)\b/i.test(
+      trimmed,
+    )
+  ) {
+    score += 1;
+  }
+  return score;
+}
+
+function shortenChattyFinalReplyText(
+  text: string,
+  params: { maxChars: number; maxSentences: number },
+): string {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  const sentences = trimmed
+    .split(/(?<=[.!?])\s+/u)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  let shortened = sentences.slice(0, params.maxSentences).join(" ");
+  if (!shortened) {
+    shortened = trimmed.slice(0, params.maxChars).trimEnd();
+  }
+  if (shortened.length > params.maxChars) {
+    shortened = shortened.slice(0, params.maxChars).trimEnd();
+  }
+  if (shortened.length >= trimmed.length) {
+    return trimmed;
+  }
+  return shortened.replace(/[.,;:!?-]*$/u, "").trimEnd() + "...";
+}
+
+function applyOpenAIGptChatReplyGuard(params: {
+  provider?: string;
+  model?: string;
+  commandBody: string;
+  isHeartbeat: boolean;
+  payloads?: ReplyPayload[];
+}): void {
+  if (
+    params.isHeartbeat ||
+    !shouldApplyOpenAIGptChatGuard({
+      provider: params.provider,
+      model: params.model,
+    }) ||
+    !params.payloads?.length
+  ) {
+    return;
+  }
+
+  const trimmedCommand = params.commandBody.trim();
+  const isAckTurn = isLikelyExecutionAckPrompt(trimmedCommand);
+  const allowSoftCap =
+    !isAckTurn &&
+    trimmedCommand.length > 0 &&
+    trimmedCommand.length <= 120 &&
+    !/\b(?:detail|detailed|depth|deep dive|explain|compare|walk me through|why|how)\b/i.test(
+      trimmedCommand,
+    );
+
+  for (const payload of params.payloads) {
+    if (
+      !payload.text?.trim() ||
+      payload.isError ||
+      payload.isReasoning ||
+      payload.mediaUrl ||
+      (payload.mediaUrls?.length ?? 0) > 0 ||
+      payload.interactive ||
+      payload.text.includes("```")
+    ) {
+      continue;
+    }
+
+    if (isAckTurn) {
+      payload.text = shortenChattyFinalReplyText(payload.text, {
+        maxChars: GPT_CHAT_BREVITY_ACK_MAX_CHARS,
+        maxSentences: GPT_CHAT_BREVITY_ACK_MAX_SENTENCES,
+      });
+      continue;
+    }
+
+    if (allowSoftCap && scoreChattyFinalReplyText(payload.text) >= 4) {
+      payload.text = shortenChattyFinalReplyText(payload.text, {
+        maxChars: GPT_CHAT_BREVITY_SOFT_MAX_CHARS,
+        maxSentences: GPT_CHAT_BREVITY_SOFT_MAX_SENTENCES,
+      });
+    }
+  }
+}
+
+function buildRestartLifecycleReplyText(): string {
+  return "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
+}
+
+function resolveRestartLifecycleError(
+  err: unknown,
+): GatewayDrainingError | CommandLaneClearedError | undefined {
+  const pending = [err];
+  const seen = new Set<unknown>();
+
+  while (pending.length > 0) {
+    const candidate = pending.shift();
+    if (!candidate || seen.has(candidate)) {
+      continue;
+    }
+    seen.add(candidate);
+
+    if (candidate instanceof GatewayDrainingError || candidate instanceof CommandLaneClearedError) {
+      return candidate;
+    }
+
+    if (isFallbackSummaryError(candidate)) {
+      for (const attempt of candidate.attempts) {
+        pending.push(attempt.error);
+      }
+    }
+
+    if (candidate instanceof Error && "cause" in candidate) {
+      pending.push(candidate.cause);
+    }
+  }
+
+  return undefined;
+}
+
+function isReplyOperationUserAbort(replyOperation?: ReplyOperation): boolean {
+  return (
+    replyOperation?.result?.kind === "aborted" && replyOperation.result.code === "aborted_by_user"
+  );
+}
+
+function isReplyOperationRestartAbort(replyOperation?: ReplyOperation): boolean {
+  return (
+    replyOperation?.result?.kind === "aborted" &&
+    replyOperation.result.code === "aborted_for_restart"
+  );
+}
+
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;
   followupRun: FollowupRun;
   sessionCtx: TemplateContext;
+  replyOperation?: ReplyOperation;
   opts?: GetReplyOptions;
   typingSignals: TypingSignaler;
   blockReplyPipeline: BlockReplyPipeline | null;
@@ -494,122 +694,6 @@ export async function runAgentTurnWithFallback(params: {
             );
           }
 
-          if (isCliProvider(provider, params.followupRun.run.config)) {
-            const startedAt = Date.now();
-            notifyAgentRunStart();
-            emitAgentEvent({
-              runId,
-              stream: "lifecycle",
-              data: {
-                phase: "start",
-                startedAt,
-              },
-            });
-            const cliSessionBinding = getCliSessionBinding(
-              params.getActiveSessionEntry(),
-              provider,
-            );
-            const authProfileId =
-              provider === params.followupRun.run.provider
-                ? params.followupRun.run.authProfileId
-                : undefined;
-            return (async () => {
-              let lifecycleTerminalEmitted = false;
-              try {
-                const result = await runCliAgent({
-                  sessionId: params.followupRun.run.sessionId,
-                  sessionKey: params.sessionKey,
-                  agentId: params.followupRun.run.agentId,
-                  sessionFile: params.followupRun.run.sessionFile,
-                  workspaceDir: params.followupRun.run.workspaceDir,
-                  config: params.followupRun.run.config,
-                  prompt: params.commandBody,
-                  provider,
-                  model,
-                  thinkLevel: params.followupRun.run.thinkLevel,
-                  timeoutMs: params.followupRun.run.timeoutMs,
-                  runId,
-                  extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
-                  ownerNumbers: params.followupRun.run.ownerNumbers,
-                  cliSessionId: cliSessionBinding?.sessionId,
-                  cliSessionBinding,
-                  authProfileId,
-                  bootstrapPromptWarningSignaturesSeen,
-                  bootstrapPromptWarningSignature:
-                    bootstrapPromptWarningSignaturesSeen[
-                      bootstrapPromptWarningSignaturesSeen.length - 1
-                    ],
-                  images: params.opts?.images,
-                  imageOrder: params.opts?.imageOrder,
-                });
-                bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
-                  result.meta?.systemPromptReport,
-                );
-
-                // CLI backends don't emit streaming assistant events, so we need to
-                // emit one with the final text so server-chat can populate its buffer
-                // and send the response to TUI/WebSocket clients.
-                const cliText = result.payloads?.[0]?.text?.trim();
-                if (cliText) {
-                  emitAgentEvent({
-                    runId,
-                    stream: "assistant",
-                    data: { text: cliText },
-                  });
-                }
-
-                emitAgentEvent({
-                  runId,
-                  stream: "lifecycle",
-                  data: {
-                    phase: "end",
-                    startedAt,
-                    endedAt: Date.now(),
-                  },
-                });
-                lifecycleTerminalEmitted = true;
-
-                return result;
-              } catch (err) {
-                if (rollbackFallbackCandidateSelection) {
-                  try {
-                    await rollbackFallbackCandidateSelection();
-                  } catch (rollbackError) {
-                    logVerbose(
-                      `failed to roll back fallback candidate selection (non-fatal): ${String(rollbackError)}`,
-                    );
-                  }
-                }
-                emitAgentEvent({
-                  runId,
-                  stream: "lifecycle",
-                  data: {
-                    phase: "error",
-                    startedAt,
-                    endedAt: Date.now(),
-                    error: String(err),
-                  },
-                });
-                lifecycleTerminalEmitted = true;
-                throw err;
-              } finally {
-                // Defensive backstop: never let a CLI run complete without a terminal
-                // lifecycle event, otherwise downstream consumers can hang.
-                if (!lifecycleTerminalEmitted) {
-                  emitAgentEvent({
-                    runId,
-                    stream: "lifecycle",
-                    data: {
-                      phase: "error",
-                      startedAt,
-                      endedAt: Date.now(),
-                      error: "CLI run completed without lifecycle terminal event",
-                    },
-                  });
-                }
-              }
-            })();
-          }
           const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams(
             {
               run: params.followupRun.run,
@@ -651,7 +735,8 @@ export async function runAgentTurnWithFallback(params: {
                 bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
                 images: params.opts?.images,
                 imageOrder: params.opts?.imageOrder,
-                abortSignal: params.opts?.abortSignal,
+                abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
+                replyOperation: params.replyOperation,
                 blockReplyBreak: params.resolvedBlockStreamingBreak,
                 blockReplyChunking: params.blockReplyChunking,
                 onPartialReply: async (payload) => {
@@ -698,6 +783,105 @@ export async function runAgentTurnWithFallback(params: {
                       await params.typingSignals.signalToolStart();
                       await params.opts?.onToolStart?.({ name, phase });
                     }
+                  }
+                  if (evt.stream === "item") {
+                    await params.opts?.onItemEvent?.({
+                      itemId: typeof evt.data.itemId === "string" ? evt.data.itemId : undefined,
+                      kind: typeof evt.data.kind === "string" ? evt.data.kind : undefined,
+                      title: typeof evt.data.title === "string" ? evt.data.title : undefined,
+                      name: typeof evt.data.name === "string" ? evt.data.name : undefined,
+                      phase: typeof evt.data.phase === "string" ? evt.data.phase : undefined,
+                      status: typeof evt.data.status === "string" ? evt.data.status : undefined,
+                      summary: typeof evt.data.summary === "string" ? evt.data.summary : undefined,
+                      progressText:
+                        typeof evt.data.progressText === "string"
+                          ? evt.data.progressText
+                          : undefined,
+                      approvalId:
+                        typeof evt.data.approvalId === "string" ? evt.data.approvalId : undefined,
+                      approvalSlug:
+                        typeof evt.data.approvalSlug === "string"
+                          ? evt.data.approvalSlug
+                          : undefined,
+                    });
+                  }
+                  if (evt.stream === "plan") {
+                    await params.opts?.onPlanUpdate?.({
+                      phase: typeof evt.data.phase === "string" ? evt.data.phase : undefined,
+                      title: typeof evt.data.title === "string" ? evt.data.title : undefined,
+                      explanation:
+                        typeof evt.data.explanation === "string" ? evt.data.explanation : undefined,
+                      steps: Array.isArray(evt.data.steps)
+                        ? evt.data.steps.filter((step): step is string => typeof step === "string")
+                        : undefined,
+                      source: typeof evt.data.source === "string" ? evt.data.source : undefined,
+                    });
+                  }
+                  if (evt.stream === "approval") {
+                    await params.opts?.onApprovalEvent?.({
+                      phase: typeof evt.data.phase === "string" ? evt.data.phase : undefined,
+                      kind: typeof evt.data.kind === "string" ? evt.data.kind : undefined,
+                      status: typeof evt.data.status === "string" ? evt.data.status : undefined,
+                      title: typeof evt.data.title === "string" ? evt.data.title : undefined,
+                      itemId: typeof evt.data.itemId === "string" ? evt.data.itemId : undefined,
+                      toolCallId:
+                        typeof evt.data.toolCallId === "string" ? evt.data.toolCallId : undefined,
+                      approvalId:
+                        typeof evt.data.approvalId === "string" ? evt.data.approvalId : undefined,
+                      approvalSlug:
+                        typeof evt.data.approvalSlug === "string"
+                          ? evt.data.approvalSlug
+                          : undefined,
+                      command: typeof evt.data.command === "string" ? evt.data.command : undefined,
+                      host: typeof evt.data.host === "string" ? evt.data.host : undefined,
+                      reason: typeof evt.data.reason === "string" ? evt.data.reason : undefined,
+                      message: typeof evt.data.message === "string" ? evt.data.message : undefined,
+                    });
+                  }
+                  if (evt.stream === "command_output") {
+                    await params.opts?.onCommandOutput?.({
+                      itemId: typeof evt.data.itemId === "string" ? evt.data.itemId : undefined,
+                      phase: typeof evt.data.phase === "string" ? evt.data.phase : undefined,
+                      title: typeof evt.data.title === "string" ? evt.data.title : undefined,
+                      toolCallId:
+                        typeof evt.data.toolCallId === "string" ? evt.data.toolCallId : undefined,
+                      name: typeof evt.data.name === "string" ? evt.data.name : undefined,
+                      output: typeof evt.data.output === "string" ? evt.data.output : undefined,
+                      status: typeof evt.data.status === "string" ? evt.data.status : undefined,
+                      exitCode:
+                        typeof evt.data.exitCode === "number" || evt.data.exitCode === null
+                          ? evt.data.exitCode
+                          : undefined,
+                      durationMs:
+                        typeof evt.data.durationMs === "number" ? evt.data.durationMs : undefined,
+                      cwd: typeof evt.data.cwd === "string" ? evt.data.cwd : undefined,
+                    });
+                  }
+                  if (evt.stream === "patch") {
+                    await params.opts?.onPatchSummary?.({
+                      itemId: typeof evt.data.itemId === "string" ? evt.data.itemId : undefined,
+                      phase: typeof evt.data.phase === "string" ? evt.data.phase : undefined,
+                      title: typeof evt.data.title === "string" ? evt.data.title : undefined,
+                      toolCallId:
+                        typeof evt.data.toolCallId === "string" ? evt.data.toolCallId : undefined,
+                      name: typeof evt.data.name === "string" ? evt.data.name : undefined,
+                      added: Array.isArray(evt.data.added)
+                        ? evt.data.added.filter(
+                            (entry): entry is string => typeof entry === "string",
+                          )
+                        : undefined,
+                      modified: Array.isArray(evt.data.modified)
+                        ? evt.data.modified.filter(
+                            (entry): entry is string => typeof entry === "string",
+                          )
+                        : undefined,
+                      deleted: Array.isArray(evt.data.deleted)
+                        ? evt.data.deleted.filter(
+                            (entry): entry is string => typeof entry === "string",
+                          )
+                        : undefined,
+                      summary: typeof evt.data.summary === "string" ? evt.data.summary : undefined,
+                    });
                   }
                   // Track auto-compaction and notify higher layers.
                   if (evt.stream === "compaction") {
@@ -841,6 +1025,7 @@ export async function runAgentTurnWithFallback(params: {
         (await params.resetSessionAfterCompactionFailure(embeddedError.message))
       ) {
         didResetAfterCompactionFailure = true;
+        params.replyOperation?.fail("run_failed", embeddedError);
         return {
           kind: "final",
           payload: {
@@ -851,6 +1036,7 @@ export async function runAgentTurnWithFallback(params: {
       if (embeddedError?.kind === "role_ordering") {
         const didReset = await params.resetSessionAfterRoleOrderingConflict(embeddedError.message);
         if (didReset) {
+          params.replyOperation?.fail("run_failed", embeddedError);
           return {
             kind: "final",
             payload: {
@@ -880,6 +1066,7 @@ export async function runAgentTurnWithFallback(params: {
               "Logs: openclaw logs --follow"
             : "⚠️ Agent failed before reply: model switch could not be completed. " +
               "The requested model may be temporarily unavailable. Please try again shortly.";
+          params.replyOperation?.fail("run_failed", err);
           return {
             kind: "final",
             payload: {
@@ -905,12 +1092,52 @@ export async function runAgentTurnWithFallback(params: {
       const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
       const isTransientHttp = isTransientHttpError(message);
 
+      if (isReplyOperationRestartAbort(params.replyOperation)) {
+        return {
+          kind: "final",
+          payload: {
+            text: buildRestartLifecycleReplyText(),
+          },
+        };
+      }
+
+      if (isReplyOperationUserAbort(params.replyOperation)) {
+        return {
+          kind: "final",
+          payload: {
+            text: SILENT_REPLY_TOKEN,
+          },
+        };
+      }
+
+      const restartLifecycleError = resolveRestartLifecycleError(err);
+      if (restartLifecycleError instanceof GatewayDrainingError) {
+        params.replyOperation?.fail("gateway_draining", restartLifecycleError);
+        return {
+          kind: "final",
+          payload: {
+            text: buildRestartLifecycleReplyText(),
+          },
+        };
+      }
+
+      if (restartLifecycleError instanceof CommandLaneClearedError) {
+        params.replyOperation?.fail("command_lane_cleared", restartLifecycleError);
+        return {
+          kind: "final",
+          payload: {
+            text: buildRestartLifecycleReplyText(),
+          },
+        };
+      }
+
       if (
         isCompactionFailure &&
         !didResetAfterCompactionFailure &&
         (await params.resetSessionAfterCompactionFailure(message))
       ) {
         didResetAfterCompactionFailure = true;
+        params.replyOperation?.fail("run_failed", err);
         return {
           kind: "final",
           payload: {
@@ -921,6 +1148,7 @@ export async function runAgentTurnWithFallback(params: {
       if (isRoleOrderingError) {
         const didReset = await params.resetSessionAfterRoleOrderingConflict(message);
         if (didReset) {
+          params.replyOperation?.fail("run_failed", err);
           return {
             kind: "final",
             payload: {
@@ -967,6 +1195,7 @@ export async function runAgentTurnWithFallback(params: {
           );
         }
 
+        params.replyOperation?.fail("session_corruption_reset", err);
         return {
           kind: "final",
           payload: {
@@ -1010,8 +1239,11 @@ export async function runAgentTurnWithFallback(params: {
             ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
             : isRoleOrderingError
               ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-              : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
+              : shouldSurfaceToControlUi
+                ? `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`
+                : buildExternalRunFailureText(message);
 
+      params.replyOperation?.fail("run_failed", err);
       return {
         kind: "final",
         payload: {
@@ -1031,6 +1263,7 @@ export async function runAgentTurnWithFallback(params: {
   if (finalEmbeddedError && !hasPayloadText) {
     const errorMsg = finalEmbeddedError.message ?? "";
     if (isContextOverflowError(errorMsg)) {
+      params.replyOperation?.fail("run_failed", finalEmbeddedError);
       return {
         kind: "final",
         payload: {
@@ -1079,6 +1312,14 @@ export async function runAgentTurnWithFallback(params: {
         ];
       }
     }
+
+    applyOpenAIGptChatReplyGuard({
+      provider: fallbackProvider,
+      model: fallbackModel,
+      commandBody: params.commandBody,
+      isHeartbeat: params.isHeartbeat,
+      payloads: runResult.payloads,
+    });
   }
 
   return {

@@ -16,8 +16,11 @@ import {
   upsertAuthProfile,
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
-import { createZaiToolStreamWrapper } from "openclaw/plugin-sdk/provider-stream";
+import {
+  buildProviderReplayFamilyHooks,
+  normalizeModelCompat,
+} from "openclaw/plugin-sdk/provider-model-shared";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { fetchZaiUsage, resolveLegacyPiAgentAccessToken } from "openclaw/plugin-sdk/provider-usage";
 import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
 import { zaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
@@ -27,6 +30,10 @@ import { applyZaiConfig, applyZaiProviderConfig, ZAI_DEFAULT_MODEL_REF } from ".
 const PROVIDER_ID = "zai";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
 const PROFILE_ID = "zai:default";
+const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
+  family: "openai-compatible",
+});
+const ZAI_TOOL_STREAM_HOOKS = buildProviderStreamFamilyHooks("tool-stream-default-on");
 
 function resolveGlm5ForwardCompatModel(
   ctx: ProviderResolveDynamicModelContext,
@@ -34,6 +41,14 @@ function resolveGlm5ForwardCompatModel(
   const trimmedModelId = ctx.modelId.trim();
   if (!trimmedModelId.toLowerCase().startsWith("glm-5")) {
     return undefined;
+  }
+
+  const existing = ctx.modelRegistry.find(
+    PROVIDER_ID,
+    trimmedModelId,
+  ) as ProviderRuntimeModel | null;
+  if (existing) {
+    return existing;
   }
 
   const def = buildZaiModelDefinition({ id: trimmedModelId });
@@ -264,6 +279,7 @@ export default definePluginEntry({
         }),
       ],
       resolveDynamicModel: (ctx) => resolveGlm5ForwardCompatModel(ctx),
+      ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
       prepareExtraParams: (ctx) => {
         if (ctx.extraParams?.tool_stream !== undefined) {
           return ctx.extraParams;
@@ -273,8 +289,7 @@ export default definePluginEntry({
           tool_stream: true,
         };
       },
-      wrapStreamFn: (ctx) =>
-        createZaiToolStreamWrapper(ctx.streamFn, ctx.extraParams?.tool_stream !== false),
+      ...ZAI_TOOL_STREAM_HOOKS,
       isBinaryThinking: () => true,
       isModernModelRef: ({ modelId }) => {
         const lower = modelId.trim().toLowerCase();

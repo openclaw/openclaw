@@ -1,10 +1,13 @@
+import type { ChannelSetupWizardAdapter } from "./setup-wizard-types.js";
 import type { ChannelSetupWizard } from "./setup-wizard.js";
 import type {
   ChannelApprovalAdapter,
+  ChannelApprovalCapability,
   ChannelAuthAdapter,
   ChannelCommandAdapter,
   ChannelConfigAdapter,
   ChannelConversationBindingSupport,
+  ChannelDoctorAdapter,
   ChannelDirectoryAdapter,
   ChannelResolverAdapter,
   ChannelElevatedAdapter,
@@ -14,6 +17,7 @@ import type {
   ChannelLifecycleAdapter,
   ChannelOutboundAdapter,
   ChannelPairingAdapter,
+  ChannelSecretsAdapter,
   ChannelSecurityAdapter,
   ChannelSetupAdapter,
   ChannelStatusAdapter,
@@ -73,6 +77,8 @@ export type ChannelConfigSchema = {
 };
 
 /** Full capability contract for a native channel plugin. */
+type ChannelPluginSetupWizard = ChannelSetupWizard | ChannelSetupWizardAdapter;
+
 // oxlint-disable-next-line typescript/no-explicit-any
 export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknown> = {
   id: ChannelId;
@@ -84,7 +90,7 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
     };
   };
   reload?: { configPrefixes: string[]; noopPrefixes?: string[] };
-  setupWizard?: ChannelSetupWizard;
+  setupWizard?: ChannelPluginSetupWizard;
   config: ChannelConfigAdapter<ResolvedAccount>;
   configSchema?: ChannelConfigSchema;
   setup?: ChannelSetupAdapter;
@@ -97,11 +103,14 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   gatewayMethods?: string[];
   gateway?: ChannelGatewayAdapter<ResolvedAccount>;
   auth?: ChannelAuthAdapter;
+  approvalCapability?: ChannelApprovalCapability;
   elevated?: ChannelElevatedAdapter;
   commands?: ChannelCommandAdapter;
   lifecycle?: ChannelLifecycleAdapter;
+  secrets?: ChannelSecretsAdapter;
   approvals?: ChannelApprovalAdapter;
   allowlist?: ChannelAllowlistAdapter;
+  doctor?: ChannelDoctorAdapter;
   bindings?: ChannelConfiguredBindingProvider;
   conversationBindings?: ChannelConversationBindingSupport;
   streaming?: ChannelStreamingAdapter;

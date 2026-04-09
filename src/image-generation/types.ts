@@ -11,11 +11,23 @@ export type GeneratedImageAsset = {
 
 export type ImageGenerationResolution = "1K" | "2K" | "4K";
 
+export type ImageGenerationIgnoredOverrideKey = "size" | "aspectRatio" | "resolution";
+
+export type ImageGenerationIgnoredOverride = {
+  key: ImageGenerationIgnoredOverrideKey;
+  value: string;
+};
+
 export type ImageGenerationSourceImage = {
   buffer: Buffer;
   mimeType: string;
   fileName?: string;
   metadata?: Record<string, unknown>;
+};
+
+export type ImageGenerationProviderConfiguredContext = {
+  cfg?: OpenClawConfig;
+  agentDir?: string;
 };
 
 export type ImageGenerationRequest = {
@@ -70,5 +82,6 @@ export type ImageGenerationProvider = {
   defaultModel?: string;
   models?: string[];
   capabilities: ImageGenerationProviderCapabilities;
+  isConfigured?: (ctx: ImageGenerationProviderConfiguredContext) => boolean;
   generateImage: (req: ImageGenerationRequest) => Promise<ImageGenerationResult>;
 };

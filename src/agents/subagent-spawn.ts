@@ -1,15 +1,5 @@
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
-import { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinking.js";
-import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
-import { loadConfig } from "../config/config.js";
-import { mergeSessionEntry, updateSessionStore } from "../config/sessions.js";
-import { callGateway } from "../gateway/call.js";
-import {
-  pruneLegacyStoreKeys,
-  resolveGatewaySessionStoreTarget,
-} from "../gateway/session-utils.js";
-import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import {
   isValidAgentId,
@@ -17,18 +7,11 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.js";
-import { resolveAgentConfig } from "./agent-scope.js";
-import { AGENT_LANE_SUBAGENT } from "./lanes.js";
-import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
-import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import {
   mapToolContextToSpawnedRunMetadata,
   normalizeSpawnedRunMetadata,
   resolveSpawnedWorkspaceInheritance,
 } from "./spawned-context.js";
-import { buildSubagentSystemPrompt } from "./subagent-announce.js";
 import {
   decodeStrictBase64,
   materializeSubagentAttachments,
@@ -37,12 +20,31 @@ import {
 import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
-import { readStringParam } from "./tools/common.js";
 import {
+  ADMIN_SCOPE,
+  AGENT_LANE_SUBAGENT,
+  DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
+  buildSubagentSystemPrompt,
+  callGateway,
+  emitSessionLifecycleEvent,
+  formatThinkingLevels,
+  getGlobalHookRunner,
+  loadConfig,
+  mergeSessionEntry,
+  normalizeDeliveryContext,
+  normalizeThinkLevel,
+  pruneLegacyStoreKeys,
+  resolveAgentConfig,
   resolveDisplaySessionKey,
+  resolveGatewaySessionStoreTarget,
   resolveInternalSessionKey,
   resolveMainSessionAlias,
-} from "./tools/sessions-helpers.js";
+  resolveSandboxRuntimeStatus,
+  resolveSubagentSpawnModelSelection,
+  updateSessionStore,
+  isAdminOnlyMethod,
+} from "./subagent-spawn.runtime.js";
+import { readStringParam } from "./tools/common.js";
 
 export const SUBAGENT_SPAWN_MODES = ["run", "session"] as const;
 export type SpawnSubagentMode = (typeof SUBAGENT_SPAWN_MODES)[number];
@@ -148,7 +150,21 @@ async function updateSubagentSessionStore(
 async function callSubagentGateway(
   params: Parameters<typeof callGateway>[0],
 ): Promise<Awaited<ReturnType<typeof callGateway>>> {
-  return await subagentSpawnDeps.callGateway(params);
+  // Subagent lifecycle requires methods spanning multiple scope tiers
+  // (sessions.patch / sessions.delete → admin, agent → write).  When each call
+  // independently negotiates least-privilege scopes the first connection pairs
+  // at a lower tier and every subsequent higher-tier call triggers a
+  // scope-upgrade handshake that headless gateway-client connections cannot
+  // complete interactively, causing close(1008) "pairing required" (#59428).
+  //
+  // Only admin-only methods are pinned to ADMIN_SCOPE; other methods (e.g.
+  // "agent" → write) keep their least-privilege scope so that the gateway does
+  // not treat the caller as owner (senderIsOwner) and expose owner-only tools.
+  const scopes = params.scopes ?? (isAdminOnlyMethod(params.method) ? [ADMIN_SCOPE] : undefined);
+  return await subagentSpawnDeps.callGateway({
+    ...params,
+    ...(scopes != null ? { scopes } : {}),
+  });
 }
 
 function readGatewayRunId(response: Awaited<ReturnType<typeof callGateway>>): string | undefined {
@@ -445,7 +461,10 @@ export async function spawnSubagentDirect(
   }
   const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
   if (targetAgentId !== requesterAgentId) {
-    const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
+    const allowAgents =
+      resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ??
+      cfg?.agents?.defaults?.subagents?.allowAgents ??
+      [];
     const allowAny = allowAgents.some((value) => value.trim() === "*");
     const normalizedTargetId = targetAgentId.toLowerCase();
     const allowSet = new Set(

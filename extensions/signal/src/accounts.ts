@@ -33,7 +33,9 @@ export function resolveSignalAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): ResolvedSignalAccount {
-  const accountId = normalizeAccountId(params.accountId);
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultSignalAccountId(params.cfg),
+  );
   const baseEnabled = params.cfg.channels?.signal?.enabled !== false;
   const merged = mergeSignalAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;

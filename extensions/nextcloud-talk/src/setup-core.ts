@@ -4,7 +4,6 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/rout
 import {
   createSetupInputPresenceValidator,
   mergeAllowFromEntries,
-  createTopLevelChannelDmPolicy,
   promptParsedAllowFromForAccount,
   resolveSetupAccountId,
   setSetupChannelEnabled,
@@ -29,6 +28,10 @@ type NextcloudSetupInput = ChannelSetupInput & {
   secretFile?: string;
 };
 type NextcloudTalkSection = NonNullable<CoreConfig["channels"]>["nextcloud-talk"];
+
+function addWildcardAllowFrom(allowFrom?: Array<string | number> | null): string[] {
+  return mergeAllowFromEntries(allowFrom, ["*"]);
+}
 
 export function normalizeNextcloudTalkBaseUrl(value: string | undefined): string {
   return value?.trim().replace(/\/+$/, "") ?? "";
@@ -161,14 +164,39 @@ async function promptNextcloudTalkAllowFromForAccount(params: {
   });
 }
 
-export const nextcloudTalkDmPolicy: ChannelSetupDmPolicy = createTopLevelChannelDmPolicy({
+export const nextcloudTalkDmPolicy: ChannelSetupDmPolicy = {
   label: "Nextcloud Talk",
   channel,
   policyKey: "channels.nextcloud-talk.dmPolicy",
   allowFromKey: "channels.nextcloud-talk.allowFrom",
-  getCurrent: (cfg) => cfg.channels?.["nextcloud-talk"]?.dmPolicy ?? "pairing",
+  resolveConfigKeys: (cfg, accountId) =>
+    (accountId ?? resolveDefaultNextcloudTalkAccountId(cfg as CoreConfig)) !== DEFAULT_ACCOUNT_ID
+      ? {
+          policyKey: `channels.nextcloud-talk.accounts.${accountId ?? resolveDefaultNextcloudTalkAccountId(cfg as CoreConfig)}.dmPolicy`,
+          allowFromKey: `channels.nextcloud-talk.accounts.${accountId ?? resolveDefaultNextcloudTalkAccountId(cfg as CoreConfig)}.allowFrom`,
+        }
+      : {
+          policyKey: "channels.nextcloud-talk.dmPolicy",
+          allowFromKey: "channels.nextcloud-talk.allowFrom",
+        },
+  getCurrent: (cfg, accountId) =>
+    resolveNextcloudTalkAccount({
+      cfg: cfg as CoreConfig,
+      accountId: accountId ?? resolveDefaultNextcloudTalkAccountId(cfg as CoreConfig),
+    }).config.dmPolicy ?? "pairing",
+  setPolicy: (cfg, policy, accountId) => {
+    const resolvedAccountId = accountId ?? resolveDefaultNextcloudTalkAccountId(cfg as CoreConfig);
+    const resolved = resolveNextcloudTalkAccount({
+      cfg: cfg as CoreConfig,
+      accountId: resolvedAccountId,
+    });
+    return setNextcloudTalkAccountConfig(cfg as CoreConfig, resolvedAccountId, {
+      dmPolicy: policy,
+      ...(policy === "open" ? { allowFrom: addWildcardAllowFrom(resolved.config.allowFrom) } : {}),
+    });
+  },
   promptAllowFrom: promptNextcloudTalkAllowFromForAccount,
-});
+};
 
 export const nextcloudTalkSetupAdapter: ChannelSetupAdapter = {
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),

@@ -1,5 +1,5 @@
 import type { PluginEntryConfig } from "../config/types.plugins.js";
-import { hasExplicitPluginConfig } from "./config-state.js";
+import { hasExplicitPluginConfig } from "./config-policy.js";
 import type { PluginLoadOptions } from "./loader.js";
 
 export function withBundledPluginAllowlistCompat(params: {

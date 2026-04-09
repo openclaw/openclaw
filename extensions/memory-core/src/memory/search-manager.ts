@@ -30,10 +30,10 @@ function getMemorySearchManagerCacheStore(): MemorySearchManagerCacheStore {
 
 const log = createSubsystemLogger("memory");
 const { qmdManagerCache: QMD_MANAGER_CACHE } = getMemorySearchManagerCacheStore();
-let managerRuntimePromise: Promise<typeof import("./manager-runtime.js")> | null = null;
+let managerRuntimePromise: Promise<typeof import("../../manager-runtime.js")> | null = null;
 
 function loadManagerRuntime() {
-  managerRuntimePromise ??= import("./manager-runtime.js");
+  managerRuntimePromise ??= import("../../manager-runtime.js");
   return managerRuntimePromise;
 }
 

@@ -30,9 +30,6 @@ function shouldAuditChannelConfig(config: DiscordGuildChannelConfig | undefined)
   if (!config) {
     return true;
   }
-  if (config.allow === false) {
-    return false;
-  }
   if (config.enabled === false) {
     return false;
   }

@@ -1,3 +1,4 @@
+import { canExecRequestNode } from "../agents/exec-defaults.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
@@ -247,7 +248,14 @@ export async function statusAllCommand(
             try {
               return buildWorkspaceSkillStatus(defaultWorkspace, {
                 config: cfg,
-                eligibility: { remote: getRemoteSkillEligibility() },
+                eligibility: {
+                  remote: getRemoteSkillEligibility({
+                    advertiseExecNode: canExecRequestNode({
+                      cfg,
+                      agentId: agentStatus.defaultId,
+                    }),
+                  }),
+                },
               });
             } catch {
               return null;

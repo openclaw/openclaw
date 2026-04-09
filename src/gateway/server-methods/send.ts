@@ -231,31 +231,38 @@ export const sendHandlers: GatewayRequestHandlers = {
           : undefined;
         const defaultAgentId = resolveSessionAgentId({ config: cfg });
         const effectiveAgentId = explicitAgentId ?? sessionAgentId ?? defaultAgentId;
-        // If callers omit sessionKey, derive a target session key from the outbound route.
-        const derivedRoute = !providedSessionKey
-          ? await resolveOutboundSessionRoute({
-              cfg,
-              channel,
-              agentId: effectiveAgentId,
-              accountId,
-              target: deliveryTarget,
-              resolvedTarget: idLikeTarget,
-              threadId,
-            })
+        const derivedRoute = await resolveOutboundSessionRoute({
+          cfg,
+          channel,
+          agentId: effectiveAgentId,
+          accountId,
+          target: deliveryTarget,
+          currentSessionKey: providedSessionKey,
+          resolvedTarget: idLikeTarget,
+          threadId,
+        });
+        const outboundRoute = derivedRoute
+          ? providedSessionKey
+            ? {
+                ...derivedRoute,
+                sessionKey: providedSessionKey,
+                baseSessionKey: providedSessionKey,
+              }
+            : derivedRoute
           : null;
-        if (derivedRoute) {
+        if (outboundRoute) {
           await ensureOutboundSessionEntry({
             cfg,
-            agentId: effectiveAgentId,
             channel,
             accountId,
-            route: derivedRoute,
+            route: outboundRoute,
           });
         }
+        const outboundSessionKey = outboundRoute?.sessionKey ?? providedSessionKey;
         const outboundSession = buildOutboundSessionContext({
           cfg,
           agentId: effectiveAgentId,
-          sessionKey: providedSessionKey ?? derivedRoute?.sessionKey,
+          sessionKey: outboundSessionKey,
         });
         const results = await deliverOutboundPayloads({
           cfg,
@@ -268,23 +275,15 @@ export const sendHandlers: GatewayRequestHandlers = {
           threadId: threadId ?? null,
           deps: outboundDeps,
           gatewayClientScopes: client?.connect?.scopes ?? [],
-          mirror: providedSessionKey
+          mirror: outboundSessionKey
             ? {
-                sessionKey: providedSessionKey,
+                sessionKey: outboundSessionKey,
                 agentId: effectiveAgentId,
                 text: mirrorText || message,
                 mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
                 idempotencyKey: idem,
               }
-            : derivedRoute
-              ? {
-                  sessionKey: derivedRoute.sessionKey,
-                  agentId: effectiveAgentId,
-                  text: mirrorText || message,
-                  mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
-                  idempotencyKey: idem,
-                }
-              : undefined,
+            : undefined,
         });
 
         const result = results.at(-1);
@@ -382,22 +381,27 @@ export const sendHandlers: GatewayRequestHandlers = {
       return;
     }
     const { cfg, channel } = resolvedChannel;
-    if (typeof request.durationSeconds === "number" && channel !== "telegram") {
+    const plugin = resolveOutboundChannelPlugin({ channel, cfg });
+    const outbound = plugin?.outbound;
+    if (
+      typeof request.durationSeconds === "number" &&
+      outbound?.supportsPollDurationSeconds !== true
+    ) {
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "durationSeconds is only supported for Telegram polls",
+          `durationSeconds is not supported for ${channel} polls`,
         ),
       );
       return;
     }
-    if (typeof request.isAnonymous === "boolean" && channel !== "telegram") {
+    if (typeof request.isAnonymous === "boolean" && outbound?.supportsAnonymousPolls !== true) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "isAnonymous is only supported for Telegram polls"),
+        errorShape(ErrorCodes.INVALID_REQUEST, `isAnonymous is not supported for ${channel} polls`),
       );
       return;
     }
@@ -417,8 +421,6 @@ export const sendHandlers: GatewayRequestHandlers = {
         ? request.accountId.trim()
         : undefined;
     try {
-      const plugin = resolveOutboundChannelPlugin({ channel, cfg });
-      const outbound = plugin?.outbound;
       if (!outbound?.sendPoll) {
         respond(
           false,

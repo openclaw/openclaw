@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, it, vi } from "vitest";
+import { beforeEach, describe, it, vi } from "vitest";
 import {
   expectAugmentedCodexCatalog,
   expectCodexBuiltInSuppression,
@@ -38,44 +38,42 @@ vi.mock("../../../src/plugins/providers.runtime.js", () => ({
 }));
 
 export function describeOpenAIProviderCatalogContract() {
-  let augmentModelCatalogWithProviderPlugins: Awaited<
-    ReturnType<typeof importProviderRuntimeCatalogModule>
-  >["augmentModelCatalogWithProviderPlugins"];
-  let resetProviderRuntimeHookCacheForTest: Awaited<
-    ReturnType<typeof importProviderRuntimeCatalogModule>
-  >["resetProviderRuntimeHookCacheForTest"];
-  let resolveProviderBuiltInModelSuppression: Awaited<
-    ReturnType<typeof importProviderRuntimeCatalogModule>
-  >["resolveProviderBuiltInModelSuppression"];
-  let openaiProviders: ProviderPlugin[];
-  let openaiProvider: ProviderPlugin;
+  const contractDepsPromise = (async () => {
+    vi.resetModules();
+    const openaiPlugin = loadBundledPluginPublicSurfaceSync<{
+      default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
+    }>({
+      pluginId: "openai",
+      artifactBasename: "index.js",
+    });
+    const openaiProviders = (
+      await registerProviderPlugin({
+        plugin: openaiPlugin.default,
+        id: "openai",
+        name: "OpenAI",
+      })
+    ).providers;
+    const openaiProvider = requireRegisteredProvider(openaiProviders, "openai", "provider");
+    const {
+      augmentModelCatalogWithProviderPlugins,
+      resetProviderRuntimeHookCacheForTest,
+      resolveProviderBuiltInModelSuppression,
+    } = await importProviderRuntimeCatalogModule();
+    return {
+      augmentModelCatalogWithProviderPlugins,
+      resetProviderRuntimeHookCacheForTest,
+      resolveProviderBuiltInModelSuppression,
+      openaiProviders,
+      openaiProvider,
+    };
+  })();
 
   describe(
     "openai provider catalog contract",
     { timeout: PROVIDER_CATALOG_CONTRACT_TIMEOUT_MS },
     () => {
-      beforeAll(async () => {
-        vi.resetModules();
-        const openaiPlugin = loadBundledPluginPublicSurfaceSync<{
-          default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
-        }>({
-          pluginId: "openai",
-          artifactBasename: "index.js",
-        });
-        openaiProviders = registerProviderPlugin({
-          plugin: openaiPlugin.default,
-          id: "openai",
-          name: "OpenAI",
-        }).providers;
-        openaiProvider = requireRegisteredProvider(openaiProviders, "openai", "provider");
-        ({
-          augmentModelCatalogWithProviderPlugins,
-          resetProviderRuntimeHookCacheForTest,
-          resolveProviderBuiltInModelSuppression,
-        } = await importProviderRuntimeCatalogModule());
-      });
-
-      beforeEach(() => {
+      beforeEach(async () => {
+        const { resetProviderRuntimeHookCacheForTest, openaiProviders } = await contractDepsPromise;
         resetProviderRuntimeHookCacheForTest();
 
         resolvePluginProvidersMock.mockReset();
@@ -103,17 +101,20 @@ export function describeOpenAIProviderCatalogContract() {
         resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["openai"]);
       });
 
-      it("keeps codex-only missing-auth hints wired through the provider runtime", () => {
+      it("keeps codex-only missing-auth hints wired through the provider runtime", async () => {
+        const { openaiProvider } = await contractDepsPromise;
         expectCodexMissingAuthHint(
           (params) => openaiProvider.buildMissingAuthMessage?.(params.context) ?? undefined,
         );
       });
 
-      it("keeps built-in model suppression wired through the provider runtime", () => {
+      it("keeps built-in model suppression wired through the provider runtime", async () => {
+        const { resolveProviderBuiltInModelSuppression } = await contractDepsPromise;
         expectCodexBuiltInSuppression(resolveProviderBuiltInModelSuppression);
       });
 
       it("keeps bundled model augmentation wired through the provider runtime", async () => {
+        const { augmentModelCatalogWithProviderPlugins } = await contractDepsPromise;
         await expectAugmentedCodexCatalog(augmentModelCatalogWithProviderPlugins);
       });
     },

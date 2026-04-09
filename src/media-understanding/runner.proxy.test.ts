@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withAudioFixture, withVideoFixture } from "./runner.test-utils.js";
 import type { AudioTranscriptionRequest, VideoDescriptionRequest } from "./types.js";
@@ -22,6 +22,7 @@ vi.mock("../infra/net/proxy-fetch.js", () => ({
 }));
 
 let buildProviderRegistry: typeof import("./runner.js").buildProviderRegistry;
+let clearMediaUnderstandingBinaryCacheForTests: typeof import("./runner.js").clearMediaUnderstandingBinaryCacheForTests;
 let runCapability: typeof import("./runner.js").runCapability;
 
 async function runAudioCapabilityWithFetchCapture(params: {
@@ -75,11 +76,15 @@ async function runAudioCapabilityWithFetchCapture(params: {
 }
 
 describe("runCapability proxy fetch passthrough", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
+    ({ buildProviderRegistry, clearMediaUnderstandingBinaryCacheForTests, runCapability } =
+      await import("./runner.js"));
+  });
+
+  beforeEach(() => {
     vi.useRealTimers();
-    vi.resetModules();
     vi.clearAllMocks();
-    ({ buildProviderRegistry, runCapability } = await import("./runner.js"));
+    clearMediaUnderstandingBinaryCacheForTests();
   });
   afterEach(() => vi.unstubAllEnvs());
 

@@ -38,6 +38,7 @@ import {
 } from "./abort-primitives.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { clearSessionQueues } from "./queue.js";
+import { replyRunRegistry } from "./reply-run-registry.js";
 
 export { resolveAbortCutoffFromContext, shouldSkipMessageByAbortCutoff } from "./abort-cutoff.js";
 export {
@@ -151,9 +152,16 @@ export function stopSubagentsForRequester(params: {
       continue;
     }
     const latest = abortDeps.getLatestSubagentRunByChildSessionKey(childKey);
+    if (!latest) {
+      const existing = dedupedRunsByChildKey.get(childKey);
+      if (!existing || run.createdAt >= existing.createdAt) {
+        dedupedRunsByChildKey.set(childKey, run);
+      }
+      continue;
+    }
     const latestControllerSessionKey =
       latest?.controllerSessionKey?.trim() || latest?.requesterSessionKey?.trim();
-    if (!latest || latest.runId !== run.runId || latestControllerSessionKey !== requesterKey) {
+    if (latest.runId !== run.runId || latestControllerSessionKey !== requesterKey) {
       continue;
     }
     const existing = dedupedRunsByChildKey.get(childKey);
@@ -187,8 +195,10 @@ export function stopSubagentsForRequester(params: {
         storeCache.set(storePath, store);
       }
       const entry = store[childKey];
-      const sessionId = entry?.sessionId;
-      const aborted = sessionId ? abortDeps.abortEmbeddedPiRun(sessionId) : false;
+      const sessionId = replyRunRegistry.resolveSessionId(childKey) ?? entry?.sessionId;
+      const aborted =
+        (childKey ? replyRunRegistry.abort(childKey) : false) ||
+        (sessionId ? abortDeps.abortEmbeddedPiRun(sessionId) : false);
       const markedTerminated =
         abortDeps.markSubagentRunTerminated({
           runId: run.runId,
@@ -221,14 +231,20 @@ export async function tryFastAbortFromMessage(params: {
 }): Promise<{ handled: boolean; aborted: boolean; stoppedSubagents?: number }> {
   const { ctx, cfg } = params;
   const targetKey = resolveAbortTargetKey(ctx);
-  const agentId = resolveSessionAgentId({
-    sessionKey: targetKey ?? ctx.SessionKey ?? "",
-    config: cfg,
-  });
   // Use RawBody/CommandBody for abort detection (clean message without structural context).
   const raw = stripStructuralPrefixes(ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "");
   const isGroup = ctx.ChatType?.trim().toLowerCase() === "group";
-  const stripped = isGroup ? stripMentions(raw, ctx, cfg, agentId) : raw;
+  const stripped = isGroup
+    ? stripMentions(
+        raw,
+        ctx,
+        cfg,
+        resolveSessionAgentId({
+          sessionKey: targetKey ?? ctx.SessionKey ?? "",
+          config: cfg,
+        }),
+      )
+    : raw;
   const abortRequested = isAbortRequestText(stripped);
   if (!abortRequested) {
     return { handled: false, aborted: false };
@@ -244,6 +260,10 @@ export async function tryFastAbortFromMessage(params: {
     return { handled: false, aborted: false };
   }
 
+  const agentId = resolveSessionAgentId({
+    sessionKey: targetKey ?? ctx.SessionKey ?? "",
+    config: cfg,
+  });
   const abortKey = targetKey ?? auth.from ?? auth.to;
   const requesterSessionKey = targetKey ?? ctx.SessionKey ?? abortKey;
 
@@ -270,8 +290,10 @@ export async function tryFastAbortFromMessage(params: {
         );
       }
     }
-    const sessionId = entry?.sessionId;
-    const aborted = sessionId ? abortDeps.abortEmbeddedPiRun(sessionId) : false;
+    const sessionId = replyRunRegistry.resolveSessionId(resolvedTargetKey) ?? entry?.sessionId;
+    const aborted =
+      replyRunRegistry.abort(resolvedTargetKey) ||
+      (sessionId ? abortDeps.abortEmbeddedPiRun(sessionId) : false);
     const cleared = clearSessionQueues([resolvedTargetKey, sessionId]);
     if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
       logVerbose(

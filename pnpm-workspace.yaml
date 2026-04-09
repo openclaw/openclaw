@@ -6,8 +6,15 @@ packages:
 
 minimumReleaseAge: 2880
 
-# minimumReleaseAgeExclude:
-#   - "@mariozechner/*"
+minimumReleaseAgeExclude:
+  - "acpx"
+  - "openclaw"
+  - "@mariozechner/*"
+  - "@typescript/native-preview*"
+  - "@oxlint/*"
+  - "@oxfmt/*"
+  - "sqlite-vec"
+  - "sqlite-vec-*"
 
 onlyBuiltDependencies:
   - "@lydell/node-pty"

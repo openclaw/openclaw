@@ -1,66 +1,12 @@
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
-
-vi.hoisted(() => {
-  vi.resetModules();
-});
-
 import "./server-context.chrome-test-harness.js";
 import {
   PROFILE_ATTACH_RETRY_TIMEOUT_MS,
   PROFILE_HTTP_REACHABILITY_TIMEOUT_MS,
 } from "./cdp-timeouts.js";
 import * as chromeModule from "./chrome.js";
-import type { RunningChrome } from "./chrome.js";
-import type { BrowserServerState } from "./server-context.js";
 import { createBrowserRouteContext } from "./server-context.js";
-
-function makeBrowserState(): BrowserServerState {
-  return {
-    // oxlint-disable-next-line typescript/no-explicit-any
-    server: null as any,
-    port: 0,
-    resolved: {
-      enabled: true,
-      controlPort: 18791,
-      cdpProtocol: "http",
-      cdpHost: "127.0.0.1",
-      cdpIsLoopback: true,
-      cdpPortRangeStart: 18800,
-      cdpPortRangeEnd: 18810,
-      evaluateEnabled: false,
-      remoteCdpTimeoutMs: 1500,
-      remoteCdpHandshakeTimeoutMs: 3000,
-      extraArgs: [],
-      color: "#FF4500",
-      headless: true,
-      noSandbox: false,
-      attachOnly: false,
-      ssrfPolicy: { allowPrivateNetwork: true },
-      defaultProfile: "openclaw",
-      profiles: {
-        openclaw: { cdpPort: 18800, color: "#FF4500" },
-      },
-    },
-    profiles: new Map(),
-  };
-}
-
-function mockLaunchedChrome(
-  launchOpenClawChrome: { mockResolvedValue: (value: RunningChrome) => unknown },
-  pid: number,
-) {
-  const proc = new EventEmitter() as unknown as ChildProcessWithoutNullStreams;
-  launchOpenClawChrome.mockResolvedValue({
-    pid,
-    exe: { kind: "chromium", path: "/usr/bin/chromium" },
-    userDataDir: "/tmp/openclaw-test",
-    cdpPort: 18800,
-    startedAt: Date.now(),
-    proc,
-  });
-}
+import { makeBrowserServerState, mockLaunchedChrome } from "./server-context.test-harness.js";
 
 function setupEnsureBrowserAvailableHarness() {
   vi.useFakeTimers();
@@ -71,7 +17,7 @@ function setupEnsureBrowserAvailableHarness() {
   const isChromeCdpReady = vi.mocked(chromeModule.isChromeCdpReady);
   isChromeReachable.mockResolvedValue(false);
 
-  const state = makeBrowserState();
+  const state = makeBrowserServerState();
   const ctx = createBrowserRouteContext({ getState: () => state });
   const profile = ctx.forProfile("openclaw");
 

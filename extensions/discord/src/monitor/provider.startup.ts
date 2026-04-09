@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { createDiscordRequestClient } from "../proxy-request-client.js";
 import type { DiscordGuildEntryResolved } from "./allow-list.js";
 import { createDiscordAutoPresenceController } from "./auto-presence.js";
 import type { DiscordDmPolicy } from "./dm-command-auth.js";
@@ -70,6 +71,7 @@ export function createDiscordMonitorClient(params: {
   accountId: string;
   applicationId: string;
   token: string;
+  proxyFetch?: typeof fetch;
   commands: BaseCommand[];
   components: BaseMessageInteractiveComponent[];
   modals: Modal[];
@@ -124,6 +126,11 @@ export function createDiscordMonitorClient(params: {
     },
     clientPlugins,
   );
+  if (params.proxyFetch) {
+    client.rest = createDiscordRequestClient(params.token, {
+      fetch: params.proxyFetch,
+    });
+  }
   const gateway = client.getPlugin<GatewayPlugin>("gateway") as MutableDiscordGateway | undefined;
   const gatewaySupervisor = params.createGatewaySupervisor({
     gateway,

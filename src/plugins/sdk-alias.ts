@@ -21,6 +21,10 @@ type PluginSdkPackageJson = {
 
 const STARTUP_ARGV1 = process.argv[1];
 
+export function normalizeJitiAliasTargetPath(targetPath: string): string {
+  return process.platform === "win32" ? targetPath.replace(/\\/g, "/") : targetPath;
+}
+
 function resolveLoaderModulePath(params: LoaderModuleResolveParams = {}): string {
   return params.modulePath ?? fileURLToPath(params.moduleUrl ?? import.meta.url);
 }
@@ -368,9 +372,17 @@ export function buildPluginLoaderAliasMap(
   });
   const extensionApiAlias = resolveExtensionApiAlias({ modulePath, pluginSdkResolution });
   return {
-    ...(extensionApiAlias ? { "openclaw/extension-api": extensionApiAlias } : {}),
-    ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
-    ...resolvePluginSdkScopedAliasMap({ modulePath, argv1, moduleUrl, pluginSdkResolution }),
+    ...(extensionApiAlias
+      ? { "openclaw/extension-api": normalizeJitiAliasTargetPath(extensionApiAlias) }
+      : {}),
+    ...(pluginSdkAlias
+      ? { "openclaw/plugin-sdk": normalizeJitiAliasTargetPath(pluginSdkAlias) }
+      : {}),
+    ...Object.fromEntries(
+      Object.entries(
+        resolvePluginSdkScopedAliasMap({ modulePath, argv1, moduleUrl, pluginSdkResolution }),
+      ).map(([key, value]) => [key, normalizeJitiAliasTargetPath(value)]),
+    ),
   };
 }
 
@@ -424,6 +436,9 @@ export function buildPluginLoaderJitiOptions(aliasMap: Record<string, string>) {
 export function shouldPreferNativeJiti(modulePath: string): boolean {
   const versions = process.versions as { bun?: string };
   if (typeof versions.bun === "string") {
+    return false;
+  }
+  if (process.platform === "win32") {
     return false;
   }
   switch (path.extname(modulePath).toLowerCase()) {

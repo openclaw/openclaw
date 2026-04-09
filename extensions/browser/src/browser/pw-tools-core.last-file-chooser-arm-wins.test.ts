@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_UPLOAD_DIR } from "./paths.js";
 import {
   installPwToolsCoreTestHooks,
@@ -9,14 +9,9 @@ import {
 } from "./pw-tools-core.test-harness.js";
 
 installPwToolsCoreTestHooks();
-let mod: typeof import("./pw-tools-core.js");
+const mod = await import("./pw-tools-core.js");
 
 describe("pw-tools-core", () => {
-  beforeAll(async () => {
-    vi.resetModules();
-    mod = await import("./pw-tools-core.js");
-  });
-
   it("last file-chooser arm wins", async () => {
     const firstPath = path.join(DEFAULT_UPLOAD_DIR, `vitest-arm-1-${crypto.randomUUID()}.txt`);
     const secondPath = path.join(DEFAULT_UPLOAD_DIR, `vitest-arm-2-${crypto.randomUUID()}.txt`);

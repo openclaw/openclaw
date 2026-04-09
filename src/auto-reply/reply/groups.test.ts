@@ -10,9 +10,9 @@ describe("group runtime loading", () => {
 
   it("keeps prompt helpers off the heavy group runtime", async () => {
     const groupsRuntimeLoads = vi.fn();
-    vi.doMock("./groups.runtime.js", async (importOriginal) => {
+    vi.doMock("./groups.runtime.js", async () => {
       groupsRuntimeLoads();
-      return await importOriginal<typeof import("./groups.runtime.js")>();
+      return await vi.importActual<typeof import("./groups.runtime.js")>("./groups.runtime.js");
     });
     const groups = await import("./groups.js");
 
@@ -25,7 +25,7 @@ describe("group runtime loading", () => {
           Provider: "whatsapp",
         },
       }),
-    ).toContain('You are in the WhatsApp group chat "Ops".');
+    ).toContain('You are in the Whatsapp group chat "Ops".');
     expect(
       groups.buildGroupIntro({
         cfg: {} as OpenClawConfig,
@@ -33,16 +33,24 @@ describe("group runtime loading", () => {
         defaultActivation: "mention",
         silentToken: "NO_REPLY",
       }),
-    ).toContain("WhatsApp IDs:");
+    ).toContain("Activation: trigger-only");
+    expect(
+      groups.buildGroupIntro({
+        cfg: {} as OpenClawConfig,
+        sessionCtx: { Provider: "whatsapp" },
+        defaultActivation: "mention",
+        silentToken: "NO_REPLY",
+      }),
+    ).toContain("Minimize empty lines and use normal chat conventions");
     expect(groupsRuntimeLoads).not.toHaveBeenCalled();
     vi.doUnmock("./groups.runtime.js");
   });
 
   it("loads the group runtime only when requireMention resolution needs it", async () => {
     const groupsRuntimeLoads = vi.fn();
-    vi.doMock("./groups.runtime.js", async (importOriginal) => {
+    vi.doMock("./groups.runtime.js", async () => {
       groupsRuntimeLoads();
-      return await importOriginal<typeof import("./groups.runtime.js")>();
+      return await vi.importActual<typeof import("./groups.runtime.js")>("./groups.runtime.js");
     });
     const groups = await import("./groups.js");
 

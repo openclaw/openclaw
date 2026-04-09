@@ -3,9 +3,9 @@ import { vi } from "vitest";
 type PiAiMockModule = Record<string, unknown>;
 
 export async function createPiAiStreamSimpleMock(
-  importOriginal: () => Promise<PiAiMockModule>,
+  loadActual: () => Promise<PiAiMockModule>,
 ): Promise<PiAiMockModule> {
-  const original = await importOriginal();
+  const original = await loadActual();
   return {
     ...original,
     streamSimple: vi.fn(() => ({

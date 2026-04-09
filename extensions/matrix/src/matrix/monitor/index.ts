@@ -1,4 +1,5 @@
 import { format } from "node:util";
+import { MatrixExecApprovalHandler } from "../../exec-approvals-handler.js";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveThreadBindingIdleTimeoutMsForChannel,
@@ -10,7 +11,8 @@ import {
 } from "../../runtime-api.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig, ReplyToMode } from "../../types.js";
-import { resolveConfiguredMatrixBotUserIds, resolveMatrixAccount } from "../accounts.js";
+import { resolveMatrixAccountConfig } from "../account-config.js";
+import { resolveConfiguredMatrixBotUserIds } from "../accounts.js";
 import { setActiveMatrixClient } from "../active-client.js";
 import {
   isBunRuntime,
@@ -82,8 +84,10 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const effectiveAccountId = authContext.accountId;
 
   // Resolve account-specific config for multi-account support
-  const account = resolveMatrixAccount({ cfg, accountId: effectiveAccountId });
-  const accountConfig = account.config;
+  const accountConfig = resolveMatrixAccountConfig({
+    cfg,
+    accountId: effectiveAccountId,
+  });
 
   const allowlistOnly = accountConfig.allowlistOnly === true;
   const accountAllowBots = accountConfig.allowBots;
@@ -142,6 +146,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   setActiveMatrixClient(client, auth.accountId);
   let cleanedUp = false;
   let threadBindingManager: { accountId: string; stop: () => void } | null = null;
+  let execApprovalsHandler: MatrixExecApprovalHandler | null = null;
   const inboundDeduper = await createMatrixInboundEventDeduper({
     auth,
     env: process.env,
@@ -161,6 +166,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       client.stopSyncWithoutPersist();
       await client.drainPendingDecryptions("matrix monitor shutdown");
       await waitForInFlightRoomMessages();
+      await execApprovalsHandler?.stop();
       threadBindingManager?.stop();
       await inboundDeduper.stop();
       await releaseSharedClientInstance(client, "persist");
@@ -179,7 +185,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   warnMissingProviderGroupPolicyFallbackOnce({
     providerMissingFallbackApplied,
     providerKey: "matrix",
-    accountId: account.accountId,
+    accountId: effectiveAccountId,
     blockedLabel: GROUP_POLICY_BLOCKED_LABEL.room,
     log: (message) => logVerboseMessage(message),
   });
@@ -190,26 +196,32 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const threadBindingIdleTimeoutMs = resolveThreadBindingIdleTimeoutMsForChannel({
     cfg,
     channel: "matrix",
-    accountId: account.accountId,
+    accountId: effectiveAccountId,
   });
   const threadBindingMaxAgeMs = resolveThreadBindingMaxAgeMsForChannel({
     cfg,
     channel: "matrix",
-    accountId: account.accountId,
+    accountId: effectiveAccountId,
   });
   const dmConfig = accountConfig.dm;
   const dmEnabled = dmConfig?.enabled ?? true;
   const dmPolicyRaw = dmConfig?.policy ?? "pairing";
   const dmPolicy = allowlistOnly && dmPolicyRaw !== "disabled" ? "allowlist" : dmPolicyRaw;
-  const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "matrix", account.accountId);
+  const dmSessionScope = dmConfig?.sessionScope ?? "per-user";
+  const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "matrix", effectiveAccountId);
   const globalGroupChatHistoryLimit = (
     cfg.messages as { groupChat?: { historyLimit?: number } } | undefined
   )?.groupChat?.historyLimit;
   const historyLimit = Math.max(0, accountConfig.historyLimit ?? globalGroupChatHistoryLimit ?? 0);
   const mediaMaxMb = opts.mediaMaxMb ?? accountConfig.mediaMaxMb ?? DEFAULT_MEDIA_MAX_MB;
   const mediaMaxBytes = Math.max(1, mediaMaxMb) * 1024 * 1024;
-  const streaming: "partial" | "off" =
-    accountConfig.streaming === true || accountConfig.streaming === "partial" ? "partial" : "off";
+  const streaming: "partial" | "quiet" | "off" =
+    accountConfig.streaming === true || accountConfig.streaming === "partial"
+      ? "partial"
+      : accountConfig.streaming === "quiet"
+        ? "quiet"
+        : "off";
+  const blockStreamingEnabled = accountConfig.blockStreaming === true;
   const startupMs = Date.now();
   const startupGraceMs = 0;
   // Cold starts should ignore old room history, but once we have a persisted
@@ -251,7 +263,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     client,
     core,
     cfg,
-    accountId: account.accountId,
+    accountId: effectiveAccountId,
     runtime,
     logger,
     logVerboseMessage,
@@ -264,7 +276,9 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     replyToMode,
     threadReplies,
     dmThreadReplies,
+    dmSessionScope,
     streaming,
+    blockStreamingEnabled,
     dmEnabled,
     dmPolicy,
     textLimit,
@@ -289,7 +303,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
 
   try {
     threadBindingManager = await createMatrixThreadBindingManager({
-      accountId: account.accountId,
+      accountId: effectiveAccountId,
       auth,
       client,
       env: process.env,
@@ -313,7 +327,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
           .readAllowFromStore({
             channel: "matrix",
             env: process.env,
-            accountId: account.accountId,
+            accountId: effectiveAccountId,
           })
           .catch(() => []),
       directTracker,
@@ -338,10 +352,17 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     // Shared client is already started via resolveSharedMatrixClient.
     logger.info(`matrix: logged in as ${auth.userId}`);
 
+    execApprovalsHandler = new MatrixExecApprovalHandler({
+      client,
+      accountId: effectiveAccountId,
+      cfg,
+    });
+    await execApprovalsHandler.start();
+
     await runMatrixStartupMaintenance({
       client,
       auth,
-      accountId: account.accountId,
+      accountId: effectiveAccountId,
       effectiveAccountId,
       accountConfig,
       logger,

@@ -1,12 +1,12 @@
-import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
-import { getModelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import {
   getRuntimeConfig,
   readSourceConfigSnapshotForWrite,
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
-} from "../../config/config.js";
-import type { RuntimeEnv } from "../../runtime.js";
+  getModelsCommandSecretTargetIds,
+  resolveCommandSecretRefsViaGateway,
+} from "./load-config.runtime.js";
 
 export type LoadedModelsConfig = {
   sourceConfig: OpenClawConfig;

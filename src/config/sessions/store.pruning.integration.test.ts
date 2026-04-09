@@ -6,8 +6,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { SessionEntry } from "./types.js";
 
 // Keep integration tests deterministic: never read a real openclaw.json.
-vi.mock("../config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config.js")>()),
+vi.mock("../config.js", async () => ({
+  ...(await vi.importActual<typeof import("../config.js")>("../config.js")),
   loadConfig: vi.fn().mockReturnValue({}),
 }));
 

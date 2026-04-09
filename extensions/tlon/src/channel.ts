@@ -1,8 +1,8 @@
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { createHybridChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
+import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
 import {
@@ -10,6 +10,7 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { tlonChannelConfigSchema } from "./config-schema.js";
+import { tlonDoctor } from "./doctor.js";
 import { resolveTlonOutboundSessionRoute } from "./session-route.js";
 import {
   applyTlonSetupConfig,
@@ -31,13 +32,19 @@ const TLON_CHANNEL_ID = "tlon" as const;
 const loadTlonChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
 
 const tlonSetupWizardProxy = createTlonSetupWizardBase({
-  resolveConfigured: async ({ cfg }) =>
-    await (await loadTlonChannelRuntime()).tlonSetupWizard.status.resolveConfigured({ cfg }),
-  resolveStatusLines: async ({ cfg, configured }) =>
+  resolveConfigured: async ({ cfg, accountId }) =>
+    await (
+      await loadTlonChannelRuntime()
+    ).tlonSetupWizard.status.resolveConfigured({
+      cfg,
+      accountId,
+    }),
+  resolveStatusLines: async ({ cfg, accountId, configured }) =>
     (await (
       await loadTlonChannelRuntime()
     ).tlonSetupWizard.status.resolveStatusLines?.({
       cfg,
+      accountId,
       configured,
     })) ?? [],
   finalize: async (params) =>
@@ -94,6 +101,7 @@ export const tlonPlugin = createChatChannelPlugin({
           },
         }),
     },
+    doctor: tlonDoctor,
     messaging: {
       normalizeTarget: (target) => {
         const parsed = parseTlonTarget(target);

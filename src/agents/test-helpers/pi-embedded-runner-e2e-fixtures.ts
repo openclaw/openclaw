@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
+import { buildAttemptReplayMetadata } from "../pi-embedded-runner/run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "../pi-embedded-runner/run/types.js";
 
 export type EmbeddedPiRunnerTestWorkspace = {
@@ -96,6 +97,9 @@ export function buildEmbeddedRunnerAssistant(
 export function makeEmbeddedRunnerAttempt(
   overrides: Partial<EmbeddedRunAttemptResult>,
 ): EmbeddedRunAttemptResult {
+  const toolMetas = overrides.toolMetas ?? [];
+  const didSendViaMessagingTool = overrides.didSendViaMessagingTool ?? false;
+  const successfulCronAdds = overrides.successfulCronAdds;
   return {
     aborted: false,
     timedOut: false,
@@ -105,13 +109,21 @@ export function makeEmbeddedRunnerAttempt(
     systemPromptReport: undefined,
     messagesSnapshot: [],
     assistantTexts: [],
-    toolMetas: [],
+    toolMetas,
     lastAssistant: undefined,
-    didSendViaMessagingTool: false,
+    replayMetadata:
+      overrides.replayMetadata ??
+      buildAttemptReplayMetadata({
+        toolMetas,
+        didSendViaMessagingTool,
+        successfulCronAdds,
+      }),
+    didSendViaMessagingTool,
     messagingToolSentTexts: [],
     messagingToolSentMediaUrls: [],
     messagingToolSentTargets: [],
     cloudCodeAssistFormatError: false,
+    itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
     ...overrides,
   };
 }

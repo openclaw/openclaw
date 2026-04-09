@@ -69,6 +69,11 @@ export const SUB_CLI_DESCRIPTORS = [
     hasSubcommands: false,
   },
   {
+    name: "qa",
+    description: "Run QA scenarios and launch the private QA debugger UI",
+    hasSubcommands: true,
+  },
+  {
     name: "hooks",
     description: "Manage internal agent hooks",
     hasSubcommands: true,
@@ -80,7 +85,7 @@ export const SUB_CLI_DESCRIPTORS = [
   },
   {
     name: "qr",
-    description: "Generate iOS pairing QR/setup code",
+    description: "Generate mobile pairing QR/setup code",
     hasSubcommands: false,
   },
   {

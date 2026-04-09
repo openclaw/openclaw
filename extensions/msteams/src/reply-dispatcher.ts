@@ -31,6 +31,7 @@ export { pickInformativeStatusText } from "./reply-stream-controller.js";
 export function createMSTeamsReplyDispatcher(params: {
   cfg: OpenClawConfig;
   agentId: string;
+  sessionKey: string;
   accountId?: string;
   runtime: RuntimeEnv;
   log: MSTeamsMonitorLogger;
@@ -109,6 +110,8 @@ export function createMSTeamsReplyDispatcher(params: {
 
   const blockStreamingEnabled =
     typeof msteamsCfg?.blockStreaming === "boolean" ? msteamsCfg.blockStreaming : false;
+  const typingIndicatorEnabled =
+    typeof msteamsCfg?.typingIndicator === "boolean" ? msteamsCfg.typingIndicator : true;
 
   const pendingMessages: MSTeamsRenderedMessage[] = [];
 
@@ -134,6 +137,32 @@ export function createMSTeamsReplyDispatcher(params: {
     });
   };
 
+  const queueDeliveryFailureSystemEvent = (failure: {
+    failed: number;
+    total: number;
+    error: unknown;
+  }) => {
+    const classification = classifyMSTeamsSendError(failure.error);
+    const errorText = formatUnknownError(failure.error);
+    const failedAll = failure.failed >= failure.total;
+    const summary = failedAll
+      ? "the previous reply was not delivered"
+      : `${failure.failed} of ${failure.total} message blocks were not delivered`;
+    const sentences = [
+      `Microsoft Teams delivery failed: ${summary}.`,
+      `The user may not have received ${failedAll ? "that reply" : "the full reply"}.`,
+      `Error: ${errorText}.`,
+      classification.statusCode != null ? `Status: ${classification.statusCode}.` : undefined,
+      classification.kind === "transient" || classification.kind === "throttled"
+        ? "Retrying later may succeed."
+        : undefined,
+    ].filter(Boolean);
+    core.system.enqueueSystemEvent(sentences.join(" "), {
+      sessionKey: params.sessionKey,
+      contextKey: `msteams:delivery-failure:${params.conversationRef.conversation?.id ?? "unknown"}`,
+    });
+  };
+
   const flushPendingMessages = async () => {
     if (pendingMessages.length === 0) {
       return;
@@ -143,15 +172,17 @@ export function createMSTeamsReplyDispatcher(params: {
     let ids: string[];
     try {
       ids = await sendMessages(toSend);
-    } catch {
+    } catch (batchError) {
       ids = [];
       let failed = 0;
+      let lastFailedError: unknown = batchError;
       for (const msg of toSend) {
         try {
           const msgIds = await sendMessages([msg]);
           ids.push(...msgIds);
-        } catch {
+        } catch (msgError) {
           failed += 1;
+          lastFailedError = msgError;
           params.log.debug?.("individual message send failed, continuing with remaining blocks");
         }
       }
@@ -159,6 +190,11 @@ export function createMSTeamsReplyDispatcher(params: {
         params.log.warn?.(`failed to deliver ${failed} of ${total} message blocks`, {
           failed,
           total,
+        });
+        queueDeliveryFailureSystemEvent({
+          failed,
+          total,
+          error: lastFailedError,
         });
       }
     }
@@ -176,7 +212,10 @@ export function createMSTeamsReplyDispatcher(params: {
     humanDelay: core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),
     onReplyStart: async () => {
       await streamController.onReplyStart();
-      await typingCallbacks?.onReplyStart?.();
+      // Avoid duplicate typing UX in DMs: stream status already shows progress.
+      if (typingIndicatorEnabled && !streamController.hasStream()) {
+        await typingCallbacks?.onReplyStart?.();
+      }
     },
     typingCallbacks,
     deliver: async (payload) => {
@@ -231,7 +270,7 @@ export function createMSTeamsReplyDispatcher(params: {
       })
       .then(() => {
         return streamController.finalize().catch((err) => {
-          params.log.debug?.("stream finalize failed", { error: String(err) });
+          params.log.debug?.("stream finalize failed", { error: formatUnknownError(err) });
         });
       })
       .finally(() => {

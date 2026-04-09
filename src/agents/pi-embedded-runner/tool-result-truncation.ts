@@ -14,12 +14,18 @@ import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.j
 const MAX_TOOL_RESULT_CONTEXT_SHARE = 0.3;
 
 /**
- * Hard character limit for a single tool result text block.
- * Even for the largest context windows (~2M tokens), a single tool result
- * should not exceed ~400K characters (~100K tokens).
- * This acts as a safety net when we don't know the context window size.
+ * Default hard cap for a single live tool result text block.
+ *
+ * Pi already truncates tool results aggressively when serializing old history
+ * for compaction summaries. For the live request path we still keep a bounded
+ * request-local ceiling so oversized tool output cannot dominate the next turn.
  */
-export const HARD_MAX_TOOL_RESULT_CHARS = 400_000;
+export const DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS = 40_000;
+
+/**
+ * Backwards-compatible alias for older call sites/tests.
+ */
+export const HARD_MAX_TOOL_RESULT_CHARS = DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
 
 /**
  * Minimum characters to keep when truncating.
@@ -126,7 +132,7 @@ export function calculateMaxToolResultChars(contextWindowTokens: number): number
   const maxTokens = Math.floor(contextWindowTokens * MAX_TOOL_RESULT_CONTEXT_SHARE);
   // Rough conversion: ~4 chars per token on average
   const maxChars = maxTokens * 4;
-  return Math.min(maxChars, HARD_MAX_TOOL_RESULT_CHARS);
+  return Math.min(maxChars, DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS);
 }
 
 /**

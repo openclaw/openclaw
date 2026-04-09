@@ -54,6 +54,7 @@ export function evaluateSystemRunPolicy(params: {
   ask: ExecAsk;
   analysisOk: boolean;
   allowlistSatisfied: boolean;
+  durableApprovalSatisfied?: boolean;
   approvalDecision: ExecApprovalDecision;
   approved?: boolean;
   isWindows: boolean;
@@ -87,6 +88,7 @@ export function evaluateSystemRunPolicy(params: {
     security: params.security,
     analysisOk,
     allowlistSatisfied,
+    durableApprovalSatisfied: params.durableApprovalSatisfied,
   });
   if (requiresAsk && !approvedByAsk) {
     return {
@@ -104,6 +106,18 @@ export function evaluateSystemRunPolicy(params: {
   }
 
   if (params.security === "allowlist" && (!analysisOk || !allowlistSatisfied) && !approvedByAsk) {
+    if (params.durableApprovalSatisfied) {
+      return {
+        allowed: true,
+        analysisOk,
+        allowlistSatisfied,
+        shellWrapperBlocked,
+        windowsShellWrapperBlocked,
+        requiresAsk,
+        approvalDecision: params.approvalDecision,
+        approvedByAsk,
+      };
+    }
     return {
       allowed: false,
       eventReason: "allowlist-miss",

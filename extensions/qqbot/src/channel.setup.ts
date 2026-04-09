@@ -156,7 +156,8 @@ export const qqbotSetupPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     }),
   },
   setup: {
-    resolveAccountId: ({ accountId }) => accountId?.trim().toLowerCase() || DEFAULT_ACCOUNT_ID,
+    resolveAccountId: ({ cfg, accountId }) =>
+      accountId?.trim().toLowerCase() || resolveDefaultQQBotAccountId(cfg),
     applyAccountName: ({ cfg, accountId, name }) =>
       applyAccountNameToChannelSection({
         cfg,

@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -209,7 +210,7 @@ export function renderAgentOverview(params: {
             ?disabled=${configLoading}
             @click=${onConfigReload}
           >
-            Reload Config
+            ${t("common.reloadConfig")}
           </button>
           <button
             type="button"

@@ -13,6 +13,46 @@ export function uniqueSortedStrings(values: readonly string[]) {
   return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
 }
 
+function formatImportSideEffectCall(args: readonly unknown[]): string {
+  if (args.length === 0) {
+    return "(no args)";
+  }
+  return args
+    .map((arg) => {
+      try {
+        return JSON.stringify(arg);
+      } catch {
+        return String(arg);
+      }
+    })
+    .join(", ");
+}
+
+export function assertNoImportTimeSideEffects(params: {
+  moduleId: string;
+  forbiddenSeam: string;
+  calls: readonly (readonly unknown[])[];
+  why: string;
+  fixHint: string;
+}) {
+  if (params.calls.length === 0) {
+    return;
+  }
+  const observedCalls = params.calls
+    .slice(0, 3)
+    .map((call, index) => `  ${index + 1}. ${formatImportSideEffectCall(call)}`)
+    .join("\n");
+  throw new Error(
+    [
+      `[runtime contract] ${params.moduleId} touched ${params.forbiddenSeam} during module import.`,
+      `why this is banned: ${params.why}`,
+      `expected fix: ${params.fixHint}`,
+      `observed calls (${params.calls.length}):`,
+      observedCalls,
+    ].join("\n"),
+  );
+}
+
 export function createPluginRegistryFixture(config = {} as OpenClawConfig) {
   return {
     config,
@@ -49,6 +89,7 @@ export function registerVirtualTestPlugin(params: {
   name: string;
   source?: string;
   kind?: PluginRecord["kind"];
+  contracts?: PluginRecord["contracts"];
   register(this: void, api: OpenClawPluginApi): void;
 }) {
   registerTestPlugin({
@@ -59,6 +100,7 @@ export function registerVirtualTestPlugin(params: {
       name: params.name,
       source: params.source ?? `/virtual/${params.id}/index.ts`,
       ...(params.kind ? { kind: params.kind } : {}),
+      ...(params.contracts ? { contracts: params.contracts } : {}),
     }),
     register: params.register,
   });

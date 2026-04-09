@@ -1,5 +1,6 @@
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
+import { extractAssistantVisibleText as extractSharedAssistantVisibleText } from "../../../../src/shared/chat-message-content.js";
 import { stripThinkingTags } from "../format.ts";
 
 const textCache = new WeakMap<object, string | null>();
@@ -18,7 +19,8 @@ function processMessageText(text: string, role: string): string {
 export function extractText(message: unknown): string | null {
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "";
-  const raw = extractRawText(message);
+  const raw =
+    role === "assistant" ? extractSharedAssistantVisibleText(message) : extractRawText(message);
   if (!raw) {
     return null;
   }

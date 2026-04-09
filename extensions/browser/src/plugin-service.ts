@@ -2,7 +2,7 @@ import {
   startLazyPluginServiceModule,
   type LazyPluginServiceHandle,
   type OpenClawPluginService,
-} from "openclaw/plugin-sdk/browser-support";
+} from "openclaw/plugin-sdk/browser-node-runtime";
 
 type BrowserControlHandle = LazyPluginServiceHandle | null;
 

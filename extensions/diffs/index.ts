@@ -8,6 +8,7 @@ import {
   diffsPluginConfigSchema,
   resolveDiffsPluginDefaults,
   resolveDiffsPluginSecurity,
+  resolveDiffsPluginViewerBaseUrl,
 } from "./src/config.js";
 import { createDiffsHttpHandler } from "./src/http.js";
 import { DIFFS_AGENT_GUIDANCE } from "./src/prompt-guidance.js";
@@ -22,14 +23,18 @@ export default definePluginEntry({
   register(api: OpenClawPluginApi) {
     const defaults = resolveDiffsPluginDefaults(api.pluginConfig);
     const security = resolveDiffsPluginSecurity(api.pluginConfig);
+    const viewerBaseUrl = resolveDiffsPluginViewerBaseUrl(api.pluginConfig);
     const store = new DiffArtifactStore({
       rootDir: path.join(resolvePreferredOpenClawTmpDir(), "openclaw-diffs"),
       logger: api.logger,
     });
 
-    api.registerTool((ctx) => createDiffsTool({ api, store, defaults, context: ctx }), {
-      name: "diffs",
-    });
+    api.registerTool(
+      (ctx) => createDiffsTool({ api, store, defaults, viewerBaseUrl, context: ctx }),
+      {
+        name: "diffs",
+      },
+    );
     api.registerHttpRoute({
       path: "/plugins/diffs",
       auth: "plugin",

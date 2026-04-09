@@ -8,21 +8,168 @@ import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { DEFAULT_LOCAL_MODEL } from "../memory-host-sdk/engine-embeddings.js";
+import { checkQmdBinaryAvailability } from "../memory-host-sdk/engine-qmd.js";
+import { hasConfiguredMemorySecretInput } from "../memory-host-sdk/secret.js";
 import {
+  auditShortTermPromotionArtifacts,
   getBuiltinMemoryEmbeddingProviderDoctorMetadata,
   listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata,
+  repairShortTermPromotionArtifacts,
+  type ShortTermAuditSummary,
 } from "../plugin-sdk/memory-core-engine-runtime.js";
-import { DEFAULT_LOCAL_MODEL } from "../plugin-sdk/memory-core-host-engine-embeddings.js";
-import { checkQmdBinaryAvailability } from "../plugin-sdk/memory-core-host-engine-qmd.js";
-import { hasConfiguredMemorySecretInput } from "../plugin-sdk/memory-core-host-secret.js";
-import { resolveActiveMemoryBackendConfig } from "../plugins/memory-runtime.js";
+import {
+  getActiveMemorySearchManager,
+  resolveActiveMemoryBackendConfig,
+} from "../plugins/memory-runtime.js";
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
+import type { DoctorPrompter } from "./doctor-prompter.js";
 
 function resolveSuggestedRemoteMemoryProvider(): string | undefined {
   return listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata().find(
     (provider) => provider.transport === "remote",
   )?.providerId;
+}
+
+type RuntimeMemoryAuditContext = {
+  workspaceDir?: string;
+  backend?: string;
+  dbPath?: string;
+  qmdCollections?: number;
+};
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+async function resolveRuntimeMemoryAuditContext(
+  cfg: OpenClawConfig,
+): Promise<RuntimeMemoryAuditContext | null> {
+  const agentId = resolveDefaultAgentId(cfg);
+  const result = await getActiveMemorySearchManager({
+    cfg,
+    agentId,
+    purpose: "status",
+  });
+  const manager = result.manager;
+  if (!manager) {
+    return null;
+  }
+  try {
+    const status = manager.status();
+    const customQmd = asRecord(asRecord(status.custom)?.qmd);
+    return {
+      workspaceDir: status.workspaceDir?.trim(),
+      backend: status.backend,
+      dbPath: status.dbPath,
+      qmdCollections:
+        typeof customQmd?.collections === "number" ? customQmd.collections : undefined,
+    };
+  } finally {
+    await manager.close?.().catch(() => undefined);
+  }
+}
+
+function buildMemoryRecallIssueNote(audit: ShortTermAuditSummary): string | null {
+  if (audit.issues.length === 0) {
+    return null;
+  }
+  const issueLines = audit.issues.map((issue) => `- ${issue.message}`);
+  const hasFixableIssue = audit.issues.some((issue) => issue.fixable);
+  const guidance = hasFixableIssue
+    ? `Fix: ${formatCliCommand("openclaw doctor --fix")} or ${formatCliCommand("openclaw memory status --fix")}`
+    : `Verify: ${formatCliCommand("openclaw memory status --deep")}`;
+  return [
+    "Memory recall artifacts need attention:",
+    ...issueLines,
+    `Recall store: ${audit.storePath}`,
+    guidance,
+  ].join("\n");
+}
+
+export async function noteMemoryRecallHealth(cfg: OpenClawConfig): Promise<void> {
+  try {
+    const context = await resolveRuntimeMemoryAuditContext(cfg);
+    const workspaceDir = context?.workspaceDir?.trim();
+    if (!workspaceDir) {
+      return;
+    }
+    const audit = await auditShortTermPromotionArtifacts({
+      workspaceDir,
+      qmd:
+        context?.backend === "qmd"
+          ? {
+              dbPath: context.dbPath,
+              collections: context.qmdCollections,
+            }
+          : undefined,
+    });
+    const message = buildMemoryRecallIssueNote(audit);
+    if (message) {
+      note(message, "Memory search");
+    }
+  } catch (err) {
+    note(
+      `Memory recall audit could not be completed: ${err instanceof Error ? err.message : String(err)}`,
+      "Memory search",
+    );
+  }
+}
+
+export async function maybeRepairMemoryRecallHealth(params: {
+  cfg: OpenClawConfig;
+  prompter: DoctorPrompter;
+}): Promise<void> {
+  try {
+    const context = await resolveRuntimeMemoryAuditContext(params.cfg);
+    const workspaceDir = context?.workspaceDir?.trim();
+    if (!workspaceDir) {
+      return;
+    }
+    const audit = await auditShortTermPromotionArtifacts({
+      workspaceDir,
+      qmd:
+        context?.backend === "qmd"
+          ? {
+              dbPath: context.dbPath,
+              collections: context.qmdCollections,
+            }
+          : undefined,
+    });
+    const hasFixableIssue = audit.issues.some((issue) => issue.fixable);
+    if (!hasFixableIssue) {
+      return;
+    }
+    const approved = await params.prompter.confirmRuntimeRepair({
+      message: "Normalize memory recall artifacts and remove stale promotion locks?",
+      initialValue: true,
+    });
+    if (!approved) {
+      return;
+    }
+    const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
+    if (!repair.changed) {
+      return;
+    }
+    const lines = [
+      "Memory recall artifacts repaired:",
+      repair.rewroteStore
+        ? `- rewrote recall store${repair.removedInvalidEntries > 0 ? ` (-${repair.removedInvalidEntries} invalid entries)` : ""}`
+        : null,
+      repair.removedStaleLock ? "- removed stale promotion lock" : null,
+      `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+    ].filter(Boolean);
+    note(lines.join("\n"), "Doctor changes");
+  } catch (err) {
+    note(
+      `Memory recall repair could not be completed: ${err instanceof Error ? err.message : String(err)}`,
+      "Memory search",
+    );
+  }
 }
 
 /**
@@ -71,7 +218,7 @@ export async function noteMemorySearchHealth(
           qmdCheck.error ? `Probe error: ${qmdCheck.error}` : null,
           "",
           "Fix (pick one):",
-          "- Install the supported QMD package: npm install -g @tobilu/qmd",
+          "- Install the supported QMD package: npm install -g @tobilu/qmd (or bun install -g @tobilu/qmd)",
           `- Set an explicit binary path: ${formatCliCommand("openclaw config set memory.qmd.command /absolute/path/to/qmd")}`,
           `- Or switch back to builtin memory: ${formatCliCommand("openclaw config set memory.backend builtin")}`,
           "",

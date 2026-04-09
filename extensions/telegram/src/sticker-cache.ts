@@ -9,11 +9,14 @@ import {
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { loadJsonFile, saveJsonFile } from "openclaw/plugin-sdk/json-store";
-import { AUTO_IMAGE_KEY_PROVIDERS, DEFAULT_IMAGE_MODELS } from "openclaw/plugin-sdk/media-runtime";
 import { resolveAutoImageModel } from "openclaw/plugin-sdk/media-runtime";
-import { describeImageFileWithModel } from "openclaw/plugin-sdk/media-understanding-runtime";
+import {
+  resolveAutoMediaKeyProviders,
+  resolveDefaultMediaModel,
+} from "openclaw/plugin-sdk/media-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { STATE_DIR } from "openclaw/plugin-sdk/state-paths";
+import { getTelegramRuntime } from "./runtime.js";
 
 const CACHE_FILE = path.join(STATE_DIR, "telegram", "sticker-cache.json");
 const CACHE_VERSION = 1;
@@ -182,6 +185,11 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
     }
   };
 
+  const autoProviders = resolveAutoMediaKeyProviders({
+    cfg,
+    capability: "image",
+  });
+
   const selectCatalogModel = (provider: string) => {
     const entries = catalog.filter(
       (entry) =>
@@ -190,7 +198,11 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
     if (entries.length === 0) {
       return undefined;
     }
-    const defaultId = DEFAULT_IMAGE_MODELS[provider];
+    const defaultId = resolveDefaultMediaModel({
+      cfg,
+      providerId: provider,
+      capability: "image",
+    });
     const preferred = entries.find((entry) => entry.id === defaultId);
     return preferred ?? entries[0];
   };
@@ -198,16 +210,14 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
   let resolved = null as { provider: string; model?: string } | null;
   if (
     activeModel &&
-    AUTO_IMAGE_KEY_PROVIDERS.includes(
-      activeModel.provider as (typeof AUTO_IMAGE_KEY_PROVIDERS)[number],
-    ) &&
+    autoProviders.includes(activeModel.provider) &&
     (await hasProviderKey(activeModel.provider))
   ) {
     resolved = activeModel;
   }
 
   if (!resolved) {
-    for (const provider of AUTO_IMAGE_KEY_PROVIDERS) {
+    for (const provider of autoProviders) {
       if (!(await hasProviderKey(provider))) {
         continue;
       }
@@ -236,7 +246,7 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
   logVerbose(`telegram: describing sticker with ${provider}/${model}`);
 
   try {
-    const result = await describeImageFileWithModel({
+    const result = await getTelegramRuntime().mediaUnderstanding.describeImageFileWithModel({
       filePath: imagePath,
       mime: "image/webp",
       cfg,

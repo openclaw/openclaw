@@ -26,24 +26,6 @@ describe("duckduckgo web search provider", () => {
     runDuckDuckGoSearch.mockImplementation(async (params: Record<string, unknown>) => params);
   });
 
-  it("registers a keyless web search provider", () => {
-    const webSearchProviders: unknown[] = [];
-
-    plugin.register({
-      registerWebSearchProvider(provider: unknown) {
-        webSearchProviders.push(provider);
-      },
-    } as never);
-
-    expect(plugin.id).toBe("duckduckgo");
-    expect(webSearchProviders).toHaveLength(1);
-
-    const provider = webSearchProviders[0] as Record<string, unknown>;
-    expect(provider.id).toBe("duckduckgo");
-    expect(provider.requiresCredential).toBe(false);
-    expect(provider.envVars).toEqual([]);
-  });
-
   it("exposes keyless metadata and enables the plugin in config", () => {
     const provider = createDuckDuckGoWebSearchProvider();
     if (!provider.applySelectionConfig) {

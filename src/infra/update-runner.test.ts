@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { bundledDistPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
-import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/public-artifacts.js";
+import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { pathExists } from "../utils.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
@@ -168,7 +168,10 @@ describe("runGatewayUpdate", () => {
     buildCommand: string;
     uiBuildCommand: string;
     doctorCommand: string;
-    onCommand?: (key: string) => Promise<CommandResponse | undefined> | CommandResponse | undefined;
+    onCommand?: (
+      key: string,
+      options?: { env?: NodeJS.ProcessEnv; cwd?: string; timeoutMs?: number },
+    ) => Promise<CommandResponse | undefined> | CommandResponse | undefined;
   }) {
     const calls: string[] = [];
     const responses = {
@@ -179,10 +182,13 @@ describe("runGatewayUpdate", () => {
       [params.doctorCommand]: { stdout: "" },
     } satisfies Record<string, CommandResponse>;
 
-    const runCommand = async (argv: string[]) => {
+    const runCommand = async (
+      argv: string[],
+      options?: { env?: NodeJS.ProcessEnv; cwd?: string; timeoutMs?: number },
+    ) => {
       const key = argv.join(" ");
       calls.push(key);
-      const override = await params.onCommand?.(key);
+      const override = await params.onCommand?.(key, options);
       if (override) {
         return toCommandResult(override);
       }
@@ -201,7 +207,7 @@ describe("runGatewayUpdate", () => {
       argv: string[],
       options?: { env?: NodeJS.ProcessEnv; cwd?: string; timeoutMs?: number },
     ) => Promise<CommandResult>,
-    options?: { channel?: "stable" | "beta"; tag?: string; cwd?: string },
+    options?: { channel?: "stable" | "beta" | "dev"; tag?: string; cwd?: string },
   ) {
     return runGatewayUpdate({
       cwd: options?.cwd ?? tempDir,
@@ -214,7 +220,7 @@ describe("runGatewayUpdate", () => {
 
   async function runWithRunner(
     runner: (argv: string[]) => Promise<CommandResult>,
-    options?: { channel?: "stable" | "beta"; tag?: string; cwd?: string },
+    options?: { channel?: "stable" | "beta" | "dev"; tag?: string; cwd?: string },
   ) {
     return runWithCommand(runner, options);
   }
@@ -376,39 +382,44 @@ describe("runGatewayUpdate", () => {
     expect(calls).not.toContain(`git -C ${tempDir} checkout --detach ${betaTag}`);
   });
 
-  it("falls back to npm when pnpm is unavailable for git installs", async () => {
+  it("bootstraps pnpm via npm when pnpm and corepack are unavailable", async () => {
     await setupGitPackageManagerFixture();
     const stableTag = "v1.0.1-1";
     const { calls, runCommand } = createGitInstallRunner({
       stableTag,
-      installCommand: "npm install --no-package-lock --legacy-peer-deps",
-      buildCommand: "npm run build",
-      uiBuildCommand: "npm run ui:build",
+      installCommand: "pnpm install",
+      buildCommand: "pnpm build",
+      uiBuildCommand: "pnpm ui:build",
       doctorCommand: `${process.execPath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive`,
-      onCommand: (key) => {
+      onCommand: (key, options) => {
         if (key === "pnpm --version") {
+          const envPath = options?.env?.PATH ?? options?.env?.Path ?? "";
+          if (envPath.includes("openclaw-update-pnpm-")) {
+            return { stdout: "10.0.0" };
+          }
           throw new Error("spawn pnpm ENOENT");
+        }
+        if (key === "corepack --version") {
+          throw new Error("spawn corepack ENOENT");
         }
         if (key === "npm --version") {
           return { stdout: "10.0.0" };
+        }
+        if (key.startsWith("npm install --prefix ") && key.endsWith(" pnpm@10")) {
+          return { stdout: "added 1 package" };
         }
         return undefined;
       },
     });
 
-    const result = await runGatewayUpdate({
-      cwd: tempDir,
-      runCommand: async (argv, _options) => runCommand(argv),
-      timeoutMs: 5000,
-      channel: "stable",
-    });
+    const result = await runWithCommand(runCommand, { channel: "stable" });
 
     expect(result.status).toBe("ok");
     expect(calls).toContain("pnpm --version");
-    expect(calls).toContain("corepack --version");
+    expect(calls.some((call) => call.startsWith("npm install --prefix "))).toBe(true);
     expect(calls).toContain("npm --version");
-    expect(calls).toContain("npm install --no-package-lock --legacy-peer-deps");
-    expect(calls).not.toContain("pnpm install");
+    expect(calls).toContain("pnpm install");
+    expect(calls).not.toContain("npm install --no-package-lock --legacy-peer-deps");
   });
 
   it("bootstraps pnpm via corepack when pnpm is missing", async () => {
@@ -450,6 +461,178 @@ describe("runGatewayUpdate", () => {
     expect(calls).toContain("corepack enable");
     expect(calls).toContain("pnpm install");
     expect(calls).not.toContain("npm install --no-package-lock --legacy-peer-deps");
+  });
+
+  it("uses npm-bootstrapped pnpm for dev preflight when pnpm and corepack are missing", async () => {
+    await setupGitPackageManagerFixture();
+    const calls: string[] = [];
+    const pnpmEnvPaths: string[] = [];
+    const upstreamSha = "upstream123";
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
+
+    const runCommand = async (
+      argv: string[],
+      options?: { env?: NodeJS.ProcessEnv; cwd?: string; timeoutMs?: number },
+    ) => {
+      const key = argv.join(" ");
+      calls.push(key);
+
+      if (key === `git -C ${tempDir} rev-parse --show-toplevel`) {
+        return { stdout: tempDir, stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-parse HEAD`) {
+        return { stdout: "abc123", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-parse --abbrev-ref HEAD`) {
+        return { stdout: "main", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`) {
+        return { stdout: "origin/main", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-parse @{upstream}`) {
+        return { stdout: upstreamSha, stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-list --max-count=10 ${upstreamSha}`) {
+        return { stdout: `${upstreamSha}\n`, stderr: "", code: 0 };
+      }
+      if (key === "pnpm --version") {
+        const envPath = options?.env?.PATH ?? options?.env?.Path ?? "";
+        if (envPath.includes("openclaw-update-pnpm-")) {
+          pnpmEnvPaths.push(envPath);
+          return { stdout: "10.0.0", stderr: "", code: 0 };
+        }
+        throw new Error("spawn pnpm ENOENT");
+      }
+      if (key === "corepack --version") {
+        throw new Error("spawn corepack ENOENT");
+      }
+      if (key === "npm --version") {
+        return { stdout: "10.0.0", stderr: "", code: 0 };
+      }
+      if (key.startsWith("npm install --prefix ") && key.endsWith(" pnpm@10")) {
+        return { stdout: "added 1 package", stderr: "", code: 0 };
+      }
+      if (
+        key.startsWith(`git -C ${tempDir} worktree add --detach /tmp/openclaw-update-preflight-`) &&
+        key.endsWith(` /worktree ${upstreamSha}`)
+      ) {
+        return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
+      }
+      if (
+        key.startsWith("git -C /tmp/openclaw-update-preflight-") &&
+        key.includes("/worktree checkout --detach ") &&
+        key.endsWith(upstreamSha)
+      ) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === "pnpm install" || key === "pnpm build" || key === "pnpm lint") {
+        const envPath = options?.env?.PATH ?? options?.env?.Path ?? "";
+        pnpmEnvPaths.push(envPath);
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (
+        key.startsWith(`git -C ${tempDir} worktree remove --force /tmp/openclaw-update-preflight-`)
+      ) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} worktree prune`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rebase ${upstreamSha}`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === "pnpm ui:build") {
+        const envPath = options?.env?.PATH ?? options?.env?.Path ?? "";
+        pnpmEnvPaths.push(envPath);
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === doctorCommand) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-parse HEAD`) {
+        return { stdout: upstreamSha, stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    };
+
+    const result = await runWithCommand(runCommand, { channel: "dev" });
+
+    expect(result.status).toBe("ok");
+    expect(calls.some((call) => call.startsWith("npm install --prefix "))).toBe(true);
+    expect(calls).toContain("pnpm install");
+    expect(calls).toContain("pnpm build");
+    expect(calls).toContain("pnpm lint");
+    expect(calls).toContain("pnpm ui:build");
+    expect(pnpmEnvPaths.some((value) => value.includes("openclaw-update-pnpm-"))).toBe(true);
+  });
+
+  it("does not fall back to npm scripts when a pnpm repo cannot bootstrap pnpm", async () => {
+    await setupGitPackageManagerFixture();
+    const calls: string[] = [];
+    const upstreamSha = "upstream123";
+
+    const runCommand = async (
+      argv: string[],
+      _options?: { env?: NodeJS.ProcessEnv; cwd?: string; timeoutMs?: number },
+    ) => {
+      const key = argv.join(" ");
+      calls.push(key);
+
+      if (key === `git -C ${tempDir} rev-parse --show-toplevel`) {
+        return { stdout: tempDir, stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-parse HEAD`) {
+        return { stdout: "abc123", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-parse --abbrev-ref HEAD`) {
+        return { stdout: "main", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`) {
+        return { stdout: "origin/main", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-parse @{upstream}`) {
+        return { stdout: upstreamSha, stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} rev-list --max-count=10 ${upstreamSha}`) {
+        return { stdout: `${upstreamSha}\n`, stderr: "", code: 0 };
+      }
+      if (key === "pnpm --version") {
+        throw new Error("spawn pnpm ENOENT");
+      }
+      if (key === "corepack --version") {
+        throw new Error("spawn corepack ENOENT");
+      }
+      if (key === "npm --version") {
+        return { stdout: "10.0.0", stderr: "", code: 0 };
+      }
+      if (key.startsWith("npm install --prefix ") && key.endsWith(" pnpm@10")) {
+        return { stdout: "", stderr: "network exploded", code: 1 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    };
+
+    const result = await runWithCommand(runCommand, { channel: "dev" });
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toBe("pnpm-npm-bootstrap-failed");
+    expect(calls.some((call) => call === "npm run build")).toBe(false);
+    expect(calls.some((call) => call === "npm run lint")).toBe(false);
+    expect(calls.some((call) => call.startsWith("git -C /tmp/openclaw-update-preflight-"))).toBe(
+      false,
+    );
   });
 
   it("skips update when no git root", async () => {

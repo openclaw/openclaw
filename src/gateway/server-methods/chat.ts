@@ -19,6 +19,7 @@ import { normalizeInputProvenance, type InputProvenance } from "../../sessions/i
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
 import {
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
@@ -43,7 +44,6 @@ import {
   parseMessageWithAttachments,
 } from "../chat-attachments.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
-import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -681,35 +681,7 @@ function sanitizeChatHistoryMessage(
  * dropping messages that carry real text alongside a stale `content: "NO_REPLY"`.
  */
 function extractAssistantTextForSilentCheck(message: unknown): string | undefined {
-  if (!message || typeof message !== "object") {
-    return undefined;
-  }
-  const entry = message as Record<string, unknown>;
-  if (entry.role !== "assistant") {
-    return undefined;
-  }
-  if (typeof entry.text === "string") {
-    return entry.text;
-  }
-  if (typeof entry.content === "string") {
-    return entry.content;
-  }
-  if (!Array.isArray(entry.content) || entry.content.length === 0) {
-    return undefined;
-  }
-
-  const texts: string[] = [];
-  for (const block of entry.content) {
-    if (!block || typeof block !== "object") {
-      return undefined;
-    }
-    const typed = block as { type?: unknown; text?: unknown };
-    if (typed.type !== "text" || typeof typed.text !== "string") {
-      return undefined;
-    }
-    texts.push(typed.text);
-  }
-  return texts.length > 0 ? texts.join("\n") : undefined;
+  return extractAssistantVisibleText(message);
 }
 
 function sanitizeChatHistoryMessages(messages: unknown[], maxChars: number): unknown[] {
@@ -1231,16 +1203,10 @@ export const chatHandlers: GatewayRequestHandlers = {
         : typeof configMaxChars === "number"
           ? configMaxChars
           : DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
-    const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
     const sessionId = entry?.sessionId;
-    const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
     const localMessages =
       sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
-    const rawMessages = augmentChatHistoryWithCliSessionImports({
-      entry,
-      provider: resolvedSessionModel.provider,
-      localMessages,
-    });
+    const rawMessages = localMessages;
     const hardMax = 1000;
     const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;
@@ -1265,11 +1231,16 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
+      const sessionAgentId = resolveSessionAgentId({
+        sessionKey,
+        config: cfg,
+      });
+      const resolvedModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
       const catalog = await context.loadGatewayModelCatalog();
       thinkingLevel = resolveThinkingDefault({
         cfg,
-        provider: resolvedSessionModel.provider,
-        model: resolvedSessionModel.model,
+        provider: resolvedModel.provider,
+        model: resolvedModel.model,
         catalog,
       });
     }

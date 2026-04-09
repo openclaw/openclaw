@@ -1,4 +1,6 @@
-import type { MediaUnderstandingCapability } from "./types.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { buildMediaUnderstandingRegistry, normalizeMediaProviderId } from "./provider-registry.js";
+import type { MediaUnderstandingCapability, MediaUnderstandingProvider } from "./types.js";
 
 const MB = 1024 * 1024;
 
@@ -27,39 +29,78 @@ export const DEFAULT_PROMPT: Record<MediaUnderstandingCapability, string> = {
   video: "Describe the video.",
 };
 export const DEFAULT_VIDEO_MAX_BASE64_BYTES = 70 * MB;
-export const DEFAULT_AUDIO_MODELS: Record<string, string> = {
-  groq: "whisper-large-v3-turbo",
-  openai: "gpt-4o-mini-transcribe",
-  deepgram: "nova-3",
-  mistral: "voxtral-mini-latest",
-};
-
-export const AUTO_AUDIO_KEY_PROVIDERS = [
-  "openai",
-  "groq",
-  "deepgram",
-  "google",
-  "mistral",
-] as const;
-export const AUTO_IMAGE_KEY_PROVIDERS = [
-  "openai",
-  "anthropic",
-  "google",
-  "minimax",
-  "minimax-portal",
-  "zai",
-] as const;
-export const AUTO_VIDEO_KEY_PROVIDERS = ["google", "moonshot"] as const;
-export const DEFAULT_IMAGE_MODELS: Record<string, string> = {
-  openai: "gpt-5-mini",
-  anthropic: "claude-opus-4-6",
-  google: "gemini-3-flash-preview",
-  minimax: "MiniMax-VL-01",
-  "minimax-portal": "MiniMax-VL-01",
-  zai: "glm-4.6v",
-};
 export const CLI_OUTPUT_MAX_BUFFER = 5 * MB;
 export const DEFAULT_MEDIA_CONCURRENCY = 2;
+
+function providerSupportsCapability(
+  provider: MediaUnderstandingProvider | undefined,
+  capability: MediaUnderstandingCapability,
+): boolean {
+  if (!provider) {
+    return false;
+  }
+  if (capability === "audio") {
+    return Boolean(provider.transcribeAudio);
+  }
+  if (capability === "image") {
+    return Boolean(provider.describeImage);
+  }
+  return Boolean(provider.describeVideo);
+}
+
+function resolveDefaultRegistry(cfg?: OpenClawConfig) {
+  return buildMediaUnderstandingRegistry(undefined, cfg ?? ({} as OpenClawConfig));
+}
+
+export function resolveDefaultMediaModel(params: {
+  providerId: string;
+  capability: MediaUnderstandingCapability;
+  cfg?: OpenClawConfig;
+  providerRegistry?: Map<string, MediaUnderstandingProvider>;
+}): string | undefined {
+  const registry = params.providerRegistry ?? resolveDefaultRegistry(params.cfg);
+  const provider = registry.get(normalizeMediaProviderId(params.providerId));
+  return provider?.defaultModels?.[params.capability]?.trim() || undefined;
+}
+
+export function resolveAutoMediaKeyProviders(params: {
+  capability: MediaUnderstandingCapability;
+  cfg?: OpenClawConfig;
+  providerRegistry?: Map<string, MediaUnderstandingProvider>;
+}): string[] {
+  const registry = params.providerRegistry ?? resolveDefaultRegistry(params.cfg);
+  type AutoProviderEntry = {
+    provider: MediaUnderstandingProvider;
+    priority: number;
+  };
+  return [...registry.values()]
+    .filter((provider) => providerSupportsCapability(provider, params.capability))
+    .map((provider): AutoProviderEntry | null => {
+      const priority = provider.autoPriority?.[params.capability];
+      return typeof priority === "number" && Number.isFinite(priority)
+        ? { provider, priority }
+        : null;
+    })
+    .filter((entry): entry is AutoProviderEntry => entry !== null)
+    .toSorted((left, right) => {
+      if (left.priority !== right.priority) {
+        return left.priority - right.priority;
+      }
+      return left.provider.id.localeCompare(right.provider.id);
+    })
+    .map((entry) => normalizeMediaProviderId(entry.provider.id))
+    .filter(Boolean);
+}
+
+export function providerSupportsNativePdfDocument(params: {
+  providerId: string;
+  cfg?: OpenClawConfig;
+  providerRegistry?: Map<string, MediaUnderstandingProvider>;
+}): boolean {
+  const registry = params.providerRegistry ?? resolveDefaultRegistry(params.cfg);
+  const provider = registry.get(normalizeMediaProviderId(params.providerId));
+  return provider?.nativeDocumentInputs?.includes("pdf") ?? false;
+}
 
 /**
  * Minimum audio file size in bytes below which transcription is skipped.

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
 
@@ -50,8 +50,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
   ({ createExecApprovalChannelRuntime } = await import("./exec-approval-channel-runtime.js"));
 });
 

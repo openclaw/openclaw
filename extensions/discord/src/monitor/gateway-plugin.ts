@@ -6,6 +6,7 @@ import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import * as undici from "undici";
 import * as ws from "ws";
+import { validateDiscordProxyUrl } from "../proxy-fetch.js";
 
 const DISCORD_GATEWAY_BOT_URL = "https://discord.com/api/v10/gateway/bot";
 const DEFAULT_DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/";
@@ -317,6 +318,7 @@ export function createDiscordGatewayPlugin(params: {
   }
 
   try {
+    validateDiscordProxyUrl(proxy);
     const HttpsProxyAgentCtor =
       params.__testing?.HttpsProxyAgentCtor ?? httpsProxyAgent.HttpsProxyAgent;
     const ProxyAgentCtor = params.__testing?.ProxyAgentCtor ?? undici.ProxyAgent;

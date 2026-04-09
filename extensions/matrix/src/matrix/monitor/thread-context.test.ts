@@ -63,6 +63,7 @@ describe("matrix thread context", () => {
       }),
     ).resolves.toEqual({
       threadStarterBody: "Matrix thread root $root from Alice:\nRoot topic",
+      senderId: "@alice:example.org",
       senderLabel: "Alice",
       summary: "Root topic",
     });
@@ -115,6 +116,7 @@ describe("matrix thread context", () => {
       }),
     ).resolves.toEqual({
       threadStarterBody: "Matrix thread root $root from Alice:\nRecovered topic",
+      senderId: "@alice:example.org",
       senderLabel: "Alice",
       summary: "Recovered topic",
     });

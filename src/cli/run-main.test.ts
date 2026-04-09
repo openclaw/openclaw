@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   rewriteUpdateFlagArgv,
-  resolveMissingBrowserCommandMessage,
+  resolveMissingPluginCommandMessage,
   shouldEnsureCliPath,
   shouldRegisterPrimarySubcommand,
   shouldSkipPluginCommandRegistration,
@@ -138,10 +138,10 @@ describe("shouldUseRootHelpFastPath", () => {
   });
 });
 
-describe("resolveMissingBrowserCommandMessage", () => {
-  it("explains plugins.allow misses for the browser command", () => {
+describe("resolveMissingPluginCommandMessage", () => {
+  it("explains plugins.allow misses for a bundled plugin command", () => {
     expect(
-      resolveMissingBrowserCommandMessage({
+      resolveMissingPluginCommandMessage("browser", {
         plugins: {
           allow: ["telegram"],
         },
@@ -149,9 +149,9 @@ describe("resolveMissingBrowserCommandMessage", () => {
     ).toContain('`plugins.allow` excludes "browser"');
   });
 
-  it("explains explicit bundled browser disablement", () => {
+  it("explains explicit bundled plugin disablement", () => {
     expect(
-      resolveMissingBrowserCommandMessage({
+      resolveMissingPluginCommandMessage("browser", {
         plugins: {
           entries: {
             browser: {
@@ -163,9 +163,9 @@ describe("resolveMissingBrowserCommandMessage", () => {
     ).toContain("plugins.entries.browser.enabled=false");
   });
 
-  it("returns null when browser is already allowed", () => {
+  it("returns null when the bundled plugin command is already allowed", () => {
     expect(
-      resolveMissingBrowserCommandMessage({
+      resolveMissingPluginCommandMessage("browser", {
         plugins: {
           allow: ["browser"],
         },

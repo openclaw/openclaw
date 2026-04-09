@@ -2,23 +2,30 @@ import { describe, expect, it } from "vitest";
 import {
   imageGenerationProviderContractRegistry,
   mediaUnderstandingProviderContractRegistry,
+  musicGenerationProviderContractRegistry,
   pluginRegistrationContractRegistry,
   speechProviderContractRegistry,
+  videoGenerationProviderContractRegistry,
 } from "../../../src/plugins/contracts/registry.js";
 import { loadPluginManifestRegistry } from "../../../src/plugins/manifest-registry.js";
 
 type PluginRegistrationContractParams = {
   pluginId: string;
   providerIds?: string[];
+  webFetchProviderIds?: string[];
   webSearchProviderIds?: string[];
   speechProviderIds?: string[];
+  realtimeTranscriptionProviderIds?: string[];
+  realtimeVoiceProviderIds?: string[];
   mediaUnderstandingProviderIds?: string[];
   imageGenerationProviderIds?: string[];
-  cliBackendIds?: string[];
+  videoGenerationProviderIds?: string[];
+  musicGenerationProviderIds?: string[];
   toolNames?: string[];
   requireSpeechVoices?: boolean;
   requireDescribeImages?: boolean;
   requireGenerateImage?: boolean;
+  requireGenerateVideo?: boolean;
   manifestAuthChoice?: {
     pluginId: string;
     choiceId: string;
@@ -88,6 +95,30 @@ function findImageGenerationProvider(pluginId: string) {
   return entry.provider;
 }
 
+function findVideoGenerationProviderIds(pluginId: string) {
+  return videoGenerationProviderContractRegistry
+    .filter((entry) => entry.pluginId === pluginId)
+    .map((entry) => entry.provider.id)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+function findVideoGenerationProvider(pluginId: string) {
+  const entry = videoGenerationProviderContractRegistry.find(
+    (candidate) => candidate.pluginId === pluginId,
+  );
+  if (!entry) {
+    throw new Error(`video-generation provider contract missing for ${pluginId}`);
+  }
+  return entry.provider;
+}
+
+function findMusicGenerationProviderIds(pluginId: string) {
+  return musicGenerationProviderContractRegistry
+    .filter((entry) => entry.pluginId === pluginId)
+    .map((entry) => entry.provider.id)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 export function describePluginRegistrationContract(params: PluginRegistrationContractParams) {
   describe(`${params.pluginId} plugin registration contract`, () => {
     if (params.providerIds) {
@@ -104,12 +135,36 @@ export function describePluginRegistrationContract(params: PluginRegistrationCon
       });
     }
 
+    if (params.webFetchProviderIds) {
+      it("keeps bundled web fetch ownership explicit", () => {
+        expect(findRegistration(params.pluginId).webFetchProviderIds).toEqual(
+          params.webFetchProviderIds,
+        );
+      });
+    }
+
     if (params.speechProviderIds) {
       it("keeps bundled speech ownership explicit", () => {
         expect(findRegistration(params.pluginId).speechProviderIds).toEqual(
           params.speechProviderIds,
         );
         expect(findSpeechProviderIds(params.pluginId)).toEqual(params.speechProviderIds);
+      });
+    }
+
+    if (params.realtimeTranscriptionProviderIds) {
+      it("keeps bundled realtime-transcription ownership explicit", () => {
+        expect(findRegistration(params.pluginId).realtimeTranscriptionProviderIds).toEqual(
+          params.realtimeTranscriptionProviderIds,
+        );
+      });
+    }
+
+    if (params.realtimeVoiceProviderIds) {
+      it("keeps bundled realtime-voice ownership explicit", () => {
+        expect(findRegistration(params.pluginId).realtimeVoiceProviderIds).toEqual(
+          params.realtimeVoiceProviderIds,
+        );
       });
     }
 
@@ -135,9 +190,25 @@ export function describePluginRegistrationContract(params: PluginRegistrationCon
       });
     }
 
-    if (params.cliBackendIds) {
-      it("keeps bundled CLI backend ownership explicit", () => {
-        expect(findRegistration(params.pluginId).cliBackendIds).toEqual(params.cliBackendIds);
+    if (params.videoGenerationProviderIds) {
+      it("keeps bundled video-generation ownership explicit", () => {
+        expect(findRegistration(params.pluginId).videoGenerationProviderIds).toEqual(
+          params.videoGenerationProviderIds,
+        );
+        expect(findVideoGenerationProviderIds(params.pluginId)).toEqual(
+          params.videoGenerationProviderIds,
+        );
+      });
+    }
+
+    if (params.musicGenerationProviderIds) {
+      it("keeps bundled music-generation ownership explicit", () => {
+        expect(findRegistration(params.pluginId).musicGenerationProviderIds).toEqual(
+          params.musicGenerationProviderIds,
+        );
+        expect(findMusicGenerationProviderIds(params.pluginId)).toEqual(
+          params.musicGenerationProviderIds,
+        );
       });
     }
 
@@ -164,6 +235,14 @@ export function describePluginRegistrationContract(params: PluginRegistrationCon
     if (params.requireGenerateImage) {
       it("keeps bundled image-generation support explicit", () => {
         expect(findImageGenerationProvider(params.pluginId).generateImage).toEqual(
+          expect.any(Function),
+        );
+      });
+    }
+
+    if (params.requireGenerateVideo) {
+      it("keeps bundled video-generation support explicit", () => {
+        expect(findVideoGenerationProvider(params.pluginId).generateVideo).toEqual(
           expect.any(Function),
         );
       });

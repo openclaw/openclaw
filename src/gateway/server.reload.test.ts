@@ -3,6 +3,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { drainSystemEvents } from "../infra/system-events.js";
+import {
+  TALK_TEST_PROVIDER_API_KEY_PATH,
+  TALK_TEST_PROVIDER_ID,
+} from "../test-utils/talk-test-provider.js";
 import { openTrackedWs } from "./device-authz.test-helpers.js";
 import {
   connectReq,
@@ -225,6 +229,16 @@ describe("gateway hot reload", () => {
     });
   }
 
+  async function writeChannelEnvRefConfig() {
+    await writeConfigFile({
+      channels: {
+        telegram: {
+          botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+        },
+      },
+    });
+  }
+
   async function writeConfigFile(config: unknown) {
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
     if (!configPath) {
@@ -233,10 +247,14 @@ describe("gateway hot reload", () => {
     await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
   }
 
-  async function writeTalkApiKeyEnvRefConfig(refId = "TALK_API_KEY_REF") {
+  async function writeTalkProviderApiKeyEnvRefConfig(refId = "TALK_API_KEY_REF") {
     await writeConfigFile({
       talk: {
-        apiKey: { source: "env", provider: "default", id: refId },
+        providers: {
+          [TALK_TEST_PROVIDER_ID]: {
+            apiKey: { source: "env", provider: "default", id: refId },
+          },
+        },
       },
     });
   }
@@ -387,14 +405,23 @@ describe("gateway hot reload", () => {
       configPath,
       `${JSON.stringify(
         {
+          plugins: {
+            entries: {
+              google: {
+                enabled: true,
+                config: {
+                  webSearch: {
+                    apiKey: "gemini-startup-key",
+                  },
+                },
+              },
+            },
+          },
           tools: {
             web: {
               search: {
                 enabled: true,
                 provider: "gemini",
-                gemini: {
-                  apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" },
-                },
               },
             },
           },
@@ -549,6 +576,13 @@ describe("gateway hot reload", () => {
     );
   });
 
+  it("allows startup when unresolved channel refs exist but channels are skipped", async () => {
+    await writeChannelEnvRefConfig();
+    delete process.env.TELEGRAM_BOT_TOKEN;
+    process.env.OPENCLAW_SKIP_CHANNELS = "1";
+    await expect(withGatewayServer(async () => {})).resolves.toBeUndefined();
+  });
+
   it("fails startup when an active exec ref id contains traversal segments", async () => {
     await writeGatewayTraversalExecRefConfig();
     const previousGatewayAuth = testState.gatewayAuth;
@@ -650,19 +684,18 @@ describe("gateway hot reload", () => {
     });
   });
 
-  it("emits one-shot degraded and recovered system events for web search secret reload transitions", async () => {
+  it("does not emit secrets reloader events for web search secret reload transitions", async () => {
     await writeWebSearchGeminiRefConfig();
-    process.env.GEMINI_API_KEY = "gemini-startup-key"; // pragma: allowlist secret
 
     await withGatewayServer(async () => {
       const onHotReload = hoisted.getOnHotReload();
       expect(onHotReload).toBeTypeOf("function");
       const sessionKey = resolveMainSessionKeyFromConfig();
       const plan = {
-        changedPaths: ["tools.web.search.gemini.apiKey"],
+        changedPaths: ["plugins.entries.google.config.webSearch.apiKey"],
         restartGateway: false,
         restartReasons: [],
-        hotReasons: ["tools.web.search.gemini.apiKey"],
+        hotReasons: ["plugins.entries.google.config.webSearch.apiKey"],
         reloadHooks: false,
         restartGmailWatcher: false,
         restartCron: false,
@@ -670,14 +703,42 @@ describe("gateway hot reload", () => {
         restartChannels: new Set(),
         noopPaths: [],
       };
-      const nextConfig = {
+      const degradedConfig = {
         tools: {
           web: {
             search: {
               enabled: true,
               provider: "gemini",
-              gemini: {
-                apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" },
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            google: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "OPENCLAW_TEST_MISSING_GEMINI_API_KEY",
+                  },
+                },
+              },
+            },
+          },
+        },
+      };
+      const recoveredConfig = {
+        tools: degradedConfig.tools,
+        plugins: {
+          entries: {
+            google: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: "gemini-recovered-key",
+                },
               },
             },
           },
@@ -685,17 +746,13 @@ describe("gateway hot reload", () => {
       };
 
       delete process.env.GEMINI_API_KEY;
-      await expectOneShotSecretReloadEvents({
-        applyReload: () => onHotReload?.(plan, nextConfig),
-        sessionKey,
-        expectedError: "[WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK]",
-      });
+      delete process.env.OPENCLAW_TEST_MISSING_GEMINI_API_KEY;
+      expect(drainSystemEvents(sessionKey)).toEqual([]);
+      await expect(onHotReload?.(plan, degradedConfig)).resolves.toBeUndefined();
+      expect(drainSystemEvents(sessionKey)).toEqual([]);
 
-      process.env.GEMINI_API_KEY = "gemini-recovered-key"; // pragma: allowlist secret
-      await expectSecretReloadRecovered({
-        applyReload: () => onHotReload?.(plan, nextConfig),
-        sessionKey,
-      });
+      await expect(onHotReload?.(plan, recoveredConfig)).resolves.toBeUndefined();
+      expect(drainSystemEvents(sessionKey)).toEqual([]);
     });
   });
 
@@ -721,7 +778,7 @@ describe("gateway hot reload", () => {
     const refId = "RUNTIME_LKG_TALK_API_KEY";
     const previousRefValue = process.env[refId];
     process.env[refId] = "talk-key-before-reload-failure"; // pragma: allowlist secret
-    await writeTalkApiKeyEnvRefConfig(refId);
+    await writeTalkProviderApiKeyEnvRefConfig(refId);
 
     const { server, ws } = await startServerWithClient();
     try {
@@ -730,10 +787,10 @@ describe("gateway hot reload", () => {
         assignments?: Array<{ path: string; pathSegments: string[]; value: unknown }>;
       }>(ws, "secrets.resolve", {
         commandName: "runtime-lkg-test",
-        targetIds: ["talk.apiKey"],
+        targetIds: ["talk.providers.*.apiKey"],
       });
       expect(preResolve.ok).toBe(true);
-      expect(preResolve.payload?.assignments?.[0]?.path).toBe("talk.apiKey");
+      expect(preResolve.payload?.assignments?.[0]?.path).toBe(TALK_TEST_PROVIDER_API_KEY_PATH);
       expect(preResolve.payload?.assignments?.[0]?.value).toBe("talk-key-before-reload-failure");
 
       delete process.env[refId];
@@ -746,10 +803,10 @@ describe("gateway hot reload", () => {
         assignments?: Array<{ path: string; pathSegments: string[]; value: unknown }>;
       }>(ws, "secrets.resolve", {
         commandName: "runtime-lkg-test",
-        targetIds: ["talk.apiKey"],
+        targetIds: ["talk.providers.*.apiKey"],
       });
       expect(postResolve.ok).toBe(true);
-      expect(postResolve.payload?.assignments?.[0]?.path).toBe("talk.apiKey");
+      expect(postResolve.payload?.assignments?.[0]?.path).toBe(TALK_TEST_PROVIDER_API_KEY_PATH);
       expect(postResolve.payload?.assignments?.[0]?.value).toBe("talk-key-before-reload-failure");
     } finally {
       if (previousRefValue === undefined) {

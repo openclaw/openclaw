@@ -1,5 +1,6 @@
 import { evaluateSenderGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
+import { looksLikeUuid } from "./uuid.js";
 
 export type SignalSender =
   | { kind: "phone"; raw: string; e164: string }
@@ -10,19 +11,7 @@ type SignalAllowEntry =
   | { kind: "phone"; e164: string }
   | { kind: "uuid"; raw: string };
 
-const UUID_HYPHENATED_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const UUID_COMPACT_RE = /^[0-9a-f]{32}$/i;
-
-export function looksLikeUuid(value: string): boolean {
-  if (UUID_HYPHENATED_RE.test(value) || UUID_COMPACT_RE.test(value)) {
-    return true;
-  }
-  const compact = value.replace(/-/g, "");
-  if (!/^[0-9a-f]+$/i.test(compact)) {
-    return false;
-  }
-  return /[a-f]/i.test(compact);
-}
+export { looksLikeUuid } from "./uuid.js";
 
 function stripSignalPrefix(value: string): string {
   return value.replace(/^signal:/i, "").trim();

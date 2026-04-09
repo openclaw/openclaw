@@ -235,6 +235,33 @@ To use cloud models, select **Cloud + Local** mode during setup. The wizard chec
 
 You can also sign in directly at [ollama.com/signin](https://ollama.com/signin).
 
+## Ollama Web Search
+
+OpenClaw also supports **Ollama Web Search** as a bundled `web_search`
+provider.
+
+- It uses your configured Ollama host (`models.providers.ollama.baseUrl` when
+  set, otherwise `http://127.0.0.1:11434`).
+- It is key-free.
+- It requires Ollama to be running and signed in with `ollama signin`.
+
+Choose **Ollama Web Search** during `openclaw onboard` or
+`openclaw configure --section web`, or set:
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        provider: "ollama",
+      },
+    },
+  },
+}
+```
+
+For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-search).
+
 ## Advanced
 
 ### Reasoning models

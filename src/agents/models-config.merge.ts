@@ -85,6 +85,11 @@ export function mergeProviderModels(
       explicitValue: explicitModel.contextWindow,
       implicitValue: implicitModel.contextWindow,
     });
+    const contextTokens = resolvePreferredTokenLimit({
+      explicitPresent: "contextTokens" in explicitModel,
+      explicitValue: explicitModel.contextTokens,
+      implicitValue: implicitModel.contextTokens,
+    });
     const maxTokens = resolvePreferredTokenLimit({
       explicitPresent: "maxTokens" in explicitModel,
       explicitValue: explicitModel.maxTokens,
@@ -96,6 +101,7 @@ export function mergeProviderModels(
       input: implicitModel.input,
       reasoning: "reasoning" in explicitModel ? explicitModel.reasoning : implicitModel.reasoning,
       ...(contextWindow === undefined ? {} : { contextWindow }),
+      ...(contextTokens === undefined ? {} : { contextTokens }),
       ...(maxTokens === undefined ? {} : { maxTokens }),
     };
   });

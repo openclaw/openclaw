@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { fetchWithBearerAuthScopeFallback } from "./fetch-auth.js";
+import { resolveRequestUrl } from "./request-url.js";
 
 const asFetch = (fn: unknown): typeof fetch => fn as typeof fetch;
 
@@ -113,5 +114,27 @@ describe("fetchWithBearerAuthScopeFallback", () => {
     expect(tokenProvider.getAccessToken).toHaveBeenCalledTimes(2);
     expect(tokenProvider.getAccessToken).toHaveBeenNthCalledWith(1, "https://first.example");
     expect(tokenProvider.getAccessToken).toHaveBeenNthCalledWith(2, "https://second.example");
+  });
+});
+
+describe("resolveRequestUrl", () => {
+  it.each([
+    {
+      name: "resolves string input",
+      input: "https://example.com/a",
+      expected: "https://example.com/a",
+    },
+    {
+      name: "resolves URL input",
+      input: new URL("https://example.com/b"),
+      expected: "https://example.com/b",
+    },
+    {
+      name: "resolves object input with url field",
+      input: { url: "https://example.com/c" } as unknown as RequestInfo,
+      expected: "https://example.com/c",
+    },
+  ])("$name", ({ input, expected }) => {
+    expect(resolveRequestUrl(input)).toBe(expected);
   });
 });

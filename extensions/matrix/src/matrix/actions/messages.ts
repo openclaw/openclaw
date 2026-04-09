@@ -1,17 +1,14 @@
 import { fetchMatrixPollMessageSummary, resolveMatrixPollRootEventId } from "../poll-summary.js";
 import { isPollEventType } from "../poll-types.js";
-import { sendMessageMatrix } from "../send.js";
-import { withResolvedActionClient, withResolvedRoomAction } from "./client.js";
+import { editMessageMatrix, sendMessageMatrix } from "../send.js";
+import { withResolvedRoomAction } from "./client.js";
 import { resolveMatrixActionLimit } from "./limits.js";
 import { summarizeMatrixRawEvent } from "./summary.js";
 import {
   EventType,
-  MsgType,
-  RelationType,
   type MatrixActionClientOpts,
   type MatrixMessageSummary,
   type MatrixRawEvent,
-  type RoomMessageEventContent,
 } from "./types.js";
 
 export async function sendMatrixMessage(
@@ -47,23 +44,13 @@ export async function editMatrixMessage(
   if (!trimmed) {
     throw new Error("Matrix edit requires content");
   }
-  return await withResolvedRoomAction(roomId, opts, async (client, resolvedRoom) => {
-    const newContent = {
-      msgtype: MsgType.Text,
-      body: trimmed,
-    } satisfies RoomMessageEventContent;
-    const payload: RoomMessageEventContent = {
-      msgtype: MsgType.Text,
-      body: `* ${trimmed}`,
-      "m.new_content": newContent,
-      "m.relates_to": {
-        rel_type: RelationType.Replace,
-        event_id: messageId,
-      },
-    };
-    const eventId = await client.sendMessage(resolvedRoom, payload);
-    return { eventId: eventId ?? null };
+  const eventId = await editMessageMatrix(roomId, messageId, trimmed, {
+    cfg: opts.cfg,
+    accountId: opts.accountId ?? undefined,
+    client: opts.client,
+    timeoutMs: opts.timeoutMs,
   });
+  return { eventId: eventId || null };
 }
 
 export async function deleteMatrixMessage(

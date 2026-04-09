@@ -26,6 +26,10 @@ import {
   CDP_READY_AFTER_LAUNCH_POLL_MS,
   CDP_READY_AFTER_LAUNCH_WINDOW_MS,
 } from "./server-context.constants.js";
+import {
+  closePlaywrightBrowserConnectionForProfile,
+  resolveIdleProfileStopOutcome,
+} from "./server-context.lifecycle.js";
 import type {
   BrowserServerState,
   ContextOptions,
@@ -98,15 +102,6 @@ export function createProfileAvailability({
         setProfileRunning(null);
       }
     });
-  };
-
-  const closePlaywrightBrowserConnectionForProfile = async (cdpUrl?: string): Promise<void> => {
-    try {
-      const mod = await import("./pw-ai.js");
-      await mod.closePlaywrightBrowserConnection(cdpUrl ? { cdpUrl } : undefined);
-    } catch {
-      // ignore
-    }
   };
 
   const reconcileProfileRuntime = async (): Promise<void> => {
@@ -277,7 +272,13 @@ export function createProfileAvailability({
     }
     const profileState = getProfileState();
     if (!profileState.running) {
-      return { stopped: false };
+      const idleStop = resolveIdleProfileStopOutcome(profile);
+      if (idleStop.closePlaywright) {
+        // No process was launched for attachOnly/remote profiles, but a cached
+        // Playwright CDP connection may still be active and holding emulation state.
+        await closePlaywrightBrowserConnectionForProfile(profile.cdpUrl);
+      }
+      return { stopped: idleStop.stopped };
     }
     await stopOpenClawChrome(profileState.running);
     setProfileRunning(null);

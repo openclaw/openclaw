@@ -96,7 +96,7 @@ describe("docker build cache layout", () => {
     expect(
       indexOfPattern(
         dockerfile,
-        /^COPY(?:\s+--chown=\S+)?\s+package\.json pnpm-lock\.yaml pnpm-workspace\.yaml \.\/$/m,
+        /^COPY(?:\s+--chown=\S+)?\s+package\.json pnpm-lock\.yaml pnpm-workspace\.yaml \.npmrc \.\/$/m,
       ),
     ).toBeLessThan(installIndex);
     expect(
@@ -114,7 +114,7 @@ describe("docker build cache layout", () => {
     expect(
       indexOfPattern(
         dockerfile,
-        /^COPY(?:\s+--chown=\S+)?\s+tsconfig\.json tsconfig\.plugin-sdk\.dts\.json tsdown\.config\.ts vitest\.config\.ts vitest\.e2e\.config\.ts vitest\.performance-config\.ts openclaw\.mjs \.\/$/m,
+        /^COPY(?:\s+--chown=\S+)?\s+tsconfig\.json tsconfig\.plugin-sdk\.dts\.json tsdown\.config\.ts vitest\.config\.ts vitest\.e2e\.config\.ts vitest\.performance-config\.ts vitest\.shared\.config\.ts vitest\.bundled-plugin-paths\.ts openclaw\.mjs \.\/$/m,
       ),
     ).toBeGreaterThan(installIndex);
     expect(indexOfPattern(dockerfile, /^COPY(?:\s+--chown=\S+)?\s+src \.\/src$/m)).toBeGreaterThan(
@@ -156,6 +156,21 @@ describe("docker build cache layout", () => {
         /^COPY(?:\s+--chown=\S+)?\s+extensions\/memory-core\/package\.json \.\/extensions\/memory-core\/package\.json$/m,
       ),
     ).toBe(-1);
+    expect(indexOfPattern(dockerfile, /^COPY(?:\s+--chown=\S+)?\s+\.\s+\.$/m)).toBeGreaterThan(
+      installIndex,
+    );
+  });
+
+  it("copies .npmrc before install in the cleanup smoke image", async () => {
+    const dockerfile = await readRepoFile("scripts/docker/cleanup-smoke/Dockerfile");
+    const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
+
+    expect(
+      indexOfPattern(
+        dockerfile,
+        /^COPY(?:\s+--chown=\S+)?\s+package\.json pnpm-lock\.yaml pnpm-workspace\.yaml \.npmrc \.\/$/m,
+      ),
+    ).toBeLessThan(installIndex);
     expect(indexOfPattern(dockerfile, /^COPY(?:\s+--chown=\S+)?\s+\.\s+\.$/m)).toBeGreaterThan(
       installIndex,
     );

@@ -8,6 +8,7 @@ export * from "./src/login.js";
 export * from "./src/media.js";
 export * from "./src/send.js";
 export * from "./src/session.js";
+export { setWhatsAppRuntime } from "./src/runtime.js";
 
 type StartWebLoginWithQr = typeof import("./src/login-qr.js").startWebLoginWithQr;
 type WaitForWebLogin = typeof import("./src/login-qr.js").waitForWebLogin;

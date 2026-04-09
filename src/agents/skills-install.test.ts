@@ -19,8 +19,10 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
 }));
 
-vi.mock("../security/skill-scanner.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../security/skill-scanner.js")>()),
+vi.mock("../security/skill-scanner.js", async () => ({
+  ...(await vi.importActual<typeof import("../security/skill-scanner.js")>(
+    "../security/skill-scanner.js",
+  )),
   scanDirectoryWithSummary: (...args: unknown[]) => scanDirectoryWithSummaryMock(...args),
 }));
 
@@ -176,7 +178,6 @@ describe("installSkill code safety scanning", () => {
       expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
     });
   });
-
   it("surfaces plugin scanner findings from before_install", async () => {
     const handler = vi.fn().mockReturnValue({
       findings: [

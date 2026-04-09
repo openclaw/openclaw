@@ -8,6 +8,10 @@ export const SLACK_DEFAULT_RETRY_OPTIONS: RetryOptions = {
   randomize: true,
 };
 
+export const SLACK_WRITE_RETRY_OPTIONS: RetryOptions = {
+  retries: 0,
+};
+
 export function resolveSlackWebClientOptions(options: WebClientOptions = {}): WebClientOptions {
   return {
     ...options,
@@ -15,6 +19,17 @@ export function resolveSlackWebClientOptions(options: WebClientOptions = {}): We
   };
 }
 
+export function resolveSlackWriteClientOptions(options: WebClientOptions = {}): WebClientOptions {
+  return {
+    ...options,
+    retryConfig: options.retryConfig ?? SLACK_WRITE_RETRY_OPTIONS,
+  };
+}
+
 export function createSlackWebClient(token: string, options: WebClientOptions = {}) {
   return new WebClient(token, resolveSlackWebClientOptions(options));
+}
+
+export function createSlackWriteClient(token: string, options: WebClientOptions = {}) {
+  return new WebClient(token, resolveSlackWriteClientOptions(options));
 }

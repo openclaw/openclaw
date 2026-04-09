@@ -86,6 +86,43 @@ cd apps/ios
 fastlane ios beta
 ```
 
+Maintainer recovery path for a fresh clone on the same Mac:
+
+1. Reuse the existing Keychain-backed ASC key on that machine.
+2. Restore or recreate `apps/ios/fastlane/.env` so it contains the non-secret variables:
+
+```bash
+ASC_KEY_ID=YOUR_KEY_ID
+ASC_ISSUER_ID=YOUR_ISSUER_ID
+ASC_KEYCHAIN_SERVICE=openclaw-asc-key
+ASC_KEYCHAIN_ACCOUNT=YOUR_MAC_USERNAME
+```
+
+3. Re-run auth validation:
+
+```bash
+cd apps/ios
+fastlane ios auth_check
+```
+
+4. Set the official/TestFlight relay URL before release:
+
+```bash
+export OPENCLAW_PUSH_RELAY_BASE_URL=https://relay.example.com
+```
+
+5. Upload:
+
+```bash
+pnpm ios:beta
+```
+
+Quick verification after upload:
+
+- confirm `apps/ios/build/beta/OpenClaw-<version>.ipa` exists
+- confirm Fastlane prints `Uploaded iOS beta: version=<version> short=<short> build=<build>`
+- remember that TestFlight processing can take a few minutes after the upload succeeds
+
 Versioning rules:
 
 - Root `package.json.version` is the single source of truth for iOS

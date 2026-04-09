@@ -680,12 +680,12 @@ export abstract class MemoryManagerSyncOps {
     if (params?.force) {
       return true;
     }
+    if (needsFullReindex) {
+      return true;
+    }
     const reason = params?.reason;
     if (reason === "session-start" || reason === "watch") {
       return false;
-    }
-    if (needsFullReindex) {
-      return true;
     }
     return this.sessionsDirty && this.sessionsDirtyFiles.size > 0;
   }
@@ -1119,7 +1119,11 @@ export abstract class MemoryManagerSyncOps {
     }
     const fallbackFrom = this.provider.id as EmbeddingProviderId;
 
-    const fallbackModel = resolveEmbeddingProviderFallbackModel(fallback, this.settings.model);
+    const fallbackModel = resolveEmbeddingProviderFallbackModel(
+      fallback,
+      this.settings.model,
+      this.cfg,
+    );
 
     const fallbackResult = await createEmbeddingProvider({
       config: this.cfg,

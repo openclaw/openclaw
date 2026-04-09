@@ -129,7 +129,9 @@ export async function retryAsync<T>(
         err,
         label: options.label,
       });
-      await sleep(delay);
+      if (delay > 0) {
+        await sleep(delay);
+      }
     }
   }
 

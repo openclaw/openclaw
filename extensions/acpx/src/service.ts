@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import type {
   AcpRuntime,
   OpenClawPluginService,
@@ -6,12 +7,16 @@ import type {
 } from "../runtime-api.js";
 import { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "../runtime-api.js";
 import { resolveAcpxPluginConfig, type ResolvedAcpxPluginConfig } from "./config.js";
-import { ensureAcpx } from "./ensure.js";
 import { ACPX_BACKEND_ID, AcpxRuntime } from "./runtime.js";
 
 type AcpxRuntimeLike = AcpRuntime & {
   probeAvailability(): Promise<void>;
   isHealthy(): boolean;
+  doctor?(): Promise<{
+    ok: boolean;
+    message: string;
+    details?: string[];
+  }>;
 };
 
 type AcpxRuntimeFactoryParams = {
@@ -28,8 +33,12 @@ type CreateAcpxRuntimeServiceParams = {
 function createDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntimeLike {
   return new AcpxRuntime(params.pluginConfig, {
     logger: params.logger,
-    queueOwnerTtlSeconds: params.queueOwnerTtlSeconds,
   });
+}
+
+function formatDoctorFailureMessage(report: { message: string; details?: string[] }): string {
+  const detailText = report.details?.filter(Boolean).join("; ").trim();
+  return detailText ? `${report.message} (${detailText})` : report.message;
 }
 
 export function createAcpxRuntimeService(
@@ -45,6 +54,8 @@ export function createAcpxRuntimeService(
         rawConfig: params.pluginConfig,
         workspaceDir: ctx.workspaceDir,
       });
+      await fs.mkdir(pluginConfig.stateDir, { recursive: true });
+
       const runtimeFactory = params.runtimeFactory ?? createDefaultRuntime;
       runtime = runtimeFactory({
         pluginConfig,
@@ -57,41 +68,33 @@ export function createAcpxRuntimeService(
         runtime,
         healthy: () => runtime?.isHealthy() ?? false,
       });
-      const expectedVersionLabel = pluginConfig.expectedVersion ?? "any";
-      const installLabel = pluginConfig.allowPluginLocalInstall ? "enabled" : "disabled";
-      ctx.logger.info(
-        `acpx runtime backend registered (command: ${pluginConfig.command}, expectedVersion: ${expectedVersionLabel}, pluginLocalInstall: ${installLabel})`,
-      );
+      ctx.logger.info(`embedded acpx runtime backend registered (cwd: ${pluginConfig.cwd})`);
 
       lifecycleRevision += 1;
       const currentRevision = lifecycleRevision;
       void (async () => {
         try {
-          await ensureAcpx({
-            command: pluginConfig.command,
-            logger: ctx.logger,
-            expectedVersion: pluginConfig.expectedVersion,
-            allowInstall: pluginConfig.allowPluginLocalInstall,
-            stripProviderAuthEnvVars: pluginConfig.stripProviderAuthEnvVars,
-            spawnOptions: {
-              strictWindowsCmdWrapper: pluginConfig.strictWindowsCmdWrapper,
-            },
-          });
+          await runtime?.probeAvailability();
           if (currentRevision !== lifecycleRevision) {
             return;
           }
-          await runtime?.probeAvailability();
           if (runtime?.isHealthy()) {
-            ctx.logger.info("acpx runtime backend ready");
-          } else {
-            ctx.logger.warn("acpx runtime backend probe failed after local install");
+            ctx.logger.info("embedded acpx runtime backend ready");
+            return;
           }
+          const doctorReport = await runtime?.doctor?.();
+          if (currentRevision !== lifecycleRevision) {
+            return;
+          }
+          ctx.logger.warn(
+            `embedded acpx runtime backend probe failed: ${doctorReport ? formatDoctorFailureMessage(doctorReport) : "backend remained unhealthy after probe"}`,
+          );
         } catch (err) {
           if (currentRevision !== lifecycleRevision) {
             return;
           }
           ctx.logger.warn(
-            `acpx runtime setup failed: ${err instanceof Error ? err.message : String(err)}`,
+            `embedded acpx runtime setup failed: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
       })();

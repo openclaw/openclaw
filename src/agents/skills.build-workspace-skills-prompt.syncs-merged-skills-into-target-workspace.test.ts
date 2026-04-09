@@ -100,6 +100,15 @@ describe("buildWorkspaceSkillsPrompt", () => {
     const extraDir = path.join(sourceWorkspace, ".extra");
     const bundledDir = path.join(sourceWorkspace, ".bundled");
     const managedDir = path.join(sourceWorkspace, ".managed");
+    const workspaceSkillDir = path.join(sourceWorkspace, "skills", "demo-skill");
+
+    await fs.mkdir(path.join(workspaceSkillDir, ".git"), { recursive: true });
+    await fs.writeFile(path.join(workspaceSkillDir, ".git", "config"), "gitdir");
+    await fs.mkdir(path.join(workspaceSkillDir, "node_modules", "pkg"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceSkillDir, "node_modules", "pkg", "index.js"),
+      "export {}",
+    );
 
     await withEnv({ HOME: sourceWorkspace, PATH: "" }, () =>
       syncSkillsToWorkspace({
@@ -121,6 +130,59 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).not.toContain("Bundled version");
     expect(prompt).not.toContain("Extra version");
     expect(prompt.replaceAll("\\", "/")).toContain("demo-skill/SKILL.md");
+    expect(await pathExists(path.join(targetWorkspace, "skills", "demo-skill", ".git"))).toBe(
+      false,
+    );
+    expect(
+      await pathExists(path.join(targetWorkspace, "skills", "demo-skill", "node_modules")),
+    ).toBe(false);
+  });
+
+  it("syncs the explicit agent skill subset instead of inherited defaults", async () => {
+    const sourceWorkspace = await createCaseDir("source");
+    const targetWorkspace = await createCaseDir("target");
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "foo_bar"),
+      name: "foo_bar",
+      description: "Underscore variant",
+    });
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "foo.dot"),
+      name: "foo.dot",
+      description: "Dot variant",
+    });
+
+    await withEnv({ HOME: sourceWorkspace, PATH: "" }, () =>
+      syncSkillsToWorkspace({
+        sourceWorkspaceDir: sourceWorkspace,
+        targetWorkspaceDir: targetWorkspace,
+        agentId: "alpha",
+        config: {
+          agents: {
+            defaults: {
+              skills: ["foo_bar", "foo.dot"],
+            },
+            list: [{ id: "alpha", skills: ["foo_bar"] }],
+          },
+        },
+        bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
+        managedSkillsDir: path.join(sourceWorkspace, ".managed"),
+      }),
+    );
+
+    const prompt = buildPrompt(targetWorkspace, {
+      bundledSkillsDir: path.join(targetWorkspace, ".bundled"),
+      managedSkillsDir: path.join(targetWorkspace, ".managed"),
+    });
+
+    expect(prompt).toContain("Underscore variant");
+    expect(prompt).not.toContain("Dot variant");
+    expect(await pathExists(path.join(targetWorkspace, "skills", "foo_bar", "SKILL.md"))).toBe(
+      true,
+    );
+    expect(await pathExists(path.join(targetWorkspace, "skills", "foo.dot", "SKILL.md"))).toBe(
+      false,
+    );
   });
   it.runIf(process.platform !== "win32")(
     "does not sync workspace skills that resolve outside the source workspace root",
@@ -251,5 +313,46 @@ describe("buildWorkspaceSkillsPrompt", () => {
       skillFilter: [],
     });
     expect(emptyPrompt).toBe("");
+  });
+
+  it("syncs remote-eligible filtered skills into the target workspace", async () => {
+    const sourceWorkspace = await createCaseDir("source");
+    const targetWorkspace = await createCaseDir("target");
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "remote-only"),
+      name: "remote-only",
+      description: "Sandbox-only bin",
+      metadata: '{"openclaw":{"requires":{"anyBins":["missingbin","sandboxbin"]}}}',
+    });
+
+    await withEnv({ HOME: sourceWorkspace, PATH: "" }, () =>
+      syncSkillsToWorkspace({
+        sourceWorkspaceDir: sourceWorkspace,
+        targetWorkspaceDir: targetWorkspace,
+        agentId: "alpha",
+        config: {
+          agents: {
+            defaults: {
+              skills: ["remote-only"],
+            },
+            list: [{ id: "alpha" }],
+          },
+        },
+        eligibility: {
+          remote: {
+            platforms: ["linux"],
+            hasBin: () => false,
+            hasAnyBin: (bins: string[]) => bins.includes("sandboxbin"),
+            note: "sandbox",
+          },
+        },
+        bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
+        managedSkillsDir: path.join(sourceWorkspace, ".managed"),
+      }),
+    );
+
+    expect(await pathExists(path.join(targetWorkspace, "skills", "remote-only", "SKILL.md"))).toBe(
+      true,
+    );
   });
 });

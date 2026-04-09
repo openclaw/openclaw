@@ -1,28 +1,27 @@
 import { once } from "node:events";
 import http from "node:http";
+import type {
+  RealtimeTranscriptionProviderPlugin,
+  RealtimeTranscriptionSession,
+} from "openclaw/plugin-sdk/realtime-transcription";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { MediaStreamHandler, sanitizeLogText } from "./media-stream.js";
-import type {
-  OpenAIRealtimeSTTProvider,
-  RealtimeSTTSession,
-} from "./providers/stt-openai-realtime.js";
 
-const createStubSession = (): RealtimeSTTSession => ({
+const createStubSession = (): RealtimeTranscriptionSession => ({
   connect: async () => {},
   sendAudio: () => {},
-  waitForTranscript: async () => "",
-  onPartial: () => {},
-  onTranscript: () => {},
-  onSpeechStart: () => {},
   close: () => {},
   isConnected: () => true,
 });
 
-const createStubSttProvider = (): OpenAIRealtimeSTTProvider =>
+const createStubSttProvider = (): RealtimeTranscriptionProviderPlugin =>
   ({
     createSession: () => createStubSession(),
-  }) as unknown as OpenAIRealtimeSTTProvider;
+    id: "openai",
+    label: "OpenAI",
+    isConfigured: () => true,
+  }) as unknown as RealtimeTranscriptionProviderPlugin;
 
 const flush = async (): Promise<void> => {
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -104,7 +103,8 @@ const waitForClose = async (
 describe("MediaStreamHandler TTS queue", () => {
   it("serializes TTS playback and resolves in order", async () => {
     const handler = new MediaStreamHandler({
-      sttProvider: createStubSttProvider(),
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
     });
     const started: number[] = [];
     const finished: number[] = [];
@@ -137,7 +137,8 @@ describe("MediaStreamHandler TTS queue", () => {
 
   it("cancels active playback and clears queued items", async () => {
     const handler = new MediaStreamHandler({
-      sttProvider: createStubSttProvider(),
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
     });
 
     let queuedRan = false;
@@ -165,7 +166,8 @@ describe("MediaStreamHandler TTS queue", () => {
 describe("MediaStreamHandler security hardening", () => {
   it("fails sends and closes stream when buffered bytes already exceed the cap", () => {
     const handler = new MediaStreamHandler({
-      sttProvider: createStubSttProvider(),
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
     });
     const ws = {
       readyState: WebSocket.OPEN,
@@ -177,7 +179,12 @@ describe("MediaStreamHandler security hardening", () => {
       handler as unknown as {
         sessions: Map<
           string,
-          { callId: string; streamSid: string; ws: WebSocket; sttSession: RealtimeSTTSession }
+          {
+            callId: string;
+            streamSid: string;
+            ws: WebSocket;
+            sttSession: RealtimeTranscriptionSession;
+          }
         >;
       }
     ).sessions.set("MZ-backpressure", {
@@ -196,7 +203,8 @@ describe("MediaStreamHandler security hardening", () => {
 
   it("fails sends when buffered bytes exceed cap after enqueueing a frame", () => {
     const handler = new MediaStreamHandler({
-      sttProvider: createStubSttProvider(),
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
     });
     const ws = {
       readyState: WebSocket.OPEN,
@@ -214,7 +222,12 @@ describe("MediaStreamHandler security hardening", () => {
       handler as unknown as {
         sessions: Map<
           string,
-          { callId: string; streamSid: string; ws: WebSocket; sttSession: RealtimeSTTSession }
+          {
+            callId: string;
+            streamSid: string;
+            ws: WebSocket;
+            sttSession: RealtimeTranscriptionSession;
+          }
         >;
       }
     ).sessions.set("MZ-overflow", {
@@ -243,7 +256,8 @@ describe("MediaStreamHandler security hardening", () => {
     const shouldAcceptStreamCalls: Array<{ callId: string; streamSid: string; token?: string }> =
       [];
     const handler = new MediaStreamHandler({
-      sttProvider: createStubSttProvider(),
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
       preStartTimeoutMs: 40,
       shouldAcceptStream: (params) => {
         shouldAcceptStreamCalls.push(params);
@@ -266,7 +280,8 @@ describe("MediaStreamHandler security hardening", () => {
 
   it("enforces pending connection limits", async () => {
     const handler = new MediaStreamHandler({
-      sttProvider: createStubSttProvider(),
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
       preStartTimeoutMs: 5_000,
       maxPendingConnections: 1,
       maxPendingConnectionsPerIp: 1,
@@ -291,7 +306,8 @@ describe("MediaStreamHandler security hardening", () => {
 
   it("rejects upgrades when max connection cap is reached", async () => {
     const handler = new MediaStreamHandler({
-      sttProvider: createStubSttProvider(),
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
       preStartTimeoutMs: 5_000,
       maxConnections: 1,
       maxPendingConnections: 10,
@@ -319,7 +335,8 @@ describe("MediaStreamHandler security hardening", () => {
 
   it("clears pending state after valid start", async () => {
     const handler = new MediaStreamHandler({
-      sttProvider: createStubSttProvider(),
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
       preStartTimeoutMs: 40,
       shouldAcceptStream: () => true,
     });
@@ -349,7 +366,8 @@ describe("MediaStreamHandler security hardening", () => {
     const shouldAcceptStreamCalls: Array<{ callId: string; streamSid: string; token?: string }> =
       [];
     const handler = new MediaStreamHandler({
-      sttProvider: createStubSttProvider(),
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
       preStartTimeoutMs: 1_000,
       shouldAcceptStream: (params) => {
         shouldAcceptStreamCalls.push(params);

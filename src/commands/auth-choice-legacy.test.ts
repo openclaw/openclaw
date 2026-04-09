@@ -7,23 +7,19 @@ import {
 } from "./auth-choice-legacy.js";
 
 describe("auth choice legacy aliases", () => {
-  it("maps claude-cli to the new anthropic cli choice", () => {
-    expect(normalizeLegacyOnboardAuthChoice("claude-cli")).toBe("anthropic-cli");
-    expect(resolveDeprecatedAuthChoiceReplacement("claude-cli")).toEqual({
-      normalized: "anthropic-cli",
-      message: 'Auth choice "claude-cli" is deprecated; using Anthropic Claude CLI setup instead.',
+  it("maps codex-cli to the plugin-backed Codex choice", () => {
+    expect(normalizeLegacyOnboardAuthChoice("codex-cli")).toBe("openai-codex");
+    expect(resolveDeprecatedAuthChoiceReplacement("codex-cli")).toEqual({
+      normalized: "openai-codex",
+      message:
+        'Auth choice "codex-cli" is deprecated; using OpenAI Codex (ChatGPT OAuth) setup instead.',
     });
-    expect(formatDeprecatedNonInteractiveAuthChoiceError("claude-cli")).toBe(
-      'Auth choice "claude-cli" is deprecated.\nUse "--auth-choice anthropic-cli".',
+    expect(formatDeprecatedNonInteractiveAuthChoiceError("codex-cli")).toBe(
+      'Auth choice "codex-cli" is deprecated.\nUse "--auth-choice openai-codex".',
     );
   });
 
   it("sources deprecated cli aliases from plugin manifests", () => {
-    expect(resolveLegacyAuthChoiceAliasesForCli()).toEqual([
-      "setup-token",
-      "oauth",
-      "claude-cli",
-      "codex-cli",
-    ]);
+    expect(resolveLegacyAuthChoiceAliasesForCli()).toEqual(["codex-cli"]);
   });
 });

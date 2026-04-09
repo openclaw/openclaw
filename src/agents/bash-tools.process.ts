@@ -1,4 +1,4 @@
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
@@ -18,9 +18,12 @@ import {
 import { deriveSessionName, pad, sliceLogLines, truncateMiddle } from "./bash-tools.shared.js";
 import { recordCommandPoll, resetCommandPollCount } from "./command-poll-backoff.js";
 import { encodeKeySequence, encodePaste, hasCursorModeSensitiveKeys } from "./pty-keys.js";
+import { PROCESS_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
+import type { AgentToolWithMeta } from "./tools/common.js";
 
 export type ProcessToolDefaults = {
   cleanupMs?: number;
+  hasCronTool?: boolean;
   scopeKey?: string;
 };
 
@@ -116,10 +119,22 @@ function resetPollRetrySuggestion(sessionId: string): void {
   }
 }
 
+export function describeProcessTool(params?: { hasCronTool?: boolean }): string {
+  return [
+    "Manage running exec sessions for commands already started: list, poll, log, write, send-keys, submit, paste, kill.",
+    "Use poll/log when you need status, logs, quiet-success confirmation, or completion confirmation when automatic completion wake is unavailable. Use write/send-keys/submit/paste/kill for input or intervention.",
+    params?.hasCronTool
+      ? "Do not use process polling to emulate timers or reminders; use cron for scheduled follow-ups."
+      : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 export function createProcessTool(
   defaults?: ProcessToolDefaults,
   // oxlint-disable-next-line typescript/no-explicit-any
-): AgentTool<any, unknown> {
+): AgentToolWithMeta<any, unknown> {
   if (defaults?.cleanupMs !== undefined) {
     setJobTtlMs(defaults.cleanupMs);
   }
@@ -149,8 +164,8 @@ export function createProcessTool(
   return {
     name: "process",
     label: "process",
-    description:
-      "Manage running exec sessions: list, poll, log, write, send-keys, submit, paste, kill.",
+    displaySummary: PROCESS_TOOL_DISPLAY_SUMMARY,
+    description: describeProcessTool({ hasCronTool: defaults?.hasCronTool === true }),
     parameters: processSchema,
     execute: async (_toolCallId, args, _signal, _onUpdate): Promise<AgentToolResult<unknown>> => {
       const params = args as {

@@ -70,7 +70,10 @@ describe("heartbeat transcript pruning", () => {
           agentId: undefined,
           reason: "test",
           cfg,
-          deps: { sendTelegram: vi.fn() },
+          deps: {
+            sendTelegram: vi.fn(),
+            getReplyFromConfig: replySpy,
+          },
         });
 
         const finalSize = (await fs.stat(transcriptPath)).size;

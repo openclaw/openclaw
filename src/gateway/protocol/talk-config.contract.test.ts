@@ -36,7 +36,7 @@ const fixtures = JSON.parse(fs.readFileSync(fixturePath, "utf-8")) as TalkConfig
 describe("talk.config contract fixtures", () => {
   for (const fixture of fixtures.selectionCases) {
     it(fixture.id, () => {
-      const payload = { config: { talk: fixture.talk } };
+      const payload = { config: { talk: buildTalkConfigResponse(fixture.talk) } };
       if (fixture.payloadValid) {
         expect(validateTalkConfigResult(payload)).toBe(true);
       } else {
@@ -55,16 +55,12 @@ describe("talk.config contract fixtures", () => {
             apiKey?: string;
           };
         };
-        voiceId?: string;
-        apiKey?: string;
       };
       expect(talk.resolved?.provider ?? fixture.defaultProvider).toBe(
         fixture.expectedSelection.provider,
       );
-      expect(talk.resolved?.config?.voiceId ?? talk.voiceId).toBe(
-        fixture.expectedSelection.voiceId,
-      );
-      expect(talk.resolved?.config?.apiKey ?? talk.apiKey).toBe(fixture.expectedSelection.apiKey);
+      expect(talk.resolved?.config?.voiceId).toBe(fixture.expectedSelection.voiceId);
+      expect(talk.resolved?.config?.apiKey).toBe(fixture.expectedSelection.apiKey);
     });
   }
 

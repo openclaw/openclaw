@@ -1,38 +1,23 @@
 import { describe, expect, it } from "vitest";
-import {
-  formatChannelSelectionLine,
-  listChatChannels,
-  normalizeChatChannelId,
-} from "./registry.js";
+import { formatChannelSelectionLine, listChatChannels } from "./registry.js";
 
 describe("channel registry helpers", () => {
-  it("normalizes aliases + trims whitespace", () => {
-    expect(normalizeChatChannelId(" imsg ")).toBe("imessage");
-    expect(normalizeChatChannelId("gchat")).toBe("googlechat");
-    expect(normalizeChatChannelId("google-chat")).toBe("googlechat");
-    expect(normalizeChatChannelId("internet-relay-chat")).toBe("irc");
-    expect(normalizeChatChannelId("telegram")).toBe("telegram");
-    expect(normalizeChatChannelId("web")).toBeNull();
-    expect(normalizeChatChannelId("nope")).toBeNull();
+  it("keeps Feishu first in the current default order", () => {
+    const channels = listChatChannels();
+    expect(channels[0]?.id).toBe("feishu");
   });
 
-  it("keeps Telegram first in the default order", () => {
+  it("includes MS Teams in the bundled channel list", () => {
     const channels = listChatChannels();
-    expect(channels[0]?.id).toBe("telegram");
+    expect(channels.some((channel) => channel.id === "msteams")).toBe(true);
   });
 
-  it("does not include MS Teams by default", () => {
-    const channels = listChatChannels();
-    expect(channels.some((channel) => channel.id === "msteams")).toBe(false);
-  });
-
-  it("formats selection lines with docs labels + website extras", () => {
-    const channels = listChatChannels();
-    const first = channels[0];
-    if (!first) {
-      throw new Error("Missing channel metadata.");
+  it("formats Telegram selection lines without a docs prefix and with website extras", () => {
+    const telegram = listChatChannels().find((channel) => channel.id === "telegram");
+    if (!telegram) {
+      throw new Error("Missing Telegram channel metadata.");
     }
-    const line = formatChannelSelectionLine(first, (path, label) =>
+    const line = formatChannelSelectionLine(telegram, (path, label) =>
       [label, path].filter(Boolean).join(":"),
     );
     expect(line).not.toContain("Docs:");

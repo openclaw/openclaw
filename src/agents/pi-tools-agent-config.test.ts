@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 import type { SandboxDockerConfig } from "./sandbox.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
@@ -14,6 +16,10 @@ type ToolWithExecute = {
 };
 
 describe("Agent-specific tool filtering", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(createSessionConversationTestRegistry());
+  });
+
   const sandboxFsBridgeStub: SandboxFsBridge = {
     resolvePath: () => ({
       hostPath: "/tmp/sandbox",
@@ -69,7 +75,7 @@ describe("Agent-specific tool filtering", () => {
         workspaceDir,
         agentDir: "/tmp/agent",
         modelProvider: "openai",
-        modelId: "gpt-5.2",
+        modelId: "gpt-5.4",
       });
 
       const applyPatchTool = tools.find((t) => t.name === "apply_patch");
@@ -198,7 +204,7 @@ describe("Agent-specific tool filtering", () => {
       workspaceDir: "/tmp/test",
       agentDir: "/tmp/agent",
       modelProvider: "openai",
-      modelId: "gpt-5.2",
+      modelId: "gpt-5.4",
     });
 
     const toolNames = tools.map((t) => t.name);
@@ -223,7 +229,7 @@ describe("Agent-specific tool filtering", () => {
       workspaceDir: "/tmp/test",
       agentDir: "/tmp/agent",
       modelProvider: "openai",
-      modelId: "gpt-5.2",
+      modelId: "gpt-5.4",
     });
 
     const toolNames = tools.map((t) => t.name);
@@ -515,6 +521,31 @@ describe("Agent-specific tool filtering", () => {
     expect(names).not.toContain("exec");
   });
 
+  it("should resolve feishu group tool policy for sender-scoped session keys", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            oc_group_chat: {
+              tools: { allow: ["read"] },
+            },
+          },
+        },
+      },
+    };
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      messageProvider: "feishu",
+      workspaceDir: "/tmp/test-feishu-scoped-group",
+      agentDir: "/tmp/agent-feishu",
+    });
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("read");
+    expect(names).not.toContain("exec");
+  });
+
   it("should inherit group tool policy for subagents from spawnedBy session keys", () => {
     const cfg: OpenClawConfig = {
       channels: {
@@ -696,7 +727,7 @@ describe("Agent-specific tool filtering", () => {
         command: "echo done",
         host: "sandbox",
       }),
-    ).rejects.toThrow("requires a sandbox runtime");
+    ).rejects.toThrow(/requires a sandbox runtime/);
   });
 
   it("should apply agent-specific exec host defaults over global defaults", async () => {
@@ -746,7 +777,7 @@ describe("Agent-specific tool filtering", () => {
         host: "sandbox",
         yieldMs: 1000,
       }),
-    ).rejects.toThrow("requires a sandbox runtime");
+    ).rejects.toThrow(/requires a sandbox runtime/);
   });
 
   it("applies explicit agentId exec defaults when sessionKey is opaque", async () => {

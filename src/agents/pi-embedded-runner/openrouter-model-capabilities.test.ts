@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 
 async function withOpenRouterStateDir(run: (stateDir: string) => Promise<void>) {
   const stateDir = mkdtempSync(join(tmpdir(), "openclaw-openrouter-capabilities-"));
@@ -13,9 +14,15 @@ async function withOpenRouterStateDir(run: (stateDir: string) => Promise<void>) 
   }
 }
 
+async function importOpenRouterModelCapabilities(scope: string) {
+  return await importFreshModule<typeof import("./openrouter-model-capabilities.js")>(
+    import.meta.url,
+    `./openrouter-model-capabilities.js?scope=${scope}`,
+  );
+}
+
 describe("openrouter-model-capabilities", () => {
   afterEach(() => {
-    vi.resetModules();
     vi.unstubAllGlobals();
     delete process.env.OPENCLAW_STATE_DIR;
   });
@@ -56,7 +63,7 @@ describe("openrouter-model-capabilities", () => {
         ),
       );
 
-      const module = await import("./openrouter-model-capabilities.js");
+      const module = await importOpenRouterModelCapabilities("top-level-max-tokens");
       await module.loadOpenRouterModelCapabilities("acme/top-level-max-completion");
 
       expect(module.getOpenRouterModelCapabilities("acme/top-level-max-completion")).toMatchObject({
@@ -97,7 +104,7 @@ describe("openrouter-model-capabilities", () => {
       );
       vi.stubGlobal("fetch", fetchSpy);
 
-      const module = await import("./openrouter-model-capabilities.js");
+      const module = await importOpenRouterModelCapabilities("awaited-miss");
       await module.loadOpenRouterModelCapabilities("acme/missing-model");
       expect(module.getOpenRouterModelCapabilities("acme/missing-model")).toBeUndefined();
       expect(fetchSpy).toHaveBeenCalledTimes(1);

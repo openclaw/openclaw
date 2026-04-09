@@ -115,39 +115,39 @@ await api.runtime.subagent.deleteSession({
   Untrusted plugins can still run subagents, but override requests are rejected.
 </Warning>
 
-### `api.runtime.operations`
+### `api.runtime.taskFlow`
 
-Dispatch and query durable operation records behind a plugin-owned operations
-runtime.
+Bind a Task Flow runtime to an existing OpenClaw session key or trusted tool
+context, then create and manage Task Flows without passing an owner on every call.
 
 ```typescript
-const created = await api.runtime.operations.dispatch({
-  type: "create",
-  namespace: "imports",
-  kind: "csv",
-  status: "queued",
-  description: "Import contacts.csv",
-  runId: "import-1",
+const taskFlow = api.runtime.taskFlow.fromToolContext(ctx);
+
+const created = taskFlow.createManaged({
+  controllerId: "my-plugin/review-batch",
+  goal: "Review new pull requests",
 });
 
-const progressed = await api.runtime.operations.dispatch({
-  type: "transition",
-  runId: "import-1",
+const child = taskFlow.runTask({
+  flowId: created.flowId,
+  runtime: "acp",
+  childSessionKey: "agent:main:subagent:reviewer",
+  task: "Review PR #123",
   status: "running",
-  progressSummary: "Parsing rows",
+  startedAt: Date.now(),
 });
 
-const record = await api.runtime.operations.findByRunId("import-1");
-const list = await api.runtime.operations.list({ namespace: "imports" });
-const summary = await api.runtime.operations.summarize({ namespace: "imports" });
+const waiting = taskFlow.setWaiting({
+  flowId: created.flowId,
+  expectedRevision: created.revision,
+  currentStep: "await-human-reply",
+  waitJson: { kind: "reply", channel: "telegram" },
+});
 ```
 
-Notes:
-
-- `api.registerOperationsRuntime(...)` installs the active runtime.
-- Core exposes the facade; plugins own the operation semantics and storage.
-- The built-in default runtime maps the existing background task ledger into the
-  generic operations shape until a plugin overrides it.
+Use `bindSession({ sessionKey, requesterOrigin })` when you already have a
+trusted OpenClaw session key from your own binding layer. Do not bind from raw
+user input.
 
 ### `api.runtime.tts`
 
@@ -364,15 +364,15 @@ export function tryGetRuntime() {
 
 Beyond `api.runtime`, the API object also provides:
 
-| Field                    | Type                      | Description                                                      |
-| ------------------------ | ------------------------- | ---------------------------------------------------------------- |
-| `api.id`                 | `string`                  | Plugin id                                                        |
-| `api.name`               | `string`                  | Plugin display name                                              |
-| `api.config`             | `OpenClawConfig`          | Current config snapshot                                          |
-| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config`        |
-| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)                 |
-| `api.registrationMode`   | `PluginRegistrationMode`  | `"full"`, `"setup-only"`, `"setup-runtime"`, or `"cli-metadata"` |
-| `api.resolvePath(input)` | `(string) => string`      | Resolve a path relative to the plugin root                       |
+| Field                    | Type                      | Description                                                                                 |
+| ------------------------ | ------------------------- | ------------------------------------------------------------------------------------------- |
+| `api.id`                 | `string`                  | Plugin id                                                                                   |
+| `api.name`               | `string`                  | Plugin display name                                                                         |
+| `api.config`             | `OpenClawConfig`          | Current config snapshot (active in-memory runtime snapshot when available)                  |
+| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config`                                   |
+| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)                                            |
+| `api.registrationMode`   | `PluginRegistrationMode`  | Current load mode; `"setup-runtime"` is the lightweight pre-full-entry startup/setup window |
+| `api.resolvePath(input)` | `(string) => string`      | Resolve a path relative to the plugin root                                                  |
 
 ## Related
 

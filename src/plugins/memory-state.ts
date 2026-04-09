@@ -4,7 +4,7 @@ import type {
   MemoryEmbeddingProbeResult,
   MemoryProviderStatus,
   MemorySyncProgressUpdate,
-} from "../plugin-sdk/memory-core-host-engine-storage.js";
+} from "../memory-host-sdk/engine-storage.js";
 
 export type MemoryPromptSectionBuilder = (params: {
   availableTools: Set<string>;

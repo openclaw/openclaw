@@ -31,9 +31,20 @@ export function resolveBlueBubblesAccountFromConfig(params: {
   cfg?: { channels?: { bluebubbles?: Record<string, unknown> } };
   accountId?: string;
 }) {
-  const config = params.cfg?.channels?.bluebubbles ?? {};
+  const baseConfig = params.cfg?.channels?.bluebubbles ?? {};
+  const accountId = params.accountId ?? "default";
+  const accountConfig =
+    accountId === "default"
+      ? {}
+      : ((baseConfig.accounts as Record<string, Record<string, unknown> | undefined> | undefined)?.[
+          accountId
+        ] ?? {});
+  const config = {
+    ...baseConfig,
+    ...accountConfig,
+  };
   return {
-    accountId: params.accountId ?? "default",
+    accountId,
     enabled: config.enabled !== false,
     configured: Boolean(config.serverUrl && config.password),
     config,

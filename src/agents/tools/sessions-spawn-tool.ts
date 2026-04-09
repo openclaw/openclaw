@@ -3,11 +3,15 @@ import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
-import { spawnAcpDirect } from "../acp-spawn.js";
+import { isSpawnAcpAcceptedResult, spawnAcpDirect } from "../acp-spawn.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
 import { registerSubagentRun } from "../subagent-registry.js";
 import { SUBAGENT_SPAWN_MODES, spawnSubagentDirect } from "../subagent-spawn.js";
+import {
+  describeSessionsSpawnTool,
+  SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
+} from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam, ToolInputError } from "./common.js";
 import {
@@ -131,8 +135,8 @@ export function createSessionsSpawnTool(
   return {
     label: "Sessions",
     name: "sessions_spawn",
-    description:
-      'Spawn an isolated session (runtime="subagent" or runtime="acp"). mode="run" is one-shot and mode="session" is persistent/thread-bound. Subagents inherit the parent workspace directory automatically.',
+    displaySummary: SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
+    description: describeSessionsSpawnTool(),
     parameters: SessionsSpawnToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -223,7 +227,7 @@ export function createSessionsSpawnTool(
           },
         );
         const childSessionKey = result.childSessionKey?.trim();
-        const childRunId = result.runId?.trim();
+        const childRunId = isSpawnAcpAcceptedResult(result) ? result.runId?.trim() : undefined;
         const shouldTrackViaRegistry =
           result.status === "accepted" &&
           Boolean(childSessionKey) &&

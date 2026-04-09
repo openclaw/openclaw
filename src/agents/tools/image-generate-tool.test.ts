@@ -69,6 +69,13 @@ function requireImageGenerateTool(tool: ReturnType<typeof createImageGenerateToo
   return tool;
 }
 
+function ensureDefaultImageGenerationProvidersStubbed() {
+  if (vi.isMockFunction(imageGenerationRuntime.listRuntimeImageGenerationProviders)) {
+    return;
+  }
+  stubImageGenerationProviders();
+}
+
 function createToolWithPrimaryImageModel(
   primary: string,
   extra?: {
@@ -76,6 +83,7 @@ function createToolWithPrimaryImageModel(
     workspaceDir?: string;
   },
 ) {
+  ensureDefaultImageGenerationProvidersStubbed();
   return requireImageGenerateTool(
     createImageGenerateTool({
       config: {
@@ -97,6 +105,7 @@ function stubEditedImageFlow(params?: { width?: number; height?: number }) {
     provider: "google",
     model: "gemini-3-pro-image-preview",
     attempts: [],
+    ignoredOverrides: [],
     images: [
       {
         buffer: Buffer.from("png-out"),
@@ -252,10 +261,36 @@ describe("createImageGenerateTool", () => {
   });
 
   it("generates images and returns details.media paths", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      {
+        id: "openai",
+        defaultModel: "gpt-image-1",
+        models: ["gpt-image-1"],
+        capabilities: {
+          generate: {
+            maxCount: 4,
+            supportsSize: true,
+            supportsAspectRatio: true,
+          },
+          edit: {
+            enabled: false,
+            maxInputImages: 0,
+          },
+          geometry: {
+            sizes: ["1024x1024", "1024x1536", "1536x1024"],
+            aspectRatios: ["1:1", "16:9"],
+          },
+        },
+        generateImage: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
       provider: "openai",
       model: "gpt-image-1",
       attempts: [],
+      ignoredOverrides: [],
       images: [
         {
           buffer: Buffer.from("png-1"),
@@ -365,10 +400,115 @@ describe("createImageGenerateTool", () => {
       },
     });
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
-    expect(text).not.toContain("MEDIA:");
+    expect(text).toContain("MEDIA:/tmp/generated-1.png");
+    expect(text).toContain("MEDIA:/tmp/generated-2.png");
+  });
+
+  it("includes MEDIA paths in content text so follow-up replies use the real saved file", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      {
+        id: "google",
+        defaultModel: "gemini-3.1-flash-image-preview",
+        models: ["gemini-3.1-flash-image-preview"],
+        capabilities: {
+          generate: {
+            maxCount: 4,
+            supportsAspectRatio: true,
+            supportsResolution: true,
+          },
+          edit: {
+            enabled: true,
+            maxInputImages: 5,
+            supportsAspectRatio: true,
+            supportsResolution: true,
+          },
+          geometry: {
+            resolutions: ["1K", "2K", "4K"],
+            aspectRatios: ["1:1", "16:9"],
+          },
+        },
+        generateImage: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+    vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "google",
+      model: "gemini-3.1-flash-image-preview",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [
+        {
+          buffer: Buffer.from("jpg-data"),
+          mimeType: "image/jpeg",
+          fileName: "kodo_sawaki_zazen.jpg",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
+      path: "/home/openclaw/.openclaw/media/tool-image-generation/kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg",
+      id: "kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg",
+      size: 8,
+      contentType: "image/jpeg",
+    });
+
+    const tool = createImageGenerateTool({
+      config: {
+        agents: {
+          defaults: {
+            imageGenerationModel: { primary: "google/gemini-3.1-flash-image-preview" },
+          },
+        },
+      },
+    });
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("expected image_generate tool");
+    }
+
+    const result = await tool.execute("call-regression", { prompt: "kodo sawaki zazen" });
+    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+
+    expect(text).toContain(
+      "MEDIA:/home/openclaw/.openclaw/media/tool-image-generation/kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg",
+    );
+    expect(result.details).toMatchObject({
+      media: {
+        mediaUrls: [
+          "/home/openclaw/.openclaw/media/tool-image-generation/kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg",
+        ],
+      },
+    });
   });
 
   it("rejects counts outside the supported range", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      {
+        id: "google",
+        defaultModel: "gemini-3.1-flash-image-preview",
+        models: ["gemini-3.1-flash-image-preview"],
+        capabilities: {
+          generate: {
+            maxCount: 4,
+            supportsAspectRatio: true,
+            supportsResolution: true,
+          },
+          edit: {
+            enabled: true,
+            maxInputImages: 5,
+            supportsAspectRatio: true,
+            supportsResolution: true,
+          },
+          geometry: {
+            resolutions: ["1K", "2K", "4K"],
+            aspectRatios: ["1:1", "16:9"],
+          },
+        },
+        generateImage: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
     const tool = createImageGenerateTool({
       config: {
         agents: {
@@ -415,6 +555,90 @@ describe("createImageGenerateTool", () => {
     );
   });
 
+  it("does not treat inferred edit resolution as an OpenAI override", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      {
+        id: "openai",
+        defaultModel: "gpt-image-1",
+        models: ["gpt-image-1"],
+        capabilities: {
+          generate: {
+            maxCount: 4,
+            supportsSize: true,
+            supportsAspectRatio: false,
+            supportsResolution: false,
+          },
+          edit: {
+            enabled: true,
+            maxCount: 4,
+            maxInputImages: 5,
+            supportsSize: true,
+            supportsAspectRatio: false,
+            supportsResolution: false,
+          },
+          geometry: {
+            sizes: ["1024x1024", "1024x1536", "1536x1024"],
+          },
+        },
+        generateImage: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [
+        {
+          buffer: Buffer.from("png-out"),
+          mimeType: "image/png",
+          fileName: "edited.png",
+        },
+      ],
+    });
+    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      kind: "image",
+      buffer: Buffer.from("input-image"),
+      contentType: "image/jpeg",
+    });
+    vi.spyOn(imageOps, "getImageMetadata").mockResolvedValue({
+      width: 3200,
+      height: 1800,
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/edited.png",
+      id: "edited.png",
+      size: 7,
+      contentType: "image/png",
+    });
+
+    const tool = createToolWithPrimaryImageModel("openai/gpt-image-1", {
+      workspaceDir: process.cwd(),
+    });
+
+    await expect(
+      tool.execute("call-openai-edit", {
+        prompt: "Remove the subject but keep the rest unchanged.",
+        image: "./fixtures/reference.png",
+      }),
+    ).resolves.toBeDefined();
+
+    expect(generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelOverride: undefined,
+        resolution: undefined,
+        inputImages: [
+          expect.objectContaining({
+            buffer: Buffer.from("input-image"),
+            mimeType: "image/jpeg",
+          }),
+        ],
+      }),
+    );
+  });
+
   it("forwards explicit aspect ratio and supports up to 5 reference images", async () => {
     const generateImage = stubEditedImageFlow();
     const tool = createToolWithPrimaryImageModel("google/gemini-3-pro-image-preview", {
@@ -437,6 +661,75 @@ describe("createImageGenerateTool", () => {
       }),
     );
     expect(generateImage.mock.calls[0]?.[0].inputImages).toHaveLength(5);
+  });
+
+  it("reports ignored unsupported overrides instead of failing", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      {
+        id: "openai",
+        defaultModel: "gpt-image-1",
+        models: ["gpt-image-1"],
+        capabilities: {
+          generate: {
+            maxCount: 4,
+            supportsSize: true,
+            supportsAspectRatio: false,
+            supportsResolution: false,
+          },
+          edit: {
+            enabled: true,
+            maxCount: 4,
+            maxInputImages: 5,
+            supportsSize: true,
+            supportsAspectRatio: false,
+            supportsResolution: false,
+          },
+          geometry: {
+            sizes: ["1024x1024", "1024x1536", "1536x1024"],
+          },
+        },
+        generateImage: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+    vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1",
+      attempts: [],
+      ignoredOverrides: [{ key: "aspectRatio", value: "1:1" }],
+      images: [
+        {
+          buffer: Buffer.from("png-out"),
+          mimeType: "image/png",
+          fileName: "generated.png",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/generated.png",
+      id: "generated.png",
+      size: 7,
+      contentType: "image/png",
+    });
+
+    const tool = createToolWithPrimaryImageModel("openai/gpt-image-1");
+    const result = await tool.execute("call-openai-generate", {
+      prompt: "A lobster at the movies",
+      aspectRatio: "1:1",
+    });
+    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+
+    expect(text).toContain("Generated 1 image with openai/gpt-image-1.");
+    expect(text).toContain(
+      "Warning: Ignored unsupported overrides for openai/gpt-image-1: aspectRatio=1:1.",
+    );
+    expect(result).toMatchObject({
+      details: {
+        warning: "Ignored unsupported overrides for openai/gpt-image-1: aspectRatio=1:1.",
+        ignoredOverrides: [{ key: "aspectRatio", value: "1:1" }],
+      },
+    });
   });
 
   it("rejects unsupported aspect ratios", async () => {
@@ -595,14 +888,32 @@ describe("createImageGenerateTool", () => {
     expect(generateImage).not.toHaveBeenCalled();
   });
 
-  it("rejects unsupported provider-specific edit aspect ratio overrides before runtime", async () => {
+  it("passes edit aspect ratio overrides through to runtime for provider-level handling", async () => {
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
       createFalEditProvider({ aspectRatios: ["1:1", "16:9"] }),
     ]);
-    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "fal",
+      model: "fal-ai/flux/dev",
+      attempts: [],
+      ignoredOverrides: [{ key: "aspectRatio", value: "16:9" }],
+      images: [
+        {
+          buffer: Buffer.from("png-out"),
+          mimeType: "image/png",
+          fileName: "edited.png",
+        },
+      ],
+    });
     vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
       kind: "image",
       buffer: Buffer.from("input-image"),
+      contentType: "image/png",
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/edited.png",
+      id: "edited.png",
+      size: 7,
       contentType: "image/png",
     });
 
@@ -610,13 +921,20 @@ describe("createImageGenerateTool", () => {
       workspaceDir: process.cwd(),
     });
 
-    await expect(
-      tool.execute("call-fal-aspect", {
-        prompt: "edit",
-        image: "./fixtures/a.png",
+    const result = await tool.execute("call-fal-aspect", {
+      prompt: "edit",
+      image: "./fixtures/a.png",
+      aspectRatio: "16:9",
+    });
+    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+
+    expect(generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({
         aspectRatio: "16:9",
       }),
-    ).rejects.toThrow("fal edit does not support aspectRatio overrides");
-    expect(generateImage).not.toHaveBeenCalled();
+    );
+    expect(text).toContain(
+      "Warning: Ignored unsupported overrides for fal/fal-ai/flux/dev: aspectRatio=16:9.",
+    );
   });
 });

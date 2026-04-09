@@ -1,4 +1,4 @@
-import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/core";
+import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const slackChannelConfigUiHints = {
   "": {
@@ -51,15 +51,15 @@ export const slackChannelConfigUiHints = {
   },
   execApprovals: {
     label: "Slack Exec Approvals",
-    help: "Slack-native exec approval routing and approver authorization. Enable this only when Slack should act as an explicit exec-approval client for the selected workspace account.",
+    help: "Slack-native exec approval routing and approver authorization. When unset, OpenClaw auto-enables DM-first native approvals if approvers can be resolved for this workspace account.",
   },
   "execApprovals.enabled": {
     label: "Slack Exec Approvals Enabled",
-    help: "Enable Slack exec approvals for this account. When false or unset, Slack messages/buttons cannot approve exec requests.",
+    help: 'Controls Slack native exec approvals for this account: unset or "auto" enables DM-first native approvals when approvers can be resolved, true forces native approvals on, and false disables them.',
   },
   "execApprovals.approvers": {
     label: "Slack Exec Approval Approvers",
-    help: "Slack user IDs allowed to approve exec requests for this workspace account. Use Slack user IDs or user targets such as `U123`, `user:U123`, or `<@U123>`. If you leave this unset, OpenClaw falls back to owner IDs inferred from channels.slack.allowFrom, channels.slack.dm.allowFrom, and defaultTo when possible.",
+    help: "Slack user IDs allowed to approve exec requests for this workspace account. Use Slack user IDs or user targets such as `U123`, `user:U123`, or `<@U123>`. If you leave this unset, OpenClaw falls back to commands.ownerAllowFrom when possible.",
   },
   "execApprovals.agentFilter": {
     label: "Slack Exec Approval Agent Filter",
@@ -80,10 +80,6 @@ export const slackChannelConfigUiHints = {
   nativeStreaming: {
     label: "Slack Native Streaming",
     help: "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming is partial (default: true).",
-  },
-  streamMode: {
-    label: "Slack Stream Mode (Legacy)",
-    help: "Legacy Slack preview mode alias (replace | status_final | append); auto-migrated to channels.slack.streaming.",
   },
   "thread.historyScope": {
     label: "Slack Thread History Scope",

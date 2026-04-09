@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   __testing,
   clearPluginCommands,
@@ -98,7 +98,96 @@ function expectBindingConversationCase(
 }
 
 beforeEach(() => {
-  setActivePluginRegistry(createTestRegistry([]));
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "telegram",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+          commands: {
+            nativeCommandsAutoEnabled: true,
+          },
+          bindings: {
+            selfParentConversationByDefault: true,
+            resolveCommandConversation: ({
+              threadId,
+              originatingTo,
+              commandTo,
+              fallbackTo,
+            }: {
+              threadId?: string;
+              originatingTo?: string;
+              commandTo?: string;
+              fallbackTo?: string;
+            }) => {
+              const rawTarget = [commandTo, originatingTo, fallbackTo].find(Boolean)?.trim();
+              if (!rawTarget || rawTarget.startsWith("slash:")) {
+                return null;
+              }
+              const normalized = rawTarget.replace(/^telegram:/i, "");
+              const topicMatch = /^(.*?):topic:(\d+)$/i.exec(normalized);
+              if (topicMatch?.[1]) {
+                return {
+                  conversationId: `${topicMatch[1]}:topic:${threadId ?? topicMatch[2]}`,
+                  parentConversationId: topicMatch[1],
+                };
+              }
+              return { conversationId: normalized };
+            },
+          },
+        },
+      },
+      {
+        pluginId: "discord",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "discord", label: "Discord" }),
+          commands: {
+            nativeCommandsAutoEnabled: true,
+          },
+          bindings: {
+            resolveCommandConversation: ({
+              threadId,
+              threadParentId,
+              originatingTo,
+              commandTo,
+              fallbackTo,
+            }: {
+              threadId?: string;
+              threadParentId?: string;
+              originatingTo?: string;
+              commandTo?: string;
+              fallbackTo?: string;
+            }) => {
+              const rawTarget = [originatingTo, commandTo, fallbackTo].find(Boolean)?.trim();
+              if (!rawTarget || rawTarget.startsWith("slash:")) {
+                return null;
+              }
+              const normalized = rawTarget.replace(/^discord:/i, "");
+              if (/^\d+$/.test(normalized)) {
+                return { conversationId: `user:${normalized}` };
+              }
+              if (threadId) {
+                const baseConversationId =
+                  originatingTo?.trim()?.replace(/^discord:/i, "") ||
+                  commandTo?.trim()?.replace(/^discord:/i, "") ||
+                  fallbackTo?.trim()?.replace(/^discord:/i, "");
+                return {
+                  conversationId: baseConversationId || threadId,
+                  ...(threadParentId ? { parentConversationId: threadParentId } : {}),
+                };
+              }
+              if (normalized.startsWith("channel:") || normalized.startsWith("user:")) {
+                return { conversationId: normalized };
+              }
+              return null;
+            },
+          },
+        },
+      },
+    ]),
+  );
 });
 
 afterEach(() => {
@@ -175,6 +264,32 @@ describe("registerPluginCommand", () => {
       { provider: "telegram", expectedNames: ["talkvoice"] },
       { provider: "slack", expectedNames: [] },
     ]);
+  });
+
+  it("accepts native progress metadata on plugin commands", () => {
+    const result = registerVoiceCommandForTest({
+      nativeProgressMessages: { telegram: "Running voice command..." },
+      description: "Demo command",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(matchPluginCommand("/voice")).toMatchObject({
+      command: expect.objectContaining({
+        nativeProgressMessages: { telegram: "Running voice command..." },
+      }),
+    });
+  });
+
+  it("rejects empty native progress metadata", () => {
+    const result = registerVoiceCommandForTest({
+      nativeProgressMessages: { telegram: "   " },
+      description: "Demo command",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: 'Native progress message "telegram" cannot be empty',
+    });
   });
 
   it("shares plugin commands across duplicate module instances", async () => {
@@ -384,5 +499,113 @@ describe("registerPluginCommand", () => {
     });
 
     expectUnsupportedBindingApiResult(result);
+  });
+
+  it("passes host session identity through to the plugin command context", async () => {
+    let receivedCtx:
+      | {
+          sessionKey?: string;
+          sessionId?: string;
+        }
+      | undefined;
+    const handler = async (ctx: { sessionKey?: string; sessionId?: string }) => {
+      receivedCtx = ctx;
+      return { text: "ok" };
+    };
+
+    const result = await executePluginCommand({
+      command: {
+        name: "sessioncheck",
+        description: "Demo command",
+        acceptsArgs: false,
+        handler,
+        pluginId: "demo-plugin",
+      },
+      channel: "whatsapp",
+      senderId: "U123",
+      isAuthorizedSender: true,
+      sessionKey: "agent:main:whatsapp:direct:123",
+      sessionId: "session-123",
+      commandBody: "/sessioncheck",
+      config: {} as never,
+    });
+
+    expect(result).toEqual({ text: "ok" });
+    expect(receivedCtx).toMatchObject({
+      sessionKey: "agent:main:whatsapp:direct:123",
+      sessionId: "session-123",
+    });
+  });
+
+  it("passes the effective default account to plugin command handlers when accountId is omitted", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "line",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "line",
+              label: "LINE",
+              config: {
+                listAccountIds: () => ["default", "work"],
+                defaultAccountId: () => "work",
+                resolveAccount: (_cfg, accountId) => ({ accountId: accountId ?? "work" }),
+              },
+            }),
+            bindings: {
+              resolveCommandConversation: ({
+                originatingTo,
+                commandTo,
+                fallbackTo,
+              }: {
+                originatingTo?: string;
+                commandTo?: string;
+                fallbackTo?: string;
+              }) => {
+                const rawTarget = [originatingTo, commandTo, fallbackTo].find(Boolean)?.trim();
+                if (!rawTarget) {
+                  return null;
+                }
+                return {
+                  conversationId: rawTarget.replace(/^line:/i, "").replace(/^user:/i, ""),
+                };
+              },
+            },
+          },
+        },
+      ]),
+    );
+
+    let receivedCtx:
+      | {
+          accountId?: string;
+        }
+      | undefined;
+    const handler = async (ctx: { accountId?: string }) => {
+      receivedCtx = ctx;
+      return { text: "ok" };
+    };
+
+    const result = await executePluginCommand({
+      command: {
+        name: "accountcheck",
+        description: "Demo command",
+        acceptsArgs: false,
+        handler,
+        pluginId: "demo-plugin",
+      },
+      channel: "line",
+      senderId: "U123",
+      isAuthorizedSender: true,
+      commandBody: "/accountcheck",
+      config: {} as never,
+      from: "line:user:U1234567890abcdef1234567890abcdef",
+    });
+
+    expect(result).toEqual({ text: "ok" });
+    expect(receivedCtx).toMatchObject({
+      accountId: "work",
+    });
   });
 });

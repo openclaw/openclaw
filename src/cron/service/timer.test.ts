@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
-import * as taskExecutor from "openclaw/plugin-sdk/tasks";
-import { resetTaskRegistryForTests } from "openclaw/plugin-sdk/tasks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/service.test-harness.js";
 import { createCronServiceState } from "../../cron/service/state.js";
 import { onTimer } from "../../cron/service/timer.js";
 import type { CronJob } from "../../cron/types.js";
+import * as taskExecutor from "../../tasks/task-executor.js";
+import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-timer-seam",

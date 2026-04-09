@@ -33,7 +33,7 @@ async function loadSkillsStatusReport(): Promise<SkillStatusReport> {
 async function runSkillsAction(render: (report: SkillStatusReport) => string): Promise<void> {
   try {
     const report = await loadSkillsStatusReport();
-    defaultRuntime.log(render(report));
+    defaultRuntime.writeStdout(render(report));
   } catch (err) {
     defaultRuntime.error(String(err));
     defaultRuntime.exit(1);

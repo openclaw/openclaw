@@ -85,6 +85,7 @@ export async function elevenLabsTTS(params: {
   seed?: number;
   applyTextNormalization?: "auto" | "on" | "off";
   languageCode?: string;
+  latencyTier?: number;
   voiceSettings: {
     stability: number;
     similarityBoost: number;
@@ -104,6 +105,7 @@ export async function elevenLabsTTS(params: {
     seed,
     applyTextNormalization,
     languageCode,
+    latencyTier,
     voiceSettings,
     timeoutMs,
   } = params;
@@ -137,6 +139,7 @@ export async function elevenLabsTTS(params: {
         seed: normalizedSeed,
         apply_text_normalization: normalizedNormalization,
         language_code: normalizedLanguage,
+        latency_optimization_level: latencyTier,
         voice_settings: {
           stability: voiceSettings.stability,
           similarity_boost: voiceSettings.similarityBoost,

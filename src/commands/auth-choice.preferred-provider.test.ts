@@ -49,19 +49,19 @@ describe("resolvePreferredProviderForAuthChoice", () => {
 
   it("normalizes legacy auth choices before plugin lookup", async () => {
     resolveManifestDeprecatedProviderAuthChoice.mockReturnValue({
-      choiceId: "anthropic-cli",
-      choiceLabel: "Anthropic Claude CLI",
+      choiceId: "openai-codex",
+      choiceLabel: "OpenAI Codex (ChatGPT OAuth)",
     });
     resolveManifestProviderAuthChoice.mockReturnValue({
-      pluginId: "anthropic",
-      providerId: "anthropic",
-      methodId: "cli",
-      choiceId: "anthropic-cli",
-      choiceLabel: "Anthropic Claude CLI",
+      pluginId: "openai",
+      providerId: "openai-codex",
+      methodId: "oauth",
+      choiceId: "openai-codex",
+      choiceLabel: "OpenAI Codex (ChatGPT OAuth)",
     });
 
-    await expect(resolvePreferredProviderForAuthChoice({ choice: "claude-cli" })).resolves.toBe(
-      "anthropic",
+    await expect(resolvePreferredProviderForAuthChoice({ choice: "codex-cli" })).resolves.toBe(
+      "openai-codex",
     );
     expect(resolveProviderPluginChoice).not.toHaveBeenCalled();
     expect(resolvePluginProviders).not.toHaveBeenCalled();
@@ -70,21 +70,21 @@ describe("resolvePreferredProviderForAuthChoice", () => {
   it("passes explicit env through legacy auth normalization", async () => {
     const env = { OPENCLAW_AUTH_CHOICE_TEST: "1" } as NodeJS.ProcessEnv;
     resolveManifestDeprecatedProviderAuthChoice.mockReturnValue({
-      choiceId: "anthropic-cli",
-      choiceLabel: "Anthropic Claude CLI",
+      choiceId: "openai-codex",
+      choiceLabel: "OpenAI Codex (ChatGPT OAuth)",
     });
     resolveManifestProviderAuthChoice.mockReturnValue({
-      pluginId: "anthropic",
-      providerId: "anthropic",
-      methodId: "cli",
-      choiceId: "anthropic-cli",
-      choiceLabel: "Anthropic Claude CLI",
+      pluginId: "openai",
+      providerId: "openai-codex",
+      methodId: "oauth",
+      choiceId: "openai-codex",
+      choiceLabel: "OpenAI Codex (ChatGPT OAuth)",
     });
 
-    await expect(
-      resolvePreferredProviderForAuthChoice({ choice: "claude-cli", env }),
-    ).resolves.toBe("anthropic");
-    expect(resolveManifestDeprecatedProviderAuthChoice).toHaveBeenCalledWith("claude-cli", { env });
+    await expect(resolvePreferredProviderForAuthChoice({ choice: "codex-cli", env })).resolves.toBe(
+      "openai-codex",
+    );
+    expect(resolveManifestDeprecatedProviderAuthChoice).toHaveBeenCalledWith("codex-cli", { env });
   });
 
   it("uses manifest metadata for plugin-owned choices", async () => {

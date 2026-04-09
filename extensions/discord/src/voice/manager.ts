@@ -10,18 +10,17 @@ import { agentCommandFromIngress } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveTtsConfig, type ResolvedTtsConfig } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig, TtsConfig } from "openclaw/plugin-sdk/config-runtime";
-import { transcribeAudioFile } from "openclaw/plugin-sdk/media-understanding-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { parseTtsDirectives } from "openclaw/plugin-sdk/speech";
-import { textToSpeech } from "openclaw/plugin-sdk/speech-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { formatMention } from "../mentions.js";
 import { normalizeDiscordSlug, resolveDiscordOwnerAccess } from "../monitor/allow-list.js";
 import { formatDiscordUserTag } from "../monitor/format.js";
+import { getDiscordRuntime } from "../runtime.js";
 import { authorizeDiscordVoiceIngress } from "./access.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
 
@@ -32,7 +31,8 @@ const CHANNELS = 2;
 const BIT_DEPTH = 16;
 const MIN_SEGMENT_SECONDS = 0.35;
 const SILENCE_DURATION_MS = 1_000;
-const PLAYBACK_READY_TIMEOUT_MS = 15_000;
+const VOICE_CONNECT_READY_TIMEOUT_MS = 15_000;
+const PLAYBACK_READY_TIMEOUT_MS = 60_000;
 const SPEAKING_READY_TIMEOUT_MS = 60_000;
 const DECRYPT_FAILURE_WINDOW_MS = 30_000;
 const DECRYPT_FAILURE_RECONNECT_THRESHOLD = 3;
@@ -225,7 +225,7 @@ async function transcribeAudio(params: {
   agentId: string;
   filePath: string;
 }): Promise<string | undefined> {
-  const result = await transcribeAudioFile({
+  const result = await getDiscordRuntime().mediaUnderstanding.transcribeAudioFile({
     filePath: params.filePath,
     cfg: params.cfg,
     agentDir: resolveAgentDir(params.cfg, params.agentId),
@@ -388,7 +388,7 @@ export class DiscordVoiceManager {
       await voiceSdk.entersState(
         connection,
         voiceSdk.VoiceConnectionStatus.Ready,
-        PLAYBACK_READY_TIMEOUT_MS,
+        VOICE_CONNECT_READY_TIMEOUT_MS,
       );
       logVoiceVerbose(`join: connected to guild ${guildId} channel ${channelId}`);
     } catch (err) {
@@ -702,7 +702,7 @@ export class DiscordVoiceManager {
       return;
     }
 
-    const ttsResult = await textToSpeech({
+    const ttsResult = await getDiscordRuntime().tts.textToSpeech({
       text: speakText,
       cfg: ttsCfg,
       channel: "discord",
@@ -939,8 +939,10 @@ export class DiscordVoiceReadyListener extends ReadyListener {
     super();
   }
 
-  async handle() {
-    await this.manager.autoJoin();
+  async handle(_data: unknown, _client: Client): Promise<void> {
+    void this.manager
+      .autoJoin()
+      .catch((err) => logger.warn(`discord voice: autoJoin failed: ${formatErrorMessage(err)}`));
   }
 }
 

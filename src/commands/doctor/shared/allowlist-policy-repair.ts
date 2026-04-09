@@ -1,4 +1,4 @@
-import { normalizeChatChannelId } from "../../../channels/registry.js";
+import { normalizeChatChannelId } from "../../../channels/ids.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { readChannelAllowFromStore } from "../../../pairing/pairing-store.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";

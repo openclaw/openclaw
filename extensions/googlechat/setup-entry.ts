@@ -1,4 +1,9 @@
-import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
-import { googlechatPlugin } from "./src/channel.js";
+import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
-export default defineSetupPluginEntry(googlechatPlugin);
+export default defineBundledChannelSetupEntry({
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./api.js",
+    exportName: "googlechatPlugin",
+  },
+});

@@ -1,3 +1,4 @@
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { listMattermostAccountIds, resolveMattermostAccount } from "./accounts.js";
 import {
   createMattermostClient,
@@ -27,7 +28,7 @@ function buildClient(params: {
   return createMattermostClient({
     baseUrl: account.baseUrl,
     botToken: account.botToken,
-    allowPrivateNetwork: account.config?.allowPrivateNetwork === true,
+    allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
   });
 }
 

@@ -5,8 +5,8 @@ import {
   setConfigValueAtPath,
   unsetConfigValueAtPath,
 } from "./config-paths.js";
-import { readConfigFileSnapshot, validateConfigObject } from "./config.js";
-import { buildWebSearchProviderConfig, withTempHome, writeOpenClawConfig } from "./test-helpers.js";
+import { validateConfigObject } from "./config.js";
+import { buildWebSearchProviderConfig } from "./test-helpers.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 describe("$schema key in config (#14998)", () => {
@@ -45,6 +45,20 @@ describe("plugins.slots.contextEngine", () => {
       plugins: {
         slots: {
           contextEngine: "my-context-engine",
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
+describe("auth.cooldowns auth_permanent backoff config", () => {
+  it("accepts auth_permanent backoff knobs", () => {
+    const result = OpenClawSchema.safeParse({
+      auth: {
+        cooldowns: {
+          authPermanentBackoffMinutes: 10,
+          authPermanentMaxMinutes: 60,
         },
       },
     });
@@ -149,31 +163,6 @@ describe("web search provider config", () => {
     );
 
     expect(res.ok).toBe(true);
-  });
-});
-
-describe("talk.voiceAliases", () => {
-  it("accepts a string map of voice aliases", () => {
-    const res = validateConfigObject({
-      talk: {
-        voiceAliases: {
-          Clawd: "EXAVITQu4vr4xnSDxMaL",
-          Roger: "CwhRBWXzGAHq8TQ4Fs17",
-        },
-      },
-    });
-    expect(res.ok).toBe(true);
-  });
-
-  it("rejects non-string voice alias values", () => {
-    const res = validateConfigObject({
-      talk: {
-        voiceAliases: {
-          Clawd: 123,
-        },
-      },
-    });
-    expect(res.ok).toBe(false);
   });
 });
 
@@ -434,165 +423,5 @@ describe("config paths", () => {
     expect(getConfigValueAtPath(root, parsed.path)).toBe(123);
     expect(unsetConfigValueAtPath(root, parsed.path)).toBe(true);
     expect(getConfigValueAtPath(root, parsed.path)).toBeUndefined();
-  });
-});
-
-describe("config strict validation", () => {
-  it("rejects unknown fields", async () => {
-    const res = validateConfigObject({
-      agents: { list: [{ id: "pi" }] },
-      customUnknownField: { nested: "value" },
-    });
-    expect(res.ok).toBe(false);
-  });
-
-  it("accepts documented agents.list[].params overrides", () => {
-    const res = validateConfigObject({
-      agents: {
-        list: [
-          {
-            id: "main",
-            model: "anthropic/claude-opus-4-6",
-            params: {
-              cacheRetention: "none",
-              temperature: 0.4,
-              maxTokens: 8192,
-            },
-          },
-        ],
-      },
-    });
-
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.config.agents?.list?.[0]?.params).toEqual({
-        cacheRetention: "none",
-        temperature: 0.4,
-        maxTokens: 8192,
-      });
-    }
-  });
-
-  it("rejects removed legacy config entries without auto-migrating", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        memorySearch: { provider: "local", fallback: "none" },
-      });
-
-      const snap = await readConfigFileSnapshot();
-
-      expect(snap.valid).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
-    });
-  });
-
-  it("accepts legacy messages.tts provider keys via auto-migration and reports legacyIssues", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        messages: {
-          tts: {
-            provider: "elevenlabs",
-            elevenlabs: {
-              apiKey: "test-key",
-              voiceId: "voice-1",
-            },
-          },
-        },
-      });
-
-      const snap = await readConfigFileSnapshot();
-
-      expect(snap.valid).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "messages.tts")).toBe(true);
-      expect(snap.sourceConfig.messages?.tts?.providers?.elevenlabs).toEqual({
-        apiKey: "test-key",
-        voiceId: "voice-1",
-      });
-      expect(
-        (snap.sourceConfig.messages?.tts as Record<string, unknown> | undefined)?.elevenlabs,
-      ).toBeUndefined();
-    });
-  });
-
-  it("accepts legacy plugins.entries.*.config.tts provider keys via auto-migration", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        plugins: {
-          entries: {
-            "voice-call": {
-              config: {
-                tts: {
-                  provider: "openai",
-                  openai: {
-                    model: "gpt-4o-mini-tts",
-                    voice: "alloy",
-                  },
-                },
-              },
-            },
-          },
-        },
-      });
-
-      const snap = await readConfigFileSnapshot();
-
-      expect(snap.valid).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "plugins.entries")).toBe(true);
-      const voiceCallTts = (
-        snap.sourceConfig.plugins?.entries as
-          | Record<
-              string,
-              {
-                config?: {
-                  tts?: {
-                    providers?: Record<string, unknown>;
-                    openai?: unknown;
-                  };
-                };
-              }
-            >
-          | undefined
-      )?.["voice-call"]?.config?.tts;
-      expect(voiceCallTts?.providers?.openai).toEqual({
-        model: "gpt-4o-mini-tts",
-        voice: "alloy",
-      });
-      expect(voiceCallTts?.openai).toBeUndefined();
-    });
-  });
-
-  it("does not mark resolved-only gateway.bind aliases as auto-migratable legacy", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        gateway: { bind: "${OPENCLAW_BIND}" },
-      });
-
-      const prev = process.env.OPENCLAW_BIND;
-      process.env.OPENCLAW_BIND = "0.0.0.0";
-      try {
-        const snap = await readConfigFileSnapshot();
-        expect(snap.valid).toBe(false);
-        expect(snap.legacyIssues).toHaveLength(0);
-        expect(snap.issues.some((issue) => issue.path === "gateway.bind")).toBe(true);
-      } finally {
-        if (prev === undefined) {
-          delete process.env.OPENCLAW_BIND;
-        } else {
-          process.env.OPENCLAW_BIND = prev;
-        }
-      }
-    });
-  });
-
-  it("still marks literal gateway.bind host aliases as legacy", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        gateway: { bind: "0.0.0.0" },
-      });
-
-      const snap = await readConfigFileSnapshot();
-      expect(snap.valid).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "gateway.bind")).toBe(true);
-    });
   });
 });

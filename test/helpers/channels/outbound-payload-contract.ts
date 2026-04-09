@@ -1,34 +1,175 @@
-import { vi } from "vitest";
-import type { ReplyPayload } from "../../../src/auto-reply/types.js";
-import {
-  createSlackOutboundPayloadHarness,
-  installChannelOutboundPayloadContractSuite,
-  primeChannelOutboundSendMock,
-} from "../../../src/channels/plugins/contracts/suites.js";
-import { createDirectTextMediaOutbound } from "../../../src/channels/plugins/outbound/direct-text-media.js";
-import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types.js";
+import { expect, it, type Mock, vi } from "vitest";
+import { createSlackOutboundPayloadHarness } from "../../../extensions/slack/contract-api.js";
 import {
   chunkTextForOutbound as chunkZaloTextForOutbound,
   sendPayloadWithChunkedTextAndMedia as sendZaloPayloadWithChunkedTextAndMedia,
-} from "../../../src/plugin-sdk/zalo.js";
-import { sendPayloadWithChunkedTextAndMedia as sendZalouserPayloadWithChunkedTextAndMedia } from "../../../src/plugin-sdk/zalouser.js";
+} from "../../../extensions/zalo/runtime-api.js";
+import { sendPayloadWithChunkedTextAndMedia as sendZalouserPayloadWithChunkedTextAndMedia } from "../../../extensions/zalouser/runtime-api.js";
+import type { ReplyPayload } from "../../../src/auto-reply/types.js";
+import { primeChannelOutboundSendMock } from "../../../src/channels/plugins/contracts/test-helpers.js";
+import { createDirectTextMediaOutbound } from "../../../src/channels/plugins/outbound/direct-text-media.js";
+import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types.js";
 import { loadBundledPluginTestApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 type ParseZalouserOutboundTarget = (raw: string) => { threadId: string; isGroup: boolean };
 
-const { discordOutbound } = loadBundledPluginTestApiSync<{
-  discordOutbound: ChannelOutboundAdapter;
-}>("discord");
-const { whatsappOutbound } = loadBundledPluginTestApiSync<{
-  whatsappOutbound: ChannelOutboundAdapter;
-}>("whatsapp");
-const { parseZalouserOutboundTarget } = loadBundledPluginTestApiSync<{
-  parseZalouserOutboundTarget: ParseZalouserOutboundTarget;
-}>("zalouser");
+let discordOutboundCache: ChannelOutboundAdapter | undefined;
+let whatsappOutboundCache: ChannelOutboundAdapter | undefined;
+let parseZalouserOutboundTargetCache: ParseZalouserOutboundTarget | undefined;
+
+function getDiscordOutbound(): ChannelOutboundAdapter {
+  if (!discordOutboundCache) {
+    ({ discordOutbound: discordOutboundCache } = loadBundledPluginTestApiSync<{
+      discordOutbound: ChannelOutboundAdapter;
+    }>("discord"));
+  }
+  return discordOutboundCache;
+}
+
+function getWhatsAppOutbound(): ChannelOutboundAdapter {
+  if (!whatsappOutboundCache) {
+    ({ whatsappOutbound: whatsappOutboundCache } = loadBundledPluginTestApiSync<{
+      whatsappOutbound: ChannelOutboundAdapter;
+    }>("whatsapp"));
+  }
+  return whatsappOutboundCache;
+}
+
+function getParseZalouserOutboundTarget(): ParseZalouserOutboundTarget {
+  if (!parseZalouserOutboundTargetCache) {
+    ({ parseZalouserOutboundTarget: parseZalouserOutboundTargetCache } =
+      loadBundledPluginTestApiSync<{
+        parseZalouserOutboundTarget: ParseZalouserOutboundTarget;
+      }>("zalouser"));
+  }
+  return parseZalouserOutboundTargetCache;
+}
 
 type PayloadHarnessParams = {
   payload: ReplyPayload;
   sendResults?: Array<{ messageId: string }>;
 };
+
+type PayloadLike = {
+  mediaUrl?: string;
+  mediaUrls?: string[];
+  text?: string;
+};
+
+type SendResultLike = {
+  messageId: string;
+  [key: string]: unknown;
+};
+
+type ChunkingMode =
+  | {
+      longTextLength: number;
+      maxChunkLength: number;
+      mode: "split";
+    }
+  | {
+      longTextLength: number;
+      mode: "passthrough";
+    };
+
+function installChannelOutboundPayloadContractSuite(params: {
+  channel: string;
+  chunking: ChunkingMode;
+  createHarness: (params: { payload: PayloadLike; sendResults?: SendResultLike[] }) => {
+    run: () => Promise<Record<string, unknown>>;
+    sendMock: Mock;
+    to: string;
+  };
+}) {
+  it("text-only delegates to sendText", async () => {
+    const { run, sendMock, to } = params.createHarness({
+      payload: { text: "hello" },
+    });
+    const result = await run();
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock).toHaveBeenCalledWith(to, "hello", expect.any(Object));
+    expect(result).toMatchObject({ channel: params.channel });
+  });
+
+  it("single media delegates to sendMedia", async () => {
+    const { run, sendMock, to } = params.createHarness({
+      payload: { text: "cap", mediaUrl: "https://example.com/a.jpg" },
+    });
+    const result = await run();
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock).toHaveBeenCalledWith(
+      to,
+      "cap",
+      expect.objectContaining({ mediaUrl: "https://example.com/a.jpg" }),
+    );
+    expect(result).toMatchObject({ channel: params.channel });
+  });
+
+  it("multi-media iterates URLs with caption on first", async () => {
+    const { run, sendMock, to } = params.createHarness({
+      payload: {
+        text: "caption",
+        mediaUrls: ["https://example.com/1.jpg", "https://example.com/2.jpg"],
+      },
+      sendResults: [{ messageId: "m-1" }, { messageId: "m-2" }],
+    });
+    const result = await run();
+
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    expect(sendMock).toHaveBeenNthCalledWith(
+      1,
+      to,
+      "caption",
+      expect.objectContaining({ mediaUrl: "https://example.com/1.jpg" }),
+    );
+    expect(sendMock).toHaveBeenNthCalledWith(
+      2,
+      to,
+      "",
+      expect.objectContaining({ mediaUrl: "https://example.com/2.jpg" }),
+    );
+    expect(result).toMatchObject({ channel: params.channel, messageId: "m-2" });
+  });
+
+  it("empty payload returns no-op", async () => {
+    const { run, sendMock } = params.createHarness({ payload: {} });
+    const result = await run();
+
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ channel: params.channel, messageId: "" });
+  });
+
+  if (params.chunking.mode === "passthrough") {
+    it("text exceeding chunk limit is sent as-is when chunker is null", async () => {
+      const text = "a".repeat(params.chunking.longTextLength);
+      const { run, sendMock, to } = params.createHarness({ payload: { text } });
+      const result = await run();
+
+      expect(sendMock).toHaveBeenCalledTimes(1);
+      expect(sendMock).toHaveBeenCalledWith(to, text, expect.any(Object));
+      expect(result).toMatchObject({ channel: params.channel });
+    });
+    return;
+  }
+
+  const chunking = params.chunking;
+
+  it("chunking splits long text", async () => {
+    const text = "a".repeat(chunking.longTextLength);
+    const { run, sendMock } = params.createHarness({
+      payload: { text },
+      sendResults: [{ messageId: "c-1" }, { messageId: "c-2" }],
+    });
+    const result = await run();
+
+    expect(sendMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+    for (const call of sendMock.mock.calls) {
+      expect((call[1] as string).length).toBeLessThanOrEqual(chunking.maxChunkLength);
+    }
+    expect(result).toMatchObject({ channel: params.channel });
+  });
+}
 
 function buildChannelSendResult(channel: string, result: Record<string, unknown>) {
   return {
@@ -54,7 +195,7 @@ function createDiscordHarness(params: PayloadHarnessParams) {
     },
   };
   return {
-    run: async () => await discordOutbound.sendPayload!(ctx),
+    run: async () => await getDiscordOutbound().sendPayload!(ctx),
     sendMock: sendDiscord,
     to: ctx.to,
   };
@@ -69,11 +210,11 @@ function createWhatsAppHarness(params: PayloadHarnessParams) {
     text: "",
     payload: params.payload,
     deps: {
-      sendWhatsApp,
+      whatsapp: sendWhatsApp,
     },
   };
   return {
-    run: async () => await whatsappOutbound.sendPayload!(ctx),
+    run: async () => await getWhatsAppOutbound().sendPayload!(ctx),
     sendMock: sendWhatsApp,
     to: ctx.to,
   };
@@ -155,7 +296,7 @@ function createZalouserHarness(params: PayloadHarnessParams) {
       await sendZalouserPayloadWithChunkedTextAndMedia({
         ctx,
         sendText: async (nextCtx) => {
-          const target = parseZalouserOutboundTarget(nextCtx.to);
+          const target = getParseZalouserOutboundTarget()(nextCtx.to);
           return buildChannelSendResult(
             "zalouser",
             await sendZalouser(target.threadId, nextCtx.text, {
@@ -168,7 +309,7 @@ function createZalouserHarness(params: PayloadHarnessParams) {
           );
         },
         sendMedia: async (nextCtx) => {
-          const target = parseZalouserOutboundTarget(nextCtx.to);
+          const target = getParseZalouserOutboundTarget()(nextCtx.to);
           return buildChannelSendResult(
             "zalouser",
             await sendZalouser(target.threadId, nextCtx.text, {
