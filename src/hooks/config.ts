@@ -13,6 +13,9 @@ const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
   "browser.enabled": true,
   "browser.evaluateEnabled": true,
   "workspace.dir": true,
+  "agent_performance.enabled": true,
+  "context_management.enabled": true,
+  "system_health.enabled": true,
 };
 
 export { hasBinary, resolveConfigPath, resolveRuntimePlatform };
