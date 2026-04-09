@@ -3216,7 +3216,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 ],
                 title: "Memory Injection",
                 description:
-                  'Controls how MEMORY.md is injected into workspace bootstrap context: "full" (default), "core-only", or "recall-only". Use "recall-only" when you want memory context to come only from per-turn recall instead of eager bootstrap injection.',
+                  'Controls how MEMORY.md is injected into workspace bootstrap context: "full" (default), "core-only", or "recall-only". Today, "full" and "core-only" follow the same bounded bootstrap path; use "core-only" when you want to declare that intent explicitly, and use "recall-only" when memory context should come only from per-turn recall instead of eager bootstrap injection.',
               },
               bootstrapMaxChars: {
                 type: "integer",
@@ -24305,7 +24305,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.defaults.memoryInjection": {
       label: "Memory Injection",
-      help: 'Controls how MEMORY.md is injected into workspace bootstrap context: "full" (default), "core-only", or "recall-only". Use "recall-only" when you want memory context to come only from per-turn recall instead of eager bootstrap injection.',
+      help: 'Controls how MEMORY.md is injected into workspace bootstrap context: "full" (default), "core-only", or "recall-only". Today, "full" and "core-only" follow the same bounded bootstrap path; use "core-only" when you want to declare that intent explicitly, and use "recall-only" when memory context should come only from per-turn recall instead of eager bootstrap injection.',
       tags: ["advanced"],
     },
     "agents.defaults.bootstrapMaxChars": {
