@@ -238,7 +238,9 @@ function renderBoundaryEdgeGraph(sccRows) {
     const boundaries = scc.boundaries.map((boundary) => boundary.name);
     for (const boundary of boundaries) {
       const nodeId = boundary.replaceAll(/[^a-zA-Z0-9_]/g, "_");
-      if (addedNodes.has(nodeId)) continue;
+      if (addedNodes.has(nodeId)) {
+        continue;
+      }
       addedNodes.add(nodeId);
       lines.push(`  ${nodeId}["${boundary}"]`);
     }
