@@ -515,10 +515,14 @@ export async function initSessionState(params: {
   const lastTo = deliveryFields.lastTo ?? lastToRaw;
   const lastAccountId = deliveryFields.lastAccountId ?? lastAccountIdRaw;
   const lastThreadId = deliveryFields.lastThreadId ?? lastThreadIdRaw;
+  // System events (heartbeat, cron-event, exec-event) must not advance updatedAt.
+  // Advancing updatedAt would make evaluateSessionFreshness always see the session as fresh,
+  // preventing daily resets from ever firing. See: https://github.com/openclaw/openclaw/issues/63732
+  const sessionUpdatedAt = isSystemEvent && baseEntry?.updatedAt != null ? baseEntry.updatedAt : Date.now();
   sessionEntry = {
     ...baseEntry,
     sessionId,
-    updatedAt: Date.now(),
+    updatedAt: sessionUpdatedAt,
     systemSent,
     abortedLastRun,
     // Persist previously stored thinking/verbose levels when present.
