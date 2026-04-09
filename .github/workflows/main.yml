@@ -1,0 +1,125 @@
+# Semgrep + AppSecAI (only)
+name: Scan Triage and Remediation - Prod
+
+permissions:
+  contents: write
+  id-token: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      sarif_file:
+        description: "Optional repo-relative path to an existing SARIF file"
+        required: false
+        type: string
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      run_semgrep: ${{ steps.resolve_sarif.outputs.run_semgrep }}
+      sarif_file: ${{ steps.resolve_sarif.outputs.sarif_file }}
+      source_branch: ${{ steps.branch.outputs.source_branch }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine source branch
+        id: branch
+        run: |
+          source_branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+
+          if [[ -z "$source_branch" ]]; then
+            echo "Unable to determine the source branch for this workflow run." >&2
+            exit 1
+          fi
+
+          echo "source_branch=$source_branch" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve SARIF file path
+        id: resolve_sarif
+        run: |
+          existing_file="${{ github.event.inputs.sarif_file }}"
+
+          if [[ -n "$existing_file" ]]; then
+            if [[ "$existing_file" = /* ]]; then
+              echo "SARIF input must be a repo-relative path, not an absolute path." >&2
+              exit 1
+            fi
+
+            if [[ "$existing_file" != *.sarif ]]; then
+              echo "SARIF input must point to a .sarif file." >&2
+              exit 1
+            fi
+
+            if [[ ! -f "$existing_file" ]]; then
+              echo "SARIF input does not exist in the repository: $existing_file" >&2
+              exit 1
+            fi
+
+            echo "run_semgrep=false" >> "$GITHUB_OUTPUT"
+            echo "sarif_file=$existing_file" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          timestamp=$(date -u +"%Y%m%d-%H%M%S")
+          output_file="semgrep-results-${timestamp}.sarif"
+
+          echo "run_semgrep=true" >> "$GITHUB_OUTPUT"
+          echo "sarif_file=$output_file" >> "$GITHUB_OUTPUT"
+
+  scan:
+    needs: plan
+    if: needs.plan.outputs.run_semgrep == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.source_branch }}
+          fetch-depth: 0
+
+      - name: Run Semgrep
+        run: |
+          pip install semgrep
+          semgrep scan --config auto --sarif --output "${{ needs.plan.outputs.sarif_file }}" .
+
+      - name: Commit SARIF file
+        run: |
+          sarif_file="${{ needs.plan.outputs.sarif_file }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$sarif_file"
+
+          if git diff --cached --quiet; then
+            echo "No SARIF changes to commit."
+            exit 0
+          fi
+
+          git commit -m "Add SARIF results for workflow run ${GITHUB_RUN_ID}"
+          git push origin "HEAD:${{ needs.plan.outputs.source_branch }}"
+
+  triageAndRemediation:
+    needs: [plan, scan]
+    if: always() && needs.plan.result == 'success' && (needs.scan.result == 'success' || needs.scan.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.source_branch }}
+          fetch-depth: 0
+
+      - name: Sync branch state
+        run: |
+          git fetch origin "${{ needs.plan.outputs.source_branch }}"
+          git checkout "${{ needs.plan.outputs.source_branch }}"
+          git pull --ff-only origin "${{ needs.plan.outputs.source_branch }}"
+
+      - name: AppSecAI
+        uses: AppSecureAI/automation-action@v1
+        with:
+          file: ${{ needs.plan.outputs.sarif_file }}
