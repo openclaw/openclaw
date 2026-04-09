@@ -16,7 +16,7 @@ import { loadConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { resolvePluginTools } from "../plugins/tools.js";
-import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
+import { DEFAULT_GATEWAY_TOOL_DENY } from "../security/dangerous-tools.js";
 import { VERSION } from "../version.js";
 
 function resolveJsonSchemaForTool(tool: AnyAgentTool): Record<string, unknown> {
@@ -44,11 +44,12 @@ export function createPluginToolsMcpServer(
   const cfg = params.config ?? loadConfig();
   const tools = params.tools ?? resolveTools(cfg);
 
-  // Enforce the same tool deny-list boundary applied on the HTTP gateway.
-  // Without this, MCP clients could invoke exec/spawn/shell/nodes and other
-  // RCE-surface tools that the HTTP gateway explicitly blocks.
+  // Enforce the universal tool deny-list (RCE, file mutation, control-plane).
+  // Uses DEFAULT_GATEWAY_TOOL_DENY instead of DEFAULT_GATEWAY_HTTP_TOOL_DENY
+  // because MCP clients can handle interactive tools (e.g. whatsapp_login)
+  // that are only blocked on HTTP due to non-interactive surface constraints.
   const gatewayToolsCfg = cfg.gateway?.tools;
-  const defaultDeny = DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter(
+  const defaultDeny = DEFAULT_GATEWAY_TOOL_DENY.filter(
     (name) => !gatewayToolsCfg?.allow?.includes(name),
   );
   const denySet = new Set<string>([

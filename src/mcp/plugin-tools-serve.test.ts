@@ -166,6 +166,20 @@ describe("security boundary — tool deny list", () => {
     }
   });
 
+  it("allows HTTP-only denied tools on MCP (e.g. whatsapp_login)", async () => {
+    const interactiveTool = makeTool("whatsapp_login");
+    const session = await connectPluginToolsServer([interactiveTool], {} as OpenClawConfig);
+    try {
+      const listed = await session.client.listTools();
+      expect(listed.tools.map((t) => t.name)).toContain("whatsapp_login");
+      const result = await session.client.callTool({ name: "whatsapp_login", arguments: {} });
+      expect(result.isError).toBeFalsy();
+      expect(interactiveTool.execute).toHaveBeenCalled();
+    } finally {
+      await session.close();
+    }
+  });
+
   it("blocks an additional tool when operator config denies it", async () => {
     const customTool = makeTool("custom_dangerous");
     const config = { gateway: { tools: { deny: ["custom_dangerous"] } } } as OpenClawConfig;

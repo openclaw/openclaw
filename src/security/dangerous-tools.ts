@@ -1,12 +1,12 @@
 // Shared tool-risk constants.
-// Keep these centralized so gateway HTTP restrictions and security audits don't drift.
+// Keep these centralized so gateway restrictions and security audits don't drift.
 
 /**
- * Tools denied via Gateway HTTP `POST /tools/invoke` by default.
- * These are high-risk because they enable session orchestration, control-plane actions,
- * or interactive flows that don't make sense over a non-interactive HTTP surface.
+ * Tools denied on ALL gateway surfaces (HTTP, MCP, etc.) by default.
+ * These are universally dangerous — RCE primitives, arbitrary file mutation,
+ * session orchestration, and control-plane actions.
  */
-export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
+export const DEFAULT_GATEWAY_TOOL_DENY = [
   // Direct command execution — immediate RCE surface
   "exec",
   // Arbitrary child process creation — immediate RCE surface
@@ -27,10 +27,27 @@ export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
   "sessions_send",
   // Persistent automation control plane — can create/update/remove scheduled runs
   "cron",
-  // Gateway control plane — prevents gateway reconfiguration via HTTP
+  // Gateway control plane — prevents gateway reconfiguration
   "gateway",
   // Node command relay can reach system.run on paired hosts
   "nodes",
+] as const;
+
+/**
+ * Tools denied only on the HTTP gateway surface due to HTTP-specific constraints.
+ * These are not inherently dangerous but don't work over non-interactive HTTP
+ * (e.g. interactive terminal flows). MCP clients can handle these.
+ */
+export const DEFAULT_GATEWAY_HTTP_ONLY_TOOL_DENY = [
   // Interactive setup — requires terminal QR scan, hangs on HTTP
   "whatsapp_login",
+] as const;
+
+/**
+ * Combined deny list for the HTTP gateway surface.
+ * Union of universal + HTTP-only denials. Used by `POST /tools/invoke`.
+ */
+export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
+  ...DEFAULT_GATEWAY_TOOL_DENY,
+  ...DEFAULT_GATEWAY_HTTP_ONLY_TOOL_DENY,
 ] as const;
