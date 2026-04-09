@@ -799,6 +799,37 @@ describe("readLatestSessionUsageFromTranscript", () => {
 
     expect(readLatestSessionUsageFromTranscript(sessionId, storePath)).toBeNull();
   });
+
+  test("returns null when the transcript session header belongs to a different sessionId (stale transcript after reset)", () => {
+    // Simulate the post-reset bug: the old session's transcript file is still
+    // discoverable on disk, but its header carries the old sessionId. The new
+    // session should not inherit usage figures from the previous session.
+    const oldSessionId = "usage-old-session";
+    const newSessionId = "usage-new-session";
+    // Write the transcript under the OLD session's file name so it can be
+    // picked up as a stale candidate when queried with the new sessionId.
+    writeTranscript(tmpDir, oldSessionId, [
+      { type: "session", version: 1, id: oldSessionId },
+      {
+        message: {
+          role: "assistant",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          usage: { input: 138_000, output: 5_000, cost: { total: 1.23 } },
+        },
+      },
+    ]);
+
+    // Query with the new sessionId but pass the old file as sessionFile so it
+    // lands in the stale-candidate path inside resolveSessionTranscriptCandidates.
+    const oldSessionFile = `${oldSessionId}.jsonl`;
+    const result = readLatestSessionUsageFromTranscript(
+      newSessionId,
+      storePath,
+      oldSessionFile,
+    );
+    expect(result).toBeNull();
+  });
 });
 
 describe("resolveSessionTranscriptCandidates", () => {

@@ -580,6 +580,23 @@ export function readLatestSessionUsageFromTranscript(
       return null;
     }
     const chunk = fs.readFileSync(fd, "utf-8");
+    // Reject transcript if its session header belongs to a different session.
+    // This prevents stale/archived transcripts from being read as the current
+    // session's usage after a reset (which assigns a new sessionId).
+    const newlineIdx = chunk.indexOf("\n");
+    const firstLine = newlineIdx >= 0 ? chunk.slice(0, newlineIdx) : chunk;
+    try {
+      const header = JSON.parse(firstLine) as Record<string, unknown>;
+      if (
+        header?.type === "session" &&
+        typeof header.id === "string" &&
+        header.id !== sessionId
+      ) {
+        return null;
+      }
+    } catch {
+      // No parseable header — proceed and let the usage extractor handle it.
+    }
     return extractLatestUsageFromTranscriptChunk(chunk);
   });
 }
