@@ -37,7 +37,8 @@ const DISCOVERY_SCOPE_LEAK_PHRASES = [
 
 function confirmsDiscoveryFileRead(text: string) {
   const lower = normalizeLowercaseStringOrEmpty(text);
-  const mentionsAllRefs = REQUIRED_DISCOVERY_REFS_LOWER.every((ref) => lower.includes(ref));
+  const requiredRefsLower = getRequiredDiscoveryRefsLower();
+  const mentionsAllRefs = requiredRefsLower.every((ref) => lower.includes(ref));
   const mentionsReadVerb = /(?:read|retrieved|inspected|loaded|accessed|digested)/.test(lower);
   const requiredCountPattern = "(?:three|3|four|4)";
   const confirmsRead =
