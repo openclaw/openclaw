@@ -60,15 +60,23 @@ function hasMeaningfulText(block: AssistantContentBlock): boolean {
 }
 
 /**
+ * Generic replay helper for Anthropic-style history handling.
+ *
  * Strip `type: "thinking"` and `type: "redacted_thinking"` content blocks from
  * all assistant messages except the latest one.
  *
- * Thinking blocks in the latest assistant turn are preserved verbatim so
- * providers that require replay signatures can continue the conversation.
+ * The latest assistant turn is intentionally preserved verbatim here because
+ * Anthropic-native replay can require that signed/redacted thinking payload to
+ * remain immutable across the next request.
  *
  * If a non-latest assistant message becomes empty after stripping, it is
  * replaced with a synthetic `{ type: "text", text: "" }` block to preserve
  * turn structure (some providers require strict user/assistant alternation).
+ *
+ * IMPORTANT: GitHub Copilot Claude is different. Copilot rejects replayed plain
+ * `type: "thinking"` blocks even when they are in the latest assistant turn,
+ * so Copilot must use `dropGithubCopilotThinkingBlocks()` instead of this
+ * generic helper.
  *
  * Returns the original array reference when nothing was changed (callers can
  * use reference equality to skip downstream work).
@@ -117,12 +125,19 @@ export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
 }
 
 /**
+ * GitHub Copilot-specific replay helper.
+ *
  * GitHub Copilot Claude rejects replayed plain `type: "thinking"` blocks on
  * follow-up requests, including when they appear in the latest assistant turn.
  *
- * Unlike the generic helper above, this Copilot-specific variant strips plain
- * thinking blocks from **all** assistant messages while intentionally keeping
- * `redacted_thinking` blocks untouched for Anthropic-native recovery flows.
+ * Compared with `dropThinkingBlocks()` above, the differences are intentional:
+ * - drop only plain `type: "thinking"`
+ * - keep `type: "redacted_thinking"` untouched
+ * - do NOT preserve the latest assistant turn; plain thinking is stripped from
+ *   every assistant message, including the latest replayed turn
+ *
+ * This keeps the fix narrowly scoped to Copilot while avoiding behavior changes
+ * for Anthropic-native replay/signature handling.
  */
 export function dropGithubCopilotThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
   let touched = false;
