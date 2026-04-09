@@ -99,16 +99,6 @@ vi.mock("../../infra/outbound/deliver.js", () => ({
   },
 }));
 
-vi.mock("../../infra/outbound/message.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/outbound/message.js")>(
-    "../../infra/outbound/message.js",
-  );
-  return {
-    ...actual,
-    sendResolvedDirectMessage: actual.sendResolvedDirectMessage,
-  };
-});
-
 vi.mock("../../config/sessions.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
     "../../config/sessions.js",

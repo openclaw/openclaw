@@ -365,8 +365,8 @@ export const sendHandlers: GatewayRequestHandlers = {
                 text: mirrorText || message,
                 mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
                 idempotencyKey: idem,
-                }
-              : undefined,
+              }
+            : undefined,
         });
 
         if (sendResult.blocked) {

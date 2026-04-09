@@ -11,7 +11,6 @@ import {
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
 import {
-  deliverOutboundPayloads,
   deliverOutboundPayloadsWithStatus,
   type OutboundDeliveryResult,
   type OutboundSendDeps,
@@ -338,7 +337,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       accountId: params.accountId,
       mode: "explicit",
     });
-  if (!resolvedTarget.ok) {
+    if (!resolvedTarget.ok) {
       throw resolvedTarget.error;
     }
     return await sendResolvedDirectMessage({
