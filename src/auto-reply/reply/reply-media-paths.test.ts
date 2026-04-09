@@ -176,4 +176,24 @@ describe("createReplyMediaPathNormalizer", () => {
       mediaUrls: ["/Users/peter/.openclaw/media/outbound/persisted.png"],
     });
   });
+
+  it("keeps TTS voice output from the OpenClaw temp directory", async () => {
+    // resolvePreferredOpenClawTmpDir() returns /tmp/openclaw on POSIX when it exists.
+    // We rely on the real function (no mock) since the test environment has /tmp/openclaw.
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: ["/tmp/openclaw/tts-abc123/voice-1234567890.opus"],
+    });
+
+    expect(result).toMatchObject({
+      mediaUrl: "/tmp/openclaw/tts-abc123/voice-1234567890.opus",
+      mediaUrls: ["/tmp/openclaw/tts-abc123/voice-1234567890.opus"],
+    });
+    expect(saveMediaSource).not.toHaveBeenCalled();
+  });
 });

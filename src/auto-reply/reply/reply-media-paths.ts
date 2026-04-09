@@ -60,10 +60,12 @@ function isAllowedAbsoluteReplyMediaPath(params: {
  * These are trusted paths written by OpenClaw's own tooling
  * (TTS, media processing, etc.) and should be deliverable as reply media.
  */
+let cachedTmpRoot: string | undefined;
+
 function isOpenClawTmpPath(candidate: string): boolean {
   try {
-    const tmpRoot = resolvePreferredOpenClawTmpDir();
-    return isPathInside(tmpRoot, candidate);
+    cachedTmpRoot ??= resolvePreferredOpenClawTmpDir();
+    return isPathInside(cachedTmpRoot, candidate);
   } catch {
     return false;
   }
