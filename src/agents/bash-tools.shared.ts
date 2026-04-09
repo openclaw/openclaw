@@ -1,7 +1,7 @@
-import { existsSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import fs from "node:fs/promises";
-import { homedir } from "node:os";
 import path from "node:path";
+import { expandHomePrefix, resolveRequiredOsHomeDir } from "../infra/home-dir.js";
 import { sliceUtf16Safe } from "../utils.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxBackendExecSpec } from "./sandbox/backend.js";
@@ -168,28 +168,23 @@ function normalizeContainerPath(input: string): string {
   return path.posix.normalize(normalized);
 }
 
-export function resolveWorkdir(workdir: string, warnings: string[]) {
-  const current = safeCwd();
-  const fallback = current ?? homedir();
+export function resolveWorkdir(workdir: string, _warnings: string[]) {
+  // Anchor ~ to the OS home directory, not OPENCLAW_HOME, so exec workdir paths
+  // resolve consistently with the user's real home (same as the read tool's fs-safe.ts).
+  const expanded = expandHomePrefix(workdir, { home: resolveRequiredOsHomeDir() });
+  let notDirectory = false;
   try {
-    const stats = statSync(workdir);
+    const stats = statSync(expanded);
     if (stats.isDirectory()) {
-      return workdir;
+      return expanded;
     }
+    notDirectory = true;
   } catch {
-    // ignore, fallback below
+    // not found — fall through to error
   }
-  warnings.push(`Warning: workdir "${workdir}" is unavailable; using "${fallback}".`);
-  return fallback;
-}
-
-function safeCwd() {
-  try {
-    const cwd = process.cwd();
-    return existsSync(cwd) ? cwd : null;
-  } catch {
-    return null;
-  }
+  const detail = expanded !== workdir ? ` (resolved to "${expanded}")` : "";
+  const reason = notDirectory ? "is not a directory" : "is unavailable";
+  throw new Error(`workdir "${workdir}" ${reason}${detail}`);
 }
 
 /**
