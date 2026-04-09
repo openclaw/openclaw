@@ -24,6 +24,7 @@ export type SessionDisplayRow = {
   modelProvider?: string;
   providerOverride?: string;
   modelOverride?: string;
+  modelIsFromFallback?: boolean;
   contextTokens?: number;
 };
 
@@ -57,11 +58,13 @@ export function toSessionDisplayRows(store: Record<string, SessionEntry>): Sessi
         modelProvider: entry?.modelProvider,
         providerOverride: entry?.providerOverride,
         modelOverride: entry?.modelOverride,
+        modelIsFromFallback: entry?.modelIsFromFallback,
         contextTokens: entry?.contextTokens,
       } satisfies SessionDisplayRow;
     })
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
 }
+
 
 function truncateSessionKey(key: string): string {
   if (key.length <= SESSION_KEY_PAD) {
