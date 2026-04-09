@@ -1601,9 +1601,17 @@ resource "aws_iam_role_policy_attachment" "config_aggregator" {{
             "ReadOnly": "arn:aws:iam::aws:policy/ViewOnlyAccess",
             "SecurityAudit": "arn:aws:iam::aws:policy/SecurityAudit",
         }
+        # Map groups to target account scope
+        grp_account_scope = {
+            "Admins": "all",
+            "Developers": "workloads",
+            "ReadOnly": "all",
+            "SecurityAudit": "all",
+        }
         for grp in sso_groups:
             grp_safe = grp.lower().replace(" ", "_").replace("-", "_")
             policy_arn = perm_set_map.get(grp, "arn:aws:iam::aws:policy/ViewOnlyAccess")
+            scope = grp_account_scope.get(grp, "all")
             sso_perm_sets += f"""
 resource "aws_ssoadmin_permission_set" "{grp_safe}" {{
   name             = "{grp}"
@@ -1622,6 +1630,19 @@ resource "aws_identitystore_group" "{grp_safe}" {{
   identity_store_id = tolist(data.aws_ssoadmin_instances.this.identity_store_ids)[0]
   display_name      = "{grp}"
   description       = "SSO group for {grp}"
+}}
+"""
+            # Account assignments for core accounts
+            if scope == "all":
+                for acct_key, acct_ref in [("log_archive", "aws_organizations_account.log_archive.id"), ("audit", "aws_organizations_account.audit.id")]:
+                    sso_perm_sets += f"""
+resource "aws_ssoadmin_account_assignment" "{grp_safe}_{acct_key}" {{
+  instance_arn       = tolist(data.aws_ssoadmin_instances.this.arns)[0]
+  permission_set_arn = aws_ssoadmin_permission_set.{grp_safe}.arn
+  principal_id       = aws_identitystore_group.{grp_safe}.group_id
+  principal_type     = "GROUP"
+  target_id          = {acct_ref}
+  target_type        = "AWS_ACCOUNT"
 }}
 """
         sso_block = f"""
@@ -1811,6 +1832,23 @@ resource "aws_budgets_budget" "workload" {{
 
 output "workload_account_ids" {{
   value = {{ for k, v in aws_organizations_account.workload : k => v.id }}
+}}
+"""
+        # Add SSO assignments for workload accounts if SSO is enabled
+        if enable_sso:
+            for grp in sso_groups:
+                grp_safe = grp.lower().replace(" ", "_").replace("-", "_")
+                scope = grp_account_scope.get(grp, "all")
+                if scope in ("all", "workloads"):
+                    vending_block += f"""
+resource "aws_ssoadmin_account_assignment" "{grp_safe}_workload" {{
+  for_each           = var.workload_accounts
+  instance_arn       = tolist(data.aws_ssoadmin_instances.this.arns)[0]
+  permission_set_arn = aws_ssoadmin_permission_set.{grp_safe}.arn
+  principal_id       = aws_identitystore_group.{grp_safe}.group_id
+  principal_type     = "GROUP"
+  target_id          = aws_organizations_account.workload[each.key].id
+  target_type        = "AWS_ACCOUNT"
 }}
 """
 
