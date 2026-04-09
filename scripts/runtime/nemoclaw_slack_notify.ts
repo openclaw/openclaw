@@ -1,4 +1,5 @@
 import process from "node:process";
+import { writeLatestNemoClawDigestCache } from "../../extensions/sense-worker/src/latest-digest-cache.js";
 import {
   sendNemoClawSlackNotification,
   type NemoClawSlackEvent,
@@ -46,6 +47,13 @@ async function main() {
     throw new Error("Pass --event job_done|job_failed|digest_ready");
   }
   const payload = await readStdin();
+  if (event === "digest_ready") {
+    await writeLatestNemoClawDigestCache({
+      payload,
+      event,
+      jobId: args["job-id"],
+    });
+  }
   const cfg = loadConfig();
   const result = await sendNemoClawSlackNotification({
     cfg,

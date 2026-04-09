@@ -1007,9 +1007,9 @@ Slack command minimum set:
   - current digest structures are sufficient for the display layer
 - `/nemoclaw digest`
   - input: optional filter such as owner/bucket/top-n
-  - returns: top digest rows ordered for operator review
+  - returns: latest digest summary row for operator review in the current minimum implementation
   - digest: yes
-  - current digest structures are the primary payload
+  - current digest structures are the primary payload, sourced from the latest cached `notification_digest_summary`
 - `/nemoclaw gpu`
   - input: optional sandbox/runner target
   - returns: current GPU/runtime readiness summary
@@ -1041,6 +1041,11 @@ These notifications are emitted from the NemoClaw runner completion path and ren
 with `mode=nemoclaw_job` plus `params.digest_ready_probe=true`, which returns one digest
 item whose primary display entrypoint remains
 `digest_bucket_ui_layouts.meta.summary_parts`.
+
+The first `/nemoclaw digest` command stays intentionally shallow: it reads the latest cached
+`notification_digest_summary`, formats the first item with the shared Slack digest formatter,
+and returns that text directly. This keeps the post-notification check path aligned with the
+same `summary_parts` contract used by preview and Slack notifications.
 
 The runtime entrypoint now also emits a lightweight feedback layer for the next turn:
 
