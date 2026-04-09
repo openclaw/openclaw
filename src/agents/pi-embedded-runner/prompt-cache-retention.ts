@@ -19,6 +19,7 @@ export function resolveCacheRetention(
   provider: string,
   modelApi?: string,
   modelId?: string,
+  modelName?: string,
 ): CacheRetention | undefined {
   const hasExplicitCacheConfig =
     extraParams?.cacheRetention !== undefined || extraParams?.cacheControlTtl !== undefined;
@@ -26,6 +27,7 @@ export function resolveCacheRetention(
     provider,
     modelApi,
     modelId,
+    modelName,
     hasExplicitCacheConfig,
   });
   const googleEligible = isGooglePromptCacheEligible({ modelApi, modelId });

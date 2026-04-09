@@ -62,13 +62,14 @@ export function isAnthropicFamilyCacheTtlEligible(params: {
   provider: string;
   modelApi?: string;
   modelId: string;
+  modelName?: string;
 }): boolean {
   const normalizedProvider = normalizeOptionalLowercaseString(params.provider);
   if (normalizedProvider === "anthropic" || normalizedProvider === "anthropic-vertex") {
     return true;
   }
   if (normalizedProvider === "amazon-bedrock") {
-    return isAnthropicBedrockModel(params.modelId);
+    return isAnthropicBedrockModel(params.modelId, params.modelName);
   }
   return params.modelApi === "anthropic-messages";
 }
@@ -77,6 +78,7 @@ export function resolveAnthropicCacheRetentionFamily(params: {
   provider: string;
   modelApi?: string;
   modelId?: string;
+  modelName?: string;
   hasExplicitCacheConfig: boolean;
 }): AnthropicCacheRetentionFamily | undefined {
   const normalizedProvider = normalizeOptionalLowercaseString(params.provider);
@@ -87,7 +89,7 @@ export function resolveAnthropicCacheRetentionFamily(params: {
     normalizedProvider === "amazon-bedrock" &&
     params.hasExplicitCacheConfig &&
     typeof params.modelId === "string" &&
-    isAnthropicBedrockModel(params.modelId)
+    isAnthropicBedrockModel(params.modelId, params.modelName)
   ) {
     return "anthropic-bedrock";
   }

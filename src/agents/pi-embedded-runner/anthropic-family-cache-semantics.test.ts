@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isAnthropicBedrockModel } from "./anthropic-family-cache-semantics.js";
+import {
+  isAnthropicBedrockModel,
+  isAnthropicFamilyCacheTtlEligible,
+  resolveAnthropicCacheRetentionFamily,
+} from "./anthropic-family-cache-semantics.js";
 
 describe("isAnthropicBedrockModel", () => {
   it("matches direct Anthropic Claude model IDs", () => {
@@ -53,5 +57,85 @@ describe("isAnthropicBedrockModel", () => {
   it("ignores modelName for direct model IDs (not inference profiles)", () => {
     // modelName should only matter for application inference profile ARNs
     expect(isAnthropicBedrockModel("amazon.nova-micro-v1:0", "Claude Sonnet 4.6")).toBe(false);
+  });
+});
+
+describe("isAnthropicFamilyCacheTtlEligible", () => {
+  const randomIdArn =
+    "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/7g9cumu1wd7v";
+
+  it("returns true for amazon-bedrock with random-ID inference profile when modelName contains 'claude'", () => {
+    expect(
+      isAnthropicFamilyCacheTtlEligible({
+        provider: "amazon-bedrock",
+        modelId: randomIdArn,
+        modelName: "Claude Sonnet 4.6 via Inference Profile",
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false for amazon-bedrock with random-ID inference profile without modelName", () => {
+    expect(
+      isAnthropicFamilyCacheTtlEligible({
+        provider: "amazon-bedrock",
+        modelId: randomIdArn,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true for anthropic provider regardless of modelName", () => {
+    expect(
+      isAnthropicFamilyCacheTtlEligible({
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-6",
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("resolveAnthropicCacheRetentionFamily", () => {
+  const randomIdArn =
+    "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/7g9cumu1wd7v";
+
+  it("returns 'anthropic-bedrock' for random-ID inference profile when modelName contains 'claude'", () => {
+    expect(
+      resolveAnthropicCacheRetentionFamily({
+        provider: "amazon-bedrock",
+        modelId: randomIdArn,
+        modelName: "Claude Sonnet 4.6 via Inference Profile",
+        hasExplicitCacheConfig: true,
+      }),
+    ).toBe("anthropic-bedrock");
+  });
+
+  it("returns undefined for random-ID inference profile without modelName", () => {
+    expect(
+      resolveAnthropicCacheRetentionFamily({
+        provider: "amazon-bedrock",
+        modelId: randomIdArn,
+        hasExplicitCacheConfig: true,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined for random-ID inference profile with non-Claude modelName", () => {
+    expect(
+      resolveAnthropicCacheRetentionFamily({
+        provider: "amazon-bedrock",
+        modelId: randomIdArn,
+        modelName: "My Custom LLM",
+        hasExplicitCacheConfig: true,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("returns 'anthropic-direct' for anthropic provider regardless of modelName", () => {
+    expect(
+      resolveAnthropicCacheRetentionFamily({
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-6",
+        hasExplicitCacheConfig: false,
+      }),
+    ).toBe("anthropic-direct");
   });
 });

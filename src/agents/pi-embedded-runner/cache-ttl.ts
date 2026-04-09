@@ -28,6 +28,7 @@ export function isCacheTtlEligibleProvider(
   provider: string,
   modelId: string,
   modelApi?: string,
+  modelName?: string,
 ): boolean {
   const normalizedProvider = normalizeLowercaseStringOrEmpty(provider);
   const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
@@ -47,6 +48,7 @@ export function isCacheTtlEligibleProvider(
       provider: normalizedProvider,
       modelId: normalizedModelId,
       modelApi,
+      modelName,
     }) ||
     (normalizedProvider === "kilocode" && isAnthropicModelRef(normalizedModelId)) ||
     isGooglePromptCacheEligible({ modelApi, modelId: normalizedModelId })

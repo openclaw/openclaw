@@ -270,6 +270,26 @@ describe("cacheRetention default behavior", () => {
       ),
     ).toBe("none");
   });
+
+  it("returns 'long' for Bedrock inference profile with random ID when modelName contains 'claude'", () => {
+    const arn = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/7g9cumu1wd7v";
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "long" },
+        "amazon-bedrock",
+        undefined,
+        arn,
+        "Claude Sonnet 4.6 via Inference Profile",
+      ),
+    ).toBe("long");
+  });
+
+  it("returns undefined for Bedrock inference profile with random ID without modelName", () => {
+    const arn = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/7g9cumu1wd7v";
+    expect(
+      resolveCacheRetention({ cacheRetention: "long" }, "amazon-bedrock", undefined, arn),
+    ).toBeUndefined();
+  });
 });
 
 describe("anthropic-family cache semantics", () => {
