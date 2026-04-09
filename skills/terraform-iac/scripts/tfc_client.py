@@ -3031,6 +3031,20 @@ data "aws_ami" "this" {
     # SSH key
     key_name = prompt("EC2 Key Pair name for SSH access (leave blank to skip)", default="")
     key_block = f'  key_name = "{key_name}"' if key_name else "  # key_name = \"your-key-pair\"  # uncomment to enable SSH"
+    ssh_ingress_block = ""
+    if key_name:
+        print("\n  SSH access:")
+        print("    ⚠️  Never use 0.0.0.0/0 for SSH in production.")
+        ssh_cidr = prompt("Source CIDR for SSH (e.g. 203.0.113.10/32, or 10.0.0.0/8 for VPN)", default="10.0.0.0/8")
+        ssh_ingress_block = f"""
+  ingress {{
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["{ssh_cidr}"]
+    description = "SSH access"
+  }}
+"""
 
     # Root volume
     vol_size = prompt("Root volume size (GB)", default="20")
@@ -3077,7 +3091,7 @@ resource "aws_security_group" "this" {{
   name        = "{name}-sg"
   description = "Security group for {name}"
   vpc_id      = {vpc_id_ref}
-
+{ssh_ingress_block}
   egress {{
     from_port   = 0
     to_port     = 0
