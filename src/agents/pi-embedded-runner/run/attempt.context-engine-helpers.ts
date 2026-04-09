@@ -4,6 +4,46 @@ import type { ContextEngine, ContextEngineRuntimeContext } from "../../../contex
 
 export type AttemptContextEngine = ContextEngine;
 
+export type AttemptBootstrapContext = {
+  bootstrapFiles: unknown[];
+  contextFiles: unknown[];
+};
+
+export async function resolveAttemptBootstrapContext<
+  TContext extends AttemptBootstrapContext,
+>(params: {
+  contextInjectionMode: "always" | "continuation-skip";
+  bootstrapContextMode?: string;
+  bootstrapContextRunKind?: string;
+  sessionFile: string;
+  hasCompletedBootstrapTurn: (sessionFile: string) => Promise<boolean>;
+  resolveBootstrapContextForRun: () => Promise<TContext>;
+}): Promise<
+  TContext & {
+    isContinuationTurn: boolean;
+    shouldRecordCompletedBootstrapTurn: boolean;
+  }
+> {
+  const isContinuationTurn =
+    params.contextInjectionMode === "continuation-skip" &&
+    params.bootstrapContextRunKind !== "heartbeat" &&
+    (await params.hasCompletedBootstrapTurn(params.sessionFile));
+  const shouldRecordCompletedBootstrapTurn =
+    !isContinuationTurn &&
+    params.bootstrapContextMode !== "lightweight" &&
+    params.bootstrapContextRunKind !== "heartbeat";
+
+  const context = isContinuationTurn
+    ? ({ bootstrapFiles: [], contextFiles: [] } as unknown as TContext)
+    : await params.resolveBootstrapContextForRun();
+
+  return {
+    ...context,
+    isContinuationTurn,
+    shouldRecordCompletedBootstrapTurn,
+  };
+}
+
 export async function runAttemptContextEngineBootstrap(params: {
   hadSessionFile: boolean;
   contextEngine?: AttemptContextEngine;

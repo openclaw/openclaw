@@ -69,6 +69,7 @@ import {
   backfillDreamDiary,
   loadDreamDiary,
   loadDreamingStatus,
+  resetGroundedShortTerm,
   resetDreamDiary,
   resolveConfiguredDreaming,
   updateDreamingEnabled,
@@ -2118,6 +2119,7 @@ export function renderApp(state: AppViewState) {
           ? renderDreaming({
               active: dreamingOn,
               shortTermCount: state.dreamingStatus?.shortTermCount ?? 0,
+              groundedSignalCount: state.dreamingStatus?.groundedSignalCount ?? 0,
               totalSignalCount: state.dreamingStatus?.totalSignalCount ?? 0,
               promotedCount: state.dreamingStatus?.promotedToday ?? 0,
               phaseSignalCount: state.dreamingStatus?.phaseSignalCount ?? 0,
@@ -2139,6 +2141,7 @@ export function renderApp(state: AppViewState) {
               onRefreshDiary: () => loadDreamDiary(state),
               onBackfillDiary: () => backfillDreamDiary(state),
               onResetDiary: () => resetDreamDiary(state),
+              onResetGroundedShortTerm: () => resetGroundedShortTerm(state),
               onToggleEnabled: applyDreamingEnabled,
               onRequestUpdate: requestHostUpdate,
             })

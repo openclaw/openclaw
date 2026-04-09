@@ -1,10 +1,11 @@
+import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { type OpenClawConfig, type RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
 import { buildFeedbackEvent, runFeedbackReflection } from "./feedback-reflection.js";
 import { buildFileInfoCard, parseFileConsentInvoke, uploadToConsentUrl } from "./file-consent.js";
-import { normalizeMSTeamsConversationId } from "./inbound.js";
+import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } from "./inbound.js";
 import type { MSTeamsAdapter } from "./messenger.js";
 import { resolveMSTeamsSenderAccess } from "./monitor-handler/access.js";
 import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
@@ -257,7 +258,8 @@ async function handleFeedbackInvoke(
   }
 
   // Strip ;messageid=... suffix to match the normalized ID used by the message handler.
-  const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "unknown");
+  const rawConversationId = activity.conversation?.id ?? "unknown";
+  const conversationId = normalizeMSTeamsConversationId(rawConversationId);
   const senderId = activity.from?.aadObjectId ?? activity.from?.id ?? "unknown";
   const messageId = value.replyToId ?? activity.replyToId ?? "unknown";
   const isNegative = reaction === "dislike";
@@ -277,6 +279,22 @@ async function handleFeedbackInvoke(
       id: isDirectMessage ? senderId : conversationId,
     },
   });
+
+  // Match the thread-aware session key used by the message handler so feedback
+  // events land in the correct per-thread transcript. For channel threads, the
+  // thread root ID comes from the ;messageid= suffix on the conversation ID or
+  // from activity.replyToId.
+  const feedbackThreadId = isChannel
+    ? (extractMSTeamsConversationMessageId(rawConversationId) ?? activity.replyToId ?? undefined)
+    : undefined;
+  if (feedbackThreadId) {
+    const threadKeys = resolveThreadSessionKeys({
+      baseSessionKey: route.sessionKey,
+      threadId: feedbackThreadId,
+      parentSessionKey: route.sessionKey,
+    });
+    route.sessionKey = threadKeys.sessionKey;
+  }
 
   // Log feedback event to session JSONL
   const feedbackEvent = buildFeedbackEvent({

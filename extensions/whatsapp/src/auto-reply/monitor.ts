@@ -1,3 +1,4 @@
+import type { WASocket } from "@whiskeysockets/baileys";
 import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { waitForever } from "openclaw/plugin-sdk/cli-runtime";
@@ -165,6 +166,20 @@ export async function monitorWebChannel(
   process.once("SIGINT", handleSigint);
 
   let reconnectAttempts = 0;
+  const socketRef: { current: WASocket | null } = { current: null };
+  const disconnectRetryController = new AbortController();
+  const stopDisconnectRetries = () => {
+    if (!disconnectRetryController.signal.aborted) {
+      disconnectRetryController.abort();
+    }
+  };
+  if (abortSignal) {
+    if (abortSignal.aborted) {
+      stopDisconnectRetries();
+    } else {
+      abortSignal.addEventListener("abort", stopDisconnectRetries, { once: true });
+    }
+  }
 
   while (true) {
     if (stopRequested()) {
@@ -217,6 +232,11 @@ export async function monitorWebChannel(
       sendReadReceipts: account.sendReadReceipts,
       debounceMs: inboundDebounceMs,
       shouldDebounce,
+      socketRef,
+      shouldRetryDisconnect: () =>
+        keepAlive && !sigintStop && !stopRequested() && !disconnectRetryController.signal.aborted,
+      disconnectRetryPolicy: reconnectPolicy,
+      disconnectRetryAbortSignal: disconnectRetryController.signal,
       onMessage: async (msg: WebInboundMsg) => {
         active.handledMessages += 1;
         active.lastInboundAt = Date.now();
@@ -257,6 +277,7 @@ export async function monitorWebChannel(
     });
 
     const closeListener = async () => {
+      socketRef.current = null;
       setActiveWebListener(account.accountId, null);
       if (active.unregisterUnhandled) {
         active.unregisterUnhandled();
@@ -343,6 +364,7 @@ export async function monitorWebChannel(
     }
 
     if (!keepAlive) {
+      stopDisconnectRetries();
       await closeListener();
       process.removeListener("SIGINT", handleSigint);
       return;
@@ -363,6 +385,7 @@ export async function monitorWebChannel(
     statusController.noteReconnectAttempts(reconnectAttempts);
 
     if (stopRequested() || sigintStop || reason === "aborted") {
+      stopDisconnectRetries();
       await closeListener();
       break;
     }
@@ -396,6 +419,7 @@ export async function monitorWebChannel(
     });
 
     if (loggedOut) {
+      stopDisconnectRetries();
       statusController.noteClose({
         statusCode: numericStatusCode,
         loggedOut: true,
@@ -411,6 +435,7 @@ export async function monitorWebChannel(
     }
 
     if (isNonRetryableWebCloseStatus(statusCode)) {
+      stopDisconnectRetries();
       statusController.noteClose({
         statusCode: numericStatusCode,
         error: errorStr,
@@ -434,6 +459,7 @@ export async function monitorWebChannel(
 
     reconnectAttempts += 1;
     if (reconnectPolicy.maxAttempts > 0 && reconnectAttempts >= reconnectPolicy.maxAttempts) {
+      stopDisconnectRetries();
       statusController.noteClose({
         statusCode: numericStatusCode,
         error: errorStr,

@@ -15,7 +15,7 @@ import {
 import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/outbound-runtime";
 import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
@@ -121,6 +121,47 @@ export function resolveSlackStreamingThreadHint(params: {
     hasReplied: false,
     isThreadReply: params.isThreadReply,
   });
+}
+
+type SlackTurnDeliveryAttempt = {
+  kind: ReplyDispatchKind;
+  payload: ReplyPayload;
+  threadTs?: string;
+  textOverride?: string;
+};
+
+function buildSlackTurnDeliveryKey(params: SlackTurnDeliveryAttempt): string | null {
+  const reply = resolveSendableOutboundReplyParts(params.payload, {
+    text: params.textOverride,
+  });
+  const slackBlocks = readSlackReplyBlocks(params.payload);
+  if (!reply.hasContent && !slackBlocks?.length) {
+    return null;
+  }
+  return JSON.stringify({
+    kind: params.kind,
+    threadTs: params.threadTs ?? "",
+    replyToId: params.payload.replyToId ?? null,
+    text: reply.trimmedText,
+    mediaUrls: reply.mediaUrls,
+    blocks: slackBlocks ?? null,
+  });
+}
+
+export function createSlackTurnDeliveryTracker() {
+  const deliveredKeys = new Set<string>();
+  return {
+    hasDelivered(params: SlackTurnDeliveryAttempt) {
+      const key = buildSlackTurnDeliveryKey(params);
+      return key ? deliveredKeys.has(key) : false;
+    },
+    markDelivered(params: SlackTurnDeliveryAttempt) {
+      const key = buildSlackTurnDeliveryKey(params);
+      if (key) {
+        deliveredKeys.add(key);
+      }
+    },
+  };
 }
 
 function shouldUseStreaming(params: {
@@ -349,11 +390,26 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let streamFailed = false;
   let usedReplyThreadTs: string | undefined;
   let observedReplyDelivery = false;
+  const deliveryTracker = createSlackTurnDeliveryTracker();
 
-  const deliverNormally = async (payload: ReplyPayload, forcedThreadTs?: string): Promise<void> => {
-    const replyThreadTs = forcedThreadTs ?? replyPlan.nextThreadTs();
+  const deliverNormally = async (params: {
+    payload: ReplyPayload;
+    kind: ReplyDispatchKind;
+    forcedThreadTs?: string;
+  }): Promise<void> => {
+    const replyThreadTs = params.forcedThreadTs ?? replyPlan.nextThreadTs();
+    if (
+      deliveryTracker.hasDelivered({
+        kind: params.kind,
+        payload: params.payload,
+        threadTs: replyThreadTs,
+      })
+    ) {
+      logVerbose("slack: suppressed duplicate normal delivery within the same turn");
+      return;
+    }
     await deliverReplies({
-      replies: [payload],
+      replies: [params.payload],
       target: prepared.replyTarget,
       token: ctx.botToken,
       accountId: account.accountId,
@@ -369,12 +425,29 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       usedReplyThreadTs ??= replyThreadTs;
     }
     replyPlan.markSent();
+    deliveryTracker.markDelivered({
+      kind: params.kind,
+      payload: params.payload,
+      threadTs: replyThreadTs,
+    });
   };
 
-  const deliverWithStreaming = async (payload: ReplyPayload): Promise<void> => {
-    const reply = resolveSendableOutboundReplyParts(payload);
-    if (streamFailed || reply.hasMedia || readSlackReplyBlocks(payload)?.length || !reply.hasText) {
-      await deliverNormally(payload, streamSession?.threadTs);
+  const deliverWithStreaming = async (params: {
+    payload: ReplyPayload;
+    kind: ReplyDispatchKind;
+  }): Promise<void> => {
+    const reply = resolveSendableOutboundReplyParts(params.payload);
+    if (
+      streamFailed ||
+      reply.hasMedia ||
+      readSlackReplyBlocks(params.payload)?.length ||
+      !reply.hasText
+    ) {
+      await deliverNormally({
+        payload: params.payload,
+        kind: params.kind,
+        forcedThreadTs: streamSession?.threadTs,
+      });
       return;
     }
 
@@ -389,7 +462,18 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             "slack-stream: no reply thread target for stream start, falling back to normal delivery",
           );
           streamFailed = true;
-          await deliverNormally(payload);
+          await deliverNormally({ payload: params.payload, kind: params.kind });
+          return;
+        }
+        if (
+          deliveryTracker.hasDelivered({
+            kind: params.kind,
+            payload: params.payload,
+            threadTs: streamThreadTs,
+            textOverride: text,
+          })
+        ) {
+          logVerbose("slack-stream: suppressed duplicate stream start payload");
           return;
         }
 
@@ -404,6 +488,23 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         observedReplyDelivery = true;
         usedReplyThreadTs ??= streamThreadTs;
         replyPlan.markSent();
+        deliveryTracker.markDelivered({
+          kind: params.kind,
+          payload: params.payload,
+          threadTs: streamThreadTs,
+          textOverride: text,
+        });
+        return;
+      }
+      if (
+        deliveryTracker.hasDelivered({
+          kind: params.kind,
+          payload: params.payload,
+          threadTs: streamSession.threadTs,
+          textOverride: text,
+        })
+      ) {
+        logVerbose("slack-stream: suppressed duplicate append payload");
         return;
       }
 
@@ -411,21 +512,31 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         session: streamSession,
         text: "\n" + text,
       });
+      deliveryTracker.markDelivered({
+        kind: params.kind,
+        payload: params.payload,
+        threadTs: streamSession.threadTs,
+        textOverride: text,
+      });
     } catch (err) {
       runtime.error?.(
         danger(`slack-stream: streaming API call failed: ${String(err)}, falling back`),
       );
       streamFailed = true;
-      await deliverNormally(payload, streamSession?.threadTs ?? plannedThreadTs);
+      await deliverNormally({
+        payload: params.payload,
+        kind: params.kind,
+        forcedThreadTs: streamSession?.threadTs ?? plannedThreadTs,
+      });
     }
   };
 
   const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
     ...replyPipeline,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
-    deliver: async (payload) => {
+    deliver: async (payload, info) => {
       if (useStreaming) {
-        await deliverWithStreaming(payload);
+        await deliverWithStreaming({ payload, kind: info.kind });
         return;
       }
 
@@ -444,6 +555,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         typeof draftChannelId === "string";
 
       if (canFinalizeViaPreviewEdit) {
+        const finalThreadTs = usedReplyThreadTs ?? statusThreadTs;
+        if (deliveryTracker.hasDelivered({ kind: info.kind, payload, threadTs: finalThreadTs })) {
+          observedReplyDelivery = true;
+          return;
+        }
         draftStream?.stop();
         try {
           await finalizeSlackPreviewEdit({
@@ -454,9 +570,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             messageId: draftMessageId,
             text: normalizeSlackOutboundText(trimmedFinalText),
             ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
-            threadTs: usedReplyThreadTs ?? statusThreadTs,
+            threadTs: finalThreadTs,
           });
           observedReplyDelivery = true;
+          deliveryTracker.markDelivered({ kind: info.kind, payload, threadTs: finalThreadTs });
           return;
         } catch (err) {
           logVerbose(
@@ -483,7 +600,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         hasStreamedMessage = false;
       }
 
-      await deliverNormally(payload);
+      await deliverNormally({ payload, kind: info.kind });
     },
     onError: (err, info) => {
       runtime.error?.(danger(`slack ${info.kind} reply failed: ${String(err)}`));

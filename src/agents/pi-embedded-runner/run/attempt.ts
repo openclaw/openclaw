@@ -161,6 +161,7 @@ import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.
 import {
   assembleAttemptContextEngine,
   finalizeAttemptContextEngineTurn,
+  resolveAttemptBootstrapContext,
   runAttemptContextEngineBootstrap,
 } from "./attempt.context-engine-helpers.js";
 import {
@@ -451,20 +452,18 @@ export async function runEmbeddedAttempt(
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const contextInjectionMode = resolveContextInjectionMode(params.config);
-    const isContinuationTurn =
-      contextInjectionMode === "continuation-skip" &&
-      params.bootstrapContextRunKind !== "heartbeat" &&
-      (await hasCompletedBootstrapTurn(params.sessionFile));
-    const shouldRecordCompletedBootstrapTurn =
-      !isContinuationTurn &&
-      params.bootstrapContextMode !== "lightweight" &&
-      params.bootstrapContextRunKind !== "heartbeat";
-    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } = isContinuationTurn
-      ? {
-          bootstrapFiles: [],
-          contextFiles: [],
-        }
-      : await resolveBootstrapContextForRun({
+    const {
+      bootstrapFiles: hookAdjustedBootstrapFiles,
+      contextFiles,
+      shouldRecordCompletedBootstrapTurn,
+    } = await resolveAttemptBootstrapContext({
+      contextInjectionMode,
+      bootstrapContextMode: params.bootstrapContextMode,
+      bootstrapContextRunKind: params.bootstrapContextRunKind,
+      sessionFile: params.sessionFile,
+      hasCompletedBootstrapTurn,
+      resolveBootstrapContextForRun: async () =>
+        await resolveBootstrapContextForRun({
           workspaceDir: effectiveWorkspace,
           config: params.config,
           sessionKey: params.sessionKey,
@@ -472,7 +471,8 @@ export async function runEmbeddedAttempt(
           warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
           contextMode: params.bootstrapContextMode,
           runKind: params.bootstrapContextRunKind,
-        });
+        }),
+    });
     const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
     const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
     const bootstrapAnalysis = analyzeBootstrapBudget({
