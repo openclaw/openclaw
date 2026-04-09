@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { z } from "zod";
 import { resolveStateDir } from "../../config/paths.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -9,11 +10,12 @@ export type UpdateHintOptions = {
   json?: boolean;
 };
 
-type UpdateCheckState = {
-  lastCheckedAt?: string;
-  lastAvailableVersion?: string;
-  lastAvailableTag?: string;
-};
+const UpdateCheckStateSchema = z.object({
+  lastCheckedAt: z.string().optional(),
+  lastAvailableVersion: z.string().optional(),
+  lastAvailableTag: z.string().optional(),
+});
+type UpdateCheckState = z.infer<typeof UpdateCheckStateSchema>;
 
 /**
  * Lightweight hint command for agent/skill preambles.
@@ -32,14 +34,14 @@ export async function updateHintCommand(opts: UpdateHintOptions): Promise<void> 
   let state: UpdateCheckState;
   try {
     const raw = await fs.readFile(statePath, "utf-8");
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    const result = UpdateCheckStateSchema.safeParse(JSON.parse(raw));
+    if (!result.success) {
       if (opts.json) {
         defaultRuntime.writeJson({ updateAvailable: false });
       }
       return;
     }
-    state = parsed as UpdateCheckState;
+    state = result.data;
   } catch {
     // No state file or invalid JSON — nothing to report.
     if (opts.json) {
@@ -48,8 +50,7 @@ export async function updateHintCommand(opts: UpdateHintOptions): Promise<void> 
     return;
   }
 
-  const latestVersion =
-    typeof state.lastAvailableVersion === "string" ? state.lastAvailableVersion.trim() : undefined;
+  const latestVersion = state.lastAvailableVersion?.trim();
   if (!latestVersion) {
     if (opts.json) {
       defaultRuntime.writeJson({ updateAvailable: false });
@@ -66,8 +67,7 @@ export async function updateHintCommand(opts: UpdateHintOptions): Promise<void> 
     return;
   }
 
-  const channel =
-    (typeof state.lastAvailableTag === "string" && state.lastAvailableTag.trim()) || "latest";
+  const channel = state.lastAvailableTag?.trim() || "latest";
 
   if (opts.json) {
     defaultRuntime.writeJson({
