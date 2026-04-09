@@ -273,4 +273,35 @@ describe("resolveGatewayStartupPluginIds", () => {
       expected: ["demo-channel", "browser", "memory-alt"],
     });
   });
+
+  it("excludes all memory plugins when memory slot is explicitly disabled", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        plugins: {
+          slots: {
+            memory: "none",
+          },
+        },
+      } as OpenClawConfig,
+      expected: ["demo-channel", "browser"],
+    });
+  });
+
+  it("does not include a selected memory slot plugin when it is explicitly disabled", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        plugins: {
+          slots: {
+            memory: "memory-alt",
+          },
+          entries: {
+            "memory-alt": {
+              enabled: false,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      expected: ["demo-channel", "browser"],
+    });
+  });
 });
