@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createUpdatePlanTool } from "./update-plan-tool.js";
 
 describe("update_plan tool", () => {
-  it("returns the normalized plan payload", async () => {
+  it("returns a compact success payload", async () => {
     const tool = createUpdatePlanTool();
     const result = await tool.execute("call-1", {
       explanation: "Started work",
@@ -16,12 +16,6 @@ describe("update_plan tool", () => {
     expect(result.content).toEqual([{ type: "text", text: "Plan updated." }]);
     expect(result.details).toEqual({
       status: "updated",
-      explanation: "Started work",
-      plan: [
-        { step: "Inspect harness", status: "completed" },
-        { step: "Add tool", status: "in_progress" },
-        { step: "Run tests", status: "pending" },
-      ],
     });
   });
 

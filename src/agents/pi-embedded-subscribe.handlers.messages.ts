@@ -6,6 +6,7 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import { resolveAssistantMessagePhase } from "../shared/chat-message-content.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
@@ -75,8 +76,8 @@ function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage | undefi
   if (!message || message.role !== "assistant") {
     return false;
   }
-  const provider = typeof message.provider === "string" ? message.provider.trim() : "";
-  const model = typeof message.model === "string" ? message.model.trim() : "";
+  const provider = normalizeOptionalString(message.provider) ?? "";
+  const model = normalizeOptionalString(message.model) ?? "";
   return provider === "openclaw" && (model === "delivery-mirror" || model === "gateway-injected");
 }
 

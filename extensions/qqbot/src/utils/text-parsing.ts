@@ -1,5 +1,8 @@
+import { estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { RefAttachmentSummary } from "../ref-index-store.js";
+
+const MAX_FACE_EXT_BYTES = 64 * 1024;
 
 /** Replace QQ face tags with readable text labels. */
 export function parseFaceTags(text: string): string {
@@ -9,6 +12,9 @@ export function parseFaceTags(text: string): string {
 
   return text.replace(/<faceType=\d+,faceId="[^"]*",ext="([^"]*)">/g, (_match, ext: string) => {
     try {
+      if (estimateBase64DecodedBytes(ext) > MAX_FACE_EXT_BYTES) {
+        return "[Emoji: unknown emoji]";
+      }
       const decoded = Buffer.from(ext, "base64").toString("utf-8");
       const parsed = JSON.parse(decoded);
       const faceName = parsed.text || "unknown emoji";

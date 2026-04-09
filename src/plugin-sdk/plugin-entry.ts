@@ -142,7 +142,7 @@ export type {
 };
 export type { OpenClawConfig };
 
-export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
+export { buildPluginConfigSchema, emptyPluginConfigSchema } from "../plugins/config-schema.js";
 
 /** Options for a plugin entry that registers providers, tools, commands, or services. */
 type DefinePluginEntryOptions = {

@@ -2,7 +2,10 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import type { ResolvedBrowserConfig } from "./config.js";
 
 export type BrowserExecutable = {
@@ -115,7 +118,7 @@ function execText(
       encoding: "utf8",
       maxBuffer,
     });
-    return String(output ?? "").trim() || null;
+    return normalizeOptionalString(output) ?? null;
   } catch {
     return null;
   }
@@ -192,7 +195,7 @@ function detectDefaultChromiumExecutableMac(): BrowserExecutable | null {
   if (!appPathRaw) {
     return null;
   }
-  const appPath = appPathRaw.trim().replace(/\/$/, "");
+  const appPath = appPathRaw.replace(/\/$/, "");
   const exeName = execText("/usr/bin/defaults", [
     "read",
     path.join(appPath, "Contents", "Info"),
@@ -201,7 +204,7 @@ function detectDefaultChromiumExecutableMac(): BrowserExecutable | null {
   if (!exeName) {
     return null;
   }
-  const exePath = path.join(appPath, "Contents", "MacOS", exeName.trim());
+  const exePath = path.join(appPath, "Contents", "MacOS", exeName);
   if (!exists(exePath)) {
     return null;
   }
@@ -430,12 +433,12 @@ function readWindowsCommandForProgId(progId: string): string | null {
     return null;
   }
   const match = output.match(/REG_\w+\s+(.+)$/im);
-  return match?.[1]?.trim() || null;
+  return normalizeOptionalString(match?.[1]) ?? null;
 }
 
 function expandWindowsEnvVars(value: string): string {
   return value.replace(/%([^%]+)%/g, (_match, name) => {
-    const key = String(name ?? "").trim();
+    const key = normalizeOptionalString(name) ?? "";
     return key ? (process.env[key] ?? `%${key}%`) : _match;
   });
 }

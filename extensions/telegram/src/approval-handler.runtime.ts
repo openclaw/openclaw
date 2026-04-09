@@ -13,6 +13,7 @@ import {
   type PluginApprovalRequest,
 } from "openclaw/plugin-sdk/infra-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import {
   isTelegramExecApprovalHandlerConfigured,
@@ -49,7 +50,7 @@ function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext):
   context: TelegramApprovalHandlerContext;
 } | null {
   const context = params.context as TelegramApprovalHandlerContext | undefined;
-  const accountId = params.accountId?.trim() || "";
+  const accountId = normalizeOptionalString(params.accountId) ?? "";
   if (!context?.token || !accountId) {
     return null;
   }

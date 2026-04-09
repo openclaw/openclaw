@@ -15,13 +15,26 @@ describe("qa live timeout policy", () => {
     ).toBe(30_000);
   });
 
-  it("uses the standard live floor for non-anthropic models", () => {
+  it("uses the higher gpt-5 live floor for openai heavy turns", () => {
     expect(
       resolveQaLiveTurnTimeoutMs(
         {
           providerMode: "live-frontier",
           primaryModel: "openai/gpt-5.4",
           alternateModel: "openai/gpt-5.4",
+        },
+        30_000,
+      ),
+    ).toBe(360_000);
+  });
+
+  it("keeps the standard live floor for other non-anthropic models", () => {
+    expect(
+      resolveQaLiveTurnTimeoutMs(
+        {
+          providerMode: "live-frontier",
+          primaryModel: "google/gemini-3-flash",
+          alternateModel: "google/gemini-3-flash",
         },
         30_000,
       ),

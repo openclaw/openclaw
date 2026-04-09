@@ -327,7 +327,10 @@ export async function tryDispatchAcpReply(params: {
   const shouldEmitResolvedIdentityNotice =
     !params.suppressUserDelivery &&
     identityPendingBeforeTurn &&
-    (Boolean(params.ctx.MessageThreadId != null && String(params.ctx.MessageThreadId).trim()) ||
+    (Boolean(
+      params.ctx.MessageThreadId != null &&
+      (normalizeOptionalString(String(params.ctx.MessageThreadId)) ?? ""),
+    ) ||
       (await hasBoundConversationForSession({
         cfg: params.cfg,
         sessionKey: canonicalSessionKey,

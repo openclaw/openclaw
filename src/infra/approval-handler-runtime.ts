@@ -222,13 +222,24 @@ export type ChannelApprovalNativeObserveAdapter<
   ) => void;
 };
 
-export type ChannelApprovalNativeRuntimeAdapter = {
+export type ChannelApprovalNativeRuntimeAdapter<
+  TPendingPayload = unknown,
+  TPreparedTarget = unknown,
+  TPendingEntry = unknown,
+  TBinding = unknown,
+  TFinalPayload = unknown,
+> = {
   eventKinds?: readonly ExecApprovalChannelRuntimeEventKind[];
   resolveApprovalKind?: (request: ApprovalRequest) => ChannelApprovalKind;
   availability: ChannelApprovalNativeAvailabilityAdapter;
-  presentation: ChannelApprovalNativePresentationAdapter;
-  transport: ChannelApprovalNativeTransportAdapter;
-  interactions?: ChannelApprovalNativeInteractionAdapter;
+  presentation: ChannelApprovalNativePresentationAdapter<TPendingPayload, TFinalPayload>;
+  transport: ChannelApprovalNativeTransportAdapter<
+    TPreparedTarget,
+    TPendingEntry,
+    TPendingPayload,
+    TFinalPayload
+  >;
+  interactions?: ChannelApprovalNativeInteractionAdapter<TPendingEntry, TBinding>;
   observe?: ChannelApprovalNativeObserveAdapter;
 };
 
@@ -237,6 +248,7 @@ export type ChannelApprovalNativeRuntimeSpec<
   TPreparedTarget,
   TPendingEntry,
   TBinding = unknown,
+  TFinalPayload = unknown,
   TPendingView extends PendingApprovalView = PendingApprovalView,
   TResolvedView extends ResolvedApprovalView = ResolvedApprovalView,
   TExpiredView extends ExpiredApprovalView = ExpiredApprovalView,
@@ -261,8 +273,8 @@ export type ChannelApprovalNativeRuntimeSpec<
         entry: TPendingEntry;
       },
     ) =>
-      | ChannelApprovalNativeFinalAction<unknown>
-      | Promise<ChannelApprovalNativeFinalAction<unknown>>;
+      | ChannelApprovalNativeFinalAction<TFinalPayload>
+      | Promise<ChannelApprovalNativeFinalAction<TFinalPayload>>;
     buildExpiredResult: (
       params: ChannelApprovalCapabilityHandlerContext & {
         request: ApprovalRequest;
@@ -270,8 +282,8 @@ export type ChannelApprovalNativeRuntimeSpec<
         entry: TPendingEntry;
       },
     ) =>
-      | ChannelApprovalNativeFinalAction<unknown>
-      | Promise<ChannelApprovalNativeFinalAction<unknown>>;
+      | ChannelApprovalNativeFinalAction<TFinalPayload>
+      | Promise<ChannelApprovalNativeFinalAction<TFinalPayload>>;
   };
   transport: {
     prepareTarget: (
@@ -299,7 +311,7 @@ export type ChannelApprovalNativeRuntimeSpec<
     updateEntry?: (
       params: ChannelApprovalCapabilityHandlerContext & {
         entry: TPendingEntry;
-        payload: unknown;
+        payload: TFinalPayload;
         phase: "resolved" | "expired";
       },
     ) => Promise<void>;
@@ -487,6 +499,7 @@ export function createChannelApprovalNativeRuntimeAdapter<
   TPreparedTarget,
   TPendingEntry,
   TBinding = unknown,
+  TFinalPayload = unknown,
   TPendingView extends PendingApprovalView = PendingApprovalView,
   TResolvedView extends ResolvedApprovalView = ResolvedApprovalView,
   TExpiredView extends ExpiredApprovalView = ExpiredApprovalView,
@@ -496,11 +509,18 @@ export function createChannelApprovalNativeRuntimeAdapter<
     TPreparedTarget,
     TPendingEntry,
     TBinding,
+    TFinalPayload,
     TPendingView,
     TResolvedView,
     TExpiredView
   >,
-): ChannelApprovalNativeRuntimeAdapter {
+): ChannelApprovalNativeRuntimeAdapter<
+  TPendingPayload,
+  TPreparedTarget,
+  TPendingEntry,
+  TBinding,
+  TFinalPayload
+> {
   return {
     ...(spec.eventKinds ? { eventKinds: spec.eventKinds } : {}),
     ...(spec.resolveApprovalKind ? { resolveApprovalKind: spec.resolveApprovalKind } : {}),
@@ -547,7 +567,7 @@ export function createChannelApprovalNativeRuntimeAdapter<
             ...(spec.interactions.bindPending
               ? {
                   bindPending: async (params) =>
-                    await spec.interactions?.bindPending?.(params as never),
+                    (await spec.interactions!.bindPending!(params as never)) ?? null,
                 }
               : {}),
             ...(spec.interactions.unbindPending

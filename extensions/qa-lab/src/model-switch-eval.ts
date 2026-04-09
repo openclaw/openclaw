@@ -1,5 +1,7 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+
 export function hasModelSwitchContinuityEvidence(text: string) {
-  const lower = text.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(text);
   const mentionsHandoff =
     lower.includes("handoff") || lower.includes("model switch") || lower.includes("switched");
   const mentionsKickoffTask =

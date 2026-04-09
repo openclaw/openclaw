@@ -7,6 +7,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { FetchLike, Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { loadUndiciRuntimeDeps } from "../infra/net/undici-runtime.js";
 import { logDebug } from "../logger.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 
 export type ResolvedMcpTransport = {
@@ -23,7 +24,8 @@ function attachStderrLogging(serverName: string, transport: StdioClientTransport
     return undefined;
   }
   const onData = (chunk: Buffer | string) => {
-    const message = String(chunk).trim();
+    const message =
+      normalizeOptionalString(typeof chunk === "string" ? chunk : String(chunk)) ?? "";
     if (!message) {
       return;
     }

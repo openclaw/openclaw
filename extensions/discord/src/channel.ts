@@ -25,7 +25,11 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { resolveTargetsWithOptionalToken } from "openclaw/plugin-sdk/target-resolver-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  normalizeOptionalStringifiedId,
+} from "openclaw/plugin-sdk/text-runtime";
 import {
   listDiscordAccountIds,
   resolveDiscordAccount,
@@ -137,7 +141,7 @@ function resolveDiscordAttachedOutboundTarget(params: {
   if (params.threadId == null) {
     return params.to;
   }
-  const threadId = String(params.threadId).trim();
+  const threadId = normalizeOptionalStringifiedId(params.threadId) ?? "";
   return threadId ? `channel:${threadId}` : params.to;
 }
 
@@ -206,7 +210,8 @@ function resolveDiscordStartupDelayMs(cfg: OpenClawConfig, accountId: string): n
     const candidate = resolveDiscordAccount({ cfg, accountId: candidateId });
     return (
       candidate.enabled &&
-      (resolveConfiguredFromCredentialStatuses(candidate) ?? Boolean(candidate.token.trim()))
+      (resolveConfiguredFromCredentialStatuses(candidate) ??
+        Boolean(normalizeOptionalString(candidate.token)))
     );
   });
   const startupIndex = startupAccountIds.findIndex((candidateId) => candidateId === accountId);
@@ -367,7 +372,7 @@ function resolveDiscordCommandConversation(params: {
   const targets = [params.originatingTo, params.commandTo, params.fallbackTo];
   if (params.threadId) {
     const parentConversationId =
-      normalizeDiscordMessagingTarget(params.threadParentId?.trim() ?? "") ||
+      normalizeDiscordMessagingTarget(normalizeOptionalString(params.threadParentId) ?? "") ||
       parseDiscordParentChannelFromSessionKey(params.parentSessionKey) ||
       resolveDiscordConversationIdFromTargets(targets);
     return {

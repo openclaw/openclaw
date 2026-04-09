@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "./config.js";
 import {
   type OwnerDisplaySecretPersistState,
   persistGeneratedOwnerDisplaySecret,
 } from "./io.owner-display-secret.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
 function createState(): OwnerDisplaySecretPersistState {
   return {

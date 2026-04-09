@@ -91,4 +91,41 @@ describe("qa-bus state", () => {
       }),
     ).rejects.toThrow("qa-bus wait timeout");
   });
+
+  it("preserves inline attachments and lets search match attachment metadata", () => {
+    const state = createQaBusState();
+
+    const outbound = state.addOutboundMessage({
+      to: "dm:alice",
+      text: "artifact attached",
+      attachments: [
+        {
+          id: "image-1",
+          kind: "image",
+          mimeType: "image/png",
+          fileName: "qa-screenshot.png",
+          altText: "QA dashboard screenshot",
+          contentBase64: "aGVsbG8=",
+        },
+      ],
+    });
+
+    const readback = state.readMessage({ messageId: outbound.id });
+    expect(readback.attachments).toHaveLength(1);
+    expect(readback.attachments?.[0]).toMatchObject({
+      kind: "image",
+      fileName: "qa-screenshot.png",
+      altText: "QA dashboard screenshot",
+    });
+
+    const byFilename = state.searchMessages({
+      query: "screenshot",
+    });
+    expect(byFilename.some((message) => message.id === outbound.id)).toBe(true);
+
+    const byAltText = state.searchMessages({
+      query: "dashboard",
+    });
+    expect(byAltText.some((message) => message.id === outbound.id)).toBe(true);
+  });
 });

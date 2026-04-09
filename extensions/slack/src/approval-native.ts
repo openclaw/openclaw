@@ -3,6 +3,7 @@ import {
   splitChannelApprovalCapability,
 } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
@@ -34,7 +35,8 @@ function extractSlackSessionKind(
     return null;
   }
   const match = sessionKey.match(/slack:(direct|channel|group):/i);
-  return match?.[1] ? (match[1].toLowerCase() as "direct" | "channel" | "group") : null;
+  const kind = normalizeLowercaseStringOrEmpty(match?.[1]);
+  return kind ? (kind as "direct" | "channel" | "group") : null;
 }
 
 function normalizeComparableTarget(value: string): string {
@@ -52,7 +54,7 @@ function normalizeSlackThreadMatchKey(threadId?: string): string {
 
 function resolveTurnSourceSlackOriginTarget(request: ApprovalRequest): SlackOriginTarget | null {
   const turnSourceChannel = normalizeLowercaseStringOrEmpty(request.request.turnSourceChannel);
-  const turnSourceTo = request.request.turnSourceTo?.trim() || "";
+  const turnSourceTo = normalizeOptionalString(request.request.turnSourceTo) ?? "";
   if (turnSourceChannel !== "slack" || !turnSourceTo) {
     return null;
   }
@@ -65,7 +67,7 @@ function resolveTurnSourceSlackOriginTarget(request: ApprovalRequest): SlackOrig
   }
   const threadId =
     typeof request.request.turnSourceThreadId === "string"
-      ? request.request.turnSourceThreadId.trim() || undefined
+      ? normalizeOptionalString(request.request.turnSourceThreadId)
       : typeof request.request.turnSourceThreadId === "number"
         ? String(request.request.turnSourceThreadId)
         : undefined;
@@ -83,7 +85,7 @@ function resolveSessionSlackOriginTarget(sessionTarget: {
     to: sessionTarget.to,
     threadId:
       typeof sessionTarget.threadId === "string"
-        ? sessionTarget.threadId.trim() || undefined
+        ? normalizeOptionalString(sessionTarget.threadId)
         : typeof sessionTarget.threadId === "number"
           ? String(sessionTarget.threadId)
           : undefined,
@@ -183,7 +185,9 @@ export const slackApprovalCapability = createApproverRestrictedNativeApprovalCap
         accountId,
         request,
       }),
-    load: async () => (await import("./approval-handler.runtime.js")).slackApprovalNativeRuntime,
+    load: async () =>
+      (await import("./approval-handler.runtime.js"))
+        .slackApprovalNativeRuntime as unknown as ChannelApprovalNativeRuntimeAdapter,
   }),
 });
 

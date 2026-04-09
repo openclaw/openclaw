@@ -40,6 +40,7 @@ import {
   type DeviceBootstrapProfile,
 } from "../../../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
+import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import {
   isBrowserOperatorUiClient,
   isGatewayCliClient,
@@ -659,7 +660,7 @@ export function attachGatewayWsMessageHandler(params: {
             rejectDeviceAuthInvalid("device-signature-stale", "device signature expired");
             return;
           }
-          const providedNonce = typeof device.nonce === "string" ? device.nonce.trim() : "";
+          const providedNonce = normalizeOptionalString(device.nonce) ?? "";
           if (!providedNonce) {
             rejectDeviceAuthInvalid("device-nonce-missing", "device nonce required");
             return;
@@ -1251,7 +1252,7 @@ export function attachGatewayWsMessageHandler(params: {
             remoteIp: reportedClientIp,
           });
           const instanceIdRaw = connectParams.client.instanceId;
-          const instanceId = typeof instanceIdRaw === "string" ? instanceIdRaw.trim() : "";
+          const instanceId = normalizeOptionalString(instanceIdRaw) ?? "";
           const nodeIdsForPairing = new Set<string>([nodeSession.nodeId]);
           if (instanceId) {
             nodeIdsForPairing.add(instanceId);

@@ -224,11 +224,12 @@ describe("plugin runtime command execution", () => {
       },
     },
     {
-      name: "exposes runtime.modelAuth with getApiKeyForModel and resolveApiKeyForProvider",
+      name: "exposes runtime.modelAuth with raw and runtime-ready auth helpers",
       assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
         expect(runtime.modelAuth).toBeDefined();
         expectFunctionKeys(runtime.modelAuth as Record<string, unknown>, [
           "getApiKeyForModel",
+          "getRuntimeAuthForModel",
           "resolveApiKeyForProvider",
         ]);
       },

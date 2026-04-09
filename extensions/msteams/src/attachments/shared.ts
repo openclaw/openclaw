@@ -1,5 +1,7 @@
 import { Buffer } from "node:buffer";
 import { lookup } from "node:dns/promises";
+export { estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
+import { estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   isHttpsUrlAllowedByHostnameSuffixAllowlist,
@@ -208,20 +210,6 @@ export function extractHtmlFromAttachment(att: MSTeamsAttachmentLike): string | 
           ? att.content.content
           : undefined;
   return text;
-}
-
-function estimateBase64DecodedBytes(value: string): number {
-  const normalized = value.replace(/\s+/g, "");
-  if (!normalized) {
-    return 0;
-  }
-  let padding = 0;
-  if (normalized.endsWith("==")) {
-    padding = 2;
-  } else if (normalized.endsWith("=")) {
-    padding = 1;
-  }
-  return Math.max(0, Math.floor((normalized.length * 3) / 4) - padding);
 }
 
 function isLikelyBase64Payload(value: string): boolean {

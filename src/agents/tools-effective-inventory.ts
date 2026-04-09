@@ -1,6 +1,9 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { getChannelAgentToolMeta } from "./channel-tools.js";
 import { resolveModel } from "./pi-embedded-runner/model.js";
@@ -63,7 +66,7 @@ export type ResolveEffectiveToolInventoryParams = {
 };
 
 function resolveEffectiveToolLabel(tool: AnyAgentTool): string {
-  const rawLabel = typeof tool.label === "string" ? tool.label.trim() : "";
+  const rawLabel = normalizeOptionalString(tool.label) ?? "";
   if (
     rawLabel &&
     normalizeLowercaseStringOrEmpty(rawLabel) !== normalizeLowercaseStringOrEmpty(tool.name)
@@ -74,7 +77,7 @@ function resolveEffectiveToolLabel(tool: AnyAgentTool): string {
 }
 
 function resolveRawToolDescription(tool: AnyAgentTool): string {
-  return typeof tool.description === "string" ? tool.description.trim() : "";
+  return normalizeOptionalString(tool.description) ?? "";
 }
 
 function summarizeToolDescription(tool: AnyAgentTool): string {

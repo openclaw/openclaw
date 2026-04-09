@@ -30,7 +30,10 @@ import { applyVerboseOverride, parseVerboseOverride } from "../sessions/level-ov
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import {
   ErrorCodes,
   type ErrorShape,
@@ -109,7 +112,7 @@ export async function applySessionsPatchToStore(params: {
         return invalid("spawnedBy cannot be cleared once set");
       }
     } else if (raw !== undefined) {
-      const trimmed = String(raw).trim();
+      const trimmed = normalizeOptionalString(String(raw)) ?? "";
       if (!trimmed) {
         return invalid("invalid spawnedBy: empty");
       }
@@ -133,7 +136,7 @@ export async function applySessionsPatchToStore(params: {
       if (!supportsSpawnLineage(storeKey)) {
         return invalid("spawnedWorkspaceDir is only supported for subagent:* or acp:* sessions");
       }
-      const trimmed = String(raw).trim();
+      const trimmed = normalizeOptionalString(String(raw)) ?? "";
       if (!trimmed) {
         return invalid("invalid spawnedWorkspaceDir: empty");
       }
@@ -237,8 +240,9 @@ export async function applySessionsPatchToStore(params: {
     } else if (raw !== undefined) {
       const normalized = normalizeThinkLevel(String(raw));
       if (!normalized) {
-        const hintProvider = existing?.providerOverride?.trim() || resolvedDefault.provider;
-        const hintModel = existing?.modelOverride?.trim() || resolvedDefault.model;
+        const hintProvider =
+          normalizeOptionalString(existing?.providerOverride) || resolvedDefault.provider;
+        const hintModel = normalizeOptionalString(existing?.modelOverride) || resolvedDefault.model;
         return invalid(
           `invalid thinkingLevel (use ${formatThinkingLevels(hintProvider, hintModel, "|")})`,
         );
@@ -359,7 +363,7 @@ export async function applySessionsPatchToStore(params: {
     if (raw === null) {
       delete next.execNode;
     } else if (raw !== undefined) {
-      const trimmed = String(raw).trim();
+      const trimmed = normalizeOptionalString(String(raw)) ?? "";
       if (!trimmed) {
         return invalid("invalid execNode: empty");
       }
@@ -380,7 +384,7 @@ export async function applySessionsPatchToStore(params: {
         markLiveSwitchPending: true,
       });
     } else if (raw !== undefined) {
-      const trimmed = String(raw).trim();
+      const trimmed = normalizeOptionalString(String(raw)) ?? "";
       if (!trimmed) {
         return invalid("invalid model: empty");
       }

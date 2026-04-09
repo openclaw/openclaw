@@ -262,6 +262,99 @@ function collectAllowedValuesFromUnknownIssue(issue: unknown): unknown[] {
   return collection.values;
 }
 
+function isBindingsIssuePath(pathSegments: readonly ConfigPathSegment[]): boolean {
+  return pathSegments[0] === "bindings" && typeof pathSegments[1] === "number";
+}
+
+function isRouteTypeMismatchIssue(issue: UnknownIssueRecord): boolean {
+  const issuePath = toConfigPathSegments(issue.path);
+  if (issuePath.length !== 1 || issuePath[0] !== "type") {
+    return false;
+  }
+  if (issue.code !== "invalid_value" || !Array.isArray(issue.values)) {
+    return false;
+  }
+  return issue.values.includes("route");
+}
+
+function extractBindingsSpecificUnionIssue(
+  record: UnknownIssueRecord,
+  parentPath: string,
+): ConfigValidationIssue | null {
+  if (!isBindingsIssuePath(toConfigPathSegments(record.path)) || !Array.isArray(record.errors)) {
+    return null;
+  }
+
+  let matchingBranchIssue: UnknownIssueRecord | null = null;
+  let matchingBranchIsUnrecognized = false;
+  let matchingBranchPathLen = -1;
+  let sawRouteTypeMismatch = false;
+
+  for (const errGroup of record.errors) {
+    if (!Array.isArray(errGroup)) {
+      continue;
+    }
+
+    const branch = errGroup
+      .map((issue) => toIssueRecord(issue))
+      .filter(Boolean) as UnknownIssueRecord[];
+    if (branch.length === 0) {
+      continue;
+    }
+
+    if (branch.some((issue) => isRouteTypeMismatchIssue(issue))) {
+      sawRouteTypeMismatch = true;
+      continue;
+    }
+
+    let branchBestIssue: UnknownIssueRecord | null = null;
+    let branchBestIsUnrecognized = false;
+    let branchBestPathLen = -1;
+
+    for (const issue of branch) {
+      const issueCode = typeof issue.code === "string" ? issue.code : "";
+      const issuePathLen = toConfigPathSegments(issue.path).length;
+      const issueIsUnrecognized = issueCode === "unrecognized_keys";
+      const issueIsBetter =
+        issuePathLen > branchBestPathLen
+          ? true
+          : issuePathLen === branchBestPathLen && issueIsUnrecognized && !branchBestIsUnrecognized;
+
+      if (issueIsBetter) {
+        branchBestIssue = issue;
+        branchBestIsUnrecognized = issueIsUnrecognized;
+        branchBestPathLen = issuePathLen;
+      }
+    }
+
+    if (!branchBestIssue) {
+      continue;
+    }
+
+    if (matchingBranchIssue) {
+      return null;
+    }
+
+    matchingBranchIssue = branchBestIssue;
+    matchingBranchIsUnrecognized = branchBestIsUnrecognized;
+    matchingBranchPathLen = branchBestPathLen;
+  }
+
+  if (!sawRouteTypeMismatch || !matchingBranchIssue) {
+    return null;
+  }
+
+  if (matchingBranchPathLen === 0 && !matchingBranchIsUnrecognized) {
+    return null;
+  }
+
+  const subPath = formatConfigPath(toConfigPathSegments(matchingBranchIssue.path));
+  const fullPath = parentPath && subPath ? `${parentPath}.${subPath}` : parentPath || subPath;
+  const subMessage =
+    typeof matchingBranchIssue.message === "string" ? matchingBranchIssue.message : "Invalid input";
+  return { path: fullPath, message: subMessage };
+}
+
 function isObjectSecretRefCandidate(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -354,7 +447,23 @@ function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   const record = toIssueRecord(issue);
   const path = formatConfigPath(toConfigPathSegments(record?.path));
   const message = typeof record?.message === "string" ? record.message : "Invalid input";
+
   const allowedValuesSummary = summarizeAllowedValues(collectAllowedValuesFromUnknownIssue(issue));
+
+  // Bindings use a plain union because legacy route bindings may omit `type`.
+  // When an explicit ACP binding fails strict-object checks, Zod collapses the
+  // useful ACP branch issue behind a generic union-level "Invalid input".
+  if (
+    record &&
+    typeof record.code === "string" &&
+    record.code === "invalid_union" &&
+    !allowedValuesSummary
+  ) {
+    const betterIssue = extractBindingsSpecificUnionIssue(record, path);
+    if (betterIssue) {
+      return betterIssue;
+    }
+  }
 
   if (!allowedValuesSummary) {
     return { path, message };
@@ -968,11 +1077,7 @@ function validateConfigObjectWithPluginsBase(
     }
     seenPlugins.add(pluginId);
     const entry = normalizedPlugins.entries[pluginId];
-    const entryExists = entry !== undefined;
     const entryHasConfig = Boolean(entry?.config);
-    const shouldReplacePluginConfig = opts.applyDefaults
-      ? entryExists || entryHasConfig
-      : entryHasConfig;
 
     const activationState = resolveEffectivePluginActivationState({
       id: pluginId,
@@ -999,7 +1104,8 @@ function validateConfigObjectWithPluginsBase(
       }
     }
 
-    const shouldValidate = enabled || entryExists || entryHasConfig;
+    const shouldReplacePluginConfig = entryHasConfig || (opts.applyDefaults && enabled);
+    const shouldValidate = enabled || entryHasConfig;
     if (shouldValidate) {
       if (record.configSchema) {
         const res = validateJsonSchemaValue({

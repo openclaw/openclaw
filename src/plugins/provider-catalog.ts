@@ -1,6 +1,9 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { ModelProviderConfig } from "../config/types.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import type { ProviderCatalogContext, ProviderCatalogResult } from "./types.js";
 
 export function findCatalogTemplate(params: {
@@ -37,8 +40,7 @@ export async function buildSingleProviderApiKeyCatalog(params: {
           ([configuredProviderId]) => normalizeProviderId(configuredProviderId) === providerId,
         )?.[1]
       : undefined;
-  const explicitBaseUrl =
-    typeof explicitProvider?.baseUrl === "string" ? explicitProvider.baseUrl.trim() : "";
+  const explicitBaseUrl = normalizeOptionalString(explicitProvider?.baseUrl) ?? "";
 
   return {
     provider: {

@@ -6,6 +6,21 @@ export type Conversation = {
   title?: string;
 };
 
+export type Attachment = {
+  id: string;
+  kind: "image" | "video" | "audio" | "file";
+  mimeType: string;
+  fileName?: string;
+  inline?: boolean;
+  url?: string;
+  contentBase64?: string;
+  width?: number;
+  height?: number;
+  durationMs?: number;
+  altText?: string;
+  transcript?: string;
+};
+
 export type Thread = {
   id: string;
   conversationId: string;
@@ -24,6 +39,7 @@ export type Message = {
   threadTitle?: string;
   deleted?: boolean;
   editedAt?: number;
+  attachments?: Attachment[];
   reactions: Array<{ emoji: string; senderId: string }>;
 };
 
@@ -196,6 +212,56 @@ function esc(text: string) {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
+}
+
+function attachmentSourceUrl(attachment: Attachment): string | null {
+  if (attachment.url?.trim()) {
+    return attachment.url;
+  }
+  if (attachment.contentBase64?.trim()) {
+    return `data:${attachment.mimeType};base64,${attachment.contentBase64}`;
+  }
+  return null;
+}
+
+function renderMessageAttachments(message: Message): string {
+  const attachments = message.attachments ?? [];
+  if (attachments.length === 0) {
+    return "";
+  }
+  const items = attachments
+    .map((attachment) => {
+      const sourceUrl = attachmentSourceUrl(attachment);
+      const label = attachment.fileName || attachment.altText || attachment.mimeType;
+      if (attachment.kind === "image" && sourceUrl) {
+        return `<figure class="msg-attachment msg-attachment-image">
+          <img src="${esc(sourceUrl)}" alt="${esc(attachment.altText || label)}" loading="lazy" />
+          <figcaption>${esc(label)}</figcaption>
+        </figure>`;
+      }
+      if (attachment.kind === "video" && sourceUrl) {
+        return `<figure class="msg-attachment msg-attachment-video">
+          <video controls preload="metadata" src="${esc(sourceUrl)}"></video>
+          <figcaption>${esc(label)}</figcaption>
+        </figure>`;
+      }
+      if (attachment.kind === "audio" && sourceUrl) {
+        return `<figure class="msg-attachment msg-attachment-audio">
+          <audio controls preload="metadata" src="${esc(sourceUrl)}"></audio>
+          <figcaption>${esc(label)}</figcaption>
+        </figure>`;
+      }
+      const transcript = attachment.transcript?.trim()
+        ? `<div class="msg-attachment-transcript">${esc(attachment.transcript)}</div>`
+        : "";
+      const href = sourceUrl ? ` href="${esc(sourceUrl)}" target="_blank" rel="noreferrer"` : "";
+      return `<div class="msg-attachment msg-attachment-file">
+        <a class="msg-attachment-link"${href}>${esc(label)}</a>
+        ${transcript}
+      </div>`;
+    })
+    .join("");
+  return `<div class="msg-attachments">${items}</div>`;
 }
 
 const MOCK_MODELS: RunnerModelOption[] = [
@@ -626,6 +692,7 @@ function renderMessage(m: Message): string {
           <span class="msg-time">${formatTime(m.timestamp)}</span>
         </div>
         <div class="msg-text">${esc(m.text)}</div>
+        ${renderMessageAttachments(m)}
         ${metaTags.length > 0 || reactions ? `<div class="msg-meta">${metaTags.join("")}${reactions}</div>` : ""}
       </div>
     </div>`;

@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
-import { resolveManifestContractOwnerPluginId } from "../plugins/manifest-registry.js";
+import { createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import type {
   ResolverContext,
@@ -11,6 +11,11 @@ import { pushInactiveSurfaceWarning, pushWarning } from "./runtime-shared.js";
 import type { RuntimeWebDiagnostic, RuntimeWebDiagnosticCode } from "./runtime-web-tools.types.js";
 export { isRecord } from "./shared.js";
 import { isRecord } from "./shared.js";
+
+const loadResolveManifestContractOwnerPluginId = createLazyRuntimeNamedExport(
+  () => import("./runtime-web-tools-manifest.runtime.js"),
+  "resolveManifestContractOwnerPluginId",
+);
 
 type RuntimeWebWarningCode = Extract<RuntimeWebDiagnosticCode, SecretResolverWarningCode>;
 export type SecretResolutionResult<TSource extends string> = {
@@ -165,6 +170,7 @@ export async function resolveRuntimeWebProviderSurface<
 ): Promise<RuntimeWebProviderSurface<TProvider>> {
   let configuredBundledPluginId = params.configuredBundledPluginIdHint;
   if (!configuredBundledPluginId && params.rawProvider) {
+    const resolveManifestContractOwnerPluginId = await loadResolveManifestContractOwnerPluginId();
     configuredBundledPluginId = resolveManifestContractOwnerPluginId({
       contract: params.contract,
       value: params.rawProvider,
@@ -187,6 +193,7 @@ export async function resolveRuntimeWebProviderSurface<
     configuredBundledPluginId = undefined;
   }
   if (params.rawProvider && !configuredBundledPluginId) {
+    const resolveManifestContractOwnerPluginId = await loadResolveManifestContractOwnerPluginId();
     configuredBundledPluginId = resolveManifestContractOwnerPluginId({
       contract: params.contract,
       value: params.rawProvider,

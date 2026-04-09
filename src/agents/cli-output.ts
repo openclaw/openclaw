@@ -103,6 +103,42 @@ function parseJsonRecordCandidates(raw: string): Record<string, unknown>[] {
   return parsedRecords;
 }
 
+function readNestedErrorMessage(parsed: Record<string, unknown>): string | undefined {
+  if (isRecord(parsed.error)) {
+    const errorMessage = readNestedErrorMessage(parsed.error);
+    if (errorMessage) {
+      return errorMessage;
+    }
+  }
+  if (typeof parsed.message === "string") {
+    const trimmed = parsed.message.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  if (typeof parsed.error === "string") {
+    const trimmed = parsed.error.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return undefined;
+}
+
+function unwrapCliErrorText(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return "";
+  }
+  for (const parsed of parseJsonRecordCandidates(trimmed)) {
+    const nested = readNestedErrorMessage(parsed);
+    if (nested) {
+      return nested;
+    }
+  }
+  return trimmed;
+}
+
 function toCliUsage(raw: Record<string, unknown>): CliUsage | undefined {
   const pick = (key: string) =>
     typeof raw[key] === "number" && raw[key] > 0 ? raw[key] : undefined;
@@ -171,6 +207,35 @@ function collectCliText(value: unknown): string {
   if (isRecord(value.message)) {
     return collectCliText(value.message);
   }
+  return "";
+}
+
+function collectExplicitCliErrorText(parsed: Record<string, unknown>): string {
+  const nested = readNestedErrorMessage(parsed);
+  if (nested) {
+    return unwrapCliErrorText(nested);
+  }
+
+  if (parsed.is_error === true && typeof parsed.result === "string") {
+    return unwrapCliErrorText(parsed.result);
+  }
+
+  if (parsed.type === "assistant") {
+    const text = collectCliText(parsed.message);
+    if (/^\s*API Error:/i.test(text)) {
+      return unwrapCliErrorText(text);
+    }
+  }
+
+  if (parsed.type === "error") {
+    const text =
+      collectCliText(parsed.message) ||
+      collectCliText(parsed.content) ||
+      collectCliText(parsed.result) ||
+      collectCliText(parsed);
+    return unwrapCliErrorText(text);
+  }
+
   return "";
 }
 
@@ -437,4 +502,21 @@ export function parseCliOutput(params: {
       sessionId: params.fallbackSessionId,
     }
   );
+}
+
+export function extractCliErrorMessage(raw: string): string | null {
+  const parsedRecords = parseJsonRecordCandidates(raw);
+  if (parsedRecords.length === 0) {
+    return null;
+  }
+
+  let errorText = "";
+  for (const parsed of parsedRecords) {
+    const next = collectExplicitCliErrorText(parsed);
+    if (next) {
+      errorText = next;
+    }
+  }
+
+  return errorText || null;
 }

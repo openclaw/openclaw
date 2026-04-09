@@ -64,6 +64,7 @@ export type ShortTermRecallEntry = {
   snippet: string;
   recallCount: number;
   dailyCount: number;
+  groundedCount: number;
   totalScore: number;
   maxScore: number;
   firstRecalledAt: string;
@@ -71,6 +72,7 @@ export type ShortTermRecallEntry = {
   queryHashes: string[];
   recallDays: string[];
   conceptTags: string[];
+  claimHash?: string;
   promotedAt?: string;
 };
 
@@ -112,10 +114,12 @@ export type PromotionCandidate = {
   snippet: string;
   recallCount: number;
   dailyCount?: number;
+  groundedCount?: number;
   signalCount?: number;
   avgScore: number;
   maxScore: number;
   uniqueQueries: number;
+  claimHash?: string;
   promotedAt?: string;
   firstRecalledAt: string;
   lastRecalledAt: string;
@@ -232,13 +236,19 @@ function normalizeMemoryPath(rawPath: string): string {
   return rawPath.replaceAll("\\", "/").replace(/^\.\//, "");
 }
 
+function buildClaimHash(snippet: string): string {
+  return createHash("sha1").update(normalizeSnippet(snippet)).digest("hex").slice(0, 12);
+}
+
 function buildEntryKey(result: {
   path: string;
   startLine: number;
   endLine: number;
   source: string;
+  claimHash?: string;
 }): string {
-  return `${result.source}:${normalizeMemoryPath(result.path)}:${result.startLine}:${result.endLine}`;
+  const base = `${result.source}:${normalizeMemoryPath(result.path)}:${result.startLine}:${result.endLine}`;
+  return result.claimHash ? `${base}:${result.claimHash}` : base;
 }
 
 function hashQuery(query: string): string {
@@ -315,6 +325,18 @@ function normalizeDistinctStrings(values: unknown[], limit: number): string[] {
   return normalized;
 }
 
+function totalSignalCountForEntry(entry: {
+  recallCount?: number;
+  dailyCount?: number;
+  groundedCount?: number;
+}): number {
+  return (
+    Math.max(0, Math.floor(entry.recallCount ?? 0)) +
+    Math.max(0, Math.floor(entry.dailyCount ?? 0)) +
+    Math.max(0, Math.floor(entry.groundedCount ?? 0))
+  );
+}
+
 function calculateConsolidationComponent(recallDays: string[]): number {
   if (recallDays.length === 0) {
     return 0;
@@ -371,6 +393,7 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
 
       const recallCount = Math.max(0, Math.floor(Number(entry.recallCount) || 0));
       const dailyCount = Math.max(0, Math.floor(Number(entry.dailyCount) || 0));
+      const groundedCount = Math.max(0, Math.floor(Number(entry.groundedCount) || 0));
       const totalScore = Math.max(0, Number(entry.totalScore) || 0);
       const maxScore = clampScore(Number(entry.maxScore) || 0);
       const firstRecalledAt =
@@ -378,6 +401,10 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
       const lastRecalledAt =
         typeof entry.lastRecalledAt === "string" ? entry.lastRecalledAt : nowIso;
       const promotedAt = typeof entry.promotedAt === "string" ? entry.promotedAt : undefined;
+      const claimHash =
+        typeof entry.claimHash === "string" && entry.claimHash.trim().length > 0
+          ? entry.claimHash.trim()
+          : undefined;
       const snippet = typeof entry.snippet === "string" ? normalizeSnippet(entry.snippet) : "";
       const queryHashes = Array.isArray(entry.queryHashes)
         ? normalizeDistinctStrings(entry.queryHashes, MAX_QUERY_HASHES)
@@ -396,7 +423,8 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
           )
         : deriveConceptTags({ path: entryPath, snippet });
 
-      const normalizedKey = key || buildEntryKey({ path: entryPath, startLine, endLine, source });
+      const normalizedKey =
+        key || buildEntryKey({ path: entryPath, startLine, endLine, source, claimHash });
       entries[normalizedKey] = {
         key: normalizedKey,
         path: entryPath,
@@ -406,6 +434,7 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
         snippet,
         recallCount,
         dailyCount,
+        groundedCount,
         totalScore,
         maxScore,
         firstRecalledAt,
@@ -413,6 +442,7 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
         queryHashes,
         recallDays: recallDays.slice(-MAX_RECALL_DAYS),
         conceptTags,
+        ...(claimHash ? { claimHash } : {}),
         ...(promotedAt ? { promotedAt } : {}),
       };
     }
@@ -568,7 +598,7 @@ function isProcessLikelyAlive(pid: number): boolean {
     process.kill(pid, 0);
     return true;
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    const code = (err as NodeJS.ErrnoException).code;
     if (code === "ESRCH") {
       return false;
     }
@@ -621,9 +651,8 @@ async function withShortTermLock<T>(workspaceDir: string, task: () => Promise<T>
     const startedAt = Date.now();
 
     while (true) {
-      let lockHandle: Awaited<ReturnType<typeof fs.open>> | undefined;
       try {
-        lockHandle = await fs.open(lockPath, "wx");
+        const lockHandle = await fs.open(lockPath, "wx");
         await lockHandle
           .writeFile(`${process.pid}:${Date.now()}\n`, "utf-8")
           .catch(() => undefined);
@@ -812,10 +841,21 @@ export async function recordShortTermRecalls(params: {
     const store = await readStore(workspaceDir, nowIso);
 
     for (const result of relevant) {
-      const key = buildEntryKey(result);
       const normalizedPath = normalizeMemoryPath(result.path);
-      const existing = store.entries[key];
       const snippet = normalizeSnippet(result.snippet);
+      const claimHash = snippet ? buildClaimHash(snippet) : undefined;
+      const groundedKey = claimHash
+        ? buildEntryKey({
+            path: normalizedPath,
+            startLine: Math.max(1, Math.floor(result.startLine)),
+            endLine: Math.max(1, Math.floor(result.endLine)),
+            source: "memory",
+            claimHash,
+          })
+        : null;
+      const baseKey = buildEntryKey(result);
+      const key = groundedKey && store.entries[groundedKey] ? groundedKey : baseKey;
+      const existing = store.entries[key];
       const score = clampScore(result.score);
       const recallDaysBase = existing?.recallDays ?? [];
       const queryHashesBase = existing?.queryHashes ?? [];
@@ -846,6 +886,7 @@ export async function recordShortTermRecalls(params: {
         snippet: snippet || existing?.snippet || "",
         recallCount,
         dailyCount,
+        groundedCount: Math.max(0, Math.floor(existing?.groundedCount ?? 0)),
         totalScore,
         maxScore,
         firstRecalledAt: existing?.firstRecalledAt ?? nowIso,
@@ -853,6 +894,7 @@ export async function recordShortTermRecalls(params: {
         queryHashes,
         recallDays,
         conceptTags: conceptTags.length > 0 ? conceptTags : (existing?.conceptTags ?? []),
+        ...(existing?.claimHash ? { claimHash: existing.claimHash } : {}),
         ...(existing?.promotedAt ? { promotedAt: existing.promotedAt } : {}),
       };
     }
@@ -871,6 +913,129 @@ export async function recordShortTermRecalls(params: {
         score: clampScore(result.score),
       })),
     });
+  });
+}
+
+export async function recordGroundedShortTermCandidates(params: {
+  workspaceDir?: string;
+  query: string;
+  items: Array<{
+    path: string;
+    startLine: number;
+    endLine: number;
+    snippet: string;
+    score: number;
+    query?: string;
+    signalCount?: number;
+    dayBucket?: string;
+  }>;
+  dedupeByQueryPerDay?: boolean;
+  dayBucket?: string;
+  nowMs?: number;
+  timezone?: string;
+}): Promise<void> {
+  const workspaceDir = params.workspaceDir?.trim();
+  if (!workspaceDir) {
+    return;
+  }
+  const query = params.query.trim();
+  if (!query) {
+    return;
+  }
+  const relevant = params.items
+    .map((item) => {
+      const snippet = normalizeSnippet(item.snippet);
+      const normalizedPath = normalizeMemoryPath(item.path);
+      if (
+        !snippet ||
+        !normalizedPath ||
+        !isShortTermMemoryPath(normalizedPath) ||
+        !Number.isFinite(item.startLine) ||
+        !Number.isFinite(item.endLine)
+      ) {
+        return null;
+      }
+      return {
+        path: normalizedPath,
+        startLine: Math.max(1, Math.floor(item.startLine)),
+        endLine: Math.max(1, Math.floor(item.endLine)),
+        snippet,
+        score: clampScore(item.score),
+        query: normalizeSnippet(item.query ?? query),
+        signalCount: Math.max(1, Math.floor(item.signalCount ?? 1)),
+        dayBucket: normalizeIsoDay(item.dayBucket ?? params.dayBucket ?? ""),
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== null);
+  if (relevant.length === 0) {
+    return;
+  }
+
+  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  const fallbackDayBucket = formatMemoryDreamingDay(nowMs, params.timezone);
+  await withShortTermLock(workspaceDir, async () => {
+    const store = await readStore(workspaceDir, nowIso);
+
+    for (const item of relevant) {
+      const dayBucket = item.dayBucket ?? fallbackDayBucket;
+      const effectiveQuery = item.query || query;
+      if (!effectiveQuery) {
+        continue;
+      }
+      const queryHash = hashQuery(effectiveQuery);
+      const claimHash = buildClaimHash(item.snippet);
+      const key = buildEntryKey({
+        path: item.path,
+        startLine: item.startLine,
+        endLine: item.endLine,
+        source: "memory",
+        claimHash,
+      });
+      const existing = store.entries[key];
+      const recallDaysBase = existing?.recallDays ?? [];
+      const queryHashesBase = existing?.queryHashes ?? [];
+      const dedupeSignal =
+        Boolean(params.dedupeByQueryPerDay) &&
+        queryHashesBase.includes(queryHash) &&
+        recallDaysBase.includes(dayBucket);
+      const groundedCount = Math.max(
+        0,
+        Math.floor(existing?.groundedCount ?? 0) + (dedupeSignal ? 0 : item.signalCount),
+      );
+      const totalScore = Math.max(
+        0,
+        (existing?.totalScore ?? 0) + (dedupeSignal ? 0 : item.score * item.signalCount),
+      );
+      const maxScore = Math.max(existing?.maxScore ?? 0, dedupeSignal ? 0 : item.score);
+      const queryHashes = mergeQueryHashes(existing?.queryHashes ?? [], queryHash);
+      const recallDays = mergeRecentDistinct(recallDaysBase, dayBucket, MAX_RECALL_DAYS);
+      const conceptTags = deriveConceptTags({ path: item.path, snippet: item.snippet });
+
+      store.entries[key] = {
+        key,
+        path: item.path,
+        startLine: item.startLine,
+        endLine: item.endLine,
+        source: "memory",
+        snippet: item.snippet,
+        recallCount: Math.max(0, Math.floor(existing?.recallCount ?? 0)),
+        dailyCount: Math.max(0, Math.floor(existing?.dailyCount ?? 0)),
+        groundedCount,
+        totalScore,
+        maxScore,
+        firstRecalledAt: existing?.firstRecalledAt ?? nowIso,
+        lastRecalledAt: nowIso,
+        queryHashes,
+        recallDays,
+        conceptTags: conceptTags.length > 0 ? conceptTags : (existing?.conceptTags ?? []),
+        claimHash,
+        ...(existing?.promotedAt ? { promotedAt: existing.promotedAt } : {}),
+      };
+    }
+
+    store.updatedAt = nowIso;
+    await writeStore(workspaceDir, store);
   });
 }
 
@@ -970,7 +1135,8 @@ export async function rankShortTermPromotionCandidates(
     }
     const recallCount = Math.max(0, Math.floor(entry.recallCount ?? 0));
     const dailyCount = Math.max(0, Math.floor(entry.dailyCount ?? 0));
-    const signalCount = recallCount + dailyCount;
+    const groundedCount = Math.max(0, Math.floor(entry.groundedCount ?? 0));
+    const signalCount = totalSignalCountForEntry(entry);
     if (signalCount <= 0) {
       continue;
     }
@@ -996,7 +1162,10 @@ export async function rankShortTermPromotionCandidates(
     const recency = clampScore(calculateRecencyComponent(ageDays, halfLifeDays));
     const recallDays = entry.recallDays ?? [];
     const conceptTags = entry.conceptTags ?? [];
-    const consolidation = calculateConsolidationComponent(recallDays);
+    const consolidation = Math.max(
+      calculateConsolidationComponent(recallDays),
+      clampScore(groundedCount / 3),
+    );
     const conceptual = calculateConceptualComponent(conceptTags);
 
     const phaseBoost = calculatePhaseSignalBoost(phaseSignals.entries[entry.key], nowMs);
@@ -1022,10 +1191,12 @@ export async function rankShortTermPromotionCandidates(
       snippet: entry.snippet,
       recallCount,
       dailyCount,
+      groundedCount,
       signalCount,
       avgScore,
       maxScore: clampScore(entry.maxScore),
       uniqueQueries,
+      ...(entry.claimHash ? { claimHash: entry.claimHash } : {}),
       promotedAt: entry.promotedAt,
       firstRecalledAt: entry.firstRecalledAt,
       lastRecalledAt: entry.lastRecalledAt,
@@ -1300,9 +1471,15 @@ export async function applyShortTermPromotions(
         if (candidate.score < minScore) {
           return false;
         }
-        const candidateSignalCount =
+        const candidateSignalCount = Math.max(
+          0,
           candidate.signalCount ??
-          Math.max(0, candidate.recallCount) + Math.max(0, candidate.dailyCount ?? 0);
+            totalSignalCountForEntry({
+              recallCount: candidate.recallCount,
+              dailyCount: candidate.dailyCount,
+              groundedCount: candidate.groundedCount,
+            }),
+        );
         if (candidateSignalCount < minRecallCount) {
           return false;
         }
@@ -1606,6 +1783,10 @@ export async function repairShortTermPromotionArtifacts(params: {
                 0,
                 Math.floor((entry as { dailyCount?: number }).dailyCount ?? 0),
               ),
+              groundedCount: Math.max(
+                0,
+                Math.floor((entry as { groundedCount?: number }).groundedCount ?? 0),
+              ),
               queryHashes: (entry.queryHashes ?? []).slice(-MAX_QUERY_HASHES),
               recallDays: mergeRecentDistinct(entry.recallDays ?? [], fallbackDay, MAX_RECALL_DAYS),
               conceptTags: conceptTags.length > 0 ? conceptTags : (entry.conceptTags ?? []),
@@ -1641,6 +1822,50 @@ export async function repairShortTermPromotionArtifacts(params: {
   };
 }
 
+export async function removeGroundedShortTermCandidates(params: {
+  workspaceDir: string;
+}): Promise<{ removed: number; storePath: string }> {
+  const workspaceDir = params.workspaceDir.trim();
+  const storePath = resolveStorePath(workspaceDir);
+  const nowIso = new Date().toISOString();
+  let removed = 0;
+
+  await withShortTermLock(workspaceDir, async () => {
+    const [store, phaseSignals] = await Promise.all([
+      readStore(workspaceDir, nowIso),
+      readPhaseSignalStore(workspaceDir, nowIso),
+    ]);
+
+    for (const [key, entry] of Object.entries(store.entries)) {
+      if (
+        Math.max(0, Math.floor(entry.groundedCount ?? 0)) > 0 &&
+        Math.max(0, Math.floor(entry.recallCount ?? 0)) === 0 &&
+        Math.max(0, Math.floor(entry.dailyCount ?? 0)) === 0
+      ) {
+        delete store.entries[key];
+        removed += 1;
+      }
+    }
+
+    for (const key of Object.keys(phaseSignals.entries)) {
+      if (!Object.hasOwn(store.entries, key)) {
+        delete phaseSignals.entries[key];
+      }
+    }
+
+    if (removed > 0) {
+      store.updatedAt = nowIso;
+      phaseSignals.updatedAt = nowIso;
+      await Promise.all([
+        writeStore(workspaceDir, store),
+        writePhaseSignalStore(workspaceDir, phaseSignals),
+      ]);
+    }
+  });
+
+  return { removed, storePath };
+}
+
 export const __testing = {
   parseLockOwnerPid,
   canStealStaleLock,
@@ -1648,4 +1873,6 @@ export const __testing = {
   deriveConceptTags,
   calculateConsolidationComponent,
   calculatePhaseSignalBoost,
+  buildClaimHash,
+  totalSignalCountForEntry,
 };

@@ -11,7 +11,10 @@ import {
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "../../../routing/session-key.js";
-import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../../shared/string-coerce.js";
 import { asObjectRecord } from "./object.js";
 
 type ChannelMissingDefaultAccountContext = {
@@ -88,7 +91,7 @@ export function collectMissingDefaultAccountBindingWarnings(cfg: OpenClawConfig)
         continue;
       }
 
-      const rawAccountId = typeof match.accountId === "string" ? match.accountId.trim() : "";
+      const rawAccountId = normalizeOptionalString(match.accountId) ?? "";
       if (!rawAccountId) {
         continue;
       }
