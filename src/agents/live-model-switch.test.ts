@@ -27,6 +27,26 @@ vi.mock("./pi-embedded-runner/runs.js", () => ({
 }));
 
 vi.mock("./model-selection.js", () => ({
+  normalizeStoredOverrideModel: (params: {
+    providerOverride?: string;
+    modelOverride?: string;
+  }) => {
+    const providerOverride = params.providerOverride?.trim();
+    const modelOverride = params.modelOverride?.trim();
+    if (!providerOverride || !modelOverride) {
+      return {
+        providerOverride,
+        modelOverride,
+      };
+    }
+    const providerPrefix = `${providerOverride.toLowerCase()}/`;
+    return {
+      providerOverride,
+      modelOverride: modelOverride.toLowerCase().startsWith(providerPrefix)
+        ? modelOverride.slice(providerOverride.length + 1).trim() || modelOverride
+        : modelOverride,
+    };
+  },
   resolveDefaultModelForAgent: (...args: unknown[]) =>
     state.resolveDefaultModelForAgentMock(...args),
   resolvePersistedSelectedModelRef: (...args: unknown[]) =>
@@ -230,6 +250,85 @@ describe("live model switch", () => {
       model: "anthropic/claude-haiku-4.5",
       authProfileId: undefined,
       authProfileIdSource: undefined,
+    });
+  });
+
+  it("keeps nested model ids under the persisted provider override", async () => {
+    state.loadSessionStoreMock.mockReturnValue({
+      main: {
+        providerOverride: "nvidia",
+        modelOverride: "moonshotai/kimi-k2.5",
+      },
+    });
+
+    const { resolveLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      resolveLiveSessionModelSelection({
+        cfg: { session: { store: "/tmp/custom-store.json" } },
+        sessionKey: "main",
+        agentId: "reply",
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+      }),
+    ).toEqual({
+      provider: "nvidia",
+      model: "moonshotai/kimi-k2.5",
+      authProfileId: undefined,
+      authProfileIdSource: undefined,
+    });
+  });
+
+  it("strips duplicated provider prefixes from persisted overrides", async () => {
+    state.loadSessionStoreMock.mockReturnValue({
+      main: {
+        providerOverride: "openai-codex",
+        modelOverride: "openai-codex/gpt-5.4",
+      },
+    });
+
+    const { resolveLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      resolveLiveSessionModelSelection({
+        cfg: { session: { store: "/tmp/custom-store.json" } },
+        sessionKey: "main",
+        agentId: "reply",
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+      }),
+    ).toEqual({
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      authProfileId: undefined,
+      authProfileIdSource: undefined,
+    });
+  });
+
+  it("routes normalized overrides back through persisted ref resolution", async () => {
+    state.loadSessionStoreMock.mockReturnValue({
+      main: {
+        providerOverride: "z-ai",
+        modelOverride: "z-ai/deepseek-chat",
+      },
+    });
+
+    const { resolveLiveSessionModelSelection } = await loadModule();
+
+    resolveLiveSessionModelSelection({
+      cfg: { session: { store: "/tmp/custom-store.json" } },
+      sessionKey: "main",
+      agentId: "reply",
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-6",
+    });
+
+    expect(state.resolvePersistedSelectedModelRefMock).toHaveBeenCalledWith({
+      defaultProvider: "anthropic",
+      runtimeProvider: undefined,
+      runtimeModel: undefined,
+      overrideProvider: "z-ai",
+      overrideModel: "deepseek-chat",
     });
   });
 
