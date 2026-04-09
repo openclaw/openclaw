@@ -26,6 +26,7 @@ import {
 
 type StepFunRegion = "cn" | "intl";
 type StepFunSurface = "standard" | "plan";
+const STEPFUN_PROVIDER_IDS = [STEPFUN_PROVIDER_ID, STEPFUN_PLAN_PROVIDER_ID] as const;
 
 function trimExplicitBaseUrl(ctx: ProviderCatalogContext, providerId: string): string | undefined {
   const explicitProvider = ctx.config.models?.providers?.[providerId];
@@ -65,6 +66,52 @@ function inferRegionFromProfileId(profileId: string | undefined): StepFunRegion 
   return undefined;
 }
 
+function inferLatestConfiguredRegion(ctx: ProviderCatalogContext): StepFunRegion | undefined {
+  const configuredProfiles = ctx.config.auth?.profiles;
+  if (!configuredProfiles || typeof configuredProfiles !== "object") {
+    return undefined;
+  }
+
+  const normalizedProviderIds = new Set(STEPFUN_PROVIDER_IDS.map((id) => id.toLowerCase()));
+  const configuredOrder = ctx.config.auth?.order;
+  if (configuredOrder && typeof configuredOrder === "object") {
+    for (const providerId of STEPFUN_PROVIDER_IDS) {
+      const matchingOrder = Object.entries(configuredOrder).find(
+        ([key]) => key.trim().toLowerCase() === providerId,
+      )?.[1];
+      if (!Array.isArray(matchingOrder)) {
+        continue;
+      }
+      for (const profileId of matchingOrder) {
+        const region = inferRegionFromProfileId(typeof profileId === "string" ? profileId : "");
+        if (region) {
+          return region;
+        }
+      }
+    }
+  }
+
+  const matchingProfileIds = Object.entries(configuredProfiles)
+    .filter(([, profile]) => {
+      const provider =
+        profile && typeof profile === "object" && typeof profile.provider === "string"
+          ? profile.provider.trim().toLowerCase()
+          : "";
+      return normalizedProviderIds.has(provider);
+    })
+    .map(([profileId]) => profileId)
+    .toReversed();
+
+  for (const profileId of matchingProfileIds) {
+    const region = inferRegionFromProfileId(profileId);
+    if (region) {
+      return region;
+    }
+  }
+
+  return undefined;
+}
+
 function inferRegionFromEnv(env: NodeJS.ProcessEnv): StepFunRegion | undefined {
   // Shared env-only setup needs one stable fallback region.
   if (env.STEPFUN_API_KEY?.trim()) {
@@ -101,6 +148,7 @@ function resolveStepFunCatalog(
   const region =
     inferRegionFromBaseUrl(explicitBaseUrl) ??
     inferRegionFromExplicitBaseUrls(ctx) ??
+    inferLatestConfiguredRegion(ctx) ??
     inferRegionFromProfileId(auth.profileId) ??
     inferRegionFromEnv(ctx.env);
   // Keep discovery working for legacy/manual auth profiles that resolved a
@@ -153,7 +201,7 @@ function createStepFunApiKeyMethod(params: {
       choiceHint: params.choiceHint,
       groupId: "stepfun",
       groupLabel: "StepFun",
-      groupHint: "Standard / Step Plan (China / Global)",
+      groupHint: "Standard / Step Plan (China / International)",
     },
   });
 }
@@ -185,13 +233,13 @@ export default definePluginEntry({
         createStepFunApiKeyMethod({
           providerId: STEPFUN_PROVIDER_ID,
           methodId: "standard-api-key-intl",
-          label: "StepFun Standard API key (Global/Intl)",
+          label: "StepFun Standard API key (International)",
           hint: "Endpoint: api.stepfun.ai/v1",
           region: "intl",
-          promptMessage: "Enter StepFun API key for global endpoints",
+          promptMessage: "Enter StepFun API key for international endpoints",
           defaultModel: STEPFUN_DEFAULT_MODEL_REF,
           choiceId: "stepfun-standard-api-key-intl",
-          choiceLabel: "StepFun Standard API key (Global/Intl)",
+          choiceLabel: "StepFun Standard API key (International)",
           choiceHint: "Endpoint: api.stepfun.ai/v1",
           applyConfig: applyStepFunStandardConfig,
         }),
@@ -228,13 +276,13 @@ export default definePluginEntry({
         createStepFunApiKeyMethod({
           providerId: STEPFUN_PLAN_PROVIDER_ID,
           methodId: "plan-api-key-intl",
-          label: "StepFun Step Plan API key (Global/Intl)",
+          label: "StepFun Step Plan API key (International)",
           hint: "Endpoint: api.stepfun.ai/step_plan/v1",
           region: "intl",
-          promptMessage: "Enter StepFun API key for global endpoints",
+          promptMessage: "Enter StepFun API key for international endpoints",
           defaultModel: STEPFUN_PLAN_DEFAULT_MODEL_REF,
           choiceId: "stepfun-plan-api-key-intl",
-          choiceLabel: "StepFun Step Plan API key (Global/Intl)",
+          choiceLabel: "StepFun Step Plan API key (International)",
           choiceHint: "Endpoint: api.stepfun.ai/step_plan/v1",
           applyConfig: applyStepFunPlanConfig,
         }),

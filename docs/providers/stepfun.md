@@ -21,12 +21,12 @@ The built-in catalogs currently differ by surface:
 ## Region and endpoint overview
 
 - China standard endpoint: `https://api.stepfun.com/v1`
-- Global standard endpoint: `https://api.stepfun.ai/v1`
+- International standard endpoint: `https://api.stepfun.ai/v1`
 - China Step Plan endpoint: `https://api.stepfun.com/step_plan/v1`
-- Global Step Plan endpoint: `https://api.stepfun.ai/step_plan/v1`
+- International Step Plan endpoint: `https://api.stepfun.ai/step_plan/v1`
 - Auth env var: `STEPFUN_API_KEY`
 
-Use a China key with the `.com` endpoints and a global key with the `.ai`
+Use a China key with the `.com` endpoints and an international key with the `.ai`
 endpoints.
 
 ## CLI setup
