@@ -975,10 +975,14 @@ export async function startGatewayServer(
   let lifecycleUnsub: (() => void) | null = null;
   try {
     try {
-      mcpServer = await startMcpLoopbackServer(0);
+      const configuredMcpLoopbackPort = cfgAtStart.gateway?.mcpLoopback?.port ?? 0;
+      mcpServer = await startMcpLoopbackServer(configuredMcpLoopbackPort);
       log.info(`MCP loopback server listening on http://127.0.0.1:${mcpServer.port}/mcp`);
     } catch (error) {
-      log.warn(`MCP loopback server failed to start: ${String(error)}`);
+      const portHint = configuredMcpLoopbackPort
+        ? ` (configured port ${configuredMcpLoopbackPort})`
+        : "";
+      log.warn(`MCP loopback server failed to start${portHint}: ${String(error)}`);
     }
 
     if (!minimalTestGateway) {

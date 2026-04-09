@@ -20498,6 +20498,23 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Control UI hosting settings including enablement, pathing, and browser-origin/auth hardening behavior. Keep UI exposure minimal and pair with strong auth controls before internet-facing deployments.",
           },
+          mcpLoopback: {
+            type: "object",
+            properties: {
+              port: {
+                type: "integer",
+                minimum: 0,
+                maximum: 65535,
+                title: "Gateway MCP Loopback Port",
+                description:
+                  "TCP port for the local MCP loopback server. Use 0 or leave unset for an ephemeral port, or set a fixed loopback port to keep MCP URLs stable across restarts and improve CLI session reuse.",
+              },
+            },
+            additionalProperties: false,
+            title: "Gateway MCP Loopback",
+            description:
+              "Local MCP loopback server settings used to expose OpenClaw tools to CLI backends over HTTP. Leave unset for ephemeral ports, or set a fixed port when session-bound MCP URLs must stay stable across gateway restarts.",
+          },
           auth: {
             type: "object",
             properties: {
@@ -22889,6 +22906,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "gateway.controlUi.enabled": {
       label: "Control UI Enabled",
       help: "Enables serving the gateway Control UI from the gateway HTTP process when true. Keep enabled for local administration, and disable when an external control surface replaces it.",
+      tags: ["network"],
+    },
+    "gateway.mcpLoopback": {
+      label: "Gateway MCP Loopback",
+      help: "Local MCP loopback server settings used to expose OpenClaw tools to CLI backends over HTTP. Leave unset for ephemeral ports, or set a fixed port when session-bound MCP URLs must stay stable across gateway restarts.",
+      tags: ["network"],
+    },
+    "gateway.mcpLoopback.port": {
+      label: "Gateway MCP Loopback Port",
+      help: "TCP port for the local MCP loopback server. Use 0 or leave unset for an ephemeral port, or set a fixed loopback port to keep MCP URLs stable across restarts and improve CLI session reuse.",
       tags: ["network"],
     },
     "gateway.auth": {

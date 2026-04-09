@@ -119,6 +119,16 @@ describe("mcp loopback server", () => {
     expect(getActiveMcpLoopbackRuntime()).toBeUndefined();
   });
 
+  it("uses the requested fixed port when configured", async () => {
+    const port = await getFreePortBlockWithPermissionFallback({
+      offsets: [0],
+      fallbackBase: 54_000,
+    });
+    server = await startMcpLoopbackServer(port);
+    expect(server.port).toBe(port);
+    expect(getActiveMcpLoopbackRuntime()?.port).toBe(port);
+  });
+
   it("returns 401 when the bearer token is missing", async () => {
     server = await startMcpLoopbackServer(0);
     const response = await sendRaw({

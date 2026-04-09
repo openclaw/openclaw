@@ -102,6 +102,15 @@ export type GatewayControlUiConfig = {
   dangerouslyDisableDeviceAuth?: boolean;
 };
 
+export type GatewayMcpLoopbackConfig = {
+  /**
+   * TCP port for the local MCP loopback server.
+   * Set to 0 or leave unset to use an ephemeral port. Set a fixed loopback port
+   * to keep MCP URLs stable across gateway restarts.
+   */
+  port?: number;
+};
+
 export type GatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
 
 /**
@@ -398,6 +407,7 @@ export type GatewayConfig = {
   /** Custom IP address for bind="custom" mode. Fallback: 0.0.0.0. */
   customBindHost?: string;
   controlUi?: GatewayControlUiConfig;
+  mcpLoopback?: GatewayMcpLoopbackConfig;
   auth?: GatewayAuthConfig;
   tailscale?: GatewayTailscaleConfig;
   remote?: GatewayRemoteConfig;
