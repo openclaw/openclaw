@@ -109,11 +109,7 @@ export function resolveCampfireAccount(
 ): ResolvedCampfireAccount {
   const section = resolveCampfireConfigSection(cfg);
   const resolvedAccountId = trimOptionalString(accountId) ?? resolveDefaultCampfireAccountId(cfg);
-  const {
-    accounts: _accounts,
-    defaultAccount: _defaultAccount,
-    ...base
-  } = section as CampfireChannelConfig;
+  const { accounts: _accounts, defaultAccount: _defaultAccount, ...base } = section;
   const override = resolveCampfireAccountOverride(section, resolvedAccountId);
   const merged: CampfireAccountConfig = {
     ...base,
@@ -173,7 +169,13 @@ export const campfireChannelConfigSchema = {
     botKey: {
       sensitive: true,
     },
+    webhookSecret: {
+      sensitive: true,
+    },
     "accounts.*.botKey": {
+      sensitive: true,
+    },
+    "accounts.*.webhookSecret": {
       sensitive: true,
     },
   },
