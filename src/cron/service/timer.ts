@@ -453,8 +453,7 @@ export function applyJobResult(
     job.state.lastFailureAlertAtMs = undefined;
   }
 
-  const shouldDelete =
-    job.schedule.kind === "at" && job.deleteAfterRun === true && result.status === "ok";
+  const shouldDelete = job.deleteAfterRun === true && result.status === "ok";
 
   if (!shouldDelete) {
     if (job.schedule.kind === "at") {
