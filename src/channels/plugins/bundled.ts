@@ -214,6 +214,14 @@ let cachedBundledChannelState: BundledChannelState | null = null;
 let bundledChannelStateLoadInProgress = false;
 const pluginLoadInProgressIds = new Set<ChannelId>();
 const setupPluginLoadInProgressIds = new Set<ChannelId>();
+// Channel ids whose lazy `loadChannelPlugin`/`loadSetupPlugin`/`loadChannelSecrets`
+// already failed once. Used to warn at most once per id and avoid retry storms;
+// keeps a single broken bundled channel (e.g. a missing transitive npm dep in
+// the published tarball) from bricking unrelated CLI commands.
+const pluginLoadFailedIds = new Set<ChannelId>();
+const setupPluginLoadFailedIds = new Set<ChannelId>();
+const channelSecretsLoadFailedIds = new Set<ChannelId>();
+const setupSecretsLoadFailedIds = new Set<ChannelId>();
 
 function getBundledChannelState(): BundledChannelState {
   if (cachedBundledChannelState) {
@@ -292,11 +300,20 @@ export function getBundledChannelPlugin(id: ChannelId): ChannelPlugin | undefine
   if (!entry) {
     return undefined;
   }
+  if (pluginLoadFailedIds.has(id)) {
+    return undefined;
+  }
   pluginLoadInProgressIds.add(id);
   try {
     const plugin = entry.loadChannelPlugin();
     state.pluginsById.set(id, plugin);
     return plugin;
+  } catch (error) {
+    pluginLoadFailedIds.add(id);
+    log.warn(
+      `[channels] failed to lazily load bundled channel ${id}: ${formatErrorMessage(error)} — skipping; CLI commands unrelated to this channel will continue to work`,
+    );
+    return undefined;
   } finally {
     pluginLoadInProgressIds.delete(id);
   }
@@ -311,7 +328,19 @@ export function getBundledChannelSecrets(id: ChannelId): ChannelPlugin["secrets"
   if (!entry) {
     return undefined;
   }
-  const secrets = entry.loadChannelSecrets?.() ?? getBundledChannelPlugin(id)?.secrets;
+  if (channelSecretsLoadFailedIds.has(id)) {
+    return undefined;
+  }
+  let secrets: ChannelPlugin["secrets"] | undefined;
+  try {
+    secrets = entry.loadChannelSecrets?.() ?? getBundledChannelPlugin(id)?.secrets;
+  } catch (error) {
+    channelSecretsLoadFailedIds.add(id);
+    log.warn(
+      `[channels] failed to load bundled channel secrets for ${id}: ${formatErrorMessage(error)} — skipping`,
+    );
+    return undefined;
+  }
   state.secretsById.set(id, secrets ?? null);
   return secrets;
 }
@@ -329,11 +358,20 @@ export function getBundledChannelSetupPlugin(id: ChannelId): ChannelPlugin | und
   if (!entry) {
     return undefined;
   }
+  if (setupPluginLoadFailedIds.has(id)) {
+    return undefined;
+  }
   setupPluginLoadInProgressIds.add(id);
   try {
     const plugin = entry.loadSetupPlugin();
     state.setupPluginsById.set(id, plugin);
     return plugin;
+  } catch (error) {
+    setupPluginLoadFailedIds.add(id);
+    log.warn(
+      `[channels] failed to lazily load bundled channel setup ${id}: ${formatErrorMessage(error)} — skipping; CLI commands unrelated to this channel will continue to work`,
+    );
+    return undefined;
   } finally {
     setupPluginLoadInProgressIds.delete(id);
   }
@@ -348,7 +386,19 @@ export function getBundledChannelSetupSecrets(id: ChannelId): ChannelPlugin["sec
   if (!entry) {
     return undefined;
   }
-  const secrets = entry.loadSetupSecrets?.() ?? getBundledChannelSetupPlugin(id)?.secrets;
+  if (setupSecretsLoadFailedIds.has(id)) {
+    return undefined;
+  }
+  let secrets: ChannelPlugin["secrets"] | undefined;
+  try {
+    secrets = entry.loadSetupSecrets?.() ?? getBundledChannelSetupPlugin(id)?.secrets;
+  } catch (error) {
+    setupSecretsLoadFailedIds.add(id);
+    log.warn(
+      `[channels] failed to load bundled channel setup secrets for ${id}: ${formatErrorMessage(error)} — skipping`,
+    );
+    return undefined;
+  }
   state.setupSecretsById.set(id, secrets ?? null);
   return secrets;
 }
