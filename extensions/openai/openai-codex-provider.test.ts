@@ -134,6 +134,42 @@ describe("openai codex provider", () => {
     });
   });
 
+  it("resolves gpt-5.4-pro with pro pricing and codex-sized limits", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.4-pro",
+      modelRegistry: {
+        find: (providerId: string, modelId: string) => {
+          if (providerId === "openai-codex" && modelId === "gpt-5.3-codex") {
+            return {
+              id: "gpt-5.3-codex",
+              name: "gpt-5.3-codex",
+              provider: "openai-codex",
+              api: "openai-codex-responses",
+              baseUrl: "https://chatgpt.com/backend-api",
+              reasoning: true,
+              input: ["text", "image"] as const,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 272_000,
+              maxTokens: 128_000,
+            };
+          }
+          return undefined;
+        },
+      } as never,
+    });
+
+    expect(model).toMatchObject({
+      id: "gpt-5.4-pro",
+      contextWindow: 1_050_000,
+      contextTokens: 272_000,
+      maxTokens: 128_000,
+      cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+    });
+  });
+
   it("resolves the legacy gpt-5.4-codex alias to canonical gpt-5.4", () => {
     const provider = buildOpenAICodexProviderPlugin();
 
@@ -226,6 +262,13 @@ describe("openai codex provider", () => {
     expect(entries).toContainEqual(
       expect.objectContaining({
         id: "gpt-5.4",
+        contextWindow: 1_050_000,
+        contextTokens: 272_000,
+      }),
+    );
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        id: "gpt-5.4-pro",
         contextWindow: 1_050_000,
         contextTokens: 272_000,
       }),
