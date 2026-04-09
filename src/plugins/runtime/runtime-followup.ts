@@ -20,15 +20,16 @@ export function createRuntimeFollowup(): PluginRuntimeCore["followup"] {
           return false;
         }
 
-        // Reuse session metadata already loaded by buildFollowupRunForSession
-        // instead of loading the store a second time.
+        // Extract session metadata before queueing — avoid serializing the
+        // full session store into every queued followup item.
         const { storePath, sessionStore, sessionEntry } = followupRun._sessionMeta;
+        const { _sessionMeta: _, ...cleanFollowupRun } = followupRun;
 
         // Preserve an existing queue's mode instead of forcing "followup".
         const existingMode = getExistingFollowupQueue(params.sessionKey)?.mode;
         const enqueued = enqueueFollowupRun(
           params.sessionKey,
-          followupRun,
+          cleanFollowupRun,
           { mode: existingMode ?? "followup" },
           "none",
           undefined,
