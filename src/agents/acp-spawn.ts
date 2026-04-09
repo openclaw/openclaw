@@ -517,7 +517,7 @@ function resolveConversationIdForThreadBinding(params: {
     return normalizeOptionalString(pluginResolvedConversationId);
   }
   const compatibilityConversationId =
-    channelKey && channelKey in threadBindingFallbackConversationResolvers
+    channelKey && Object.hasOwn(threadBindingFallbackConversationResolvers, channelKey)
       ? threadBindingFallbackConversationResolvers[
           channelKey as keyof typeof threadBindingFallbackConversationResolvers
         ](params)
