@@ -3055,6 +3055,10 @@ Validation and safety notes:
 - `POST /hooks/wake` → `{ text, mode?: "now"|"next-heartbeat" }`
 - `POST /hooks/agent` → `{ message, name?, agentId?, sessionKey?, wakeMode?, deliver?, channel?, to?, model?, thinking?, timeoutSeconds? }`
   - `sessionKey` from request payload is accepted only when `hooks.allowRequestSessionKey=true` (default: `false`).
+  - Automation-only route: runs isolated agent tasks and returns run status metadata; it does not guarantee chat UI mirroring.
+- `POST /hooks/message` → `{ message, requestId, kind?: "message"|"event", sessionKey?, source?, sender?, conversation?, metadata? }`
+  - `kind="message"` is the chat visibility transport path (ingress + broadcast + optional auto-reply).
+  - `kind="event"` is operational-only (no auto-reply dispatch).
 - `POST /hooks/<name>` → resolved via `hooks.mappings`
 
 <Accordion title="Mapping details">

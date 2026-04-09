@@ -8,8 +8,11 @@ import {
 } from "../infra/system-events.js";
 import { DEDUPE_TTL_MS } from "./server-constants.js";
 import {
+  connectWebchatClient,
   cronIsolatedRun,
+  dispatchInboundMessageMock,
   installGatewayTestHooks,
+  onceMessage,
   testState,
   withGatewayServer,
   waitForSystemEvent,
@@ -94,11 +97,13 @@ async function expectFirstHookDelivery(
   idempotencyKey: string,
   headers?: Record<string, string>,
 ) {
+  const expectedCalls = cronIsolatedRun.mock.calls.length + 1;
   const first = await postAgentHookWithIdempotency(port, idempotencyKey, headers);
   const firstBody = (await first.json()) as { runId?: string };
   expect(firstBody.runId).toBeTruthy();
-  await waitForSystemEvent();
-  drainSystemEvents(resolveMainKey());
+  await vi.waitFor(() => {
+    expect(cronIsolatedRun).toHaveBeenCalledTimes(expectedCalls);
+  });
   return firstBody;
 }
 
@@ -119,15 +124,16 @@ describe("gateway server hooks", () => {
       mockIsolatedRunOkOnce();
       const resAgent = await postHook(port, "/hooks/agent", { message: "Do it", name: "Email" });
       expect(resAgent.status).toBe(200);
-      const agentEvents = await waitForSystemEvent();
-      expect(agentEvents.some((e) => e.includes("Hook Email: done"))).toBe(true);
+      await vi.waitFor(() => {
+        expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      });
       const firstCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         deliveryContract?: string;
         job?: { payload?: { externalContentSource?: string } };
       };
       expect(firstCall?.deliveryContract).toBe("shared");
       expect(firstCall?.job?.payload?.externalContentSource).toBe("webhook");
-      drainSystemEvents(resolveMainKey());
+      expect(peekSystemEvents(resolveMainKey())).toHaveLength(0);
 
       mockIsolatedRunOkOnce();
       const resAgentModel = await postHook(port, "/hooks/agent", {
@@ -136,12 +142,14 @@ describe("gateway server hooks", () => {
         model: "openai/gpt-4.1-mini",
       });
       expect(resAgentModel.status).toBe(200);
-      await waitForSystemEvent();
+      await vi.waitFor(() => {
+        expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      });
       const call = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         job?: { payload?: { model?: string } };
       };
       expect(call?.job?.payload?.model).toBe("openai/gpt-4.1-mini");
-      drainSystemEvents(resolveMainKey());
+      expect(peekSystemEvents(resolveMainKey())).toHaveLength(0);
 
       mockIsolatedRunOkOnce();
       const resAgentWithId = await postHook(port, "/hooks/agent", {
@@ -150,12 +158,14 @@ describe("gateway server hooks", () => {
         agentId: "hooks",
       });
       expect(resAgentWithId.status).toBe(200);
-      await waitForSystemEvent();
+      await vi.waitFor(() => {
+        expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      });
       const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         job?: { agentId?: string };
       };
       expect(routedCall?.job?.agentId).toBe("hooks");
-      drainSystemEvents(resolveMainKey());
+      expect(peekSystemEvents(resolveMainKey())).toHaveLength(0);
 
       mockIsolatedRunOkOnce();
       const resAgentUnknown = await postHook(port, "/hooks/agent", {
@@ -164,12 +174,14 @@ describe("gateway server hooks", () => {
         agentId: "missing-agent",
       });
       expect(resAgentUnknown.status).toBe(200);
-      await waitForSystemEvent();
+      await vi.waitFor(() => {
+        expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      });
       const fallbackCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         job?: { agentId?: string };
       };
       expect(fallbackCall?.job?.agentId).toBe("main");
-      drainSystemEvents(resolveMainKey());
+      expect(peekSystemEvents(resolveMainKey())).toHaveLength(0);
 
       const resQuery = await postHook(
         port,
@@ -236,7 +248,9 @@ describe("gateway server hooks", () => {
         messages: [{ id: "msg-1", from: "Ada", subject: "Hello", snippet: "Hi", body: "Body" }],
       });
       expect(response.status).toBe(200);
-      await waitForSystemEvent();
+      await vi.waitFor(() => {
+        expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      });
 
       const call = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         sessionKey?: string;
@@ -244,7 +258,76 @@ describe("gateway server hooks", () => {
       };
       expect(call?.sessionKey).toBe("main");
       expect(call?.job?.payload?.externalContentSource).toBe("gmail");
-      drainSystemEvents(resolveMainKey());
+      expect(peekSystemEvents(resolveMainKey())).toHaveLength(0);
+    });
+  });
+
+  test("does not mirror /hooks/agent run outcomes into main-session system events", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    setMainAndHooksAgents();
+
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockReset();
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "ok",
+        summary: "done",
+        delivered: false,
+      });
+
+      const okResponse = await postHook(port, "/hooks/agent", {
+        message: "Run this task",
+        name: "No mirror",
+      });
+      expect(okResponse.status).toBe(200);
+      await vi.waitFor(() => {
+        expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      });
+      expect(peekSystemEvents(resolveMainKey())).toHaveLength(0);
+
+      cronIsolatedRun.mockReset();
+      cronIsolatedRun.mockRejectedValueOnce(new Error("run failed"));
+
+      const failedResponse = await postHook(port, "/hooks/agent", {
+        message: "Run this task",
+        name: "No mirror",
+      });
+      expect(failedResponse.status).toBe(200);
+      await vi.waitFor(() => {
+        expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(peekSystemEvents(resolveMainKey())).toHaveLength(0);
+    });
+  });
+
+  test("uses cron-owned delivery contract for /hooks/agent when deliver is false", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    setMainAndHooksAgents();
+
+    await withGatewayServer(async ({ port }) => {
+      mockIsolatedRunOkOnce();
+      const response = await postHook(port, "/hooks/agent", {
+        message: "Run without outbound delivery",
+        name: "No outbound",
+        deliver: false,
+      });
+      expect(response.status).toBe(200);
+      await vi.waitFor(() => {
+        expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      });
+
+      const call = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
+        | {
+            deliveryContract?: string;
+            job?: {
+              delivery?: {
+                mode?: string;
+              };
+            };
+          }
+        | undefined;
+      expect(call?.deliveryContract).toBe("cron-owned");
+      expect(call?.job?.delivery?.mode).toBe("none");
     });
   });
 
@@ -334,12 +417,14 @@ describe("gateway server hooks", () => {
         body: JSON.stringify({ message: "No key" }),
       });
       expect(defaultRoute.status).toBe(200);
-      await waitForSystemEvent();
+      await vi.waitFor(() => {
+        expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      });
       const defaultCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
         | { sessionKey?: string }
         | undefined;
       expect(defaultCall?.sessionKey).toBe("hook:ingress");
-      drainSystemEvents(resolveMainKey());
+      expect(peekSystemEvents(resolveMainKey())).toHaveLength(0);
 
       cronIsolatedRun.mockClear();
       cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "done" });
@@ -352,12 +437,14 @@ describe("gateway server hooks", () => {
         body: JSON.stringify({ subject: "hello", id: "42" }),
       });
       expect(mappedOk.status).toBe(200);
-      await waitForSystemEvent();
+      await vi.waitFor(() => {
+        expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      });
       const mappedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
         | { sessionKey?: string }
         | undefined;
       expect(mappedCall?.sessionKey).toBe("hook:mapped:42");
-      drainSystemEvents(resolveMainKey());
+      expect(peekSystemEvents(resolveMainKey())).toHaveLength(0);
 
       const requestBadPrefix = await postHook(port, "/hooks/agent", {
         message: "Bad key",
@@ -388,14 +475,16 @@ describe("gateway server hooks", () => {
         sessionKey: "agent:hooks:slack:channel:c123",
       });
       expect(resAgent.status).toBe(200);
-      await waitForSystemEvent();
+      await vi.waitFor(() => {
+        expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      });
 
       const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
         | { sessionKey?: string; job?: { agentId?: string } }
         | undefined;
       expect(routedCall?.job?.agentId).toBe("hooks");
       expect(routedCall?.sessionKey).toBe("agent:hooks:slack:channel:c123");
-      drainSystemEvents(resolveMainKey());
+      expect(peekSystemEvents(resolveMainKey())).toHaveLength(0);
     });
   });
 
@@ -417,14 +506,16 @@ describe("gateway server hooks", () => {
         sessionKey: "agent:main:slack:channel:c123",
       });
       expect(resAgent.status).toBe(200);
-      await waitForSystemEvent();
+      await vi.waitFor(() => {
+        expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      });
 
       const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
         | { sessionKey?: string; job?: { agentId?: string } }
         | undefined;
       expect(routedCall?.job?.agentId).toBe("hooks");
       expect(routedCall?.sessionKey).toBe("agent:hooks:slack:channel:c123");
-      drainSystemEvents(resolveMainKey());
+      expect(peekSystemEvents(resolveMainKey())).toHaveLength(0);
     });
   });
 
@@ -497,7 +588,9 @@ describe("gateway server hooks", () => {
       mockIsolatedRunOk();
       await expectFirstHookDelivery(port, oversizedKey);
       await postAgentHookWithIdempotency(port, oversizedKey);
-      await waitForSystemEvent();
+      await vi.waitFor(() => {
+        expect(cronIsolatedRun).toHaveBeenCalledTimes(2);
+      });
 
       expect(cronIsolatedRun).toHaveBeenCalledTimes(2);
     });
@@ -558,12 +651,14 @@ describe("gateway server hooks", () => {
       mockIsolatedRunOkOnce();
       const resNoAgent = await postHook(port, "/hooks/agent", { message: "No explicit agent" });
       expect(resNoAgent.status).toBe(200);
-      await waitForSystemEvent();
+      await vi.waitFor(() => {
+        expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      });
       const noAgentCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         job?: { agentId?: string };
       };
       expect(noAgentCall?.job?.agentId).toBeUndefined();
-      drainSystemEvents(resolveMainKey());
+      expect(peekSystemEvents(resolveMainKey())).toHaveLength(0);
 
       mockIsolatedRunOkOnce();
       const resAllowed = await postHook(port, "/hooks/agent", {
@@ -571,12 +666,14 @@ describe("gateway server hooks", () => {
         agentId: "hooks",
       });
       expect(resAllowed.status).toBe(200);
-      await waitForSystemEvent();
+      await vi.waitFor(() => {
+        expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      });
       const allowedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         job?: { agentId?: string };
       };
       expect(allowedCall?.job?.agentId).toBe("hooks");
-      drainSystemEvents(resolveMainKey());
+      expect(peekSystemEvents(resolveMainKey())).toHaveLength(0);
 
       const resDenied = await postHook(port, "/hooks/agent", {
         message: "Denied",
@@ -665,6 +762,304 @@ describe("gateway server hooks", () => {
       expect(allowed.status).toBe(200);
       await waitForSystemEvent();
       drainSystemEvents(resolveMainKey());
+    });
+  });
+
+  test("enforces /hooks/message auth parity and blocks query token auth", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    await withGatewayServer(async ({ port }) => {
+      const noAuth = await postHook(
+        port,
+        "/hooks/message",
+        { message: "inbound", requestId: "msg-auth-missing" },
+        { token: null },
+      );
+      expect(noAuth.status).toBe(401);
+
+      let throttled: Response | null = null;
+      for (let i = 0; i < 20; i++) {
+        throttled = await postHook(
+          port,
+          "/hooks/message",
+          { message: "inbound", requestId: `msg-auth-wrong-${i}` },
+          { token: "wrong" },
+        );
+      }
+      expect(throttled?.status).toBe(429);
+
+      const byBearer = await postHook(port, "/hooks/message", {
+        message: "inbound",
+        requestId: "msg-auth-bearer",
+      });
+      const byBearerBody = await byBearer.text();
+      expect(byBearer.status, byBearerBody).toBe(200);
+
+      const byHeader = await postHook(
+        port,
+        "/hooks/message",
+        { message: "inbound", requestId: "msg-auth-header" },
+        { token: null, headers: { "x-openclaw-token": HOOK_TOKEN } },
+      );
+      const byHeaderBody = await byHeader.text();
+      expect(byHeader.status, byHeaderBody).toBe(200);
+
+      const byQuery = await postHook(
+        port,
+        "/hooks/message?token=bad",
+        { message: "inbound", requestId: "msg-auth-query" },
+        { token: null },
+      );
+      expect(byQuery.status).toBe(400);
+    });
+  });
+
+  test("applies /hooks/message method guard and dedupes retries by requestId", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    dispatchInboundMessageMock.mockReset();
+    dispatchInboundMessageMock.mockImplementation(async () => undefined);
+
+    await withGatewayServer(async ({ port }) => {
+      const getResponse = await fetch(`http://127.0.0.1:${port}/hooks/message`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${HOOK_TOKEN}` },
+      });
+      expect(getResponse.status).toBe(405);
+      expect(getResponse.headers.get("allow")).toBe("POST");
+
+      const first = await postHook(port, "/hooks/message", {
+        message: "dedupe me",
+        requestId: "msg-dedupe-1",
+      });
+      const firstBody = await first.text();
+      expect(first.status, firstBody).toBe(200);
+
+      const second = await postHook(port, "/hooks/message", {
+        message: "dedupe me",
+        requestId: "msg-dedupe-1",
+      });
+      expect(second.status).toBe(200);
+
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  test("dedupes /hooks/message retries when nested metadata key order differs", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    dispatchInboundMessageMock.mockReset();
+    dispatchInboundMessageMock.mockImplementation(async () => undefined);
+
+    await withGatewayServer(async ({ port }) => {
+      const first = await postHook(port, "/hooks/message", {
+        message: "ordered payload",
+        requestId: "msg-ordered-keys",
+        metadata: { alpha: 1, beta: 2 },
+        sender: { id: "sender-1", role: "member" },
+        conversation: { id: "conv-1", context: { a: 1, b: 2 } },
+      });
+      const firstBody = await first.text();
+      expect(first.status, firstBody).toBe(200);
+
+      const second = await postHook(port, "/hooks/message", {
+        message: "ordered payload",
+        requestId: "msg-ordered-keys",
+        metadata: { beta: 2, alpha: 1 },
+        sender: { role: "member", id: "sender-1" },
+        conversation: { context: { b: 2, a: 1 }, id: "conv-1" },
+      });
+      const secondBody = await second.text();
+      expect(second.status, secondBody).toBe(200);
+
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  test("routes /hooks/message kind=event without auto-reply dispatch", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    dispatchInboundMessageMock.mockReset();
+    dispatchInboundMessageMock.mockImplementation(async () => undefined);
+
+    await withGatewayServer(async ({ port }) => {
+      const response = await postHook(port, "/hooks/message", {
+        message: "operational event",
+        requestId: "msg-event-1",
+        kind: "event",
+      });
+      expect(response.status).toBe(200);
+      const payload = (await response.json()) as { status?: string };
+      expect(payload.status).toBe("event");
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    });
+  });
+
+  test("canonicalizes /hooks/message kind=event session keys before enqueueing", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      defaultSessionKey: "hook:ingress",
+      allowedSessionKeyPrefixes: ["hook:"],
+    };
+    dispatchInboundMessageMock.mockReset();
+    dispatchInboundMessageMock.mockImplementation(async () => undefined);
+
+    await withGatewayServer(async ({ port }) => {
+      const response = await postHook(port, "/hooks/message", {
+        message: "event via alias",
+        requestId: "msg-event-canonical",
+        kind: "event",
+      });
+      const body = (await response.json()) as { status?: string; sessionKey?: string };
+      expect(response.status).toBe(200);
+      expect(body.status).toBe("event");
+      expect(body.sessionKey).toBe("agent:main:hook:ingress");
+
+      const entries = peekSystemEventEntries("agent:main:hook:ingress");
+      expect(entries.some((entry) => entry.text === "event via alias")).toBe(true);
+      drainSystemEvents("agent:main:hook:ingress");
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    });
+  });
+
+  test("applies hook session policy defaults for /hooks/message when sessionKey is omitted", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      defaultSessionKey: "hook:ingress",
+      allowedSessionKeyPrefixes: ["hook:"],
+    };
+    dispatchInboundMessageMock.mockReset();
+    dispatchInboundMessageMock.mockImplementation(async () => undefined);
+
+    await withGatewayServer(async ({ port }) => {
+      const response = await postHook(port, "/hooks/message", {
+        message: "inbound",
+        requestId: "msg-policy-default",
+      });
+      const rawBody = await response.text();
+      expect(response.status, rawBody).toBe(200);
+      const payload = JSON.parse(rawBody) as { sessionKey?: string };
+      expect(payload.sessionKey).toBe("agent:main:hook:ingress");
+
+      await vi.waitFor(() => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      });
+      const firstCall = dispatchInboundMessageMock.mock.calls[0]?.[0] as
+        | {
+            ctx?: {
+              SessionKey?: unknown;
+            };
+          }
+        | undefined;
+      expect(firstCall?.ctx?.SessionKey).toBe("agent:main:hook:ingress");
+    });
+  });
+
+  test("scopes /hooks/message chat idempotency by replay identity", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["hook:", "agent:main:"],
+    };
+    dispatchInboundMessageMock.mockReset();
+    dispatchInboundMessageMock.mockImplementation(async () => undefined);
+
+    await withGatewayServer(async ({ port }) => {
+      const first = await postHook(port, "/hooks/message", {
+        message: "first",
+        requestId: "shared-request-id",
+        sessionKey: "agent:main:scope-a",
+      });
+      const firstBody = await first.text();
+      expect(first.status, firstBody).toBe(200);
+
+      const second = await postHook(port, "/hooks/message", {
+        message: "second",
+        requestId: "shared-request-id",
+        sessionKey: "agent:main:scope-b",
+      });
+      const secondBody = await second.text();
+      expect(second.status, secondBody).toBe(200);
+
+      await vi.waitFor(() => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+      });
+    });
+  });
+
+  test("returns /hooks/message INVALID_REQUEST failures as HTTP 400", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    testState.sessionConfig = { sendPolicy: { default: "deny" } };
+    dispatchInboundMessageMock.mockReset();
+    dispatchInboundMessageMock.mockImplementation(async () => undefined);
+
+    await withGatewayServer(async ({ port }) => {
+      const response = await postHook(port, "/hooks/message", {
+        message: "blocked by policy",
+        requestId: "msg-send-policy-deny",
+      });
+      const rawBody = await response.text();
+      expect(response.status, rawBody).toBe(400);
+      const payload = JSON.parse(rawBody) as { error?: string };
+      expect(payload.error ?? "").toMatch(/send blocked by session policy/i);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    });
+  });
+
+  test("persists /hooks/message inbound text and emits chat final updates", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    dispatchInboundMessageMock.mockReset();
+    dispatchInboundMessageMock.mockImplementation(async () => undefined);
+
+    await withGatewayServer(async ({ port }) => {
+      const webchatWs = await connectWebchatClient({ port });
+      try {
+        const inboundText = "Inbound via webhook";
+        const requestId = "msg-ui-1";
+        const postResponse = await postHook(port, "/hooks/message", {
+          message: inboundText,
+          requestId,
+          kind: "message",
+        });
+        const rawPostPayload = await postResponse.text();
+        expect(postResponse.status, rawPostPayload).toBe(200);
+        const postPayload = JSON.parse(rawPostPayload) as { runId?: string; sessionKey?: string };
+        const runId = postPayload.runId ?? requestId;
+        const sessionKey = postPayload.sessionKey ?? "main";
+
+        const chatEvent = await onceMessage<{
+          type?: string;
+          event?: string;
+          payload?: Record<string, unknown>;
+        }>(
+          webchatWs,
+          (o) => {
+            if (o.type !== "event" || o.event !== "chat") {
+              return false;
+            }
+            const payload = o.payload;
+            return payload?.runId === runId && payload?.state === "final";
+          },
+          10_000,
+        );
+        expect(chatEvent.event).toBe("chat");
+        await vi.waitFor(() => {
+          expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+        });
+        const firstCall = dispatchInboundMessageMock.mock.calls[0]?.[0] as
+          | {
+              ctx?: {
+                SessionKey?: unknown;
+                Body?: unknown;
+                RawBody?: unknown;
+              };
+            }
+          | undefined;
+        expect(firstCall?.ctx?.SessionKey).toBe(sessionKey);
+        expect(firstCall?.ctx?.Body).toBe(inboundText);
+        expect(firstCall?.ctx?.RawBody).toBe(inboundText);
+      } finally {
+        webchatWs.close();
+      }
     });
   });
 });

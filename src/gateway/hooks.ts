@@ -220,6 +220,99 @@ export type HookAgentDispatchPayload = Omit<HookAgentPayload, "sessionKey"> & {
   externalContentSource?: HookExternalContentSource;
 };
 
+export type HookMessagePayload = {
+  message: string;
+  requestId: string;
+  kind: "message" | "event";
+  sessionKey?: string;
+  source?: string;
+  sender?: Record<string, unknown>;
+  conversation?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+};
+
+export type HookMessageDispatchPayload = HookMessagePayload & {
+  idempotencyKey: string;
+  chatIdempotencyKey?: string;
+  allowedSessionKeyPrefixes?: string[];
+};
+
+export type HookMessageDispatchResult = {
+  status: "accepted" | "event";
+  sessionKey: string;
+  runId?: string;
+};
+
+function isHookMessageRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function resolveOptionalHookMessageString(raw: unknown): string | undefined {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function resolveOptionalHookMessageRecord(raw: unknown): Record<string, unknown> | undefined {
+  return isHookMessageRecord(raw) ? raw : undefined;
+}
+
+export function normalizeHookMessagePayload(
+  payload: Record<string, unknown>,
+): { ok: true; value: HookMessagePayload } | { ok: false; error: string } {
+  const message = resolveOptionalHookMessageString(payload.message);
+  if (!message) {
+    return { ok: false, error: "message required" };
+  }
+
+  const requestId = resolveOptionalHookMessageString(payload.requestId);
+  if (!requestId) {
+    return { ok: false, error: "requestId required" };
+  }
+
+  const kindRaw = payload.kind;
+  const kind =
+    kindRaw === undefined
+      ? "message"
+      : kindRaw === "message" || kindRaw === "event"
+        ? kindRaw
+        : null;
+  if (!kind) {
+    return { ok: false, error: "kind must be message|event" };
+  }
+
+  const sender = resolveOptionalHookMessageRecord(payload.sender);
+  if (payload.sender !== undefined && !sender) {
+    return { ok: false, error: "sender must be an object when provided" };
+  }
+
+  const conversation = resolveOptionalHookMessageRecord(payload.conversation);
+  if (payload.conversation !== undefined && !conversation) {
+    return { ok: false, error: "conversation must be an object when provided" };
+  }
+
+  const metadata = resolveOptionalHookMessageRecord(payload.metadata);
+  if (payload.metadata !== undefined && !metadata) {
+    return { ok: false, error: "metadata must be an object when provided" };
+  }
+
+  return {
+    ok: true,
+    value: {
+      message,
+      requestId,
+      kind,
+      sessionKey: resolveOptionalHookMessageString(payload.sessionKey),
+      source: resolveOptionalHookMessageString(payload.source),
+      ...(sender ? { sender } : {}),
+      ...(conversation ? { conversation } : {}),
+      ...(metadata ? { metadata } : {}),
+    },
+  };
+}
+
 const listHookChannelValues = () => ["last", ...listChannelPlugins().map((plugin) => plugin.id)];
 
 export type HookMessageChannel = ChannelId;

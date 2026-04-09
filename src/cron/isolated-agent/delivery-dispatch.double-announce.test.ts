@@ -111,6 +111,7 @@ function makeWithRunSession() {
 function makeBaseParams(overrides: {
   synthesizedText?: string;
   deliveryRequested?: boolean;
+  deliveryContract?: "cron-owned" | "shared";
   runSessionId?: string;
   sessionTarget?: string;
   deliveryBestEffort?: boolean;
@@ -135,6 +136,7 @@ function makeBaseParams(overrides: {
     timeoutMs: 30_000,
     resolvedDelivery,
     deliveryRequested: overrides.deliveryRequested ?? true,
+    deliveryContract: overrides.deliveryContract ?? "cron-owned",
     skipHeartbeatDelivery: false,
     deliveryBestEffort: overrides.deliveryBestEffort ?? false,
     deliveryPayloadHasStructuredContent: false,
@@ -359,6 +361,23 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     const params = makeBaseParams({
       synthesizedText: "Best-effort cron update.",
       deliveryBestEffort: true,
+    });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state.delivered).toBe(true);
+    expect(state.deliveryAttempted).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("skips main-session awareness for shared delivery-contract runs", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({
+      synthesizedText: "Hook agent finished.",
+      deliveryContract: "shared",
     });
     const state = await dispatchCronDelivery(params);
 

@@ -213,7 +213,7 @@ curl -X POST http://127.0.0.1:18789/hooks/wake \
 
 ### POST /hooks/agent
 
-Run an isolated agent turn:
+Run an isolated agent task (automation-only):
 
 ```bash
 curl -X POST http://127.0.0.1:18789/hooks/agent \
@@ -223,6 +223,34 @@ curl -X POST http://127.0.0.1:18789/hooks/agent \
 ```
 
 Fields: `message` (required), `name`, `agentId`, `wakeMode`, `deliver`, `channel`, `to`, `model`, `thinking`, `timeoutSeconds`.
+
+Use `/hooks/agent` when you want to execute automation logic. This route does not mirror output into chat UI by itself.
+
+### POST /hooks/message
+
+Use this endpoint for inbound transport where messages must appear in chat visibility paths:
+
+```bash
+curl -X POST http://127.0.0.1:18789/hooks/message \
+  -H 'Authorization: Bearer SECRET' \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"Inbound update","requestId":"req-123","kind":"message"}'
+```
+
+Required fields:
+
+- `message`
+- `requestId`
+
+Optional fields:
+
+- `kind` (`message` or `event`, default `message`)
+- `sessionKey`, `source`, `sender`, `conversation`, `metadata`
+
+Behavior:
+
+- `kind=message`: inbound chat visibility path + auto-reply dispatch
+- `kind=event`: operational webhook event only (no auto-reply)
 
 ### Mapped hooks (POST /hooks/\<name\>)
 

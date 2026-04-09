@@ -35,6 +35,7 @@ import {
   createGatewayHttpServer,
   type HookClientIpConfig,
 } from "./server-http.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { DedupeEntry } from "./server-shared.js";
 import { createGatewayHooksRequestHandler } from "./server/hooks.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
@@ -69,6 +70,7 @@ export async function createGatewayRuntimeState(params: {
   gatewayTls?: GatewayTlsRuntime;
   hooksConfig: () => HooksConfigResolved | null;
   getHookClientIpConfig: () => HookClientIpConfig;
+  getGatewayRequestContext?: () => GatewayRequestContext | undefined;
   pluginRegistry: PluginRegistry;
   pinChannelRegistry?: boolean;
   deps: CliDeps;
@@ -141,6 +143,7 @@ export async function createGatewayRuntimeState(params: {
       deps: params.deps,
       getHooksConfig: params.hooksConfig,
       getClientIpConfig: params.getHookClientIpConfig,
+      getGatewayRequestContext: params.getGatewayRequestContext,
       bindHost: params.bindHost,
       port: params.port,
       logHooks: params.logHooks,

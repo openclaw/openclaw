@@ -92,7 +92,7 @@ export type RunCronAgentTurnResult = {
 
 type ResolvedCronDeliveryTarget = Awaited<ReturnType<typeof resolveDeliveryTarget>>;
 
-type IsolatedDeliveryContract = "cron-owned" | "shared";
+export type IsolatedDeliveryContract = "cron-owned" | "shared";
 
 function resolveCronToolPolicy(params: {
   deliveryRequested: boolean;
@@ -620,6 +620,7 @@ async function finalizeCronRun(params: {
     timeoutMs: prepared.timeoutMs,
     resolvedDelivery: prepared.resolvedDelivery,
     deliveryRequested: prepared.deliveryRequested,
+    deliveryContract: prepared.input.deliveryContract ?? "cron-owned",
     skipHeartbeatDelivery,
     skipMessagingToolDelivery,
     deliveryBestEffort: resolveCronDeliveryBestEffort(prepared.input.job),
