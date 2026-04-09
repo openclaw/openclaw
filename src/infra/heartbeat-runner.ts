@@ -830,13 +830,10 @@ export async function runHeartbeatOnce(opts: {
           restrictToStoreDir: true,
         });
       } catch (err) {
-        log.warn(
-          {
-            err: String(err),
-            sessionKey: staleIsolatedSessionKey,
-          },
-          "heartbeat: failed to archive stale isolated session transcript",
-        );
+        log.warn("heartbeat: failed to archive stale isolated session transcript", {
+          err: String(err),
+          sessionKey: staleIsolatedSessionKey,
+        });
       }
     }
     runSessionKey = isolatedSessionKey;
