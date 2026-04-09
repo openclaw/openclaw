@@ -1,6 +1,6 @@
 ---
 title: "Active Memory"
-summary: "A plugin-owned blocking memory subagent that injects relevant memory into interactive chat sessions"
+summary: "A plugin-owned blocking memory sub-agent that injects relevant memory into interactive chat sessions"
 read_when:
   - You want to understand what active memory is for
   - You want to turn active memory on for a conversational agent
@@ -9,7 +9,7 @@ read_when:
 
 # Active Memory
 
-Active memory is an optional plugin-owned blocking memory subagent that runs
+Active memory is an optional plugin-owned blocking memory sub-agent that runs
 before the main reply for eligible conversational sessions.
 
 It exists because most memory systems are capable but reactive. They rely on
@@ -135,7 +135,7 @@ Those lines are derived from the same active memory pass that feeds the hidden
 system context, but they are formatted for humans instead of exposing raw prompt
 markup.
 
-By default, the blocking memory subagent transcript is temporary and deleted
+By default, the blocking memory sub-agent transcript is temporary and deleted
 after the run completes.
 
 Example flow:
@@ -221,7 +221,7 @@ inference feature.
 | Headless one-shot runs                                              | No                                                      |
 | Heartbeat/background runs                                           | No                                                      |
 | Generic internal `agent-command` paths                              | No                                                      |
-| Subagent/internal helper execution                                  | No                                                      |
+| Sub-agent/internal helper execution                                 | No                                                      |
 
 ## Why use it
 
@@ -251,13 +251,13 @@ The runtime shape is:
 ```mermaid
 flowchart LR
   U["User Message"] --> Q["Build Memory Query"]
-  Q --> R["Active Memory Blocking Memory Subagent"]
+  Q --> R["Active Memory Blocking Memory Sub-Agent"]
   R -->|NONE or empty| M["Main Reply"]
   R -->|relevant summary| I["Append Hidden active_memory_plugin System Context"]
   I --> M["Main Reply"]
 ```
 
-The blocking memory subagent can use only:
+The blocking memory sub-agent can use only:
 
 - `memory_search`
 - `memory_get`
@@ -266,11 +266,11 @@ If the connection is weak, it should return `NONE`.
 
 ## Query modes
 
-`config.queryMode` controls how much conversation the blocking memory subagent sees.
+`config.queryMode` controls how much conversation the blocking memory sub-agent sees.
 
 ## Prompt styles
 
-`config.promptStyle` controls how eager or strict the blocking memory subagent is
+`config.promptStyle` controls how eager or strict the blocking memory sub-agent is
 when deciding whether to return memory.
 
 Available styles:
@@ -370,7 +370,7 @@ Recommended timeout:
 
 ### `full`
 
-The full conversation is sent to the blocking memory subagent.
+The full conversation is sent to the blocking memory sub-agent.
 
 ```text
 Full conversation context:
@@ -398,16 +398,16 @@ message < recent < full
 
 ## Transcript persistence
 
-Active memory blocking memory subagent runs create a real `session.jsonl`
-transcript during the blocking memory subagent call.
+Active memory blocking memory sub-agent runs create a real `session.jsonl`
+transcript during the blocking memory sub-agent call.
 
 By default, that transcript is temporary:
 
 - it is written to a temp directory
-- it is used only for the blocking memory subagent run
+- it is used only for the blocking memory sub-agent run
 - it is deleted immediately after the run finishes
 
-If you want to keep those blocking memory subagent transcripts on disk for debugging or
+If you want to keep those blocking memory sub-agent transcripts on disk for debugging or
 inspection, turn persistence on explicitly:
 
 ```json5
@@ -434,14 +434,14 @@ path.
 The default layout is conceptually:
 
 ```text
-agents/<agent>/sessions/active-memory/<blocking-memory-subagent-session-id>.jsonl
+agents/<agent>/sessions/active-memory/<blocking-memory-sub-agent-session-id>.jsonl
 ```
 
 You can change the relative subdirectory with `config.transcriptDir`.
 
 Use this carefully:
 
-- blocking memory subagent transcripts can accumulate quickly on busy sessions
+- blocking memory sub-agent transcripts can accumulate quickly on busy sessions
 - `full` query mode can duplicate a lot of conversation context
 - these transcripts contain hidden prompt context and recalled memories
 
@@ -455,18 +455,18 @@ plugins.entries.active-memory
 
 The most important fields are:
 
-| Key                         | Type                                                                                                 | Meaning                                                                                               |
-| --------------------------- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `enabled`                   | `boolean`                                                                                            | Enables the plugin itself                                                                             |
-| `config.agents`             | `string[]`                                                                                           | Agent ids that may use active memory                                                                  |
-| `config.model`              | `string`                                                                                             | Optional blocking memory subagent model ref; when unset, active memory uses the current session model |
-| `config.queryMode`          | `"message" \| "recent" \| "full"`                                                                    | Controls how much conversation the blocking memory subagent sees                                      |
-| `config.promptStyle`        | `"balanced" \| "strict" \| "contextual" \| "recall-heavy" \| "precision-heavy" \| "preference-only"` | Controls how eager or strict the blocking memory subagent is when deciding whether to return memory   |
-| `config.timeoutMs`          | `number`                                                                                             | Hard timeout for the blocking memory subagent                                                         |
-| `config.maxSummaryChars`    | `number`                                                                                             | Maximum total characters allowed in the active-memory summary                                         |
-| `config.logging`            | `boolean`                                                                                            | Emits active memory logs while tuning                                                                 |
-| `config.persistTranscripts` | `boolean`                                                                                            | Keeps blocking memory subagent transcripts on disk instead of deleting temp files                     |
-| `config.transcriptDir`      | `string`                                                                                             | Relative blocking memory subagent transcript directory under the agent sessions folder                |
+| Key                         | Type                                                                                                 | Meaning                                                                                                |
+| --------------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `enabled`                   | `boolean`                                                                                            | Enables the plugin itself                                                                              |
+| `config.agents`             | `string[]`                                                                                           | Agent ids that may use active memory                                                                   |
+| `config.model`              | `string`                                                                                             | Optional blocking memory sub-agent model ref; when unset, active memory uses the current session model |
+| `config.queryMode`          | `"message" \| "recent" \| "full"`                                                                    | Controls how much conversation the blocking memory sub-agent sees                                      |
+| `config.promptStyle`        | `"balanced" \| "strict" \| "contextual" \| "recall-heavy" \| "precision-heavy" \| "preference-only"` | Controls how eager or strict the blocking memory sub-agent is when deciding whether to return memory   |
+| `config.timeoutMs`          | `number`                                                                                             | Hard timeout for the blocking memory sub-agent                                                         |
+| `config.maxSummaryChars`    | `number`                                                                                             | Maximum total characters allowed in the active-memory summary                                          |
+| `config.logging`            | `boolean`                                                                                            | Emits active memory logs while tuning                                                                  |
+| `config.persistTranscripts` | `boolean`                                                                                            | Keeps blocking memory sub-agent transcripts on disk instead of deleting temp files                     |
+| `config.transcriptDir`      | `string`                                                                                             | Relative blocking memory sub-agent transcript directory under the agent sessions folder                |
 
 Useful tuning fields:
 
@@ -509,7 +509,7 @@ session instead of looking for a separate active-memory debug command.
 Then move to:
 
 - `message` if you want lower latency
-- `full` if you decide extra context is worth the slower blocking memory subagent
+- `full` if you decide extra context is worth the slower blocking memory sub-agent
 
 ## Debugging
 

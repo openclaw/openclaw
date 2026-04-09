@@ -499,7 +499,7 @@ describe("active-memory plugin", () => {
     expect(store[sessionKey]?.pluginStatusLines).toEqual(["Other Plugin: keep me"]);
   });
 
-  it("returns nothing when the sidecar says none", async () => {
+  it("returns nothing when the subagent says none", async () => {
     runEmbeddedPiAgent.mockResolvedValueOnce({
       payloads: [{ text: "NONE" }],
     });
@@ -787,7 +787,7 @@ describe("active-memory plugin", () => {
     );
   });
 
-  it("applies total summary truncation after normalizing the sidecar reply", async () => {
+  it("applies total summary truncation after normalizing the subagent reply", async () => {
     api.pluginConfig = {
       agents: ["main"],
       maxSummaryChars: 40,
@@ -824,7 +824,7 @@ describe("active-memory plugin", () => {
     );
   });
 
-  it("uses the configured maxSummaryChars value in the sidecar prompt", async () => {
+  it("uses the configured maxSummaryChars value in the subagent prompt", async () => {
     api.pluginConfig = {
       agents: ["main"],
       maxSummaryChars: 90,
@@ -846,7 +846,7 @@ describe("active-memory plugin", () => {
     );
   });
 
-  it("keeps sidecar transcripts off disk by default by using a temp session file", async () => {
+  it("keeps subagent transcripts off disk by default by using a temp session file", async () => {
     const mkdtempSpy = vi
       .spyOn(fs, "mkdtemp")
       .mockResolvedValue("/tmp/openclaw-active-memory-temp");
@@ -872,11 +872,11 @@ describe("active-memory plugin", () => {
     });
   });
 
-  it("persists sidecar transcripts in a separate directory when enabled", async () => {
+  it("persists subagent transcripts in a separate directory when enabled", async () => {
     api.pluginConfig = {
       agents: ["main"],
       persistTranscripts: true,
-      transcriptDir: "active-memory-sidecars",
+      transcriptDir: "active-memory-subagents",
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
@@ -890,17 +890,17 @@ describe("active-memory plugin", () => {
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
 
-    expect(mkdirSpy).toHaveBeenCalledWith("/tmp/active-memory-sidecars", { recursive: true });
+    expect(mkdirSpy).toHaveBeenCalledWith("/tmp/active-memory-subagents", { recursive: true });
     expect(mkdtempSpy).not.toHaveBeenCalled();
     expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.sessionFile).toMatch(
-      /^\/tmp\/active-memory-sidecars\/active-memory-[a-z0-9]+-[a-f0-9]{8}\.jsonl$/,
+      /^\/tmp\/active-memory-subagents\/active-memory-[a-z0-9]+-[a-f0-9]{8}\.jsonl$/,
     );
     expect(rmSpy).not.toHaveBeenCalled();
     expect(
       vi
         .mocked(api.logger.info)
         .mock.calls.some((call: unknown[]) =>
-          String(call[0]).includes("transcript=/tmp/active-memory-sidecars/"),
+          String(call[0]).includes("transcript=/tmp/active-memory-subagents/"),
         ),
     ).toBe(true);
   });

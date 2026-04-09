@@ -17,12 +17,12 @@ conceptual overviews, see:
 - [Builtin Engine](/concepts/memory-builtin) -- default SQLite backend
 - [QMD Engine](/concepts/memory-qmd) -- local-first sidecar
 - [Memory Search](/concepts/memory-search) -- search pipeline and tuning
-- [Active Memory](/concepts/active-memory) -- enabling the memory sidecar for interactive sessions
+- [Active Memory](/concepts/active-memory) -- enabling the memory sub-agent for interactive sessions
 
 All memory search settings live under `agents.defaults.memorySearch` in
 `openclaw.json` unless noted otherwise.
 
-If you are looking for the **active memory** feature toggle and sidecar config,
+If you are looking for the **active memory** feature toggle and sub-agent config,
 that lives under `plugins.entries.active-memory` instead of `memorySearch`.
 
 Active memory uses a two-gate model:

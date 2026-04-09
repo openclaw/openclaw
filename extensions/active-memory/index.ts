@@ -852,7 +852,7 @@ function getModelRef(
   );
 }
 
-async function runRecallSidecar(params: {
+async function runRecallSubagent(params: {
   api: OpenClawPluginApi;
   config: ResolvedActiveRecallPluginConfig;
   agentId: string;
@@ -872,7 +872,7 @@ async function runRecallSidecar(params: {
   if (!modelRef) {
     return { rawReply: "NONE" };
   }
-  const sidecarSessionId = `active-memory-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
+  const subagentSessionId = `active-memory-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
   const parentSessionKey =
     params.sessionKey ??
     resolveCanonicalSessionKeyFromSessionId({
@@ -880,15 +880,15 @@ async function runRecallSidecar(params: {
       agentId: params.agentId,
       sessionId: params.sessionId,
     });
-  const sidecarScope = parentSessionKey ?? params.sessionId ?? crypto.randomUUID();
-  const sidecarSuffix = `active-memory:${crypto
+  const subagentScope = parentSessionKey ?? params.sessionId ?? crypto.randomUUID();
+  const subagentSuffix = `active-memory:${crypto
     .createHash("sha1")
-    .update(`${sidecarScope}:${params.query}`)
+    .update(`${subagentScope}:${params.query}`)
     .digest("hex")
     .slice(0, 12)}`;
-  const sidecarSessionKey = parentSessionKey
-    ? `${parentSessionKey}:${sidecarSuffix}`
-    : `agent:${params.agentId}:${sidecarSuffix}`;
+  const subagentSessionKey = parentSessionKey
+    ? `${parentSessionKey}:${subagentSuffix}`
+    : `agent:${params.agentId}:${subagentSuffix}`;
   const storePath = params.api.runtime.agent.session.resolveStorePath(
     params.api.config.session?.store,
     {
@@ -908,7 +908,7 @@ async function runRecallSidecar(params: {
     await fs.mkdir(persistedDir, { recursive: true });
   }
   const sessionFile = params.config.persistTranscripts
-    ? path.join(persistedDir!, `${sidecarSessionId}.jsonl`)
+    ? path.join(persistedDir!, `${subagentSessionId}.jsonl`)
     : path.join(tempDir!, "session.jsonl");
   const prompt = [
     "You are a memory search agent.",
@@ -962,8 +962,8 @@ async function runRecallSidecar(params: {
 
   try {
     const result = await params.api.runtime.agent.runEmbeddedPiAgent({
-      sessionId: sidecarSessionId,
-      sessionKey: sidecarSessionKey,
+      sessionId: subagentSessionId,
+      sessionKey: subagentSessionKey,
       agentId: params.agentId,
       sessionFile,
       workspaceDir,
@@ -973,7 +973,7 @@ async function runRecallSidecar(params: {
       provider: modelRef.provider,
       model: modelRef.model,
       timeoutMs: params.config.timeoutMs,
-      runId: sidecarSessionId,
+      runId: subagentSessionId,
       trigger: "manual",
       toolsAllow: ["memory_search", "memory_get"],
       disableMessageTool: true,
@@ -1048,7 +1048,7 @@ async function maybeResolveActiveRecall(params: {
   timeoutId.unref?.();
 
   try {
-    const { rawReply, transcriptPath } = await runRecallSidecar({
+    const { rawReply, transcriptPath } = await runRecallSubagent({
       ...params,
       abortSignal: controller.signal,
     });
