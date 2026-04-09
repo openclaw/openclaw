@@ -12,6 +12,7 @@ import {
 import * as sessionPaths from "../config/sessions/paths.js";
 import * as sessionStore from "../config/sessions/store.js";
 import * as sessionTranscript from "../config/sessions/transcript.js";
+import * as channelPlugins from "../channels/plugins/index.js";
 import * as gatewayCall from "../gateway/call.js";
 import * as heartbeatWake from "../infra/heartbeat-wake.js";
 import {
@@ -82,6 +83,7 @@ const hoisted = vi.hoisted(() => {
 });
 
 const callGatewaySpy = vi.spyOn(gatewayCall, "callGateway");
+const getChannelPluginSpy = vi.spyOn(channelPlugins, "getChannelPlugin");
 const getAcpSessionManagerSpy = vi.spyOn(acpSessionManager, "getAcpSessionManager");
 const loadSessionStoreSpy = vi.spyOn(sessionStore, "loadSessionStore");
 const resolveStorePathSpy = vi.spyOn(sessionPaths, "resolveStorePath");
@@ -484,6 +486,7 @@ describe("spawnAcpDirect", () => {
     resolveSessionTranscriptFileSpy
       .mockReset()
       .mockImplementation(async (params) => await hoisted.resolveSessionTranscriptFileMock(params));
+    getChannelPluginSpy.mockReset().mockReturnValue(null);
     areHeartbeatsEnabledSpy
       .mockReset()
       .mockImplementation(() => hoisted.areHeartbeatsEnabledMock());
@@ -496,6 +499,18 @@ describe("spawnAcpDirect", () => {
   });
 
   it("spawns ACP session, binds a new thread, and dispatches initial task", async () => {
+    getChannelPluginSpy.mockImplementation((channel) =>
+      channel === "discord"
+        ? {
+            messaging: {
+              resolveInboundConversation: () => ({
+                conversationId: "channel:parent-channel",
+              }),
+            },
+          }
+        : null,
+    );
+
     const result = await spawnAcpDirect(
       {
         task: "Investigate flaky tests",
@@ -527,6 +542,11 @@ describe("spawnAcpDirect", () => {
       expect.objectContaining({
         targetKind: "session",
         placement: "child",
+        conversation: expect.objectContaining({
+          channel: "discord",
+          accountId: "default",
+          conversationId: "parent-channel",
+        }),
       }),
     );
     expectResolvedIntroTextInBindMetadata();
