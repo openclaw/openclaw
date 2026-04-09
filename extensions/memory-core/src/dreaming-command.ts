@@ -75,7 +75,7 @@ function formatUsage(includeStatus: string): string {
   ].join("\n");
 }
 
-function requiresAdminToMutateDreaming(gatewayClientScopes?: readonly string[]): boolean {
+function isBlockedFromMutatingDreaming(gatewayClientScopes?: readonly string[]): boolean {
   if (!Array.isArray(gatewayClientScopes)) {
     return false;
   }
@@ -111,7 +111,7 @@ export function registerDreamingCommand(api: OpenClawPluginApi): void {
       if (firstToken === "on" || firstToken === "off") {
         // Gateway callers can override the visible channel, so gateway scopes
         // are the authoritative signal for internal admin-only persistence.
-        if (requiresAdminToMutateDreaming(ctx.gatewayClientScopes)) {
+        if (isBlockedFromMutatingDreaming(ctx.gatewayClientScopes)) {
           return {
             text: "⚠️ /dreaming on|off requires operator.admin for gateway clients.",
           };
