@@ -373,6 +373,128 @@ describe("gateway server agent", () => {
     expectAgentRoutingCall({ channel: "webchat", deliver: false });
   });
 
+  test("webchat observers receive internal webchat agent turns without agent.wait", async () => {
+    await writeMainSessionEntry({
+      sessionId: "sess-main-webchat-observer",
+      lastChannel: "webchat",
+      lastTo: "+1555",
+    });
+
+    const webchatWs = await connectWebchatClient({ port });
+    const res = await rpcReq(ws, "agent", {
+      message: "resume after subagent completion",
+      sessionKey: "main",
+      channel: "last",
+      deliver: false,
+      idempotencyKey: "idem-agent-webchat-observer",
+    });
+    expect(res.ok).toBe(true);
+
+    const runId = res.payload?.runId;
+    expect(typeof runId).toBe("string");
+
+    const finalChatP = onceMessage(
+      webchatWs,
+      (o) => {
+        if (o.type !== "event" || o.event !== "chat") {
+          return false;
+        }
+        const payload = o.payload as { state?: unknown; runId?: unknown } | undefined;
+        return payload?.state === "final" && payload.runId === runId;
+      },
+      8000,
+    );
+
+    emitAgentEvent({
+      runId: String(runId),
+      stream: "assistant",
+      data: { text: "subagent result delivered" },
+    });
+    emitAgentEvent({
+      runId: String(runId),
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+
+    const evt = await finalChatP;
+    const payload = evt.payload as {
+      runId?: string;
+      sessionKey?: string;
+      state?: string;
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(payload.runId).toBe(runId);
+    expect(payload.sessionKey).toBe("agent:main:main");
+    expect(payload.state).toBe("final");
+    expect(payload.message?.content?.[0]?.text).toContain("subagent result delivered");
+
+    webchatWs.close();
+  });
+
+  test("webchat observers receive internal turns for direct webchat sessions", async () => {
+    await useTempSessionStorePath();
+    await writeSessionStore({
+      entries: {
+        "agent:main:webchat:dm:user-123": {
+          sessionId: "sess-webchat-dm-user-123",
+          updatedAt: Date.now(),
+          lastChannel: "webchat",
+          lastTo: "webchat:user-123",
+        },
+      },
+    });
+
+    const webchatWs = await connectWebchatClient({ port });
+    const sessionKey = "agent:main:webchat:dm:user-123";
+    const res = await rpcReq(ws, "agent", {
+      message: "resume direct webchat session",
+      sessionKey,
+      deliver: false,
+      idempotencyKey: "idem-agent-webchat-direct-session",
+    });
+    expect(res.ok).toBe(true);
+
+    const runId = res.payload?.runId;
+    expect(typeof runId).toBe("string");
+
+    const finalChatP = onceMessage(
+      webchatWs,
+      (o) => {
+        if (o.type !== "event" || o.event !== "chat") {
+          return false;
+        }
+        const payload = o.payload as { state?: unknown; runId?: unknown } | undefined;
+        return payload?.state === "final" && payload.runId === runId;
+      },
+      8000,
+    );
+
+    emitAgentEvent({
+      runId: String(runId),
+      stream: "assistant",
+      data: { text: "direct webchat subagent result" },
+    });
+    emitAgentEvent({
+      runId: String(runId),
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+
+    const evt = await finalChatP;
+    const payload = evt.payload as {
+      runId?: string;
+      sessionKey?: string;
+      state?: string;
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(payload.runId).toBe(runId);
+    expect(payload.sessionKey).toBe(sessionKey);
+    expect(payload.state).toBe("final");
+    expect(payload.message?.content?.[0]?.text).toContain("direct webchat subagent result");
+
+    webchatWs.close();
+  });
+
   test("agent routes bare /new through session reset before running greeting prompt", async () => {
     await writeMainSessionEntry({ sessionId: "sess-main-before-reset" });
     const spy = vi.mocked(agentCommand);
