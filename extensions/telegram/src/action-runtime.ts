@@ -122,11 +122,6 @@ export function readTelegramButtons(
       if (!text || !callbackData) {
         throw new Error(`buttons[${rowIndex}][${buttonIndex}] requires text and callback_data`);
       }
-      if (!fitsTelegramCallbackData(callbackData)) {
-        throw new Error(
-          `buttons[${rowIndex}][${buttonIndex}] callback_data too long (max ${TELEGRAM_CALLBACK_DATA_MAX_BYTES} bytes)`,
-        );
-      }
       const styleRaw = rawButton.style;
       const style = normalizeOptionalLowercaseString(styleRaw);
       if (styleRaw !== undefined && !style) {
