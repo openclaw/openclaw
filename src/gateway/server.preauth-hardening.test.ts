@@ -8,6 +8,7 @@ import { createPreauthConnectionBudget } from "./server/preauth-connection-budge
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
+  connectOk,
   createGatewaySuiteHarness,
   installGatewayTestHooks,
   readConnectChallengeNonce,
@@ -160,6 +161,77 @@ describe("gateway pre-auth hardening", () => {
 
       const result = await closed;
       expect(result.code).toBe(1009);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("accepts typed-array pre-auth connect frames", async () => {
+    const harness = await createGatewaySuiteHarness({
+      serverOptions: { auth: { mode: "none" } },
+    });
+    try {
+      const ws = await harness.openWs();
+      const originalSend = ws.send.bind(ws);
+      const textEncoder = new TextEncoder();
+      ws.send = ((data, options, cb) => {
+        if (typeof data === "string") {
+          return originalSend(textEncoder.encode(data), options, cb);
+        }
+        return originalSend(data, options, cb);
+      }) as typeof ws.send;
+
+      await connectOk(ws, { skipDefaultAuth: true });
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("closes malformed json before connect as a protocol violation", async () => {
+    const harness = await createGatewaySuiteHarness({
+      serverOptions: { auth: { mode: "none" } },
+    });
+    try {
+      const ws = await harness.openWs();
+      await readConnectChallengeNonce(ws);
+
+      const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+        ws.once("close", (code, reason) => {
+          resolve({ code, reason: reason.toString() });
+        });
+      });
+
+      ws.send("{ invalid json");
+
+      await expect(closed).resolves.toEqual({
+        code: 1008,
+        reason: "invalid json",
+      });
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("closes malformed json after connect as a protocol violation", async () => {
+    const harness = await createGatewaySuiteHarness({
+      serverOptions: { auth: { mode: "none" } },
+    });
+    try {
+      const ws = await harness.openWs();
+      await connectOk(ws, { skipDefaultAuth: true });
+
+      const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+        ws.once("close", (code, reason) => {
+          resolve({ code, reason: reason.toString() });
+        });
+      });
+
+      ws.send("{ still invalid json");
+
+      await expect(closed).resolves.toEqual({
+        code: 1008,
+        reason: "invalid json",
+      });
     } finally {
       await harness.close();
     }

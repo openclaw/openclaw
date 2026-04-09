@@ -33,7 +33,7 @@ import {
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../infra/skills-remote.js";
 import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
-import { rawDataToString } from "../../../infra/ws.js";
+import { rawDataByteLength, rawDataToString } from "../../../infra/ws.js";
 import type { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
   resolveBootstrapProfileScopesForRole,
@@ -301,7 +301,7 @@ export function attachGatewayWsMessageHandler(params: {
       return;
     }
 
-    const preauthPayloadBytes = !getClient() ? getRawDataByteLength(data) : undefined;
+    const preauthPayloadBytes = !getClient() ? rawDataByteLength(data) : undefined;
     if (preauthPayloadBytes !== undefined && preauthPayloadBytes > MAX_PREAUTH_PAYLOAD_BYTES) {
       setHandshakeState("failed");
       setCloseCause("preauth-payload-too-large", {
@@ -1437,24 +1437,19 @@ export function attachGatewayWsMessageHandler(params: {
     } catch (err) {
       logGateway.error(`parse/handle error: ${String(err)}`);
       logWs("out", "parse-error", { connId, error: formatForLog(err) });
+      if (err instanceof SyntaxError) {
+        const hadClient = getClient() !== null;
+        setCloseCause(hadClient ? "invalid-json-frame" : "invalid-handshake-json", {
+          parseError: formatForLog(err),
+        });
+        close(1008, "invalid json");
+        return;
+      }
       if (!getClient()) {
         close();
       }
     }
   });
-}
-
-function getRawDataByteLength(data: unknown): number {
-  if (Buffer.isBuffer(data)) {
-    return data.byteLength;
-  }
-  if (Array.isArray(data)) {
-    return data.reduce((total, chunk) => total + chunk.byteLength, 0);
-  }
-  if (data instanceof ArrayBuffer) {
-    return data.byteLength;
-  }
-  return Buffer.byteLength(String(data));
 }
 
 function setSocketMaxPayload(socket: WebSocket, maxPayload: number): void {
