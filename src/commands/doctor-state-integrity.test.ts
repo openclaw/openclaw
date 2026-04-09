@@ -232,4 +232,26 @@ describe("doctor state integrity oauth dir checks", () => {
     const text = await runStateIntegrityText(cfg);
     expect(text).not.toContain("recent sessions are missing transcripts");
   });
+
+  it("warns when the same sessionId maps ambiguously to multiple session keys", async () => {
+    const cfg: OpenClawConfig = {};
+    writeSessionStore(cfg, {
+      "agent:main:beta": {
+        sessionId: "sid-dup",
+        updatedAt: 10,
+      },
+      "agent:main:alpha": {
+        sessionId: "sid-dup",
+        updatedAt: 10,
+      },
+    });
+
+    const text = await runStateIntegrityText(cfg);
+
+    expect(text).toContain("Session isolation risk: 1 ambiguous sessionId mapping");
+    expect(text).toContain(
+      "The same sessionId is referenced by multiple session keys without a unique canonical selection.",
+    );
+    expect(text).toContain("sessionId=sid-dup: agent:main:beta, agent:main:alpha");
+  });
 });

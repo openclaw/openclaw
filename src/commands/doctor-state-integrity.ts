@@ -16,10 +16,12 @@ import {
   resolveSessionFilePathOptions,
   resolveSessionTranscriptsDirForAgent,
   resolveStorePath,
+  type SessionEntry,
 } from "../config/sessions.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveMemoryBackendConfig } from "../memory-host-sdk/engine-storage.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { resolveSessionIdMatchSelection } from "../sessions/session-id-resolution.js";
 import { asNullableObjectRecord } from "../shared/record-coerce.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
@@ -488,6 +490,40 @@ function shouldSuppressOrphanTranscriptWarning(cfg: OpenClawConfig, agentId: str
   return backendConfig?.backend === "qmd" && backendConfig.qmd?.sessions.enabled === true;
 }
 
+function collectAmbiguousSessionIdWarnings(
+  entries: Array<[string, SessionEntry]>,
+): Array<{ sessionId: string; sessionKeys: string[] }> {
+  const bySessionId = new Map<string, Array<[string, SessionEntry]>>();
+  for (const [sessionKey, entry] of entries) {
+    const sessionId = normalizeOptionalLowercaseString(entry.sessionId);
+    if (!sessionId) {
+      continue;
+    }
+    const bucket = bySessionId.get(sessionId);
+    if (bucket) {
+      bucket.push([sessionKey, entry]);
+    } else {
+      bySessionId.set(sessionId, [[sessionKey, entry]]);
+    }
+  }
+
+  const warnings: Array<{ sessionId: string; sessionKeys: string[] }> = [];
+  for (const [sessionId, matches] of bySessionId) {
+    if (matches.length < 2) {
+      continue;
+    }
+    const selection = resolveSessionIdMatchSelection(matches, sessionId);
+    if (selection.kind !== "ambiguous") {
+      continue;
+    }
+    warnings.push({
+      sessionId,
+      sessionKeys: selection.sessionKeys,
+    });
+  }
+  return warnings;
+}
+
 export async function noteStateIntegrity(
   cfg: OpenClawConfig,
   prompter: DoctorPrompterLike,
@@ -721,6 +757,22 @@ export async function noteStateIntegrity(
   const store = loadSessionStore(storePath);
   const sessionPathOpts = resolveSessionFilePathOptions({ agentId, storePath });
   const entries = Object.entries(store).filter(([, entry]) => entry && typeof entry === "object");
+  const ambiguousSessionIds = collectAmbiguousSessionIdWarnings(entries);
+  if (ambiguousSessionIds.length > 0) {
+    const examples = ambiguousSessionIds.slice(0, 3).map((entry) => {
+      const preview = entry.sessionKeys.slice(0, 3).join(", ");
+      const remaining = entry.sessionKeys.length - Math.min(entry.sessionKeys.length, 3);
+      return `  - sessionId=${entry.sessionId}: ${preview}${remaining > 0 ? `, and ${remaining} more` : ""}`;
+    });
+    warnings.push(
+      [
+        `- Session isolation risk: ${countLabel(ambiguousSessionIds.length, "ambiguous sessionId mapping")}.`,
+        "- The same sessionId is referenced by multiple session keys without a unique canonical selection.",
+        "- This can cause cross-session context reuse or ambiguous transcript lookup across runs.",
+        ...examples,
+      ].join("\n"),
+    );
+  }
   if (entries.length > 0) {
     const recent = entries
       .slice()
