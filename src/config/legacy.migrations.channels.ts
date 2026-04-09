@@ -82,7 +82,93 @@ const THREAD_BINDING_RULES: LegacyConfigRule[] = [
   },
 ];
 
+/** Fields that were never valid inside a channel config block but could appear
+ *  in v4.5-era configs due to top-level key nesting.  Stripping them before
+ *  schema validation restores a safe v4.5 → v4.8 upgrade path (issue #63101). */
+const CHANNEL_LEVEL_STALE_KEYS = ["installs", "plugins"] as const;
+
+function hasStaleChannelKeys(channelValue: unknown): boolean {
+  const entry = getRecord(channelValue);
+  return entry !== null && CHANNEL_LEVEL_STALE_KEYS.some((key) => hasOwnKey(entry, key));
+}
+
+/**
+ * Strip stale top-level keys (`installs`, `plugins`) from every channel entry
+ * and its nested `accounts.<id>` entries.
+ * Returns `true` if at least one key was removed.
+ */
+function stripStaleChannelKeys(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): boolean {
+  let removed = false;
+  for (const key of CHANNEL_LEVEL_STALE_KEYS) {
+    if (hasOwnKey(params.entry, key)) {
+      delete params.entry[key];
+      params.changes.push(
+        `Removed ${params.pathPrefix}.${key} (not a valid channel property; auto-stripped for upgrade compatibility).`,
+      );
+      removed = true;
+    }
+  }
+
+  const accounts = getRecord(params.entry.accounts);
+  if (accounts) {
+    for (const [accountId, accountRaw] of Object.entries(accounts)) {
+      const account = getRecord(accountRaw);
+      if (!account) {
+        continue;
+      }
+      for (const key of CHANNEL_LEVEL_STALE_KEYS) {
+        if (hasOwnKey(account, key)) {
+          delete account[key];
+          params.changes.push(
+            `Removed ${params.pathPrefix}.accounts.${accountId}.${key} (not a valid channel property; auto-stripped for upgrade compatibility).`,
+          );
+          removed = true;
+        }
+      }
+    }
+  }
+  return removed;
+}
+
+const STALE_CHANNEL_KEY_RULES: LegacyConfigRule[] = [
+  {
+    path: ["channels", "feishu"],
+    message:
+      'channels.feishu contains legacy "installs" or "plugins" keys that are not valid channel properties (auto-removed on load).',
+    match: (value) => hasStaleChannelKeys(value),
+  },
+];
+
 export const LEGACY_CONFIG_MIGRATIONS_CHANNELS: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "channels.*.stale-top-level-keys",
+    describe:
+      "Strip legacy installs/plugins keys from channel configs (not valid channel properties)",
+    legacyRules: STALE_CHANNEL_KEY_RULES,
+    apply: (raw, changes) => {
+      const channels = getRecord(raw.channels);
+      if (!channels) {
+        return;
+      }
+      for (const [channelId, channelRaw] of Object.entries(channels)) {
+        const channel = getRecord(channelRaw);
+        if (!channel) {
+          continue;
+        }
+        stripStaleChannelKeys({
+          entry: channel,
+          pathPrefix: `channels.${channelId}`,
+          changes,
+        });
+        channels[channelId] = channel;
+      }
+      raw.channels = channels;
+    },
+  }),
   defineLegacyConfigMigration({
     id: "thread-bindings.ttlHours->idleHours",
     describe:

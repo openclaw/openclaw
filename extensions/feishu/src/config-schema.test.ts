@@ -240,6 +240,43 @@ describe("FeishuConfigSchema actions", () => {
   });
 });
 
+describe("FeishuConfigSchema legacy field rejection (issue #63101)", () => {
+  it("rejects config with legacy installs field before migration", () => {
+    const result = FeishuConfigSchema.safeParse({
+      appId: "cli_test",
+      appSecret: "secret_test", // pragma: allowlist secret
+      installs: [{ source: "npm", spec: "@openclaw/plugin-feishu@4.5.0" }],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const messages = result.error.issues.map((i) => i.message);
+      expect(messages.some((m) => /unrecognized/i.test(m))).toBe(true);
+    }
+  });
+
+  it("rejects config with legacy plugins field before migration", () => {
+    const result = FeishuConfigSchema.safeParse({
+      appId: "cli_test",
+      appSecret: "secret_test", // pragma: allowlist secret
+      plugins: { allow: ["@openclaw/plugin-feishu"] },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects config with both legacy installs and plugins fields before migration", () => {
+    const result = FeishuConfigSchema.safeParse({
+      appId: "cli_test",
+      appSecret: "secret_test", // pragma: allowlist secret
+      installs: [{ source: "npm", spec: "@openclaw/plugin-feishu@4.5.0" }],
+      plugins: { allow: ["@openclaw/plugin-feishu"] },
+    });
+
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("FeishuConfigSchema defaultAccount", () => {
   it("accepts defaultAccount when it matches an account key", () => {
     const result = FeishuConfigSchema.safeParse({

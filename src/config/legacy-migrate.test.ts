@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { migrateLegacyConfig } from "./legacy-migrate.js";
+import { applyLegacyMigrations } from "./legacy.js";
 
 describe("legacy migrate audio transcription", () => {
   it("does not rewrite removed routing.transcribeAudio migrations", () => {
@@ -327,5 +328,114 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
       "http://localhost:18789",
       "http://127.0.0.1:18789",
     ]);
+  });
+});
+
+describe("legacy migrate stale channel keys (issue #63101)", () => {
+  it("strips installs from channels.feishu", () => {
+    const { next, changes } = applyLegacyMigrations({
+      channels: {
+        feishu: {
+          appId: "cli_test",
+          appSecret: "secret_test", // pragma: allowlist secret
+          installs: [{ source: "npm", spec: "@openclaw/plugin-feishu@4.5.0" }],
+        },
+      },
+    });
+
+    expect(next).not.toBeNull();
+    expect(changes.length).toBeGreaterThan(0);
+    expect(changes.some((c) => c.includes("channels.feishu.installs"))).toBe(true);
+    const feishu = (next?.channels as Record<string, Record<string, unknown>>)?.feishu;
+    expect(feishu).toBeDefined();
+    expect(Object.prototype.hasOwnProperty.call(feishu, "installs")).toBe(false);
+    expect(feishu?.appId).toBe("cli_test");
+  });
+
+  it("strips plugins from channels.feishu", () => {
+    const { next, changes } = applyLegacyMigrations({
+      channels: {
+        feishu: {
+          appId: "cli_test",
+          appSecret: "secret_test", // pragma: allowlist secret
+          plugins: { allow: ["@openclaw/plugin-feishu"] },
+        },
+      },
+    });
+
+    expect(next).not.toBeNull();
+    expect(changes.some((c) => c.includes("channels.feishu.plugins"))).toBe(true);
+    const feishu = (next?.channels as Record<string, Record<string, unknown>>)?.feishu;
+    expect(Object.prototype.hasOwnProperty.call(feishu, "plugins")).toBe(false);
+  });
+
+  it("strips both installs and plugins from channels.feishu", () => {
+    const { next, changes } = applyLegacyMigrations({
+      channels: {
+        feishu: {
+          appId: "cli_test",
+          appSecret: "secret_test", // pragma: allowlist secret
+          installs: [{ source: "npm", spec: "@openclaw/plugin-feishu@4.5.0" }],
+          plugins: { allow: ["@openclaw/plugin-feishu"] },
+        },
+      },
+    });
+
+    expect(next).not.toBeNull();
+    expect(changes.filter((c) => c.includes("channels.feishu")).length).toBe(2);
+    const feishu = (next?.channels as Record<string, Record<string, unknown>>)?.feishu;
+    expect(Object.prototype.hasOwnProperty.call(feishu, "installs")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(feishu, "plugins")).toBe(false);
+  });
+
+  it("does not modify channel config without stale keys", () => {
+    const { next, changes } = applyLegacyMigrations({
+      channels: {
+        feishu: {
+          appId: "cli_test",
+          appSecret: "secret_test", // pragma: allowlist secret
+        },
+      },
+    });
+
+    expect(next).toBeNull();
+    expect(changes).toHaveLength(0);
+  });
+
+  it("strips stale keys from other channels too", () => {
+    const { next, changes } = applyLegacyMigrations({
+      channels: {
+        slack: {
+          botToken: "xoxb-test",
+          installs: [{ source: "npm", spec: "@openclaw/plugin-slack@4.5.0" }],
+        },
+      },
+    });
+
+    expect(next).not.toBeNull();
+    expect(changes.some((c) => c.includes("channels.slack.installs"))).toBe(true);
+  });
+
+  it("strips stale keys from nested account configs", () => {
+    const { next, changes } = applyLegacyMigrations({
+      channels: {
+        feishu: {
+          appId: "cli_test",
+          appSecret: "secret_test", // pragma: allowlist secret
+          accounts: {
+            main: {
+              appId: "cli_main",
+              plugins: { allow: ["@openclaw/plugin-feishu"] },
+            },
+          },
+        },
+      },
+    });
+
+    expect(next).not.toBeNull();
+    expect(changes.some((c) => c.includes("channels.feishu.accounts.main.plugins"))).toBe(true);
+    const accounts = (next?.channels as Record<string, Record<string, unknown>>)?.feishu
+      ?.accounts as Record<string, Record<string, unknown>>;
+    expect(Object.prototype.hasOwnProperty.call(accounts?.main, "plugins")).toBe(false);
   });
 });
