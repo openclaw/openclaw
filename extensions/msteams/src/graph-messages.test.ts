@@ -17,7 +17,7 @@ const mockState = vi.hoisted(() => ({
   postGraphJson: vi.fn(),
   postGraphBetaJson: vi.fn(),
   deleteGraphRequest: vi.fn(),
-  findByUserId: vi.fn(),
+  findPreferredDmByUserId: vi.fn(),
 }));
 
 vi.mock("./graph.js", () => ({
@@ -31,7 +31,7 @@ vi.mock("./graph.js", () => ({
 
 vi.mock("./conversation-store-fs.js", () => ({
   createMSTeamsConversationStoreFs: () => ({
-    findByUserId: mockState.findByUserId,
+    findPreferredDmByUserId: mockState.findPreferredDmByUserId,
   }),
 }));
 
@@ -46,7 +46,7 @@ describe("getMessageMSTeams", () => {
   });
 
   it("resolves user: target using graphChatId from store", async () => {
-    mockState.findByUserId.mockResolvedValue({
+    mockState.findPreferredDmByUserId.mockResolvedValue({
       conversationId: "a:bot-framework-dm-id",
       reference: { graphChatId: "19:graph-native-chat@thread.tacv2" },
     });
@@ -62,7 +62,7 @@ describe("getMessageMSTeams", () => {
       messageId: "msg-1",
     });
 
-    expect(mockState.findByUserId).toHaveBeenCalledWith("aad-object-id-123");
+    expect(mockState.findPreferredDmByUserId).toHaveBeenCalledWith("aad-object-id-123");
     // Must use the graphChatId, not the Bot Framework conversation ID
     expect(mockState.fetchGraphJson).toHaveBeenCalledWith({
       token: TOKEN,
@@ -71,7 +71,7 @@ describe("getMessageMSTeams", () => {
   });
 
   it("falls back to conversationId when it starts with 19:", async () => {
-    mockState.findByUserId.mockResolvedValue({
+    mockState.findPreferredDmByUserId.mockResolvedValue({
       conversationId: "19:resolved-chat@thread.tacv2",
       reference: {},
     });
@@ -94,7 +94,7 @@ describe("getMessageMSTeams", () => {
   });
 
   it("throws when user: target has no stored conversation", async () => {
-    mockState.findByUserId.mockResolvedValue(null);
+    mockState.findPreferredDmByUserId.mockResolvedValue(null);
 
     await expect(
       getMessageMSTeams({
@@ -106,7 +106,7 @@ describe("getMessageMSTeams", () => {
   });
 
   it("throws when user: target has Bot Framework ID and no graphChatId", async () => {
-    mockState.findByUserId.mockResolvedValue({
+    mockState.findPreferredDmByUserId.mockResolvedValue({
       conversationId: "a:bot-framework-dm-id",
       reference: {},
     });
@@ -460,7 +460,7 @@ describe("reactMessageMSTeams", () => {
   });
 
   it("resolves user: target through conversation store", async () => {
-    mockState.findByUserId.mockResolvedValue({
+    mockState.findPreferredDmByUserId.mockResolvedValue({
       conversationId: "a:bot-id",
       reference: { graphChatId: "19:dm-chat@thread.tacv2" },
     });
@@ -473,7 +473,7 @@ describe("reactMessageMSTeams", () => {
       reactionType: "like",
     });
 
-    expect(mockState.findByUserId).toHaveBeenCalledWith("aad-user-1");
+    expect(mockState.findPreferredDmByUserId).toHaveBeenCalledWith("aad-user-1");
     expect(mockState.postGraphBetaJson).toHaveBeenCalledWith({
       token: TOKEN,
       path: `/chats/${encodeURIComponent("19:dm-chat@thread.tacv2")}/messages/msg-1/setReaction`,

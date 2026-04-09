@@ -996,11 +996,24 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
       },
     },
     threading: {
-      buildToolContext: ({ context, hasRepliedRef }) => ({
-        currentChannelId: context.To?.trim() || undefined,
-        currentThreadTs: context.ReplyToId,
-        hasRepliedRef,
-      }),
+      buildToolContext: ({ context, hasRepliedRef }) => {
+        // For Teams channel messages, NativeChannelId carries the compound
+        // `teamId/channelId` target that resolveConversationPath uses to route
+        // through `/teams/{teamId}/channels/{channelId}`. Without it, we would
+        // fall back to `context.To` (a bare `conversation:19:...@thread.tacv2`
+        // string), which Graph API routes through `/chats/{id}` — wrong for
+        // channel messages. DMs and group chats still use `To` as before.
+        const nativeChannelId = context.NativeChannelId?.trim();
+        const hasChannelRoute = Boolean(nativeChannelId && nativeChannelId.includes("/"));
+        const currentChannelId = hasChannelRoute
+          ? nativeChannelId
+          : context.To?.trim() || undefined;
+        return {
+          currentChannelId,
+          currentThreadTs: context.ReplyToId,
+          hasRepliedRef,
+        };
+      },
     },
     outbound: {
       deliveryMode: "direct",

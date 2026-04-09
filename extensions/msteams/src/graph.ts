@@ -162,32 +162,6 @@ export async function postGraphBetaJson<T>(params: {
   return readOptionalGraphJson<T>(res);
 }
 
-export async function postGraphBetaJson<T>(params: {
-  token: string;
-  path: string;
-  body?: unknown;
-}): Promise<T> {
-  const res = await fetch(`${GRAPH_BETA}${params.path}`, {
-    method: "POST",
-    headers: {
-      "User-Agent": buildUserAgent(),
-      Authorization: `Bearer ${params.token}`,
-      "Content-Type": "application/json",
-    },
-    body: params.body !== undefined ? JSON.stringify(params.body) : undefined,
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(
-      `Graph beta POST ${params.path} failed (${res.status}): ${text || "unknown error"}`,
-    );
-  }
-  if (res.status === 204 || res.headers.get("content-length") === "0") {
-    return undefined as T;
-  }
-  return (await res.json()) as T;
-}
-
 export async function deleteGraphRequest(params: { token: string; path: string }): Promise<void> {
   await requestGraph({
     token: params.token,
