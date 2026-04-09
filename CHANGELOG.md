@@ -8,6 +8,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/image tool: resolve gateway claim-check `media://inbound/<id>` URIs to on-disk inbound media (same guards as native prompt images) and avoid treating the `media:` scheme as a `MEDIA:` path tag. (#63476) Thanks @zhengriu.
+
 ## 2026.4.9-beta.1
 
 ### Changes

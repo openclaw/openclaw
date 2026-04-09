@@ -7,6 +7,7 @@ import {
 } from "../../media-understanding/defaults.js";
 import { getMediaUnderstandingProvider } from "../../media-understanding/provider-registry.js";
 import { buildProviderRegistry } from "../../media-understanding/runner.js";
+import { getMediaDir, resolveMediaBufferPath } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import {
   describeImageWithModel,
@@ -45,6 +46,10 @@ import {
 
 const DEFAULT_PROMPT = "Describe the image.";
 const DEFAULT_MAX_IMAGES = 20;
+
+/** Gateway claim-check URIs (`media://inbound/<id>`); aligned with `run/images.ts` MEDIA_URI_REGEX. */
+// eslint-disable-next-line no-control-regex -- exclude null bytes in media IDs (same as `run/images.ts`)
+const INBOUND_MEDIA_URI_RE = /^media:\/\/inbound\/([^\]\s/\\\u0000]+)$/i;
 
 const imageToolProviderDeps = {
   buildProviderRegistry,
@@ -402,16 +407,61 @@ export function createImageTool(options?: {
           throw new Error("image required (empty string in array)");
         }
 
+        // Match `loadWebMedia`: strip optional MEDIA: tag before scheme/path handling.
+        // Do not treat the `media:` scheme of gateway claim-check URIs (`media://inbound/...`)
+        // as a tagged path — `/^\s*MEDIA\s*:\s*/i` would otherwise consume `media:` and yield `//inbound/...`.
+        const trimmedForNorm = imageRaw.trimStart();
+        const normalizedRef = trimmedForNorm.toLowerCase().startsWith("media://")
+          ? trimmedForNorm
+          : imageRaw.replace(/^\s*MEDIA\s*:\s*/i, "");
+
+        const inboundMediaMatch = normalizedRef.match(INBOUND_MEDIA_URI_RE);
+        const inboundMediaId = inboundMediaMatch?.[1]?.trim();
+        if (inboundMediaId) {
+          try {
+            const physicalPath = await resolveMediaBufferPath(inboundMediaId, "inbound");
+            const media = await loadWebMedia(physicalPath, {
+              maxBytes,
+              localRoots: [getMediaDir()],
+            });
+            if (media.kind !== "image") {
+              throw new Error(`Unsupported media type: ${media.kind}`);
+            }
+            const mimeType = media.contentType?.trim() || "image/png";
+            loadedImages.push({
+              buffer: media.buffer,
+              mimeType,
+              resolvedImage: normalizedRef,
+            });
+            continue;
+          } catch (err) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Failed to load inbound media (${normalizedRef}): ${
+                    err instanceof Error ? err.message : String(err)
+                  }`,
+                },
+              ],
+              details: {
+                error: "inbound_media_load_failed",
+                image: imageRawInput,
+              },
+            };
+          }
+        }
+
         // The tool accepts file paths, file/data URLs, or http(s) URLs. In some
         // agent/model contexts, images can be referenced as pseudo-URIs like
         // `image:0` (e.g. "first image in the prompt"). We don't have access to a
         // shared image registry here, so fail gracefully instead of attempting to
         // `fs.readFile("image:0")` and producing a noisy ENOENT.
-        const looksLikeWindowsDrivePath = /^[a-zA-Z]:[\\/]/.test(imageRaw);
-        const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(imageRaw);
-        const isFileUrl = /^file:/i.test(imageRaw);
-        const isHttpUrl = /^https?:\/\//i.test(imageRaw);
-        const isDataUrl = /^data:/i.test(imageRaw);
+        const looksLikeWindowsDrivePath = /^[a-zA-Z]:[\\/]/.test(normalizedRef);
+        const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(normalizedRef);
+        const isFileUrl = /^file:/i.test(normalizedRef);
+        const isHttpUrl = /^https?:\/\//i.test(normalizedRef);
+        const isDataUrl = /^data:/i.test(normalizedRef);
         if (hasScheme && !looksLikeWindowsDrivePath && !isFileUrl && !isHttpUrl && !isDataUrl) {
           return {
             content: [
@@ -433,10 +483,10 @@ export function createImageTool(options?: {
 
         const resolvedImage = (() => {
           if (sandboxConfig) {
-            return imageRaw;
+            return normalizedRef;
           }
-          if (imageRaw.startsWith("~")) {
-            return resolveUserPath(imageRaw);
+          if (normalizedRef.startsWith("~")) {
+            return resolveUserPath(normalizedRef);
           }
           // Resolve relative paths against workspaceDir so agents can reference
           // workspace-relative paths (e.g. "inbox/photo.png") without needing to
@@ -446,12 +496,12 @@ export function createImageTool(options?: {
             !isFileUrl &&
             !isHttpUrl &&
             !looksLikeWindowsDrivePath &&
-            !isAbsolute(imageRaw) &&
+            !isAbsolute(normalizedRef) &&
             options?.workspaceDir
           ) {
-            return resolve(options.workspaceDir, imageRaw);
+            return resolve(options.workspaceDir, normalizedRef);
           }
-          return imageRaw;
+          return normalizedRef;
         })();
         const resolvedPathInfo: { resolved: string; rewrittenFrom?: string } = isDataUrl
           ? { resolved: "" }

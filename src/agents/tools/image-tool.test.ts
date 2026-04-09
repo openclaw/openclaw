@@ -1356,6 +1356,72 @@ describe("image tool MiniMax VLM routing", () => {
   });
 });
 
+describe("image tool gateway media://inbound URIs", () => {
+  const priorFetch = global.fetch;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    global.fetch = priorFetch;
+  });
+
+  it("resolves claim-check media://inbound/<id> to files under OPENCLAW_STATE_DIR", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-inbound-media-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+
+    try {
+      await fs.mkdir(path.join(stateDir, "media", "inbound"), { recursive: true });
+      const mediaId = "claim-check-test.png";
+      await fs.writeFile(
+        path.join(stateDir, "media", "inbound", mediaId),
+        Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+      );
+
+      installImageUnderstandingProviderStubs();
+      const fetch = stubMinimaxOkFetch();
+
+      await withTempAgentDir(async (agentDir) => {
+        const tool = createRequiredImageTool({
+          config: createMinimaxImageConfig(),
+          agentDir,
+        });
+        await expectImageToolExecOk(tool, `media://inbound/${mediaId}`);
+        expect(fetch).toHaveBeenCalledTimes(1);
+      });
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts MEDIA:media://inbound/<id> the same as bare media://", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-inbound-media2-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+
+    try {
+      await fs.mkdir(path.join(stateDir, "media", "inbound"), { recursive: true });
+      const mediaId = "tagged.png";
+      await fs.writeFile(
+        path.join(stateDir, "media", "inbound", mediaId),
+        Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+      );
+
+      installImageUnderstandingProviderStubs();
+      stubMinimaxOkFetch();
+
+      await withTempAgentDir(async (agentDir) => {
+        const tool = createRequiredImageTool({
+          config: createMinimaxImageConfig(),
+          agentDir,
+        });
+        await expectImageToolExecOk(tool, `MEDIA:media://inbound/${mediaId}`);
+      });
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("image tool response validation", () => {
   function createAssistantMessage(
     overrides: Partial<{
