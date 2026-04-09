@@ -891,6 +891,55 @@ describe("installPluginFromArchive", () => {
     }
   });
 
+  it("blocks package installs when a broad vendored tree contains a deeply nested blocked manifest", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "wide-vendored-tree-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["index.js"] },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n");
+
+    const vendorRoot = path.join(pluginDir, "vendor");
+    for (let index = 0; index < 128; index += 1) {
+      fs.mkdirSync(path.join(vendorRoot, `pkg-${String(index).padStart(3, "0")}`), {
+        recursive: true,
+      });
+    }
+
+    const blockedManifestDir = path.join(
+      vendorRoot,
+      "pkg-127",
+      "node_modules",
+      "nested-safe",
+      "node_modules",
+      "plain-crypto-js",
+    );
+    fs.mkdirSync(blockedManifestDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(blockedManifestDir, "package.json"),
+      JSON.stringify({
+        name: "plain-crypto-js",
+        version: "4.2.1",
+      }),
+    );
+
+    const { result } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain('"plain-crypto-js" as package name');
+      expect(result.error).toContain(
+        "declared in plain-crypto-js (vendor/pkg-127/node_modules/nested-safe/node_modules/plain-crypto-js/package.json)",
+      );
+    }
+  });
+
   it("reports all blocked dependencies from the same manifest", async () => {
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
 

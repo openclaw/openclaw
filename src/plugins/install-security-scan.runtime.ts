@@ -140,9 +140,11 @@ function buildBuiltinScanFromSummary(summary: {
 async function collectPackageManifestPaths(rootDir: string): Promise<string[]> {
   const queue = [rootDir];
   const packageManifestPaths: string[] = [];
+  let queueIndex = 0;
 
-  while (queue.length > 0) {
-    const currentDir = queue.shift();
+  while (queueIndex < queue.length) {
+    const currentDir = queue[queueIndex];
+    queueIndex += 1;
     if (!currentDir) {
       continue;
     }
