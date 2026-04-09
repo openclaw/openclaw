@@ -1245,11 +1245,11 @@ export async function startGatewayServer(
             connIds,
             { dropIfSlow: true },
           );
-          if (event.reason === "reset" || event.reason === "deleted") {
+          if (event.reason === "reset" || event.reason === "deleted" || event.reason === "new") {
             broadcastToConnIds(
               "socket.drain",
               { sessionKey: event.sessionKey, reason: event.reason, ts: Date.now() },
-              connIds
+              connIds,
             );
           }
         });
