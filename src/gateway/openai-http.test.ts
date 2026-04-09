@@ -869,6 +869,59 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     }
   });
 
+  it("preserves content when upstream emits replace events during final-tag stripping", async () => {
+    const port = enabledPort;
+
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      // Simulate partial <final> tag split across chunks:
+      // Chunk 1: delta contains partial tag remnant "<"
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { text: "<", delta: "<" },
+      });
+      // Chunk 2: tag is fully resolved; upstream sends replace with corrected text
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { text: "Title\nSubtitle\nBody", delta: "", replace: true },
+      });
+      // Chunk 3: normal append delta
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { text: "Title\nSubtitle\nBody more", delta: " more" },
+      });
+      return { payloads: [{ text: "Title\nSubtitle\nBody more" }] };
+    }) as never);
+
+    const res = await postChatCompletions(port, {
+      stream: true,
+      model: "openclaw",
+      messages: [{ role: "user", content: "tell me" }],
+    });
+    expect(res.status).toBe(200);
+
+    const text = await res.text();
+    const data = parseSseDataLines(text);
+    expect(data[data.length - 1]).toBe("[DONE]");
+
+    const jsonChunks = data
+      .filter((d) => d !== "[DONE]")
+      .map((d) => JSON.parse(d) as Record<string, unknown>);
+    const allContent = jsonChunks
+      .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
+      .map((choice) => (choice.delta as Record<string, unknown> | undefined)?.content)
+      .filter((v): v is string => typeof v === "string")
+      .join("");
+    expect(allContent).toContain("Title");
+    expect(allContent).toContain("Subtitle");
+    expect(allContent).toContain("Body more");
+    expect(allContent.split("Title").length - 1).toBe(1);
+  });
+
   it("treats shared-secret bearer callers as owner operators", async () => {
     const port = await getFreePort();
     const server = await startTokenServer(port);

@@ -560,6 +560,7 @@ export async function handleOpenAiHttpRequest(
   let wroteRole = false;
   let sawAssistantDelta = false;
   let closed = false;
+  let accumulatedSent = "";
   let stopWatchingDisconnect = () => {};
 
   const unsubscribe = onAgentEvent((evt) => {
@@ -571,7 +572,28 @@ export async function handleOpenAiHttpRequest(
     }
 
     if (evt.stream === "assistant") {
-      const content = resolveAssistantStreamDeltaText(evt) ?? "";
+      const fullText = typeof evt.data?.text === "string" ? evt.data.text : "";
+      const delta = resolveAssistantStreamDeltaText(evt) ?? "";
+
+      let content: string;
+      if (fullText) {
+        if (fullText.startsWith(accumulatedSent)) {
+          content = fullText.slice(accumulatedSent.length);
+        } else {
+          let commonLen = 0;
+          const limit = Math.min(accumulatedSent.length, fullText.length);
+          while (commonLen < limit && accumulatedSent[commonLen] === fullText[commonLen]) {
+            commonLen++;
+          }
+          content = fullText.slice(commonLen);
+          accumulatedSent = fullText.slice(0, commonLen);
+        }
+      } else if (delta) {
+        content = delta;
+      } else {
+        content = "";
+      }
+
       if (!content) {
         return;
       }
@@ -582,6 +604,7 @@ export async function handleOpenAiHttpRequest(
       }
 
       sawAssistantDelta = true;
+      accumulatedSent += content;
       writeAssistantContentChunk(res, {
         runId,
         model,
