@@ -707,6 +707,23 @@ export function renderApp(state: AppViewState) {
         return nothing;
     }
   };
+  const loadAgentPanelDataForSelectedAgent = (agentId: string | null) => {
+    if (!agentId) {
+      return;
+    }
+    if (state.agentsPanel === "files") {
+      void loadAgentFiles(state, agentId);
+      return;
+    }
+    if (state.agentsPanel === "skills") {
+      void loadAgentSkills(state, agentId);
+      return;
+    }
+    if (state.agentsPanel === "tools") {
+      void loadToolsCatalog(state, agentId);
+      void refreshVisibleToolsEffectiveForCurrentSession(state);
+    }
+  };
 
   return html`
     ${renderCommandPalette({
@@ -1339,16 +1356,7 @@ export function renderApp(state: AppViewState) {
                     state.agentsList?.defaultId ??
                     state.agentsList?.agents?.[0]?.id ??
                     null;
-                  if (state.agentsPanel === "files" && refreshedAgentId) {
-                    void loadAgentFiles(state, refreshedAgentId);
-                  }
-                  if (state.agentsPanel === "skills" && refreshedAgentId) {
-                    void loadAgentSkills(state, refreshedAgentId);
-                  }
-                  if (state.agentsPanel === "tools" && refreshedAgentId) {
-                    void loadToolsCatalog(state, refreshedAgentId);
-                    void refreshVisibleToolsEffectiveForCurrentSession(state);
-                  }
+                  loadAgentPanelDataForSelectedAgent(refreshedAgentId);
                   if (state.agentsPanel === "channels") {
                     void loadChannels(state, false);
                   }
@@ -1375,16 +1383,7 @@ export function renderApp(state: AppViewState) {
                   state.toolsCatalogLoading = false;
                   resetToolsEffectiveState(state);
                   void loadAgentIdentity(state, agentId);
-                  if (state.agentsPanel === "files") {
-                    void loadAgentFiles(state, agentId);
-                  }
-                  if (state.agentsPanel === "tools") {
-                    void loadToolsCatalog(state, agentId);
-                    void refreshVisibleToolsEffectiveForCurrentSession(state);
-                  }
-                  if (state.agentsPanel === "skills") {
-                    void loadAgentSkills(state, agentId);
-                  }
+                  loadAgentPanelDataForSelectedAgent(agentId);
                 },
                 onSelectPanel: (panel) => {
                   state.agentsPanel = panel;
