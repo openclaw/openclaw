@@ -42,6 +42,16 @@ export function shouldAutoGenerateBrowserAuth(env: NodeJS.ProcessEnv): boolean {
   return true;
 }
 
+function hasExplicitNonStringGatewayCredential(cfg?: OpenClawConfig): boolean {
+  const auth = cfg?.gateway?.auth;
+  if (!auth) {
+    return false;
+  }
+  const tokenConfiguredAsNonString = auth.token != null && typeof auth.token !== "string";
+  const passwordConfiguredAsNonString = auth.password != null && typeof auth.password !== "string";
+  return tokenConfiguredAsNonString || passwordConfiguredAsNonString;
+}
+
 function generateBrowserControlToken(): string {
   return crypto.randomBytes(24).toString("hex");
 }
@@ -144,6 +154,11 @@ export async function ensureBrowserControlAuth(params: {
     latestCfg.gateway?.auth?.mode === "none" ||
     latestCfg.gateway?.auth?.mode === "trusted-proxy"
   ) {
+    if (hasExplicitNonStringGatewayCredential(latestCfg)) {
+      // Avoid silently overwriting SecretRef-style gateway auth inputs with generated plaintext.
+      // Startup will fail closed if no resolved browser auth is available.
+      return { auth: latestAuth };
+    }
     if (latestCfg.gateway?.auth?.mode === "trusted-proxy") {
       // gateway.auth.mode=trusted-proxy must never be persisted with gateway.auth.token.
       // Persist a browser-only shared secret through gateway.auth.password instead so

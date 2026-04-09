@@ -182,6 +182,27 @@ describe("ensureBrowserControlAuth", () => {
     expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
   });
 
+  it("does not persist over unresolved token SecretRef in none mode", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "none",
+          token: { source: "env", provider: "default", id: "BROWSER_TOKEN" },
+        },
+      },
+      browser: {
+        enabled: true,
+      },
+    };
+    mocks.loadConfig.mockReturnValue(cfg);
+
+    const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
+
+    expect(result).toEqual({ auth: {} });
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
+  });
+
   it("auto-generates in trusted-proxy mode and persists browser auth password", async () => {
     const cfg: OpenClawConfig = {
       gateway: {
@@ -202,6 +223,28 @@ describe("ensureBrowserControlAuth", () => {
     const persistedCfg = mocks.writeConfigFile.mock.calls[0]?.[0] as OpenClawConfig | undefined;
     expect(persistedCfg?.gateway?.auth?.mode).toBe("trusted-proxy");
     expect(persistedCfg?.gateway?.auth?.password).toBe(result.generatedToken);
+    expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
+  });
+
+  it("does not persist over unresolved password SecretRef in trusted-proxy mode", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          password: { source: "env", provider: "default", id: "BROWSER_PASSWORD" },
+          trustedProxy: { userHeader: "x-forwarded-user" },
+        },
+      },
+      browser: {
+        enabled: true,
+      },
+    };
+    mocks.loadConfig.mockReturnValue(cfg);
+
+    const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
+
+    expect(result).toEqual({ auth: {} });
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
     expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
   });
 
