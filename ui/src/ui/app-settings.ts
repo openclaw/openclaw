@@ -101,6 +101,15 @@ export function setLastActiveSessionKey(host: SettingsHost, next: string) {
   applySettings(host, { ...host.settings, lastActiveSessionKey: trimmed });
 }
 
+function applySessionSelection(host: SettingsHost, session: string) {
+  host.sessionKey = session;
+  applySettings(host, {
+    ...host.settings,
+    sessionKey: session,
+    lastActiveSessionKey: session,
+  });
+}
+
 /** Set to true when the token is read from a query string (?token=) instead of a URL fragment. */
 export let warnQueryToken = false;
 
@@ -167,12 +176,7 @@ export function applySettingsFromUrl(host: SettingsHost) {
 
   if (sessionRaw != null) {
     if (session) {
-      host.sessionKey = session;
-      applySettings(host, {
-        ...host.settings,
-        sessionKey: session,
-        lastActiveSessionKey: session,
-      });
+      applySessionSelection(host, session);
     }
   }
 
@@ -204,13 +208,14 @@ export function setTab(host: SettingsHost, next: Tab) {
   applyTabSelection(host, next, { refreshPolicy: "always", syncUrl: true });
 }
 
-export function setTheme(host: SettingsHost, next: ThemeName, context?: ThemeTransitionContext) {
-  const resolved = resolveTheme(next, host.themeMode);
-  const applyTheme = () => {
-    applySettings(host, { ...host.settings, theme: next });
-  };
+function applyThemeTransition(
+  host: SettingsHost,
+  nextTheme: ResolvedTheme,
+  applyTheme: () => void,
+  context?: ThemeTransitionContext,
+) {
   startThemeTransition({
-    nextTheme: resolved,
+    nextTheme,
     applyTheme,
     context,
     currentTheme: host.themeResolved,
@@ -218,22 +223,30 @@ export function setTheme(host: SettingsHost, next: ThemeName, context?: ThemeTra
   syncSystemThemeListener(host);
 }
 
+export function setTheme(host: SettingsHost, next: ThemeName, context?: ThemeTransitionContext) {
+  applyThemeTransition(
+    host,
+    resolveTheme(next, host.themeMode),
+    () => {
+      applySettings(host, { ...host.settings, theme: next });
+    },
+    context,
+  );
+}
+
 export function setThemeMode(
   host: SettingsHost,
   next: ThemeMode,
   context?: ThemeTransitionContext,
 ) {
-  const resolved = resolveTheme(host.theme, next);
-  const applyMode = () => {
-    applySettings(host, { ...host.settings, themeMode: next });
-  };
-  startThemeTransition({
-    nextTheme: resolved,
-    applyTheme: applyMode,
+  applyThemeTransition(
+    host,
+    resolveTheme(host.theme, next),
+    () => {
+      applySettings(host, { ...host.settings, themeMode: next });
+    },
     context,
-    currentTheme: host.themeResolved,
-  });
-  syncSystemThemeListener(host);
+  );
 }
 
 export async function refreshActiveTab(host: SettingsHost) {
@@ -443,12 +456,7 @@ export function onPopState(host: SettingsHost) {
   const url = new URL(window.location.href);
   const session = normalizeOptionalString(url.searchParams.get("session"));
   if (session) {
-    host.sessionKey = session;
-    applySettings(host, {
-      ...host.settings,
-      sessionKey: session,
-      lastActiveSessionKey: session,
-    });
+    applySessionSelection(host, session);
   }
 
   setTabFromRoute(host, resolved);
@@ -484,16 +492,12 @@ function applyTabSelection(
   if (next === "chat") {
     host.chatHasAutoScrolled = false;
   }
-  if (next === "logs") {
-    startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
-  } else {
-    stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
-  }
-  if (next === "debug") {
-    startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
-  } else {
-    stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
-  }
+  (next === "logs" ? startLogsPolling : stopLogsPolling)(
+    host as unknown as Parameters<typeof startLogsPolling>[0],
+  );
+  (next === "debug" ? startDebugPolling : stopDebugPolling)(
+    host as unknown as Parameters<typeof startDebugPolling>[0],
+  );
 
   if (options.refreshPolicy === "always" || host.connected) {
     void refreshActiveTab(host);

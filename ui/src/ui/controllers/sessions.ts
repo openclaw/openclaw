@@ -90,17 +90,14 @@ async function fetchSessionCompactionCheckpoints(state: SessionsState, key: stri
   }
 }
 
-async function withSessionsLoading<T>(
-  state: SessionsState,
-  run: () => Promise<T>,
-): Promise<T | undefined> {
+async function withSessionsLoading(state: SessionsState, run: () => Promise<void>) {
   if (state.sessionsLoading) {
-    return undefined;
+    return;
   }
   state.sessionsLoading = true;
   state.sessionsError = null;
   try {
-    return await run();
+    await run();
   } finally {
     state.sessionsLoading = false;
   }
@@ -121,7 +118,7 @@ async function runCompactionMutation<T>(
   try {
     const result = await client.request<T>(method, { key, checkpointId });
     await loadSessions(state);
-    return result ?? null;
+    return result;
   } catch (err) {
     state.sessionsError = String(err);
     return null;
@@ -202,7 +199,6 @@ export async function loadSessions(
         await fetchSessionCompactionCheckpoints(state, expandedKey);
       }
     }
-    return undefined;
   }).catch((err: unknown) => {
     if (!isMissingOperatorReadScopeError(err)) {
       state.sessionsError = String(err);
