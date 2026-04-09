@@ -220,6 +220,7 @@ Docs: https://docs.openclaw.ai
 - Providers/Google: add Gemma 4 model support and keep Google fallback resolution on the requested provider path so native Google Gemma routes work again. (#61507) Thanks @eyjohn.
 - Providers/Google: preserve explicit thinking-off semantics for Gemma 4 while still enabling Gemma reasoning support in compatibility wrappers. (#62127) Thanks @romgenie.
 - Providers/Arcee AI: add a bundled Arcee AI provider plugin with Trinity catalog entries, OpenRouter support, and updated onboarding/auth guidance. (#62068) Thanks @arthurbr11.
+- Providers/SiliconFlow: add a bundled SiliconFlow (硅基流动) provider plugin with Qwen and DeepSeek model catalog entries, OpenAI-compatible API support, and onboarding guidance.
 - Providers/Anthropic: restore Claude CLI as the preferred local Anthropic path in onboarding, model-auth guidance, doctor flows, and Docker Claude CLI live lanes again.
 - Providers/Ollama: detect vision capability from the `/api/show` response and set image input on models that support it so Ollama vision models accept image attachments. (#62193) Thanks @BruceMacD.
 - Memory/dreaming: ingest redacted session transcripts into the dreaming corpus with per-day session-corpus notes, cursor checkpointing, and promotion/doctor support. (#62227) Thanks @vignesh07.

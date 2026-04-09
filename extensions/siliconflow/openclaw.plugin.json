@@ -1,0 +1,28 @@
+{
+  "id": "siliconflow",
+  "enabledByDefault": true,
+  "providers": ["siliconflow"],
+  "providerAuthEnvVars": {
+    "siliconflow": ["SILICONFLOW_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "siliconflow",
+      "method": "api-key",
+      "choiceId": "siliconflow-api-key",
+      "choiceLabel": "SiliconFlow API key",
+      "groupId": "siliconflow",
+      "groupLabel": "SiliconFlow",
+      "groupHint": "API key",
+      "optionKey": "siliconflowApiKey",
+      "cliFlag": "--siliconflow-api-key",
+      "cliOption": "--siliconflow-api-key <key>",
+      "cliDescription": "SiliconFlow API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
