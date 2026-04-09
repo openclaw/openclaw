@@ -1087,9 +1087,7 @@ describe("memory cli", () => {
       await runMemoryCli(["rem-backfill", "--path", path.join(workspaceDir, "missing-history")]);
 
       expect(
-        errors.mock.calls.some((call) =>
-          String(call[0]).includes("found no YYYY-MM-DD.md files"),
-        ),
+        errors.mock.calls.some((call) => String(call[0]).includes("found no YYYY-MM-DD.md files")),
       ).toBe(true);
       expect(close).toHaveBeenCalled();
     });

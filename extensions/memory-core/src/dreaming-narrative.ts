@@ -295,7 +295,10 @@ export function buildBackfillDiaryEntry(params: {
 }): string {
   const dateStr = formatBackfillDiaryDate(params.isoDay, params.timezone);
   const marker = `<!-- ${BACKFILL_ENTRY_MARKER} day=${params.isoDay}${params.sourcePath ? ` source=${params.sourcePath}` : ""} -->`;
-  const body = params.bodyLines.map((line) => line.trimEnd()).join("\n").trim();
+  const body = params.bodyLines
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .trim();
   return [`*${dateStr}*`, marker, body].filter((part) => part.length > 0).join("\n\n");
 }
 

@@ -359,6 +359,37 @@ describe("executeSlashCommand directives", () => {
     });
   });
 
+  it("keeps openrouter-prefixed refs when patched model ids include slashes", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.patch") {
+        return createResolvedModelPatch("google/gemma-4-26b-a4b-it", "openrouter");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "model",
+      "google/gemma-4-26b-a4b-it",
+      {
+        chatModelCatalog: [
+          {
+            id: "google/gemma-4-26b-a4b-it",
+            name: "Gemma 4 26B",
+            provider: "openrouter",
+          },
+        ],
+      },
+    );
+
+    expect(result.sessionPatch?.modelOverride).toEqual({
+      kind: "qualified",
+      value: "openrouter/google/gemma-4-26b-a4b-it",
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
   it("falls back to the patched server provider when catalog lookup fails", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.patch") {

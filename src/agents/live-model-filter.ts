@@ -9,6 +9,7 @@ export type ModelRef = {
 
 const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "anthropic/claude-opus-4-6",
+  "anthropic/claude-sonnet-4-6",
   "google/gemini-3.1-pro-preview",
   "google/gemini-3-flash-preview",
   "minimax/minimax-m2.7",
@@ -16,11 +17,13 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "openai-codex/gpt-5.2",
   "opencode-go/glm-5",
   "openrouter/ai21/jamba-large-1.7",
-  "xai/grok-3",
+  "xai/grok-4-1-fast-non-reasoning",
   "zai/glm-4.7",
   "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
   "minimax-portal/minimax-m2.7",
 ] as const;
+
+export const DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT = HIGH_SIGNAL_LIVE_MODEL_PRIORITY.length;
 
 const HIGH_SIGNAL_LIVE_MODEL_PRIORITY_INDEX = new Map<string, number>(
   HIGH_SIGNAL_LIVE_MODEL_PRIORITY.map((key, index) => [key, index]),
@@ -178,6 +181,22 @@ export function selectHighSignalLiveItems<T>(
   }
 
   return [...selected, ...capByProviderSpread(remaining, maxItems - selected.length, providerOf)];
+}
+
+export function resolveHighSignalLiveModelLimit(params: {
+  rawMaxModels?: string;
+  useExplicitModels: boolean;
+  defaultLimit?: number;
+}): number {
+  const trimmed = params.rawMaxModels?.trim();
+  if (trimmed) {
+    const parsed = Number.parseInt(trimmed, 10);
+    return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+  }
+  if (params.useExplicitModels) {
+    return 0;
+  }
+  return params.defaultLimit ?? DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT;
 }
 
 export function getHighSignalLiveModelPriorityIndex(ref: ModelRef): number | null {

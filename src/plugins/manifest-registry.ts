@@ -75,6 +75,7 @@ export type PluginManifestRecord = {
   kind?: PluginKind | PluginKind[];
   channels: string[];
   providers: string[];
+  providerDiscoverySource?: string;
   modelSupport?: PluginManifestModelSupport;
   cliBackends: string[];
   providerAuthEnvVars?: Record<string, string[]>;
@@ -309,6 +310,9 @@ function buildRecord(params: {
     kind: params.manifest.kind,
     channels: params.manifest.channels ?? [],
     providers: params.manifest.providers ?? [],
+    providerDiscoverySource: params.manifest.providerDiscoveryEntry
+      ? path.resolve(params.candidate.rootDir, params.manifest.providerDiscoveryEntry)
+      : undefined,
     modelSupport: params.manifest.modelSupport,
     cliBackends: params.manifest.cliBackends ?? [],
     providerAuthEnvVars: params.manifest.providerAuthEnvVars,

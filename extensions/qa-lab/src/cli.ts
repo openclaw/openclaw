@@ -38,6 +38,7 @@ async function runQaCharacterEval(opts: {
   modelThinking?: string[];
   judgeModel?: string[];
   judgeTimeoutMs?: number;
+  blindJudgeModels?: boolean;
   concurrency?: number;
   judgeConcurrency?: number;
 }) {
@@ -199,6 +200,10 @@ export function registerQaLabCli(program: Command) {
     .option("--judge-timeout-ms <ms>", "Override judge wait timeout", (value: string) =>
       Number(value),
     )
+    .option(
+      "--blind-judge-models",
+      "Hide candidate model refs from judge prompts; reports still map rankings back to real refs",
+    )
     .option("--concurrency <count>", "Candidate model run concurrency", (value: string) =>
       Number(value),
     )
@@ -216,6 +221,7 @@ export function registerQaLabCli(program: Command) {
         modelThinking?: string[];
         judgeModel?: string[];
         judgeTimeoutMs?: number;
+        blindJudgeModels?: boolean;
         concurrency?: number;
         judgeConcurrency?: number;
       }) => {

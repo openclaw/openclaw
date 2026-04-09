@@ -341,15 +341,19 @@ export async function resolveImplicitProviders(
 ): Promise<NonNullable<OpenClawConfig["models"]>["providers"]> {
   const providers: Record<string, ProviderConfig> = {};
   const env = params.env ?? process.env;
-  const authStore = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-  });
+  let authStore: ReturnType<typeof ensureAuthProfileStore> | undefined;
+  const getAuthStore = () =>
+    (authStore ??= ensureAuthProfileStore(params.agentDir, {
+      allowKeychainPrompt: false,
+    }));
   const context: ImplicitProviderContext = {
     ...params,
-    authStore,
+    get authStore() {
+      return getAuthStore();
+    },
     env,
-    resolveProviderApiKey: createProviderApiKeyResolver(env, authStore, params.config),
-    resolveProviderAuth: createProviderAuthResolver(env, authStore, params.config),
+    resolveProviderApiKey: createProviderApiKeyResolver(env, getAuthStore, params.config),
+    resolveProviderAuth: createProviderAuthResolver(env, getAuthStore, params.config),
   };
   const discoveryProviders = await resolvePluginDiscoveryProviders({
     config: params.config,

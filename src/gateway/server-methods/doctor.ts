@@ -246,10 +246,7 @@ function normalizeMemoryPath(rawPath: string): string {
 function normalizeMemoryPathForWorkspace(workspaceDir: string, rawPath: string): string {
   const normalized = normalizeMemoryPath(rawPath);
   const workspaceNormalized = normalizeMemoryPath(workspaceDir);
-  if (
-    path.isAbsolute(rawPath) &&
-    normalized.startsWith(`${workspaceNormalized}/`)
-  ) {
+  if (path.isAbsolute(rawPath) && normalized.startsWith(`${workspaceNormalized}/`)) {
     return normalized.slice(workspaceNormalized.length + 1);
   }
   return normalized;

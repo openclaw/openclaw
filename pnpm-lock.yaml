@@ -130,6 +130,9 @@ importers:
       croner:
         specifier: ^10.0.1
         version: 10.0.1
+      discord-api-types:
+        specifier: ^0.38.44
+        version: 0.38.44
       dotenv:
         specifier: ^17.4.0
         version: 17.4.0
@@ -190,6 +193,9 @@ importers:
       node-llama-cpp:
         specifier: 3.18.1
         version: 3.18.1(typescript@6.0.2)
+      nostr-tools:
+        specifier: ^2.23.3
+        version: 2.23.3(typescript@6.0.2)
       openai:
         specifier: ^6.33.0
         version: 6.33.0(ws@8.20.0)(zod@4.3.6)

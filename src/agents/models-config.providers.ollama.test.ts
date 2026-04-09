@@ -11,6 +11,7 @@ import {
 } from "../plugins/provider-discovery.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
+import { OLLAMA_LOCAL_AUTH_MARKER } from "./model-auth-markers.js";
 import { resolveImplicitProviders } from "./models-config.providers.js";
 import type { ProviderConfig } from "./models-config.providers.js";
 
@@ -351,7 +352,44 @@ describe("Ollama provider", () => {
     });
   });
 
-  it("should preserve explicit apiKey when discovery path has no models and no env key", async () => {
+  it("should use synthetic local auth for configured remote providers without apiKey", async () => {
+    await withoutAmbientOllamaEnv(async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+
+      const provider = await runOllamaCatalog({
+        config: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "http://remote-ollama:11434/v1",
+                models: [
+                  {
+                    id: "gpt-oss:20b",
+                    name: "GPT-OSS 20B",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 8192,
+                    maxTokens: 81920,
+                  },
+                ],
+              },
+            },
+          },
+        },
+        env: { VITEST: "", NODE_ENV: "development" },
+      });
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(provider?.baseUrl).toBe("http://remote-ollama:11434");
+      expect(provider?.api).toBe("ollama");
+      expect(provider?.apiKey).toBe(OLLAMA_LOCAL_AUTH_MARKER);
+      expect(provider?.models).toHaveLength(1);
+    });
+  });
+
+  it("should preserve explicit apiKey from configured remote providers", async () => {
     await withoutAmbientOllamaEnv(async () => {
       const fetchMock = vi.fn(async (input: unknown) => {
         const url = String(input);
@@ -369,7 +407,17 @@ describe("Ollama provider", () => {
               ollama: {
                 baseUrl: "http://remote-ollama:11434/v1",
                 api: "openai-completions",
-                models: [],
+                models: [
+                  {
+                    id: "configured-remote-model",
+                    name: "Configured Remote Model",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 8192,
+                    maxTokens: 8192,
+                  },
+                ],
                 apiKey: "config-ollama-key", // pragma: allowlist secret
               },
             },
@@ -379,6 +427,9 @@ describe("Ollama provider", () => {
       });
 
       expect(provider?.apiKey).toBe("config-ollama-key");
+      expect(provider?.baseUrl).toBe("http://remote-ollama:11434");
+      expect(provider?.api).toBe("openai-completions");
+      expect(fetchMock).not.toHaveBeenCalled();
     });
   });
 });
