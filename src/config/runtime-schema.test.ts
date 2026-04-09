@@ -211,4 +211,21 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     expect(channelProps?.telegram).toBeTruthy();
     expect(channelProps?.matrix).toBeTruthy();
   });
+
+  it('calls loadPluginManifestRegistry with cache:false on every invocation (regression guard for #54816)', async () => {
+    // Each MCP connection triggers a config.schema / config.get gateway request which calls
+    // loadGatewayRuntimeConfigSchema. The original bug caused a fresh full plugin registry to
+    // be activated on every call, re-running registerFull for all channel plugins including
+    // Feishu. Verify that repeated calls always pass cache:false so the manifest registry
+    // path is used and no activation state accumulates between calls.
+    const { loadGatewayRuntimeConfigSchema } = await import('./runtime-schema.js');
+    loadGatewayRuntimeConfigSchema();
+    loadGatewayRuntimeConfigSchema();
+    loadGatewayRuntimeConfigSchema();
+
+    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(3);
+    for (const call of mockLoadPluginManifestRegistry.mock.calls) {
+      expect(call[0]).toMatchObject({ cache: false });
+    }
+  });
 });
