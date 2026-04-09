@@ -81,7 +81,7 @@ function validateAvailableModels(availableModels: unknown): Model<Api>[] {
   return availableModels as Model<Api>[];
 }
 
-function loadAvailableModels(registry: ModelRegistry): Model<Api>[] {
+function loadAvailableModels(registry: ModelRegistry, cfg: OpenClawConfig): Model<Api>[] {
   let availableModels: unknown;
   try {
     availableModels = registry.getAvailable();
@@ -90,7 +90,13 @@ function loadAvailableModels(registry: ModelRegistry): Model<Api>[] {
   }
   try {
     return validateAvailableModels(availableModels).filter(
-      (model) => !shouldSuppressBuiltInModel({ provider: model.provider, id: model.id }),
+      (model) =>
+        !shouldSuppressBuiltInModel({
+          provider: model.provider,
+          id: model.id,
+          baseUrl: model.baseUrl,
+          config: cfg,
+        }),
     );
   } catch (err) {
     throw normalizeAvailabilityError(err);
@@ -98,20 +104,26 @@ function loadAvailableModels(registry: ModelRegistry): Model<Api>[] {
 }
 
 export async function loadModelRegistry(
-  _cfg: OpenClawConfig,
+  cfg: OpenClawConfig,
   _opts?: { sourceConfig?: OpenClawConfig },
 ) {
   const agentDir = resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(agentDir);
   const registry = discoverModels(authStorage, agentDir);
-  const models = registry
-    .getAll()
-    .filter((model) => !shouldSuppressBuiltInModel({ provider: model.provider, id: model.id }));
+  const models = registry.getAll().filter(
+    (model) =>
+      !shouldSuppressBuiltInModel({
+        provider: model.provider,
+        id: model.id,
+        baseUrl: model.baseUrl,
+        config: cfg,
+      }),
+  );
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
 
   try {
-    const availableModels = loadAvailableModels(registry);
+    const availableModels = loadAvailableModels(registry, cfg);
     availableKeys = new Set(availableModels.map((model) => modelKey(model.provider, model.id)));
   } catch (err) {
     if (!shouldFallbackToAuthHeuristics(err)) {

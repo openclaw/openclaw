@@ -4,6 +4,33 @@ import { resolveBundledPluginsDir } from "./bundled-dir.js";
 
 const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"] as const;
 
+export function normalizeBundledPluginArtifactSubpath(artifactBasename: string): string {
+  if (
+    path.posix.isAbsolute(artifactBasename) ||
+    path.win32.isAbsolute(artifactBasename) ||
+    artifactBasename.includes("\\")
+  ) {
+    throw new Error(`Bundled plugin artifact path must stay plugin-local: ${artifactBasename}`);
+  }
+
+  const normalized = artifactBasename.replace(/^\.\//u, "");
+  if (!normalized) {
+    throw new Error("Bundled plugin artifact path must not be empty");
+  }
+
+  const segments = normalized.split("/");
+  if (
+    segments.some(
+      (segment) =>
+        segment.length === 0 || segment === "." || segment === ".." || segment.includes(":"),
+    )
+  ) {
+    throw new Error(`Bundled plugin artifact path must stay plugin-local: ${artifactBasename}`);
+  }
+
+  return normalized;
+}
+
 export function resolveBundledPluginPublicSurfacePath(params: {
   rootDir: string;
   dirName: string;
@@ -11,10 +38,7 @@ export function resolveBundledPluginPublicSurfacePath(params: {
   env?: NodeJS.ProcessEnv;
   bundledPluginsDir?: string;
 }): string | null {
-  const artifactBasename = params.artifactBasename.replace(/^\.\//u, "");
-  if (!artifactBasename) {
-    return null;
-  }
+  const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
 
   const explicitBundledPluginsDir =
     params.bundledPluginsDir ?? resolveBundledPluginsDir(params.env ?? process.env);

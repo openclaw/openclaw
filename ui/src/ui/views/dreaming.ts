@@ -258,6 +258,7 @@ function renderDiaryNavigator(
 export type DreamingProps = {
   active: boolean;
   shortTermCount: number;
+  groundedSignalCount: number;
   totalSignalCount: number;
   promotedCount: number;
   phaseSignalCount: number;
@@ -269,6 +270,7 @@ export type DreamingProps = {
     snippet: string;
     recallCount: number;
     dailyCount: number;
+    groundedCount: number;
     totalSignalCount: number;
     lightHits: number;
     remHits: number;
@@ -284,6 +286,7 @@ export type DreamingProps = {
     snippet: string;
     recallCount: number;
     dailyCount: number;
+    groundedCount: number;
     totalSignalCount: number;
     lightHits: number;
     remHits: number;
@@ -299,6 +302,7 @@ export type DreamingProps = {
     snippet: string;
     recallCount: number;
     dailyCount: number;
+    groundedCount: number;
     totalSignalCount: number;
     lightHits: number;
     remHits: number;
@@ -321,6 +325,7 @@ export type DreamingProps = {
   onRefreshDiary: () => void;
   onBackfillDiary: () => void;
   onResetDiary: () => void;
+  onResetGroundedShortTerm: () => void;
   onToggleEnabled: (enabled: boolean) => void;
   onRequestUpdate?: () => void;
 };
@@ -470,6 +475,7 @@ export function renderDreaming(props: DreamingProps) {
 // ── Scene renderer ────────────────────────────────────────────────────
 
 function renderScene(props: DreamingProps, idle: boolean, dreamText: string) {
+  const groundedEntries = props.shortTermEntries.filter((entry) => entry.groundedCount > 0);
   return html`
     <section class="dreams ${idle ? "dreams--idle" : ""}">
       ${STARS.map(
@@ -545,6 +551,13 @@ function renderScene(props: DreamingProps, idle: boolean, dreamText: string) {
         >
           ${t("dreaming.scene.reset")}
         </button>
+        <button
+          class="btn btn--subtle btn--sm"
+          ?disabled=${props.modeSaving || props.dreamDiaryActionLoading}
+          @click=${() => props.onResetGroundedShortTerm()}
+        >
+          ${t("dreaming.scene.clearGrounded")}
+        </button>
       </div>
 
       <div class="dreams__stats">
@@ -553,6 +566,13 @@ function renderScene(props: DreamingProps, idle: boolean, dreamText: string) {
             >${props.shortTermCount}</span
           >
           <span class="dreams__stat-label">${t("dreaming.stats.shortTerm")}</span>
+        </div>
+        <div class="dreams__stat-divider"></div>
+        <div class="dreams__stat">
+          <span class="dreams__stat-value" style="color: var(--accent-muted);"
+            >${props.groundedSignalCount}</span
+          >
+          <span class="dreams__stat-label">${t("dreaming.stats.grounded")}</span>
         </div>
         <div class="dreams__stat-divider"></div>
         <div class="dreams__stat">
@@ -580,9 +600,25 @@ function renderScene(props: DreamingProps, idle: boolean, dreamText: string) {
                 ? `${entry.recallCount} recall${entry.recallCount === 1 ? "" : "s"}`
                 : null,
               entry.dailyCount > 0 ? `${entry.dailyCount} daily` : null,
+              entry.groundedCount > 0 ? `${entry.groundedCount} grounded` : null,
               entry.phaseHitCount > 0
                 ? `${entry.phaseHitCount} phase hit${entry.phaseHitCount === 1 ? "" : "s"}`
                 : null,
+            ]
+              .filter(Boolean)
+              .join(" · "),
+        })}
+        ${renderTraceSection("grounded", groundedEntries, {
+          count: groundedEntries.length,
+          emptyKey: "dreaming.trace.emptyGrounded",
+          meta: (entry) =>
+            [
+              `${entry.groundedCount} grounded`,
+              entry.recallCount > 0
+                ? `${entry.recallCount} recall${entry.recallCount === 1 ? "" : "s"}`
+                : null,
+              entry.dailyCount > 0 ? `${entry.dailyCount} daily` : null,
+              isGroundedLed(entry) ? t("dreaming.trace.groundedLed") : null,
             ]
               .filter(Boolean)
               .join(" · "),
@@ -606,6 +642,8 @@ function renderScene(props: DreamingProps, idle: boolean, dreamText: string) {
           meta: (entry) =>
             [
               entry.promotedAt ? formatCompactDateTime(entry.promotedAt) : null,
+              entry.groundedCount > 0 ? `${entry.groundedCount} grounded` : null,
+              isGroundedLed(entry) ? t("dreaming.trace.groundedLed") : null,
               entry.totalSignalCount > 0
                 ? `${entry.totalSignalCount} signal${entry.totalSignalCount === 1 ? "" : "s"} before promote`
                 : null,
@@ -639,8 +677,21 @@ function formatCompactDateTime(value: string): string {
   });
 }
 
+function isGroundedLed(
+  entry: Pick<
+    DreamingProps["shortTermEntries"][number],
+    "groundedCount" | "recallCount" | "dailyCount"
+  >,
+): boolean {
+  return (
+    entry.groundedCount > 0 &&
+    entry.groundedCount >= entry.recallCount &&
+    entry.groundedCount >= entry.dailyCount
+  );
+}
+
 function renderTraceSection(
-  kind: "shortTerm" | "signals" | "promoted",
+  kind: "shortTerm" | "grounded" | "signals" | "promoted",
   entries: DreamingProps["shortTermEntries"],
   options: {
     count: number;

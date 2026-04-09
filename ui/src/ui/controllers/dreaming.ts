@@ -40,6 +40,7 @@ export type DreamingEntry = {
   snippet: string;
   recallCount: number;
   dailyCount: number;
+  groundedCount: number;
   totalSignalCount: number;
   lightHits: number;
   remHits: number;
@@ -57,6 +58,7 @@ export type DreamingStatus = {
   shortTermCount: number;
   recallSignalCount: number;
   dailySignalCount: number;
+  groundedSignalCount: number;
   totalSignalCount: number;
   phaseSignalCount: number;
   lightPhaseHitCount: number;
@@ -87,11 +89,12 @@ type DoctorMemoryDreamDiaryPayload = {
   content?: unknown;
 };
 
-type DoctorMemoryDreamDiaryActionPayload = {
+type DoctorMemoryDreamActionPayload = {
   action?: unknown;
   removedEntries?: unknown;
   written?: unknown;
   replaced?: unknown;
+  removedShortTermEntries?: unknown;
 };
 
 export type DreamingState = {
@@ -211,6 +214,7 @@ function normalizeDreamingEntry(raw: unknown): DreamingEntry | null {
     snippet,
     recallCount: normalizeFiniteInt(record?.recallCount, 0),
     dailyCount: normalizeFiniteInt(record?.dailyCount, 0),
+    groundedCount: normalizeFiniteInt(record?.groundedCount, 0),
     totalSignalCount: normalizeFiniteInt(record?.totalSignalCount, 0),
     lightHits: normalizeFiniteInt(record?.lightHits, 0),
     remHits: normalizeFiniteInt(record?.remHits, 0),
@@ -252,6 +256,7 @@ function normalizeDreamingStatus(raw: unknown): DreamingStatus | null {
     shortTermCount: normalizeFiniteInt(record.shortTermCount, 0),
     recallSignalCount: normalizeFiniteInt(record.recallSignalCount, 0),
     dailySignalCount: normalizeFiniteInt(record.dailySignalCount, 0),
+    groundedSignalCount: normalizeFiniteInt(record.groundedSignalCount, 0),
     totalSignalCount: normalizeFiniteInt(record.totalSignalCount, 0),
     phaseSignalCount: normalizeFiniteInt(record.phaseSignalCount, 0),
     lightPhaseHitCount: normalizeFiniteInt(record.lightPhaseHitCount, 0),
@@ -340,7 +345,13 @@ export async function loadDreamDiary(state: DreamingState): Promise<void> {
 
 async function runDreamDiaryAction(
   state: DreamingState,
-  method: "doctor.memory.backfillDreamDiary" | "doctor.memory.resetDreamDiary",
+  method:
+    | "doctor.memory.backfillDreamDiary"
+    | "doctor.memory.resetDreamDiary"
+    | "doctor.memory.resetGroundedShortTerm",
+  options?: {
+    reloadDiary?: boolean;
+  },
 ): Promise<boolean> {
   if (!state.client || !state.connected || state.dreamDiaryActionLoading) {
     return false;
@@ -349,8 +360,10 @@ async function runDreamDiaryAction(
   state.dreamingStatusError = null;
   state.dreamDiaryError = null;
   try {
-    await state.client.request<DoctorMemoryDreamDiaryActionPayload>(method, {});
-    await loadDreamDiary(state);
+    await state.client.request<DoctorMemoryDreamActionPayload>(method, {});
+    if (options?.reloadDiary !== false) {
+      await loadDreamDiary(state);
+    }
     await loadDreamingStatus(state);
     return true;
   } catch (err) {
@@ -369,6 +382,12 @@ export async function backfillDreamDiary(state: DreamingState): Promise<boolean>
 
 export async function resetDreamDiary(state: DreamingState): Promise<boolean> {
   return runDreamDiaryAction(state, "doctor.memory.resetDreamDiary");
+}
+
+export async function resetGroundedShortTerm(state: DreamingState): Promise<boolean> {
+  return runDreamDiaryAction(state, "doctor.memory.resetGroundedShortTerm", {
+    reloadDiary: false,
+  });
 }
 
 async function writeDreamingPatch(

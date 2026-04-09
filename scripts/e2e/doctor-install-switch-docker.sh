@@ -2,10 +2,11 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
 IMAGE_NAME="openclaw-doctor-install-switch-e2e"
 
 echo "Building Docker image..."
-docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
+run_logged doctor-switch-build docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
 
 echo "Running doctor install switch E2E..."
 docker run --rm -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 "$IMAGE_NAME" bash -lc '
@@ -80,7 +81,11 @@ LOGINCTL
     echo "npm pack failed (expected /app/$pkg_tgz)"
     exit 1
   fi
-  npm install -g --prefix /tmp/npm-prefix "/app/$pkg_tgz"
+  npm_log="/tmp/openclaw-doctor-switch-npm-install.log"
+  if ! npm install -g --prefix /tmp/npm-prefix "/app/$pkg_tgz" >"$npm_log" 2>&1; then
+    cat "$npm_log"
+    exit 1
+  fi
 
 	  npm_bin="/tmp/npm-prefix/bin/openclaw"
 	  npm_root="/tmp/npm-prefix/lib/node_modules/openclaw"
@@ -124,13 +129,18 @@ LOGINCTL
     local install_expected="$3"
     local doctor_cmd="$4"
     local doctor_expected="$5"
+    local install_log="/tmp/openclaw-doctor-switch-${name}-install.log"
+    local doctor_log="/tmp/openclaw-doctor-switch-${name}-doctor.log"
 
     echo "== Flow: $name =="
     home_dir=$(mktemp -d "/tmp/openclaw-switch-${name}.XXXXXX")
     export HOME="$home_dir"
     export USER="testuser"
 
-    eval "$install_cmd"
+    if ! eval "$install_cmd" >"$install_log" 2>&1; then
+      cat "$install_log"
+      exit 1
+    fi
 
     unit_path="$HOME/.config/systemd/user/openclaw-gateway.service"
     if [ ! -f "$unit_path" ]; then
@@ -139,7 +149,10 @@ LOGINCTL
     fi
     assert_entrypoint "$unit_path" "$install_expected"
 
-    eval "$doctor_cmd"
+    if ! eval "$doctor_cmd" >"$doctor_log" 2>&1; then
+      cat "$doctor_log"
+      exit 1
+    fi
 
     assert_entrypoint "$unit_path" "$doctor_expected"
   }

@@ -16,6 +16,7 @@ import {
   loadPluginManifestRegistry,
   type PluginManifestRecord,
 } from "../plugins/manifest-registry.js";
+import { normalizeBundledPluginArtifactSubpath } from "../plugins/public-surface-runtime.js";
 
 const ALWAYS_ALLOWED_RUNTIME_DIR_NAMES = new Set([
   "image-generation-core",
@@ -166,7 +167,7 @@ export function resolveRegistryPluginModuleLocation(params: {
     (plugin) => path.basename(plugin.rootDir) === params.dirName,
     (plugin) => plugin.channels.includes(params.dirName),
   ];
-  const artifactBasename = params.artifactBasename.replace(/^\.\//u, "");
+  const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
   const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
   for (const matchFn of tiers) {
     for (const record of registry.filter(matchFn)) {

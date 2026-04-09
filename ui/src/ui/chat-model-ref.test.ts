@@ -35,6 +35,37 @@ describe("chat-model-ref helpers", () => {
     );
   });
 
+  it("prefixes provider-native model ids that already contain slashes", () => {
+    expect(
+      buildChatModelOption({
+        id: "google/gemma-4-26b-a4b-it",
+        provider: "openrouter",
+      } as never),
+    ).toEqual({
+      value: "openrouter/google/gemma-4-26b-a4b-it",
+      label: "google/gemma-4-26b-a4b-it · openrouter",
+    });
+    expect(
+      resolvePreferredServerChatModel("Google/Gemma-4-26b-a4b-it", "openrouter", [
+        { id: "google/gemma-4-26b-a4b-it", provider: "openrouter" } as never,
+      ]),
+    ).toEqual({
+      value: "openrouter/google/gemma-4-26b-a4b-it",
+      source: "server",
+    });
+  });
+
+  it("reuses already-qualified catalog ids without double-prefixing them", () => {
+    expect(
+      resolvePreferredServerChatModel("OpenAI/GPT-4O", "openai", [
+        { id: "openai/gpt-4o", provider: "openai" } as never,
+      ]),
+    ).toEqual({
+      value: "openai/gpt-4o",
+      source: "server",
+    });
+  });
+
   it("normalizes raw overrides when the catalog match is unique", () => {
     expect(normalizeChatModelOverrideValue(createChatModelOverride("gpt-5-mini"), catalog)).toBe(
       "openai/gpt-5-mini",
@@ -102,7 +133,6 @@ describe("chat-model-ref helpers", () => {
     ).toEqual({
       value: "openai/gpt-5-mini",
       source: "server",
-      reason: "ambiguous",
     });
   });
 });

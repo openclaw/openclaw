@@ -689,7 +689,10 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expectSourceMentions("command-auth", [
       "buildCommandTextFromArgs",
+      "buildCommandsMessage",
+      "buildCommandsMessagePaginated",
       "buildCommandsPaginationKeyboard",
+      "buildHelpMessage",
       "buildModelsProviderData",
       "hasControlCommand",
       "listNativeCommandSpecsForConfig",
@@ -706,6 +709,12 @@ describe("plugin-sdk subpath exports", () => {
       "shouldComputeCommandAuthorized",
       "shouldHandleTextCommands",
     ]);
+    expectSourceMentions("command-status", [
+      "buildCommandsMessage",
+      "buildCommandsMessagePaginated",
+      "buildHelpMessage",
+    ]);
+    expectSourceOmitsImportPattern("command-auth", "../auto-reply/status.js");
     expectSourceOmitsSnippet("command-auth", "../../extensions/");
     expectSourceOmitsSnippet("matrix-runtime-heavy", "../../extensions/");
     expectSourceMentions("channel-send-result", [

@@ -1042,7 +1042,9 @@ jobs:
           set -euo pipefail
           case "$TASK" in
             test)
-              pnpm test
+              # Linux owns the full repo test suite. Keep the Windows runner focused on
+              # Windows-native process/path wrappers so platform regressions fail fast.
+              pnpm test:windows:ci
               ;;
             *)
               echo "Unsupported Windows checks task: $TASK" >&2
@@ -1093,7 +1095,9 @@ jobs:
           set -euo pipefail
           case "$TASK" in
             test)
-              pnpm test
+              # Linux owns the full repo test suite. Keep macOS CI focused on
+              # launchd/Homebrew/runtime path coverage and the process-group wrapper.
+              pnpm test:macos:ci
               ;;
             *)
               echo "Unsupported macOS node task: $TASK" >&2
