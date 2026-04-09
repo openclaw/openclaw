@@ -32,8 +32,12 @@ export function getMemoryEmbeddingProvider(
   if (registered) {
     return registered.adapter;
   }
-  if (listRegisteredMemoryEmbeddingProviders().length > 0) {
-    return undefined;
-  }
-  return listMemoryEmbeddingProviders(cfg).find((adapter) => adapter.id === id);
+  // Fall back to plugin capability resolution.  Even when other providers are
+  // already registered the requested `id` may belong to a plugin that was not
+  // loaded into the main registry (e.g. the ollama plugin when it is not
+  // included in `plugins.allow`).  Skipping this fallback caused the
+  // "Unknown memory embedding provider: ollama" error reported in #63429.
+  return resolvePluginCapabilityProviders({ key: "memoryEmbeddingProviders", cfg }).find(
+    (adapter) => adapter.id === id,
+  );
 }

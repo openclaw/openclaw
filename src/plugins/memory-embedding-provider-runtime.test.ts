@@ -60,14 +60,14 @@ describe("memory embedding provider runtime resolution", () => {
     expect(mocks.resolvePluginCapabilityProviders).toHaveBeenCalledTimes(2);
   });
 
-  it("does not consult capability fallback once runtime adapters are registered", () => {
+  it("falls back to capability resolution for unregistered provider even when others are registered", () => {
     registerMemoryEmbeddingProvider({
       id: "openai",
       create: async () => ({ provider: null }),
     });
     mocks.resolvePluginCapabilityProviders.mockReturnValue([createCapabilityAdapter("ollama")]);
 
-    expect(runtimeModule.getMemoryEmbeddingProvider("ollama")).toBeUndefined();
-    expect(mocks.resolvePluginCapabilityProviders).not.toHaveBeenCalled();
+    expect(runtimeModule.getMemoryEmbeddingProvider("ollama")?.id).toBe("ollama");
+    expect(mocks.resolvePluginCapabilityProviders).toHaveBeenCalled();
   });
 });
