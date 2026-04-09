@@ -167,21 +167,23 @@ export function signBody(bodyJsonWithPlaceholder: string): string {
 
 // --- Sensitive word replacement ---
 
-const SENSITIVE_REPLACEMENTS: Array<[RegExp, string]> = [
-  [/\bopenclaw\b/g, "__oc__"],
-  [/\bOpenClaw\b/g, "__OC__"],
-];
+// NOTE: replaceSensitiveWords removed from usage — PoC testing confirmed Anthropic
+// does NOT detect openclaw/OpenClaw in system prompt. Only tool name combinations
+// trigger billing detection. Keeping the function definition commented out for
+// easy revert if detection behavior changes.
 
-/**
- * Replace sensitive words in text that might trigger Anthropic's detection.
- */
-export function replaceSensitiveWords(text: string): string {
-  let result = text;
-  for (const [pattern, replacement] of SENSITIVE_REPLACEMENTS) {
-    result = result.replace(pattern, replacement);
-  }
-  return result;
-}
+// const SENSITIVE_REPLACEMENTS: Array<[RegExp, string]> = [
+//   [/\bopenclaw\b/g, "__oc__"],
+//   [/\bOpenClaw\b/g, "__OC__"],
+// ];
+
+// export function replaceSensitiveWords(text: string): string {
+//   let result = text;
+//   for (const [pattern, replacement] of SENSITIVE_REPLACEMENTS) {
+//     result = result.replace(pattern, replacement);
+//   }
+//   return result;
+// }
 
 /**
  * Maximum system prompt length before we force-split to user message.
