@@ -63,6 +63,7 @@ export function createMatrixDraftStream(params: {
   let stopped = false;
   let sendFailed = false;
   let finalizeInPlaceBlocked = false;
+  let liveFinalized = false;
   let replyToId = params.replyToId;
 
   const sendOrEdit = async (text: string): Promise<boolean> => {
@@ -146,7 +147,8 @@ export function createMatrixDraftStream(params: {
     // Send a final edit without the MSC4357 live marker to signal that
     // the stream is complete. Supporting clients will stop the streaming
     // animation and display the final content.
-    if (useLive && currentEventId && lastSentText) {
+    if (useLive && !liveFinalized && currentEventId && lastSentText) {
+      liveFinalized = true;
       try {
         await editMessageMatrix(roomId, currentEventId, lastSentText, {
           client,
@@ -179,6 +181,7 @@ export function createMatrixDraftStream(params: {
     stopped = false;
     sendFailed = false;
     finalizeInPlaceBlocked = false;
+    liveFinalized = false;
     loop.resetPending();
     loop.resetThrottleWindow();
   };
