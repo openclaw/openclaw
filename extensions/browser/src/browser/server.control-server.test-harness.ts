@@ -95,6 +95,66 @@ export function getCdpMocks(): { createTargetViaCdp: MockFn; snapshotAria: MockF
   return cdpMocks as unknown as { createTargetViaCdp: MockFn; snapshotAria: MockFn };
 }
 
+type ExecuteActMockAction = { kind: string } & Record<string, unknown>;
+type ExecuteActMockOptions = {
+  cdpUrl: string;
+  action: ExecuteActMockAction;
+  targetId?: string;
+  ssrfPolicy?: unknown;
+  evaluateEnabled?: boolean;
+  signal?: AbortSignal;
+};
+
+type PassThroughActKind =
+  | "click"
+  | "type"
+  | "press"
+  | "hover"
+  | "scrollIntoView"
+  | "drag"
+  | "select"
+  | "fill"
+  | "resize"
+  | "wait"
+  | "close";
+
+type PassThroughActDispatch = {
+  mock: (opts?: unknown) => Promise<unknown>;
+  fields: readonly string[];
+  includeSsrf?: boolean;
+  includeSignal?: boolean;
+};
+
+function pickActionFields(
+  action: ExecuteActMockAction,
+  fields: readonly string[],
+): Record<string, unknown> {
+  const picked: Record<string, unknown> = {};
+  for (const field of fields) {
+    picked[field] = action[field];
+  }
+  return picked;
+}
+
+function buildActPayload(params: {
+  cdpUrl: string;
+  targetId?: string;
+  action: ExecuteActMockAction;
+  fields: readonly string[];
+  ssrfPolicy?: unknown;
+  signal?: AbortSignal;
+  includeSsrf?: boolean;
+  includeSignal?: boolean;
+}): Record<string, unknown> {
+  return {
+    cdpUrl: params.cdpUrl,
+    targetId: params.targetId,
+    ...pickActionFields(params.action, params.fields),
+    ...(params.includeSsrf ? { ssrfPolicy: params.ssrfPolicy } : {}),
+    ...(params.includeSignal ? { signal: params.signal } : {}),
+  };
+}
+
 const pwMocks = vi.hoisted(() => ({
   armDialogViaPlaywright: vi.fn(async () => {}),
   armFileUploadViaPlaywright: vi.fn(async () => {}),
@@ -149,130 +209,85 @@ const pwMocks = vi.hoisted(() => ({
   ),
 }));
 
+const passThroughActDispatch: Record<PassThroughActKind, PassThroughActDispatch> = {
+  click: {
+    mock: pwMocks.clickViaPlaywright,
+    fields: ["ref", "selector", "doubleClick", "button", "modifiers", "delayMs", "timeoutMs"],
+    includeSsrf: true,
+  },
+  type: {
+    mock: pwMocks.typeViaPlaywright,
+    fields: ["ref", "selector", "text", "submit", "slowly", "timeoutMs"],
+    includeSsrf: true,
+  },
+  press: {
+    mock: pwMocks.pressKeyViaPlaywright,
+    fields: ["key", "delayMs"],
+    includeSsrf: true,
+  },
+  hover: {
+    mock: pwMocks.hoverViaPlaywright,
+    fields: ["ref", "selector", "timeoutMs"],
+  },
+  scrollIntoView: {
+    mock: pwMocks.scrollIntoViewViaPlaywright,
+    fields: ["ref", "selector", "timeoutMs"],
+  },
+  drag: {
+    mock: pwMocks.dragViaPlaywright,
+    fields: ["startRef", "startSelector", "endRef", "endSelector", "timeoutMs"],
+  },
+  select: {
+    mock: pwMocks.selectOptionViaPlaywright,
+    fields: ["ref", "selector", "values", "timeoutMs"],
+  },
+  fill: {
+    mock: pwMocks.fillFormViaPlaywright,
+    fields: ["fields", "timeoutMs"],
+  },
+  resize: {
+    mock: pwMocks.resizeViewportViaPlaywright,
+    fields: ["width", "height"],
+  },
+  wait: {
+    mock: pwMocks.waitForViaPlaywright,
+    fields: ["timeMs", "text", "textGone", "selector", "url", "loadState", "fn", "timeoutMs"],
+    includeSignal: true,
+  },
+  close: {
+    mock: pwMocks.closePageViaPlaywright,
+    fields: [],
+  },
+};
+
+function isPassThroughActKind(kind: string): kind is PassThroughActKind {
+  return Object.hasOwn(passThroughActDispatch, kind);
+}
+
 pwMocks.executeActViaPlaywright.mockImplementation(
-  async (
-    opts:
-      | {
-          cdpUrl: string;
-          action: { kind: string } & Record<string, unknown>;
-          targetId?: string;
-          ssrfPolicy?: unknown;
-          evaluateEnabled?: boolean;
-          signal?: AbortSignal;
-        }
-      | undefined,
-  ) => {
+  async (opts: ExecuteActMockOptions | undefined) => {
     if (!opts) {
       return {};
     }
     const { cdpUrl, action, targetId, ssrfPolicy, evaluateEnabled, signal } = opts;
-    switch (action.kind) {
-      case "click":
-        await pwMocks.clickViaPlaywright({
+    if (isPassThroughActKind(action.kind)) {
+      const spec = passThroughActDispatch[action.kind];
+      await spec.mock(
+        buildActPayload({
           cdpUrl,
           targetId,
-          ref: action.ref,
-          selector: action.selector,
-          doubleClick: action.doubleClick,
-          button: action.button,
-          modifiers: action.modifiers,
-          delayMs: action.delayMs,
-          timeoutMs: action.timeoutMs,
+          action,
+          fields: spec.fields,
           ssrfPolicy,
-        });
-        return {};
-      case "type":
-        await pwMocks.typeViaPlaywright({
-          cdpUrl,
-          targetId,
-          ref: action.ref,
-          selector: action.selector,
-          text: action.text,
-          submit: action.submit,
-          slowly: action.slowly,
-          timeoutMs: action.timeoutMs,
-          ssrfPolicy,
-        });
-        return {};
-      case "press":
-        await pwMocks.pressKeyViaPlaywright({
-          cdpUrl,
-          targetId,
-          key: action.key,
-          delayMs: action.delayMs,
-          ssrfPolicy,
-        });
-        return {};
-      case "hover":
-        await pwMocks.hoverViaPlaywright({
-          cdpUrl,
-          targetId,
-          ref: action.ref,
-          selector: action.selector,
-          timeoutMs: action.timeoutMs,
-        });
-        return {};
-      case "scrollIntoView":
-        await pwMocks.scrollIntoViewViaPlaywright({
-          cdpUrl,
-          targetId,
-          ref: action.ref,
-          selector: action.selector,
-          timeoutMs: action.timeoutMs,
-        });
-        return {};
-      case "drag":
-        await pwMocks.dragViaPlaywright({
-          cdpUrl,
-          targetId,
-          startRef: action.startRef,
-          startSelector: action.startSelector,
-          endRef: action.endRef,
-          endSelector: action.endSelector,
-          timeoutMs: action.timeoutMs,
-        });
-        return {};
-      case "select":
-        await pwMocks.selectOptionViaPlaywright({
-          cdpUrl,
-          targetId,
-          ref: action.ref,
-          selector: action.selector,
-          values: action.values,
-          timeoutMs: action.timeoutMs,
-        });
-        return {};
-      case "fill":
-        await pwMocks.fillFormViaPlaywright({
-          cdpUrl,
-          targetId,
-          fields: action.fields,
-          timeoutMs: action.timeoutMs,
-        });
-        return {};
-      case "resize":
-        await pwMocks.resizeViewportViaPlaywright({
-          cdpUrl,
-          targetId,
-          width: action.width,
-          height: action.height,
-        });
-        return {};
-      case "wait":
-        await pwMocks.waitForViaPlaywright({
-          cdpUrl,
-          targetId,
-          timeMs: action.timeMs,
-          text: action.text,
-          textGone: action.textGone,
-          selector: action.selector,
-          url: action.url,
-          loadState: action.loadState,
-          fn: action.fn,
-          timeoutMs: action.timeoutMs,
           signal,
-        });
-        return {};
+          includeSsrf: spec.includeSsrf,
+          includeSignal: spec.includeSignal,
+        }),
+      );
+      return {};
+    }
+
+    switch (action.kind) {
       case "evaluate": {
         if (!evaluateEnabled) {
           throw new Error("act:evaluate is disabled by config (browser.evaluateEnabled=false)");
@@ -288,9 +303,6 @@ pwMocks.executeActViaPlaywright.mockImplementation(
         });
         return { result };
       }
-      case "close":
-        await pwMocks.closePageViaPlaywright({ cdpUrl, targetId });
-        return {};
       case "batch": {
         const result = await pwMocks.batchViaPlaywright({
           cdpUrl,
