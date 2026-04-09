@@ -378,6 +378,101 @@ describe("runMessageAction plugin dispatch", () => {
       expect(pluginCall?.mediaAccess).toBeDefined();
       expect(pluginCall?.mediaAccess?.readFile).toBeUndefined();
     });
+
+    it("uses requester account policy for host-media reads when destination account differs", async () => {
+      const handlePolicyCheckedAction = vi.fn(async ({ mediaAccess }) =>
+        jsonResult({
+          ok: true,
+          hasHostReadCapability: typeof mediaAccess?.readFile === "function",
+        }),
+      );
+      const policyPlugin: ChannelPlugin = {
+        id: "feishu",
+        meta: {
+          id: "feishu",
+          label: "Feishu",
+          selectionLabel: "Feishu",
+          docsPath: "/channels/feishu",
+          blurb: "Feishu account policy test plugin.",
+        },
+        capabilities: { chatTypes: ["direct", "channel"], media: true },
+        config: createAlwaysConfiguredPluginConfig(),
+        messaging: {
+          targetResolver: {
+            looksLikeId: () => true,
+          },
+        },
+        actions: {
+          describeMessageTool: () => ({ actions: ["send"] }),
+          supportsAction: ({ action }) => action === "send",
+          handleAction: handlePolicyCheckedAction,
+        },
+      };
+
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "feishu",
+            source: "test",
+            plugin: policyPlugin,
+          },
+        ]),
+      );
+
+      await runMessageAction({
+        cfg: {
+          tools: { allow: ["read"] },
+          channels: {
+            feishu: {
+              enabled: true,
+            },
+            whatsapp: {
+              accounts: {
+                source: {
+                  groups: {
+                    ops: {
+                      toolsBySender: {
+                        "id:trusted-user": {
+                          deny: ["read"],
+                        },
+                      },
+                    },
+                  },
+                },
+                destination: {
+                  groups: {
+                    ops: {
+                      toolsBySender: {
+                        "id:trusted-user": {
+                          allow: ["read"],
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "feishu",
+          accountId: "destination",
+          target: "oc_123",
+          message: "hello",
+          media: "/tmp/host.png",
+        },
+        requesterAccountId: "source",
+        requesterSenderId: "trusted-user",
+        sessionKey: "agent:alpha:whatsapp:group:ops",
+        dryRun: false,
+      });
+
+      const pluginCall = handlePolicyCheckedAction.mock.calls[0]?.[0];
+      expect(pluginCall?.accountId).toBe("destination");
+      expect(pluginCall?.mediaAccess).toBeDefined();
+      expect(pluginCall?.mediaAccess?.readFile).toBeUndefined();
+    });
   });
 
   describe("card-only send behavior", () => {

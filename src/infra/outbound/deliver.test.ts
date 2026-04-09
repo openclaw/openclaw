@@ -281,6 +281,37 @@ describe("deliverOutboundPayloads", () => {
     resolveMediaAccessSpy.mockRestore();
   });
 
+  it("uses requester account from session for delivery media policy", async () => {
+    const resolveMediaAccessSpy = vi.spyOn(
+      mediaCapabilityModule,
+      "resolveAgentScopedOutboundMediaAccess",
+    );
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w3", toJid: "jid" });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      accountId: "destination-account",
+      payloads: [{ text: "hello" }],
+      deps: { whatsapp: sendWhatsApp },
+      session: {
+        key: "agent:main:whatsapp:group:ops",
+        requesterAccountId: "source-account",
+        requesterSenderId: "attacker",
+      },
+    });
+
+    expect(resolveMediaAccessSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:whatsapp:group:ops",
+        accountId: "source-account",
+        requesterSenderId: "attacker",
+      }),
+    );
+    resolveMediaAccessSpy.mockRestore();
+  });
+
   it("chunks direct adapter text and preserves delivery overrides across sends", async () => {
     const sendText = vi.fn().mockImplementation(async ({ text }: { text: string }) => ({
       channel: "matrix" as const,
