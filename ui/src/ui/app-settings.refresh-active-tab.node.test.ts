@@ -65,23 +65,7 @@ vi.mock("./controllers/logs.ts", () => ({
 
 import { refreshActiveTab } from "./app-settings.ts";
 
-type RefreshHost = {
-  tab: string;
-  connected: boolean;
-  client: object;
-  agentsPanel: string;
-  agentsSelectedId: string;
-  agentsList: { defaultId: string; agents: Array<{ id: string }> };
-  chatHasAutoScrolled: boolean;
-  logsAtBottom: boolean;
-  eventLog: unknown[];
-  eventLogBuffer: unknown[];
-  cronRunsScope: string;
-  cronRunsJobId: string | null;
-  sessionKey: string;
-};
-
-function createHost(): RefreshHost {
+function createHost() {
   return {
     tab: "agents",
     connected: true,
@@ -97,7 +81,7 @@ function createHost(): RefreshHost {
     eventLog: [],
     eventLogBuffer: [],
     cronRunsScope: "all",
-    cronRunsJobId: null,
+    cronRunsJobId: null as string | null,
     sessionKey: "main",
   };
 }
@@ -109,6 +93,12 @@ describe("refreshActiveTab", () => {
     }
   });
 
+  const expectCommonAgentsTabRefresh = (host: ReturnType<typeof createHost>) => {
+    expect(mocks.loadAgentsMock).toHaveBeenCalledOnce();
+    expect(mocks.loadConfigMock).toHaveBeenCalledOnce();
+    expect(mocks.loadAgentIdentityMock).toHaveBeenCalledWith(host, "agent-b");
+  };
+
   it("loads agents panel files data for the resolved selected agent", async () => {
     const host = createHost();
     host.tab = "agents";
@@ -116,10 +106,8 @@ describe("refreshActiveTab", () => {
 
     await refreshActiveTab(host as never);
 
-    expect(mocks.loadAgentsMock).toHaveBeenCalledOnce();
-    expect(mocks.loadConfigMock).toHaveBeenCalledOnce();
+    expectCommonAgentsTabRefresh(host);
     expect(mocks.loadAgentIdentitiesMock).toHaveBeenCalledWith(host, ["agent-a", "agent-b"]);
-    expect(mocks.loadAgentIdentityMock).toHaveBeenCalledWith(host, "agent-b");
     expect(mocks.loadAgentFilesMock).toHaveBeenCalledWith(host, "agent-b");
     expect(mocks.loadAgentSkillsMock).not.toHaveBeenCalled();
     expect(mocks.loadChannelsMock).not.toHaveBeenCalled();
@@ -135,9 +123,7 @@ describe("refreshActiveTab", () => {
 
     await refreshActiveTab(host as never);
 
-    expect(mocks.loadAgentsMock).toHaveBeenCalledOnce();
-    expect(mocks.loadConfigMock).toHaveBeenCalledOnce();
-    expect(mocks.loadAgentIdentityMock).toHaveBeenCalledWith(host, "agent-b");
+    expectCommonAgentsTabRefresh(host);
     expect(mocks.loadChannelsMock).toHaveBeenCalledWith(host, false);
     expect(mocks.loadCronStatusMock).toHaveBeenCalledOnce();
     expect(mocks.loadCronJobsMock).toHaveBeenCalledOnce();
@@ -153,9 +139,7 @@ describe("refreshActiveTab", () => {
 
     await refreshActiveTab(host as never);
 
-    expect(mocks.loadAgentsMock).toHaveBeenCalledOnce();
-    expect(mocks.loadConfigMock).toHaveBeenCalledOnce();
-    expect(mocks.loadAgentIdentityMock).toHaveBeenCalledWith(host, "agent-b");
+    expectCommonAgentsTabRefresh(host);
     expect(mocks.loadAgentFilesMock).not.toHaveBeenCalled();
     expect(mocks.loadAgentSkillsMock).not.toHaveBeenCalled();
     expect(mocks.loadChannelsMock).not.toHaveBeenCalled();
