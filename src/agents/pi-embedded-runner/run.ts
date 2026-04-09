@@ -768,6 +768,8 @@ export async function runEmbeddedPiAgent(
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
       let overloadFailoverAttempts = 0;
+      let emptyResponseRetries = 0;
+      const MAX_EMPTY_RESPONSE_RETRIES = 3;
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
         reason?: AuthProfileFailureReason | null;
@@ -1578,6 +1580,62 @@ export async function runEmbeddedPiAgent(
                   text:
                     "Request timed out before a response was generated. " +
                     "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+                  isError: true,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta,
+                aborted,
+                systemPromptReport: attempt.systemPromptReport,
+              },
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+              successfulCronAdds: attempt.successfulCronAdds,
+            };
+          }
+
+          // Detect "fake success" empty responses: the provider returned
+          // stopReason "stop"/"end_turn" but produced zero output tokens and no
+          // content.  This is observed with MiniMax and other non-standard
+          // providers that silently fail without surfacing an error.  Retry up
+          // to MAX_EMPTY_RESPONSE_RETRIES times before giving up with a
+          // user-visible error (instead of silently dropping the turn).
+          if (
+            !aborted &&
+            !timedOut &&
+            payloads.length === 0 &&
+            !attempt.didSendViaMessagingTool &&
+            !attempt.promptError &&
+            attempt.assistantTexts.length === 0 &&
+            lastAssistant != null &&
+            lastAssistant.stopReason !== "error" &&
+            !(lastAssistant.usage as UsageLike | undefined)?.output
+          ) {
+            emptyResponseRetries += 1;
+            if (emptyResponseRetries <= MAX_EMPTY_RESPONSE_RETRIES) {
+              log.warn(
+                `[empty-response-retry] Empty response from ${provider}/${modelId} ` +
+                  `(stopReason=${lastAssistant?.stopReason ?? "unknown"}, usage.output=0). ` +
+                  `Retry ${emptyResponseRetries}/${MAX_EMPTY_RESPONSE_RETRIES}. ` +
+                  `runId=${params.runId} sessionId=${params.sessionId}`,
+              );
+              continue;
+            }
+            log.error(
+              `[empty-response-exhausted] Empty response from ${provider}/${modelId} ` +
+                `after ${MAX_EMPTY_RESPONSE_RETRIES} retries. ` +
+                `runId=${params.runId} sessionId=${params.sessionId}`,
+            );
+            return {
+              payloads: [
+                {
+                  text:
+                    `⚠️ ${provider}/${modelId} returned an empty response after ` +
+                    `${MAX_EMPTY_RESPONSE_RETRIES} retries. Please try again or switch to a different model.`,
                   isError: true,
                 },
               ],
