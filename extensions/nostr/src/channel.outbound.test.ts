@@ -1,8 +1,10 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk/nostr";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createStartAccountContext } from "../../test-utils/start-account-context.js";
-import { nostrPlugin } from "./channel.js";
+import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
+import type { PluginRuntime } from "../runtime-api.js";
+import { nostrOutboundAdapter, startNostrGatewayAccount } from "./gateway.js";
 import { setNostrRuntime } from "./runtime.js";
+import { TEST_RESOLVED_PRIVATE_KEY, buildResolvedNostrAccount } from "./test-fixtures.js";
 
 const mocks = vi.hoisted(() => ({
   normalizePubkey: vi.fn((value: string) => `normalized-${value.toLowerCase()}`),
@@ -16,6 +18,50 @@ vi.mock("./nostr-bus.js", () => ({
   startNostrBus: mocks.startNostrBus,
 }));
 
+function createCfg() {
+  return {
+    channels: {
+      nostr: {
+        privateKey: TEST_RESOLVED_PRIVATE_KEY, // pragma: allowlist secret
+      },
+    },
+  };
+}
+
+function installOutboundRuntime(convertMarkdownTables = vi.fn((text: string) => text)) {
+  const resolveMarkdownTableMode = vi.fn(() => "off");
+  setNostrRuntime({
+    channel: {
+      text: {
+        resolveMarkdownTableMode,
+        convertMarkdownTables,
+      },
+    },
+    reply: {},
+  } as unknown as PluginRuntime);
+  return { resolveMarkdownTableMode, convertMarkdownTables };
+}
+
+async function startOutboundAccount(accountId?: string) {
+  const sendDm = vi.fn(async () => {});
+  const bus = {
+    sendDm,
+    close: vi.fn(),
+    getMetrics: vi.fn(() => ({ counters: {} })),
+    publishProfile: vi.fn(),
+    getProfileState: vi.fn(async () => null),
+  };
+  mocks.startNostrBus.mockResolvedValueOnce(bus as unknown);
+
+  const cleanup = (await startNostrGatewayAccount(
+    createStartAccountContext({
+      account: buildResolvedNostrAccount(accountId ? { accountId } : undefined),
+    }),
+  )) as { stop: () => void };
+
+  return { cleanup, sendDm };
+}
+
 describe("nostr outbound cfg threading", () => {
   afterEach(() => {
     mocks.normalizePubkey.mockClear();
@@ -23,52 +69,14 @@ describe("nostr outbound cfg threading", () => {
   });
 
   it("uses resolved cfg when converting markdown tables before send", async () => {
-    const resolveMarkdownTableMode = vi.fn(() => "off");
-    const convertMarkdownTables = vi.fn((text: string) => `converted:${text}`);
-    setNostrRuntime({
-      channel: {
-        text: {
-          resolveMarkdownTableMode,
-          convertMarkdownTables,
-        },
-      },
-      reply: {},
-    } as unknown as PluginRuntime);
+    const { resolveMarkdownTableMode, convertMarkdownTables } = installOutboundRuntime(
+      vi.fn((text: string) => `converted:${text}`),
+    );
+    const { cleanup, sendDm } = await startOutboundAccount();
 
-    const sendDm = vi.fn(async () => {});
-    const bus = {
-      sendDm,
-      close: vi.fn(),
-      getMetrics: vi.fn(() => ({ counters: {} })),
-      publishProfile: vi.fn(),
-      getProfileState: vi.fn(async () => null),
-    };
-    mocks.startNostrBus.mockResolvedValueOnce(bus as any);
-
-    const cleanup = (await nostrPlugin.gateway!.startAccount!(
-      createStartAccountContext({
-        account: {
-          accountId: "default",
-          enabled: true,
-          configured: true,
-          privateKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", // pragma: allowlist secret
-          publicKey: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", // pragma: allowlist secret
-          relays: ["wss://relay.example.com"],
-          config: {},
-        },
-        abortSignal: new AbortController().signal,
-      }),
-    )) as { stop: () => void };
-
-    const cfg = {
-      channels: {
-        nostr: {
-          privateKey: "resolved-nostr-private-key", // pragma: allowlist secret
-        },
-      },
-    };
-    await nostrPlugin.outbound!.sendText!({
-      cfg: cfg as any,
+    const cfg = createCfg();
+    await nostrOutboundAdapter.sendText({
+      cfg: cfg as OpenClawConfig,
       to: "NPUB123",
       text: "|a|b|",
       accountId: "default",
@@ -82,6 +90,35 @@ describe("nostr outbound cfg threading", () => {
     expect(convertMarkdownTables).toHaveBeenCalledWith("|a|b|", "off");
     expect(mocks.normalizePubkey).toHaveBeenCalledWith("NPUB123");
     expect(sendDm).toHaveBeenCalledWith("normalized-npub123", "converted:|a|b|");
+
+    cleanup.stop();
+  });
+
+  it("uses the configured defaultAccount when accountId is omitted", async () => {
+    const { resolveMarkdownTableMode } = installOutboundRuntime();
+    const { cleanup, sendDm } = await startOutboundAccount("work");
+
+    const cfg = {
+      channels: {
+        nostr: {
+          privateKey: TEST_RESOLVED_PRIVATE_KEY, // pragma: allowlist secret
+          defaultAccount: "work",
+        },
+      },
+    };
+
+    await nostrOutboundAdapter.sendText({
+      cfg: cfg as OpenClawConfig,
+      to: "NPUB123",
+      text: "hello",
+    });
+
+    expect(resolveMarkdownTableMode).toHaveBeenCalledWith({
+      cfg,
+      channel: "nostr",
+      accountId: "work",
+    });
+    expect(sendDm).toHaveBeenCalledWith("normalized-npub123", "hello");
 
     cleanup.stop();
   });

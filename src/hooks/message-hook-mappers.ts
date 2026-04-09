@@ -1,10 +1,17 @@
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
+import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type {
+  PluginHookInboundClaimContext,
+  PluginHookInboundClaimEvent,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSentEvent,
 } from "../plugins/types.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import type {
   MessagePreprocessedHookContext,
   MessageReceivedHookContext,
@@ -33,6 +40,8 @@ export type CanonicalInboundMessageHookContext = {
   threadId?: string | number;
   mediaPath?: string;
   mediaType?: string;
+  mediaPaths?: string[];
+  mediaTypes?: string[];
   originatingChannel?: string;
   originatingTo?: string;
   guildId?: string;
@@ -70,9 +79,21 @@ export function deriveInboundMessageHookContext(
         : typeof ctx.Body === "string"
           ? ctx.Body
           : "");
-  const channelId = (ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "").toLowerCase();
+  const channelId = normalizeLowercaseStringOrEmpty(
+    ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "",
+  );
   const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
   const isGroup = Boolean(ctx.GroupSubject || ctx.GroupChannel);
+  const mediaPaths = Array.isArray(ctx.MediaPaths)
+    ? ctx.MediaPaths.filter(
+        (value): value is string => typeof value === "string" && value.length > 0,
+      )
+    : undefined;
+  const mediaTypes = Array.isArray(ctx.MediaTypes)
+    ? ctx.MediaTypes.filter(
+        (value): value is string => typeof value === "string" && value.length > 0,
+      )
+    : undefined;
   return {
     from: ctx.From ?? "",
     to: ctx.To,
@@ -100,8 +121,10 @@ export function deriveInboundMessageHookContext(
     provider: ctx.Provider,
     surface: ctx.Surface,
     threadId: ctx.MessageThreadId,
-    mediaPath: ctx.MediaPath,
-    mediaType: ctx.MediaType,
+    mediaPath: ctx.MediaPath ?? mediaPaths?.[0],
+    mediaType: ctx.MediaType ?? mediaTypes?.[0],
+    mediaPaths,
+    mediaTypes,
     originatingChannel: ctx.OriginatingChannel,
     originatingTo: ctx.OriginatingTo,
     guildId: ctx.GroupSpace,
@@ -144,6 +167,106 @@ export function toPluginMessageContext(
     channelId: canonical.channelId,
     accountId: canonical.accountId,
     conversationId: canonical.conversationId,
+  };
+}
+
+function stripChannelPrefix(value: string | undefined, channelId: string): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const genericPrefixes = ["channel:", "chat:", "user:"];
+  for (const prefix of genericPrefixes) {
+    if (value.startsWith(prefix)) {
+      return value.slice(prefix.length);
+    }
+  }
+  const prefix = `${channelId}:`;
+  return value.startsWith(prefix) ? value.slice(prefix.length) : value;
+}
+
+function resolveInboundConversation(canonical: CanonicalInboundMessageHookContext): {
+  conversationId?: string;
+  parentConversationId?: string;
+} {
+  const channelId = normalizeChannelId(canonical.channelId);
+  const pluginResolved = channelId
+    ? getChannelPlugin(channelId)?.messaging?.resolveInboundConversation?.({
+        from: canonical.from,
+        to: canonical.to ?? canonical.originatingTo,
+        conversationId: canonical.conversationId,
+        threadId: canonical.threadId,
+        isGroup: canonical.isGroup,
+      })
+    : null;
+  if (pluginResolved) {
+    return {
+      conversationId: normalizeOptionalString(pluginResolved.conversationId),
+      parentConversationId: normalizeOptionalString(pluginResolved.parentConversationId),
+    };
+  }
+  const baseConversationId = stripChannelPrefix(
+    canonical.to ?? canonical.originatingTo ?? canonical.conversationId,
+    canonical.channelId,
+  );
+  return { conversationId: baseConversationId };
+}
+
+export function toPluginInboundClaimContext(
+  canonical: CanonicalInboundMessageHookContext,
+): PluginHookInboundClaimContext {
+  const conversation = resolveInboundConversation(canonical);
+  return {
+    channelId: canonical.channelId,
+    accountId: canonical.accountId,
+    conversationId: conversation.conversationId,
+    parentConversationId: conversation.parentConversationId,
+    senderId: canonical.senderId,
+    messageId: canonical.messageId,
+  };
+}
+
+export function toPluginInboundClaimEvent(
+  canonical: CanonicalInboundMessageHookContext,
+  extras?: {
+    commandAuthorized?: boolean;
+    wasMentioned?: boolean;
+  },
+): PluginHookInboundClaimEvent {
+  const context = toPluginInboundClaimContext(canonical);
+  return {
+    content: canonical.content,
+    body: canonical.body,
+    bodyForAgent: canonical.bodyForAgent,
+    transcript: canonical.transcript,
+    timestamp: canonical.timestamp,
+    channel: canonical.channelId,
+    accountId: canonical.accountId,
+    conversationId: context.conversationId,
+    parentConversationId: context.parentConversationId,
+    senderId: canonical.senderId,
+    senderName: canonical.senderName,
+    senderUsername: canonical.senderUsername,
+    threadId: canonical.threadId,
+    messageId: canonical.messageId,
+    isGroup: canonical.isGroup,
+    commandAuthorized: extras?.commandAuthorized,
+    wasMentioned: extras?.wasMentioned,
+    metadata: {
+      from: canonical.from,
+      to: canonical.to,
+      provider: canonical.provider,
+      surface: canonical.surface,
+      originatingChannel: canonical.originatingChannel,
+      originatingTo: canonical.originatingTo,
+      senderE164: canonical.senderE164,
+      mediaPath: canonical.mediaPath,
+      mediaType: canonical.mediaType,
+      mediaPaths: canonical.mediaPaths,
+      mediaTypes: canonical.mediaTypes,
+      guildId: canonical.guildId,
+      channelName: canonical.channelName,
+      groupId: canonical.groupId,
+    },
   };
 }
 

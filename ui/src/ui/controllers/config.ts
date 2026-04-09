@@ -78,7 +78,11 @@ export function applyConfigSchema(state: ConfigState, res: ConfigSchemaResponse)
 
 export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot) {
   state.configSnapshot = snapshot;
-  const rawFromSnapshot =
+  const rawAvailable = typeof snapshot.raw === "string";
+  if (!rawAvailable && state.configFormMode === "raw") {
+    state.configFormMode = "form";
+  }
+  const rawFromSnapshot: string =
     typeof snapshot.raw === "string"
       ? snapshot.raw
       : snapshot.config && typeof snapshot.config === "object"
@@ -117,6 +121,9 @@ function asJsonSchema(value: unknown): JsonSchema | null {
  * gateway's Zod validation always sees correctly typed values.
  */
 function serializeFormForSubmit(state: ConfigState): string {
+  if (state.configFormMode === "raw" && typeof state.configSnapshot?.raw !== "string") {
+    throw new Error("Raw config editing is unavailable for this snapshot. Switch to Form mode.");
+  }
   if (state.configFormMode !== "form" || !state.configForm) {
     return state.configRaw;
   }
@@ -184,9 +191,17 @@ export async function runUpdate(state: ConfigState) {
   state.updateRunning = true;
   state.lastError = null;
   try {
-    await state.client.request("update.run", {
+    const res = await state.client.request<{
+      ok?: boolean;
+      result?: { status?: string; reason?: string };
+    }>("update.run", {
       sessionKey: state.applySessionKey,
     });
+    if (res && res.ok === false) {
+      const status = res.result?.status ?? "error";
+      const reason = res.result?.reason ?? "Update failed.";
+      state.lastError = `Update ${status}: ${reason}`;
+    }
   } catch (err) {
     state.lastError = String(err);
   } finally {
@@ -254,4 +269,22 @@ export function ensureAgentConfigEntry(state: ConfigState, agentId: string): num
   const nextIndex = Array.isArray(list) ? list.length : 0;
   updateConfigFormValue(state, ["agents", "list", nextIndex, "id"], normalizedAgentId);
   return nextIndex;
+}
+
+export async function openConfigFile(state: ConfigState): Promise<void> {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  try {
+    await state.client.request("config.openFile", {});
+  } catch {
+    const path = state.configSnapshot?.path;
+    if (path) {
+      try {
+        await navigator.clipboard.writeText(path);
+      } catch {
+        // ignore
+      }
+    }
+  }
 }

@@ -1,6 +1,100 @@
 import type { VerboseLevel } from "../auto-reply/thinking.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
 
-export type AgentEventStream = "lifecycle" | "tool" | "assistant" | "error" | (string & {});
+export type AgentEventStream =
+  | "lifecycle"
+  | "tool"
+  | "assistant"
+  | "error"
+  | "item"
+  | "plan"
+  | "approval"
+  | "command_output"
+  | "patch"
+  | "compaction"
+  | "thinking"
+  | (string & {});
+
+export type AgentItemEventPhase = "start" | "update" | "end";
+export type AgentItemEventStatus = "running" | "completed" | "failed" | "blocked";
+export type AgentItemEventKind =
+  | "tool"
+  | "command"
+  | "patch"
+  | "search"
+  | "analysis"
+  | (string & {});
+
+export type AgentItemEventData = {
+  itemId: string;
+  phase: AgentItemEventPhase;
+  kind: AgentItemEventKind;
+  title: string;
+  status: AgentItemEventStatus;
+  name?: string;
+  meta?: string;
+  toolCallId?: string;
+  startedAt?: number;
+  endedAt?: number;
+  error?: string;
+  summary?: string;
+  progressText?: string;
+  approvalId?: string;
+  approvalSlug?: string;
+};
+
+export type AgentPlanEventData = {
+  phase: "update";
+  title: string;
+  explanation?: string;
+  steps?: string[];
+  source?: string;
+};
+
+export type AgentApprovalEventPhase = "requested" | "resolved";
+export type AgentApprovalEventStatus = "pending" | "unavailable" | "approved" | "denied" | "failed";
+export type AgentApprovalEventKind = "exec" | "plugin" | "unknown";
+
+export type AgentApprovalEventData = {
+  phase: AgentApprovalEventPhase;
+  kind: AgentApprovalEventKind;
+  status: AgentApprovalEventStatus;
+  title: string;
+  itemId?: string;
+  toolCallId?: string;
+  approvalId?: string;
+  approvalSlug?: string;
+  command?: string;
+  host?: string;
+  reason?: string;
+  message?: string;
+};
+
+export type AgentCommandOutputEventData = {
+  itemId: string;
+  phase: "delta" | "end";
+  title: string;
+  toolCallId: string;
+  name?: string;
+  output?: string;
+  status?: AgentItemEventStatus | "running";
+  exitCode?: number | null;
+  durationMs?: number;
+  cwd?: string;
+};
+
+export type AgentPatchSummaryEventData = {
+  itemId: string;
+  phase: "end";
+  title: string;
+  toolCallId: string;
+  name?: string;
+  added: string[];
+  modified: string[];
+  deleted: string[];
+  summary: string;
+};
 
 export type AgentEventPayload = {
   runId: string;
@@ -19,18 +113,30 @@ export type AgentRunContext = {
   isControlUiVisible?: boolean;
 };
 
-// Keep per-run counters so streams stay strictly monotonic per runId.
-const seqByRun = new Map<string, number>();
-const listeners = new Set<(evt: AgentEventPayload) => void>();
-const runContextById = new Map<string, AgentRunContext>();
+type AgentEventState = {
+  seqByRun: Map<string, number>;
+  listeners: Set<(evt: AgentEventPayload) => void>;
+  runContextById: Map<string, AgentRunContext>;
+};
+
+const AGENT_EVENT_STATE_KEY = Symbol.for("openclaw.agentEvents.state");
+
+function getAgentEventState(): AgentEventState {
+  return resolveGlobalSingleton<AgentEventState>(AGENT_EVENT_STATE_KEY, () => ({
+    seqByRun: new Map<string, number>(),
+    listeners: new Set<(evt: AgentEventPayload) => void>(),
+    runContextById: new Map<string, AgentRunContext>(),
+  }));
+}
 
 export function registerAgentRunContext(runId: string, context: AgentRunContext) {
   if (!runId) {
     return;
   }
-  const existing = runContextById.get(runId);
+  const state = getAgentEventState();
+  const existing = state.runContextById.get(runId);
   if (!existing) {
-    runContextById.set(runId, { ...context });
+    state.runContextById.set(runId, { ...context });
     return;
   }
   if (context.sessionKey && existing.sessionKey !== context.sessionKey) {
@@ -48,21 +154,22 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
 }
 
 export function getAgentRunContext(runId: string) {
-  return runContextById.get(runId);
+  return getAgentEventState().runContextById.get(runId);
 }
 
 export function clearAgentRunContext(runId: string) {
-  runContextById.delete(runId);
+  getAgentEventState().runContextById.delete(runId);
 }
 
 export function resetAgentRunContextForTest() {
-  runContextById.clear();
+  getAgentEventState().runContextById.clear();
 }
 
 export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
-  const nextSeq = (seqByRun.get(event.runId) ?? 0) + 1;
-  seqByRun.set(event.runId, nextSeq);
-  const context = runContextById.get(event.runId);
+  const state = getAgentEventState();
+  const nextSeq = (state.seqByRun.get(event.runId) ?? 0) + 1;
+  state.seqByRun.set(event.runId, nextSeq);
+  const context = state.runContextById.get(event.runId);
   const isControlUiVisible = context?.isControlUiVisible ?? true;
   const eventSessionKey =
     typeof event.sessionKey === "string" && event.sessionKey.trim() ? event.sessionKey : undefined;
@@ -73,16 +180,82 @@ export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
     seq: nextSeq,
     ts: Date.now(),
   };
-  for (const listener of listeners) {
-    try {
-      listener(enriched);
-    } catch {
-      /* ignore */
-    }
-  }
+  notifyListeners(state.listeners, enriched);
+}
+
+export function emitAgentItemEvent(params: {
+  runId: string;
+  data: AgentItemEventData;
+  sessionKey?: string;
+}) {
+  emitAgentEvent({
+    runId: params.runId,
+    stream: "item",
+    data: params.data as unknown as Record<string, unknown>,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+  });
+}
+
+export function emitAgentPlanEvent(params: {
+  runId: string;
+  data: AgentPlanEventData;
+  sessionKey?: string;
+}) {
+  emitAgentEvent({
+    runId: params.runId,
+    stream: "plan",
+    data: params.data as unknown as Record<string, unknown>,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+  });
+}
+
+export function emitAgentApprovalEvent(params: {
+  runId: string;
+  data: AgentApprovalEventData;
+  sessionKey?: string;
+}) {
+  emitAgentEvent({
+    runId: params.runId,
+    stream: "approval",
+    data: params.data as unknown as Record<string, unknown>,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+  });
+}
+
+export function emitAgentCommandOutputEvent(params: {
+  runId: string;
+  data: AgentCommandOutputEventData;
+  sessionKey?: string;
+}) {
+  emitAgentEvent({
+    runId: params.runId,
+    stream: "command_output",
+    data: params.data as unknown as Record<string, unknown>,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+  });
+}
+
+export function emitAgentPatchSummaryEvent(params: {
+  runId: string;
+  data: AgentPatchSummaryEventData;
+  sessionKey?: string;
+}) {
+  emitAgentEvent({
+    runId: params.runId,
+    stream: "patch",
+    data: params.data as unknown as Record<string, unknown>,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+  });
 }
 
 export function onAgentEvent(listener: (evt: AgentEventPayload) => void) {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
+  const state = getAgentEventState();
+  return registerListener(state.listeners, listener);
+}
+
+export function resetAgentEventsForTest() {
+  const state = getAgentEventState();
+  state.seqByRun.clear();
+  state.listeners.clear();
+  state.runContextById.clear();
 }

@@ -1,8 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
+import * as backupShared from "./backup-shared.js";
+import { resolveBackupPlanFromPaths } from "./backup-shared.js";
+import { backupCreateCommand } from "./backup.js";
 
 const tarCreateMock = vi.hoisted(() => vi.fn());
 const backupVerifyCommandMock = vi.hoisted(() => vi.fn());
@@ -15,18 +18,30 @@ vi.mock("./backup-verify.js", () => ({
   backupVerifyCommand: backupVerifyCommandMock,
 }));
 
-const { backupCreateCommand } = await import("./backup.js");
-
 describe("backupCreateCommand atomic archive write", () => {
   let tempHome: TempHomeEnv;
 
-  beforeEach(async () => {
+  async function resetTempHome() {
+    await fs.rm(tempHome.home, { recursive: true, force: true });
+    await fs.mkdir(path.join(tempHome.home, ".openclaw"), { recursive: true });
+    delete process.env.OPENCLAW_CONFIG_PATH;
+  }
+
+  beforeAll(async () => {
     tempHome = await createTempHomeEnv("openclaw-backup-atomic-test-");
+  });
+
+  beforeEach(async () => {
+    await resetTempHome();
     tarCreateMock.mockReset();
     backupVerifyCommandMock.mockReset();
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
+  });
+
+  afterAll(async () => {
     await tempHome.restore();
   });
 
@@ -45,6 +60,17 @@ describe("backupCreateCommand atomic archive write", () => {
         exit: vi.fn(),
       };
       const outputPath = path.join(archiveDir, "backup.tar.gz");
+      vi.spyOn(backupShared, "resolveBackupPlanFromDisk").mockResolvedValue(
+        await resolveBackupPlanFromPaths({
+          stateDir,
+          configPath: path.join(stateDir, "openclaw.json"),
+          oauthDir: path.join(stateDir, "credentials"),
+          includeWorkspace: false,
+          configInsideState: true,
+          oauthInsideState: true,
+          nowMs: 123,
+        }),
+      );
 
       await expect(
         backupCreateCommand(runtime, {
@@ -83,6 +109,17 @@ describe("backupCreateCommand atomic archive write", () => {
         exit: vi.fn(),
       };
       const outputPath = path.join(archiveDir, "backup.tar.gz");
+      vi.spyOn(backupShared, "resolveBackupPlanFromDisk").mockResolvedValue(
+        await resolveBackupPlanFromPaths({
+          stateDir,
+          configPath: path.join(stateDir, "openclaw.json"),
+          oauthDir: path.join(stateDir, "credentials"),
+          includeWorkspace: false,
+          configInsideState: true,
+          oauthInsideState: true,
+          nowMs: 123,
+        }),
+      );
 
       await expect(
         backupCreateCommand(runtime, {
@@ -118,6 +155,17 @@ describe("backupCreateCommand atomic archive write", () => {
         exit: vi.fn(),
       };
       const outputPath = path.join(archiveDir, "backup.tar.gz");
+      vi.spyOn(backupShared, "resolveBackupPlanFromDisk").mockResolvedValue(
+        await resolveBackupPlanFromPaths({
+          stateDir,
+          configPath: path.join(stateDir, "openclaw.json"),
+          oauthDir: path.join(stateDir, "credentials"),
+          includeWorkspace: false,
+          configInsideState: true,
+          oauthInsideState: true,
+          nowMs: 123,
+        }),
+      );
 
       const result = await backupCreateCommand(runtime, {
         output: outputPath,

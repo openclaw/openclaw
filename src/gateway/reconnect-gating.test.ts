@@ -21,6 +21,12 @@ describe("isNonRecoverableAuthError", () => {
     );
   });
 
+  it("blocks reconnect for AUTH_BOOTSTRAP_TOKEN_INVALID", () => {
+    expect(
+      isNonRecoverableAuthError(makeError(ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID)),
+    ).toBe(true);
+  });
+
   it("blocks reconnect for AUTH_PASSWORD_MISSING", () => {
     expect(
       isNonRecoverableAuthError(makeError(ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING)),

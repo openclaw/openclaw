@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { withTempHome } from "../../test/helpers/temp-home.js";
+import { MODEL_CONTEXT_TOKEN_CACHE } from "../agents/context-cache.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { createSuccessfulImageMediaDecision } from "./media-understanding.test-fixtures.js";
@@ -10,8 +11,16 @@ import {
   buildCommandsMessage,
   buildCommandsMessagePaginated,
   buildHelpMessage,
-  buildStatusMessage,
+  buildStatusMessage as buildStatusMessageRaw,
 } from "./status.js";
+import type { buildStatusMessage as BuildStatusMessage } from "./status.js";
+
+const buildStatusMessage: typeof BuildStatusMessage = (args) =>
+  buildStatusMessageRaw({
+    modelAuth: "api-key",
+    activeModelAuth: "api-key",
+    ...args,
+  });
 
 const { listPluginCommands } = vi.hoisted(() => ({
   listPluginCommands: vi.fn(
@@ -25,6 +34,7 @@ vi.mock("../plugins/commands.js", () => ({
 
 afterEach(() => {
   vi.restoreAllMocks();
+  MODEL_CONTEXT_TOKEN_CACHE.clear();
 });
 
 describe("buildStatusMessage", () => {
@@ -113,6 +123,92 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Reasoning: on");
   });
 
+  it("shows fast mode when enabled", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai/gpt-5.4",
+      },
+      sessionEntry: {
+        sessionId: "fast",
+        updatedAt: 0,
+        fastMode: true,
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Fast: on");
+  });
+
+  it("shows configured text verbosity for the active model", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            model: "openai-codex/gpt-5.4",
+            models: {
+              "openai-codex/gpt-5.4": {
+                params: {
+                  textVerbosity: "low",
+                },
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "openai-codex/gpt-5.4",
+      },
+      sessionEntry: {
+        sessionId: "abc",
+        updatedAt: 0,
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Text: low");
+  });
+
+  it("shows per-agent text verbosity overrides for the active model", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            model: "openai-codex/gpt-5.4",
+            models: {
+              "openai-codex/gpt-5.4": {
+                params: {
+                  textVerbosity: "high",
+                },
+              },
+            },
+          },
+          list: [
+            {
+              id: "main",
+              params: {
+                text_verbosity: "low",
+              },
+            },
+          ],
+        },
+      } as unknown as OpenClawConfig,
+      agentId: "main",
+      agent: {
+        model: "openai-codex/gpt-5.4",
+      },
+      sessionEntry: {
+        sessionId: "abc",
+        updatedAt: 0,
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Text: low");
+  });
+
   it("notes channel model overrides in status output", () => {
     const text = buildStatusMessage({
       config: {
@@ -133,7 +229,7 @@ describe("buildStatusMessage", () => {
         channel: "discord",
         groupId: "123",
       },
-      sessionKey: "agent:main:discord:channel:123",
+      sessionKey: "agent:main:main",
       sessionScope: "per-sender",
       queue: { mode: "collect", depth: 0 },
     });
@@ -206,6 +302,313 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain("Context: 1.0k/66k");
   });
 
+  it("recomputes context window from the active fallback model when session contextTokens are stale", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            "minimax-portal": {
+              models: [{ id: "MiniMax-M2.7", contextWindow: 200_000 }],
+            },
+            xiaomi: {
+              models: [{ id: "mimo-v2-flash", contextWindow: 1_048_576 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "xiaomi/mimo-v2-flash",
+      },
+      sessionEntry: {
+        sessionId: "fallback-context-window",
+        updatedAt: 0,
+        providerOverride: "xiaomi",
+        modelOverride: "mimo-v2-flash",
+        modelProvider: "minimax-portal",
+        model: "MiniMax-M2.7",
+        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
+        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
+        fallbackNoticeReason: "model not allowed",
+        totalTokens: 49_000,
+        contextTokens: 1_048_576,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      activeModelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.7");
+    expect(normalized).toContain("Context: 49k/200k");
+    expect(normalized).not.toContain("Context: 49k/1.0m");
+  });
+
+  it("keeps an explicit runtime context limit when fallback status already computed one", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            "minimax-portal": {
+              models: [{ id: "MiniMax-M2.7", contextWindow: 200_000 }],
+            },
+            xiaomi: {
+              models: [{ id: "mimo-v2-flash", contextWindow: 1_048_576 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "xiaomi/mimo-v2-flash",
+      },
+      runtimeContextTokens: 123_456,
+      sessionEntry: {
+        sessionId: "fallback-context-window-live-limit",
+        updatedAt: 0,
+        providerOverride: "xiaomi",
+        modelOverride: "mimo-v2-flash",
+        modelProvider: "minimax-portal",
+        model: "MiniMax-M2.7",
+        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
+        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
+        fallbackNoticeReason: "model not allowed",
+        totalTokens: 49_000,
+        contextTokens: 1_048_576,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      activeModelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.7");
+    expect(normalized).toContain("Context: 49k/123k");
+    expect(normalized).not.toContain("Context: 49k/1.0m");
+    expect(normalized).not.toContain("Context: 49k/200k");
+  });
+
+  it("keeps the persisted runtime context limit for fallback sessions when no live override is passed", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            "minimax-portal": {
+              models: [{ id: "MiniMax-M2.7", contextWindow: 200_000 }],
+            },
+            xiaomi: {
+              models: [{ id: "mimo-v2-flash", contextWindow: 1_048_576 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "xiaomi/mimo-v2-flash",
+      },
+      sessionEntry: {
+        sessionId: "fallback-context-window-persisted-limit",
+        updatedAt: 0,
+        providerOverride: "xiaomi",
+        modelOverride: "mimo-v2-flash",
+        modelProvider: "minimax-portal",
+        model: "MiniMax-M2.7",
+        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
+        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
+        fallbackNoticeReason: "model not allowed",
+        totalTokens: 49_000,
+        contextTokens: 123_456,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      activeModelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.7");
+    expect(normalized).toContain("Context: 49k/123k");
+    expect(normalized).not.toContain("Context: 49k/1.0m");
+    expect(normalized).not.toContain("Context: 49k/200k");
+  });
+
+  it("keeps an explicit configured context cap for fallback status before runtime snapshot persists", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            "minimax-portal": {
+              models: [{ id: "MiniMax-M2.7", contextWindow: 200_000 }],
+            },
+            xiaomi: {
+              models: [{ id: "mimo-v2-flash", contextWindow: 1_048_576 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "xiaomi/mimo-v2-flash",
+        contextTokens: 120_000,
+      },
+      explicitConfiguredContextTokens: 120_000,
+      sessionEntry: {
+        sessionId: "fallback-context-window-configured-cap",
+        updatedAt: 0,
+        providerOverride: "xiaomi",
+        modelOverride: "mimo-v2-flash",
+        modelProvider: "minimax-portal",
+        model: "MiniMax-M2.7",
+        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
+        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
+        fallbackNoticeReason: "model not allowed",
+        totalTokens: 49_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      activeModelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.7");
+    expect(normalized).toContain("Context: 49k/120k");
+    expect(normalized).not.toContain("Context: 49k/200k");
+    expect(normalized).not.toContain("Context: 49k/1.0m");
+  });
+
+  it("keeps an explicit configured context cap even when it matches the selected model window", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            "minimax-portal": {
+              models: [{ id: "MiniMax-M2.7", contextWindow: 200_000 }],
+            },
+            xiaomi: {
+              models: [{ id: "mimo-v2-flash", contextWindow: 128_000 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "xiaomi/mimo-v2-flash",
+        contextTokens: 128_000,
+      },
+      explicitConfiguredContextTokens: 128_000,
+      sessionEntry: {
+        sessionId: "fallback-context-window-configured-cap-equals-selected",
+        updatedAt: 0,
+        providerOverride: "xiaomi",
+        modelOverride: "mimo-v2-flash",
+        modelProvider: "minimax-portal",
+        model: "MiniMax-M2.7",
+        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
+        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
+        fallbackNoticeReason: "model not allowed",
+        totalTokens: 49_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      activeModelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.7");
+    expect(normalized).toContain("Context: 49k/128k");
+    expect(normalized).not.toContain("Context: 49k/200k");
+  });
+
+  it("clamps an explicit configured context cap to the active fallback window", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            "minimax-portal": {
+              models: [{ id: "MiniMax-M2.7", contextWindow: 200_000 }],
+            },
+            xiaomi: {
+              models: [{ id: "mimo-v2-flash", contextWindow: 1_048_576 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "xiaomi/mimo-v2-flash",
+        contextTokens: 1_048_576,
+      },
+      explicitConfiguredContextTokens: 1_048_576,
+      sessionEntry: {
+        sessionId: "fallback-context-window-configured-cap-clamped",
+        updatedAt: 0,
+        providerOverride: "xiaomi",
+        modelOverride: "mimo-v2-flash",
+        modelProvider: "minimax-portal",
+        model: "MiniMax-M2.7",
+        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
+        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
+        fallbackNoticeReason: "model not allowed",
+        totalTokens: 49_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      activeModelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.7");
+    expect(normalized).toContain("Context: 49k/200k");
+    expect(normalized).not.toContain("Context: 49k/1.0m");
+  });
+
+  it("keeps a persisted fallback limit when the active runtime model lookup is unavailable", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            xiaomi: {
+              models: [{ id: "mimo-v2-flash", contextWindow: 1_048_576 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "xiaomi/mimo-v2-flash",
+        contextTokens: 1_048_576,
+      },
+      explicitConfiguredContextTokens: 1_048_576,
+      sessionEntry: {
+        sessionId: "fallback-context-window-persisted-unknown-active",
+        updatedAt: 0,
+        providerOverride: "xiaomi",
+        modelOverride: "mimo-v2-flash",
+        modelProvider: "custom-runtime",
+        model: "unknown-fallback-model",
+        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
+        fallbackNoticeActiveModel: "custom-runtime/unknown-fallback-model",
+        fallbackNoticeReason: "model not allowed",
+        totalTokens: 49_000,
+        contextTokens: 128_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      activeModelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fallback: custom-runtime/unknown-fallback-model");
+    expect(normalized).toContain("Context: 49k/128k");
+    expect(normalized).not.toContain("Context: 49k/1.0m");
+  });
+
   it("uses per-agent sandbox config when config and session key are provided", () => {
     const text = buildStatusMessage({
       config: {
@@ -227,7 +630,7 @@ describe("buildStatusMessage", () => {
 
   it("shows verbose/elevated labels only when enabled", () => {
     const text = buildStatusMessage({
-      agent: { model: "anthropic/claude-opus-4-5" },
+      agent: { model: "anthropic/claude-opus-4-6" },
       sessionEntry: { sessionId: "v1", updatedAt: 0 },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -243,7 +646,7 @@ describe("buildStatusMessage", () => {
 
   it("includes media understanding decisions when present", () => {
     const text = buildStatusMessage({
-      agent: { model: "anthropic/claude-opus-4-5" },
+      agent: { model: "anthropic/claude-opus-4-6" },
       sessionEntry: { sessionId: "media", updatedAt: 0 },
       sessionKey: "agent:main:main",
       queue: { mode: "none" },
@@ -271,12 +674,12 @@ describe("buildStatusMessage", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Media: image ok (openai/gpt-5.2) · audio skipped (maxBytes)");
+    expect(normalized).toContain("Media: image ok (openai/gpt-5.4) · audio skipped (maxBytes)");
   });
 
   it("omits media line when all decisions are none", () => {
     const text = buildStatusMessage({
-      agent: { model: "anthropic/claude-opus-4-5" },
+      agent: { model: "anthropic/claude-opus-4-6" },
       sessionEntry: { sessionId: "media-none", updatedAt: 0 },
       sessionKey: "agent:main:main",
       queue: { mode: "none" },
@@ -292,7 +695,7 @@ describe("buildStatusMessage", () => {
 
   it("does not show elevated label when session explicitly disables it", () => {
     const text = buildStatusMessage({
-      agent: { model: "anthropic/claude-opus-4-5", elevatedDefault: "on" },
+      agent: { model: "anthropic/claude-opus-4-6", elevatedDefault: "on" },
       sessionEntry: { sessionId: "v1", updatedAt: 0, elevatedLevel: "off" },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -309,7 +712,7 @@ describe("buildStatusMessage", () => {
   it("shows selected model and active runtime model when they differ", () => {
     const text = buildStatusMessage({
       agent: {
-        model: "anthropic/claude-opus-4-5",
+        model: "anthropic/claude-opus-4-6",
         contextTokens: 32_000,
       },
       sessionEntry: {
@@ -351,7 +754,7 @@ describe("buildStatusMessage", () => {
         updatedAt: 0,
         modelProvider: "anthropic",
         model: "claude-haiku-4-5",
-        fallbackNoticeSelectedModel: "fireworks/minimax-m2p5",
+        fallbackNoticeSelectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
         fallbackNoticeActiveModel: "deepinfra/moonshotai/Kimi-K2.5",
         fallbackNoticeReason: "rate limit",
       },
@@ -391,17 +794,52 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("Fallback:");
   });
 
+  it("shows configured fallback models when provided", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: {
+          primary: "anthropic/claude-opus-4-6",
+          fallbacks: ["google/gemini-2.5-flash", "openai/gpt-5-mini"],
+        },
+      },
+      sessionEntry: { sessionId: "fb1", updatedAt: 0 },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fallbacks: google/gemini-2.5-flash, openai/gpt-5-mini");
+  });
+
+  it("omits configured fallbacks line when no fallbacks provided", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-6",
+      },
+      sessionEntry: { sessionId: "fb2", updatedAt: 0 },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).not.toContain("Fallbacks:");
+  });
+
   it("keeps provider prefix from configured model", () => {
     const text = buildStatusMessage({
       agent: {
-        model: "google-antigravity/claude-sonnet-4-5",
+        model: "google-antigravity/claude-sonnet-4-6",
       },
       sessionScope: "per-sender",
       queue: { mode: "collect", depth: 0 },
       modelAuth: "api-key",
     });
 
-    expect(normalizeTestText(text)).toContain("Model: google-antigravity/claude-sonnet-4-5");
+    expect(normalizeTestText(text)).toContain("Model: google-antigravity/claude-sonnet-4-6");
   });
 
   it("handles missing agent config gracefully", () => {
@@ -458,7 +896,7 @@ describe("buildStatusMessage", () => {
 
   it("inserts usage summary beneath context line", () => {
     const text = buildStatusMessage({
-      agent: { model: "anthropic/claude-opus-4-5", contextTokens: 32_000 },
+      agent: { model: "anthropic/claude-opus-4-6", contextTokens: 32_000 },
       sessionEntry: { sessionId: "u1", updatedAt: 0, totalTokens: 1000 },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -481,7 +919,7 @@ describe("buildStatusMessage", () => {
             anthropic: {
               models: [
                 {
-                  id: "claude-opus-4-5",
+                  id: "claude-opus-4-6",
                   cost: {
                     input: 1,
                     output: 1,
@@ -494,7 +932,7 @@ describe("buildStatusMessage", () => {
           },
         },
       } as unknown as OpenClawConfig,
-      agent: { model: "anthropic/claude-opus-4-5" },
+      agent: { model: "anthropic/claude-opus-4-6" },
       sessionEntry: { sessionId: "c1", updatedAt: 0, inputTokens: 10 },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -509,6 +947,7 @@ describe("buildStatusMessage", () => {
     dir: string;
     agentId: string;
     sessionId: string;
+    model?: string;
     usage: {
       input: number;
       output: number;
@@ -533,7 +972,7 @@ describe("buildStatusMessage", () => {
           type: "message",
           message: {
             role: "assistant",
-            model: "claude-opus-4-5",
+            model: params.model ?? "claude-opus-4-6",
             usage: params.usage,
           },
         }),
@@ -564,7 +1003,7 @@ describe("buildStatusMessage", () => {
   function buildTranscriptStatusText(params: { sessionId: string; sessionKey: string }) {
     return buildStatusMessage({
       agent: {
-        model: "anthropic/claude-opus-4-5",
+        model: "anthropic/claude-opus-4-6",
         contextTokens: 32_000,
       },
       sessionEntry: {
@@ -642,7 +1081,7 @@ describe("buildStatusMessage", () => {
 
         const text = buildStatusMessage({
           agent: {
-            model: "anthropic/claude-opus-4-5",
+            model: "anthropic/claude-opus-4-6",
             contextTokens: 32_000,
           },
           agentId: "worker2",
@@ -663,6 +1102,398 @@ describe("buildStatusMessage", () => {
       },
       { prefix: "openclaw-status-" },
     );
+  });
+
+  it("hydrates cache usage from transcript fallback", async () => {
+    await withTempHome(
+      async (dir) => {
+        const sessionId = "sess-cache-hydration";
+        writeBaselineTranscriptUsageLog({
+          dir,
+          agentId: "main",
+          sessionId,
+        });
+
+        const text = buildTranscriptStatusText({
+          sessionId,
+          sessionKey: "agent:main:main",
+        });
+
+        expect(normalizeTestText(text)).toContain("Cache: 100% hit · 1.0k cached, 0 new");
+      },
+      { prefix: "openclaw-status-" },
+    );
+  });
+
+  it("uses the same transcript usage fallback as sessions.list when a delivery mirror is last", async () => {
+    await withTempHome(
+      async (dir) => {
+        const sessionId = "sess-cache-delivery-mirror";
+        const logPath = path.join(
+          dir,
+          ".openclaw",
+          "agents",
+          "main",
+          "sessions",
+          `${sessionId}.jsonl`,
+        );
+        fs.mkdirSync(path.dirname(logPath), { recursive: true });
+        fs.writeFileSync(
+          logPath,
+          [
+            JSON.stringify({ type: "session", version: 1, id: sessionId }),
+            JSON.stringify({
+              type: "message",
+              message: {
+                role: "assistant",
+                provider: "anthropic",
+                model: "claude-opus-4-6",
+                usage: {
+                  input: 1,
+                  output: 2,
+                  cacheRead: 1000,
+                  cacheWrite: 0,
+                  totalTokens: 1003,
+                },
+              },
+            }),
+            JSON.stringify({
+              type: "message",
+              message: {
+                role: "assistant",
+                provider: "openclaw",
+                model: "delivery-mirror",
+                usage: {
+                  input: 0,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  totalTokens: 0,
+                },
+              },
+            }),
+          ].join("\n"),
+          "utf-8",
+        );
+
+        const text = buildTranscriptStatusText({
+          sessionId,
+          sessionKey: "agent:main:main",
+        });
+
+        expect(normalizeTestText(text)).toContain("Cache: 100% hit · 1.0k cached, 0 new");
+        expect(normalizeTestText(text)).toContain("Context: 1.0k/32k");
+      },
+      { prefix: "openclaw-status-" },
+    );
+  });
+
+  it("preserves existing nonzero cache usage over transcript fallback values", async () => {
+    await withTempHome(
+      async (dir) => {
+        const sessionId = "sess-cache-preserve";
+        writeBaselineTranscriptUsageLog({
+          dir,
+          agentId: "main",
+          sessionId,
+        });
+
+        const text = buildStatusMessage({
+          agent: {
+            model: "anthropic/claude-opus-4-6",
+            contextTokens: 32_000,
+          },
+          sessionEntry: {
+            sessionId,
+            updatedAt: 0,
+            totalTokens: 3,
+            contextTokens: 32_000,
+            cacheRead: 12,
+            cacheWrite: 34,
+          },
+          sessionKey: "agent:main:main",
+          sessionScope: "per-sender",
+          queue: { mode: "collect", depth: 0 },
+          includeTranscriptUsage: true,
+          modelAuth: "api-key",
+        });
+
+        expect(normalizeTestText(text)).toContain("Cache: 26% hit · 12 cached, 34 new");
+      },
+      { prefix: "openclaw-status-" },
+    );
+  });
+
+  it("keeps transcript-derived slash model ids on model-only context lookup", async () => {
+    await withTempHome(
+      async (dir) => {
+        MODEL_CONTEXT_TOKEN_CACHE.set("google/gemini-2.5-pro", 999_000);
+
+        const sessionId = "sess-openrouter-google";
+        writeTranscriptUsageLog({
+          dir,
+          agentId: "main",
+          sessionId,
+          model: "google/gemini-2.5-pro",
+          usage: {
+            input: 2,
+            output: 3,
+            cacheRead: 1200,
+            cacheWrite: 0,
+            totalTokens: 1205,
+          },
+        });
+
+        const text = buildStatusMessage({
+          config: {
+            models: {
+              providers: {
+                google: {
+                  models: [{ id: "gemini-2.5-pro", contextWindow: 2_000_000 }],
+                },
+              },
+            },
+          } as unknown as OpenClawConfig,
+          agent: {
+            model: "openrouter/google/gemini-2.5-pro",
+          },
+          sessionEntry: {
+            sessionId,
+            updatedAt: 0,
+            totalTokens: 5,
+          },
+          sessionKey: "agent:main:main",
+          sessionScope: "per-sender",
+          queue: { mode: "collect", depth: 0 },
+          includeTranscriptUsage: true,
+          modelAuth: "api-key",
+        });
+
+        const normalized = normalizeTestText(text);
+        expect(normalized).toContain("Context: 1.2k/999k");
+        expect(normalized).not.toContain("Context: 1.2k/2.0m");
+      },
+      { prefix: "openclaw-status-" },
+    );
+  });
+
+  it("keeps runtime slash model ids on model-only context lookup when modelProvider is missing", () => {
+    MODEL_CONTEXT_TOKEN_CACHE.set("google/gemini-2.5-pro", 999_000);
+
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            google: {
+              models: [{ id: "gemini-2.5-pro", contextWindow: 2_000_000 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "openrouter/google/gemini-2.5-pro",
+      },
+      sessionEntry: {
+        sessionId: "sess-runtime-slash-id",
+        updatedAt: 0,
+        totalTokens: 1205,
+        model: "google/gemini-2.5-pro",
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Context: 1.2k/999k");
+    expect(normalized).not.toContain("Context: 1.2k/2.0m");
+  });
+
+  it("keeps provider-aware lookup for legacy fallback runtime slash ids", () => {
+    MODEL_CONTEXT_TOKEN_CACHE.clear();
+
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            "fake-minimax": {
+              models: [{ id: "FakeMiniMax-M2.5", contextWindow: 777_000 }],
+            },
+            xiaomi: {
+              models: [{ id: "mimo-v2-flash", contextWindow: 1_048_576 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "xiaomi/mimo-v2-flash",
+      },
+      sessionEntry: {
+        sessionId: "sess-runtime-slash-id-fallback",
+        updatedAt: 0,
+        providerOverride: "xiaomi",
+        modelOverride: "mimo-v2-flash",
+        model: "fake-minimax/FakeMiniMax-M2.5",
+        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
+        fallbackNoticeActiveModel: "fake-minimax/FakeMiniMax-M2.5",
+        fallbackNoticeReason: "model not allowed",
+        totalTokens: 49_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      activeModelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fallback: fake-minimax/FakeMiniMax-M2.5");
+    expect(normalized).toContain("Context: 49k/777k");
+    expect(normalized).not.toContain("Context: 49k/200k");
+  });
+
+  it("keeps provider-aware lookup for non-fallback runtime slash ids", () => {
+    MODEL_CONTEXT_TOKEN_CACHE.clear();
+
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            openai: {
+              models: [{ id: "gpt-4o", contextWindow: 777_000 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "openai/gpt-4o",
+      },
+      sessionEntry: {
+        sessionId: "sess-runtime-slash-id-direct",
+        updatedAt: 0,
+        model: "openai/gpt-4o",
+        totalTokens: 49_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      activeModelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Context: 49k/777k");
+    expect(normalized).not.toContain("Context: 49k/200k");
+  });
+
+  it("keeps provider-aware lookup for bare transcript model ids", async () => {
+    await withTempHome(
+      async (dir) => {
+        MODEL_CONTEXT_TOKEN_CACHE.set("gemini-2.5-pro", 128_000);
+        MODEL_CONTEXT_TOKEN_CACHE.set("google-gemini-cli/gemini-2.5-pro", 1_000_000);
+
+        const sessionId = "sess-google-bare-model";
+        writeTranscriptUsageLog({
+          dir,
+          agentId: "main",
+          sessionId,
+          model: "gemini-2.5-pro",
+          usage: {
+            input: 2,
+            output: 3,
+            cacheRead: 1200,
+            cacheWrite: 0,
+            totalTokens: 1205,
+          },
+        });
+
+        const text = buildStatusMessage({
+          agent: {
+            model: "google-gemini-cli/gemini-2.5-pro",
+          },
+          sessionEntry: {
+            sessionId,
+            updatedAt: 0,
+            totalTokens: 5,
+          },
+          sessionKey: "agent:main:main",
+          sessionScope: "per-sender",
+          queue: { mode: "collect", depth: 0 },
+          includeTranscriptUsage: true,
+          modelAuth: "api-key",
+        });
+
+        const normalized = normalizeTestText(text);
+        expect(normalized).toContain("Context: 1.2k/1.0m");
+        expect(normalized).not.toContain("Context: 1.2k/128k");
+      },
+      { prefix: "openclaw-status-" },
+    );
+  });
+
+  it("prefers provider-qualified context windows for fresh bare model ids", () => {
+    MODEL_CONTEXT_TOKEN_CACHE.set("claude-opus-4-6", 200_000);
+    MODEL_CONTEXT_TOKEN_CACHE.set("anthropic/claude-opus-4-6", 1_000_000);
+
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-6",
+      },
+      sessionEntry: {
+        sessionId: "sess-anthropic-qualified-context",
+        updatedAt: 0,
+        totalTokens: 25_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Context: 25k/1.0m");
+    expect(normalized).not.toContain("Context: 25k/200k");
+  });
+
+  it("does not synthesize a 32k fallback window when the active runtime model is unknown", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            xiaomi: {
+              models: [{ id: "mimo-v2-flash", contextWindow: 128_000 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "xiaomi/mimo-v2-flash",
+      },
+      sessionEntry: {
+        sessionId: "fallback-context-window-unknown-active-model",
+        updatedAt: 0,
+        providerOverride: "xiaomi",
+        modelOverride: "mimo-v2-flash",
+        modelProvider: "custom-runtime",
+        model: "unknown-fallback-model",
+        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
+        fallbackNoticeActiveModel: "custom-runtime/unknown-fallback-model",
+        fallbackNoticeReason: "model not allowed",
+        totalTokens: 49_000,
+        contextTokens: 128_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+      activeModelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fallback: custom-runtime/unknown-fallback-model");
+    expect(normalized).toContain("Context: 49k/128k");
+    expect(normalized).not.toContain("Context: 49k/32k");
   });
 });
 
@@ -708,6 +1539,10 @@ describe("buildHelpMessage", () => {
     expect(text).not.toContain("/config");
     expect(text).not.toContain("/debug");
   });
+
+  it("includes /fast in help output", () => {
+    expect(buildHelpMessage()).toContain("/fast status|on|off");
+  });
 });
 
 describe("buildCommandsMessagePaginated", () => {
@@ -717,25 +1552,40 @@ describe("buildCommandsMessagePaginated", () => {
         commands: { config: false, debug: false },
       } as unknown as OpenClawConfig,
       undefined,
-      { surface: "telegram", page: 1 },
+      { surface: "telegram", page: 1, forcePaginatedList: true },
     );
     expect(result.text).toContain("ℹ️ Commands (1/");
     expect(result.text).toContain("Session");
     expect(result.text).toContain("/stop - Stop the current run.");
   });
 
-  it("includes plugin commands in the paginated list", () => {
-    listPluginCommands.mockReturnValue([
+  it("includes plugin commands in the paginated list", async () => {
+    const pluginCommands = [
       { name: "plugin_cmd", description: "Plugin command", pluginId: "demo-plugin" },
-    ]);
-    const result = buildCommandsMessagePaginated(
+    ];
+    listPluginCommands.mockImplementation(() => pluginCommands);
+    expect(listPluginCommands()).toEqual(pluginCommands);
+    vi.resetModules();
+    const { buildCommandsMessagePaginated: buildPaginatedCommands } = await import("./status.js");
+    const firstPage = buildPaginatedCommands(
       {
         commands: { config: false, debug: false },
       } as unknown as OpenClawConfig,
       undefined,
-      { surface: "telegram", page: 99 },
+      { surface: "telegram", page: 1, forcePaginatedList: true },
     );
-    expect(result.text).toContain("Plugins");
-    expect(result.text).toContain("/plugin_cmd (demo-plugin) - Plugin command");
+    const pages = Array.from({ length: firstPage.totalPages }, (_, index) =>
+      buildPaginatedCommands(
+        {
+          commands: { config: false, debug: false },
+        } as unknown as OpenClawConfig,
+        undefined,
+        { surface: "telegram", page: index + 1, forcePaginatedList: true },
+      ),
+    );
+    const pluginPage = pages.find((page) => page.text.includes("/plugin_cmd (demo-plugin)"));
+    expect(pluginPage).toBeTruthy();
+    expect(pluginPage?.text).toContain("Plugins");
+    expect(pluginPage?.text).toContain("/plugin_cmd (demo-plugin) - Plugin command");
   });
 });

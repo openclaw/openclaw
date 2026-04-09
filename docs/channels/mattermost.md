@@ -6,15 +6,19 @@ read_when:
 title: "Mattermost"
 ---
 
-# Mattermost (plugin)
+# Mattermost
 
-Status: supported via plugin (bot token + WebSocket events). Channels, groups, and DMs are supported.
+Status: bundled plugin (bot token + WebSocket events). Channels, groups, and DMs are supported.
 Mattermost is a self-hostable team messaging platform; see the official site at
 [mattermost.com](https://mattermost.com) for product details and downloads.
 
-## Plugin required
+## Bundled plugin
 
-Mattermost ships as a plugin and is not bundled with the core install.
+Mattermost ships as a bundled plugin in current OpenClaw releases, so normal
+packaged builds do not need a separate install.
+
+If you are on an older build or a custom install that excludes Mattermost,
+install it manually:
 
 Install via CLI (npm registry):
 
@@ -25,17 +29,16 @@ openclaw plugins install @openclaw/mattermost
 Local checkout (when running from a git repo):
 
 ```bash
-openclaw plugins install ./extensions/mattermost
+openclaw plugins install ./path/to/local/mattermost-plugin
 ```
-
-If you choose Mattermost during configure/onboarding and a git checkout is detected,
-OpenClaw will offer the local install path automatically.
 
 Details: [Plugins](/tools/plugin)
 
 ## Quick setup
 
-1. Install the Mattermost plugin.
+1. Ensure the Mattermost plugin is available.
+   - Current packaged OpenClaw releases already bundle it.
+   - Older/custom installs can add it manually with the commands above.
 2. Create a Mattermost bot account and copy the **bot token**.
 3. Copy the Mattermost **base URL** (e.g., `https://chat.example.com`).
 4. Configure OpenClaw and start the gateway.
@@ -82,7 +85,10 @@ Notes:
 - If `callbackUrl` is omitted, OpenClaw derives one from gateway host/port + `callbackPath`.
 - For multi-account setups, `commands` can be set at the top level or under
   `channels.mattermost.accounts.<id>.commands` (account values override top-level fields).
-- Command callbacks are validated with per-command tokens and fail closed when token checks fail.
+- Command callbacks are validated with the per-command tokens returned by
+  Mattermost when OpenClaw registers `oc_*` commands.
+- Slash callbacks fail closed when registration failed, startup was partial, or
+  the callback token does not match one of the registered commands.
 - Reachability requirement: the callback endpoint must be reachable from the Mattermost server.
   - Do not set `callbackUrl` to `localhost` unless Mattermost runs on the same host/network namespace as OpenClaw.
   - Do not set `callbackUrl` to your Mattermost base URL unless that URL reverse-proxies `/api/channels/mattermost/command` to OpenClaw.
@@ -129,6 +135,35 @@ Notes:
 - `onchar` still responds to explicit @mentions.
 - `channels.mattermost.requireMention` is honored for legacy configs but `chatmode` is preferred.
 
+## Threading and sessions
+
+Use `channels.mattermost.replyToMode` to control whether channel and group replies stay in the
+main channel or start a thread under the triggering post.
+
+- `off` (default): only reply in a thread when the inbound post is already in one.
+- `first`: for top-level channel/group posts, start a thread under that post and route the
+  conversation to a thread-scoped session.
+- `all`: same behavior as `first` for Mattermost today.
+- Direct messages ignore this setting and stay non-threaded.
+
+Config example:
+
+```json5
+{
+  channels: {
+    mattermost: {
+      replyToMode: "all",
+    },
+  },
+}
+```
+
+Notes:
+
+- Thread-scoped sessions use the triggering post id as the thread root.
+- `first` and `all` are currently equivalent because once Mattermost has a thread root,
+  follow-up chunks and media continue in that same thread.
+
 ## Access control (DMs)
 
 - Default: `channels.mattermost.dmPolicy = "pairing"` (unknown senders get a pairing code).
@@ -141,9 +176,27 @@ Notes:
 
 - Default: `channels.mattermost.groupPolicy = "allowlist"` (mention-gated).
 - Allowlist senders with `channels.mattermost.groupAllowFrom` (user IDs recommended).
+- Per-channel mention overrides live under `channels.mattermost.groups.<channelId>.requireMention`
+  or `channels.mattermost.groups["*"].requireMention` for a default.
 - `@username` matching is mutable and only enabled when `channels.mattermost.dangerouslyAllowNameMatching: true`.
 - Open channels: `channels.mattermost.groupPolicy="open"` (mention-gated).
 - Runtime note: if `channels.mattermost` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
+
+Example:
+
+```json5
+{
+  channels: {
+    mattermost: {
+      groupPolicy: "open",
+      groups: {
+        "*": { requireMention: true },
+        "team-channel-id": { requireMention: false },
+      },
+    },
+  },
+}
+```
 
 ## Targets for outbound delivery
 
@@ -161,6 +214,35 @@ OpenClaw resolves them **user-first**:
 - Otherwise the ID is treated as a **channel ID**.
 
 If you need deterministic behavior, always use the explicit prefixes (`user:<id>` / `channel:<id>`).
+
+## DM channel retry
+
+When OpenClaw sends to a Mattermost DM target and needs to resolve the direct channel first, it
+retries transient direct-channel creation failures by default.
+
+Use `channels.mattermost.dmChannelRetry` to tune that behavior globally for the Mattermost plugin,
+or `channels.mattermost.accounts.<id>.dmChannelRetry` for one account.
+
+```json5
+{
+  channels: {
+    mattermost: {
+      dmChannelRetry: {
+        maxRetries: 3,
+        initialDelayMs: 1000,
+        maxDelayMs: 10000,
+        timeoutMs: 30000,
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- This applies only to DM channel creation (`/api/v4/channels/direct`), not every Mattermost API call.
+- Retries apply to transient failures such as rate limits, 5xx responses, and network or timeout errors.
+- 4xx client errors other than `429` are treated as permanent and are not retried.
 
 ## Reactions (message tool)
 
@@ -360,6 +442,19 @@ Mattermost supports multiple accounts under `channels.mattermost.accounts`:
 - No replies in channels: ensure the bot is in the channel and mention it (oncall), use a trigger prefix (onchar), or set `chatmode: "onmessage"`.
 - Auth errors: check the bot token, base URL, and whether the account is enabled.
 - Multi-account issues: env vars only apply to the `default` account.
+- Native slash commands return `Unauthorized: invalid command token.`: OpenClaw
+  did not accept the callback token. Typical causes:
+  - slash command registration failed or only partially completed at startup
+  - the callback is hitting the wrong gateway/account
+  - Mattermost still has old commands pointing at a previous callback target
+  - the gateway restarted without reactivating slash commands
+- If native slash commands stop working, check logs for
+  `mattermost: failed to register slash commands` or
+  `mattermost: native slash commands enabled but no commands could be registered`.
+- If `callbackUrl` is omitted and logs warn that the callback resolved to
+  `http://127.0.0.1:18789/...`, that URL is probably only reachable when
+  Mattermost runs on the same host/network namespace as OpenClaw. Set an
+  explicit externally reachable `commands.callbackUrl` instead.
 - Buttons appear as white boxes: the agent may be sending malformed button data. Check that each button has both `text` and `callback_data` fields.
 - Buttons render but clicks do nothing: verify `AllowedUntrustedInternalConnections` in Mattermost server config includes `127.0.0.1 localhost`, and that `EnablePostActionIntegration` is `true` in ServiceSettings.
 - Buttons return 404 on click: the button `id` likely contains hyphens or underscores. Mattermost's action router breaks on non-alphanumeric IDs. Use `[a-zA-Z0-9]` only.
@@ -367,3 +462,11 @@ Mattermost supports multiple accounts under `channels.mattermost.accounts`:
 - Gateway logs `missing _token in context`: the `_token` field is not in the button's context. Ensure it is included when building the integration payload.
 - Confirmation shows raw ID instead of button name: `context.action_id` does not match the button's `id`. Set both to the same sanitized value.
 - Agent doesn't know about buttons: add `capabilities: ["inlineButtons"]` to the Mattermost channel config.
+
+## Related
+
+- [Channels Overview](/channels) — all supported channels
+- [Pairing](/channels/pairing) — DM authentication and pairing flow
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Security](/gateway/security) — access model and hardening

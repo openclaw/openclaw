@@ -1,8 +1,12 @@
 import { readLoggingConfig } from "../logging/config.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
 import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { sanitizeForConsole } from "./console-sanitize.js";
 import { getApiErrorPayloadFingerprint, parseApiErrorInfo } from "./pi-embedded-helpers.js";
 import { stableStringify } from "./stable-stringify.js";
+
+export { sanitizeForConsole } from "./console-sanitize.js";
 
 const MAX_OBSERVATION_INPUT_CHARS = 64_000;
 const MAX_FINGERPRINT_MESSAGE_CHARS = 8_000;
@@ -41,30 +45,6 @@ function boundObservationInput(text: string | undefined): string | undefined {
     : trimmed;
 }
 
-export function sanitizeForConsole(text: string | undefined, maxChars = 200): string | undefined {
-  const trimmed = text?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const withoutControlChars = Array.from(trimmed)
-    .filter((char) => {
-      const code = char.charCodeAt(0);
-      return !(
-        code <= 0x08 ||
-        code === 0x0b ||
-        code === 0x0c ||
-        (code >= 0x0e && code <= 0x1f) ||
-        code === 0x7f
-      );
-    })
-    .join("");
-  const sanitized = withoutControlChars
-    .replace(/[\r\n\t]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  return sanitized.length > maxChars ? `${sanitized.slice(0, maxChars)}…` : sanitized;
-}
-
 function replaceRequestIdPreview(
   text: string | undefined,
   requestId: string | undefined,
@@ -90,14 +70,6 @@ function redactObservationText(text: string | undefined): string | undefined {
       ...OBSERVATION_EXTRA_REDACT_PATTERNS,
     ],
   });
-}
-
-function extractRequestId(text: string | undefined): string | undefined {
-  if (!text) {
-    return undefined;
-  }
-  const match = text.match(REQUEST_ID_RE);
-  return match?.[1]?.trim() || undefined;
 }
 
 function buildObservationFingerprint(params: {
@@ -143,7 +115,8 @@ export function buildApiErrorObservationFields(rawError?: string): {
   }
   try {
     const parsed = parseApiErrorInfo(trimmed);
-    const requestId = parsed?.requestId ?? extractRequestId(trimmed);
+    const requestId =
+      parsed?.requestId ?? normalizeOptionalString(trimmed.match(REQUEST_ID_RE)?.[1]);
     const requestIdHash = requestId ? redactIdentifier(requestId, { len: 12 }) : undefined;
     const rawFingerprint = buildObservationFingerprint({
       raw: trimmed,

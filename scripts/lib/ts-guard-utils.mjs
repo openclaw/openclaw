@@ -1,11 +1,31 @@
-import { promises as fs } from "node:fs";
+import { existsSync, promises as fs } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
+
+const require = createRequire(import.meta.url);
+let tsCache;
+
+function getTypeScript() {
+  tsCache ??= require("typescript");
+  return tsCache;
+}
 
 const baseTestSuffixes = [".test.ts", ".test-utils.ts", ".test-harness.ts", ".e2e-harness.ts"];
 
 export function resolveRepoRoot(importMetaUrl) {
+  // Walk up from the caller's directory until we find the repo root (.git).
+  // This handles callers at any depth (scripts/*.mjs, scripts/lib/*.mjs, etc.)
+  // instead of assuming a fixed number of parent traversals.
+  let dir = path.dirname(fileURLToPath(importMetaUrl));
+  const { root } = path.parse(dir);
+  while (dir !== root) {
+    if (existsSync(path.join(dir, ".git"))) {
+      return dir;
+    }
+    dir = path.dirname(dir);
+  }
+  // Fallback: two levels up (original behavior).
   return path.resolve(path.dirname(fileURLToPath(importMetaUrl)), "..", "..");
 }
 
@@ -113,6 +133,7 @@ export function toLine(sourceFile, node) {
 }
 
 export function getPropertyNameText(name) {
+  const ts = getTypeScript();
   if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
     return name.text;
   }
@@ -120,6 +141,7 @@ export function getPropertyNameText(name) {
 }
 
 export function unwrapExpression(expression) {
+  const ts = getTypeScript();
   let current = expression;
   while (true) {
     if (ts.isParenthesizedExpression(current)) {
@@ -136,6 +158,21 @@ export function unwrapExpression(expression) {
     }
     return current;
   }
+}
+
+export function collectCallExpressionLines(ts, sourceFile, resolveLineNode) {
+  const lines = [];
+  const visit = (node) => {
+    if (ts.isCallExpression(node)) {
+      const lineNode = resolveLineNode(node);
+      if (lineNode) {
+        lines.push(toLine(sourceFile, lineNode));
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return lines;
 }
 
 export function isDirectExecution(importMetaUrl) {

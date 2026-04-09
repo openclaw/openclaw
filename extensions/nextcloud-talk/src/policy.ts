@@ -1,24 +1,22 @@
+import { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type {
   AllowlistMatch,
   ChannelGroupContext,
   GroupPolicy,
   GroupToolPolicyConfig,
-} from "openclaw/plugin-sdk/nextcloud-talk";
+} from "../runtime-api.js";
 import {
   buildChannelKeyCandidates,
   evaluateMatchedGroupAccessForPolicy,
   normalizeChannelSlug,
   resolveChannelEntryMatchWithFallback,
-  resolveMentionGatingWithBypass,
   resolveNestedAllowlistDecision,
-} from "openclaw/plugin-sdk/nextcloud-talk";
+} from "../runtime-api.js";
 import type { NextcloudTalkRoomConfig } from "./types.js";
 
 function normalizeAllowEntry(raw: string): string {
-  return raw
-    .trim()
-    .toLowerCase()
-    .replace(/^(nextcloud-talk|nc-talk|nc):/i, "");
+  return normalizeLowercaseStringOrEmpty(raw.trim().replace(/^(nextcloud-talk|nc-talk|nc):/i, ""));
 }
 
 export function normalizeNextcloudTalkAllowlist(
@@ -57,16 +55,10 @@ export type NextcloudTalkRoomMatch = {
 export function resolveNextcloudTalkRoomMatch(params: {
   rooms?: Record<string, NextcloudTalkRoomConfig>;
   roomToken: string;
-  roomName?: string | null;
 }): NextcloudTalkRoomMatch {
   const rooms = params.rooms ?? {};
   const allowlistConfigured = Object.keys(rooms).length > 0;
-  const roomName = params.roomName?.trim() || undefined;
-  const roomCandidates = buildChannelKeyCandidates(
-    params.roomToken,
-    roomName,
-    roomName ? normalizeChannelSlug(roomName) : undefined,
-  );
+  const roomCandidates = buildChannelKeyCandidates(params.roomToken);
   const match = resolveChannelEntryMatchWithFallback({
     entries: rooms,
     keys: roomCandidates,
@@ -101,11 +93,9 @@ export function resolveNextcloudTalkGroupToolPolicy(
   if (!roomToken) {
     return undefined;
   }
-  const roomName = params.groupChannel?.trim() || undefined;
   const match = resolveNextcloudTalkRoomMatch({
     rooms: cfg.channels?.["nextcloud-talk"]?.rooms,
     roomToken,
-    roomName,
   });
   return match.roomConfig?.tools ?? match.wildcardConfig?.tools;
 }
@@ -175,14 +165,19 @@ export function resolveNextcloudTalkMentionGate(params: {
   hasControlCommand: boolean;
   commandAuthorized: boolean;
 }): { shouldSkip: boolean; shouldBypassMention: boolean } {
-  const result = resolveMentionGatingWithBypass({
-    isGroup: params.isGroup,
-    requireMention: params.requireMention,
-    canDetectMention: true,
-    wasMentioned: params.wasMentioned,
-    allowTextCommands: params.allowTextCommands,
-    hasControlCommand: params.hasControlCommand,
-    commandAuthorized: params.commandAuthorized,
+  const result = resolveInboundMentionDecision({
+    facts: {
+      canDetectMention: true,
+      wasMentioned: params.wasMentioned,
+      implicitMentionKinds: [],
+    },
+    policy: {
+      isGroup: params.isGroup,
+      requireMention: params.requireMention,
+      allowTextCommands: params.allowTextCommands,
+      hasControlCommand: params.hasControlCommand,
+      commandAuthorized: params.commandAuthorized,
+    },
   });
   return { shouldSkip: result.shouldSkip, shouldBypassMention: result.shouldBypassMention };
 }

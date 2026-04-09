@@ -1,13 +1,70 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveMemorySearchConfig } from "./memory-search.js";
+import {
+  clearMemoryEmbeddingProviders,
+  registerMemoryEmbeddingProvider,
+} from "../plugins/memory-embedding-providers.js";
+import { resolveMemorySearchConfig, resolveMemorySearchSyncConfig } from "./memory-search.js";
 
 const asConfig = (cfg: OpenClawConfig): OpenClawConfig => cfg;
 
+function registerBaseMemoryEmbeddingProviders(options?: { includeGemini?: boolean }): void {
+  registerMemoryEmbeddingProvider({
+    id: "openai",
+    defaultModel: "text-embedding-3-small",
+    transport: "remote",
+    create: async () => ({ provider: null }),
+  });
+  registerMemoryEmbeddingProvider({
+    id: "local",
+    defaultModel: "local-default",
+    transport: "local",
+    create: async () => ({ provider: null }),
+  });
+  if (options?.includeGemini !== false) {
+    registerMemoryEmbeddingProvider({
+      id: "gemini",
+      defaultModel: "gemini-embedding-001",
+      transport: "remote",
+      supportsMultimodalEmbeddings: ({ model }) =>
+        model
+          .trim()
+          .replace(/^models\//, "")
+          .replace(/^(gemini|google)\//, "") === "gemini-embedding-2-preview",
+      create: async () => ({ provider: null }),
+    });
+  }
+  registerMemoryEmbeddingProvider({
+    id: "voyage",
+    defaultModel: "voyage-4-large",
+    transport: "remote",
+    create: async () => ({ provider: null }),
+  });
+  registerMemoryEmbeddingProvider({
+    id: "mistral",
+    defaultModel: "mistral-embed",
+    transport: "remote",
+    create: async () => ({ provider: null }),
+  });
+  registerMemoryEmbeddingProvider({
+    id: "ollama",
+    defaultModel: "nomic-embed-text",
+    transport: "remote",
+    create: async () => ({ provider: null }),
+  });
+}
+
 describe("memory search config", () => {
-  function configWithDefaultProvider(
-    provider: "openai" | "local" | "gemini" | "mistral" | "ollama",
-  ): OpenClawConfig {
+  beforeEach(() => {
+    clearMemoryEmbeddingProviders();
+    registerBaseMemoryEmbeddingProviders();
+  });
+
+  afterEach(() => {
+    clearMemoryEmbeddingProviders();
+  });
+
+  function configWithDefaultProvider(provider: string): OpenClawConfig {
     return asConfig({
       agents: {
         defaults: {
@@ -26,6 +83,56 @@ describe("memory search config", () => {
       concurrency: 2,
       pollIntervalMs: 2000,
       timeoutMinutes: 60,
+    });
+  }
+
+  function expectEmptyMultimodalConfig(resolved: ReturnType<typeof resolveMemorySearchConfig>) {
+    expect(resolved?.multimodal).toEqual({
+      enabled: true,
+      modalities: [],
+      maxFileBytes: 10 * 1024 * 1024,
+    });
+  }
+
+  function configWithRemoteDefaults(remote: Record<string, unknown>) {
+    return asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            remote,
+          },
+        },
+        list: [
+          {
+            id: "main",
+            default: true,
+            memorySearch: {
+              remote: {
+                baseUrl: "https://agent.example/v1",
+              },
+            },
+          },
+        ],
+      },
+    });
+  }
+
+  function expectMergedRemoteConfig(
+    resolved: ReturnType<typeof resolveMemorySearchConfig>,
+    apiKey: unknown,
+  ) {
+    expect(resolved?.remote).toEqual({
+      baseUrl: "https://agent.example/v1",
+      apiKey,
+      headers: { "X-Default": "on" },
+      batch: {
+        enabled: false,
+        wait: true,
+        concurrency: 2,
+        pollIntervalMs: 2000,
+        timeoutMinutes: 60,
+      },
     });
   }
 
@@ -48,6 +155,25 @@ describe("memory search config", () => {
     expect(resolved).toBeNull();
   });
 
+  it("returns null sync config when disabled", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: { enabled: true },
+        },
+        list: [
+          {
+            id: "main",
+            default: true,
+            memorySearch: { enabled: false },
+          },
+        ],
+      },
+    });
+    const resolved = resolveMemorySearchSyncConfig(cfg, "main");
+    expect(resolved).toBeNull();
+  });
+
   it("defaults provider to auto when unspecified", () => {
     const cfg = asConfig({
       agents: {
@@ -61,6 +187,44 @@ describe("memory search config", () => {
     const resolved = resolveMemorySearchConfig(cfg, "main");
     expect(resolved?.provider).toBe("auto");
     expect(resolved?.fallback).toBe("none");
+  });
+
+  it("resolves sync config without consulting embedding providers", () => {
+    clearMemoryEmbeddingProviders();
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            sync: {
+              onSessionStart: false,
+              onSearch: true,
+              watch: false,
+              watchDebounceMs: 25,
+              intervalMinutes: 3,
+              sessions: {
+                deltaBytes: 321,
+                deltaMessages: 7,
+                postCompactionForce: false,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(resolveMemorySearchSyncConfig(cfg, "main")).toEqual({
+      onSessionStart: false,
+      onSearch: true,
+      watch: false,
+      watchDebounceMs: 25,
+      intervalMinutes: 3,
+      sessions: {
+        deltaBytes: 321,
+        deltaMessages: 7,
+        postCompactionForce: false,
+      },
+    });
   });
 
   it("merges defaults and overrides", () => {
@@ -171,11 +335,7 @@ describe("memory search config", () => {
       },
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");
-    expect(resolved?.multimodal).toEqual({
-      enabled: true,
-      modalities: [],
-      maxFileBytes: 10 * 1024 * 1024,
-    });
+    expectEmptyMultimodalConfig(resolved);
     expect(resolved?.provider).toBe("gemini");
   });
 
@@ -196,11 +356,7 @@ describe("memory search config", () => {
       },
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");
-    expect(resolved?.multimodal).toEqual({
-      enabled: true,
-      modalities: [],
-      maxFileBytes: 10 * 1024 * 1024,
-    });
+    expectEmptyMultimodalConfig(resolved);
   });
 
   it("rejects multimodal memory on unsupported providers", () => {
@@ -216,8 +372,31 @@ describe("memory search config", () => {
       },
     });
     expect(() => resolveMemorySearchConfig(cfg, "main")).toThrow(
-      /memorySearch\.multimodal requires memorySearch\.provider = "gemini"/,
+      /memorySearch\.multimodal requires a provider adapter that supports multimodal embeddings/,
     );
+  });
+
+  it("accepts Gemini multimodal memory even when the runtime registry has not registered Gemini yet", () => {
+    clearMemoryEmbeddingProviders();
+    registerBaseMemoryEmbeddingProviders({ includeGemini: false });
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "gemini",
+            model: "gemini-embedding-2-preview",
+            multimodal: { enabled: true, modalities: ["image"] },
+          },
+        },
+      },
+    });
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.provider).toBe("gemini");
+    expect(resolved?.multimodal).toEqual({
+      enabled: true,
+      modalities: ["image"],
+      maxFileBytes: 10 * 1024 * 1024,
+    });
   });
 
   it("rejects multimodal memory when fallback is configured", () => {
@@ -284,89 +463,32 @@ describe("memory search config", () => {
     expect(resolved?.sync.sessions).toEqual({
       deltaBytes: 100000,
       deltaMessages: 50,
+      postCompactionForce: true,
     });
   });
 
   it("merges remote defaults with agent overrides", () => {
-    const cfg = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "openai",
-            remote: {
-              baseUrl: "https://default.example/v1",
-              apiKey: "default-key", // pragma: allowlist secret
-              headers: { "X-Default": "on" },
-            },
-          },
-        },
-        list: [
-          {
-            id: "main",
-            default: true,
-            memorySearch: {
-              remote: {
-                baseUrl: "https://agent.example/v1",
-              },
-            },
-          },
-        ],
-      },
-    });
-    const resolved = resolveMemorySearchConfig(cfg, "main");
-    expect(resolved?.remote).toEqual({
-      baseUrl: "https://agent.example/v1",
+    const cfg = configWithRemoteDefaults({
+      baseUrl: "https://default.example/v1",
       apiKey: "default-key", // pragma: allowlist secret
       headers: { "X-Default": "on" },
-      batch: {
-        enabled: false,
-        wait: true,
-        concurrency: 2,
-        pollIntervalMs: 2000,
-        timeoutMinutes: 60,
-      },
     });
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expectMergedRemoteConfig(resolved, "default-key"); // pragma: allowlist secret
   });
 
   it("preserves SecretRef remote apiKey when merging defaults with agent overrides", () => {
-    const cfg = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "openai",
-            remote: {
-              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" }, // pragma: allowlist secret
-              headers: { "X-Default": "on" },
-            },
-          },
-        },
-        list: [
-          {
-            id: "main",
-            default: true,
-            memorySearch: {
-              remote: {
-                baseUrl: "https://agent.example/v1",
-              },
-            },
-          },
-        ],
-      },
+    const cfg = configWithRemoteDefaults({
+      apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" }, // pragma: allowlist secret
+      headers: { "X-Default": "on" },
     });
 
     const resolved = resolveMemorySearchConfig(cfg, "main");
 
-    expect(resolved?.remote).toEqual({
-      baseUrl: "https://agent.example/v1",
-      apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-      headers: { "X-Default": "on" },
-      batch: {
-        enabled: false,
-        wait: true,
-        concurrency: 2,
-        pollIntervalMs: 2000,
-        timeoutMinutes: 60,
-      },
+    expectMergedRemoteConfig(resolved, {
+      source: "env",
+      provider: "default",
+      id: "OPENAI_API_KEY",
     });
   });
 

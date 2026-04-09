@@ -1,7 +1,7 @@
 ---
-summary: "Run OpenClaw with Ollama (local LLM runtime)"
+summary: "Run OpenClaw with Ollama (cloud and local models)"
 read_when:
-  - You want to run OpenClaw with local models via Ollama
+  - You want to run OpenClaw with cloud or local models via Ollama
   - You need Ollama setup and configuration guidance
 title: "Ollama"
 ---
@@ -16,19 +16,55 @@ Ollama is a local LLM runtime that makes it easy to run open-source models on yo
 
 ## Quick start
 
+### Onboarding (recommended)
+
+The fastest way to set up Ollama is through onboarding:
+
+```bash
+openclaw onboard
+```
+
+Select **Ollama** from the provider list. Onboarding will:
+
+1. Ask for the Ollama base URL where your instance can be reached (default `http://127.0.0.1:11434`).
+2. Let you choose **Cloud + Local** (cloud models and local models) or **Local** (local models only).
+3. Open a browser sign-in flow if you choose **Cloud + Local** and are not signed in to ollama.com.
+4. Discover available models and suggest defaults.
+5. Auto-pull the selected model if it is not available locally.
+
+Non-interactive mode is also supported:
+
+```bash
+openclaw onboard --non-interactive \
+  --auth-choice ollama \
+  --accept-risk
+```
+
+Optionally specify a custom base URL or model:
+
+```bash
+openclaw onboard --non-interactive \
+  --auth-choice ollama \
+  --custom-base-url "http://ollama-host:11434" \
+  --custom-model-id "qwen3.5:27b" \
+  --accept-risk
+```
+
+### Manual setup
+
 1. Install Ollama: [https://ollama.com/download](https://ollama.com/download)
 
 2. Pull a local model if you want local inference:
 
 ```bash
-ollama pull glm-4.7-flash
+ollama pull gemma4
 # or
 ollama pull gpt-oss:20b
 # or
 ollama pull llama3.3
 ```
 
-3. If you want Ollama Cloud models too, sign in:
+3. If you want cloud models too, sign in:
 
 ```bash
 ollama signin
@@ -41,13 +77,13 @@ openclaw onboard
 ```
 
 - `Local`: local models only
-- `Cloud + Local`: local models plus Ollama Cloud models
-- Cloud models such as `kimi-k2.5:cloud`, `minimax-m2.5:cloud`, and `glm-5:cloud` do **not** require a local `ollama pull`
+- `Cloud + Local`: local models plus cloud models
+- Cloud models such as `kimi-k2.5:cloud`, `minimax-m2.7:cloud`, and `glm-5.1:cloud` do **not** require a local `ollama pull`
 
 OpenClaw currently suggests:
 
-- local default: `glm-4.7-flash`
-- cloud defaults: `kimi-k2.5:cloud`, `minimax-m2.5:cloud`, `glm-5:cloud`
+- local default: `gemma4`
+- cloud defaults: `kimi-k2.5:cloud`, `minimax-m2.7:cloud`, `glm-5.1:cloud`
 
 5. If you prefer manual setup, enable Ollama for OpenClaw directly (any value works; Ollama doesn't require a real key):
 
@@ -63,7 +99,7 @@ openclaw config set models.providers.ollama.apiKey "ollama-local"
 
 ```bash
 openclaw models list
-openclaw models set ollama/glm-4.7-flash
+openclaw models set ollama/gemma4
 ```
 
 7. Or set the default in config:
@@ -72,7 +108,7 @@ openclaw models set ollama/glm-4.7-flash
 {
   agents: {
     defaults: {
-      model: { primary: "ollama/glm-4.7-flash" },
+      model: { primary: "ollama/gemma4" },
     },
   },
 }
@@ -83,7 +119,8 @@ openclaw models set ollama/glm-4.7-flash
 When you set `OLLAMA_API_KEY` (or an auth profile) and **do not** define `models.providers.ollama`, OpenClaw discovers models from the local Ollama instance at `http://127.0.0.1:11434`:
 
 - Queries `/api/tags`
-- Uses best-effort `/api/show` lookups to read `contextWindow` when available
+- Uses best-effort `/api/show` lookups to read `contextWindow` and detect capabilities (including vision) when available
+- Models with a `vision` capability reported by `/api/show` are marked as image-capable (`input: ["text", "image"]`), so OpenClaw auto-injects images into the prompt for those models
 - Marks `reasoning` with a model-name heuristic (`r1`, `reasoning`, `think`)
 - Sets `maxTokens` to the default Ollama max-token cap used by OpenClaw
 - Sets all costs to `0`
@@ -191,6 +228,41 @@ Once configured, all your Ollama models are available:
 }
 ```
 
+## Cloud models
+
+Cloud models let you run cloud-hosted models (for example `kimi-k2.5:cloud`, `minimax-m2.7:cloud`, `glm-5.1:cloud`) alongside your local models.
+
+To use cloud models, select **Cloud + Local** mode during setup. The wizard checks whether you are signed in and opens a browser sign-in flow when needed. If authentication cannot be verified, the wizard falls back to local model defaults.
+
+You can also sign in directly at [ollama.com/signin](https://ollama.com/signin).
+
+## Ollama Web Search
+
+OpenClaw also supports **Ollama Web Search** as a bundled `web_search`
+provider.
+
+- It uses your configured Ollama host (`models.providers.ollama.baseUrl` when
+  set, otherwise `http://127.0.0.1:11434`).
+- It is key-free.
+- It requires Ollama to be running and signed in with `ollama signin`.
+
+Choose **Ollama Web Search** during `openclaw onboard` or
+`openclaw configure --section web`, or set:
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        provider: "ollama",
+      },
+    },
+  },
+}
+```
+
+For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-search).
+
 ## Advanced
 
 ### Reasoning models
@@ -284,7 +356,7 @@ To add models:
 
 ```bash
 ollama list  # See what's installed
-ollama pull glm-4.7-flash
+ollama pull gemma4
 ollama pull gpt-oss:20b
 ollama pull llama3.3     # Or another model
 ```

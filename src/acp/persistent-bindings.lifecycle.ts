@@ -1,13 +1,15 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { logVerbose } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { getAcpSessionManager } from "./control-plane/manager.js";
-import { resolveAcpAgentFromSessionKey } from "./control-plane/manager.utils.js";
 import { resolveConfiguredAcpBindingSpecBySessionKey } from "./persistent-bindings.resolve.js";
 import {
   buildConfiguredAcpSessionKey,
   normalizeText,
   type ConfiguredAcpBindingSpec,
+  type ResolvedConfiguredAcpBinding,
 } from "./persistent-bindings.types.js";
 import { readAcpSessionEntry } from "./runtime/session-meta.js";
 
@@ -16,8 +18,14 @@ function sessionMatchesConfiguredBinding(params: {
   spec: ConfiguredAcpBindingSpec;
   meta: SessionAcpMeta;
 }): boolean {
-  const desiredAgent = (params.spec.acpAgentId ?? params.spec.agentId).trim().toLowerCase();
-  const currentAgent = (params.meta.agent ?? "").trim().toLowerCase();
+  if (params.meta.state === "error") {
+    return false;
+  }
+
+  const desiredAgent = normalizeLowercaseStringOrEmpty(
+    params.spec.acpAgentId ?? params.spec.agentId,
+  );
+  const currentAgent = normalizeLowercaseStringOrEmpty(params.meta.agent);
   if (!currentAgent || currentAgent !== desiredAgent) {
     return false;
   }
@@ -26,7 +34,8 @@ function sessionMatchesConfiguredBinding(params: {
     return false;
   }
 
-  const desiredBackend = params.spec.backend?.trim() || params.cfg.acp?.backend?.trim() || "";
+  const desiredBackend =
+    normalizeText(params.spec.backend) ?? normalizeText(params.cfg.acp?.backend) ?? "";
   if (desiredBackend) {
     const currentBackend = (params.meta.backend ?? "").trim();
     if (!currentBackend || currentBackend !== desiredBackend) {
@@ -34,7 +43,7 @@ function sessionMatchesConfiguredBinding(params: {
     }
   }
 
-  const desiredCwd = params.spec.cwd?.trim();
+  const desiredCwd = normalizeText(params.spec.cwd);
   if (desiredCwd !== undefined) {
     const currentCwd = (params.meta.runtimeOptions?.cwd ?? params.meta.cwd ?? "").trim();
     if (desiredCwd !== currentCwd) {
@@ -94,9 +103,9 @@ export async function ensureConfiguredAcpBindingSession(params: {
       sessionKey,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatErrorMessage(error);
     logVerbose(
-      `acp-persistent-binding: failed ensuring ${params.spec.channel}:${params.spec.accountId}:${params.spec.conversationId} -> ${sessionKey}: ${message}`,
+      `acp-configured-binding: failed ensuring ${params.spec.channel}:${params.spec.accountId}:${params.spec.conversationId} -> ${sessionKey}: ${message}`,
     );
     return {
       ok: false,
@@ -106,10 +115,31 @@ export async function ensureConfiguredAcpBindingSession(params: {
   }
 }
 
+export async function ensureConfiguredAcpBindingReady(params: {
+  cfg: OpenClawConfig;
+  configuredBinding: ResolvedConfiguredAcpBinding | null;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!params.configuredBinding) {
+    return { ok: true };
+  }
+  const ensured = await ensureConfiguredAcpBindingSession({
+    cfg: params.cfg,
+    spec: params.configuredBinding.spec,
+  });
+  if (ensured.ok) {
+    return { ok: true };
+  }
+  return {
+    ok: false,
+    error: ensured.error ?? "unknown error",
+  };
+}
+
 export async function resetAcpSessionInPlace(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   reason: "new" | "reset";
+  clearMeta?: boolean;
 }): Promise<{ ok: true } | { ok: false; skipped?: boolean; error?: string }> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -119,27 +149,18 @@ export async function resetAcpSessionInPlace(params: {
     };
   }
 
-  const configuredBinding = resolveConfiguredAcpBindingSpecBySessionKey({
-    cfg: params.cfg,
-    sessionKey,
-  });
   const meta = readAcpSessionEntry({
     cfg: params.cfg,
     sessionKey,
   })?.acp;
+  const configuredBinding = resolveConfiguredAcpBindingSpecBySessionKey({
+    cfg: params.cfg,
+    sessionKey,
+  });
+  const clearMeta = params.clearMeta ?? Boolean(configuredBinding);
   if (!meta) {
-    if (configuredBinding) {
-      const ensured = await ensureConfiguredAcpBindingSession({
-        cfg: params.cfg,
-        spec: configuredBinding,
-      });
-      if (ensured.ok) {
-        return { ok: true };
-      }
-      return {
-        ok: false,
-        error: ensured.error,
-      };
+    if (clearMeta) {
+      return { ok: true };
     }
     return {
       ok: false,
@@ -148,48 +169,22 @@ export async function resetAcpSessionInPlace(params: {
   }
 
   const acpManager = getAcpSessionManager();
-  const agent =
-    normalizeText(meta.agent) ??
-    configuredBinding?.acpAgentId ??
-    configuredBinding?.agentId ??
-    resolveAcpAgentFromSessionKey(sessionKey, "main");
-  const mode = meta.mode === "oneshot" ? "oneshot" : "persistent";
-  const runtimeOptions = { ...meta.runtimeOptions };
-  const cwd = normalizeText(runtimeOptions.cwd ?? meta.cwd);
 
   try {
     await acpManager.closeSession({
       cfg: params.cfg,
       sessionKey,
       reason: `${params.reason}-in-place-reset`,
-      clearMeta: false,
+      discardPersistentState: true,
+      clearMeta,
       allowBackendUnavailable: true,
       requireAcpSession: false,
     });
 
-    await acpManager.initializeSession({
-      cfg: params.cfg,
-      sessionKey,
-      agent,
-      mode,
-      cwd,
-      backendId: normalizeText(meta.backend) ?? normalizeText(params.cfg.acp?.backend),
-    });
-
-    const runtimeOptionsPatch = Object.fromEntries(
-      Object.entries(runtimeOptions).filter(([, value]) => value !== undefined),
-    ) as SessionAcpMeta["runtimeOptions"];
-    if (runtimeOptionsPatch && Object.keys(runtimeOptionsPatch).length > 0) {
-      await acpManager.updateSessionRuntimeOptions({
-        cfg: params.cfg,
-        sessionKey,
-        patch: runtimeOptionsPatch,
-      });
-    }
     return { ok: true };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logVerbose(`acp-persistent-binding: failed reset for ${sessionKey}: ${message}`);
+    const message = formatErrorMessage(error);
+    logVerbose(`acp-configured-binding: failed reset for ${sessionKey}: ${message}`);
     return {
       ok: false,
       error: message,

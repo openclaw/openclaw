@@ -6,6 +6,8 @@ import { onAgentEvent } from "../infra/agent-events.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { recordTaskRunProgressByRunId } from "../tasks/task-executor.js";
 
 const DEFAULT_STREAM_FLUSH_MS = 2_500;
 const DEFAULT_NO_OUTPUT_NOTICE_MS = 60_000;
@@ -28,14 +30,6 @@ function truncate(value: string, maxChars: number): string {
   return `${value.slice(0, maxChars - 1)}…`;
 }
 
-function toTrimmedString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
-
 function toFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
@@ -48,14 +42,14 @@ function resolveAcpStreamLogPathFromSessionFile(sessionFile: string, sessionId: 
 export function resolveAcpSpawnStreamLogPath(params: {
   childSessionKey: string;
 }): string | undefined {
-  const childSessionKey = params.childSessionKey.trim();
+  const childSessionKey = normalizeOptionalString(params.childSessionKey);
   if (!childSessionKey) {
     return undefined;
   }
   const storeEntry = readAcpSessionEntry({
     sessionKey: childSessionKey,
   });
-  const sessionId = storeEntry?.entry?.sessionId?.trim();
+  const sessionId = normalizeOptionalString(storeEntry?.entry?.sessionId);
   if (!storeEntry || !sessionId) {
     return undefined;
   }
@@ -79,14 +73,15 @@ export function startAcpSpawnParentStreamRelay(params: {
   childSessionKey: string;
   agentId: string;
   logPath?: string;
+  surfaceUpdates?: boolean;
   streamFlushMs?: number;
   noOutputNoticeMs?: number;
   noOutputPollMs?: number;
   maxRelayLifetimeMs?: number;
   emitStartNotice?: boolean;
 }): AcpSpawnParentRelayHandle {
-  const runId = params.runId.trim();
-  const parentSessionKey = params.parentSessionKey.trim();
+  const runId = normalizeOptionalString(params.runId) ?? "";
+  const parentSessionKey = normalizeOptionalString(params.parentSessionKey) ?? "";
   if (!runId || !parentSessionKey) {
     return {
       dispose: () => {},
@@ -113,7 +108,7 @@ export function startAcpSpawnParentStreamRelay(params: {
 
   const relayLabel = truncate(compactWhitespace(params.agentId), 40) || "ACP child";
   const contextPrefix = `acp-spawn:${runId}`;
-  const logPath = toTrimmedString(params.logPath);
+  const logPath = normalizeOptionalString(params.logPath);
   let logDirReady = false;
   let pendingLogLines = "";
   let logFlushScheduled = false;
@@ -178,7 +173,11 @@ export function startAcpSpawnParentStreamRelay(params: {
       ...fields,
     });
   };
+  const shouldSurfaceUpdates = params.surfaceUpdates !== false;
   const wake = () => {
+    if (!shouldSurfaceUpdates) {
+      return;
+    }
     requestHeartbeatNow(
       scopedHeartbeatWakeOptions(parentSessionKey, {
         reason: "acp:spawn:stream",
@@ -191,10 +190,24 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
     logEvent("system_event", { contextKey, text: cleaned });
-    enqueueSystemEvent(cleaned, { sessionKey: parentSessionKey, contextKey });
+    if (!shouldSurfaceUpdates) {
+      return;
+    }
+    enqueueSystemEvent(cleaned, {
+      sessionKey: parentSessionKey,
+      contextKey,
+      trusted: false,
+    });
     wake();
   };
   const emitStartNotice = () => {
+    recordTaskRunProgressByRunId({
+      runId,
+      runtime: "acp",
+      sessionKey: params.childSessionKey,
+      lastEventAt: Date.now(),
+      eventSummary: "Started.",
+    });
     emit(
       `Started ${relayLabel} session ${params.childSessionKey}. Streaming progress updates to parent session.`,
       `${contextPrefix}:start`,
@@ -257,6 +270,13 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
     stallNotified = true;
+    recordTaskRunProgressByRunId({
+      runId,
+      runtime: "acp",
+      sessionKey: params.childSessionKey,
+      lastEventAt: Date.now(),
+      eventSummary: `No output for ${Math.round(noOutputNoticeMs / 1000)}s. It may be waiting for input.`,
+    });
     emit(
       `${relayLabel} has produced no output for ${Math.round(noOutputNoticeMs / 1000)}s. It may be waiting for interactive input.`,
       `${contextPrefix}:stall`,
@@ -298,6 +318,13 @@ export function startAcpSpawnParentStreamRelay(params: {
 
       if (stallNotified) {
         stallNotified = false;
+        recordTaskRunProgressByRunId({
+          runId,
+          runtime: "acp",
+          sessionKey: params.childSessionKey,
+          lastEventAt: Date.now(),
+          eventSummary: "Resumed output.",
+        });
         emit(`${relayLabel} resumed output.`, `${contextPrefix}:resumed`);
       }
 
@@ -318,7 +345,7 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
 
-    const phase = toTrimmedString((event.data as { phase?: unknown } | undefined)?.phase);
+    const phase = normalizeOptionalString((event.data as { phase?: unknown } | undefined)?.phase);
     logEvent("lifecycle", { phase: phase ?? "unknown", data: event.data });
     if (phase === "end") {
       flushPending();
@@ -344,7 +371,9 @@ export function startAcpSpawnParentStreamRelay(params: {
 
     if (phase === "error") {
       flushPending();
-      const errorText = toTrimmedString((event.data as { error?: unknown } | undefined)?.error);
+      const errorText = normalizeOptionalString(
+        (event.data as { error?: unknown } | undefined)?.error,
+      );
       if (errorText) {
         emit(`${relayLabel} run failed: ${errorText}`, `${contextPrefix}:error`);
       } else {

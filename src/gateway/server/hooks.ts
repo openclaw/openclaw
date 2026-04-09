@@ -1,46 +1,55 @@
 import { randomUUID } from "node:crypto";
 import type { CliDeps } from "../../cli/deps.js";
-import { loadConfig } from "../../config/config.js";
+import { loadConfig, type OpenClawConfig } from "../../config/config.js";
 import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
 import { runCronIsolatedAgentTurn } from "../../cron/isolated-agent.js";
 import type { CronJob } from "../../cron/types.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
-import {
-  normalizeHookDispatchSessionKey,
-  type HookAgentDispatchPayload,
-  type HooksConfigResolved,
-} from "../hooks.js";
-import { createHooksRequestHandler } from "../server-http.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { type HookAgentDispatchPayload, type HooksConfigResolved } from "../hooks.js";
+import { createHooksRequestHandler, type HookClientIpConfig } from "../server-http.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
+
+export function resolveHookClientIpConfig(cfg: OpenClawConfig): HookClientIpConfig {
+  return {
+    trustedProxies: cfg.gateway?.trustedProxies,
+    allowRealIpFallback: cfg.gateway?.allowRealIpFallback === true,
+  };
+}
 
 export function createGatewayHooksRequestHandler(params: {
   deps: CliDeps;
   getHooksConfig: () => HooksConfigResolved | null;
+  getClientIpConfig: () => HookClientIpConfig;
   bindHost: string;
   port: number;
   logHooks: SubsystemLogger;
 }) {
-  const { deps, getHooksConfig, bindHost, port, logHooks } = params;
+  const { deps, getHooksConfig, getClientIpConfig, bindHost, port, logHooks } = params;
 
   const dispatchWakeHook = (value: { text: string; mode: "now" | "next-heartbeat" }) => {
     const sessionKey = resolveMainSessionKeyFromConfig();
-    enqueueSystemEvent(value.text, { sessionKey });
+    enqueueSystemEvent(value.text, { sessionKey, trusted: false });
     if (value.mode === "now") {
       requestHeartbeatNow({ reason: "hook:wake" });
     }
   };
 
   const dispatchAgentHook = (value: HookAgentDispatchPayload) => {
-    const sessionKey = normalizeHookDispatchSessionKey({
-      sessionKey: value.sessionKey,
-      targetAgentId: value.agentId,
-    });
+    const sessionKey = value.sessionKey;
     const mainSessionKey = resolveMainSessionKeyFromConfig();
     const jobId = randomUUID();
     const now = Date.now();
+    const delivery = value.deliver
+      ? {
+          mode: "announce" as const,
+          channel: value.channel,
+          to: value.to,
+        }
+      : { mode: "none" as const };
     const job: CronJob = {
       id: jobId,
       agentId: value.agentId,
@@ -57,11 +66,10 @@ export function createGatewayHooksRequestHandler(params: {
         model: value.model,
         thinking: value.thinking,
         timeoutSeconds: value.timeoutSeconds,
-        deliver: value.deliver,
-        channel: value.channel,
-        to: value.to,
         allowUnsafeExternalContent: value.allowUnsafeExternalContent,
+        externalContentSource: value.externalContentSource,
       },
+      delivery,
       state: { nextRunAtMs: now },
     };
 
@@ -78,7 +86,10 @@ export function createGatewayHooksRequestHandler(params: {
           lane: "cron",
           deliveryContract: "shared",
         });
-        const summary = result.summary?.trim() || result.error?.trim() || result.status;
+        const summary =
+          normalizeOptionalString(result.summary) ||
+          normalizeOptionalString(result.error) ||
+          result.status;
         const prefix =
           result.status === "ok" ? `Hook ${value.name}` : `Hook ${value.name} (${result.status})`;
         if (!result.delivered) {
@@ -108,6 +119,7 @@ export function createGatewayHooksRequestHandler(params: {
     bindHost,
     port,
     logHooks,
+    getClientIpConfig,
     dispatchAgentHook,
     dispatchWakeHook,
   });

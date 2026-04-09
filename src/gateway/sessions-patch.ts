@@ -11,6 +11,7 @@ import {
   formatThinkingLevels,
   formatXHighModelHint,
   normalizeElevatedLevel,
+  normalizeFastMode,
   normalizeReasoningLevel,
   normalizeThinkLevel,
   normalizeUsageDisplay,
@@ -18,6 +19,7 @@ import {
 } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { normalizeExecTarget } from "../infra/exec-approvals.js";
 import {
   isAcpSessionKey,
   isSubagentSessionKey,
@@ -29,6 +31,10 @@ import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
 import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
+import {
   ErrorCodes,
   type ErrorShape,
   errorShape,
@@ -39,16 +45,8 @@ function invalid(message: string): { ok: false; error: ErrorShape } {
   return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
 }
 
-function normalizeExecHost(raw: string): "sandbox" | "gateway" | "node" | undefined {
-  const normalized = raw.trim().toLowerCase();
-  if (normalized === "sandbox" || normalized === "gateway" || normalized === "node") {
-    return normalized;
-  }
-  return undefined;
-}
-
 function normalizeExecSecurity(raw: string): "deny" | "allowlist" | "full" | undefined {
-  const normalized = raw.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(raw);
   if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
     return normalized;
   }
@@ -56,7 +54,7 @@ function normalizeExecSecurity(raw: string): "deny" | "allowlist" | "full" | und
 }
 
 function normalizeExecAsk(raw: string): "off" | "on-miss" | "always" | undefined {
-  const normalized = raw.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(raw);
   if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
     return normalized;
   }
@@ -68,7 +66,7 @@ function supportsSpawnLineage(storeKey: string): boolean {
 }
 
 function normalizeSubagentRole(raw: string): "orchestrator" | "leaf" | undefined {
-  const normalized = raw.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(raw);
   if (normalized === "orchestrator" || normalized === "leaf") {
     return normalized;
   }
@@ -76,7 +74,7 @@ function normalizeSubagentRole(raw: string): "orchestrator" | "leaf" | undefined
 }
 
 function normalizeSubagentControlScope(raw: string): "children" | "none" | undefined {
-  const normalized = raw.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(raw);
   if (normalized === "children" || normalized === "none") {
     return normalized;
   }
@@ -114,7 +112,7 @@ export async function applySessionsPatchToStore(params: {
         return invalid("spawnedBy cannot be cleared once set");
       }
     } else if (raw !== undefined) {
-      const trimmed = String(raw).trim();
+      const trimmed = normalizeOptionalString(String(raw)) ?? "";
       if (!trimmed) {
         return invalid("invalid spawnedBy: empty");
       }
@@ -138,7 +136,7 @@ export async function applySessionsPatchToStore(params: {
       if (!supportsSpawnLineage(storeKey)) {
         return invalid("spawnedWorkspaceDir is only supported for subagent:* or acp:* sessions");
       }
-      const trimmed = String(raw).trim();
+      const trimmed = normalizeOptionalString(String(raw)) ?? "";
       if (!trimmed) {
         return invalid("invalid spawnedWorkspaceDir: empty");
       }
@@ -242,13 +240,27 @@ export async function applySessionsPatchToStore(params: {
     } else if (raw !== undefined) {
       const normalized = normalizeThinkLevel(String(raw));
       if (!normalized) {
-        const hintProvider = existing?.providerOverride?.trim() || resolvedDefault.provider;
-        const hintModel = existing?.modelOverride?.trim() || resolvedDefault.model;
+        const hintProvider =
+          normalizeOptionalString(existing?.providerOverride) || resolvedDefault.provider;
+        const hintModel = normalizeOptionalString(existing?.modelOverride) || resolvedDefault.model;
         return invalid(
           `invalid thinkingLevel (use ${formatThinkingLevels(hintProvider, hintModel, "|")})`,
         );
       }
       next.thinkingLevel = normalized;
+    }
+  }
+
+  if ("fastMode" in patch) {
+    const raw = patch.fastMode;
+    if (raw === null) {
+      delete next.fastMode;
+    } else if (raw !== undefined) {
+      const normalized = normalizeFastMode(raw);
+      if (normalized === undefined) {
+        return invalid("invalid fastMode (use true or false)");
+      }
+      next.fastMode = normalized;
     }
   }
 
@@ -312,9 +324,9 @@ export async function applySessionsPatchToStore(params: {
     if (raw === null) {
       delete next.execHost;
     } else if (raw !== undefined) {
-      const normalized = normalizeExecHost(String(raw));
+      const normalized = normalizeExecTarget(String(raw)) ?? undefined;
       if (!normalized) {
-        return invalid('invalid execHost (use "sandbox"|"gateway"|"node")');
+        return invalid('invalid execHost (use "auto"|"sandbox"|"gateway"|"node")');
       }
       next.execHost = normalized;
     }
@@ -351,7 +363,7 @@ export async function applySessionsPatchToStore(params: {
     if (raw === null) {
       delete next.execNode;
     } else if (raw !== undefined) {
-      const trimmed = String(raw).trim();
+      const trimmed = normalizeOptionalString(String(raw)) ?? "";
       if (!trimmed) {
         return invalid("invalid execNode: empty");
       }
@@ -369,9 +381,10 @@ export async function applySessionsPatchToStore(params: {
           model: resolvedDefault.model,
           isDefault: true,
         },
+        markLiveSwitchPending: true,
       });
     } else if (raw !== undefined) {
-      const trimmed = String(raw).trim();
+      const trimmed = normalizeOptionalString(String(raw)) ?? "";
       if (!trimmed) {
         return invalid("invalid model: empty");
       }
@@ -402,6 +415,7 @@ export async function applySessionsPatchToStore(params: {
           model: resolved.ref.model,
           isDefault,
         },
+        markLiveSwitchPending: true,
       });
     }
   }

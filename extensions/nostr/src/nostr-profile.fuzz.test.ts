@@ -6,10 +6,11 @@ import {
   validateProfile,
   sanitizeProfileForDisplay,
 } from "./nostr-profile.js";
+import { TEST_HEX_PRIVATE_KEY_BYTES } from "./test-fixtures.js";
 
-// Test private key
-const TEST_HEX_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-const TEST_SK = new Uint8Array(TEST_HEX_KEY.match(/.{2}/g)!.map((byte) => parseInt(byte, 16)));
+function createTestProfileEvent(profile: NostrProfile, lastPublishedAt?: number) {
+  return createProfileEvent(TEST_HEX_PRIVATE_KEY_BYTES, profile, lastPublishedAt);
+}
 
 // ============================================================================
 // Unicode Attack Vectors
@@ -51,9 +52,13 @@ describe("profile unicode attacks", () => {
       };
       const result = validateProfile(profile);
       expect(result.valid).toBe(true);
+      expect(result.profile).toBeDefined();
+      if (!result.profile) {
+        throw new Error("expected validated profile");
+      }
 
       // UI should escape or handle this
-      const sanitized = sanitizeProfileForDisplay(result.profile!);
+      const sanitized = sanitizeProfileForDisplay(result.profile);
       expect(sanitized.name).toBeDefined();
     });
 
@@ -444,7 +449,7 @@ describe("event creation edge cases", () => {
       lud16: "e".repeat(200) + "@example.com",
     };
 
-    const event = createProfileEvent(TEST_SK, profile);
+    const event = createTestProfileEvent(profile);
     expect(event.kind).toBe(0);
 
     // Content should be parseable JSON
@@ -457,7 +462,7 @@ describe("event creation edge cases", () => {
     // Create events in quick succession
     let lastTimestamp = 0;
     for (let i = 0; i < 25; i++) {
-      const event = createProfileEvent(TEST_SK, profile, lastTimestamp);
+      const event = createTestProfileEvent(profile, lastTimestamp);
       expect(event.created_at).toBeGreaterThan(lastTimestamp);
       lastTimestamp = event.created_at;
     }
@@ -469,7 +474,7 @@ describe("event creation edge cases", () => {
       about: "line1\nline2\ttab\\backslash",
     };
 
-    const event = createProfileEvent(TEST_SK, profile);
+    const event = createTestProfileEvent(profile);
     const parsed = JSON.parse(event.content) as { name: string; about: string };
 
     expect(parsed.name).toBe('test"user');

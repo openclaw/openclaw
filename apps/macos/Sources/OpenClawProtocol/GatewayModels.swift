@@ -9,6 +9,7 @@ public enum ErrorCode: String, Codable, Sendable {
     case notPaired = "NOT_PAIRED"
     case agentTimeout = "AGENT_TIMEOUT"
     case invalidRequest = "INVALID_REQUEST"
+    case approvalNotFound = "APPROVAL_NOT_FOUND"
     case unavailable = "UNAVAILABLE"
 }
 
@@ -515,6 +516,8 @@ public struct PollParams: Codable, Sendable {
 public struct AgentParams: Codable, Sendable {
     public let message: String
     public let agentid: String?
+    public let provider: String?
+    public let model: String?
     public let to: String?
     public let replyto: String?
     public let sessionid: String?
@@ -534,6 +537,8 @@ public struct AgentParams: Codable, Sendable {
     public let besteffortdeliver: Bool?
     public let lane: String?
     public let extrasystemprompt: String?
+    public let bootstrapcontextmode: AnyCodable?
+    public let bootstrapcontextrunkind: AnyCodable?
     public let internalevents: [[String: AnyCodable]]?
     public let inputprovenance: [String: AnyCodable]?
     public let idempotencykey: String
@@ -542,6 +547,8 @@ public struct AgentParams: Codable, Sendable {
     public init(
         message: String,
         agentid: String?,
+        provider: String?,
+        model: String?,
         to: String?,
         replyto: String?,
         sessionid: String?,
@@ -561,6 +568,8 @@ public struct AgentParams: Codable, Sendable {
         besteffortdeliver: Bool?,
         lane: String?,
         extrasystemprompt: String?,
+        bootstrapcontextmode: AnyCodable?,
+        bootstrapcontextrunkind: AnyCodable?,
         internalevents: [[String: AnyCodable]]?,
         inputprovenance: [String: AnyCodable]?,
         idempotencykey: String,
@@ -568,6 +577,8 @@ public struct AgentParams: Codable, Sendable {
     {
         self.message = message
         self.agentid = agentid
+        self.provider = provider
+        self.model = model
         self.to = to
         self.replyto = replyto
         self.sessionid = sessionid
@@ -587,6 +598,8 @@ public struct AgentParams: Codable, Sendable {
         self.besteffortdeliver = besteffortdeliver
         self.lane = lane
         self.extrasystemprompt = extrasystemprompt
+        self.bootstrapcontextmode = bootstrapcontextmode
+        self.bootstrapcontextrunkind = bootstrapcontextrunkind
         self.internalevents = internalevents
         self.inputprovenance = inputprovenance
         self.idempotencykey = idempotencykey
@@ -596,6 +609,8 @@ public struct AgentParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case message
         case agentid = "agentId"
+        case provider
+        case model
         case to
         case replyto = "replyTo"
         case sessionid = "sessionId"
@@ -615,6 +630,8 @@ public struct AgentParams: Codable, Sendable {
         case besteffortdeliver = "bestEffortDeliver"
         case lane
         case extrasystemprompt = "extraSystemPrompt"
+        case bootstrapcontextmode = "bootstrapContextMode"
+        case bootstrapcontextrunkind = "bootstrapContextRunKind"
         case internalevents = "internalEvents"
         case inputprovenance = "inputProvenance"
         case idempotencykey = "idempotencyKey"
@@ -1106,6 +1123,7 @@ public struct PushTestResult: Codable, Sendable {
     public let tokensuffix: String
     public let topic: String
     public let environment: String
+    public let transport: String
 
     public init(
         ok: Bool,
@@ -1114,7 +1132,8 @@ public struct PushTestResult: Codable, Sendable {
         reason: String?,
         tokensuffix: String,
         topic: String,
-        environment: String)
+        environment: String,
+        transport: String)
     {
         self.ok = ok
         self.status = status
@@ -1123,6 +1142,7 @@ public struct PushTestResult: Codable, Sendable {
         self.tokensuffix = tokensuffix
         self.topic = topic
         self.environment = environment
+        self.transport = transport
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1133,6 +1153,7 @@ public struct PushTestResult: Codable, Sendable {
         case tokensuffix = "tokenSuffix"
         case topic
         case environment
+        case transport
     }
 }
 
@@ -1314,10 +1335,359 @@ public struct SessionsResolveParams: Codable, Sendable {
     }
 }
 
+public struct SessionCompactionCheckpoint: Codable, Sendable {
+    public let checkpointid: String
+    public let sessionkey: String
+    public let sessionid: String
+    public let createdat: Int
+    public let reason: AnyCodable
+    public let tokensbefore: Int?
+    public let tokensafter: Int?
+    public let summary: String?
+    public let firstkeptentryid: String?
+    public let precompaction: [String: AnyCodable]
+    public let postcompaction: [String: AnyCodable]
+
+    public init(
+        checkpointid: String,
+        sessionkey: String,
+        sessionid: String,
+        createdat: Int,
+        reason: AnyCodable,
+        tokensbefore: Int?,
+        tokensafter: Int?,
+        summary: String?,
+        firstkeptentryid: String?,
+        precompaction: [String: AnyCodable],
+        postcompaction: [String: AnyCodable])
+    {
+        self.checkpointid = checkpointid
+        self.sessionkey = sessionkey
+        self.sessionid = sessionid
+        self.createdat = createdat
+        self.reason = reason
+        self.tokensbefore = tokensbefore
+        self.tokensafter = tokensafter
+        self.summary = summary
+        self.firstkeptentryid = firstkeptentryid
+        self.precompaction = precompaction
+        self.postcompaction = postcompaction
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case checkpointid = "checkpointId"
+        case sessionkey = "sessionKey"
+        case sessionid = "sessionId"
+        case createdat = "createdAt"
+        case reason
+        case tokensbefore = "tokensBefore"
+        case tokensafter = "tokensAfter"
+        case summary
+        case firstkeptentryid = "firstKeptEntryId"
+        case precompaction = "preCompaction"
+        case postcompaction = "postCompaction"
+    }
+}
+
+public struct SessionsCompactionListParams: Codable, Sendable {
+    public let key: String
+
+    public init(
+        key: String)
+    {
+        self.key = key
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+    }
+}
+
+public struct SessionsCompactionGetParams: Codable, Sendable {
+    public let key: String
+    public let checkpointid: String
+
+    public init(
+        key: String,
+        checkpointid: String)
+    {
+        self.key = key
+        self.checkpointid = checkpointid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case checkpointid = "checkpointId"
+    }
+}
+
+public struct SessionsCompactionBranchParams: Codable, Sendable {
+    public let key: String
+    public let checkpointid: String
+
+    public init(
+        key: String,
+        checkpointid: String)
+    {
+        self.key = key
+        self.checkpointid = checkpointid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case checkpointid = "checkpointId"
+    }
+}
+
+public struct SessionsCompactionRestoreParams: Codable, Sendable {
+    public let key: String
+    public let checkpointid: String
+
+    public init(
+        key: String,
+        checkpointid: String)
+    {
+        self.key = key
+        self.checkpointid = checkpointid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case checkpointid = "checkpointId"
+    }
+}
+
+public struct SessionsCompactionListResult: Codable, Sendable {
+    public let ok: Bool
+    public let key: String
+    public let checkpoints: [SessionCompactionCheckpoint]
+
+    public init(
+        ok: Bool,
+        key: String,
+        checkpoints: [SessionCompactionCheckpoint])
+    {
+        self.ok = ok
+        self.key = key
+        self.checkpoints = checkpoints
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case key
+        case checkpoints
+    }
+}
+
+public struct SessionsCompactionGetResult: Codable, Sendable {
+    public let ok: Bool
+    public let key: String
+    public let checkpoint: SessionCompactionCheckpoint
+
+    public init(
+        ok: Bool,
+        key: String,
+        checkpoint: SessionCompactionCheckpoint)
+    {
+        self.ok = ok
+        self.key = key
+        self.checkpoint = checkpoint
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case key
+        case checkpoint
+    }
+}
+
+public struct SessionsCompactionBranchResult: Codable, Sendable {
+    public let ok: Bool
+    public let sourcekey: String
+    public let key: String
+    public let sessionid: String
+    public let checkpoint: SessionCompactionCheckpoint
+    public let entry: [String: AnyCodable]
+
+    public init(
+        ok: Bool,
+        sourcekey: String,
+        key: String,
+        sessionid: String,
+        checkpoint: SessionCompactionCheckpoint,
+        entry: [String: AnyCodable])
+    {
+        self.ok = ok
+        self.sourcekey = sourcekey
+        self.key = key
+        self.sessionid = sessionid
+        self.checkpoint = checkpoint
+        self.entry = entry
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case sourcekey = "sourceKey"
+        case key
+        case sessionid = "sessionId"
+        case checkpoint
+        case entry
+    }
+}
+
+public struct SessionsCompactionRestoreResult: Codable, Sendable {
+    public let ok: Bool
+    public let key: String
+    public let sessionid: String
+    public let checkpoint: SessionCompactionCheckpoint
+    public let entry: [String: AnyCodable]
+
+    public init(
+        ok: Bool,
+        key: String,
+        sessionid: String,
+        checkpoint: SessionCompactionCheckpoint,
+        entry: [String: AnyCodable])
+    {
+        self.ok = ok
+        self.key = key
+        self.sessionid = sessionid
+        self.checkpoint = checkpoint
+        self.entry = entry
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case key
+        case sessionid = "sessionId"
+        case checkpoint
+        case entry
+    }
+}
+
+public struct SessionsCreateParams: Codable, Sendable {
+    public let key: String?
+    public let agentid: String?
+    public let label: String?
+    public let model: String?
+    public let parentsessionkey: String?
+    public let task: String?
+    public let message: String?
+
+    public init(
+        key: String?,
+        agentid: String?,
+        label: String?,
+        model: String?,
+        parentsessionkey: String?,
+        task: String?,
+        message: String?)
+    {
+        self.key = key
+        self.agentid = agentid
+        self.label = label
+        self.model = model
+        self.parentsessionkey = parentsessionkey
+        self.task = task
+        self.message = message
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case agentid = "agentId"
+        case label
+        case model
+        case parentsessionkey = "parentSessionKey"
+        case task
+        case message
+    }
+}
+
+public struct SessionsSendParams: Codable, Sendable {
+    public let key: String
+    public let message: String
+    public let thinking: String?
+    public let attachments: [AnyCodable]?
+    public let timeoutms: Int?
+    public let idempotencykey: String?
+
+    public init(
+        key: String,
+        message: String,
+        thinking: String?,
+        attachments: [AnyCodable]?,
+        timeoutms: Int?,
+        idempotencykey: String?)
+    {
+        self.key = key
+        self.message = message
+        self.thinking = thinking
+        self.attachments = attachments
+        self.timeoutms = timeoutms
+        self.idempotencykey = idempotencykey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case message
+        case thinking
+        case attachments
+        case timeoutms = "timeoutMs"
+        case idempotencykey = "idempotencyKey"
+    }
+}
+
+public struct SessionsMessagesSubscribeParams: Codable, Sendable {
+    public let key: String
+
+    public init(
+        key: String)
+    {
+        self.key = key
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+    }
+}
+
+public struct SessionsMessagesUnsubscribeParams: Codable, Sendable {
+    public let key: String
+
+    public init(
+        key: String)
+    {
+        self.key = key
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+    }
+}
+
+public struct SessionsAbortParams: Codable, Sendable {
+    public let key: String
+    public let runid: String?
+
+    public init(
+        key: String,
+        runid: String?)
+    {
+        self.key = key
+        self.runid = runid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case runid = "runId"
+    }
+}
+
 public struct SessionsPatchParams: Codable, Sendable {
     public let key: String
     public let label: AnyCodable?
     public let thinkinglevel: AnyCodable?
+    public let fastmode: AnyCodable?
     public let verboselevel: AnyCodable?
     public let reasoninglevel: AnyCodable?
     public let responseusage: AnyCodable?
@@ -1339,6 +1709,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         key: String,
         label: AnyCodable?,
         thinkinglevel: AnyCodable?,
+        fastmode: AnyCodable?,
         verboselevel: AnyCodable?,
         reasoninglevel: AnyCodable?,
         responseusage: AnyCodable?,
@@ -1359,6 +1730,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.key = key
         self.label = label
         self.thinkinglevel = thinkinglevel
+        self.fastmode = fastmode
         self.verboselevel = verboselevel
         self.reasoninglevel = reasoninglevel
         self.responseusage = responseusage
@@ -1381,6 +1753,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case key
         case label
         case thinkinglevel = "thinkingLevel"
+        case fastmode = "fastMode"
         case verboselevel = "verboseLevel"
         case reasoninglevel = "reasoningLevel"
         case responseusage = "responseUsage"
@@ -1878,6 +2251,106 @@ public struct TalkConfigResult: Codable, Sendable {
     }
 }
 
+public struct TalkSpeakParams: Codable, Sendable {
+    public let text: String
+    public let voiceid: String?
+    public let modelid: String?
+    public let outputformat: String?
+    public let speed: Double?
+    public let ratewpm: Int?
+    public let stability: Double?
+    public let similarity: Double?
+    public let style: Double?
+    public let speakerboost: Bool?
+    public let seed: Int?
+    public let normalize: String?
+    public let language: String?
+    public let latencytier: Int?
+
+    public init(
+        text: String,
+        voiceid: String?,
+        modelid: String?,
+        outputformat: String?,
+        speed: Double?,
+        ratewpm: Int?,
+        stability: Double?,
+        similarity: Double?,
+        style: Double?,
+        speakerboost: Bool?,
+        seed: Int?,
+        normalize: String?,
+        language: String?,
+        latencytier: Int?)
+    {
+        self.text = text
+        self.voiceid = voiceid
+        self.modelid = modelid
+        self.outputformat = outputformat
+        self.speed = speed
+        self.ratewpm = ratewpm
+        self.stability = stability
+        self.similarity = similarity
+        self.style = style
+        self.speakerboost = speakerboost
+        self.seed = seed
+        self.normalize = normalize
+        self.language = language
+        self.latencytier = latencytier
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case text
+        case voiceid = "voiceId"
+        case modelid = "modelId"
+        case outputformat = "outputFormat"
+        case speed
+        case ratewpm = "rateWpm"
+        case stability
+        case similarity
+        case style
+        case speakerboost = "speakerBoost"
+        case seed
+        case normalize
+        case language
+        case latencytier = "latencyTier"
+    }
+}
+
+public struct TalkSpeakResult: Codable, Sendable {
+    public let audiobase64: String
+    public let provider: String
+    public let outputformat: String?
+    public let voicecompatible: Bool?
+    public let mimetype: String?
+    public let fileextension: String?
+
+    public init(
+        audiobase64: String,
+        provider: String,
+        outputformat: String?,
+        voicecompatible: Bool?,
+        mimetype: String?,
+        fileextension: String?)
+    {
+        self.audiobase64 = audiobase64
+        self.provider = provider
+        self.outputformat = outputformat
+        self.voicecompatible = voicecompatible
+        self.mimetype = mimetype
+        self.fileextension = fileextension
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case audiobase64 = "audioBase64"
+        case provider
+        case outputformat = "outputFormat"
+        case voicecompatible = "voiceCompatible"
+        case mimetype = "mimeType"
+        case fileextension = "fileExtension"
+    }
+}
+
 public struct ChannelsStatusParams: Codable, Sendable {
     public let probe: Bool?
     public let timeoutms: Int?
@@ -2008,21 +2481,29 @@ public struct AgentSummary: Codable, Sendable {
     public let id: String
     public let name: String?
     public let identity: [String: AnyCodable]?
+    public let workspace: String?
+    public let model: [String: AnyCodable]?
 
     public init(
         id: String,
         name: String?,
-        identity: [String: AnyCodable]?)
+        identity: [String: AnyCodable]?,
+        workspace: String?,
+        model: [String: AnyCodable]?)
     {
         self.id = id
         self.name = name
         self.identity = identity
+        self.workspace = workspace
+        self.model = model
     }
 
     private enum CodingKeys: String, CodingKey {
         case id
         case name
         case identity
+        case workspace
+        case model
     }
 }
 
@@ -2538,6 +3019,110 @@ public struct ToolsCatalogResult: Codable, Sendable {
     }
 }
 
+public struct ToolsEffectiveParams: Codable, Sendable {
+    public let agentid: String?
+    public let sessionkey: String
+
+    public init(
+        agentid: String?,
+        sessionkey: String)
+    {
+        self.agentid = agentid
+        self.sessionkey = sessionkey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case sessionkey = "sessionKey"
+    }
+}
+
+public struct ToolsEffectiveEntry: Codable, Sendable {
+    public let id: String
+    public let label: String
+    public let description: String
+    public let rawdescription: String
+    public let source: AnyCodable
+    public let pluginid: String?
+    public let channelid: String?
+
+    public init(
+        id: String,
+        label: String,
+        description: String,
+        rawdescription: String,
+        source: AnyCodable,
+        pluginid: String?,
+        channelid: String?)
+    {
+        self.id = id
+        self.label = label
+        self.description = description
+        self.rawdescription = rawdescription
+        self.source = source
+        self.pluginid = pluginid
+        self.channelid = channelid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case label
+        case description
+        case rawdescription = "rawDescription"
+        case source
+        case pluginid = "pluginId"
+        case channelid = "channelId"
+    }
+}
+
+public struct ToolsEffectiveGroup: Codable, Sendable {
+    public let id: AnyCodable
+    public let label: String
+    public let source: AnyCodable
+    public let tools: [ToolsEffectiveEntry]
+
+    public init(
+        id: AnyCodable,
+        label: String,
+        source: AnyCodable,
+        tools: [ToolsEffectiveEntry])
+    {
+        self.id = id
+        self.label = label
+        self.source = source
+        self.tools = tools
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case label
+        case source
+        case tools
+    }
+}
+
+public struct ToolsEffectiveResult: Codable, Sendable {
+    public let agentid: String
+    public let profile: String
+    public let groups: [ToolsEffectiveGroup]
+
+    public init(
+        agentid: String,
+        profile: String,
+        groups: [ToolsEffectiveGroup])
+    {
+        self.agentid = agentid
+        self.profile = profile
+        self.groups = groups
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case profile
+        case groups
+    }
+}
+
 public struct SkillsBinsParams: Codable, Sendable {}
 
 public struct SkillsBinsResult: Codable, Sendable {
@@ -2554,51 +3139,75 @@ public struct SkillsBinsResult: Codable, Sendable {
     }
 }
 
-public struct SkillsInstallParams: Codable, Sendable {
-    public let name: String
-    public let installid: String
-    public let timeoutms: Int?
+public struct SkillsSearchParams: Codable, Sendable {
+    public let query: String?
+    public let limit: Int?
 
     public init(
-        name: String,
-        installid: String,
-        timeoutms: Int?)
+        query: String?,
+        limit: Int?)
     {
-        self.name = name
-        self.installid = installid
-        self.timeoutms = timeoutms
+        self.query = query
+        self.limit = limit
     }
 
     private enum CodingKeys: String, CodingKey {
-        case name
-        case installid = "installId"
-        case timeoutms = "timeoutMs"
+        case query
+        case limit
     }
 }
 
-public struct SkillsUpdateParams: Codable, Sendable {
-    public let skillkey: String
-    public let enabled: Bool?
-    public let apikey: String?
-    public let env: [String: AnyCodable]?
+public struct SkillsSearchResult: Codable, Sendable {
+    public let results: [[String: AnyCodable]]
 
     public init(
-        skillkey: String,
-        enabled: Bool?,
-        apikey: String?,
-        env: [String: AnyCodable]?)
+        results: [[String: AnyCodable]])
     {
-        self.skillkey = skillkey
-        self.enabled = enabled
-        self.apikey = apikey
-        self.env = env
+        self.results = results
     }
 
     private enum CodingKeys: String, CodingKey {
-        case skillkey = "skillKey"
-        case enabled
-        case apikey = "apiKey"
-        case env
+        case results
+    }
+}
+
+public struct SkillsDetailParams: Codable, Sendable {
+    public let slug: String
+
+    public init(
+        slug: String)
+    {
+        self.slug = slug
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case slug
+    }
+}
+
+public struct SkillsDetailResult: Codable, Sendable {
+    public let skill: AnyCodable
+    public let latestversion: AnyCodable?
+    public let metadata: AnyCodable?
+    public let owner: AnyCodable?
+
+    public init(
+        skill: AnyCodable,
+        latestversion: AnyCodable?,
+        metadata: AnyCodable?,
+        owner: AnyCodable?)
+    {
+        self.skill = skill
+        self.latestversion = latestversion
+        self.metadata = metadata
+        self.owner = owner
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case skill
+        case latestversion = "latestVersion"
+        case metadata
+        case owner
     }
 }
 
@@ -3048,6 +3657,20 @@ public struct ExecApprovalsSnapshot: Codable, Sendable {
     }
 }
 
+public struct ExecApprovalGetParams: Codable, Sendable {
+    public let id: String
+
+    public init(
+        id: String)
+    {
+        self.id = id
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+    }
+}
+
 public struct ExecApprovalRequestParams: Codable, Sendable {
     public let id: String?
     public let command: String?
@@ -3135,6 +3758,90 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
 }
 
 public struct ExecApprovalResolveParams: Codable, Sendable {
+    public let id: String
+    public let decision: String
+
+    public init(
+        id: String,
+        decision: String)
+    {
+        self.id = id
+        self.decision = decision
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case decision
+    }
+}
+
+public struct PluginApprovalRequestParams: Codable, Sendable {
+    public let pluginid: String?
+    public let title: String
+    public let description: String
+    public let severity: String?
+    public let toolname: String?
+    public let toolcallid: String?
+    public let agentid: String?
+    public let sessionkey: String?
+    public let turnsourcechannel: String?
+    public let turnsourceto: String?
+    public let turnsourceaccountid: String?
+    public let turnsourcethreadid: AnyCodable?
+    public let timeoutms: Int?
+    public let twophase: Bool?
+
+    public init(
+        pluginid: String?,
+        title: String,
+        description: String,
+        severity: String?,
+        toolname: String?,
+        toolcallid: String?,
+        agentid: String?,
+        sessionkey: String?,
+        turnsourcechannel: String?,
+        turnsourceto: String?,
+        turnsourceaccountid: String?,
+        turnsourcethreadid: AnyCodable?,
+        timeoutms: Int?,
+        twophase: Bool?)
+    {
+        self.pluginid = pluginid
+        self.title = title
+        self.description = description
+        self.severity = severity
+        self.toolname = toolname
+        self.toolcallid = toolcallid
+        self.agentid = agentid
+        self.sessionkey = sessionkey
+        self.turnsourcechannel = turnsourcechannel
+        self.turnsourceto = turnsourceto
+        self.turnsourceaccountid = turnsourceaccountid
+        self.turnsourcethreadid = turnsourcethreadid
+        self.timeoutms = timeoutms
+        self.twophase = twophase
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case pluginid = "pluginId"
+        case title
+        case description
+        case severity
+        case toolname = "toolName"
+        case toolcallid = "toolCallId"
+        case agentid = "agentId"
+        case sessionkey = "sessionKey"
+        case turnsourcechannel = "turnSourceChannel"
+        case turnsourceto = "turnSourceTo"
+        case turnsourceaccountid = "turnSourceAccountId"
+        case turnsourcethreadid = "turnSourceThreadId"
+        case timeoutms = "timeoutMs"
+        case twophase = "twoPhase"
+    }
+}
+
+public struct PluginApprovalResolveParams: Codable, Sendable {
     public let id: String
     public let decision: String
 
@@ -3335,18 +4042,22 @@ public struct DevicePairResolvedEvent: Codable, Sendable {
 public struct ChatHistoryParams: Codable, Sendable {
     public let sessionkey: String
     public let limit: Int?
+    public let maxchars: Int?
 
     public init(
         sessionkey: String,
-        limit: Int?)
+        limit: Int?,
+        maxchars: Int?)
     {
         self.sessionkey = sessionkey
         self.limit = limit
+        self.maxchars = maxchars
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
         case limit
+        case maxchars = "maxChars"
     }
 }
 
@@ -3355,6 +4066,10 @@ public struct ChatSendParams: Codable, Sendable {
     public let message: String
     public let thinking: String?
     public let deliver: Bool?
+    public let originatingchannel: String?
+    public let originatingto: String?
+    public let originatingaccountid: String?
+    public let originatingthreadid: String?
     public let attachments: [AnyCodable]?
     public let timeoutms: Int?
     public let systeminputprovenance: [String: AnyCodable]?
@@ -3366,6 +4081,10 @@ public struct ChatSendParams: Codable, Sendable {
         message: String,
         thinking: String?,
         deliver: Bool?,
+        originatingchannel: String?,
+        originatingto: String?,
+        originatingaccountid: String?,
+        originatingthreadid: String?,
         attachments: [AnyCodable]?,
         timeoutms: Int?,
         systeminputprovenance: [String: AnyCodable]?,
@@ -3376,6 +4095,10 @@ public struct ChatSendParams: Codable, Sendable {
         self.message = message
         self.thinking = thinking
         self.deliver = deliver
+        self.originatingchannel = originatingchannel
+        self.originatingto = originatingto
+        self.originatingaccountid = originatingaccountid
+        self.originatingthreadid = originatingthreadid
         self.attachments = attachments
         self.timeoutms = timeoutms
         self.systeminputprovenance = systeminputprovenance
@@ -3388,6 +4111,10 @@ public struct ChatSendParams: Codable, Sendable {
         case message
         case thinking
         case deliver
+        case originatingchannel = "originatingChannel"
+        case originatingto = "originatingTo"
+        case originatingaccountid = "originatingAccountId"
+        case originatingthreadid = "originatingThreadId"
         case attachments
         case timeoutms = "timeoutMs"
         case systeminputprovenance = "systemInputProvenance"

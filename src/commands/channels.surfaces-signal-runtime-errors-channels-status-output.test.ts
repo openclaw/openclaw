@@ -1,9 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { signalPlugin } from "../../extensions/signal/src/channel.js";
+import { createIMessageTestPlugin } from "../../test/helpers/channels/imessage-test-plugin.js";
+import { collectStatusIssuesFromLastError } from "../plugin-sdk/status-helpers.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
-import { createIMessageTestPlugin } from "../test-utils/imessage-test-plugin.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { formatGatewayChannelsStatusLines } from "./channels/status.js";
+
+const signalPlugin = {
+  ...createChannelTestPluginBase({ id: "signal" }),
+  status: {
+    collectStatusIssues: (accounts: Parameters<typeof collectStatusIssuesFromLastError>[1]) =>
+      collectStatusIssuesFromLastError("signal", accounts),
+  },
+};
 
 describe("channels command", () => {
   beforeEach(() => {

@@ -1,9 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
-vi.mock("../../config/sessions.js", () => ({
+vi.mock("../../config/sessions/store.js", () => ({
   loadSessionStore: vi.fn(),
+}));
+
+vi.mock("../../config/sessions/paths.js", () => ({
   resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
+}));
+
+vi.mock("../../config/sessions/reset.js", () => ({
   evaluateSessionFreshness: vi.fn().mockReturnValue({ fresh: true }),
   resolveSessionResetPolicy: vi.fn().mockReturnValue({ mode: "idle", idleMinutes: 60 }),
 }));
@@ -18,7 +24,8 @@ vi.mock("../../agents/bootstrap-cache.js", () => ({
 }));
 
 import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
-import { loadSessionStore, evaluateSessionFreshness } from "../../config/sessions.js";
+import { evaluateSessionFreshness } from "../../config/sessions/reset.js";
+import { loadSessionStore } from "../../config/sessions/store.js";
 import { resolveCronSession } from "./session.js";
 
 const NOW_MS = 1_737_600_000_000;
@@ -63,7 +70,7 @@ describe("resolveCronSession", () => {
         modelOverride: "deepseek-v3-4bit-mlx",
         providerOverride: "inferencer",
         thinkingLevel: "high",
-        model: "k2p5",
+        model: "kimi-code",
       },
     });
 
@@ -71,7 +78,7 @@ describe("resolveCronSession", () => {
     expect(result.sessionEntry.providerOverride).toBe("inferencer");
     expect(result.sessionEntry.thinkingLevel).toBe("high");
     // The model field (last-used model) should also be preserved
-    expect(result.sessionEntry.model).toBe("k2p5");
+    expect(result.sessionEntry.model).toBe("kimi-code");
   });
 
   it("handles missing modelOverride gracefully", () => {
@@ -80,7 +87,7 @@ describe("resolveCronSession", () => {
       entry: {
         sessionId: "old-session-id",
         updatedAt: 1000,
-        model: "claude-opus-4-5",
+        model: "claude-opus-4-6",
       },
     });
 
@@ -175,7 +182,7 @@ describe("resolveCronSession", () => {
             to: "channel:C0XXXXXXXXX",
             threadId: "1737500000.123456",
           },
-          modelOverride: "gpt-5.2",
+          modelOverride: "gpt-5.4",
         },
         fresh: true,
         forceNew: true,
@@ -191,7 +198,7 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.lastThreadId).toBeUndefined();
       expect(result.sessionEntry.deliveryContext).toBeUndefined();
       // Per-session overrides must be preserved
-      expect(result.sessionEntry.modelOverride).toBe("gpt-5.2");
+      expect(result.sessionEntry.modelOverride).toBe("gpt-5.4");
     });
 
     it("clears delivery routing metadata when session is stale", () => {

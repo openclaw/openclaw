@@ -4,22 +4,41 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
+import { bundledProviderSupportsNativePdfDocument } from "../../media-understanding/bundled-defaults.js";
 import { extractAssistantText } from "../pi-embedded-utils.js";
 
 export type PdfModelConfig = { primary?: string; fallbacks?: string[] };
 
-/**
- * Providers known to support native PDF document input.
- * When the model's provider is in this set, the tool sends raw PDF bytes
- * via provider-specific API calls instead of extracting text/images first.
- */
-export const NATIVE_PDF_PROVIDERS = new Set(["anthropic", "google"]);
+export function resolvePdfInputs(record: Record<string, unknown>): string[] {
+  const pdfCandidates: string[] = [];
+  if (typeof record.pdf === "string") {
+    pdfCandidates.push(record.pdf);
+  }
+  if (Array.isArray(record.pdfs)) {
+    pdfCandidates.push(...record.pdfs.filter((v): v is string => typeof v === "string"));
+  }
+
+  const seenPdfs = new Set<string>();
+  const pdfInputs: string[] = [];
+  for (const candidate of pdfCandidates) {
+    const trimmed = candidate.trim();
+    if (!trimmed || seenPdfs.has(trimmed)) {
+      continue;
+    }
+    seenPdfs.add(trimmed);
+    pdfInputs.push(trimmed);
+  }
+  if (pdfInputs.length === 0) {
+    throw new Error("pdf required: provide a path or URL to a PDF document");
+  }
+  return pdfInputs;
+}
 
 /**
  * Check whether a provider supports native PDF document input.
  */
 export function providerSupportsNativePdf(provider: string): boolean {
-  return NATIVE_PDF_PROVIDERS.has(provider.toLowerCase().trim());
+  return bundledProviderSupportsNativePdfDocument(provider);
 }
 
 /**

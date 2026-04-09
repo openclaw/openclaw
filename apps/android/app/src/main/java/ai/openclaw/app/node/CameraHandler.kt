@@ -134,9 +134,11 @@ class CameraHandler(
       }
 
       val bytes = withContext(Dispatchers.IO) {
-        val b = filePayload.file.readBytes()
-        filePayload.file.delete()
-        b
+        try {
+          filePayload.file.readBytes()
+        } finally {
+          filePayload.file.delete()
+        }
       }
       val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
       clipLog("returning base64 payload")
