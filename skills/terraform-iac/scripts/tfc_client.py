@@ -1566,8 +1566,6 @@ resource "aws_s3_bucket_lifecycle_configuration" "org_trail" {{
   }}
 }}
 
-data "aws_caller_identity" "current" {{}}
-
 resource "aws_s3_bucket_policy" "org_trail" {{
   bucket = aws_s3_bucket.org_trail.id
   policy = jsonencode({{
@@ -1689,7 +1687,7 @@ resource "aws_identitystore_group" "{grp_safe}" {{
 """
             # Account assignments for core accounts
             if scope == "all":
-                for acct_key, acct_ref in [("log_archive", "aws_organizations_account.log_archive.id"), ("audit", "aws_organizations_account.audit.id")]:
+                for acct_key, acct_ref in [("mgmt", "data.aws_caller_identity.current.account_id"), ("log_archive", "aws_organizations_account.log_archive.id"), ("audit", "aws_organizations_account.audit.id")]:
                     sso_perm_sets += f"""
 resource "aws_ssoadmin_account_assignment" "{grp_safe}_{acct_key}" {{
   instance_arn       = tolist(data.aws_ssoadmin_instances.this.arns)[0]
@@ -1939,6 +1937,8 @@ import {{
 }}
 
 provider "aws" {{ region = "{region}" }}
+
+data "aws_caller_identity" "current" {{}}
 
 locals {{
   tags = {{
