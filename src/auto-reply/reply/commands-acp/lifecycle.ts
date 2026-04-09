@@ -544,6 +544,27 @@ export async function handleAcpSpawnAction(
     );
   }
 
+  try {
+    await acpManager.getSessionStatus({
+      cfg: params.cfg,
+      sessionKey,
+    });
+  } catch (err) {
+    await cleanupFailedSpawn({
+      cfg: params.cfg,
+      sessionKey,
+      shouldDeleteSession: true,
+      initializedRuntime,
+    });
+    return stopWithText(
+      collectAcpErrorText({
+        error: err,
+        fallbackCode: "ACP_TURN_FAILED",
+        fallbackMessage: "ACP session failed health checks immediately after spawn.",
+      }),
+    );
+  }
+
   let binding: SessionBindingRecord | null = null;
   if (spawn.bind !== "off") {
     const bound = await bindSpawnedAcpSessionToCurrentConversation({

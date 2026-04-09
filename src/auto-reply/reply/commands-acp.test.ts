@@ -1134,6 +1134,25 @@ describe("/acp command", () => {
     expect(seededWithoutEntry?.runtimeSessionName).toContain(":runtime");
   });
 
+  it("fails spawn when immediate post-init status checks detect gateway disconnect", async () => {
+    hoisted.getStatusMock.mockRejectedValueOnce(
+      new AcpRuntimeError("ACP_TURN_FAILED", "Gateway disconnected: 1006: connection lost"),
+    );
+
+    const result = await runDiscordAcpCommand("/acp spawn codex --bind here");
+
+    expect(result?.reply?.text).toContain(
+      "ACP error (ACP_TURN_FAILED): Gateway disconnected: 1006: connection lost",
+    );
+    expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
+    expect(hoisted.closeMock).toHaveBeenCalled();
+    expect(hoisted.callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.delete",
+      }),
+    );
+  });
+
   it("persists ACP spawn labels without a nested gateway self-call", async () => {
     const params = createDiscordParams("/acp spawn codex --bind here --label inbox");
 
