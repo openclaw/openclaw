@@ -22,6 +22,24 @@ STATE_PATH = os.environ.get(
 
 _DEFAULT_STATE = {"cursor": {"last_ingested_id": 0}, "pending_attention": []}
 
+# Priority levels: higher number = more urgent. Emails with level >= HIGH are enqueued.
+_PRIORITY_LEVELS = {
+    "low": 1,
+    "normal": 2,
+    "medium": 2,
+    "high": 3,
+    "urgent": 4,
+    "critical": 5,
+}
+_HIGH_THRESHOLD = _PRIORITY_LEVELS["high"]
+
+
+def _is_high_priority(priority):
+    """Return True if *priority* (string or numeric) is >= High."""
+    if isinstance(priority, (int, float)):
+        return priority >= _HIGH_THRESHOLD
+    return _PRIORITY_LEVELS.get(str(priority).lower(), 0) >= _HIGH_THRESHOLD
+
 
 def get_state():
     if os.path.exists(STATE_PATH):
@@ -112,7 +130,7 @@ def sync():
 
     new_emails = data.get("results", [])
     for email in new_emails:
-        if email.get("priority", "").lower() != "high":
+        if not _is_high_priority(email.get("priority", "")):
             continue
         if not any(item["id"] == email["id"] for item in state["pending_attention"]):
             state["pending_attention"].append(

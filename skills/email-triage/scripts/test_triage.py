@@ -12,6 +12,40 @@ from unittest.mock import patch
 import triage
 
 
+class TestIsHighPriority(TestCase):
+    def test_string_high(self):
+        self.assertTrue(triage._is_high_priority("High"))
+        self.assertTrue(triage._is_high_priority("high"))
+        self.assertTrue(triage._is_high_priority("HIGH"))
+
+    def test_string_above_high(self):
+        self.assertTrue(triage._is_high_priority("Urgent"))
+        self.assertTrue(triage._is_high_priority("Critical"))
+
+    def test_string_below_high(self):
+        self.assertFalse(triage._is_high_priority("Low"))
+        self.assertFalse(triage._is_high_priority("Normal"))
+        self.assertFalse(triage._is_high_priority("Medium"))
+
+    def test_string_unknown(self):
+        self.assertFalse(triage._is_high_priority(""))
+        self.assertFalse(triage._is_high_priority("other"))
+
+    def test_numeric_at_threshold(self):
+        self.assertTrue(triage._is_high_priority(3))
+        self.assertTrue(triage._is_high_priority(4))
+        self.assertTrue(triage._is_high_priority(5))
+
+    def test_numeric_below_threshold(self):
+        self.assertFalse(triage._is_high_priority(1))
+        self.assertFalse(triage._is_high_priority(2))
+        self.assertFalse(triage._is_high_priority(0))
+
+    def test_numeric_float(self):
+        self.assertTrue(triage._is_high_priority(3.5))
+        self.assertFalse(triage._is_high_priority(2.9))
+
+
 class TestState(TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
@@ -232,15 +266,17 @@ class TestSync(TestCase):
 
     @patch("triage.subprocess.run")
     def test_sync_filters_non_high_priority(self, mock_run):
-        """Only high-priority emails should be enqueued."""
+        """Only emails with priority >= High should be enqueued."""
         ingest_result = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
         query_data = {
             "results": [
-                {"id": 1, "subject": "Urgent", "priority": "High", "sender": "a@b.com"},
-                {"id": 2, "subject": "FYI", "priority": "Low", "sender": "c@d.com"},
-                {"id": 3, "subject": "Normal", "priority": "Normal", "sender": "e@f.com"},
+                {"id": 1, "subject": "Fire", "priority": "Urgent", "sender": "a@b.com"},
+                {"id": 2, "subject": "Important", "priority": "High", "sender": "b@c.com"},
+                {"id": 3, "subject": "FYI", "priority": "Low", "sender": "c@d.com"},
+                {"id": 4, "subject": "Normal", "priority": "Normal", "sender": "e@f.com"},
+                {"id": 5, "subject": "Meltdown", "priority": "Critical", "sender": "f@g.com"},
             ],
-            "meta": {"max_id": 3},
+            "meta": {"max_id": 5},
         }
         query_result = type(
             "R", (), {"returncode": 0, "stdout": json.dumps(query_data), "stderr": ""}
@@ -250,8 +286,32 @@ class TestSync(TestCase):
         triage.sync()
 
         state = triage.get_state()
-        self.assertEqual(len(state["pending_attention"]), 1)
-        self.assertEqual(state["pending_attention"][0]["subject"], "Urgent")
+        subjects = [item["subject"] for item in state["pending_attention"]]
+        self.assertEqual(subjects, ["Fire", "Important", "Meltdown"])
+
+    @patch("triage.subprocess.run")
+    def test_sync_numeric_priority(self, mock_run):
+        """Numeric priorities >= 3 (High) should be enqueued."""
+        ingest_result = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        query_data = {
+            "results": [
+                {"id": 1, "subject": "P4", "priority": 4, "sender": "a@b.com"},
+                {"id": 2, "subject": "P3", "priority": 3, "sender": "b@c.com"},
+                {"id": 3, "subject": "P2", "priority": 2, "sender": "c@d.com"},
+                {"id": 4, "subject": "P1", "priority": 1, "sender": "d@e.com"},
+            ],
+            "meta": {"max_id": 4},
+        }
+        query_result = type(
+            "R", (), {"returncode": 0, "stdout": json.dumps(query_data), "stderr": ""}
+        )()
+        mock_run.side_effect = [ingest_result, query_result]
+
+        triage.sync()
+
+        state = triage.get_state()
+        subjects = [item["subject"] for item in state["pending_attention"]]
+        self.assertEqual(subjects, ["P4", "P3"])
 
     @patch("triage.subprocess.run")
     def test_sync_bad_json(self, mock_run):
