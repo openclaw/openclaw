@@ -446,7 +446,13 @@ describe("buildAgentSystemPrompt", () => {
       "For long waits, avoid rapid poll loops: use Exec with enough yieldMs or process(action=poll, timeout=<ms>).",
     );
     expect(prompt).toContain(
-      "- If exactly one skill clearly applies: read its SKILL.md at <location> with `Read`, then follow it.",
+      "- If one skill is the obvious best fit: read its SKILL.md at <location> with `Read`, then follow it.",
+    );
+    expect(prompt).toContain(
+      "- If the task could reasonably match a small number of skills: read the 1-3 most likely candidates, pick the best fit, and follow only the relevant guidance.",
+    );
+    expect(prompt).toContain(
+      "- Match by the user's desired outcome and constraints, not exact skill names. Users often describe the job without naming the skill.",
     );
     expect(prompt).toContain("OpenClaw docs: /tmp/openclaw/docs");
     expect(prompt).toContain(
@@ -601,8 +607,9 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Skills");
     expect(prompt).toContain(
-      "- If exactly one skill clearly applies: read its SKILL.md at <location> with `read`, then follow it.",
+      "- If one skill is the obvious best fit: read its SKILL.md at <location> with `read`, then follow it.",
     );
+    expect(prompt).toContain("do not read unrelated skills or the whole catalog up front.");
   });
 
   it("appends available skills when provided", () => {
