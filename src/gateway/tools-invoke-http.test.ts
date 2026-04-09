@@ -402,6 +402,11 @@ describe("POST /tools/invoke", () => {
           agentId: "main",
           sessionKey: "agent:main:main",
           loopDetection: { warnAt: 3 },
+          gatewayToolAudit: expect.objectContaining({
+            surface: "tools-invoke",
+            sessionKey: "agent:main:main",
+            model: null,
+          }),
         }),
       }),
     );

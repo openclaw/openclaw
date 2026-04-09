@@ -770,9 +770,13 @@ describe("OpenResponses HTTP API (e2e)", () => {
     });
     expect(writeScopeResponse.status).toBe(200);
     const writeScopeOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
-      | { senderIsOwner?: boolean }
+      | { senderIsOwner?: boolean; gatewayToolAudit?: { surface?: string; model?: string | null } }
       | undefined;
     expect(writeScopeOpts?.senderIsOwner).toBe(false);
+    expect(writeScopeOpts?.gatewayToolAudit).toMatchObject({
+      surface: "openresponses",
+      model: "openclaw",
+    });
     await ensureResponseConsumed(writeScopeResponse);
 
     agentCommand.mockClear();

@@ -273,6 +273,12 @@ export async function handleToolsInvokeHttpRequest(
         agentId,
         sessionKey,
         loopDetection: resolveToolLoopDetectionConfig({ cfg, agentId }),
+        gatewayToolAudit: {
+          surface: "tools-invoke",
+          sessionKey,
+          messageChannel: messageChannel ?? undefined,
+          model: null,
+        },
       },
     });
     if (hookResult.blocked) {

@@ -400,6 +400,7 @@ async function runResponsesAgentCommand(params: {
   images: ImageContent[];
   clientTools: ClientToolDefinition[];
   extraSystemPrompt: string;
+  model: string;
   modelOverride?: string;
   streamParams: { maxTokens: number } | undefined;
   sessionKey: string;
@@ -423,6 +424,12 @@ async function runResponsesAgentCommand(params: {
       messageChannel: params.messageChannel,
       bestEffortDeliver: false,
       senderIsOwner: params.senderIsOwner,
+      gatewayToolAudit: {
+        surface: "openresponses",
+        sessionKey: params.sessionKey,
+        messageChannel: params.messageChannel,
+        model: params.modelOverride ?? params.model,
+      },
       allowModelOverride: true,
       abortSignal: params.abortSignal,
     },
@@ -691,6 +698,7 @@ export async function handleOpenResponsesHttpRequest(
         images,
         clientTools: resolvedClientTools,
         extraSystemPrompt,
+        model,
         modelOverride,
         streamParams,
         sessionKey,
@@ -968,6 +976,7 @@ export async function handleOpenResponsesHttpRequest(
         images,
         clientTools: resolvedClientTools,
         extraSystemPrompt,
+        model,
         modelOverride,
         streamParams,
         sessionKey,
