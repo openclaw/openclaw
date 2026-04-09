@@ -58,10 +58,12 @@ type CallRegistration = {
   initialGreetingInstructions?: string;
 };
 
+// Keep this local seam narrow because the SDK bridge type currently degrades to `any`
+// under the commit-time lint/type pass in this file.
 type ActiveRealtimeVoiceBridge = {
   connect(): Promise<void>;
   sendAudio(audio: Buffer): void;
-  setMediaTimestamp(timestamp: number): void;
+  setMediaTimestamp(ts: number): void;
   submitToolResult(callId: string, result: unknown): void;
   acknowledgeMark(): void;
   close(): void;
