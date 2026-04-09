@@ -70,12 +70,14 @@ describe("createFireworksKimiThinkingDisabledWrapper", () => {
     expect(payload).toEqual({ thinking: { type: "disabled" } });
   });
 
-  it("reapplies the hardening after caller onPayload hooks run", () => {
-    let captured: Record<string, unknown> = {};
+  it("passes sanitized payloads to caller onPayload hooks", () => {
+    let callbackPayload: Record<string, unknown> = {};
     const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload = {};
+      const payload = {
+        reasoning_effort: "high",
+        reasoning: { effort: "high" },
+      };
       options?.onPayload?.(payload, _model);
-      captured = payload;
       return {} as ReturnType<StreamFn>;
     };
 
@@ -89,15 +91,12 @@ describe("createFireworksKimiThinkingDisabledWrapper", () => {
       { messages: [] } as Context,
       {
         onPayload: (payload) => {
-          const payloadObj = payload as Record<string, unknown>;
-          payloadObj.reasoning_effort = "high";
-          payloadObj.reasoning = { effort: "high" };
-          payloadObj.thinking = { type: "enabled" };
+          callbackPayload = payload as Record<string, unknown>;
         },
       },
     );
 
-    expect(captured).toEqual({ thinking: { type: "disabled" } });
+    expect(callbackPayload).toEqual({ thinking: { type: "disabled" } });
   });
 
   it("returns no provider wrapper for non-target Fireworks requests", () => {
@@ -126,6 +125,19 @@ describe("createFireworksKimiThinkingDisabledWrapper", () => {
         streamFn: undefined,
       } as never),
     ).toBeUndefined();
+
+    expect(
+      wrapFireworksProviderStream({
+        provider: "fireworks-ai",
+        modelId: "accounts/fireworks/routers/kimi-k2p5-turbo",
+        model: {
+          api: "openai-completions",
+          provider: "fireworks-ai",
+          id: "accounts/fireworks/routers/kimi-k2p5-turbo",
+        } as Model<"openai-completions">,
+        streamFn: undefined,
+      } as never),
+    ).toBeTypeOf("function");
 
     expect(
       wrapFireworksProviderStream({

@@ -1,8 +1,14 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
+import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream-shared";
 import { isFireworksKimiModelId } from "./model-id.js";
+
+function isFireworksProviderId(providerId: string): boolean {
+  const normalized = normalizeProviderId(providerId);
+  return normalized === "fireworks" || normalized === "fireworks-ai";
+}
 
 export function createFireworksKimiThinkingDisabledWrapper(
   baseStreamFn: StreamFn | undefined,
@@ -23,7 +29,7 @@ export function wrapFireworksProviderStream(
   ctx: ProviderWrapStreamFnContext,
 ): StreamFn | undefined {
   if (
-    ctx.provider !== "fireworks" ||
+    !isFireworksProviderId(ctx.provider) ||
     ctx.model?.api !== "openai-completions" ||
     !isFireworksKimiModelId(ctx.modelId)
   ) {
