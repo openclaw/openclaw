@@ -1,10 +1,10 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import path from "node:path";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
 import { expandHomePrefix } from "./home-dir.js";
+import { saveJsonFile } from "./json-file.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
@@ -232,11 +232,6 @@ function mergeLegacyAgent(
   };
 }
 
-function ensureDir(filePath: string) {
-  const dir = path.dirname(filePath);
-  fs.mkdirSync(dir, { recursive: true });
-}
-
 // Coerce legacy/corrupted allowlists into `ExecAllowlistEntry[]` before we spread
 // entries to add ids (spreading strings creates {"0":"l","1":"s",...}).
 function coerceAllowlistEntries(allowlist: unknown): ExecAllowlistEntry[] | undefined {
@@ -439,13 +434,7 @@ export function loadExecApprovals(): ExecApprovalsFile {
 
 export function saveExecApprovals(file: ExecApprovalsFile) {
   const filePath = resolveExecApprovalsPath();
-  ensureDir(filePath);
-  fs.writeFileSync(filePath, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600 });
-  try {
-    fs.chmodSync(filePath, 0o600);
-  } catch {
-    // best-effort on platforms without chmod
-  }
+  saveJsonFile(filePath, file);
 }
 
 export function ensureExecApprovals(): ExecApprovalsFile {
