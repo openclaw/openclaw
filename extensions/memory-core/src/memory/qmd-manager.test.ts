@@ -39,7 +39,7 @@ type MockChild = EventEmitter & {
 function createMockChild(params?: { autoClose?: boolean; closeDelayMs?: number }): MockChild {
   const stdout = new EventEmitter();
   const stderr = new EventEmitter();
-  const child = new EventEmitter() as MockChild;
+  const child = new EventEmitter() as unknown as MockChild;
   child.stdout = stdout;
   child.stderr = stderr;
   child.closeWith = (code = 0) => {
@@ -134,7 +134,7 @@ import { QmdMemoryManager } from "./qmd-manager.js";
 const spawnMock = mockedSpawn as unknown as Mock;
 const originalPath = process.env.PATH;
 const originalPathExt = process.env.PATHEXT;
-const originalWindowsPath = (process.env as NodeJS.ProcessEnv & { Path?: string }).Path;
+const originalWindowsPath = process.env.Path;
 
 describe("QmdMemoryManager", () => {
   let fixtureRoot: string;
@@ -269,9 +269,9 @@ describe("QmdMemoryManager", () => {
       process.env.PATHEXT = originalPathExt;
     }
     if (originalWindowsPath === undefined) {
-      delete (process.env as NodeJS.ProcessEnv & { Path?: string }).Path;
+      delete process.env.Path;
     } else {
-      (process.env as NodeJS.ProcessEnv & { Path?: string }).Path = originalWindowsPath;
+      process.env.Path = originalWindowsPath;
     }
     delete (globalThis as Record<PropertyKey, unknown>)[MCPORTER_STATE_KEY];
     delete (globalThis as Record<PropertyKey, unknown>)[QMD_EMBED_QUEUE_KEY];
@@ -423,7 +423,7 @@ describe("QmdMemoryManager", () => {
 
     const { manager } = await createManager({ mode: "full" });
     expect(watchMock).toHaveBeenCalledTimes(1);
-    const watcher = watchMock.mock.results[0]?.value as EventEmitter & { close: Mock };
+    const watcher = watchMock.mock.results[0]?.value;
     const initialUpdateCalls = spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update");
     expect(initialUpdateCalls).toHaveLength(0);
 
@@ -4062,6 +4062,83 @@ describe("QmdMemoryManager", () => {
       loadError: undefined,
     });
     await manager.close();
+  });
+
+  describe("vector availability probing with various qmd status formats", () => {
+    it("handles alternate separator format: Vectors = 42", async () => {
+      spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+        if (args[0] === "status") {
+          const child = createMockChild({ autoClose: false });
+          emitAndClose(child, "stdout", "Documents: 12\nVectors = 42\n");
+          return child;
+        }
+        return createMockChild();
+      });
+
+      const { manager } = await createManager();
+      await expect(manager.probeVectorAvailability()).resolves.toBe(true);
+      await manager.close();
+    });
+
+    it("handles tab-separated format: Vectors:\t42", async () => {
+      spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+        if (args[0] === "status") {
+          const child = createMockChild({ autoClose: false });
+          emitAndClose(child, "stdout", "Documents: 12\nVectors:\t42\n");
+          return child;
+        }
+        return createMockChild();
+      });
+
+      const { manager } = await createManager();
+      await expect(manager.probeVectorAvailability()).resolves.toBe(true);
+      await manager.close();
+    });
+
+    it("handles compact format without spaces: Vectors:42", async () => {
+      spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+        if (args[0] === "status") {
+          const child = createMockChild({ autoClose: false });
+          emitAndClose(child, "stdout", "Documents: 12\nVectors:42\n");
+          return child;
+        }
+        return createMockChild();
+      });
+
+      const { manager } = await createManager();
+      await expect(manager.probeVectorAvailability()).resolves.toBe(true);
+      await manager.close();
+    });
+
+    it("handles extra whitespace: Vectors:    123", async () => {
+      spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+        if (args[0] === "status") {
+          const child = createMockChild({ autoClose: false });
+          emitAndClose(child, "stdout", "Documents: 12\nVectors:    123\n");
+          return child;
+        }
+        return createMockChild();
+      });
+
+      const { manager } = await createManager();
+      await expect(manager.probeVectorAvailability()).resolves.toBe(true);
+      await manager.close();
+    });
+
+    it("handles zero vectors with alternative format: Vectors = 0", async () => {
+      spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+        if (args[0] === "status") {
+          const child = createMockChild({ autoClose: false });
+          emitAndClose(child, "stdout", "Documents: 12\nVectors = 0\n");
+          return child;
+        }
+        return createMockChild();
+      });
+
+      const { manager } = await createManager();
+      await expect(manager.probeVectorAvailability()).resolves.toBe(false);
+      await manager.close();
+    });
   });
 
   describe("model cache symlink", () => {

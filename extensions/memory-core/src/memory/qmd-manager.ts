@@ -113,12 +113,30 @@ function normalizeHanBm25Query(query: string): string {
 }
 
 function parseQmdStatusVectorCount(raw: string): number | null {
-  const match = raw.match(/(?:^|\n)\s*Vectors:\s*(\d+)\b/i);
-  if (!match) {
-    return null;
+  // Try multiple regex patterns to handle format variations in qmd status output.
+  // Patterns are ordered from most specific to broadest fallback.
+  const patterns = [
+    // Standard format: "Vectors: 42" (covers tabs and extra whitespace too)
+    /(?:^|\n)\s*Vectors:\s*(\d+)/im,
+    // Equals separator: "Vectors = 42"
+    /(?:^|\n)\s*Vectors\s*=\s*(\d+)/im,
+    // Broad colon/equals/whitespace separator on a line starting with Vectors
+    /(?:^|\n)\s*Vectors[,:=\s]+(\d+)/im,
+    // Line-anchored fallback: any "Vectors" at line start followed by a number
+    /^Vectors[^\d]*(\d+)/im,
+  ];
+
+  for (const pattern of patterns) {
+    const match = raw.match(pattern);
+    if (match?.[1]) {
+      const count = Number.parseInt(match[1], 10);
+      if (Number.isFinite(count)) {
+        return count;
+      }
+    }
   }
-  const count = Number.parseInt(match[1] ?? "", 10);
-  return Number.isFinite(count) ? count : null;
+
+  return null;
 }
 
 function resolveStableJitterMs(params: { seed: string; windowMs: number }): number {
