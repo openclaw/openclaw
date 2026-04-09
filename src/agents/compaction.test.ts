@@ -392,7 +392,7 @@ describe("stripAnalysisScratchpad", () => {
 
   it("strips multiple analysis blocks", () => {
     const input = "<analysis>First.</analysis> Middle. <analysis>Second.</analysis> End.";
-    expect(stripAnalysisScratchpad(input)).toBe(" Middle.  End.");
+    expect(stripAnalysisScratchpad(input)).toBe("Middle. End.");
   });
 
   it("returns empty string when stripping leaves nothing", () => {
@@ -407,7 +407,7 @@ describe("stripAnalysisScratchpad", () => {
   it("handles multiple <analysis> blocks", () => {
     const input =
       "<analysis>Thought 1</analysis> middle text <analysis>Thought 2</analysis> end text";
-    expect(stripAnalysisScratchpad(input)).toBe("middle text  end text");
+    expect(stripAnalysisScratchpad(input)).toBe("middle text end text");
   });
 
   it("handles empty input or empty after stripping", () => {

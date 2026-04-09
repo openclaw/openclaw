@@ -409,7 +409,7 @@ export function stripAnalysisScratchpad(text: string): string {
   }
 
   // Removes <analysis>...</analysis> blocks (case-insensitive, handles newlines)
-  let stripped = text.replace(/<analysis>[\s\S]*?<\/analysis>/gi, "").trim();
+  let stripped = text.replace(/(?:\s*)<analysis>[\s\S]*?<\/analysis>(?:\s*)/gi, " ").trim();
 
   // Extracts content from top-level <summary>...</summary> if it exists.
   // We avoid <summary> tags that are children of <details> to prevent stripping
