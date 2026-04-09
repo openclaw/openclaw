@@ -93,6 +93,8 @@ export type ProviderRequestCapabilitiesInput = ProviderRequestPolicyInput & {
   compat?: {
     supportsStore?: boolean;
   } | null;
+  /** When true, prompt cache fields are forwarded even for proxy-like endpoints. */
+  promptCacheSupported?: boolean;
 };
 
 export type ProviderRequestCompatibilityFamily = "moonshot";
@@ -608,7 +610,10 @@ export function resolveProviderRequestCapabilities(
       OPENAI_RESPONSES_PROVIDERS.has(provider) &&
       policy.usesKnownNativeOpenAIEndpoint,
     shouldStripResponsesPromptCache:
-      api !== undefined && OPENAI_RESPONSES_APIS.has(api) && policy.usesExplicitProxyLikeEndpoint,
+      api !== undefined &&
+      OPENAI_RESPONSES_APIS.has(api) &&
+      policy.usesExplicitProxyLikeEndpoint &&
+      input.promptCacheSupported !== true,
     // Native endpoint class is the real signal here. Users can point a generic
     // provider key at Moonshot or DashScope and still need streaming usage.
     supportsNativeStreamingUsageCompat:

@@ -81,6 +81,12 @@ export type ModelProviderConfig = {
   headers?: Record<string, SecretInput>;
   authHeader?: boolean;
   request?: ConfiguredModelProviderRequest;
+  /**
+   * When true, `prompt_cache_key` and `prompt_cache_retention` are forwarded
+   * to this provider instead of being stripped.  Useful for local/custom
+   * OpenAI-compatible servers that implement their own prefix caching.
+   */
+  promptCache?: boolean;
   models: ModelDefinitionConfig[];
 };
 

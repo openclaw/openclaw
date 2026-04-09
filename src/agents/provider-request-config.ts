@@ -157,6 +157,7 @@ type ResolveProviderRequestPolicyConfigParams = {
     supportsStore?: boolean;
   } | null;
   modelId?: string | null;
+  promptCacheSupported?: boolean;
   allowPrivateNetwork?: boolean;
   request?: ProviderRequestTransportOverrides;
 };
@@ -587,6 +588,7 @@ export function resolveProviderRequestPolicyConfig(
     ...policyInput,
     compat: params.compat,
     modelId: params.modelId,
+    promptCacheSupported: params.promptCacheSupported,
   });
   const auth = resolveAuthOverride({
     authHeader: params.authHeader,

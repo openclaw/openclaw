@@ -548,6 +548,52 @@ describe("provider attribution", () => {
     });
   });
 
+  it("respects promptCacheSupported for local OpenAI-compatible providers", () => {
+    // Without promptCacheSupported: prompt cache is stripped (default)
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "local-mlx",
+        api: "openai-responses",
+        baseUrl: "http://localhost:8080/v1",
+        capability: "llm",
+        transport: "stream",
+      }),
+    ).toMatchObject({
+      endpointClass: "local",
+      shouldStripResponsesPromptCache: true,
+    });
+
+    // With promptCacheSupported: true: prompt cache is forwarded
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "local-mlx",
+        api: "openai-responses",
+        baseUrl: "http://localhost:8080/v1",
+        capability: "llm",
+        transport: "stream",
+        promptCacheSupported: true,
+      }),
+    ).toMatchObject({
+      endpointClass: "local",
+      shouldStripResponsesPromptCache: false,
+    });
+
+    // With promptCacheSupported: false: prompt cache is stripped (explicit)
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "local-mlx",
+        api: "openai-responses",
+        baseUrl: "http://localhost:8080/v1",
+        capability: "llm",
+        transport: "stream",
+        promptCacheSupported: false,
+      }),
+    ).toMatchObject({
+      endpointClass: "local",
+      shouldStripResponsesPromptCache: true,
+    });
+  });
+
   it("resolves shared compat families and native streaming-usage gates", () => {
     expect(
       resolveProviderRequestCapabilities({
