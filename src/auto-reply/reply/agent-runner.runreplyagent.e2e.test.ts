@@ -56,6 +56,7 @@ type EmbeddedRunParams = {
 const state = vi.hoisted(() => ({
   compactEmbeddedPiSessionMock: vi.fn(),
   runEmbeddedPiAgentMock: vi.fn(),
+  runCliAgentMock: vi.fn(),
 }));
 
 const initialMemoryPluginState = {
@@ -107,6 +108,10 @@ vi.mock("../../agents/pi-embedded.js", () => ({
   runEmbeddedPiAgent: (params: unknown) => state.runEmbeddedPiAgentMock(params),
 }));
 
+vi.mock("../../agents/cli-runner.js", () => ({
+  runCliAgent: (params: unknown) => state.runCliAgentMock(params),
+}));
+
 vi.mock("./queue.js", () => ({
   enqueueFollowupRun: vi.fn(),
   refreshQueuedFollowupSession: vi.fn(),
@@ -129,6 +134,11 @@ beforeEach(() => {
   });
   state.runEmbeddedPiAgentMock.mockReset();
   state.runEmbeddedPiAgentMock.mockResolvedValue({
+    payloads: [{ text: "final" }],
+    meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+  });
+  state.runCliAgentMock.mockReset();
+  state.runCliAgentMock.mockResolvedValue({
     payloads: [{ text: "final" }],
     meta: { agentMeta: { usage: { input: 1, output: 1 } } },
   });
@@ -1657,10 +1667,6 @@ describe("runReplyAgent memory flush", () => {
 
       await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
 
-      state.runEmbeddedPiAgentMock.mockImplementation(async () => ({
-        payloads: [{ text: "ok" }],
-        meta: { agentMeta: { usage: { input: 1, output: 1 } } },
-      }));
       const baseRun = createBaseRun({
         storePath,
         sessionEntry,
@@ -1687,10 +1693,9 @@ describe("runReplyAgent memory flush", () => {
         commandBody: "hello",
       });
 
-      expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-      const call = state.runEmbeddedPiAgentMock.mock.calls[0]?.[0] as
-        | { prompt?: string }
-        | undefined;
+      expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+      expect(state.runCliAgentMock).toHaveBeenCalledTimes(1);
+      const call = state.runCliAgentMock.mock.calls[0]?.[0] as { prompt?: string } | undefined;
       expect(call?.prompt).toBe("hello");
     });
   });
@@ -1809,6 +1814,14 @@ describe("runReplyAgent memory flush", () => {
       };
 
       await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+      registerMemoryFlushPlanResolver(() => ({
+        softThresholdTokens: 4_000,
+        forceFlushTranscriptBytes: 1_000_000_000,
+        reserveTokensFloor: 20_000,
+        prompt: "Write notes.\nNO_REPLY to memory/2023-11-14.md and MEMORY.md",
+        systemPrompt: "Flush memory now. NO_REPLY memory/2023-11-14.md MEMORY.md",
+        relativePath: "memory/2023-11-14.md",
+      }));
 
       const calls: Array<EmbeddedRunParams> = [];
       state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
@@ -1825,18 +1838,6 @@ describe("runReplyAgent memory flush", () => {
       const baseRun = createBaseRun({
         storePath,
         sessionEntry,
-        config: {
-          agents: {
-            defaults: {
-              compaction: {
-                memoryFlush: {
-                  prompt: "Write notes.",
-                  systemPrompt: "Flush memory now.",
-                },
-              },
-            },
-          },
-        },
         runOverrides: { extraSystemPrompt: "extra system" },
       });
 
@@ -1857,7 +1858,7 @@ describe("runReplyAgent memory flush", () => {
       expect(flushCall?.extraSystemPrompt).toContain("extra system");
       expect(flushCall?.extraSystemPrompt).toContain("Flush memory now.");
       expect(flushCall?.extraSystemPrompt).toContain("NO_REPLY");
-      expect(flushCall?.extraSystemPrompt).toMatch(/memory\/\d{4}-\d{2}-\d{2}\.md/);
+      expect(flushCall?.extraSystemPrompt).toContain("memory/2023-11-14.md");
       expect(flushCall?.extraSystemPrompt).toContain("MEMORY.md");
       expect(flushCall?.silentExpected).toBe(true);
       expect(calls[1]?.prompt).toBe("hello");
@@ -2110,6 +2111,14 @@ describe("runReplyAgent memory flush", () => {
       };
 
       await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+      registerMemoryFlushPlanResolver(() => ({
+        softThresholdTokens: 4_000,
+        forceFlushTranscriptBytes: 256,
+        reserveTokensFloor: 20_000,
+        prompt: "Pre-compaction memory flush.\nNO_REPLY",
+        systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+        relativePath: "memory/2023-11-14.md",
+      }));
 
       const calls: Array<{ prompt?: string }> = [];
       state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
@@ -2139,8 +2148,6 @@ describe("runReplyAgent memory flush", () => {
 
       expect(calls).toHaveLength(2);
       expect(calls[0]?.prompt).toContain("Pre-compaction memory flush.");
-      expect(calls[0]?.prompt).toContain("Current time:");
-      expect(calls[0]?.prompt).toMatch(/memory\/\d{4}-\d{2}-\d{2}\.md/);
       expect(calls[1]?.prompt).toBe("hello");
 
       const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
@@ -2166,6 +2173,14 @@ describe("runReplyAgent memory flush", () => {
       };
 
       await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+      registerMemoryFlushPlanResolver(() => ({
+        softThresholdTokens: 4_000,
+        forceFlushTranscriptBytes: 256,
+        reserveTokensFloor: 20_000,
+        prompt: "Pre-compaction memory flush.\nNO_REPLY",
+        systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+        relativePath: "memory/2023-11-14.md",
+      }));
 
       const calls: Array<{ prompt?: string }> = [];
       state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
@@ -2221,6 +2236,7 @@ describe("runReplyAgent memory flush", () => {
       };
 
       await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+      registerMemoryFlushPlanResolver(() => null);
 
       state.runEmbeddedPiAgentMock.mockImplementation(async () => ({
         payloads: [{ text: "ok" }],
