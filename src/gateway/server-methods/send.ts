@@ -225,13 +225,17 @@ export const sendHandlers: GatewayRequestHandlers = {
     }
     const to = normalizeOptionalString(request.to) ?? "";
     const message = normalizeOptionalString(request.message) ?? "";
-    const mediaUrl =
-      normalizeOptionalString(request.mediaUrl) ?? normalizeOptionalString(request.media);
     const mediaUrls = Array.isArray(request.mediaUrls)
       ? request.mediaUrls
           .map((entry) => normalizeOptionalString(entry))
           .filter((entry): entry is string => Boolean(entry))
       : undefined;
+    const hasExplicitMediaUrls = (mediaUrls?.length ?? 0) > 0;
+    // `media` is a legacy alias for `mediaUrl` only when no authoritative `mediaUrls` list is set;
+    // otherwise merging would duplicate attachments (normalizeReplyPayloadsForDelivery merges both).
+    const mediaUrl =
+      normalizeOptionalString(request.mediaUrl) ??
+      (hasExplicitMediaUrls ? undefined : normalizeOptionalString(request.media));
     if (!message && !mediaUrl && (mediaUrls?.length ?? 0) === 0) {
       respond(
         false,

@@ -254,6 +254,31 @@ describe("gateway send mirroring", () => {
     );
   });
 
+  it("does not promote legacy `media` to mediaUrl when mediaUrls is already set", async () => {
+    mockDeliverySuccess("m-media-urls-win");
+
+    await runSend({
+      to: "channel:C1",
+      message: "",
+      mediaUrls: ["https://example.com/authoritative.png"],
+      media: "https://example.com/compat-legacy-only.png",
+      channel: "slack",
+      idempotencyKey: "idem-media-urls-authoritative",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [
+          {
+            text: "",
+            mediaUrl: undefined,
+            mediaUrls: ["https://example.com/authoritative.png"],
+          },
+        ],
+      }),
+    );
+  });
+
   it("forwards gateway client scopes into outbound delivery", async () => {
     mockDeliverySuccess("m-scope");
 
