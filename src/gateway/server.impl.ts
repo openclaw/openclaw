@@ -21,6 +21,7 @@ import {
   readConfigFileSnapshot,
   writeConfigFile,
 } from "../config/config.js";
+import { logConfigConflicts } from "../config/detect-conflicts.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
@@ -536,6 +537,7 @@ export async function startGatewayServer(
     activateRuntimeSecrets,
   });
   cfgAtStart = authBootstrap.cfg;
+  logConfigConflicts(cfgAtStart);
   if (authBootstrap.generatedToken) {
     if (authBootstrap.persistedGeneratedToken) {
       log.info(
