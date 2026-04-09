@@ -1,0 +1,63 @@
+{
+  "id": "pkos-bridge",
+  "name": "PKOS Bridge",
+  "description": "Bridge surfaces for PKOS, Workbench, and OpenClaw handoff flows.",
+  "uiHints": {
+    "pkosRoot": {
+      "label": "PKOS Root",
+      "help": "Absolute path to the PKOS workspace root used by this bridge."
+    },
+    "workbenchRoot": {
+      "label": "Workbench Root",
+      "help": "Absolute path to the Workbench workspace root that produces trace bundles."
+    },
+    "traceBundleRoot": {
+      "label": "Trace Bundle Root",
+      "help": "Directory watched or written by the bridge for trace bundle exchange."
+    },
+    "guidance.enabled": {
+      "label": "Enable Bridge Guidance",
+      "help": "Inject OpenClaw role-boundary guidance so the bridge stays aligned with PKOS contracts."
+    },
+    "http.basePath": {
+      "label": "Bridge HTTP Base Path",
+      "help": "Gateway route prefix exposed by the bridge plugin."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "pkosRoot": {
+        "type": "string"
+      },
+      "workbenchRoot": {
+        "type": "string"
+      },
+      "traceBundleRoot": {
+        "type": "string"
+      },
+      "guidance": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "http": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "basePath": {
+            "type": "string",
+            "default": "/plugins/pkos-bridge"
+          }
+        }
+      }
+    }
+  }
+}
+

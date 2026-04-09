@@ -1,0 +1,28 @@
+{
+  "name": "@openclaw/pkos-bridge",
+  "version": "2026.4.9",
+  "private": true,
+  "description": "OpenClaw bridge plugin for PKOS and Workbench integration",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.49"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.4.9"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
+
