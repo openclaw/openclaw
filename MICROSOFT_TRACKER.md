@@ -18,11 +18,11 @@
 | Category                   | Issues  | PRs     | Total   | Closed  | Remaining |
 | -------------------------- | ------- | ------- | ------- | ------- | --------- |
 | MS Teams (channel plugin)  | 66      | 76      | 142     | 102     | 40        |
-| Windows (platform)         | 125     | 48      | 173     | 45      | 128       |
+| Windows (platform)         | 125     | 52      | 177     | 49      | 128       |
 | WSL                        | 17      | 12      | 29      | 13      | 16        |
 | Azure (provider/infra)     | 20      | 23      | 43      | 18      | 25        |
 | Microsoft 365 / SharePoint | 3       | 0       | 3       | 2       | 1         |
-| **Total**                  | **231** | **159** | **390** | **180** | **210**   |
+| **Total**                  | **231** | **163** | **394** | **184** | **210**   |
 
 ---
 
@@ -309,7 +309,7 @@
 | [x]       | P3       | #23509 | SIGUSR1 restart creates orphaned process as Scheduled Task _(stale)_                               |           |
 | [x]       | P3       | #23109 | Silent failure sending local media on Windows via Telegram _(stale)_                               |           |
 | [x]       | P3       | #21990 | Exec Tool on Windows does not capture stdout/stderr _(stale)_                                      |           |
-| [x]       | P3       | #21678 | Windows: missing windowsHide:true on child_process.spawn _(stale)_                                 |           |
+| [x]       | P3       | #21678 | Windows: missing windowsHide:true on child*process.spawn *(stale)\_                                |           |
 | [x]       | P3       | #16323 | Security: Insecure Default Tool Policies + Windows Command Injection _(stale)_                     |           |
 
 ### Feature Requests
@@ -330,56 +330,60 @@
 
 ## 4. Windows Platform — PRs
 
-| Resolved? | Priority | #      | Title                                                                                | Assignee |
-| --------- | -------- | ------ | ------------------------------------------------------------------------------------ | -------- |
-| [x]       | P1       | #54588 | feat(windows): add native WinUI 3 companion app [AI-assisted]                        |          |
-| [ ]       | P1       | #54431 | Feat/Windows Search Index file search                                                |          |
-| [ ]       | P1       | #54205 | Fix: read tool treats Windows absolute paths as relative to workspace (Issue #54039) |          |
-| [ ]       | P1       | #54120 | fix(windows): hide console window during gateway restart                             |          |
-| [ ]       | P1       | #54066 | fix(tools): detect Windows drive-letter paths as absolute on POSIX hosts (#54039)    |          |
-| [ ]       | P1       | #53965 | fix: atomic file writes on Windows-mounted Docker volumes                            |          |
-| [ ]       | P1       | #53664 | Improve Windows source-dev support and make scripts cross-platform                   |          |
-| [ ]       | P1       | #53121 | Add Windows service support to gateway status                                        |          |
-| [ ]       | P1       | #52487 | fix(windows): prevent restart race from duplicate schtasks /Run                      |          |
-| [ ]       | P1       | #52485 | fix(windows): detect stale gateway PIDs via netstat                                  |          |
-| [ ]       | P1       | #52291 | fix(ui): make ui:build work on Windows                                               |          |
-| [ ]       | P1       | #52200 | fix(skills): normalize backslashes in compacted skill paths on Windows               |          |
-| [ ]       | P1       | #51559 | fix(process): add windowsHide to spawn in runCommandWithTimeout                      |          |
-| [ ]       | P1       | #51547 | fix(exec): default to GBK encoding on Windows (#50519)                               |          |
-| [ ]       | P1       | #51486 | fix(daemon): query Windows task runtime directly                                     |          |
-| [ ]       | P1       | #50885 | process: fix Windows runExec garbled CJK output [AI-assisted]                        |          |
-| [ ]       | P1       | #50586 | fix(exec): use gbk encoding for Windows cmd.exe wrapper [AI-assisted]                |          |
-| [ ]       | P1       | #50136 | fix(windows): stabilize gateway restart and avoid false stale cleanup [AI-assisted]  |          |
-| [ ]       | P1       | #50116 | fix: handle Windows-style session paths when running on POSIX                        |          |
-| [ ]       | P1       | #48887 | Fix/docs format check windows clean                                                  |          |
-| [ ]       | P1       | #48613 | Fix/compatible with native windows                                                   |          |
-| [x]       | P1       | #48557 | test: normalize Windows plugin path assertions                                       |          |
-| [x]       | P1       | #48544 | fix(tests): stabilize Windows CI cases                                               |          |
-| [ ]       | P1       | #48320 | fix(windows): add windowsHide to all Windows spawn resolution paths                  |          |
-| [ ]       | P1       | #48130 | fix: correct Windows Chrome executable path extraction regex                         |          |
-| [ ]       | P1       | #47751 | fix: wrap bunx with cmd shim on Windows                                              |          |
-| [ ]       | P1       | #47734 | fix: handle Windows schtasks "Last Result" key variant                               |          |
-| [ ]       | P1       | #46992 | Fix: Windows terminal encoding set to UTF-8                                          |          |
-| [ ]       | P1       | #45870 | fix: align windows path tests with runtime behavior                                  |          |
-| [ ]       | P1       | #45860 | fix(build): prefer usable POSIX shells for Windows bundling                          |          |
-| [ ]       | P1       | #45380 | Make env-prefixed npm scripts work on Windows                                        |          |
-| [ ]       | P2       | #53788 | docs(windows): companion app copy and GitHub auth notes                              |          |
-| [ ]       | P2       | #44234 | docs(windows): note Git Bash requirement for A2UI builds                             |          |
-| [ ]       | P2       | #44228 | fix(reply): normalize Windows media paths for dedupe                                 |          |
-| [ ]       | P2       | #44215 | fix(path): add Windows PATH bootstrap dirs                                           |          |
-| [ ]       | P2       | #44211 | fix(build): use Git Bash wrapper for A2UI bundling on Windows                        |          |
-| [ ]       | P2       | #43624 | fix(gateway): fall back to PowerShell when wmic unavailable on Windows               |          |
-| [ ]       | P2       | #43611 | decode Windows console output (GBK/CP936)                                            |          |
-| [ ]       | P2       | #42174 | fix: false error of Windows path when binding host path to sandbox                   |          |
-| [ ]       | P2       | #39644 | fix(windows): PowerShell completion install and time-format detection                |          |
-| [ ]       | P2       | #38932 | docs(gateway): add Windows no-Docker hardening fallback guide                        |          |
-| [ ]       | P2       | #38846 | security(windows): enhance command argument validation                               |          |
-| [ ]       | P2       | #37592 | fix(windows): handle spaces in Node.js path for plugin install                       |          |
-| [x]       | P2       | #32602 | Tests: skip ios-team-id on Windows                                                   |          |
-| [x]       | P1       | #59466 | [codex] Hide Windows exec console windows                                            |          |
-| [x]       | P1       | #59843 | fix: detect PID recycling in gateway lock on Windows/macOS + startup progress        |          |
-| [ ]       | P2       | #59705 | [codex] improve parallels windows smoke logging _(draft)_                            |          |
-| [x]       | P2       | #59647 | ci: raise Windows checks timeout to 90 minutes                                       |          |
+| Resolved? | Priority | #      | Title                                                                                | Assignee            |
+| --------- | -------- | ------ | ------------------------------------------------------------------------------------ | ------------------- |
+| [x]       | P1       | #54588 | feat(windows): add native WinUI 3 companion app [AI-assisted]                        |                     |
+| [ ]       | P1       | #54431 | Feat/Windows Search Index file search                                                |                     |
+| [ ]       | P1       | #54205 | Fix: read tool treats Windows absolute paths as relative to workspace (Issue #54039) |                     |
+| [ ]       | P1       | #54120 | fix(windows): hide console window during gateway restart                             |                     |
+| [ ]       | P1       | #54066 | fix(tools): detect Windows drive-letter paths as absolute on POSIX hosts (#54039)    |                     |
+| [x]       | P1       | #62286 | fix(channels): keep bundled dist loads off native Jiti on Windows                    | @chen-zhang-cs-code |
+| [x]       | P1       | #60480 | fix: implement Windows stale gateway process cleanup before restart                  | @arifahmedjoy       |
+| [x]       | P1       | #60692 | refactor(acpx): split Windows command parsing                                        | @steipete           |
+| [x]       | P1       | #60689 | fix(acpx): preserve Windows Claude CLI paths                                         | @steipete           |
+| [ ]       | P1       | #53965 | fix: atomic file writes on Windows-mounted Docker volumes                            |                     |
+| [ ]       | P1       | #53664 | Improve Windows source-dev support and make scripts cross-platform                   |                     |
+| [ ]       | P1       | #53121 | Add Windows service support to gateway status                                        |                     |
+| [ ]       | P1       | #52487 | fix(windows): prevent restart race from duplicate schtasks /Run                      |                     |
+| [ ]       | P1       | #52485 | fix(windows): detect stale gateway PIDs via netstat                                  |                     |
+| [ ]       | P1       | #52291 | fix(ui): make ui:build work on Windows                                               |                     |
+| [ ]       | P1       | #52200 | fix(skills): normalize backslashes in compacted skill paths on Windows               |                     |
+| [ ]       | P1       | #51559 | fix(process): add windowsHide to spawn in runCommandWithTimeout                      |                     |
+| [ ]       | P1       | #51547 | fix(exec): default to GBK encoding on Windows (#50519)                               |                     |
+| [ ]       | P1       | #51486 | fix(daemon): query Windows task runtime directly                                     |                     |
+| [ ]       | P1       | #50885 | process: fix Windows runExec garbled CJK output [AI-assisted]                        |                     |
+| [ ]       | P1       | #50586 | fix(exec): use gbk encoding for Windows cmd.exe wrapper [AI-assisted]                |                     |
+| [ ]       | P1       | #50136 | fix(windows): stabilize gateway restart and avoid false stale cleanup [AI-assisted]  |                     |
+| [ ]       | P1       | #50116 | fix: handle Windows-style session paths when running on POSIX                        |                     |
+| [ ]       | P1       | #48887 | Fix/docs format check windows clean                                                  |                     |
+| [ ]       | P1       | #48613 | Fix/compatible with native windows                                                   |                     |
+| [x]       | P1       | #48557 | test: normalize Windows plugin path assertions                                       |                     |
+| [x]       | P1       | #48544 | fix(tests): stabilize Windows CI cases                                               |                     |
+| [ ]       | P1       | #48320 | fix(windows): add windowsHide to all Windows spawn resolution paths                  |                     |
+| [ ]       | P1       | #48130 | fix: correct Windows Chrome executable path extraction regex                         |                     |
+| [ ]       | P1       | #47751 | fix: wrap bunx with cmd shim on Windows                                              |                     |
+| [ ]       | P1       | #47734 | fix: handle Windows schtasks "Last Result" key variant                               |                     |
+| [ ]       | P1       | #46992 | Fix: Windows terminal encoding set to UTF-8                                          |                     |
+| [ ]       | P1       | #45870 | fix: align windows path tests with runtime behavior                                  |                     |
+| [ ]       | P1       | #45860 | fix(build): prefer usable POSIX shells for Windows bundling                          |                     |
+| [ ]       | P1       | #45380 | Make env-prefixed npm scripts work on Windows                                        |                     |
+| [ ]       | P2       | #53788 | docs(windows): companion app copy and GitHub auth notes                              |                     |
+| [ ]       | P2       | #44234 | docs(windows): note Git Bash requirement for A2UI builds                             |                     |
+| [ ]       | P2       | #44228 | fix(reply): normalize Windows media paths for dedupe                                 |                     |
+| [ ]       | P2       | #44215 | fix(path): add Windows PATH bootstrap dirs                                           |                     |
+| [ ]       | P2       | #44211 | fix(build): use Git Bash wrapper for A2UI bundling on Windows                        |                     |
+| [ ]       | P2       | #43624 | fix(gateway): fall back to PowerShell when wmic unavailable on Windows               |                     |
+| [ ]       | P2       | #43611 | decode Windows console output (GBK/CP936)                                            |                     |
+| [ ]       | P2       | #42174 | fix: false error of Windows path when binding host path to sandbox                   |                     |
+| [ ]       | P2       | #39644 | fix(windows): PowerShell completion install and time-format detection                |                     |
+| [ ]       | P2       | #38932 | docs(gateway): add Windows no-Docker hardening fallback guide                        |                     |
+| [ ]       | P2       | #38846 | security(windows): enhance command argument validation                               |                     |
+| [ ]       | P2       | #37592 | fix(windows): handle spaces in Node.js path for plugin install                       |                     |
+| [x]       | P2       | #32602 | Tests: skip ios-team-id on Windows                                                   |                     |
+| [x]       | P1       | #59466 | [codex] Hide Windows exec console windows                                            |                     |
+| [x]       | P1       | #59843 | fix: detect PID recycling in gateway lock on Windows/macOS + startup progress        |                     |
+| [ ]       | P2       | #59705 | [codex] improve parallels windows smoke logging _(draft)_                            |                     |
+| [x]       | P2       | #59647 | ci: raise Windows checks timeout to 90 minutes                                       |                     |
 
 ---
 
