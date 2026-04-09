@@ -596,10 +596,17 @@ export async function handleOpenAiHttpRequest(
           // Normal append: derive incremental delta.
           content = fullText.slice(accumulatedSent.length);
         } else {
-          // Replace event: upstream rewrote the buffer; we can't retract already-sent
-          // bytes, so reset and re-emit the full corrected text.
-          accumulatedSent = "";
-          content = fullText;
+          // Replace event: upstream rewrote the buffer (e.g. partial tag stripped).
+          // We can't retract bytes already sent via SSE, so find the longest common
+          // prefix with what we've sent and only emit the new suffix.  This avoids
+          // duplicating the entire buffer while still forwarding new content.
+          let commonLen = 0;
+          const limit = Math.min(accumulatedSent.length, fullText.length);
+          while (commonLen < limit && accumulatedSent[commonLen] === fullText[commonLen]) {
+            commonLen++;
+          }
+          content = fullText.slice(commonLen);
+          accumulatedSent = fullText;
         }
       } else if (delta) {
         // Fallback: no full text available, use the raw delta.
