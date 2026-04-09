@@ -50,4 +50,15 @@ describe("memory-lancedb config", () => {
       });
     }).toThrow("memory config has unknown keys: unexpected");
   });
+
+  it("rejects non-object dreaming values in runtime parsing", () => {
+    expect(() => {
+      memoryConfigSchema.parse({
+        embedding: {
+          apiKey: "sk-test",
+        },
+        dreaming: true,
+      });
+    }).toThrow("dreaming config must be an object");
+  });
 });
