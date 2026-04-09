@@ -504,7 +504,7 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.ZDOTDIR).toBe("/tmp/trusted-zdotdir");
   });
 
-  it("drops newly blocked inherited startup and resolver vars", () => {
+  it("drops everywhere-blocked inherited vars and keeps override-only inherited vars", () => {
     const env = sanitizeHostExecEnv({
       baseEnv: {
         PATH: "/usr/bin:/bin",
@@ -551,6 +551,8 @@ describe("sanitizeHostExecEnv", () => {
         AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: "/attacker-credentials",
         ANSIBLE_CONFIG: "/tmp/override-ansible.cfg",
         TF_CLI_CONFIG_FILE: "/tmp/override-terraformrc",
+        CFLAGS: "-I/attacker/include",
+        LDFLAGS: "-L/attacker/lib",
         GITHUB_TOKEN: "ghp-test",
         DATABASE_URL: "postgres://attacker",
         NPM_TOKEN: "npm-test",
@@ -567,6 +569,8 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI).toBeUndefined();
     expect(env.ANSIBLE_CONFIG).toBeUndefined();
     expect(env.TF_CLI_CONFIG_FILE).toBeUndefined();
+    expect(env.CFLAGS).toBeUndefined();
+    expect(env.LDFLAGS).toBeUndefined();
     expect(env.GITHUB_TOKEN).toBeUndefined();
     expect(env.DATABASE_URL).toBeUndefined();
     expect(env.NPM_TOKEN).toBeUndefined();
@@ -786,6 +790,8 @@ describe("isDangerousHostEnvOverrideVarName", () => {
       "ANSIBLE_CONFIG",
       "ANSIBLE_LIBRARY",
       "TF_CLI_CONFIG_FILE",
+      "CFLAGS",
+      "LDFLAGS",
       "AWS_SECRET_ACCESS_KEY",
       "AZURE_CLIENT_SECRET",
       "DATABASE_URL",
