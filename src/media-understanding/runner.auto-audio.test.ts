@@ -115,6 +115,20 @@ describe("runCapability auto audio entries", () => {
     expect(result.decision.outcome).toBe("success");
   });
 
+  it("preserves explicit speech-to-text model overrides on the auto audio path", async () => {
+    let seenModel: string | undefined;
+    const result = await runAutoAudioCase({
+      transcribeAudio: async (req) => {
+        seenModel = req.model;
+        return { text: "ok", model: req.model ?? "unknown" };
+      },
+      activeModel: { provider: "openai", model: "whisper-1" },
+    });
+    expect(result.outputs[0]?.text).toBe("ok");
+    expect(seenModel).toBe("whisper-1");
+    expect(result.decision.outcome).toBe("success");
+  });
+
   it("skips auto audio when disabled", async () => {
     const result = await runAutoAudioCase({
       transcribeAudio: async () => ({

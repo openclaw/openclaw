@@ -27,6 +27,7 @@ import { runExec } from "../process/exec.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
+import { resolveBundledDefaultMediaModel } from "./bundled-defaults.js";
 import { resolveAutoMediaKeyProviders, resolveDefaultMediaModel } from "./defaults.js";
 import { isMediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
@@ -587,6 +588,64 @@ export async function resolveAutoImageModel(params: {
   return toActive(keyEntry);
 }
 
+/**
+ * When auto-selecting STT from the active provider, `activeModel` usually mirrors the
+ * conversation model. Only reuse `activeModel.model` when it is plausibly a transcription
+ * model (explicit CLI `--model`, whisper-*, names containing "transcribe", provider STT
+ * defaults, etc.); otherwise let `runProviderEntry` pick the provider default STT model.
+ */
+function looksLikeDedicatedSpeechToTextModelId(modelId: string): boolean {
+  const m = normalizeLowercaseStringOrEmpty(modelId);
+  if (!m) {
+    return false;
+  }
+  if (m.includes("whisper")) {
+    return true;
+  }
+  if (m.includes("transcribe")) {
+    return true;
+  }
+  if (m.includes("nova-")) {
+    return true;
+  }
+  if (m.includes("voxtral")) {
+    return true;
+  }
+  return false;
+}
+
+function resolveAudioModelFromActiveModel(params: {
+  cfg: OpenClawConfig;
+  providerId: string;
+  providerRegistry: ProviderRegistry;
+  activeModel?: ActiveMediaModel;
+}): string | undefined {
+  const raw = params.activeModel?.model?.trim();
+  if (!raw) {
+    return undefined;
+  }
+  const defaultStt = resolveDefaultMediaModel({
+    cfg: params.cfg,
+    providerId: params.providerId,
+    capability: "audio",
+    providerRegistry: params.providerRegistry,
+  })?.trim();
+  if (defaultStt && raw === defaultStt) {
+    return raw;
+  }
+  const bundled = resolveBundledDefaultMediaModel({
+    providerId: params.providerId,
+    capability: "audio",
+  })?.trim();
+  if (bundled && raw === bundled) {
+    return raw;
+  }
+  if (looksLikeDedicatedSpeechToTextModelId(raw)) {
+    return raw;
+  }
+  return undefined;
+}
+
 async function resolveActiveModelEntry(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
@@ -623,8 +682,6 @@ async function resolveActiveModelEntry(params: {
   if (!hasAuth) {
     return null;
   }
-  // Audio transcription must use a speech-capable model (see bundled defaults), not the
-  // active chat model id (e.g. gpt-5.4), which is invalid for /audio/transcriptions.
   const model =
     params.capability === "image"
       ? await resolveAutoImageModelId({
@@ -633,7 +690,12 @@ async function resolveActiveModelEntry(params: {
           explicitModel: params.activeModel?.model,
         })
       : params.capability === "audio"
-        ? undefined
+        ? resolveAudioModelFromActiveModel({
+            cfg: params.cfg,
+            providerId,
+            providerRegistry: params.providerRegistry,
+            activeModel: params.activeModel,
+          })
         : params.activeModel?.model;
   if (params.capability === "image" && !model) {
     return null;
