@@ -214,6 +214,39 @@ describe("cron service timer regressions", () => {
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(4);
   });
 
+  it("#63770: deleteAfterRun removes recurring jobs after first successful run", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
+
+    const cronJob = createIsolatedRegressionJob({
+      id: "every-delete-after-run",
+      name: "delete recurring after success",
+      scheduledAt,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: scheduledAt },
+      payload: { kind: "agentTurn", message: "run once" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    cronJob.deleteAfterRun = true;
+    await writeCronJobs(store.storePath, [cronJob]);
+
+    const runIsolatedAgentJob = vi.fn().mockResolvedValue({ status: "ok", summary: "done" });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => scheduledAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    await onTimer(state);
+
+    const deletedJob = state.store?.jobs.find((j) => j.id === "every-delete-after-run");
+    expect(deletedJob).toBeUndefined();
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+  });
+
   it("#24355: one-shot job respects cron.retry config", async () => {
     const store = timerRegressionFixtures.makeStorePath();
     const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
