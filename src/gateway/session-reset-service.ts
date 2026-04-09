@@ -92,9 +92,16 @@ function resolveResetPreservedSelection(params: {
     preserved.modelOverrideSource = "user";
   }
 
-  if (entry.authProfileOverrideSource === "user" && entry.authProfileOverride) {
+  // Preserve explicit user auth overrides. Legacy entries (no source field)
+  // are inferred: compactionCount present means auto-failover, absent means user.
+  const isUserAuthOverride =
+    entry.authProfileOverrideSource === "user" ||
+    (!entry.authProfileOverrideSource &&
+      typeof entry.authProfileOverrideCompactionCount !== "number" &&
+      Boolean(entry.authProfileOverride));
+  if (isUserAuthOverride && entry.authProfileOverride) {
     preserved.authProfileOverride = entry.authProfileOverride;
-    preserved.authProfileOverrideSource = entry.authProfileOverrideSource;
+    preserved.authProfileOverrideSource = entry.authProfileOverrideSource ?? "user";
     if (entry.authProfileOverrideCompactionCount !== undefined) {
       preserved.authProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
     }
