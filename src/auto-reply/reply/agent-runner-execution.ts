@@ -483,6 +483,10 @@ export async function runAgentTurnWithFallback(params: {
   activeSessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   resolvedVerboseLevel: VerboseLevel;
+  /** When true, the active model was selected by a channel-level override (not by the user).
+   * Fallback selection is not persisted to the session in this case so the channel override
+   * remains authoritative on subsequent turns. */
+  hasChannelModelOverride?: boolean;
 }): Promise<AgentRunLoopResult> {
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
   let didLogHeartbeatStrip = false;
@@ -531,7 +535,14 @@ export async function runAgentTurnWithFallback(params: {
     if (
       !params.sessionKey ||
       !params.activeSessionStore ||
-      (provider === params.followupRun.run.provider && model === params.followupRun.run.model)
+      (provider === params.followupRun.run.provider && model === params.followupRun.run.model) ||
+      // Don't pin the fallback to the session when the primary model was selected by a
+      // channel-level override. Persisting would set modelOverride/providerOverride on the
+      // session entry, which permanently shadows the channel override on subsequent turns
+      // (because channel overrides are gated by !hasSessionModelOverride). By skipping
+      // persistence here the fallback runs once, but the channel override is re-evaluated
+      // cleanly on the very next turn. See: https://github.com/openclaw/openclaw/issues/63712
+      params.hasChannelModelOverride
     ) {
       return;
     }

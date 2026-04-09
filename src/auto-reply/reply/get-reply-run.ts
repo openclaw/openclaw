@@ -109,6 +109,7 @@ type RunPreparedReplyParams = {
   modelState: Awaited<ReturnType<typeof createModelSelectionState>>;
   provider: string;
   model: string;
+  hasChannelModelOverride?: boolean;
   perMessageQueueMode?: InlineDirectives["queueMode"];
   perMessageQueueOptions?: {
     debounceMs?: number;
@@ -156,6 +157,7 @@ export async function runPreparedReply(
     modelState,
     provider,
     model,
+    hasChannelModelOverride,
     perMessageQueueMode,
     perMessageQueueOptions,
     typing,
@@ -616,5 +618,6 @@ export async function runPreparedReply(
     shouldInjectGroupIntro,
     typingMode,
     resetTriggered,
+    hasChannelModelOverride,
   });
 }

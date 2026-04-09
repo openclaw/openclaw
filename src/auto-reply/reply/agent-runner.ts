@@ -105,6 +105,7 @@ export async function runReplyAgent(params: {
   typingMode: TypingMode;
   resetTriggered?: boolean;
   replyOperation?: ReplyOperation;
+  hasChannelModelOverride?: boolean;
 }): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const {
     commandBody,
@@ -134,6 +135,7 @@ export async function runReplyAgent(params: {
     typingMode,
     resetTriggered,
     replyOperation: providedReplyOperation,
+    hasChannelModelOverride,
   } = params;
 
   let activeSessionEntry = sessionEntry;
@@ -464,6 +466,7 @@ export async function runReplyAgent(params: {
       activeSessionStore,
       storePath,
       resolvedVerboseLevel,
+      hasChannelModelOverride,
     });
 
     if (runOutcome.kind === "final") {

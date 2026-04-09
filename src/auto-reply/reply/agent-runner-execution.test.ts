@@ -1284,4 +1284,67 @@ describe("runAgentTurnWithFallback", () => {
     expect(sessionStore.main.providerOverride).toBe("zai");
     expect(sessionStore.main.modelOverride).toBe("glm-5");
   });
+
+  // Regression test for https://github.com/openclaw/openclaw/issues/63712
+  // When a channel-level model override is active (no session-level override),
+  // a successful fallback must NOT pin modelOverride/providerOverride to the session.
+  // If it did, the next turn would see hasSessionModelOverride=true and skip the
+  // channel override gate, permanently locking the session on the fallback model.
+  it("does not persist fallback selection to session when channel model override is active", async () => {
+    state.runWithModelFallbackMock.mockImplementation(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+        result: await params.run("openai", "gpt-5.4"),
+        provider: "openai",
+        model: "gpt-5.4",
+        attempts: [{ provider: "anthropic", model: "claude-opus-4-6", error: "rate_limit" }],
+      }),
+    );
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "fallback reply" }],
+      meta: {},
+    });
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      // No modelOverride / providerOverride — model was selected by a channel override
+    };
+    const sessionStore = { main: { ...sessionEntry } };
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "discord",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => sessionEntry,
+      activeSessionStore: sessionStore,
+      resolvedVerboseLevel: "off",
+      hasChannelModelOverride: true,
+    });
+
+    expect(result.kind).toBe("success");
+    // The fallback ran (gpt-5.4) but must NOT have been written to the session entry.
+    // On the next turn, hasSessionModelOverride will remain false so the channel override
+    // can be re-evaluated cleanly.
+    expect(sessionEntry.modelOverride).toBeUndefined();
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(sessionStore.main.modelOverride).toBeUndefined();
+    expect(sessionStore.main.providerOverride).toBeUndefined();
+  });
 });

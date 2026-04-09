@@ -289,7 +289,12 @@ export async function getReplyFromConfig(
   const hasSessionModelOverride = Boolean(
     sessionEntry.modelOverride?.trim() || sessionEntry.providerOverride?.trim(),
   );
-  if (!hasResolvedHeartbeatModelOverride && !hasSessionModelOverride && channelModelOverride) {
+  // True when the channel-level model override (not a session/user override) is active.
+  // Used downstream to avoid pinning a transient fallback to the session, which would
+  // permanently shadow the channel override on subsequent turns.
+  const hasChannelModelOverride =
+    !hasResolvedHeartbeatModelOverride && !hasSessionModelOverride && Boolean(channelModelOverride);
+  if (hasChannelModelOverride) {
     const resolved = resolveModelRefFromString({
       raw: channelModelOverride.model,
       defaultProvider,
@@ -497,6 +502,7 @@ export async function getReplyFromConfig(
     modelState,
     provider,
     model,
+    hasChannelModelOverride,
     perMessageQueueMode,
     perMessageQueueOptions,
     typing,
