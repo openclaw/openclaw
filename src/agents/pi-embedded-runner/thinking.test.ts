@@ -54,26 +54,23 @@ describe("dropThinkingBlocks", () => {
     expect(result).toBe(messages);
   });
 
-  it("preserves thinking blocks when the assistant message is the latest assistant turn", () => {
+  it("drops thinking blocks when the assistant message is the latest assistant turn", () => {
     const { assistant, messages, result } = dropSingleAssistantContent([
       { type: "thinking", thinking: "internal" },
       { type: "text", text: "final" },
     ]);
-    expect(result).toBe(messages);
-    expect(assistant.content).toEqual([
-      { type: "thinking", thinking: "internal" },
-      { type: "text", text: "final" },
-    ]);
+    expect(result).not.toBe(messages);
+    expect(assistant.content).toEqual([{ type: "text", text: "final" }]);
   });
 
-  it("preserves a latest assistant turn even when all content blocks are thinking", () => {
+  it("preserves the assistant turn when all content blocks are thinking", () => {
     const { assistant } = dropSingleAssistantContent([
       { type: "thinking", thinking: "internal-only" },
     ]);
-    expect(assistant.content).toEqual([{ type: "thinking", thinking: "internal-only" }]);
+    expect(assistant.content).toEqual([{ type: "text", text: "" }]);
   });
 
-  it("preserves thinking blocks in the latest assistant message", () => {
+  it("drops thinking blocks from all assistant messages including the latest", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({ role: "user", content: "first" }),
       castAgentMessage({
@@ -98,9 +95,19 @@ describe("dropThinkingBlocks", () => {
     const latestAssistant = result[3] as Extract<AgentMessage, { role: "assistant" }>;
 
     expect(firstAssistant.content).toEqual([{ type: "text", text: "old text" }]);
-    expect(latestAssistant.content).toEqual([
-      { type: "thinking", thinking: "latest", thinkingSignature: "sig_latest" },
-      { type: "text", text: "latest text" },
+    expect(latestAssistant.content).toEqual([{ type: "text", text: "latest text" }]);
+  });
+
+  it("preserves redacted_thinking blocks", () => {
+    const { assistant, messages, result } = dropSingleAssistantContent([
+      { type: "redacted_thinking", data: "signed" },
+      { type: "text", text: "final" },
+    ]);
+
+    expect(result).toBe(messages);
+    expect(assistant.content).toEqual([
+      { type: "redacted_thinking", data: "signed" },
+      { type: "text", text: "final" },
     ]);
   });
 });
