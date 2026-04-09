@@ -4,7 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
 import {
+  consumePendingToolResultReplayMetadata,
   detectToolResultReplayPolicyMeta,
+  drainPendingToolResultReplayMetadataForSession,
   recordPendingToolResultReplayMetadata,
 } from "./tool-result-replay-metadata.js";
 
@@ -508,6 +510,55 @@ describe("installSessionToolResultGuard", () => {
       AgentMessage & { __openclaw?: Record<string, unknown> }
     >;
     expect(messages[0]?.__openclaw?.transient).not.toBe(true);
+  });
+
+  it("drains replay metadata by exact session key without prefix overreach", () => {
+    recordPendingToolResultReplayMetadata({
+      sessionKey: "agent:main",
+      toolCallId: "call_1",
+      toolName: "exec",
+      args: { command: "openclaw status" },
+    });
+    recordPendingToolResultReplayMetadata({
+      sessionKey: "agent:main:thread",
+      toolCallId: "call_2",
+      toolName: "exec",
+      args: { command: "openclaw status" },
+    });
+
+    expect(
+      consumePendingToolResultReplayMetadata({
+        sessionKey: "agent:main:thread",
+        toolCallId: "call_2",
+      }),
+    ).toMatchObject({ diagnosticType: "openclaw.status" });
+
+    // Re-record thread entry, then drain only the base session.
+    recordPendingToolResultReplayMetadata({
+      sessionKey: "agent:main:thread",
+      toolCallId: "call_2",
+      toolName: "exec",
+      args: { command: "openclaw status" },
+    });
+
+    expect(
+      drainPendingToolResultReplayMetadataForSession({
+        sessionKey: "agent:main",
+      }),
+    ).toBe(1);
+
+    expect(
+      consumePendingToolResultReplayMetadata({
+        sessionKey: "agent:main",
+        toolCallId: "call_1",
+      }),
+    ).toBeNull();
+    expect(
+      consumePendingToolResultReplayMetadata({
+        sessionKey: "agent:main:thread",
+        toolCallId: "call_2",
+      }),
+    ).toMatchObject({ diagnosticType: "openclaw.status" });
   });
 
   it("drains replay metadata when synthetic tool results are disabled", () => {

@@ -43,6 +43,15 @@ function buildPendingKey(sessionKey: string, toolCallId: string): string {
   return `${sessionKey}:${toolCallId}`;
 }
 
+function extractSessionKeyFromPendingKey(pendingKey: string): string | undefined {
+  const separatorIndex = pendingKey.lastIndexOf(":");
+  if (separatorIndex <= 0) {
+    return undefined;
+  }
+  const sessionKey = pendingKey.slice(0, separatorIndex).trim();
+  return sessionKey || undefined;
+}
+
 function trimString(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -185,10 +194,9 @@ export function drainPendingToolResultReplayMetadataForSession(params: {
   if (!sessionKey) {
     return 0;
   }
-  const prefix = `${sessionKey}:`;
   let drained = 0;
   for (const key of pendingToolResultReplayMeta.keys()) {
-    if (!key.startsWith(prefix)) {
+    if (extractSessionKeyFromPendingKey(key) !== sessionKey) {
       continue;
     }
     pendingToolResultReplayMeta.delete(key);
