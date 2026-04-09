@@ -720,6 +720,18 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.fetch.userAgent": "Override User-Agent header for web_fetch requests.",
   "tools.web.fetch.readability":
     "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
+  "tools.web.fetch.ssrfPolicy":
+    "SSRF guardrail settings for web fetch paths that could reach internal hosts.",
+  "tools.web.fetch.ssrfPolicy.allowPrivateNetwork":
+    "Allows access to private-network address ranges from web fetch requests.",
+  "tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork":
+    "Allows access to private-network address ranges from web fetch tooling.",
+  "tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange":
+    "Allows access to RFC2544 benchmark IP ranges (198.18.0/15) used for network device testing.",
+  "tools.web.fetch.ssrfPolicy.allowedHostnames":
+    "Explicit hostname allowlist exceptions for SSRF policy checks.",
+  "tools.web.fetch.ssrfPolicy.hostnameAllowlist":
+    "Legacy hostname allowlist field for explicit host exceptions.",
   models:
     "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.",
   "models.mode":

@@ -342,7 +342,6 @@ export const ToolsWebFetchSchema = z
     readability: z.boolean().optional(),
     ssrfPolicy: SsrFPolicySchema.optional(),
     // Keep the legacy Firecrawl fetch shape loadable so existing installs can
-
     // start and then migrate cleanly through doctor.
     firecrawl: z
       .object({
