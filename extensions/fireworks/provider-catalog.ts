@@ -2,6 +2,7 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { isFireworksKimiModelId } from "./model-id.js";
 
 export const FIREWORKS_BASE_URL = "https://api.fireworks.ai/inference/v1";
 export const FIREWORKS_DEFAULT_MODEL_ID = "accounts/fireworks/routers/kimi-k2p5-turbo";
@@ -20,7 +21,7 @@ export function buildFireworksCatalogModels(): ModelDefinitionConfig[] {
     {
       id: FIREWORKS_DEFAULT_MODEL_ID,
       name: "Kimi K2.5 Turbo (Fire Pass)",
-      reasoning: true,
+      reasoning: !isFireworksKimiModelId(FIREWORKS_DEFAULT_MODEL_ID),
       input: ["text", "image"],
       cost: ZERO_COST,
       contextWindow: FIREWORKS_DEFAULT_CONTEXT_WINDOW,
