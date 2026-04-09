@@ -168,6 +168,32 @@ describe("createChildAdapter", () => {
     expect(spawnArgs.fallbacks ?? []).toEqual([]);
   });
 
+  it("dispose destroys stdout/stderr streams so late-arriving data does not fire listeners", async () => {
+    const stub = createStubChild(5555);
+    spawnWithFallbackMock.mockResolvedValue({
+      child: stub.child,
+      usedFallback: false,
+    });
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
+      stdinMode: "pipe-open",
+    });
+
+    const stdoutListener = vi.fn();
+    const stderrListener = vi.fn();
+    adapter.onStdout(stdoutListener);
+    adapter.onStderr(stderrListener);
+
+    adapter.dispose();
+
+    // Emitting data after dispose should not reach listeners since streams are destroyed
+    stub.child.stdout?.emit("data", Buffer.from("late stdout"));
+    stub.child.stderr?.emit("data", Buffer.from("late stderr"));
+
+    expect(stdoutListener).not.toHaveBeenCalled();
+    expect(stderrListener).not.toHaveBeenCalled();
+  });
+
   it("keeps inherited env when no override env is provided", async () => {
     await createAdapterHarness({
       pid: 3333,

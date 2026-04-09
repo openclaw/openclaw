@@ -230,6 +230,14 @@ export async function createChildAdapter(params: {
   const dispose = () => {
     clearForceKillWaitFallback();
     child.removeAllListeners();
+    // Destroy stdio streams explicitly — child.removeAllListeners() only removes
+    // listeners from the ChildProcess EventEmitter, not from the separate
+    // child.stdout/child.stderr Readable stream objects. Without this, the
+    // onStdout/onStderr listeners survive dispose() and fire on late-arriving
+    // data, pushing into a disposed agent run context and causing an unhandled
+    // promise rejection that crashes the gateway.
+    child.stdout?.destroy();
+    child.stderr?.destroy();
   };
 
   return {
