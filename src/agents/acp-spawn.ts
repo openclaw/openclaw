@@ -508,17 +508,16 @@ function resolveConversationIdForThreadBinding(params: {
   if (normalizeOptionalString(pluginResolvedConversationId)) {
     return normalizeOptionalString(pluginResolvedConversationId);
   }
-  if (channelKey === "line") {
-    const lineConversationId = normalizeLineConversationIdFallback(params.groupId ?? params.to);
-    if (lineConversationId) {
-      return lineConversationId;
-    }
-  }
-  if (channelKey === "telegram") {
-    const telegramConversationId = normalizeTelegramConversationIdFallback(params);
-    if (telegramConversationId) {
-      return telegramConversationId;
-    }
+  const fallbackResolvers: Partial<
+    Record<string, (fallbackParams: typeof params) => string | undefined>
+  > = {
+    line: (fallbackParams) =>
+      normalizeLineConversationIdFallback(fallbackParams.groupId ?? fallbackParams.to),
+    telegram: (fallbackParams) => normalizeTelegramConversationIdFallback(fallbackParams),
+  };
+  const fallbackConversationId = fallbackResolvers[channelKey ?? ""]?.(params);
+  if (fallbackConversationId) {
+    return fallbackConversationId;
   }
   const genericConversationId = resolveConversationIdFromTargets({
     threadId: params.threadId,

@@ -1141,7 +1141,7 @@ describe("createFollowupRunner messaging tool dedupe", () => {
               agents: {
                 defaults: {
                   cliBackends: {
-                    anthropic: {},
+                    "claude-cli": { command: "claude" },
                   },
                 },
               },

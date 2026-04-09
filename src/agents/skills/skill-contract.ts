@@ -1,4 +1,4 @@
-import type { Skill as CanonicalSkill, SourceInfo } from "@mariozechner/pi-coding-agent";
+import type { Skill as CanonicalSkill } from "@mariozechner/pi-coding-agent";
 
 export type SourceScope = "user" | "project" | "temporary";
 export type SourceOrigin = "package" | "top-level";
@@ -7,24 +7,6 @@ export type Skill = CanonicalSkill & {
   // Preserve legacy source reads while keeping the canonical upstream shape.
   source?: string;
 };
-
-export function createSyntheticSourceInfo(
-  path: string,
-  options: {
-    source: string;
-    scope?: SourceScope;
-    origin?: SourceOrigin;
-    baseDir?: string;
-  },
-): SourceInfo {
-  return {
-    path,
-    source: options.source,
-    scope: options.scope ?? "temporary",
-    origin: options.origin ?? "top-level",
-    baseDir: options.baseDir,
-  };
-}
 
 function escapeXml(str: string): string {
   return str

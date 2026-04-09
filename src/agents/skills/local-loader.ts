@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { openVerifiedFileSync } from "../../infra/safe-open-sync.js";
 import { parseFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
-import { createSyntheticSourceInfo, type Skill } from "./skill-contract.js";
+import { type Skill } from "./skill-contract.js";
 
 function isPathWithinRoot(rootRealPath: string, candidatePath: string): boolean {
   const relative = path.relative(rootRealPath, candidatePath);
@@ -74,12 +74,6 @@ function loadSingleSkillDirectory(params: {
     filePath,
     baseDir,
     source: params.source,
-    sourceInfo: createSyntheticSourceInfo(filePath, {
-      source: params.source,
-      baseDir,
-      scope: "project",
-      origin: "top-level",
-    }),
     disableModelInvocation: invocation.disableModelInvocation,
   };
 }

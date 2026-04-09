@@ -11,6 +11,7 @@ import {
 } from "./control-service.js";
 import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
 import { createBrowserRouteDispatcher } from "./routes/dispatcher.js";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 // Application-level error from the browser control service (service is reachable
 // but returned an error response). Must NOT be wrapped with "Can't reach ..." messaging.
@@ -189,8 +190,14 @@ async function fetchHttpJson<T>(
 
   const t = setTimeout(() => ctrl.abort(new Error("timed out")), timeoutMs);
   try {
-    const res = await fetch(url, { ...init, signal: ctrl.signal });
-    if (!res.ok) {
+    const { response: res, release } = await fetchWithSsrFGuard({
+      url,
+      init: { ...init, signal: ctrl.signal },
+      timeoutMs,
+      auditContext: "extensions/browser client-fetch",
+    });
+    try {
+      if (!res.ok) {
       if (isRateLimitStatus(res.status)) {
         // Do not reflect upstream response text into the error surface (log/agent injection risk)
         await discardResponseBody(res);
@@ -202,6 +209,9 @@ async function fetchHttpJson<T>(
       throw new BrowserServiceError(text || `HTTP ${res.status}`);
     }
     return (await res.json()) as T;
+    } finally {
+      await release();
+    }
   } finally {
     clearTimeout(t);
     if (upstreamSignal && upstreamAbortListener) {

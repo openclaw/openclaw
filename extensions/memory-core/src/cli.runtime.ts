@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
@@ -158,7 +159,9 @@ async function createHistoricalRemHarnessWorkspace(params: {
   skippedPaths: string[];
 }> {
   const sourceFiles = await listHistoricalDailyFiles(params.inputPath);
-  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rem-harness-"));
+  const workspaceDir = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-rem-harness-"),
+  );
   const memoryDir = path.join(workspaceDir, "memory");
   await fs.mkdir(memoryDir, { recursive: true });
   for (const filePath of sourceFiles) {
@@ -1720,7 +1723,9 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
         return;
       }
 
-      const scratchDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rem-backfill-"));
+      const scratchDir = await fs.mkdtemp(
+        path.join(resolvePreferredOpenClawTmpDir(), "openclaw-rem-backfill-"),
+      );
       try {
         const sourceFiles = await listHistoricalDailyFiles(opts.path);
         if (sourceFiles.length === 0) {

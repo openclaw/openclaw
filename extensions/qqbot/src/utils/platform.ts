@@ -10,6 +10,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { debugLog, debugWarn } from "./debug-log.js";
 
 // Basic platform information.
@@ -52,8 +53,8 @@ export function getHomeDir(): string {
     return envHome;
   }
 
-  // Final fallback.
-  return os.tmpdir();
+  // Final fallback (prefer OpenClaw-scoped tmp root).
+  return resolvePreferredOpenClawTmpDir();
 }
 
 /**
@@ -85,7 +86,7 @@ export function getQQBotMediaDir(...subPaths: string[]): string {
 
 /** Return the OS temp directory. */
 export function getTempDir(): string {
-  return os.tmpdir();
+  return resolvePreferredOpenClawTmpDir();
 }
 
 // Tilde expansion.

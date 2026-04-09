@@ -7,6 +7,8 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { fetchWithSsrFGuard, ssrfPolicyFromAllowPrivateNetwork } from "openclaw/plugin-sdk/ssrf-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { startQaGatewayRpcClient } from "./gateway-rpc-client.js";
 import { splitQaModelRef } from "./model-selection.js";
@@ -485,11 +487,19 @@ async function waitForGatewayReady(params: {
     }
     for (const healthPath of ["/readyz", "/healthz"]) {
       try {
-        const response = await fetch(`${params.baseUrl}${healthPath}`, {
-          signal: AbortSignal.timeout(2_000),
+        const { response, release } = await fetchWithSsrFGuard({
+          url: `${params.baseUrl}${healthPath}`,
+          init: { signal: AbortSignal.timeout(2_000) },
+          timeoutMs: 2_000,
+          policy: ssrfPolicyFromAllowPrivateNetwork(true),
+          auditContext: "extensions/qa-lab waitForGatewayReady",
         });
-        if (response.ok) {
-          return;
+        try {
+          if (response.ok) {
+            return;
+          }
+        } finally {
+          await release();
         }
       } catch {
         // retry until timeout
@@ -531,7 +541,9 @@ export async function startQaGatewayChild(params: {
   thinkingDefault?: QaThinkingLevel;
   controlUiEnabled?: boolean;
 }) {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qa-suite-"));
+  const tempRoot = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-qa-suite-"),
+  );
   const runtimeCwd = tempRoot;
   const distEntryPath = path.join(params.repoRoot, "dist", "index.js");
   const workspaceDir = path.join(tempRoot, "workspace");
