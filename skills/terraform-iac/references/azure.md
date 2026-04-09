@@ -87,7 +87,8 @@ resource "azurerm_mssql_server" "this" {
   location                     = azurerm_resource_group.this.location
   version                      = "12.0"
   administrator_login          = var.sql_admin
-  administrator_login_password = var.sql_password  # TFC sensitive variable
+  administrator_login_password = var.sql_password  # SECURITY: Set as sensitive TFC workspace variable, never commit actual value
+
   tags                         = local.tags
 }
 
