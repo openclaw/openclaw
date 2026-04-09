@@ -27,6 +27,9 @@ let lastClientOptions: {
   token?: string;
   password?: string;
   tlsFingerprint?: string;
+  requestTimeoutMs?: number;
+  clientName?: string;
+  mode?: string;
   scopes?: string[];
   deviceIdentity?: unknown;
   onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
@@ -87,8 +90,14 @@ vi.mock("./client.js", () => ({
   },
 }));
 
-const { __testing, buildGatewayConnectionDetails, callGateway, callGatewayCli, callGatewayScoped } =
-  await import("./call.js");
+const {
+  __testing,
+  buildGatewayConnectionDetails,
+  callGateway,
+  callGatewayCli,
+  callGatewayLeastPrivilege,
+  callGatewayScoped,
+} = await import("./call.js");
 
 class StubGatewayClient {
   constructor(opts: {
@@ -452,52 +461,24 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.scopes).toEqual([]);
   });
 
-  it("yields one event-loop turn before starting CLI pairing requests", async () => {
+  it("uses backend identity defaults for non-CLI wrappers", async () => {
     setLocalLoopbackGatewayConfig();
 
-    let preConnectYieldRan = false;
-    let sawYieldBeforeStart = false;
-    setImmediate(() => {
-      preConnectYieldRan = true;
-    });
+    await callGateway({ method: "health" });
+    expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT);
+    expect(lastClientOptions?.mode).toBe(GATEWAY_CLIENT_MODES.BACKEND);
 
-    __testing.setDepsForTests({
-      createGatewayClient: (opts) =>
-        ({
-          async request(
-            method: string,
-            params: unknown,
-            requestOpts?: { expectFinal?: boolean; timeoutMs?: number | null },
-          ) {
-            lastRequestOptions = { method, params, opts: requestOpts };
-            return { ok: true };
-          },
-          start() {
-            sawYieldBeforeStart = preConnectYieldRan;
-            void opts.onHelloOk?.({
-              features: {
-                methods: helloMethods ?? [],
-                events: [],
-              },
-            } as unknown as Parameters<NonNullable<typeof opts.onHelloOk>>[0]);
-          },
-          stop() {},
-        }) as never,
-      loadConfig: loadConfig as unknown as () => OpenClawConfig,
-      loadOrCreateDeviceIdentity: () => deviceIdentityState.value,
-      resolveGatewayPort: resolveGatewayPort as unknown as (
-        cfg?: OpenClawConfig,
-        env?: NodeJS.ProcessEnv,
-      ) => number,
-    });
+    await callGatewayScoped({ method: "health", scopes: ["operator.read"] });
+    expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT);
+    expect(lastClientOptions?.mode).toBe(GATEWAY_CLIENT_MODES.BACKEND);
 
-    await callGateway({
-      method: "device.pair.list",
-      mode: GATEWAY_CLIENT_MODES.CLI,
-      clientName: GATEWAY_CLIENT_NAMES.CLI,
-    });
+    await callGatewayLeastPrivilege({ method: "health" });
+    expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT);
+    expect(lastClientOptions?.mode).toBe(GATEWAY_CLIENT_MODES.BACKEND);
 
-    expect(sawYieldBeforeStart).toBe(true);
+    await callGatewayCli({ method: "health" });
+    expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.CLI);
+    expect(lastClientOptions?.mode).toBe(GATEWAY_CLIENT_MODES.CLI);
   });
 });
 

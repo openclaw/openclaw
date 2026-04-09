@@ -707,16 +707,13 @@ function ensureGatewaySupportsRequiredMethods(params: {
 async function executeGatewayRequestWithScopes<T>(params: {
   opts: CallGatewayBaseOptions;
   scopes: OperatorScope[];
-  url: string;
-  token?: string;
-  password?: string;
-  tlsFingerprint?: string;
-  timeoutMs: number;
-  safeTimerTimeoutMs: number;
-  connectionDetails: GatewayConnectionDetails;
 }): Promise<T> {
-  const { opts, scopes, url, token, password, tlsFingerprint, timeoutMs, safeTimerTimeoutMs } =
-    params;
+  const { opts, scopes } = params;
+  const { clientOptions, connectionDetails, timeoutMs, safeTimerTimeoutMs } =
+    await resolveGatewayClientConnectionWithScopes({
+      opts,
+      scopes,
+    });
   // Yield to the event loop before starting the WebSocket connection.
   // On Windows with large dist bundles, heavy synchronous module loading
   // can starve the event loop, preventing timely processing of the
@@ -739,21 +736,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
     };
 
     const client = gatewayCallDeps.createGatewayClient({
-      url,
-      token,
-      password,
-      tlsFingerprint,
-      instanceId: opts.instanceId ?? randomUUID(),
-      clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
-      clientDisplayName: opts.clientDisplayName,
-      clientVersion: opts.clientVersion ?? VERSION,
-      platform: opts.platform,
-      mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
-      role: "operator",
-      scopes,
-      deviceIdentity: resolveDeviceIdentityForGatewayCall(),
-      minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
-      maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
+      ...clientOptions,
       onHelloOk: async (hello) => {
         try {
           ensureGatewaySupportsRequiredMethods({
@@ -780,14 +763,14 @@ async function executeGatewayRequestWithScopes<T>(params: {
         }
         ignoreClose = true;
         client.stop();
-        stop(new Error(formatGatewayCloseError(code, reason, params.connectionDetails)));
+        stop(new Error(formatGatewayCloseError(code, reason, connectionDetails)));
       },
     });
 
     const timer = setTimeout(() => {
       ignoreClose = true;
       client.stop();
-      stop(new Error(formatGatewayTimeoutError(timeoutMs, params.connectionDetails)));
+      stop(new Error(formatGatewayTimeoutError(timeoutMs, connectionDetails)));
     }, safeTimerTimeoutMs);
 
     client.start();
@@ -798,6 +781,22 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   opts: CallGatewayBaseOptions,
   scopes: OperatorScope[],
 ): Promise<T> {
+  return await executeGatewayRequestWithScopes<T>({
+    opts,
+    scopes,
+  });
+}
+
+async function resolveGatewayClientConnectionWithScopes(params: {
+  opts: CallGatewayBaseOptions;
+  scopes: OperatorScope[];
+}): Promise<{
+  clientOptions: GatewayClientOptions;
+  connectionDetails: GatewayConnectionDetails;
+  timeoutMs: number;
+  safeTimerTimeoutMs: number;
+}> {
+  const { opts, scopes } = params;
   const { timeoutMs, safeTimerTimeoutMs } = resolveGatewayCallTimeout(opts.timeoutMs);
   const context = resolveGatewayCallContext(opts);
   const resolvedCredentials = await resolveGatewayCredentials(context);
@@ -818,24 +817,72 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   });
   const url = connectionDetails.url;
   const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
-  const { token, password } = resolvedCredentials;
-  return await executeGatewayRequestWithScopes<T>({
-    opts,
-    scopes,
-    url,
-    token,
-    password,
-    tlsFingerprint,
+
+  return {
+    clientOptions: {
+      url,
+      token: resolvedCredentials.token,
+      password: resolvedCredentials.password,
+      tlsFingerprint,
+      // Keep the client-level request timeout aligned with the outer one-shot
+      // call timer so direct client.request(...) calls do not outlive callGateway().
+      requestTimeoutMs: timeoutMs,
+      instanceId: opts.instanceId ?? randomUUID(),
+      clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
+      clientDisplayName: opts.clientDisplayName,
+      clientVersion: opts.clientVersion ?? VERSION,
+      platform: opts.platform,
+      mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
+      role: "operator",
+      scopes,
+      deviceIdentity: resolveDeviceIdentityForGatewayCall(),
+      minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
+      maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
+    },
+    connectionDetails,
     timeoutMs,
     safeTimerTimeoutMs,
-    connectionDetails,
+  };
+}
+
+function resolveGatewayCallScopes(opts: CallGatewayOptions): OperatorScope[] {
+  if (Array.isArray(opts.scopes)) {
+    return opts.scopes;
+  }
+  const callerMode = opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND;
+  const callerName = opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT;
+  if (callerMode === GATEWAY_CLIENT_MODES.CLI || callerName === GATEWAY_CLIENT_NAMES.CLI) {
+    return CLI_DEFAULT_OPERATOR_SCOPES;
+  }
+  return resolveLeastPrivilegeOperatorScopesForMethod(opts.method);
+}
+
+function applyBackendGatewayIdentityDefaults<T extends CallGatewayBaseOptions>(opts: T): T {
+  return {
+    ...opts,
+    clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+    mode: opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
+  };
+}
+
+export async function resolveGatewayClientConnection(opts: CallGatewayOptions): Promise<{
+  clientOptions: GatewayClientOptions;
+  connectionDetails: GatewayConnectionDetails;
+}> {
+  const { clientOptions, connectionDetails } = await resolveGatewayClientConnectionWithScopes({
+    opts,
+    scopes: resolveGatewayCallScopes(opts),
   });
+  return {
+    clientOptions,
+    connectionDetails,
+  };
 }
 
 export async function callGatewayScoped<T = Record<string, unknown>>(
   opts: CallGatewayScopedOptions,
 ): Promise<T> {
-  return await callGatewayWithScopes(opts, opts.scopes);
+  return await callGatewayWithScopes(applyBackendGatewayIdentityDefaults(opts), opts.scopes);
 }
 
 export async function callGatewayCli<T = Record<string, unknown>>(
@@ -849,25 +896,16 @@ export async function callGatewayLeastPrivilege<T = Record<string, unknown>>(
   opts: CallGatewayBaseOptions,
 ): Promise<T> {
   const scopes = resolveLeastPrivilegeOperatorScopesForMethod(opts.method);
-  return await callGatewayWithScopes(opts, scopes);
+  return await callGatewayWithScopes(applyBackendGatewayIdentityDefaults(opts), scopes);
 }
 
 export async function callGateway<T = Record<string, unknown>>(
   opts: CallGatewayOptions,
 ): Promise<T> {
-  if (Array.isArray(opts.scopes)) {
-    return await callGatewayWithScopes(opts, opts.scopes);
-  }
-  const callerMode = opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND;
-  const callerName = opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT;
-  if (callerMode === GATEWAY_CLIENT_MODES.CLI || callerName === GATEWAY_CLIENT_NAMES.CLI) {
-    return await callGatewayCli(opts);
-  }
-  return await callGatewayLeastPrivilege({
-    ...opts,
-    mode: callerMode,
-    clientName: callerName,
-  });
+  return await callGatewayWithScopes(
+    applyBackendGatewayIdentityDefaults(opts),
+    resolveGatewayCallScopes(opts),
+  );
 }
 
 export function randomIdempotencyKey() {

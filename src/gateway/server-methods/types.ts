@@ -78,6 +78,18 @@ export type GatewayRequestContext = {
   unsubscribeSessionEvents: (connId: string) => void;
   subscribeSessionMessageEvents: (connId: string, sessionKey: string) => void;
   unsubscribeSessionMessageEvents: (connId: string, sessionKey: string) => void;
+  subscribeLogEvents: (
+    connId: string,
+    opts?: {
+      paused?: boolean;
+      file?: string;
+      cursor?: number;
+      limit?: number;
+      maxBytes?: number;
+    },
+  ) => boolean;
+  activateLogEvents: (connId: string) => void;
+  unsubscribeLogEvents: (connId: string) => void;
   unsubscribeAllSessionEvents: (connId: string) => void;
   getSessionEventSubscriberConnIds: () => ReadonlySet<string>;
   registerToolEventRecipient: (runId: string, connId: string) => void;

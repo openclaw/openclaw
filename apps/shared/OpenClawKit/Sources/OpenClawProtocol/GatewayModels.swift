@@ -3520,21 +3520,25 @@ public struct CronRunLogEntry: Codable, Sendable {
 }
 
 public struct LogsTailParams: Codable, Sendable {
+    public let file: String?
     public let cursor: Int?
     public let limit: Int?
     public let maxbytes: Int?
 
     public init(
+        file: String?,
         cursor: Int?,
         limit: Int?,
         maxbytes: Int?)
     {
+        self.file = file
         self.cursor = cursor
         self.limit = limit
         self.maxbytes = maxbytes
     }
 
     private enum CodingKeys: String, CodingKey {
+        case file
         case cursor
         case limit
         case maxbytes = "maxBytes"
@@ -3566,6 +3570,70 @@ public struct LogsTailResult: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case file
+        case cursor
+        case size
+        case lines
+        case truncated
+        case reset
+    }
+}
+
+public struct LogsSubscribeParams: Codable, Sendable {
+    public let file: String?
+    public let cursor: Int?
+    public let limit: Int?
+    public let maxbytes: Int?
+
+    public init(
+        file: String?,
+        cursor: Int?,
+        limit: Int?,
+        maxbytes: Int?)
+    {
+        self.file = file
+        self.cursor = cursor
+        self.limit = limit
+        self.maxbytes = maxbytes
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case file
+        case cursor
+        case limit
+        case maxbytes = "maxBytes"
+    }
+}
+
+public struct LogsSubscribeResult: Codable, Sendable {
+    public let subscribed: Bool
+    public let file: String
+    public let cursor: Int
+    public let size: Int
+    public let lines: [String]
+    public let truncated: Bool?
+    public let reset: Bool?
+
+    public init(
+        subscribed: Bool,
+        file: String,
+        cursor: Int,
+        size: Int,
+        lines: [String],
+        truncated: Bool?,
+        reset: Bool?)
+    {
+        self.subscribed = subscribed
+        self.file = file
+        self.cursor = cursor
+        self.size = size
+        self.lines = lines
+        self.truncated = truncated
+        self.reset = reset
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case subscribed
         case file
         case cursor
         case size

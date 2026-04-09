@@ -3,6 +3,7 @@ import { ChatSendSessionKeyString, InputProvenanceSchema, NonEmptyString } from 
 
 export const LogsTailParamsSchema = Type.Object(
   {
+    file: Type.Optional(Type.String()),
     cursor: Type.Optional(Type.Integer({ minimum: 0 })),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 5000 })),
     maxBytes: Type.Optional(Type.Integer({ minimum: 1, maximum: 1_000_000 })),
@@ -12,6 +13,29 @@ export const LogsTailParamsSchema = Type.Object(
 
 export const LogsTailResultSchema = Type.Object(
   {
+    file: NonEmptyString,
+    cursor: Type.Integer({ minimum: 0 }),
+    size: Type.Integer({ minimum: 0 }),
+    lines: Type.Array(Type.String()),
+    truncated: Type.Optional(Type.Boolean()),
+    reset: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+export const LogsSubscribeParamsSchema = Type.Object(
+  {
+    file: Type.Optional(Type.String()),
+    cursor: Type.Optional(Type.Integer({ minimum: 0 })),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 5000 })),
+    maxBytes: Type.Optional(Type.Integer({ minimum: 1, maximum: 1_000_000 })),
+  },
+  { additionalProperties: false },
+);
+
+export const LogsSubscribeResultSchema = Type.Object(
+  {
+    subscribed: Type.Boolean(),
     file: NonEmptyString,
     cursor: Type.Integer({ minimum: 0 }),
     size: Type.Integer({ minimum: 0 }),
