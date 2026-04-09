@@ -15,7 +15,7 @@ describe("shouldBypassAcpDispatchForCommand", () => {
     expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(false);
   });
 
-  it("returns false for ACP slash commands", () => {
+  it("returns true for ACP slash commands", () => {
     const ctx = buildTestCtx({
       Provider: "discord",
       Surface: "discord",
@@ -24,7 +24,7 @@ describe("shouldBypassAcpDispatchForCommand", () => {
       BodyForAgent: "/acp cancel",
     });
 
-    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(false);
+    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
   });
 
   it("returns true for ACP reset-tail slash commands", () => {
@@ -52,7 +52,7 @@ describe("shouldBypassAcpDispatchForCommand", () => {
     expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
   });
 
-  it("returns false for slash commands when text commands are disabled", () => {
+  it("returns true for /acp slash commands when text commands are allowed on the surface", () => {
     const ctx = buildTestCtx({
       Provider: "discord",
       Surface: "discord",
@@ -67,7 +67,7 @@ describe("shouldBypassAcpDispatchForCommand", () => {
       },
     } as OpenClawConfig;
 
-    expect(shouldBypassAcpDispatchForCommand(ctx, cfg)).toBe(false);
+    expect(shouldBypassAcpDispatchForCommand(ctx, cfg)).toBe(true);
   });
 
   it("returns false for unauthorized bang-prefixed commands", () => {

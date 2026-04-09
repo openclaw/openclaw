@@ -94,6 +94,10 @@ export function stopWithText(text: string): CommandHandlerResult {
 
 export function resolveAcpAction(tokens: string[]): AcpAction {
   const action = normalizeOptionalLowercaseString(tokens[0]);
+  if (action === "stop") {
+    tokens.shift();
+    return "close";
+  }
   if (
     action === "spawn" ||
     action === "cancel" ||
@@ -441,6 +445,7 @@ export function resolveAcpHelpText(): string {
     "/acp cancel [session-key|session-id|session-label]",
     "/acp steer [--session <session-key|session-id|session-label>] <instruction>",
     "/acp close [session-key|session-id|session-label]",
+    "/acp stop [session-key|session-id|session-label] (alias of /acp close)",
     "/acp status [session-key|session-id|session-label]",
     "/acp set-mode <mode> [session-key|session-id|session-label]",
     "/acp set <key> <value> [session-key|session-id|session-label]",

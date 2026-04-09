@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSpawnInput, parseSteerInput } from "./shared.js";
+import { parseSpawnInput, parseSteerInput, resolveAcpAction } from "./shared.js";
 
 describe("parseSteerInput", () => {
   it("preserves non-option instruction tokens while normalizing unicode-dash flags", () => {
@@ -37,5 +37,15 @@ describe("parseSpawnInput", () => {
       error:
         "Use either --thread or --bind for /acp spawn, not both. Usage: /acp spawn [harness-id] [--mode persistent|oneshot] [--thread auto|here|off] [--bind here|off] [--cwd <path>] [--label <label>].",
     });
+  });
+});
+
+describe("resolveAcpAction", () => {
+  it("maps stop to close and consumes the action token", () => {
+    const tokens = ["stop", "agent:codex:acp:s1"];
+    const action = resolveAcpAction(tokens);
+
+    expect(action).toBe("close");
+    expect(tokens).toEqual(["agent:codex:acp:s1"]);
   });
 });

@@ -1527,6 +1527,14 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("Removed 1 binding");
   });
 
+  it("treats /acp stop as an alias for /acp close", async () => {
+    mockBoundThreadSession();
+    const result = await runThreadAcpCommand("/acp stop", baseCfg);
+
+    expect(hoisted.closeMock).toHaveBeenCalledTimes(1);
+    expect(result?.reply?.text).toContain(`Closed ACP session ${defaultAcpSessionKey}`);
+  });
+
   it("lists ACP sessions from the session store", async () => {
     hoisted.sessionBindingListBySessionMock.mockImplementation((key: string) =>
       key === defaultAcpSessionKey ? [createBoundThreadSession(key) as SessionBindingRecord] : [],
