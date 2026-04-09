@@ -13,33 +13,64 @@ describe("registerLazyCommand", () => {
       register: vi.fn(),
     });
 
-    const placeholder = program.commands.find((cmd) => cmd.name() === "demo") as Command & {
-      _helpOption: unknown;
-    };
+    const placeholder = program.commands.find((cmd) => cmd.name() === "demo")!;
     expect(placeholder).toBeDefined();
-    expect(placeholder._helpOption).toBeNull();
     expect(placeholder.options.find((opt) => opt.long === "--help")).toBeUndefined();
   });
 
-  it("sets allowUnknownOption and allowExcessArguments on placeholder", () => {
-    const program = new Command();
+  it("sets allowUnknownOption and allowExcessArguments on placeholder", async () => {
+    const makeRegister = (prog: Command) =>
+      vi.fn().mockImplementation(() => {
+        prog
+          .command("mycmd-sub")
+          .description("sub")
+          .action(() => {});
+      });
 
-    registerLazyCommand({
-      program,
-      name: "mycmd",
-      description: "My command",
-      register: vi.fn(),
-    });
+    // allowUnknownOption: placeholder should not reject unknown flags before
+    // the action handler runs; after reparse the subcommand tree is populated
+    // so unknownOption should not fire at the placeholder level.
+    {
+      const program = new Command();
+      program.exitOverride();
+      program.configureOutput({ writeOut: () => undefined, writeErr: () => undefined });
+      const register = makeRegister(program);
 
-    const placeholder = program.commands.find((cmd) => cmd.name() === "mycmd") as Command & {
-      _helpOption: unknown;
-      _allowUnknownOption: boolean;
-      _allowExcessArguments: boolean;
-    };
-    expect(placeholder).toBeDefined();
-    expect(placeholder._allowUnknownOption).toBe(true);
-    expect(placeholder._allowExcessArguments).toBe(true);
-    expect(placeholder._helpOption).toBeNull();
+      registerLazyCommand({
+        program,
+        name: "mycmd",
+        description: "My command",
+        register,
+      });
+
+      try {
+        await program.parseAsync(["mycmd", "--some-unknown-flag"], { from: "user" });
+      } catch (err: unknown) {
+        expect((err as { code?: string }).code).not.toBe("commander.unknownOption");
+      }
+    }
+
+    // allowExcessArguments: placeholder should not reject extra operands before
+    // the action handler runs.
+    {
+      const program = new Command();
+      program.exitOverride();
+      program.configureOutput({ writeOut: () => undefined, writeErr: () => undefined });
+      const register = makeRegister(program);
+
+      registerLazyCommand({
+        program,
+        name: "mycmd",
+        description: "My command",
+        register,
+      });
+
+      try {
+        await program.parseAsync(["mycmd", "extra-arg"], { from: "user" });
+      } catch (err: unknown) {
+        expect((err as { code?: string }).code).not.toBe("commander.excessArguments");
+      }
+    }
   });
 
   it("removes placeholder and invokes register on action", async () => {
