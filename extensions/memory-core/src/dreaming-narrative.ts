@@ -407,7 +407,7 @@ export async function appendNarrativeEntry(params: {
     }
   }
 
-  await fs.writeFile(dreamsPath, updated.endsWith("\n") ? updated : `${updated}\n`, "utf-8");
+  await writeDreamsFileAtomic(dreamsPath, updated.endsWith("\n") ? updated : `${updated}\n`);
   return dreamsPath;
 }
 
