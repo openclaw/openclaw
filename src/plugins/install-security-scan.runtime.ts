@@ -241,8 +241,10 @@ async function collectPackageManifestPaths(
     }>;
     try {
       entries = await fs.readdir(currentDir, { encoding: "utf8", withFileTypes: true });
-    } catch {
-      continue;
+    } catch (error) {
+      throw new Error(`manifest dependency scan could not read ${currentDir}: ${String(error)}`, {
+        cause: error,
+      });
     }
 
     // Intentionally walk vendored/node_modules trees so bundled transitive

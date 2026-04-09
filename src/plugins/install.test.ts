@@ -1084,6 +1084,43 @@ describe("installPluginFromArchive", () => {
     }
   });
 
+  it.runIf(process.platform !== "win32")(
+    "fails package installs when manifest traversal cannot read a directory",
+    async () => {
+      const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+      fs.writeFileSync(
+        path.join(pluginDir, "package.json"),
+        JSON.stringify({
+          name: "unreadable-dir-plugin",
+          version: "1.0.0",
+          openclaw: { extensions: ["index.js"] },
+        }),
+      );
+      fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n");
+
+      const blockedDir = path.join(pluginDir, "vendor", "sealed");
+      fs.mkdirSync(blockedDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(blockedDir, "package.json"),
+        JSON.stringify({ name: "plain-crypto-js" }),
+      );
+      fs.chmodSync(blockedDir, 0o000);
+
+      try {
+        const { result } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED);
+          expect(result.error).toContain("manifest dependency scan could not read");
+          expect(result.error).toContain("vendor/sealed");
+        }
+      } finally {
+        fs.chmodSync(blockedDir, 0o755);
+      }
+    },
+  );
+
   it("reports all blocked dependencies from the same manifest", async () => {
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
 

@@ -40,8 +40,16 @@ const BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAME_SET = new Set<string>(
   blockedInstallDependencyPackageNames,
 );
 
+const BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAME_LOWER_SET = new Set<string>(
+  blockedInstallDependencyPackageNames.map((packageName) => packageName.toLowerCase()),
+);
+
 function isBlockedInstallDependencyPackageName(packageName: string): boolean {
   return BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAME_SET.has(packageName);
+}
+
+function isBlockedInstallDependencyPackagePathName(packageName: string): boolean {
+  return BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAME_LOWER_SET.has(packageName.toLowerCase());
 }
 
 function parseNpmAliasTargetPackageName(spec: string): string | undefined {
@@ -191,7 +199,7 @@ export function findBlockedNodeModulesDirectory(params: {
         continue;
       }
       const scopedPackageId = `${packageScopeOrName}/${packageName}`;
-      if (!isBlockedInstallDependencyPackageName(scopedPackageId)) {
+      if (!isBlockedInstallDependencyPackagePathName(scopedPackageId)) {
         continue;
       }
       return {
@@ -200,7 +208,7 @@ export function findBlockedNodeModulesDirectory(params: {
       };
     }
 
-    if (!isBlockedInstallDependencyPackageName(packageScopeOrName)) {
+    if (!isBlockedInstallDependencyPackagePathName(packageScopeOrName)) {
       continue;
     }
     return {

@@ -96,6 +96,17 @@ describe("dependency denylist guardrails", () => {
     });
   });
 
+  it("finds blocked package directories regardless of blocked package segment casing", () => {
+    expect(
+      findBlockedNodeModulesDirectory({
+        directoryRelativePath: "vendor/node_modules/Plain-Crypto-Js",
+      }),
+    ).toEqual({
+      dependencyName: "Plain-Crypto-Js",
+      directoryRelativePath: "vendor/node_modules/Plain-Crypto-Js",
+    });
+  });
+
   it("does not treat similarly named non-node_modules segments as package-resolution paths", () => {
     expect(
       findBlockedNodeModulesDirectory({
