@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 
 const loggerMocks = vi.hoisted(() => ({
   debug: vi.fn(),
@@ -24,7 +25,6 @@ vi.mock("../logging/subsystem.js", () => ({
 
 describe("before_tool_call policy audit logging", () => {
   beforeEach(() => {
-    vi.resetModules();
     loggerMocks.debug.mockClear();
     loggerMocks.info.mockClear();
     loggerMocks.warn.mockClear();
@@ -32,7 +32,6 @@ describe("before_tool_call policy audit logging", () => {
   });
 
   it("logs matched policy details before executing the wrapped tool", async () => {
-    const { wrapToolWithBeforeToolCallHook } = await import("./pi-tools.before-tool-call.js");
     const execute = vi.fn().mockResolvedValue({ ok: true });
     const tool = wrapToolWithBeforeToolCallHook({ name: "exec", execute } as any, {
       runId: "run-1",

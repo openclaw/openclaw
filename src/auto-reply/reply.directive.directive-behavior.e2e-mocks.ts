@@ -3,6 +3,16 @@ import { vi, type Mock } from "vitest";
 export const runEmbeddedPiAgentMock: Mock = vi.fn();
 export const compactEmbeddedPiSessionMock: Mock = vi.fn();
 export const loadModelCatalogMock: Mock = vi.fn();
+export const compactEmbeddedPiSessionMock: Mock = vi.fn().mockResolvedValue({
+  ok: true,
+  compacted: true,
+  result: {
+    summary: "summary",
+    firstKeptEntryId: "entry-1",
+    tokensBefore: 120,
+    tokensAfter: 80,
+  },
+});
 
 vi.mock("../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
