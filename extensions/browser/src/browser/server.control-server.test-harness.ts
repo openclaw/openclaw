@@ -105,19 +105,6 @@ type ExecuteActMockOptions = {
   signal?: AbortSignal;
 };
 
-type PassThroughActKind =
-  | "click"
-  | "type"
-  | "press"
-  | "hover"
-  | "scrollIntoView"
-  | "drag"
-  | "select"
-  | "fill"
-  | "resize"
-  | "wait"
-  | "close";
-
 type PassThroughActDispatch = {
   mock: (opts?: unknown) => Promise<unknown>;
   fields: readonly string[];
@@ -197,19 +184,10 @@ const pwMocks = vi.hoisted(() => ({
     path: "/tmp/report.pdf",
   })),
   waitForViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
-  executeActViaPlaywright: vi.fn(
-    async (_opts?: {
-      cdpUrl: string;
-      action: { kind: string } & Record<string, unknown>;
-      targetId?: string;
-      ssrfPolicy?: unknown;
-      evaluateEnabled?: boolean;
-      signal?: AbortSignal;
-    }) => ({}),
-  ),
+  executeActViaPlaywright: vi.fn(async (_opts?: ExecuteActMockOptions) => ({})),
 }));
 
-const passThroughActDispatch: Record<PassThroughActKind, PassThroughActDispatch> = {
+const passThroughActDispatch: Record<string, PassThroughActDispatch> = {
   click: {
     mock: pwMocks.clickViaPlaywright,
     fields: ["ref", "selector", "doubleClick", "button", "modifiers", "delayMs", "timeoutMs"],
@@ -260,18 +238,14 @@ const passThroughActDispatch: Record<PassThroughActKind, PassThroughActDispatch>
   },
 };
 
-function isPassThroughActKind(kind: string): kind is PassThroughActKind {
-  return Object.hasOwn(passThroughActDispatch, kind);
-}
-
 pwMocks.executeActViaPlaywright.mockImplementation(
   async (opts: ExecuteActMockOptions | undefined) => {
     if (!opts) {
       return {};
     }
     const { cdpUrl, action, targetId, ssrfPolicy, evaluateEnabled, signal } = opts;
-    if (isPassThroughActKind(action.kind)) {
-      const spec = passThroughActDispatch[action.kind];
+    const spec = passThroughActDispatch[action.kind];
+    if (spec) {
       await spec.mock(
         buildActPayload({
           cdpUrl,
