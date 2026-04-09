@@ -1228,7 +1228,9 @@ Best practice:
     # Account Vending
     print("\n  Account Vending Machine:")
     print("    Terraform module to create new workload accounts on demand.")
-    print("    Each account gets: OU placement, baseline VPC, budget alert, CloudTrail.")
+    print("    Each account gets: OU placement, budget alert, cross-account role.")
+    print("    Note: baseline VPC and CloudTrail are org-wide (configured above),")
+    print("    not per-account. Deploy per-account baselines separately if needed.")
     enable_vending = prompt("Include account vending module?", default="yes", choices=["yes", "no"])
     enable_vending = enable_vending == "yes"
     vending_budget = "100"
