@@ -2699,7 +2699,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       type: "boolean",
                       title: "Model Provider Request Allow Private Network",
                       description:
-                        "When true, allow HTTPS/WebSocket to the model base URL when DNS resolves to private, CGNAT, or similar ranges. Use only for operator-controlled self-hosted OpenAI-compatible endpoints (LAN, overlay, split DNS). Default is false.",
+                        "When true, allow HTTPS to the model base URL when DNS resolves to private, CGNAT, or similar ranges, via the provider HTTP fetch guard (fetchWithSsrFGuard). OpenAI Responses WebSocket reuses request for headers/TLS but does not use that fetch SSRF path. Use only for operator-controlled self-hosted OpenAI-compatible endpoints (LAN, overlay, split DNS). Default is false.",
                     },
                   },
                   additionalProperties: false,
@@ -24995,7 +24995,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "models.providers.*.request.allowPrivateNetwork": {
       label: "Model Provider Request Allow Private Network",
-      help: "When true, allow HTTPS/WebSocket to the model base URL when DNS resolves to private, CGNAT, or similar ranges. Use only for operator-controlled self-hosted OpenAI-compatible endpoints (LAN, overlay, split DNS). Default is false.",
+      help: "When true, allow HTTPS to the model base URL when DNS resolves to private, CGNAT, or similar ranges, via the provider HTTP fetch guard (fetchWithSsrFGuard). OpenAI Responses WebSocket reuses request for headers/TLS but does not use that fetch SSRF path. Use only for operator-controlled self-hosted OpenAI-compatible endpoints (LAN, overlay, split DNS). Default is false.",
       tags: ["access", "models"],
     },
     "models.providers.*.models": {
