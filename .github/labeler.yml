@@ -221,6 +221,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/llm-task/**"
+"extensions: localai":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/localai/**"
 "extensions: lobster":
   - changed-files:
       - any-glob-to-any-file:

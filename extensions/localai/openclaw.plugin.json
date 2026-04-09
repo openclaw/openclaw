@@ -1,0 +1,25 @@
+{
+  "id": "localai",
+  "enabledByDefault": true,
+  "providers": ["localai"],
+  "providerAuthEnvVars": {
+    "localai": ["LOCALAI_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "localai",
+      "method": "custom",
+      "choiceId": "localai",
+      "choiceLabel": "LocalAI",
+      "choiceHint": "Multimodal, scalable local inference with auth",
+      "groupId": "localai",
+      "groupLabel": "LocalAI",
+      "groupHint": "Multimodal, scalable local inference"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
