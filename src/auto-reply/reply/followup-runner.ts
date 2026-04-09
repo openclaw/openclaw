@@ -409,7 +409,6 @@ export function createFollowupRunner(params: {
             if (match) {
               intendedProvider = match[1];
               intendedModel = match[2];
-              break;
             }
           }
         }
