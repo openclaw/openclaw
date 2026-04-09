@@ -105,7 +105,8 @@ resource "aws_db_instance" "this" {
   allocated_storage = 20
   db_name           = var.db_name
   username          = var.db_username
-  password          = var.db_password  # use TFC sensitive variable
+  password          = var.db_password  # SECURITY: Set as sensitive TFC workspace variable, never commit actual value
+
   skip_final_snapshot = true
   tags              = local.tags
 }
