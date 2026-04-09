@@ -2,16 +2,24 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtim
 import { readQaScenarioExecutionConfig } from "./scenario-catalog.js";
 
 function readRequiredDiscoveryRefs() {
-  const config = readQaScenarioExecutionConfig("source-docs-discovery-report") as
-    | { requiredFiles?: string[] }
-    | undefined;
-  return (
-    config?.requiredFiles ?? [
+  try {
+    const config = readQaScenarioExecutionConfig("source-docs-discovery-report") as
+      | { requiredFiles?: string[] }
+      | undefined;
+    return (
+      config?.requiredFiles ?? [
+        "repo/qa/scenarios/index.md",
+        "repo/extensions/qa-lab/src/suite.ts",
+        "repo/docs/help/testing.md",
+      ]
+    );
+  } catch {
+    return [
       "repo/qa/scenarios/index.md",
       "repo/extensions/qa-lab/src/suite.ts",
       "repo/docs/help/testing.md",
-    ]
-  );
+    ];
+  }
 }
 
 const REQUIRED_DISCOVERY_REFS = readRequiredDiscoveryRefs();
