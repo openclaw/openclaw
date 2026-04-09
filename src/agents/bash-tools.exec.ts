@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
@@ -114,6 +115,21 @@ const SKIPPABLE_SCRIPT_PREFLIGHT_FS_ERROR_CODES = new Set([
   "ENOTDIR",
   "EPERM",
 ]);
+
+function getNodeErrorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error)) {
+    return undefined;
+  }
+  return String((error as { code?: unknown }).code);
+}
+
+function shouldSkipScriptPreflightPathError(error: unknown): boolean {
+  if (error instanceof SafeOpenError) {
+    return true;
+  }
+  const errorCode = getNodeErrorCode(error);
+  return !!(errorCode && SKIPPABLE_SCRIPT_PREFLIGHT_FS_ERROR_CODES.has(errorCode));
+}
 
 function resolvePreflightRelativePath(params: { rootDir: string; absPath: string }): string | null {
   const root = path.resolve(params.rootDir);
@@ -950,6 +966,17 @@ async function validateScriptFileForShellBleed(params: {
     if (!relativePath) {
       continue;
     }
+    try {
+      const stat = await fs.lstat(absPath);
+      if (!stat.isFile()) {
+        continue;
+      }
+    } catch (error) {
+      if (shouldSkipScriptPreflightPathError(error)) {
+        continue;
+      }
+      throw error;
+    }
 
     // Best-effort: only validate files that safely resolve within workdir and
     // are reasonably small. This keeps preflight checks on a pinned file
@@ -963,16 +990,9 @@ async function validateScriptFileForShellBleed(params: {
       });
       content = safeRead.buffer.toString("utf-8");
     } catch (error) {
-      if (error instanceof SafeOpenError) {
-        // Preflight validation is best-effort: skip any safe-open failure and
+      if (shouldSkipScriptPreflightPathError(error)) {
+        // Preflight validation is best-effort: skip path/read failures and
         // continue to execute the command normally.
-        continue;
-      }
-      const errorCode =
-        typeof error === "object" && error !== null && "code" in error
-          ? String((error as { code?: unknown }).code)
-          : undefined;
-      if (errorCode && SKIPPABLE_SCRIPT_PREFLIGHT_FS_ERROR_CODES.has(errorCode)) {
         continue;
       }
       throw error;
