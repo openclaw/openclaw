@@ -209,6 +209,7 @@ export const memoryConfigSchema = {
     },
     storageOptions: {
       label: "Storage Options",
+      sensitive: true,
       advanced: true,
       help: "Storage configuration options (access_key, secret_key, endpoint, etc.); supports ${ENV_VAR} values",
     },
