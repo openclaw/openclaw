@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveBrewExecutable } from "../infra/brew.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   type InstallSafetyOverrides,
   scanSkillInstallSource,
@@ -248,7 +249,7 @@ async function runCommandSafely(
     return {
       code: null,
       stdout: "",
-      stderr: err instanceof Error ? err.message : String(err),
+      stderr: formatErrorMessage(err),
     };
   }
 }
@@ -507,13 +508,14 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     argv[0] = brewExe;
   }
 
-  let env: NodeJS.ProcessEnv | undefined;
+  const envOverrides: NodeJS.ProcessEnv = {};
   if (spec.kind === "go" && brewExe) {
     const brewBin = await resolveBrewBinDir(timeoutMs, brewExe);
     if (brewBin) {
-      env = { GOBIN: brewBin };
+      envOverrides.GOBIN = brewBin;
     }
   }
+  const env = Object.keys(envOverrides).length > 0 ? envOverrides : undefined;
 
   return withWarnings(await executeInstallCommand({ argv, timeoutMs, env }), warnings);
 }

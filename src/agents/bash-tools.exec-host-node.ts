@@ -14,10 +14,8 @@ import {
   describeInterpreterInlineEval,
   detectInterpreterInlineEvalArgv,
 } from "../infra/exec-inline-eval.js";
-import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import { parsePreparedSystemRunPayload } from "../infra/system-run-approval-context.js";
-import { logInfo } from "../logger.js";
 import {
   buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
@@ -193,13 +191,6 @@ export async function executeNodeHostCommand(
       // Fall back to requiring approval if node approvals cannot be fetched.
     }
   }
-  const obfuscation = detectCommandObfuscation(params.command);
-  if (obfuscation.detected) {
-    logInfo(
-      `exec: obfuscation detected (node=${nodeQuery ?? "default"}): ${obfuscation.reasons.join(", ")}`,
-    );
-    params.warnings.push(`⚠️ Obfuscated command detected: ${obfuscation.reasons.join("; ")}`);
-  }
   const requiresAsk =
     requiresExecApproval({
       ask: hostAsk,
@@ -207,9 +198,7 @@ export async function executeNodeHostCommand(
       analysisOk,
       allowlistSatisfied,
       durableApprovalSatisfied,
-    }) ||
-    inlineEvalHit !== null ||
-    obfuscation.detected;
+    }) || inlineEvalHit !== null;
   const invokeTimeoutMs = Math.max(
     10_000,
     (typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec) * 1000 +
@@ -227,6 +216,7 @@ export async function executeNodeHostCommand(
       params: {
         command: runArgv,
         rawCommand: runRawCommand,
+        systemRunPlan: prepared.plan,
         cwd: runCwd,
         env: nodeEnv,
         timeoutMs: typeof params.timeoutSec === "number" ? params.timeoutSec * 1000 : undefined,
@@ -290,12 +280,18 @@ export async function executeNodeHostCommand(
         preResolvedDecision,
       })
     ) {
-      const { approvedByAsk, deniedReason } = execHostShared.createExecApprovalDecisionState({
-        decision: preResolvedDecision,
-        askFallback,
-        obfuscationDetected: obfuscation.detected,
+      const { baseDecision, approvedByAsk, deniedReason } =
+        execHostShared.createExecApprovalDecisionState({
+          decision: preResolvedDecision,
+          askFallback,
+        });
+      const strictInlineEvalDecision = execHostShared.enforceStrictInlineEvalApprovalBoundary({
+        baseDecision,
+        approvedByAsk,
+        deniedReason,
+        requiresInlineEvalApproval: inlineEvalHit !== null,
       });
-      if (deniedReason || !approvedByAsk) {
+      if (strictInlineEvalDecision.deniedReason || !strictInlineEvalDecision.approvedByAsk) {
         throw new Error(
           execHostShared.buildHeadlessExecApprovalDeniedMessage({
             trigger: params.trigger,
@@ -306,8 +302,8 @@ export async function executeNodeHostCommand(
           }),
         );
       }
-      inlineApprovedByAsk = approvedByAsk;
-      inlineApprovalDecision = approvedByAsk ? "allow-once" : null;
+      inlineApprovedByAsk = strictInlineEvalDecision.approvedByAsk;
+      inlineApprovalDecision = strictInlineEvalDecision.approvedByAsk ? "allow-once" : null;
       inlineApprovalId = approvalId;
     } else {
       const followupTarget = execHostShared.buildExecApprovalFollowupTarget({
@@ -340,7 +336,6 @@ export async function executeNodeHostCommand(
         } = execHostShared.createExecApprovalDecisionState({
           decision,
           askFallback,
-          obfuscationDetected: obfuscation.detected,
         });
         let approvedByAsk = initialApprovedByAsk;
         let approvalDecision: "allow-once" | "allow-always" | null = null;
@@ -354,6 +349,16 @@ export async function executeNodeHostCommand(
         } else if (decision === "allow-always") {
           approvedByAsk = true;
           approvalDecision = "allow-always";
+        }
+
+        ({ approvedByAsk, deniedReason } = execHostShared.enforceStrictInlineEvalApprovalBoundary({
+          baseDecision,
+          approvedByAsk,
+          deniedReason,
+          requiresInlineEvalApproval: inlineEvalHit !== null,
+        }));
+        if (deniedReason) {
+          approvalDecision = null;
         }
 
         if (deniedReason) {

@@ -3,6 +3,22 @@ export {
   listTokenSourcedAccounts,
 } from "../channels/plugins/actions/shared.js";
 export { resolveReactionMessageId } from "../channels/plugins/actions/reaction-message-id.js";
+export {
+  createActionGate,
+  imageResultFromFile,
+  jsonResult,
+  parseAvailableTags,
+  readNumberParam,
+  readReactionParams,
+  readStringArrayParam,
+  readStringOrNumberParam,
+  readStringParam,
+  ToolAuthorizationError,
+} from "../agents/tools/common.js";
+export type { ActionGate } from "../agents/tools/common.js";
+export { withNormalizedTimestamp } from "../agents/date-time.js";
+export { assertMediaNotDataUrl } from "../agents/sandbox-paths.js";
+export { resolvePollMaxSelections } from "../polls.js";
 export { optionalStringEnum, stringEnum } from "../agents/schema/typebox.js";
 import { Type } from "@sinclair/typebox";
 import type { TSchema } from "@sinclair/typebox";

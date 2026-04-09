@@ -1,4 +1,5 @@
 export {
+  normalizeAtHashSlug,
   normalizeHyphenSlug,
   normalizeStringEntries,
   normalizeStringEntriesLower,

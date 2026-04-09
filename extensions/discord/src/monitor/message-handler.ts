@@ -4,7 +4,7 @@ import {
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
-import { createDedupeCache } from "openclaw/plugin-sdk/core";
+import { createDedupeCache } from "openclaw/plugin-sdk/infra-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { buildDiscordInboundJob } from "./inbound-job.js";
 import {
@@ -12,6 +12,7 @@ import {
   type DiscordInboundWorkerTestingHooks,
 } from "./inbound-worker.js";
 import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
+import { applyImplicitReplyBatchGate } from "./message-handler.batch-gate.js";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
 import {
@@ -144,6 +145,7 @@ export function createDiscordMessageHandler(
         if (!ctx) {
           return;
         }
+        applyImplicitReplyBatchGate(ctx, params.replyToMode, false);
         inboundWorker.enqueue(buildDiscordInboundJob(ctx));
         return;
       }
@@ -176,6 +178,7 @@ export function createDiscordMessageHandler(
       if (!ctx) {
         return;
       }
+      applyImplicitReplyBatchGate(ctx, params.replyToMode, true);
       if (entries.length > 1) {
         const ids = entries.map((entry) => entry.data.message?.id).filter(Boolean) as string[];
         if (ids.length > 0) {

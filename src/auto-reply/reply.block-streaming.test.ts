@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { withFastReplyConfig } from "./reply/get-reply-fast-path.js";
+import { loadGetReplyModuleForTest } from "./reply/get-reply.test-loader.js";
 import { createMockTypingController } from "./reply/reply.test-helpers.js";
 import type { MsgContext } from "./templating.js";
 
@@ -10,8 +12,10 @@ const mocks = vi.hoisted(() => ({
   runPreparedReply: vi.fn(),
 }));
 
-vi.mock("../agents/agent-scope.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/agent-scope.js")>();
+vi.mock("../agents/agent-scope.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/agent-scope.js")>(
+    "../agents/agent-scope.js",
+  );
   return {
     ...actual,
     resolveAgentDir: vi.fn(() => "/tmp/agent"),
@@ -20,8 +24,10 @@ vi.mock("../agents/agent-scope.js", async (importOriginal) => {
     resolveAgentSkillsFilter: vi.fn(() => undefined),
   };
 });
-vi.mock("../agents/model-selection.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/model-selection.js")>();
+vi.mock("../agents/model-selection.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/model-selection.js")>(
+    "../agents/model-selection.js",
+  );
   return {
     ...actual,
     resolveModelRefFromString: vi.fn(() => null),
@@ -49,7 +55,7 @@ vi.mock("./command-auth.js", () => ({
 vi.mock("./reply/directive-handling.defaults.js", () => ({
   resolveDefaultModel: vi.fn(() => ({
     defaultProvider: "anthropic",
-    defaultModel: "claude-opus-4-5",
+    defaultModel: "claude-opus-4-6",
     aliasIndex: new Map(),
   })),
 }));
@@ -82,8 +88,7 @@ vi.mock("./reply/get-reply-run.js", () => ({
 let getReplyFromConfig: typeof import("./reply/get-reply.js").getReplyFromConfig;
 
 async function loadFreshGetReplyModuleForTest() {
-  vi.resetModules();
-  ({ getReplyFromConfig } = await import("./reply/get-reply.js"));
+  ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
 }
 
 function createTelegramMessage(messageSid: string): MsgContext {
@@ -99,16 +104,21 @@ function createTelegramMessage(messageSid: string): MsgContext {
 }
 
 function createReplyConfig(streamMode?: "block"): OpenClawConfig {
-  return {
+  return withFastReplyConfig({
     agents: {
       defaults: {
-        model: { primary: "anthropic/claude-opus-4-5" },
+        model: { primary: "anthropic/claude-opus-4-6" },
         workspace: "/tmp/workspace",
       },
     },
-    channels: { telegram: { allowFrom: ["*"], streamMode } },
+    channels: {
+      telegram: {
+        allowFrom: ["*"],
+        ...(streamMode ? { streaming: { mode: streamMode } } : {}),
+      },
+    },
     session: { store: "/tmp/sessions.json" },
-  };
+  } as OpenClawConfig);
 }
 
 function createContinueDirectivesResult() {
@@ -148,7 +158,7 @@ function createContinueDirectivesResult() {
       blockReplyChunking: undefined,
       resolvedBlockStreamingBreak: "message_end",
       provider: "anthropic",
-      model: "claude-opus-4-5",
+      model: "claude-opus-4-6",
       modelState: {
         resolveDefaultThinkingLevel: async () => undefined,
       },

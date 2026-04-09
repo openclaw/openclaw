@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 import type { ModelCatalogEntry } from "./types.ts";
 
 export type ChatModelOverride =
@@ -24,6 +25,11 @@ export function buildQualifiedChatModelValue(model: string, provider?: string | 
   const trimmedModel = model.trim();
   if (!trimmedModel) {
     return "";
+  }
+  // Preserve already-qualified model refs (provider/model) as-is.
+  // This avoids prepending an unrelated/default provider.
+  if (trimmedModel.includes("/")) {
+    return trimmedModel;
   }
   const trimmedProvider = provider?.trim();
   return trimmedProvider ? `${trimmedProvider}/${trimmedModel}` : trimmedModel;
@@ -63,8 +69,9 @@ export function resolveChatModelOverride(
   }
 
   let matchedValue = "";
+  const normalizedTrimmed = normalizeLowercaseStringOrEmpty(trimmed);
   for (const entry of catalog) {
-    if (entry.id.trim().toLowerCase() !== trimmed.toLowerCase()) {
+    if (normalizeLowercaseStringOrEmpty(entry.id) !== normalizedTrimmed) {
       continue;
     }
     const candidate = buildQualifiedChatModelValue(entry.id, entry.provider);
@@ -72,7 +79,9 @@ export function resolveChatModelOverride(
       matchedValue = candidate;
       continue;
     }
-    if (matchedValue.toLowerCase() !== candidate.toLowerCase()) {
+    if (
+      normalizeLowercaseStringOrEmpty(matchedValue) !== normalizeLowercaseStringOrEmpty(candidate)
+    ) {
       return { value: trimmed, source: "raw", reason: "ambiguous" };
     }
   }
@@ -103,6 +112,20 @@ export function resolvePreferredServerChatModel(
   const trimmedModel = model.trim();
   if (!trimmedModel) {
     return { value: "", source: "empty", reason: "empty" };
+  }
+  const trimmedProvider = provider?.trim();
+  if (trimmedProvider) {
+    const providerMatch = catalog.find(
+      (entry) =>
+        entry.provider?.trim().toLowerCase() === trimmedProvider.toLowerCase() &&
+        entry.id.trim().toLowerCase() === trimmedModel.toLowerCase(),
+    );
+    if (providerMatch) {
+      return {
+        value: buildChatModelOption(providerMatch).value,
+        source: "server",
+      };
+    }
   }
 
   const overrideResolution = resolveChatModelOverride(
@@ -142,8 +165,15 @@ export function formatChatModelDisplay(value: string): string {
 
 export function buildChatModelOption(entry: ModelCatalogEntry): { value: string; label: string } {
   const provider = entry.provider?.trim();
+  const value = (() => {
+    if (!provider) {
+      return entry.id;
+    }
+    const providerPrefix = `${provider.toLowerCase()}/`;
+    return entry.id.toLowerCase().startsWith(providerPrefix) ? entry.id : `${provider}/${entry.id}`;
+  })();
   return {
-    value: buildQualifiedChatModelValue(entry.id, provider),
+    value,
     label: provider ? `${entry.id} · ${provider}` : entry.id,
   };
 }

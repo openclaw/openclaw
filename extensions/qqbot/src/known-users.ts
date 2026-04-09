@@ -53,7 +53,7 @@ function loadUsersFromFile(): Map<string, KnownUser> {
       debugLog(`[known-users] Loaded ${usersCache.size} users`);
     }
   } catch (err) {
-    debugError(`[known-users] Failed to load users: ${err}`);
+    debugError(`[known-users] Failed to load users: ${String(err)}`);
     usersCache = new Map();
   }
 
@@ -62,7 +62,9 @@ function loadUsersFromFile(): Map<string, KnownUser> {
 
 /** Schedule a throttled write to disk. */
 function saveUsersToFile(): void {
-  if (!isDirty) return;
+  if (!isDirty) {
+    return;
+  }
 
   if (saveTimer) {
     return;
@@ -76,7 +78,9 @@ function saveUsersToFile(): void {
 
 /** Perform the actual write to disk. */
 function doSaveUsersToFile(): void {
-  if (!usersCache || !isDirty) return;
+  if (!usersCache || !isDirty) {
+    return;
+  }
 
   try {
     ensureDir();
@@ -84,7 +88,7 @@ function doSaveUsersToFile(): void {
     fs.writeFileSync(KNOWN_USERS_FILE, JSON.stringify(users, null, 2), "utf-8");
     isDirty = false;
   } catch (err) {
-    debugError(`[known-users] Failed to save users: ${err}`);
+    debugError(`[known-users] Failed to save users: ${String(err)}`);
   }
 }
 

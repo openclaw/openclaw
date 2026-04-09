@@ -7,7 +7,7 @@ import ai.openclaw.app.gateway.GatewayClientInfo
 import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayTlsParams
-import ai.openclaw.app.gateway.isLoopbackGatewayHost
+import ai.openclaw.app.gateway.isPrivateLanGatewayHost
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.VoiceWakeMode
 
@@ -34,10 +34,10 @@ class ConnectionManager(
       val stableId = endpoint.stableId
       val stored = storedFingerprint?.trim().takeIf { !it.isNullOrEmpty() }
       val isManual = stableId.startsWith("manual|")
-      val isLoopback = isLoopbackGatewayHost(endpoint.host)
+      val cleartextAllowedHost = isPrivateLanGatewayHost(endpoint.host)
 
       if (isManual) {
-        if (!manualTlsEnabled && isLoopback) return null
+        if (!manualTlsEnabled && cleartextAllowedHost) return null
         if (!stored.isNullOrBlank()) {
           return GatewayTlsParams(
             required = true,
@@ -75,7 +75,7 @@ class ConnectionManager(
         )
       }
 
-      if (!isLoopback) {
+      if (!cleartextAllowedHost) {
         return GatewayTlsParams(
           required = true,
           expectedFingerprint = null,

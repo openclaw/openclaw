@@ -1,6 +1,7 @@
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import {
   appendCdpPath,
+  assertCdpEndpointAllowed,
   fetchJson,
   isLoopbackHost,
   isWebSocketUrl,
@@ -118,13 +119,13 @@ export async function captureScreenshot(opts: {
       format === "jpeg" ? Math.max(0, Math.min(100, Math.round(opts.quality ?? 85))) : undefined;
 
     try {
-      // fromSurface: false avoids a Chromium compositor bug where cross-origin
-      // image textures are lost when fromSurface: true + captureBeyondViewport: true
-      // extends the capture surface (see https://issues.chromium.org/40760789).
+      // Chromium bug 40760789 (cross-origin textures missing with
+      // fromSurface: true + captureBeyondViewport: true) was fixed around
+      // Chrome 130. Chrome 146+ managed/headful browsers now reject
+      // fromSurface: false, so we omit it and keep captureBeyondViewport: true.
       const result = (await send("Page.captureScreenshot", {
         format,
         ...(quality !== undefined ? { quality } : {}),
-        fromSurface: false,
         captureBeyondViewport: true,
       })) as { data?: string };
 
@@ -182,9 +183,11 @@ export async function createTargetViaCdp(opts: {
   let wsUrl: string;
   if (isWebSocketUrl(opts.cdpUrl)) {
     // Direct WebSocket URL — skip /json/version discovery.
+    await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
     wsUrl = opts.cdpUrl;
   } else {
     // Standard HTTP(S) CDP endpoint — discover WebSocket URL via /json/version.
+    await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
     const version = await fetchJson<{ webSocketDebuggerUrl?: string }>(
       appendCdpPath(opts.cdpUrl, "/json/version"),
       1500,
@@ -194,6 +197,7 @@ export async function createTargetViaCdp(opts: {
     if (!wsUrl) {
       throw new Error("CDP /json/version missing webSocketDebuggerUrl");
     }
+    await assertCdpEndpointAllowed(wsUrl, opts.ssrfPolicy);
   }
 
   return await withCdpSocket(wsUrl, async (send) => {
@@ -376,6 +380,7 @@ export async function snapshotDom(opts: {
   const expression = `(() => {
     const maxNodes = ${JSON.stringify(limit)};
     const maxText = ${JSON.stringify(maxTextChars)};
+    const lower = (value) => String(value || "").toLocaleLowerCase();
     const nodes = [];
     const root = document.documentElement;
     if (!root) return { nodes };
@@ -385,7 +390,7 @@ export async function snapshotDom(opts: {
       const el = cur.el;
       if (!el || el.nodeType !== 1) continue;
       const ref = "n" + String(nodes.length + 1);
-      const tag = (el.tagName || "").toLowerCase();
+      const tag = lower(el.tagName);
       const id = el.id ? String(el.id) : undefined;
       const className = el.className ? String(el.className).slice(0, 300) : undefined;
       const role = el.getAttribute && el.getAttribute("role") ? String(el.getAttribute("role")) : undefined;
@@ -506,9 +511,10 @@ export async function querySelector(opts: {
     const lim = ${JSON.stringify(limit)};
     const maxText = ${JSON.stringify(maxText)};
     const maxHtml = ${JSON.stringify(maxHtml)};
+    const lower = (value) => String(value || "").toLocaleLowerCase();
     const els = Array.from(document.querySelectorAll(sel)).slice(0, lim);
     return els.map((el, i) => {
-      const tag = (el.tagName || "").toLowerCase();
+      const tag = lower(el.tagName);
       const id = el.id ? String(el.id) : undefined;
       const className = el.className ? String(el.className).slice(0, 300) : undefined;
       let text = "";

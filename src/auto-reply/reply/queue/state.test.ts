@@ -18,7 +18,7 @@ function makeRun(): FollowupRun["run"] {
     workspaceDir: "/tmp/workspace",
     config: {} as FollowupRun["run"]["config"],
     provider: "anthropic",
-    model: "claude-opus-4-5",
+    model: "claude-opus-4-6",
     authProfileId: "profile-a",
     authProfileIdSource: "user",
     timeoutMs: 30_000,

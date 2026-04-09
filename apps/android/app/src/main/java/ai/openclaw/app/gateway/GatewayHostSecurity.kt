@@ -18,9 +18,7 @@ internal fun isLoopbackGatewayHost(
     host = host.dropLast(1)
   }
   val zoneIndex = host.indexOf('%')
-  if (zoneIndex >= 0) {
-    host = host.substring(0, zoneIndex)
-  }
+  if (zoneIndex >= 0) return false
   if (host.isEmpty()) return false
   if (host == "localhost") return true
   if (allowEmulatorBridgeAlias && host == "10.0.2.2") return true
@@ -44,6 +42,52 @@ internal fun isLoopbackGatewayHost(
       address[10] == 0xFF.toByte() &&
       address[11] == 0xFF.toByte()
   return isMappedIpv4 && address[12] == 127.toByte()
+}
+
+internal fun isPrivateLanGatewayHost(
+  rawHost: String?,
+  allowEmulatorBridgeAlias: Boolean = isAndroidEmulatorRuntime(),
+): Boolean {
+  var host =
+    rawHost
+      ?.trim()
+      ?.lowercase(Locale.US)
+      ?.trim('[', ']')
+      .orEmpty()
+  if (host.endsWith(".")) {
+    host = host.dropLast(1)
+  }
+  val zoneIndex = host.indexOf('%')
+  if (zoneIndex >= 0) {
+    host = host.substring(0, zoneIndex)
+  }
+  if (host.isEmpty()) return false
+  if (isLoopbackGatewayHost(host, allowEmulatorBridgeAlias = allowEmulatorBridgeAlias)) return true
+  if (host.endsWith(".local")) return true
+  if (!host.contains('.') && !host.contains(':')) return true
+
+  parseIpv4Address(host)?.let { ipv4 ->
+    val first = ipv4[0].toInt() and 0xff
+    val second = ipv4[1].toInt() and 0xff
+    return when {
+      first == 10 -> true
+      first == 172 && second in 16..31 -> true
+      first == 192 && second == 168 -> true
+      first == 169 && second == 254 -> true
+      else -> false
+    }
+  }
+  if (!host.contains(':') || !host.all(::isIpv6LiteralChar)) return false
+
+  val address = runCatching { InetAddress.getByName(host) }.getOrNull() ?: return false
+  return when {
+    address.isLinkLocalAddress -> true
+    address.isSiteLocalAddress -> true
+    else -> {
+      val bytes = address.address
+      bytes.size == 16 && (bytes[0].toInt() and 0xfe) == 0xfc
+    }
+  }
 }
 
 private fun isAndroidEmulatorRuntime(): Boolean {

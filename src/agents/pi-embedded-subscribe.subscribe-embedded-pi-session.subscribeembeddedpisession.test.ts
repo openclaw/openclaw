@@ -154,7 +154,7 @@ describe("subscribeEmbeddedPiSession", () => {
     },
   );
 
-  it("does not let tool_execution_end delivery stall later assistant streaming", async () => {
+  it("suppresses assistant streaming while deterministic exec approval delivery is pending", async () => {
     let resolveToolResult: (() => void) | undefined;
     const onToolResult = vi.fn(
       () =>
@@ -200,13 +200,58 @@ describe("subscribeEmbeddedPiSession", () => {
 
     await vi.waitFor(() => {
       expect(onToolResult).toHaveBeenCalledTimes(1);
-      expect(onPartialReply).toHaveBeenCalledWith(
-        expect.objectContaining({ text: "After tool", delta: "After tool" }),
-      );
     });
+    expect(onPartialReply).not.toHaveBeenCalled();
 
     expect(resolveToolResult).toBeTypeOf("function");
     resolveToolResult?.();
+    await Promise.resolve();
+    expect(onPartialReply).not.toHaveBeenCalled();
+  });
+
+  it("attaches media from internal completion events even when assistant omits MEDIA lines", async () => {
+    const onBlockReply = vi.fn();
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      onBlockReply,
+      blockReplyBreak: "message_end",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          announceType: "music generation task",
+          taskLabel: "lobster boss theme",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 track.\nMEDIA:/tmp/lobster-boss.mp3",
+          mediaUrls: ["/tmp/lobster-boss.mp3"],
+          replyInstruction: "Reply normally.",
+        },
+      ],
+    });
+
+    emit({
+      type: "message_start",
+      message: { role: "assistant" },
+    });
+    emitAssistantTextDelta(emit, "Here it is.");
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Here it is." }],
+      },
+    });
+    emit({ type: "agent_end" });
+    await flushBlockReplyCallbacks();
+
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Here it is.",
+        mediaUrls: ["/tmp/lobster-boss.mp3"],
+      }),
+    );
   });
 
   it.each(THINKING_TAG_CASES)(

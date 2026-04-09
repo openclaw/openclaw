@@ -56,4 +56,41 @@ describe("config presence", () => {
       expectedConfigured: false,
     });
   });
+
+  it("detects env-only channel config", () => {
+    const stateDir = makeTempStateDir();
+    const env = {
+      OPENCLAW_STATE_DIR: stateDir,
+      MATRIX_ACCESS_TOKEN: "token",
+    } as NodeJS.ProcessEnv;
+
+    expectPotentialConfiguredChannelCase({
+      cfg: {},
+      env,
+      expectedIds: ["matrix"],
+      expectedConfigured: true,
+    });
+  });
+
+  it("detects persisted Matrix credentials without config or env", () => {
+    const stateDir = makeTempStateDir();
+    fs.mkdirSync(path.join(stateDir, "credentials", "matrix"), { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "credentials", "matrix", "credentials.json"),
+      JSON.stringify({
+        homeserver: "https://matrix.example.org",
+        userId: "@bot:example.org",
+        accessToken: "token",
+      }),
+      "utf8",
+    );
+    const env = { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv;
+
+    expectPotentialConfiguredChannelCase({
+      cfg: {},
+      env,
+      expectedIds: ["matrix"],
+      expectedConfigured: true,
+    });
+  });
 });

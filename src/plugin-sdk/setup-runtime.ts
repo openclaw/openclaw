@@ -23,15 +23,19 @@ export {
   createLegacyCompatChannelDmPolicy,
   createStandardChannelSetupStatus,
   mergeAllowFromEntries,
+  noteChannelLookupFailure,
+  noteChannelLookupSummary,
   parseSetupEntriesAllowingWildcard,
   parseMentionOrPrefixedId,
   patchChannelConfigForAccount,
+  promptResolvedAllowFrom,
   promptLegacyChannelAllowFromForAccount,
   promptParsedAllowFromForAccount,
   resolveEntriesWithOptionalToken,
   resolveSetupAccountId,
   setAccountAllowFromForChannel,
   setSetupChannelEnabled,
+  splitSetupEntries,
 } from "../channels/plugins/setup-wizard-helpers.js";
 
 export { createAllowlistSetupWizardProxy } from "../channels/plugins/setup-wizard-proxy.js";

@@ -83,39 +83,26 @@ export function buildBackupArchivePath(archiveRoot: string, sourcePath: string):
   return path.posix.join(archiveRoot, "payload", encodeAbsolutePathForBackupArchive(sourcePath));
 }
 
-function compareCandidates(left: BackupAssetCandidate, right: BackupAssetCandidate): number {
-  const depthDelta = left.canonicalPath.length - right.canonicalPath.length;
-  if (depthDelta !== 0) {
-    return depthDelta;
-  }
-  const priorityDelta = backupAssetPriority(left.kind) - backupAssetPriority(right.kind);
-  if (priorityDelta !== 0) {
-    return priorityDelta;
-  }
-  return left.canonicalPath.localeCompare(right.canonicalPath);
-}
-
-async function canonicalizeExistingPath(targetPath: string): Promise<string> {
-  try {
-    return await fs.realpath(targetPath);
-  } catch {
-    return path.resolve(targetPath);
-  }
-}
-
-export async function resolveBackupPlanFromDisk(
-  params: {
-    includeWorkspace?: boolean;
-    onlyConfig?: boolean;
-    nowMs?: number;
-  } = {},
-): Promise<BackupPlan> {
+export async function resolveBackupPlanFromPaths(params: {
+  stateDir: string;
+  configPath: string;
+  oauthDir: string;
+  workspaceDirs?: string[];
+  includeWorkspace?: boolean;
+  onlyConfig?: boolean;
+  configInsideState?: boolean;
+  oauthInsideState?: boolean;
+  nowMs?: number;
+}): Promise<BackupPlan> {
   const includeWorkspace = params.includeWorkspace ?? true;
   const onlyConfig = params.onlyConfig ?? false;
-  const stateDir = resolveStateDir();
-  const configPath = resolveConfigPath();
-  const oauthDir = resolveOAuthDir();
+  const stateDir = params.stateDir;
+  const configPath = params.configPath;
+  const oauthDir = params.oauthDir;
   const archiveRoot = buildBackupArchiveRoot(params.nowMs);
+  const workspaceDirs = includeWorkspace ? (params.workspaceDirs ?? []) : [];
+  const configInsideState = params.configInsideState ?? false;
+  const oauthInsideState = params.oauthInsideState ?? false;
 
   if (onlyConfig) {
     const resolvedConfigPath = path.resolve(configPath);
@@ -155,34 +142,18 @@ export async function resolveBackupPlanFromDisk(
     };
   }
 
-  const configSnapshot = await readConfigFileSnapshot();
-  if (includeWorkspace && configSnapshot.exists && !configSnapshot.valid) {
-    throw new Error(
-      `Config invalid at ${shortenHomePath(configSnapshot.path)}. OpenClaw cannot reliably discover custom workspaces for backup. Fix the config or rerun with --no-include-workspace for a partial backup.`,
-    );
-  }
-  const cleanupPlan = buildCleanupPlan({
-    cfg: configSnapshot.config,
-    stateDir,
-    configPath,
-    oauthDir,
-  });
-  const workspaceDirs = includeWorkspace ? cleanupPlan.workspaceDirs : [];
-
   const rawCandidates: Array<Pick<BackupAssetCandidate, "kind" | "sourcePath">> = [
     { kind: "state", sourcePath: path.resolve(stateDir) },
-    ...(cleanupPlan.configInsideState
+    ...(configInsideState
       ? []
       : [{ kind: "config" as const, sourcePath: path.resolve(configPath) }]),
-    ...(cleanupPlan.oauthInsideState
+    ...(oauthInsideState
       ? []
       : [{ kind: "credentials" as const, sourcePath: path.resolve(oauthDir) }]),
-    ...(includeWorkspace
-      ? workspaceDirs.map((workspaceDir) => ({
-          kind: "workspace" as const,
-          sourcePath: path.resolve(workspaceDir),
-        }))
-      : []),
+    ...workspaceDirs.map((workspaceDir) => ({
+      kind: "workspace" as const,
+      sourcePath: path.resolve(workspaceDir),
+    })),
   ];
 
   const candidates: BackupAssetCandidate[] = await Promise.all(
@@ -251,4 +222,62 @@ export async function resolveBackupPlanFromDisk(
     included,
     skipped,
   };
+}
+
+function compareCandidates(left: BackupAssetCandidate, right: BackupAssetCandidate): number {
+  const depthDelta = left.canonicalPath.length - right.canonicalPath.length;
+  if (depthDelta !== 0) {
+    return depthDelta;
+  }
+  const priorityDelta = backupAssetPriority(left.kind) - backupAssetPriority(right.kind);
+  if (priorityDelta !== 0) {
+    return priorityDelta;
+  }
+  return left.canonicalPath.localeCompare(right.canonicalPath);
+}
+
+async function canonicalizeExistingPath(targetPath: string): Promise<string> {
+  try {
+    return await fs.realpath(targetPath);
+  } catch {
+    return path.resolve(targetPath);
+  }
+}
+
+export async function resolveBackupPlanFromDisk(
+  params: {
+    includeWorkspace?: boolean;
+    onlyConfig?: boolean;
+    nowMs?: number;
+  } = {},
+): Promise<BackupPlan> {
+  const includeWorkspace = params.includeWorkspace ?? true;
+  const onlyConfig = params.onlyConfig ?? false;
+  const stateDir = resolveStateDir();
+  const configPath = resolveConfigPath();
+  const oauthDir = resolveOAuthDir();
+
+  const configSnapshot = await readConfigFileSnapshot();
+  if (includeWorkspace && configSnapshot.exists && !configSnapshot.valid) {
+    throw new Error(
+      `Config invalid at ${shortenHomePath(configSnapshot.path)}. OpenClaw cannot reliably discover custom workspaces for backup. Fix the config or rerun with --no-include-workspace for a partial backup.`,
+    );
+  }
+  const cleanupPlan = buildCleanupPlan({
+    cfg: configSnapshot.config,
+    stateDir,
+    configPath,
+    oauthDir,
+  });
+  return await resolveBackupPlanFromPaths({
+    stateDir,
+    configPath,
+    oauthDir,
+    workspaceDirs: includeWorkspace ? cleanupPlan.workspaceDirs : [],
+    includeWorkspace,
+    onlyConfig,
+    configInsideState: cleanupPlan.configInsideState,
+    oauthInsideState: cleanupPlan.oauthInsideState,
+    nowMs: params.nowMs,
+  });
 }

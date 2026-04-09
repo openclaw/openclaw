@@ -1,12 +1,9 @@
-import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
-import * as setupRuntime from "openclaw/plugin-sdk/setup";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as clientModule from "./client.js";
+import { describe, expect, it } from "vitest";
 import {
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
 } from "./group-policy.js";
-import { probeIMessage } from "./probe.js";
+import { imessageDmPolicy } from "./setup-core.js";
 import { parseIMessageAllowFromEntries } from "./setup-surface.js";
 import {
   formatIMessageChatTarget,
@@ -16,16 +13,6 @@ import {
   normalizeIMessageHandle,
   parseIMessageTarget,
 } from "./targets.js";
-
-const spawnMock = vi.hoisted(() => vi.fn());
-
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  return {
-    ...actual,
-    spawn: (...args: unknown[]) => spawnMock(...args),
-  };
-});
 
 describe("imessage targets", () => {
   it("parses chat_id targets", () => {
@@ -112,21 +99,6 @@ describe("imessage targets", () => {
   });
 });
 
-describe("createIMessageRpcClient", () => {
-  beforeEach(() => {
-    spawnMock.mockClear();
-    vi.stubEnv("VITEST", "true");
-  });
-
-  it("refuses to spawn imsg rpc in test environments", async () => {
-    const { createIMessageRpcClient } = await import("./client.js");
-    await expect(createIMessageRpcClient()).rejects.toThrow(
-      /Refusing to start imsg rpc in test environment/i,
-    );
-    expect(spawnMock).not.toHaveBeenCalled();
-  });
-});
-
 describe("imessage group policy", () => {
   it("uses generic channel group policy helpers", () => {
     const cfg = {
@@ -144,7 +116,6 @@ describe("imessage group policy", () => {
           },
         },
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
     expect(resolveIMessageGroupRequireMention({ cfg, groupId: "chat:family" })).toBe(false);
@@ -178,33 +149,87 @@ describe("parseIMessageAllowFromEntries", () => {
       error: "Invalid chat_identifier entry",
     });
   });
-});
 
-describe("probeIMessage", () => {
-  beforeEach(() => {
-    vi.restoreAllMocks();
-    vi.spyOn(setupRuntime, "detectBinary").mockResolvedValue(true);
-    vi.spyOn(processRuntime, "runCommandWithTimeout").mockResolvedValue({
-      stdout: "",
-      stderr: 'unknown command "rpc" for "imsg"',
-      code: 1,
-      signal: null,
-      killed: false,
-      termination: "exit",
+  it("reads the named-account DM policy instead of the channel root", () => {
+    expect(
+      imessageDmPolicy.getCurrent(
+        {
+          channels: {
+            imessage: {
+              dmPolicy: "disabled",
+              accounts: {
+                work: {
+                  cliPath: "imsg",
+                  dmPolicy: "allowlist",
+                },
+              },
+            },
+          },
+        },
+        "work",
+      ),
+    ).toBe("allowlist");
+  });
+
+  it("reports account-scoped config keys for named accounts", () => {
+    expect(imessageDmPolicy.resolveConfigKeys?.({ channels: { imessage: {} } }, "work")).toEqual({
+      policyKey: "channels.imessage.accounts.work.dmPolicy",
+      allowFromKey: "channels.imessage.accounts.work.allowFrom",
     });
   });
 
-  it("marks unknown rpc subcommand as fatal", async () => {
-    const createIMessageRpcClientMock = vi
-      .spyOn(clientModule, "createIMessageRpcClient")
-      .mockResolvedValue({
-        request: vi.fn(),
-        stop: vi.fn(),
-      } as unknown as Awaited<ReturnType<typeof clientModule.createIMessageRpcClient>>);
-    const result = await probeIMessage(1000, { cliPath: "imsg-test-rpc" });
-    expect(result.ok).toBe(false);
-    expect(result.fatal).toBe(true);
-    expect(result.error).toMatch(/rpc/i);
-    expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
+  it('writes open policy state to the named account and stores inherited allowFrom with "*"', () => {
+    const next = imessageDmPolicy.setPolicy(
+      {
+        channels: {
+          imessage: {
+            allowFrom: ["+15555550123"],
+            accounts: {
+              work: {
+                cliPath: "imsg",
+              },
+            },
+          },
+        },
+      },
+      "open",
+      "work",
+    );
+
+    expect(next.channels?.imessage?.dmPolicy).toBeUndefined();
+    expect(next.channels?.imessage?.allowFrom).toEqual(["+15555550123"]);
+    expect(next.channels?.imessage?.accounts?.work?.dmPolicy).toBe("open");
+    expect(next.channels?.imessage?.accounts?.work?.allowFrom).toEqual(["+15555550123", "*"]);
+  });
+
+  it("uses the configured default account for omitted-account DM policy reads, keys, and writes", () => {
+    const cfg = {
+      channels: {
+        imessage: {
+          allowFrom: ["+15555550123"],
+          defaultAccount: "work",
+          accounts: {
+            work: {
+              cliPath: "imsg",
+              dmPolicy: "allowlist" as const,
+              allowFrom: ["chat_id:123"],
+            },
+          },
+        },
+      },
+    };
+
+    expect(imessageDmPolicy.getCurrent(cfg)).toBe("allowlist");
+    expect(imessageDmPolicy.resolveConfigKeys?.(cfg)).toEqual({
+      policyKey: "channels.imessage.accounts.work.dmPolicy",
+      allowFromKey: "channels.imessage.accounts.work.allowFrom",
+    });
+
+    const next = imessageDmPolicy.setPolicy(cfg, "open");
+
+    expect(next.channels?.imessage?.dmPolicy).toBeUndefined();
+    expect(next.channels?.imessage?.allowFrom).toEqual(["+15555550123"]);
+    expect(next.channels?.imessage?.accounts?.work?.dmPolicy).toBe("open");
+    expect(next.channels?.imessage?.accounts?.work?.allowFrom).toEqual(["chat_id:123", "*"]);
   });
 });

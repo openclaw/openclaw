@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.js";
 import { isValidEnvSecretRefId, type SecretRef } from "../config/types.secrets.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { encodeJsonPointerToken } from "../secrets/json-pointer.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import {
@@ -8,6 +9,10 @@ import {
   isValidFileSecretRefId,
   resolveDefaultSecretProviderAlias,
 } from "../secrets/ref-contract.js";
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "../shared/string-coerce.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
 let secretResolvePromise: Promise<typeof import("../secrets/resolve.js")> | undefined;
@@ -32,13 +37,6 @@ export type SecretRefSetupPromptCopy = {
   providerValidatedMessage?: (provider: string, id: string, source: "file" | "exec") => string;
 };
 
-function formatErrorMessage(error: unknown): string {
-  if (error instanceof Error && typeof error.message === "string" && error.message.trim()) {
-    return error.message;
-  }
-  return String(error);
-}
-
 export function extractEnvVarFromSourceLabel(source: string): string | undefined {
   const match = ENV_SOURCE_LABEL_RE.exec(source.trim());
   return match?.[1];
@@ -46,7 +44,7 @@ export function extractEnvVarFromSourceLabel(source: string): string | undefined
 
 function resolveDefaultProviderEnvVar(provider: string): string | undefined {
   const envVars = getProviderEnvVars(provider);
-  return envVars?.find((candidate) => candidate.trim().length > 0);
+  return envVars?.find((candidate) => normalizeOptionalString(candidate) !== undefined);
 }
 
 function resolveDefaultFilePointerId(provider: string): string {
@@ -66,7 +64,7 @@ export function resolveRefFallbackInput(params: {
     );
   }
   const env = params.env ?? process.env;
-  const value = env[fallbackEnvVar]?.trim();
+  const value = normalizeOptionalString(env[fallbackEnvVar]);
   if (!value) {
     throw new Error(
       `Environment variable "${fallbackEnvVar}" is required for --secret-input-mode ref in non-interactive setup.`,
@@ -105,7 +103,7 @@ async function promptEnvSecretRefForSetup(params: {
           'Use an env var name like "OPENAI_API_KEY" (uppercase letters, numbers, underscores).'
         );
       }
-      if (!env[candidate]?.trim()) {
+      if (!normalizeOptionalString(env[candidate])) {
         return (
           params.copy?.envVarMissingError?.(candidate) ??
           `Environment variable "${candidate}" is missing or empty in this session.`
@@ -114,7 +112,7 @@ async function promptEnvSecretRefForSetup(params: {
       return undefined;
     },
   });
-  const envCandidate = String(envVarRaw ?? "").trim();
+  const envCandidate = normalizeStringifiedOptionalString(envVarRaw) ?? "";
   const envVar =
     envCandidate && isValidEnvSecretRefId(envCandidate) ? envCandidate : params.defaultEnvVar;
   if (!envVar) {
@@ -122,7 +120,7 @@ async function promptEnvSecretRefForSetup(params: {
       `No valid environment variable name provided for provider "${params.provider}".`,
     );
   }
-  const resolvedValue = env[envVar]?.trim();
+  const resolvedValue = normalizeOptionalString(env[envVar]);
   if (!resolvedValue) {
     throw new Error(`Environment variable "${envVar}" is missing or empty in this session.`);
   }
@@ -223,7 +221,7 @@ async function promptProviderSecretRefForSetup(params: {
       return undefined;
     },
   });
-  const id = String(idRaw ?? "").trim() || idDefault;
+  const id = normalizeStringifiedOptionalString(idRaw) || idDefault;
   const ref: SecretRef = {
     source: providerEntry.source,
     provider: selectedProvider,

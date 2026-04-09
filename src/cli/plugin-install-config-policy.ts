@@ -1,15 +1,20 @@
+import fs from "node:fs";
 import path from "node:path";
 import type { Command } from "commander";
+import { findBundledPluginSource } from "../plugins/bundled-sources.js";
+import { loadPluginManifest } from "../plugins/manifest.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveFileNpmSpecToLocalPath } from "./plugins-command-helpers.js";
 
-export type PluginInstallInvalidConfigPolicy = "deny" | "recover-matrix-only";
+export type PluginInstallInvalidConfigPolicy = "deny" | "allow-bundled-recovery";
 
 export type PluginInstallRequestContext = {
   rawSpec: string;
   normalizedSpec: string;
   resolvedPath?: string;
   marketplace?: string;
+  bundledPluginId?: string;
+  allowInvalidConfigRecovery?: boolean;
 };
 
 type PluginInstallRequestResolution =
@@ -20,21 +25,71 @@ function isPluginInstallCommand(commandPath: string[]): boolean {
   return commandPath[0] === "plugins" && commandPath[1] === "install";
 }
 
-function isExplicitMatrixInstallRequest(request: PluginInstallRequestContext): boolean {
+function readBundledInstallRecoveryMetadata(rootDir: string): {
+  pluginId?: string;
+  allowInvalidConfigRecovery: boolean;
+} {
+  const packageJsonPath = path.join(rootDir, "package.json");
+  if (!fs.existsSync(packageJsonPath)) {
+    return { allowInvalidConfigRecovery: false };
+  }
+  const manifest = loadPluginManifest(rootDir, false);
+  const pluginId = manifest.ok ? manifest.manifest.id : undefined;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+      openclaw?: {
+        install?: {
+          allowInvalidConfigRecovery?: boolean;
+        };
+      };
+    };
+    return {
+      ...(pluginId ? { pluginId } : {}),
+      allowInvalidConfigRecovery: parsed.openclaw?.install?.allowInvalidConfigRecovery === true,
+    };
+  } catch {
+    return {
+      ...(pluginId ? { pluginId } : {}),
+      allowInvalidConfigRecovery: false,
+    };
+  }
+}
+
+function resolveBundledInstallRecoveryMetadata(
+  request: Pick<
+    PluginInstallRequestContext,
+    "rawSpec" | "normalizedSpec" | "resolvedPath" | "marketplace"
+  >,
+): {
+  pluginId?: string;
+  allowInvalidConfigRecovery?: boolean;
+} {
   if (request.marketplace) {
-    return false;
+    return {};
   }
-  const candidates = [request.rawSpec.trim(), request.normalizedSpec.trim()];
-  if (candidates.includes("@openclaw/matrix")) {
-    return true;
+  if (request.resolvedPath && fs.existsSync(path.join(request.resolvedPath, "package.json"))) {
+    const direct = readBundledInstallRecoveryMetadata(request.resolvedPath);
+    if (direct.pluginId || direct.allowInvalidConfigRecovery) {
+      return direct;
+    }
   }
-  if (!request.resolvedPath) {
-    return false;
+  for (const value of [request.rawSpec.trim(), request.normalizedSpec.trim()]) {
+    if (!value) {
+      continue;
+    }
+    const bundled = findBundledPluginSource({
+      lookup: { kind: "npmSpec", value },
+    });
+    if (!bundled) {
+      continue;
+    }
+    const recovered = readBundledInstallRecoveryMetadata(bundled.localPath);
+    return {
+      pluginId: recovered.pluginId ?? bundled.pluginId,
+      allowInvalidConfigRecovery: recovered.allowInvalidConfigRecovery,
+    };
   }
-  return (
-    path.basename(request.resolvedPath) === "matrix" &&
-    path.basename(path.dirname(request.resolvedPath)) === "extensions"
-  );
+  return {};
 }
 
 function resolvePluginInstallArgvTokens(commandPath: string[], argv: string[]): string[] {
@@ -103,12 +158,22 @@ export function resolvePluginInstallRequestContext(params: {
     };
   }
   const normalizedSpec = fileSpec && fileSpec.ok ? fileSpec.path : params.rawSpec;
+  const recovered = resolveBundledInstallRecoveryMetadata({
+    rawSpec: params.rawSpec,
+    normalizedSpec,
+    resolvedPath: resolveUserPath(normalizedSpec),
+    marketplace: params.marketplace,
+  });
   return {
     ok: true,
     request: {
       rawSpec: params.rawSpec,
       normalizedSpec,
       resolvedPath: resolveUserPath(normalizedSpec),
+      ...(recovered.pluginId ? { bundledPluginId: recovered.pluginId } : {}),
+      ...(recovered.allowInvalidConfigRecovery !== undefined
+        ? { allowInvalidConfigRecovery: recovered.allowInvalidConfigRecovery }
+        : {}),
     },
   };
 }
@@ -144,5 +209,5 @@ export function resolvePluginInstallInvalidConfigPolicy(
   if (!request) {
     return "deny";
   }
-  return isExplicitMatrixInstallRequest(request) ? "recover-matrix-only" : "deny";
+  return request.allowInvalidConfigRecovery === true ? "allow-bundled-recovery" : "deny";
 }

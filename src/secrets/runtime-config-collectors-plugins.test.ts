@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginOrigin } from "../plugins/types.js";
 import { collectPluginConfigAssignments } from "./runtime-config-collectors-plugins.js";
@@ -7,6 +7,14 @@ import {
   type ResolverContext,
   type SecretDefaults,
 } from "./runtime-shared.js";
+
+const { loadPluginManifestRegistryMock } = vi.hoisted(() => ({
+  loadPluginManifestRegistryMock: vi.fn(),
+}));
+
+vi.mock("../plugins/manifest-registry.js", () => ({
+  loadPluginManifestRegistry: loadPluginManifestRegistryMock,
+}));
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -28,6 +36,27 @@ function loadablePluginOrigins(entries: Array<[string, PluginOrigin]>) {
 }
 
 describe("collectPluginConfigAssignments", () => {
+  beforeEach(() => {
+    loadPluginManifestRegistryMock.mockReset();
+    loadPluginManifestRegistryMock.mockReturnValue({
+      plugins: [
+        {
+          id: "acpx",
+          origin: "bundled",
+          providers: [],
+          legacyPluginIds: [],
+          configContracts: {
+            secretInputs: {
+              bundledDefaultEnabled: false,
+              paths: [{ path: "mcpServers.*.env.*", expected: "string" }],
+            },
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+  });
+
   it("collects SecretRef assignments from active acpx MCP server env vars", () => {
     const config = asConfig({
       plugins: {
@@ -250,7 +279,7 @@ describe("collectPluginConfigAssignments", () => {
     );
   });
 
-  it("keeps bundled acpx inactive unless explicitly enabled", () => {
+  it("treats bundled acpx SecretRef surfaces as inactive until enabled", () => {
     const config = asConfig({
       plugins: {
         enabled: true,
@@ -498,5 +527,54 @@ describe("collectPluginConfigAssignments", () => {
     });
 
     expect(context.assignments).toHaveLength(0);
+  });
+
+  it("collects manifest-declared SecretRef surfaces for non-acpx plugins", () => {
+    loadPluginManifestRegistryMock.mockReturnValue({
+      plugins: [
+        {
+          id: "other",
+          origin: "config",
+          providers: [],
+          legacyPluginIds: [],
+          configContracts: {
+            secretInputs: {
+              paths: [{ path: "service.tokens.*", expected: "string" }],
+            },
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    const config = asConfig({
+      plugins: {
+        entries: {
+          other: {
+            enabled: true,
+            config: {
+              service: {
+                tokens: {
+                  primary: envRef("PRIMARY_TOKEN"),
+                  secondary: "${SECONDARY_TOKEN}",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    const context = makeContext(config);
+
+    collectPluginConfigAssignments({
+      config,
+      defaults: undefined,
+      context,
+      loadablePluginOrigins: loadablePluginOrigins([["other", "config"]]),
+    });
+
+    expect(context.assignments.map((assignment) => assignment.path).toSorted()).toEqual([
+      "plugins.entries.other.config.service.tokens.primary",
+      "plugins.entries.other.config.service.tokens.secondary",
+    ]);
   });
 });

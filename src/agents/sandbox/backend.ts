@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import type { SandboxFsBridge } from "./fs-bridge.js";
 import type { SandboxRegistryEntry } from "./registry.js";
 import type { SandboxConfig, SandboxContext } from "./types.js";
@@ -99,7 +100,7 @@ type RegisteredSandboxBackend = {
 const SANDBOX_BACKEND_FACTORIES = new Map<SandboxBackendId, RegisteredSandboxBackend>();
 
 function normalizeSandboxBackendId(id: string): SandboxBackendId {
-  const normalized = id.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(id);
   if (!normalized) {
     throw new Error("Sandbox backend id must not be empty.");
   }

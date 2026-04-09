@@ -119,6 +119,11 @@ describe("registerPreActionHooks", () => {
   function buildProgram() {
     const program = new Command().name("openclaw");
     program
+      .command("agent")
+      .requiredOption("-m, --message <text>")
+      .option("--local")
+      .action(() => {});
+    program
       .command("status")
       .option("--json")
       .action(() => {});
@@ -221,6 +226,19 @@ describe("registerPreActionHooks", () => {
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "all" });
     processTitleSetSpy.mockRestore();
+  });
+
+  it("loads plugins for local agent runs", async () => {
+    await runPreAction({
+      parseArgv: ["agent"],
+      processArgv: ["node", "openclaw", "agent", "--local", "--message", "hi"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["agent", "hi"],
+    });
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "all" });
   });
 
   it("keeps setup alias and channels add manifest-first", async () => {

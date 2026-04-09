@@ -3,20 +3,23 @@
  * Calls gateway RPC methods and returns formatted results.
  */
 
-import {
-  formatThinkingLevels,
-  normalizeThinkLevel,
-  normalizeVerboseLevel,
-  resolveThinkingDefaultForModel,
-} from "../../../../src/auto-reply/thinking.shared.js";
+import { createChatModelOverride, resolvePreferredServerChatModel } from "../chat-model-ref.ts";
+import type { GatewayBrowserClient } from "../gateway.ts";
 import {
   DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
   isSubagentSessionKey,
   parseAgentSessionKey,
-} from "../../../../src/routing/session-key.js";
-import { createChatModelOverride, resolvePreferredServerChatModel } from "../chat-model-ref.ts";
-import type { GatewayBrowserClient } from "../gateway.ts";
+} from "../session-key.ts";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../string-coerce.ts";
+import {
+  formatThinkingLevels,
+  normalizeThinkLevel,
+  resolveThinkingDefaultForModel,
+} from "../thinking.ts";
 import type {
   AgentsListResult,
   ChatModelOverride,
@@ -56,6 +59,24 @@ export type SlashCommandContext = {
   modelCatalog?: ModelCatalogEntry[];
   sessionsResult?: SessionsListResult | null;
 };
+
+function normalizeVerboseLevel(raw?: string | null): "off" | "on" | "full" | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const key = normalizeLowercaseStringOrEmpty(raw);
+  if (["off", "false", "no", "0"].includes(key)) {
+    return "off";
+  }
+  if (["full", "all", "everything"].includes(key)) {
+    return "full";
+  }
+  if (["on", "minimal", "true", "yes", "1"].includes(key)) {
+    return "on";
+  }
+  return undefined;
+}
+
 export async function executeSlashCommand(
   client: GatewayBrowserClient,
   sessionKey: string,
@@ -129,8 +150,24 @@ async function executeCompact(
   sessionKey: string,
 ): Promise<SlashCommandResult> {
   try {
-    await client.request("sessions.compact", { key: sessionKey });
-    return { content: "Context compacted successfully.", action: "refresh" };
+    const result = await client.request<{
+      compacted?: boolean;
+      reason?: string;
+      result?: { tokensBefore?: number; tokensAfter?: number };
+    }>("sessions.compact", { key: sessionKey });
+    if (result?.compacted) {
+      const before = result.result?.tokensBefore;
+      const after = result.result?.tokensAfter;
+      const tokenSummary =
+        typeof before === "number" && typeof after === "number"
+          ? ` (${before.toLocaleString()} -> ${after.toLocaleString()} tokens)`
+          : "";
+      return { content: `Context compacted successfully${tokenSummary}.`, action: "refresh" };
+    }
+    if (typeof result?.reason === "string" && result.reason.trim()) {
+      return { content: `Compaction skipped: ${result.reason}`, action: "refresh" };
+    }
+    return { content: "Compaction skipped.", action: "refresh" };
   } catch (err) {
     return { content: `Compaction failed: ${String(err)}` };
   }
@@ -205,7 +242,7 @@ async function executeThink(
       return {
         content: formatDirectiveOptions(
           `Current thinking level: ${resolveCurrentThinkingLevel(session, models)}.`,
-          formatThinkingLevels(session?.modelProvider, session?.model),
+          formatThinkingLevels(session?.modelProvider),
         ),
       };
     } catch (err) {
@@ -218,7 +255,7 @@ async function executeThink(
     try {
       const session = await loadCurrentSession(client, sessionKey);
       return {
-        content: `Unrecognized thinking level "${rawLevel}". Valid levels: ${formatThinkingLevels(session?.modelProvider, session?.model)}.`,
+        content: `Unrecognized thinking level "${rawLevel}". Valid levels: ${formatThinkingLevels(session?.modelProvider)}.`,
       };
     } catch (err) {
       return { content: `Failed to validate thinking level: ${String(err)}` };
@@ -280,7 +317,7 @@ async function executeFast(
   sessionKey: string,
   args: string,
 ): Promise<SlashCommandResult> {
-  const rawMode = args.trim().toLowerCase();
+  const rawMode = normalizeLowercaseStringOrEmpty(args);
 
   if (!rawMode || rawMode === "status") {
     try {
@@ -373,6 +410,7 @@ async function executeKill(
   args: string,
 ): Promise<SlashCommandResult> {
   const target = args.trim();
+  const normalizedTarget = normalizeLowercaseStringOrEmpty(target);
   if (!target) {
     return { content: "Usage: `/kill <id|all>`" };
   }
@@ -382,7 +420,7 @@ async function executeKill(
     if (matched.length === 0) {
       return {
         content:
-          target.toLowerCase() === "all"
+          normalizedTarget === "all"
             ? "No active sub-agent sessions found."
             : `No matching sub-agent sessions found for \`${target}\`.`,
       };
@@ -402,7 +440,7 @@ async function executeKill(
       if (rejected.length === 0) {
         return {
           content:
-            target.toLowerCase() === "all"
+            normalizedTarget === "all"
               ? "No active sub-agent runs to abort."
               : `No active runs matched \`${target}\`.`,
         };
@@ -410,7 +448,7 @@ async function executeKill(
       throw rejected[0]?.reason ?? new Error("abort failed");
     }
 
-    if (target.toLowerCase() === "all") {
+    if (normalizedTarget === "all") {
       return {
         content:
           successCount === matched.length
@@ -435,13 +473,13 @@ function resolveKillTargets(
   currentSessionKey: string,
   target: string,
 ): string[] {
-  const normalizedTarget = target.trim().toLowerCase();
+  const normalizedTarget = normalizeLowercaseStringOrEmpty(target);
   if (!normalizedTarget) {
     return [];
   }
 
   const keys = new Set<string>();
-  const normalizedCurrentSessionKey = currentSessionKey.trim().toLowerCase();
+  const normalizedCurrentSessionKey = normalizeLowercaseStringOrEmpty(currentSessionKey);
   const currentParsed = parseAgentSessionKey(normalizedCurrentSessionKey);
   const currentAgentId =
     currentParsed?.agentId ??
@@ -452,7 +490,7 @@ function resolveKillTargets(
     if (!key || !isSubagentSessionKey(key)) {
       continue;
     }
-    const normalizedKey = key.toLowerCase();
+    const normalizedKey = normalizeLowercaseStringOrEmpty(key);
     const parsed = parseAgentSessionKey(normalizedKey);
     const belongsToCurrentSession = isWithinCurrentSessionSubtree(
       normalizedKey,
@@ -517,8 +555,7 @@ function buildSessionIndex(sessions: GatewaySessionRow[]): Map<string, GatewaySe
 }
 
 function normalizeSessionKey(key?: string | null): string | undefined {
-  const normalized = key?.trim().toLowerCase();
-  return normalized || undefined;
+  return normalizeOptionalLowercaseString(key);
 }
 
 function resolveEquivalentSessionKeys(
@@ -625,11 +662,11 @@ function resolveSteerSubagent(
   currentSessionKey: string,
   target: string,
 ): string[] {
-  const normalizedTarget = target.trim().toLowerCase();
+  const normalizedTarget = normalizeLowercaseStringOrEmpty(target);
   if (!normalizedTarget) {
     return [];
   }
-  const normalizedCurrentSessionKey = currentSessionKey.trim().toLowerCase();
+  const normalizedCurrentSessionKey = normalizeLowercaseStringOrEmpty(currentSessionKey);
   const currentParsed = parseAgentSessionKey(normalizedCurrentSessionKey);
   const currentAgentId =
     currentParsed?.agentId ??
@@ -642,7 +679,7 @@ function resolveSteerSubagent(
     if (!key || !isSubagentSessionKey(key)) {
       continue;
     }
-    const normalizedKey = key.toLowerCase();
+    const normalizedKey = normalizeLowercaseStringOrEmpty(key);
     const parsed = parseAgentSessionKey(normalizedKey);
     const belongsToCurrentSession = isWithinCurrentSessionSubtree(
       normalizedKey,
@@ -659,7 +696,7 @@ function resolveSteerSubagent(
       normalizedKey === normalizedTarget ||
       normalizedKey.endsWith(`:subagent:${normalizedTarget}`) ||
       normalizedKey === `subagent:${normalizedTarget}` ||
-      (session.label ?? "").toLowerCase() === normalizedTarget;
+      normalizeLowercaseStringOrEmpty(session.label) === normalizedTarget;
     if (isMatch) {
       keys.add(key);
     }
@@ -695,7 +732,7 @@ async function resolveSteerTarget(
     const rest = trimmed.slice(spaceIdx + 1).trim();
     // Skip "all" — resolveKillTargets treats it as a wildcard, but steer/redirect
     // target a single session, so "all good now" should not match subagents.
-    if (rest && maybeTarget.toLowerCase() !== "all") {
+    if (rest && normalizeLowercaseStringOrEmpty(maybeTarget) !== "all") {
       const sessions =
         context.sessionsResult ?? (await client.request<SessionsListResult>("sessions.list", {}));
       const matched = resolveSteerSubagent(sessions?.sessions ?? [], sessionKey, maybeTarget);

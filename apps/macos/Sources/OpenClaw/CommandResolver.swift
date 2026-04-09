@@ -235,7 +235,8 @@ enum CommandResolver {
         extraArgs: [String] = [],
         defaults: UserDefaults = .standard,
         configRoot: [String: Any]? = nil,
-        searchPaths: [String]? = nil) -> [String]
+        searchPaths: [String]? = nil,
+        projectRoot: URL? = nil) -> [String]
     {
         let settings = self.connectionSettings(defaults: defaults, configRoot: configRoot)
         if settings.mode == .remote, let ssh = self.sshNodeCommand(
@@ -246,7 +247,7 @@ enum CommandResolver {
             return ssh
         }
 
-        let root = self.projectRoot()
+        let root = projectRoot ?? self.projectRoot()
         if let openclawPath = self.projectOpenClawExecutable(projectRoot: root) {
             return [openclawPath, subcommand] + extraArgs
         }
@@ -289,14 +290,16 @@ enum CommandResolver {
         extraArgs: [String] = [],
         defaults: UserDefaults = .standard,
         configRoot: [String: Any]? = nil,
-        searchPaths: [String]? = nil) -> [String]
+        searchPaths: [String]? = nil,
+        projectRoot: URL? = nil) -> [String]
     {
         self.openclawNodeCommand(
             subcommand: subcommand,
             extraArgs: extraArgs,
             defaults: defaults,
             configRoot: configRoot,
-            searchPaths: searchPaths)
+            searchPaths: searchPaths,
+            projectRoot: projectRoot)
     }
 
     // MARK: - SSH helpers
