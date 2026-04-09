@@ -7,6 +7,7 @@ import {
   createGeminiFetchMock,
   installFetchMock,
   mockResolvedProviderKey as mockResolvedProviderKeyBase,
+  parseFetchBody,
   readFirstFetchRequest,
 } from "./embeddings-provider.test-support.js";
 import { createEmbeddingProvider, DEFAULT_LOCAL_MODEL } from "./embeddings.js";
@@ -199,6 +200,48 @@ describe("embedding provider remote overrides", () => {
     const init = fetchMock.mock.calls[0]?.[1];
     const headers = (init?.headers as Record<string, string>) ?? {};
     expect(headers.Authorization).toBe("Bearer provider-key");
+  });
+
+  it("forwards queryInputType for openai query embeddings", async () => {
+    const fetchMock = createFetchMock();
+    installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
+    mockPublicPinnedHostname();
+    mockResolvedProviderKey("provider-key");
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "openai",
+      model: "text-embedding-3-small",
+      inputType: "passage",
+      queryInputType: "query",
+      fallback: "none",
+    });
+
+    await requireProvider(result).embedQuery("hello");
+
+    expect(parseFetchBody(fetchMock).input_type).toBe("query");
+  });
+
+  it("forwards documentInputType for openai batch embeddings", async () => {
+    const fetchMock = createFetchMock();
+    installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
+    mockPublicPinnedHostname();
+    mockResolvedProviderKey("provider-key");
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "openai",
+      model: "text-embedding-3-small",
+      inputType: "query",
+      documentInputType: "document",
+      fallback: "none",
+    });
+
+    await requireProvider(result).embedBatch(["doc1", "doc2"]);
+
+    const body = parseFetchBody(fetchMock);
+    expect(body.input).toEqual(["doc1", "doc2"]);
+    expect(body.input_type).toBe("document");
   });
 
   it("builds Gemini embeddings requests with api key header", async () => {

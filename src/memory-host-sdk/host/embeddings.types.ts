@@ -42,6 +42,9 @@ export type EmbeddingProviderOptions = {
     headers?: Record<string, string>;
   };
   model: string;
+  inputType?: string;
+  queryInputType?: string;
+  documentInputType?: string;
   fallback: EmbeddingProviderFallback;
   local?: {
     modelPath?: string;
