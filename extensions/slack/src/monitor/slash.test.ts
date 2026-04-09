@@ -4,9 +4,16 @@ import { getSlackSlashMocks, resetSlackSlashMocks } from "./slash.test-harness.j
 const { getPluginCommandSpecsMock } = vi.hoisted(() => ({
   getPluginCommandSpecsMock: vi.fn(() => []),
 }));
+const { handleNemoClawCommandMock } = vi.hoisted(() => ({
+  handleNemoClawCommandMock: vi.fn(async () => ({ text: "nemoclaw ok" })),
+}));
 
 vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
   getPluginCommandSpecs: getPluginCommandSpecsMock,
+}));
+
+vi.mock("../../../sense-worker/src/command.js", () => ({
+  handleNemoClawCommand: handleNemoClawCommandMock,
 }));
 
 vi.mock("../../../../src/auto-reply/commands-registry.js", () => {
@@ -201,6 +208,7 @@ beforeAll(async () => {
 beforeEach(() => {
   resetSlackSlashMocks();
   getPluginCommandSpecsMock.mockReset().mockReturnValue([]);
+  handleNemoClawCommandMock.mockReset().mockResolvedValue({ text: "nemoclaw ok" });
 });
 
 async function registerCommands(ctx: unknown, account: unknown) {
@@ -704,18 +712,13 @@ describe("Slack native command argument menus", () => {
 
 describe("Slack plugin slash command routing", () => {
   it("registers /nemoclaw and forwards arguments into the existing command handler flow", async () => {
-    getPluginCommandSpecsMock.mockReturnValue([
-      {
-        name: "nemoclaw",
-        description: "Show the latest NemoClaw digest summary or inspect a job.",
-        acceptsArgs: true,
-      },
-    ]);
-
     const harness = createArgMenusHarness();
     harness.ctx = {
       ...(harness.ctx as Record<string, unknown>),
-      cfg: { commands: { native: false, nativeSkills: false } },
+      cfg: {
+        commands: { native: false, nativeSkills: false },
+        plugins: { entries: { "sense-worker": { enabled: true, config: {} } } },
+      },
     } as typeof harness.ctx;
     harness.account = {
       ...(harness.account as Record<string, unknown>),
@@ -733,7 +736,11 @@ describe("Slack plugin slash command routing", () => {
       respond,
     });
 
-    expectSingleDispatchedSlashBody("/nemoclaw digest");
+    expect(handleNemoClawCommandMock).toHaveBeenCalledWith("digest", harness.ctx.cfg);
+    expect(respond).toHaveBeenCalledWith({
+      text: "nemoclaw ok",
+      response_type: "ephemeral",
+    });
   });
 });
 

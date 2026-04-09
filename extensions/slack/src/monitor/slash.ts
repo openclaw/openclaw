@@ -45,6 +45,9 @@ let slashDispatchRuntimePromise: Promise<typeof import("./slash-dispatch.runtime
 let slashSkillCommandsRuntimePromise: Promise<
   typeof import("./slash-skill-commands.runtime.js")
 > | null = null;
+let senseWorkerCommandRuntimePromise: Promise<
+  typeof import("../../../sense-worker/src/command.js")
+> | null = null;
 
 function loadSlashCommandsRuntime() {
   slashCommandsRuntimePromise ??= import("./slash-commands.runtime.js");
@@ -59,6 +62,28 @@ function loadSlashDispatchRuntime() {
 function loadSlashSkillCommandsRuntime() {
   slashSkillCommandsRuntimePromise ??= import("./slash-skill-commands.runtime.js");
   return slashSkillCommandsRuntimePromise;
+}
+
+function loadSenseWorkerCommandRuntime() {
+  senseWorkerCommandRuntimePromise ??= import("../../../sense-worker/src/command.js");
+  return senseWorkerCommandRuntimePromise;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function hasSenseWorkerPluginConfigured(cfg: unknown): boolean {
+  const root = asRecord(cfg);
+  const plugins = asRecord(root?.plugins);
+  const entries = asRecord(plugins?.entries);
+  const senseWorker = asRecord(entries?.["sense-worker"]);
+  if (senseWorker?.enabled === false) {
+    return false;
+  }
+  return Boolean(senseWorker);
 }
 
 function listSlackPluginSlashCommands(params: {
@@ -698,6 +723,7 @@ export async function registerSlackMonitorSlashCommands(params: {
     });
   }
   const pluginCommands = listSlackPluginSlashCommands({ nativeCommands, runtime });
+  const nemoclawSlashEnabled = hasSenseWorkerPluginConfigured(cfg);
 
   if (nativeCommands.length > 0) {
     if (!slashCommandsRuntime) {
@@ -770,7 +796,34 @@ export async function registerSlackMonitorSlashCommands(params: {
     }
   }
 
-  if (!slashCommand.enabled && nativeCommands.length === 0 && pluginCommands.length === 0) {
+  if (nemoclawSlashEnabled) {
+    ctx.app.command(
+      "/nemoclaw",
+      async ({ command, ack, respond, body }: SlackCommandMiddlewareArgs) => {
+        if (ctx.shouldDropMismatchedSlackEvent?.(body)) {
+          await ack();
+          runtime.log?.(
+            `slack: drop nemoclaw slash from user=${command.user_id ?? "unknown"} channel=${command.channel_id ?? "unknown"} (mismatched app/team)`,
+          );
+          return;
+        }
+        await ack();
+        const { handleNemoClawCommand } = await loadSenseWorkerCommandRuntime();
+        const result = await handleNemoClawCommand(command.text?.trim() ?? "", cfg);
+        await respond({
+          text: result.text,
+          response_type: slashCommand.ephemeral ? "ephemeral" : "in_channel",
+        });
+      },
+    );
+  }
+
+  if (
+    !slashCommand.enabled &&
+    nativeCommands.length === 0 &&
+    pluginCommands.length === 0 &&
+    !nemoclawSlashEnabled
+  ) {
     logVerbose("slack: slash commands disabled");
   }
 
