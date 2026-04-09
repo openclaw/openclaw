@@ -550,7 +550,8 @@ jobs:
         run: |
           echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
           if [ "$TASK" = "test" ]; then
-            echo "OPENCLAW_TEST_PROJECTS_PARALLEL=6" >> "$GITHUB_ENV"
+            echo "OPENCLAW_TEST_PROJECTS_LEAF_SHARDS=1" >> "$GITHUB_ENV"
+            echo "OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD=1" >> "$GITHUB_ENV"
           fi
           if [ "$TASK" = "channels" ]; then
             echo "OPENCLAW_VITEST_MAX_WORKERS=1" >> "$GITHUB_ENV"
@@ -946,6 +947,7 @@ jobs:
       NODE_OPTIONS: --max-old-space-size=6144
       # Keep total concurrency predictable on the 32 vCPU runner.
       OPENCLAW_VITEST_MAX_WORKERS: 1
+      OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD: 1
     defaults:
       run:
         shell: bash
@@ -1040,7 +1042,9 @@ jobs:
           set -euo pipefail
           case "$TASK" in
             test)
-              pnpm test
+              # Linux owns the full repo test suite. Keep the Windows runner focused on
+              # Windows-native process/path wrappers so platform regressions fail fast.
+              pnpm test:windows:ci
               ;;
             *)
               echo "Unsupported Windows checks task: $TASK" >&2
@@ -1091,7 +1095,9 @@ jobs:
           set -euo pipefail
           case "$TASK" in
             test)
-              pnpm test
+              # Linux owns the full repo test suite. Keep macOS CI focused on
+              # launchd/Homebrew/runtime path coverage and the process-group wrapper.
+              pnpm test:macos:ci
               ;;
             *)
               echo "Unsupported macOS node task: $TASK" >&2

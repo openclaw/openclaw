@@ -17,8 +17,7 @@ codeRefs:
   - src/agents/system-prompt.ts
   - extensions/qa-lab/src/suite.ts
 execution:
-  kind: custom
-  handler: subagent-fanout-synthesis
+  kind: flow
   summary: Verify the agent can delegate multiple bounded subagent tasks and fold both results back into one parent reply.
   config:
     prompt: |-
@@ -33,4 +32,115 @@ execution:
     expectedReplyAny:
       - subagent-1: ok
       - subagent-2: ok
+    expectedReplyGroups:
+      - - alpha-ok
+        - subagent_one_ok
+        - subagent one ok
+        - subagent-1: ok
+      - - beta-ok
+        - subagent_two_ok
+        - subagent two ok
+        - subagent-2: ok
+    expectedChildLabels:
+      - qa-fanout-alpha
+      - qa-fanout-beta
+```
+
+```yaml qa-flow
+steps:
+  - name: spawns sequential workers and folds both results back into the parent reply
+    actions:
+      - set: attempts
+        value:
+          expr: "env.providerMode === 'mock-openai' ? 1 : 2"
+      - set: lastError
+        value: null
+      - forEach:
+          items:
+            expr: "Array.from({ length: attempts }, (_, index) => index + 1)"
+          item: attempt
+          actions:
+            - if:
+                expr: "lastError === '__done__'"
+                then:
+                  - set: skippedAttempt
+                    value:
+                      expr: attempt
+                else:
+                  - try:
+                      actions:
+                        - call: waitForGatewayHealthy
+                          args:
+                            - ref: env
+                            - 120000
+                        - call: reset
+                        - set: sessionKey
+                          value:
+                            expr: "`agent:qa:fanout:${attempt}:${randomUUID().slice(0, 8)}`"
+                        - set: beforeCursor
+                          value:
+                            expr: "state.getSnapshot().messages.length"
+                        - call: runAgentPrompt
+                          args:
+                            - ref: env
+                            - sessionKey:
+                                ref: sessionKey
+                              message:
+                                expr: config.prompt
+                              timeoutMs:
+                                expr: liveTurnTimeoutMs(env, 90000)
+                        - call: waitForCondition
+                          saveAs: outbound
+                          args:
+                            - lambda:
+                                expr: "state.getSnapshot().messages.slice(beforeCursor).filter((message) => message.direction === 'outbound' && message.conversation.id === 'qa-operator' && config.expectedReplyGroups.every((group) => group.some((needle) => normalizeLowercaseStringOrEmpty(message.text ?? '').includes(needle)))).at(-1)"
+                            - expr: liveTurnTimeoutMs(env, 60000)
+                            - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
+                        - if:
+                            expr: "Boolean(env.mock)"
+                            then:
+                              - call: readRawQaSessionStore
+                                saveAs: store
+                                args:
+                                  - ref: env
+                              - set: childRows
+                                value:
+                                  expr: "Object.values(store).filter((entry) => entry.spawnedBy === sessionKey)"
+                              - set: sawAlpha
+                                value:
+                                  expr: "childRows.some((entry) => entry.label === config.expectedChildLabels[0])"
+                              - set: sawBeta
+                                value:
+                                  expr: "childRows.some((entry) => entry.label === config.expectedChildLabels[1])"
+                              - assert:
+                                  expr: "sawAlpha && sawBeta"
+                                  message:
+                                    expr: "`fanout child sessions missing (alpha=${String(sawAlpha)} beta=${String(sawBeta)})`"
+                        - set: details
+                          value:
+                            expr: "outbound.text"
+                        - set: lastError
+                          value: __done__
+                      catchAs: attemptError
+                      catch:
+                        - set: lastError
+                          value:
+                            ref: attemptError
+                        - if:
+                            expr: "attempt < attempts"
+                            then:
+                              - try:
+                                  actions:
+                                    - call: waitForGatewayHealthy
+                                      args:
+                                        - ref: env
+                                        - 120000
+                                  catch:
+                                    - set: ignoredRetryWait
+                                      value: true
+      - assert:
+          expr: "lastError === '__done__'"
+          message:
+            expr: "lastError instanceof Error ? formatErrorMessage(lastError) : String(lastError ?? 'fanout retry exhausted')"
+    detailsExpr: "details"
 ```

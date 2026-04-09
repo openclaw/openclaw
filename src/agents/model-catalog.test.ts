@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { resetProviderRuntimeHookCacheForTest } from "../plugins/provider-runtime.js";
@@ -82,6 +82,12 @@ describe("loadModelCatalog", () => {
     resetModelCatalogCacheForTest();
     resetProviderRuntimeHookCacheForTest();
     vi.restoreAllMocks();
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./models-config.js");
+    vi.doUnmock("./agent-paths.js");
+    vi.doUnmock("../plugins/provider-runtime.runtime.js");
   });
 
   it("retries after import failure without poisoning the cache", async () => {

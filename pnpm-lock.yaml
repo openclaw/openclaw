@@ -6,13 +6,14 @@ settings:
 
 overrides:
   '@anthropic-ai/sdk': 0.81.0
-  hono: 4.12.10
-  '@hono/node-server': 1.19.10
+  hono: 4.12.12
+  '@hono/node-server': 1.19.13
   axios: 1.13.6
   defu: 6.1.5
   fast-xml-parser: 5.5.7
   request: npm:@cypress/request@3.0.10
   request-promise: npm:@cypress/request-promise@5.0.0
+  basic-ftp: 5.2.1
   file-type: 22.0.0
   form-data: 2.5.4
   minimatch: 10.2.4
@@ -45,12 +46,33 @@ importers:
       '@aws-sdk/credential-provider-node':
         specifier: 3.972.29
         version: 3.972.29
+      '@aws/bedrock-token-generator':
+        specifier: ^1.1.0
+        version: 1.1.0
+      '@buape/carbon':
+        specifier: 0.14.0
+        version: 0.14.0(@discordjs/opus@0.10.0)(hono@4.12.12)(opusscript@0.1.1)
       '@clack/prompts':
         specifier: ^1.2.0
         version: 1.2.0
+      '@google/genai':
+        specifier: ^1.48.0
+        version: 1.48.0(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))
+      '@grammyjs/runner':
+        specifier: ^2.0.3
+        version: 2.0.3(grammy@1.42.0)
+      '@grammyjs/transformer-throttler':
+        specifier: ^1.2.1
+        version: 1.2.1(grammy@1.42.0)
       '@homebridge/ciao':
         specifier: ^1.3.6
         version: 1.3.6
+      '@lancedb/lancedb':
+        specifier: ^0.27.2
+        version: 0.27.2(apache-arrow@18.1.0)
+      '@larksuiteoapi/node-sdk':
+        specifier: ^1.60.0
+        version: 1.60.0
       '@line/bot-sdk':
         specifier: ^11.0.0
         version: 11.0.0
@@ -84,6 +106,12 @@ importers:
       '@sinclair/typebox':
         specifier: 0.34.49
         version: 0.34.49
+      '@slack/bolt':
+        specifier: ^4.6.0
+        version: 4.6.0(@types/express@5.0.6)
+      '@slack/web-api':
+        specifier: ^7.15.0
+        version: 7.15.0
       ajv:
         specifier: ^8.18.0
         version: 8.18.0
@@ -102,6 +130,9 @@ importers:
       croner:
         specifier: ^10.0.1
         version: 10.0.1
+      discord-api-types:
+        specifier: ^0.38.44
+        version: 0.38.44
       dotenv:
         specifier: ^17.4.0
         version: 17.4.0
@@ -114,12 +145,24 @@ importers:
       gaxios:
         specifier: 7.1.4
         version: 7.1.4
+      google-auth-library:
+        specifier: ^10.6.2
+        version: 10.6.2
+      grammy:
+        specifier: ^1.42.0
+        version: 1.42.0
       hono:
-        specifier: 4.12.10
-        version: 4.12.10
+        specifier: 4.12.12
+        version: 4.12.12
+      https-proxy-agent:
+        specifier: ^9.0.0
+        version: 9.0.0
       ipaddr.js:
         specifier: ^2.3.0
         version: 2.3.0
+      jimp:
+        specifier: ^1.6.0
+        version: 1.6.0
       jiti:
         specifier: ^2.6.1
         version: 2.6.1
@@ -136,17 +179,29 @@ importers:
         specifier: ^5.3.2
         version: 5.3.2
       markdown-it:
-        specifier: ^14.1.1
+        specifier: 14.1.1
         version: 14.1.1
       matrix-js-sdk:
         specifier: 41.3.0-rc.0
         version: 41.3.0-rc.0
+      mpg123-decoder:
+        specifier: ^1.0.3
+        version: 1.0.3
       node-edge-tts:
         specifier: ^1.2.10
         version: 1.2.10
       node-llama-cpp:
         specifier: 3.18.1
         version: 3.18.1(typescript@6.0.2)
+      nostr-tools:
+        specifier: ^2.23.3
+        version: 2.23.3(typescript@6.0.2)
+      openai:
+        specifier: ^6.33.0
+        version: 6.33.0(ws@8.20.0)(zod@4.3.6)
+      opusscript:
+        specifier: ^0.1.1
+        version: 0.1.1
       osc-progress:
         specifier: ^0.3.0
         version: 0.3.0
@@ -165,6 +220,9 @@ importers:
       sharp:
         specifier: ^0.34.5
         version: 0.34.5
+      silk-wasm:
+        specifier: ^3.7.1
+        version: 3.7.1
       sqlite-vec:
         specifier: 0.1.9
         version: 0.1.9
@@ -175,7 +233,7 @@ importers:
         specifier: ^4.10.2
         version: 4.10.2
       undici:
-        specifier: ^8.0.2
+        specifier: 8.0.2
         version: 8.0.2
       uuid:
         specifier: ^13.0.0
@@ -257,6 +315,9 @@ importers:
         specifier: ^4.1.2
         version: 4.1.2(@opentelemetry/api@1.9.1)(@types/node@25.5.2)(@vitest/browser-playwright@4.1.2)(jsdom@29.0.1(@noble/hashes@2.0.1))(vite@8.0.5(@emnapi/core@1.8.1)(@emnapi/runtime@1.9.1)(@types/node@25.5.2)(esbuild@0.27.4)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.3))
     optionalDependencies:
+      '@discordjs/opus':
+        specifier: ^0.10.0
+        version: 0.10.0
       '@matrix-org/matrix-sdk-crypto-nodejs':
         specifier: ^0.4.0
         version: 0.4.0
@@ -444,7 +505,7 @@ importers:
     dependencies:
       '@buape/carbon':
         specifier: 0.14.0
-        version: 0.14.0(@discordjs/opus@0.10.0)(hono@4.12.10)(opusscript@0.1.1)
+        version: 0.14.0(@discordjs/opus@0.10.0)(hono@4.12.12)(opusscript@0.1.1)
       '@discordjs/voice':
         specifier: ^0.19.2
         version: 0.19.2(@discordjs/opus@0.10.0)(@emnapi/core@1.8.1)(@emnapi/runtime@1.9.1)(opusscript@0.1.1)
@@ -1876,11 +1937,11 @@ packages:
     resolution: {integrity: sha512-2F9N/15Q/GnoBXimr8PFg7fb1QrAQBvuZpaW2kseWOOy14Lzc3yZB1mT9N1Ju/4hlkboU33uHxtOxZkvkPoE/w==}
     hasBin: true
 
-  '@hono/node-server@1.19.10':
-    resolution: {integrity: sha512-hZ7nOssGqRgyV3FVVQdfi+U4q02uB23bpnYpdvNXkYTRRyWx84b7yf1ans+dnJ/7h41sGL3CeQTfO+ZGxuO+Iw==}
+  '@hono/node-server@1.19.13':
+    resolution: {integrity: sha512-TsQLe4i2gvoTtrHje625ngThGBySOgSK3Xo2XRYOdqGN1teR8+I7vchQC46uLJi8OF62YTYA3AhSpumtkhsaKQ==}
     engines: {node: '>=18.14.1'}
     peerDependencies:
-      hono: 4.12.10
+      hono: 4.12.12
 
   '@huggingface/jinja@0.5.6':
     resolution: {integrity: sha512-MyMWyLnjqo+KRJYSH7oWNbsOn5onuIvfXYPcc0WOGxU0eHUV7oAYUoQTl2BMdu7ml+ea/bu11UM+EshbeHwtIA==}
@@ -4285,8 +4346,8 @@ packages:
   base64-js@1.5.1:
     resolution: {integrity: sha512-AKpaYlHn8t4SVbOHCy+b5+KKgvR4vrsD8vbvrbiQJps7fKDTkjkDry6ji0rUJjC0kzbNePLwzxq8iypo41qeWA==}
 
-  basic-ftp@5.2.0:
-    resolution: {integrity: sha512-VoMINM2rqJwJgfdHq6RiUudKt2BV+FY5ZFezP/ypmwayk68+NzzAQy4XXLlqsGD4MCzq3DrmNFD/uUmBJuGoXw==}
+  basic-ftp@5.2.1:
+    resolution: {integrity: sha512-0yaL8JdxTknKDILitVpfYfV2Ob6yb3udX/hK97M7I3jOeznBNxQPtVvTUtnhUkyHlxFWyr5Lvknmgzoc7jf+1Q==}
     engines: {node: '>=10.0.0'}
 
   bidi-js@1.0.3:
@@ -5083,8 +5144,8 @@ packages:
   highlight.js@10.7.3:
     resolution: {integrity: sha512-tzcUFauisWKNHaRkN4Wjl/ZA07gENAjFl3J/c480dprkGTg5EQstgaNFqBfUqCq54kZRIEcreTsAgF/m2quD7A==}
 
-  hono@4.12.10:
-    resolution: {integrity: sha512-mx/p18PLy5og9ufies2GOSUqep98Td9q4i/EF6X7yJgAiIopxqdfIO3jbqsi3jRgTgw88jMDEzVKi+V2EF+27w==}
+  hono@4.12.12:
+    resolution: {integrity: sha512-p1JfQMKaceuCbpJKAPKVqyqviZdS0eUxH9v82oWo1kb9xjQ5wA6iP3FNVAPDFlz5/p7d45lO+BpSk1tuSZMF4Q==}
     engines: {node: '>=16.9.0'}
 
   hookable@6.1.0:
@@ -7980,14 +8041,14 @@ snapshots:
     dependencies:
       css-tree: 3.2.1
 
-  '@buape/carbon@0.14.0(@discordjs/opus@0.10.0)(hono@4.12.10)(opusscript@0.1.1)':
+  '@buape/carbon@0.14.0(@discordjs/opus@0.10.0)(hono@4.12.12)(opusscript@0.1.1)':
     dependencies:
       '@types/node': 25.5.2
       discord-api-types: 0.38.37
     optionalDependencies:
       '@cloudflare/workers-types': 4.20260120.0
       '@discordjs/voice': 0.19.0(@discordjs/opus@0.10.0)(opusscript@0.1.1)
-      '@hono/node-server': 1.19.10(hono@4.12.10)
+      '@hono/node-server': 1.19.13(hono@4.12.12)
       '@types/bun': 1.3.6
       '@types/ws': 8.18.1
       ws: 8.19.0
@@ -8329,9 +8390,9 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@hono/node-server@1.19.10(hono@4.12.10)':
+  '@hono/node-server@1.19.13(hono@4.12.12)':
     dependencies:
-      hono: 4.12.10
+      hono: 4.12.12
 
   '@huggingface/jinja@0.5.6': {}
 
@@ -9007,7 +9068,7 @@ snapshots:
 
   '@modelcontextprotocol/sdk@1.29.0(zod@4.3.6)':
     dependencies:
-      '@hono/node-server': 1.19.10(hono@4.12.10)
+      '@hono/node-server': 1.19.13(hono@4.12.12)
       ajv: 8.18.0
       ajv-formats: 3.0.1(ajv@8.18.0)
       content-type: 1.0.5
@@ -9017,7 +9078,7 @@ snapshots:
       eventsource-parser: 3.0.6
       express: 5.2.1
       express-rate-limit: 8.3.2(express@5.2.1)
-      hono: 4.12.10
+      hono: 4.12.12
       jose: 6.2.2
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
@@ -9807,7 +9868,7 @@ snapshots:
     dependencies:
       '@slack/logger': 4.0.1
       '@slack/types': 2.20.1
-      '@types/node': 25.5.0
+      '@types/node': 25.5.2
       '@types/retry': 0.12.0
       axios: 1.13.6
       eventemitter3: 5.0.4
@@ -10829,7 +10890,7 @@ snapshots:
 
   base64-js@1.5.1: {}
 
-  basic-ftp@5.2.0: {}
+  basic-ftp@5.2.1: {}
 
   bidi-js@1.0.3:
     dependencies:
@@ -11581,7 +11642,7 @@ snapshots:
 
   get-uri@6.0.5:
     dependencies:
-      basic-ftp: 5.2.0
+      basic-ftp: 5.2.1
       data-uri-to-buffer: 6.0.2
       debug: 4.4.3
     transitivePeerDependencies:
@@ -11589,7 +11650,7 @@ snapshots:
 
   get-uri@8.0.0:
     dependencies:
-      basic-ftp: 5.2.0
+      basic-ftp: 5.2.1
       data-uri-to-buffer: 8.0.0
       debug: 4.4.3
     transitivePeerDependencies:
@@ -11712,7 +11773,7 @@ snapshots:
 
   highlight.js@10.7.3: {}
 
-  hono@4.12.10: {}
+  hono@4.12.12: {}
 
   hookable@6.1.0: {}
 

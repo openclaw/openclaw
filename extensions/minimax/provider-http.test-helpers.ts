@@ -5,7 +5,7 @@ type ResolveProviderHttpRequestConfigParams = Parameters<
   typeof resolveProviderHttpRequestConfig
 >[0];
 
-const providerHttpMocks = vi.hoisted(() => ({
+const minimaxProviderHttpMocks = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "provider-key" })),
   postJsonRequestMock: vi.fn(),
   fetchWithTimeoutMock: vi.fn(),
@@ -19,27 +19,27 @@ const providerHttpMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
-  resolveApiKeyForProvider: providerHttpMocks.resolveApiKeyForProviderMock,
+  resolveApiKeyForProvider: minimaxProviderHttpMocks.resolveApiKeyForProviderMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-http", () => ({
-  assertOkOrThrowHttpError: providerHttpMocks.assertOkOrThrowHttpErrorMock,
-  fetchWithTimeout: providerHttpMocks.fetchWithTimeoutMock,
-  postJsonRequest: providerHttpMocks.postJsonRequestMock,
-  resolveProviderHttpRequestConfig: providerHttpMocks.resolveProviderHttpRequestConfigMock,
+  assertOkOrThrowHttpError: minimaxProviderHttpMocks.assertOkOrThrowHttpErrorMock,
+  fetchWithTimeout: minimaxProviderHttpMocks.fetchWithTimeoutMock,
+  postJsonRequest: minimaxProviderHttpMocks.postJsonRequestMock,
+  resolveProviderHttpRequestConfig: minimaxProviderHttpMocks.resolveProviderHttpRequestConfigMock,
 }));
 
 export function getMinimaxProviderHttpMocks() {
-  return providerHttpMocks;
+  return minimaxProviderHttpMocks;
 }
 
 export function installMinimaxProviderHttpMockCleanup(): void {
   afterEach(() => {
-    providerHttpMocks.resolveApiKeyForProviderMock.mockClear();
-    providerHttpMocks.postJsonRequestMock.mockReset();
-    providerHttpMocks.fetchWithTimeoutMock.mockReset();
-    providerHttpMocks.assertOkOrThrowHttpErrorMock.mockClear();
-    providerHttpMocks.resolveProviderHttpRequestConfigMock.mockClear();
+    minimaxProviderHttpMocks.resolveApiKeyForProviderMock.mockClear();
+    minimaxProviderHttpMocks.postJsonRequestMock.mockReset();
+    minimaxProviderHttpMocks.fetchWithTimeoutMock.mockReset();
+    minimaxProviderHttpMocks.assertOkOrThrowHttpErrorMock.mockClear();
+    minimaxProviderHttpMocks.resolveProviderHttpRequestConfigMock.mockClear();
   });
 }
 

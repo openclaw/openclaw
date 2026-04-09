@@ -464,6 +464,42 @@ class GatewayConfigResolverTest {
     assertEquals(false, resolved?.tls)
   }
 
+  @Test
+  fun composeGatewayManualUrlDefaultsPortTo443WhenTlsAndPortBlank() {
+    val url = composeGatewayManualUrl("mydevice.tail1234.ts.net", "", tls = true)
+
+    assertEquals("https://mydevice.tail1234.ts.net:443", url)
+  }
+
+  @Test
+  fun composeGatewayManualUrlRejectsBlankPortWhenTlsIsOff() {
+    val url = composeGatewayManualUrl("127.0.0.1", "", tls = false)
+
+    assertNull(url)
+  }
+
+  @Test
+  fun resolveGatewayConnectConfigManualAcceptsTailscaleHostWithoutPort() {
+    val resolved =
+      resolveGatewayConnectConfig(
+        useSetupCode = false,
+        setupCode = "",
+        savedManualHost = "",
+        savedManualPort = "",
+        savedManualTls = true,
+        manualHostInput = "mydevice.tail1234.ts.net",
+        manualPortInput = "",
+        manualTlsInput = true,
+        fallbackBootstrapToken = "",
+        fallbackToken = "",
+        fallbackPassword = "",
+      )
+
+    assertEquals("mydevice.tail1234.ts.net", resolved?.host)
+    assertEquals(443, resolved?.port)
+    assertEquals(true, resolved?.tls)
+  }
+
   private fun encodeSetupCode(payloadJson: String): String {
     return Base64.getUrlEncoder().withoutPadding().encodeToString(payloadJson.toByteArray(Charsets.UTF_8))
   }

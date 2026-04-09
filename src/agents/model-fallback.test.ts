@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import { saveAuthProfileStore } from "./auth-profiles/store.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -564,8 +565,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("sanitizes model identifiers in model_not_found warnings", async () => {
-    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warnLogs = createWarnLogCapture("openclaw-model-fallback-test");
     try {
       const cfg = makeCfg();
       const run = vi
@@ -581,16 +581,12 @@ describe("runWithModelFallback", () => {
       });
 
       expect(result.result).toBe("ok");
-      const warning = warnSpy.mock.calls
-        .map((call) => call[0] as string)
-        .find((value) => value.includes('Model "openai/gpt-6spoof" not found'));
+      const warning = warnLogs.findText('Model "openai/gpt-6spoof" not found');
       expect(warning).toContain('Model "openai/gpt-6spoof" not found');
       expect(warning).not.toContain("\u001B");
       expect(warning).not.toContain("\n");
     } finally {
-      warnSpy.mockRestore();
-      setLoggerOverride(null);
-      resetLogger();
+      warnLogs.cleanup();
     }
   });
 

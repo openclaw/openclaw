@@ -93,6 +93,9 @@ Those belong in your plugin code and `package.json`.
   "providerAuthEnvVars": {
     "openrouter": ["OPENROUTER_API_KEY"]
   },
+  "providerAuthAliases": {
+    "openrouter-coding": "openrouter"
+  },
   "channelEnvVars": {
     "openrouter-chatops": ["OPENROUTER_CHATOPS_TOKEN"]
   },
@@ -145,6 +148,7 @@ Those belong in your plugin code and `package.json`.
 | `modelSupport`                      | No       | `object`                         | Manifest-owned shorthand model-family metadata used to auto-load the plugin before runtime.                                                                                                                  |
 | `cliBackends`                       | No       | `string[]`                       | CLI inference backend ids owned by this plugin. Used for startup auto-activation from explicit config refs.                                                                                                  |
 | `providerAuthEnvVars`               | No       | `Record<string, string[]>`       | Cheap provider-auth env metadata that OpenClaw can inspect without loading plugin code.                                                                                                                      |
+| `providerAuthAliases`               | No       | `Record<string, string>`         | Provider ids that should reuse another provider id for auth lookup, for example a coding provider that shares the base provider API key and auth profiles.                                                   |
 | `channelEnvVars`                    | No       | `Record<string, string[]>`       | Cheap channel env metadata that OpenClaw can inspect without loading plugin code. Use this for env-driven channel setup or auth surfaces that generic startup/config helpers should see.                     |
 | `providerAuthChoices`               | No       | `object[]`                       | Cheap auth-choice metadata for onboarding pickers, preferred-provider resolution, and simple CLI flag wiring.                                                                                                |
 | `contracts`                         | No       | `object`                         | Static bundled capability snapshot for speech, realtime transcription, realtime voice, media-understanding, image-generation, music-generation, video-generation, web-fetch, web search, and tool ownership. |
@@ -440,6 +444,9 @@ See [Configuration reference](/gateway/configuration) for the full `plugins.*` s
 - `providerAuthEnvVars` is the cheap metadata path for auth probes, env-marker
   validation, and similar provider-auth surfaces that should not boot plugin
   runtime just to inspect env names.
+- `providerAuthAliases` lets provider variants reuse another provider's auth
+  env vars, auth profiles, config-backed auth, and API-key onboarding choice
+  without hardcoding that relationship in core.
 - `channelEnvVars` is the cheap metadata path for shell-env fallback, setup
   prompts, and similar channel surfaces that should not boot plugin runtime
   just to inspect env names.

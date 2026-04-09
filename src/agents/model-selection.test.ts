@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import {
   buildAllowedModelSet,
   inferUniqueProviderFromConfiguredModels,
@@ -126,9 +127,9 @@ describe("model-selection", () => {
   });
 
   describe("normalizeProviderIdForAuth", () => {
-    it("maps coding-plan variants to base provider for auth lookup", () => {
-      expect(normalizeProviderIdForAuth("volcengine-plan")).toBe("volcengine");
-      expect(normalizeProviderIdForAuth("byteplus-plan")).toBe("byteplus");
+    it("only applies generic provider-id normalization before auth alias lookup", () => {
+      expect(normalizeProviderIdForAuth("qwencloud")).toBe("qwen");
+      expect(normalizeProviderIdForAuth("openai-codex")).toBe("openai-codex");
       expect(normalizeProviderIdForAuth("openai")).toBe("openai");
     });
   });
@@ -826,14 +827,14 @@ describe("model-selection", () => {
           expect.stringContaining('Falling back to "google/claude-3-5-sonnet"'),
         );
       } finally {
+        warnSpy.mockRestore();
         setLoggerOverride(null);
         resetLogger();
       }
     });
 
     it("sanitizes control characters in providerless-model warnings", () => {
-      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const warnLogs = createWarnLogCapture("openclaw-model-selection-test");
       try {
         const cfg: Partial<OpenClawConfig> = {
           agents: {
@@ -853,14 +854,12 @@ describe("model-selection", () => {
           provider: "google",
           model: "\u001B[31mclaude-3-5-sonnet\nspoof",
         });
-        const warning = warnSpy.mock.calls[0]?.[0] as string;
+        const warning = warnLogs.findText('Falling back to "google/claude-3-5-sonnet"');
         expect(warning).toContain('Falling back to "google/claude-3-5-sonnet"');
         expect(warning).not.toContain("\u001B");
         expect(warning).not.toContain("\n");
       } finally {
-        warnSpy.mockRestore();
-        setLoggerOverride(null);
-        resetLogger();
+        warnLogs.cleanup();
       }
     });
 

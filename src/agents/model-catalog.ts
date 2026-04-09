@@ -143,7 +143,7 @@ export async function loadModelCatalog(params?: {
         if (!provider) {
           continue;
         }
-        if (shouldSuppressBuiltInModel({ provider, id })) {
+        if (shouldSuppressBuiltInModel({ provider, id, config: cfg })) {
           continue;
         }
         const name = normalizeOptionalString(String(entry?.name ?? id)) || id;
