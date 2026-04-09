@@ -160,6 +160,11 @@ export function createMatrixDraftStream(params: {
         log?.(`draft-stream: finalized ${currentEventId} (MSC4357 stream ended)`);
       } catch (err) {
         log?.(`draft-stream: finalize edit failed: ${String(err)}`);
+        // If the finalize edit fails, the live marker remains on the last
+        // successful edit. Flag the stream so callers can fall back to
+        // normal final delivery or redaction instead of leaving the message
+        // stuck in a "still streaming" state for MSC4357 clients.
+        finalizeInPlaceBlocked = true;
       }
     }
     return currentEventId;
