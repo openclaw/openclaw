@@ -382,25 +382,29 @@ describe("createQverisTools", () => {
     expect(parsed.execution_id).toBe("exec-123");
   });
 
-  it("qveris_call returns a structured error when tool was not discovered", async () => {
-    const fetchMock = vi.fn();
+  it("qveris_call proceeds with null search_id when tool was not discovered", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({ execution_id: "exec-1", success: true, result: { data: "ok" } }),
+      text: () => Promise.resolve(""),
+      headers: new Headers(),
+    });
     globalThis.fetch = fetchMock as typeof globalThis.fetch;
     const tools = createQverisTools({ config: makeConfig() });
     const invoke = tools.find((t) => t.name === "qveris_call")!;
 
-    const result = await invoke.execute("call-1", {
+    await invoke.execute("call-1", {
       tool_id: "unknown-tool-xyz",
       params_to_tool: '{"city": "London"}',
     });
 
-    const parsed = parseToolResult(result);
-    expect(parsed.success).toBe(false);
-    expect(parsed.error_type).toBe("tool_not_discovered");
-    expect(String(parsed.detail)).toContain("not been discovered");
-    expect(String(parsed.detail)).toContain("/search or /tools/execute");
-    expect(String(parsed.note)).toContain("Stay inside the QVeris tool workflow");
-    expect(String(parsed.note)).toContain("Never call /search");
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain("/tools/execute");
+    const body = JSON.parse(init.body);
+    expect(body.search_id).toBeNull();
   });
 
   it("qveris_call returns recovery_step on body-level failure", async () => {
