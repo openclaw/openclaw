@@ -54,14 +54,25 @@ export function shouldAppendAttemptCacheTtl(params: {
   provider: string;
   modelId: string;
   modelApi?: string;
-  isCacheTtlEligibleProvider: (provider: string, modelId: string, modelApi?: string) => boolean;
+  modelName?: string;
+  isCacheTtlEligibleProvider: (
+    provider: string,
+    modelId: string,
+    modelApi?: string,
+    modelName?: string,
+  ) => boolean;
 }): boolean {
   if (params.timedOutDuringCompaction || params.compactionOccurredThisAttempt) {
     return false;
   }
   return (
     params.config?.agents?.defaults?.contextPruning?.mode === "cache-ttl" &&
-    params.isCacheTtlEligibleProvider(params.provider, params.modelId, params.modelApi)
+    params.isCacheTtlEligibleProvider(
+      params.provider,
+      params.modelId,
+      params.modelApi,
+      params.modelName,
+    )
   );
 }
 
@@ -75,7 +86,13 @@ export function appendAttemptCacheTtlIfNeeded(params: {
   provider: string;
   modelId: string;
   modelApi?: string;
-  isCacheTtlEligibleProvider: (provider: string, modelId: string, modelApi?: string) => boolean;
+  modelName?: string;
+  isCacheTtlEligibleProvider: (
+    provider: string,
+    modelId: string,
+    modelApi?: string,
+    modelName?: string,
+  ) => boolean;
   now?: number;
 }): boolean {
   if (!shouldAppendAttemptCacheTtl(params)) {

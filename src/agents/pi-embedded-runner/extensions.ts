@@ -40,7 +40,14 @@ function buildContextPruningFactory(params: {
   if (raw?.mode !== "cache-ttl") {
     return undefined;
   }
-  if (!isCacheTtlEligibleProvider(params.provider, params.modelId, params.model?.api)) {
+  if (
+    !isCacheTtlEligibleProvider(
+      params.provider,
+      params.modelId,
+      params.model?.api,
+      params.model?.name,
+    )
+  ) {
     return undefined;
   }
 
