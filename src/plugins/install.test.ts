@@ -1420,6 +1420,50 @@ describe("installPluginFromDir", () => {
     expect(manifest.devDependencies?.vitest).toBe("^3.0.0");
   });
 
+  it("blocks install when resolved dependencies introduce a denied package", async () => {
+    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
+
+    const run = vi.mocked(runCommandWithTimeout);
+    run.mockImplementation(async (_command, opts) => {
+      const cwd = opts?.cwd;
+      if (!cwd) {
+        throw new Error("expected cwd for npm install");
+      }
+      const blockedPkgDir = path.join(cwd, "node_modules", "plain-crypto-js");
+      fs.mkdirSync(blockedPkgDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(blockedPkgDir, "package.json"),
+        JSON.stringify({
+          name: "plain-crypto-js",
+          version: "4.2.1",
+        }),
+        "utf-8",
+      );
+      return {
+        code: 0,
+        stdout: "",
+        stderr: "",
+        signal: null,
+        killed: false,
+        termination: "exit" as const,
+      };
+    });
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain('"plain-crypto-js" as package name');
+      expect(result.error).toContain(
+        "declared in plain-crypto-js (node_modules/plain-crypto-js/package.json)",
+      );
+    }
+  });
+
   it.each([
     {
       name: "rejects plugins whose minHostVersion is newer than the current host",

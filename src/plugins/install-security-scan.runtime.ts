@@ -538,6 +538,18 @@ export async function scanPackageInstallSourceRuntime(
   return hookResult?.blocked ? hookResult : builtinBlocked;
 }
 
+export async function scanInstalledPackageDependencyTreeRuntime(params: {
+  logger: InstallScanLogger;
+  packageDir: string;
+  pluginId: string;
+}): Promise<InstallSecurityScanResult | undefined> {
+  return await scanManifestDependencyDenylist({
+    logger: params.logger,
+    packageDir: params.packageDir,
+    targetLabel: `Plugin "${params.pluginId}" installation`,
+  });
+}
+
 export async function scanFileInstallSourceRuntime(
   params: InstallSafetyOverrides & {
     filePath: string;
