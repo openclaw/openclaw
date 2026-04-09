@@ -236,14 +236,11 @@ describe("isDangerousHostEnvVarName", () => {
       "CONFIG_SITE",
       "CONFIG_SHELL",
       "CMAKE_TOOLCHAIN_FILE",
-      "ANSIBLE_CONFIG",
-      "ANSIBLE_LIBRARY",
       "ERL_AFLAGS",
       "ERL_FLAGS",
       "ERL_ZFLAGS",
       "R_ENVIRON",
       "R_PROFILE_USER",
-      "TF_CLI_CONFIG_FILE",
     ] as const;
 
     for (const key of keys) {
@@ -252,7 +249,10 @@ describe("isDangerousHostEnvVarName", () => {
     }
 
     expect(isDangerousHostEnvVarName("ANSIBLE_REMOTE_TEMP")).toBe(false);
+    expect(isDangerousHostEnvVarName("ANSIBLE_CONFIG")).toBe(false);
+    expect(isDangerousHostEnvVarName("ANSIBLE_LIBRARY")).toBe(false);
     expect(isDangerousHostEnvVarName("R_LIBS_USER")).toBe(false);
+    expect(isDangerousHostEnvVarName("TF_CLI_CONFIG_FILE")).toBe(false);
     expect(isDangerousHostEnvVarName("TF_PLUGIN_CACHE_DIR")).toBe(false);
     expect(isDangerousHostEnvVarName("AWS_CONTAINER_CREDENTIALS_FULL_URI")).toBe(false);
     expect(isDangerousHostEnvVarName("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")).toBe(false);
@@ -532,10 +532,10 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.AWS_CONTAINER_CREDENTIALS_FULL_URI).toBe("http://169.254.170.2/credentials");
     expect(env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI).toBe("/v2/credentials/abcd");
     expect(env.CONFIG_SITE).toBeUndefined();
-    expect(env.ANSIBLE_CONFIG).toBeUndefined();
+    expect(env.ANSIBLE_CONFIG).toBe("/tmp/evil-ansible.cfg");
     expect(env.R_PROFILE_USER).toBeUndefined();
     expect(env.ERL_AFLAGS).toBeUndefined();
-    expect(env.TF_CLI_CONFIG_FILE).toBeUndefined();
+    expect(env.TF_CLI_CONFIG_FILE).toBe("/tmp/evil-terraformrc");
     expect(env.SAFE).toBe("1");
   });
 
@@ -549,6 +549,8 @@ describe("sanitizeHostExecEnv", () => {
         HOSTALIASES: "/tmp/evil-hostaliases",
         AWS_CONTAINER_CREDENTIALS_FULL_URI: "http://attacker/credentials",
         AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: "/attacker-credentials",
+        ANSIBLE_CONFIG: "/tmp/override-ansible.cfg",
+        TF_CLI_CONFIG_FILE: "/tmp/override-terraformrc",
         GITHUB_TOKEN: "ghp-test",
         DATABASE_URL: "postgres://attacker",
         NPM_TOKEN: "npm-test",
@@ -563,6 +565,8 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.HOSTALIASES).toBeUndefined();
     expect(env.AWS_CONTAINER_CREDENTIALS_FULL_URI).toBeUndefined();
     expect(env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI).toBeUndefined();
+    expect(env.ANSIBLE_CONFIG).toBeUndefined();
+    expect(env.TF_CLI_CONFIG_FILE).toBeUndefined();
     expect(env.GITHUB_TOKEN).toBeUndefined();
     expect(env.DATABASE_URL).toBeUndefined();
     expect(env.NPM_TOKEN).toBeUndefined();
@@ -779,6 +783,9 @@ describe("isDangerousHostEnvOverrideVarName", () => {
       "AWS_ACCESS_KEY_ID",
       "AWS_CONTAINER_CREDENTIALS_FULL_URI",
       "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+      "ANSIBLE_CONFIG",
+      "ANSIBLE_LIBRARY",
+      "TF_CLI_CONFIG_FILE",
       "AWS_SECRET_ACCESS_KEY",
       "AZURE_CLIENT_SECRET",
       "DATABASE_URL",
@@ -1021,6 +1028,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
         LUA_INIT_5_4: "os.execute('touch /tmp/pwned')",
         HOSTALIASES: "/tmp/evil-hostaliases",
         ANSIBLE_CONFIG: "/tmp/evil-ansible.cfg",
+        TF_CLI_CONFIG_FILE: "/tmp/evil-terraformrc",
         AWS_CONTAINER_CREDENTIALS_FULL_URI: "http://attacker/credentials",
         AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: "/attacker-credentials",
         GITHUB_TOKEN: "ghp-test",
@@ -1039,6 +1047,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "HOSTALIASES",
       "LUA_INIT_5_4",
       "R_PROFILE_USER",
+      "TF_CLI_CONFIG_FILE",
       "VIMINIT",
     ]);
     expect(result.rejectedOverrideInvalidKeys).toEqual([]);
@@ -1047,6 +1056,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.LUA_INIT_5_4).toBeUndefined();
     expect(result.env.HOSTALIASES).toBeUndefined();
     expect(result.env.ANSIBLE_CONFIG).toBeUndefined();
+    expect(result.env.TF_CLI_CONFIG_FILE).toBeUndefined();
     expect(result.env.GITHUB_TOKEN).toBeUndefined();
     expect(result.env.DATABASE_URL).toBeUndefined();
     expect(result.env.R_PROFILE_USER).toBeUndefined();
