@@ -119,6 +119,17 @@ describe("dependency denylist guardrails", () => {
     });
   });
 
+  it("finds blocked extensionless package file aliases under node_modules", () => {
+    expect(
+      findBlockedNodeModulesFileAlias({
+        fileRelativePath: "vendor/Node_Modules/Plain-Crypto-Js",
+      }),
+    ).toEqual({
+      dependencyName: "Plain-Crypto-Js",
+      fileRelativePath: "vendor/Node_Modules/Plain-Crypto-Js",
+    });
+  });
+
   it("does not treat similarly named non-node_modules segments as package-resolution paths", () => {
     expect(
       findBlockedNodeModulesDirectory({
@@ -131,6 +142,14 @@ describe("dependency denylist guardrails", () => {
     expect(
       findBlockedNodeModulesFileAlias({
         fileRelativePath: "vendor/plain-crypto-js.js",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not treat dotted non-loadable file aliases as blocked package paths", () => {
+    expect(
+      findBlockedNodeModulesFileAlias({
+        fileRelativePath: "vendor/node_modules/plain-crypto-js.txt",
       }),
     ).toBeUndefined();
   });

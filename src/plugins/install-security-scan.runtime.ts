@@ -150,6 +150,106 @@ function buildBlockedDependencyFileReason(params: {
   return `${params.targetLabel} blocked: blocked dependency file alias "${params.dependencyName}" declared at ${params.fileRelativePath}.`;
 }
 
+function pathContainsNodeModulesSegment(relativePath: string): boolean {
+  return relativePath
+    .split(/[\\/]+/)
+    .map((segment) => segment.trim().toLowerCase())
+    .includes("node_modules");
+}
+
+function buildSyntheticNodeModulesTargetPath(targetRelativePath: string): string | undefined {
+  const segments = targetRelativePath
+    .split(/[\\/]+/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  const targetLeaf = segments.at(-1);
+  if (!targetLeaf) {
+    return undefined;
+  }
+  const targetParent = segments.at(-2);
+  return targetParent?.startsWith("@")
+    ? path.posix.join("node_modules", targetParent, targetLeaf)
+    : path.posix.join("node_modules", targetLeaf);
+}
+
+async function inspectNodeModulesSymlinkTarget(params: {
+  rootRealPath: string;
+  symlinkPath: string;
+  symlinkRelativePath: string;
+}): Promise<
+  Pick<PackageManifestTraversalResult, "blockedDirectoryFinding" | "blockedFileFinding">
+> {
+  let resolvedTargetPath: string;
+  try {
+    resolvedTargetPath = await fs.realpath(params.symlinkPath);
+  } catch (error) {
+    throw new Error(
+      `manifest dependency scan could not resolve symlink target ${params.symlinkRelativePath}: ${String(error)}`,
+      {
+        cause: error,
+      },
+    );
+  }
+
+  if (!isPathInside(params.rootRealPath, resolvedTargetPath)) {
+    throw new Error(
+      `manifest dependency scan found node_modules symlink target outside install root at ${params.symlinkRelativePath}`,
+    );
+  }
+
+  const resolvedTargetRelativePath = path.relative(params.rootRealPath, resolvedTargetPath);
+
+  let resolvedTargetStats: Awaited<ReturnType<typeof fs.stat>>;
+  try {
+    resolvedTargetStats = await fs.stat(resolvedTargetPath);
+  } catch (error) {
+    throw new Error(
+      `manifest dependency scan could not stat symlink target ${params.symlinkRelativePath}: ${String(error)}`,
+      {
+        cause: error,
+      },
+    );
+  }
+
+  if (resolvedTargetStats.isDirectory()) {
+    const syntheticTargetPath = buildSyntheticNodeModulesTargetPath(resolvedTargetRelativePath);
+    const blockedDirectoryFinding = syntheticTargetPath
+      ? findBlockedNodeModulesDirectory({
+          directoryRelativePath: syntheticTargetPath,
+        })
+      : undefined;
+    return {
+      blockedDirectoryFinding: blockedDirectoryFinding
+        ? {
+            ...blockedDirectoryFinding,
+            directoryRelativePath: resolvedTargetRelativePath,
+          }
+        : undefined,
+    };
+  }
+
+  if (resolvedTargetStats.isFile()) {
+    const syntheticTargetPath = buildSyntheticNodeModulesTargetPath(resolvedTargetRelativePath);
+    const blockedFileFinding = syntheticTargetPath
+      ? findBlockedNodeModulesFileAlias({
+          fileRelativePath: syntheticTargetPath,
+        })
+      : undefined;
+    return {
+      blockedFileFinding: blockedFileFinding
+        ? {
+            ...blockedFileFinding,
+            fileRelativePath: resolvedTargetRelativePath,
+          }
+        : undefined,
+    };
+  }
+
+  throw new Error(
+    `manifest dependency scan found unsupported node_modules symlink target type at ${params.symlinkRelativePath}`,
+  );
+}
+
 function buildBuiltinScanFromError(error: unknown): BuiltinInstallScan {
   return {
     status: "error",
@@ -218,6 +318,7 @@ async function collectPackageManifestPaths(
   rootDir: string,
 ): Promise<PackageManifestTraversalResult> {
   const limits = resolvePackageManifestTraversalLimits();
+  const rootRealPath = await fs.realpath(rootDir).catch(() => rootDir);
   const queue: Array<{ depth: number; dir: string }> = [{ depth: 0, dir: rootDir }];
   const packageManifestPaths: string[] = [];
   const visitedDirectories = new Set<string>();
@@ -276,6 +377,34 @@ async function collectPackageManifestPaths(
             blockedDirectoryFinding,
             packageManifestPaths,
           };
+        }
+        const blockedFileFinding = findBlockedNodeModulesFileAlias({
+          fileRelativePath: relativeNextPath,
+        });
+        if (blockedFileFinding) {
+          return {
+            blockedFileFinding,
+            packageManifestPaths,
+          };
+        }
+        if (pathContainsNodeModulesSegment(relativeNextPath)) {
+          const symlinkTargetInspection = await inspectNodeModulesSymlinkTarget({
+            rootRealPath,
+            symlinkPath: nextPath,
+            symlinkRelativePath: relativeNextPath,
+          });
+          if (symlinkTargetInspection.blockedDirectoryFinding) {
+            return {
+              blockedDirectoryFinding: symlinkTargetInspection.blockedDirectoryFinding,
+              packageManifestPaths,
+            };
+          }
+          if (symlinkTargetInspection.blockedFileFinding) {
+            return {
+              blockedFileFinding: symlinkTargetInspection.blockedFileFinding,
+              packageManifestPaths,
+            };
+          }
         }
         continue;
       }

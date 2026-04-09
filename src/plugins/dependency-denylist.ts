@@ -244,10 +244,13 @@ export function findBlockedNodeModulesDirectory(params: {
 
 function parseBlockedPackageFileAliasName(fileName: string): string | undefined {
   const extensionMatch = /^(.+)\.(js|json|node)$/i.exec(fileName);
-  if (!extensionMatch) {
+  if (extensionMatch) {
+    return extensionMatch[1];
+  }
+  if (fileName.includes(".")) {
     return undefined;
   }
-  return extensionMatch[1];
+  return fileName;
 }
 
 export function findBlockedNodeModulesFileAlias(params: {
