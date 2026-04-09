@@ -799,6 +799,17 @@ export async function runEmbeddedPiAgent(
                     source: "assistantError" as const,
                   };
                 }
+                // Some providers (e.g. ZhipuAI/GLM) surface context overflow via
+                // a dedicated stop reason (model_context_window_exceeded) rather
+                // than an error-coded stop with an errorMessage. Detect those here
+                // so the standard overflow recovery path applies.
+                const rawStopReason = lastAssistant?.stopReason;
+                if (rawStopReason && isLikelyContextOverflowError(rawStopReason)) {
+                  return {
+                    text: lastAssistant?.errorMessage?.trim() || rawStopReason,
+                    source: "assistantError" as const,
+                  };
+                }
                 return null;
               })()
             : null;
