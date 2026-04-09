@@ -1440,10 +1440,7 @@ export async function startGatewayServer(
     // current gateway context without relying on a startup snapshot.
     setFallbackGatewayContextResolver(() => gatewayRequestContext);
 
-    // Start channels and plugin sidecars before WebSocket RPC is enabled. Otherwise a
-    // slow or CPU-heavy `chat.history` (sync session store + transcript reads) can block
-    // the event loop and delay channel startup; upgrades also stay 503 until listeners
-    // attach (see attachGatewayUpgradeHandler).
+    // Start sidecars before WS RPC so sync history reads cannot stall startup.
     if (!minimalTestGateway) {
       if (deferredConfiguredChannelPluginIds.length > 0) {
         ({ pluginRegistry } = reloadDeferredGatewayPlugins({
