@@ -57,31 +57,28 @@ Use `qa character-eval` for style/persona/vibe checks across multiple live model
 pnpm openclaw qa character-eval \
   --model openai/gpt-5.4,thinking=xhigh \
   --model openai/gpt-5.2,thinking=xhigh \
+  --model openai/gpt-5,thinking=xhigh \
   --model anthropic/claude-opus-4-6,thinking=high \
   --model anthropic/claude-sonnet-4-6,thinking=high \
-  --model minimax/MiniMax-M2.7,thinking=high \
   --model zai/glm-5.1,thinking=high \
   --model moonshot/kimi-k2.5,thinking=high \
-  --model qwen/qwen3.6-plus,thinking=high \
-  --model xiaomi/mimo-v2-pro,thinking=high \
   --model google/gemini-3.1-pro-preview,thinking=high \
-  --model codex-cli/<codex-model>,thinking=high \
   --judge-model openai/gpt-5.4,thinking=xhigh,fast \
   --judge-model anthropic/claude-opus-4-6,thinking=high \
-  --concurrency 8 \
-  --judge-concurrency 8 \
+  --concurrency 16 \
+  --judge-concurrency 16 \
   --output-dir .artifacts/qa-e2e/character-eval-<tag>
 ```
 
 - Runs local QA gateway child processes, not Docker.
 - Preferred model spec syntax is `provider/model,thinking=<level>[,fast|,no-fast|,fast=<bool>]` for both `--model` and `--judge-model`.
 - Do not add new examples with separate `--model-thinking`; keep that flag as legacy compatibility only.
-- Defaults to candidate models `openai/gpt-5.4`, `openai/gpt-5.2`, `anthropic/claude-opus-4-6`, `anthropic/claude-sonnet-4-6`, `minimax/MiniMax-M2.7`, `zai/glm-5.1`, `moonshot/kimi-k2.5`, `qwen/qwen3.6-plus`, `xiaomi/mimo-v2-pro`, and `google/gemini-3.1-pro-preview` when no `--model` is passed.
+- Defaults to candidate models `openai/gpt-5.4`, `openai/gpt-5.2`, `openai/gpt-5`, `anthropic/claude-opus-4-6`, `anthropic/claude-sonnet-4-6`, `zai/glm-5.1`, `moonshot/kimi-k2.5`, and `google/gemini-3.1-pro-preview` when no `--model` is passed.
 - Candidate thinking defaults to `high`, with `xhigh` for OpenAI models that support it. Prefer inline `--model provider/model,thinking=<level>`; `--thinking <level>` and `--model-thinking <provider/model=level>` remain compatibility shims.
 - OpenAI candidate refs default to fast mode so priority processing is used where supported. Use inline `,fast`, `,no-fast`, or `,fast=false` for one model; use `--fast` only to force fast mode for every candidate.
 - Judges default to `openai/gpt-5.4,thinking=xhigh,fast` and `anthropic/claude-opus-4-6,thinking=high`.
 - Report includes judge ranking, run stats, durations, and full transcripts; do not include raw judge replies. Duration is benchmark context, not a grading signal.
-- Candidate and judge concurrency default to 8. Use `--concurrency <n>` and `--judge-concurrency <n>` to override when local gateways or provider limits need a gentler lane.
+- Candidate and judge concurrency default to 16. Use `--concurrency <n>` and `--judge-concurrency <n>` to override when local gateways or provider limits need a gentler lane.
 - Scenario source should stay markdown-driven under `qa/scenarios/`.
 - For isolated character/persona evals, write the persona into `SOUL.md` and blank `IDENTITY.md` in the scenario flow. Use `SOUL.md + IDENTITY.md` only when intentionally testing how the normal OpenClaw identity combines with the character.
 - Keep prompts natural and task-shaped. The candidate model should receive character setup through `SOUL.md`, then normal user turns such as chat, workspace help, and small file tasks; do not ask "how would you react?" or tell the model it is in an eval.

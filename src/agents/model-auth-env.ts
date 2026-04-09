@@ -35,6 +35,7 @@ export function resolveEnvApiKey(
         return resolved;
       }
     }
+    return null;
   }
 
   if (normalized === "google-vertex") {

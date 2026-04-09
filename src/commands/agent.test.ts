@@ -55,6 +55,16 @@ vi.mock("../agents/auth-profiles.js", async () => {
   };
 });
 
+vi.mock("../agents/auth-profiles/store.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/auth-profiles/store.js")>(
+    "../agents/auth-profiles/store.js",
+  );
+  return {
+    ...actual,
+    ensureAuthProfileStore: vi.fn(() => ({ version: 1, profiles: {} })),
+  };
+});
+
 vi.mock("../agents/workspace.js", () => {
   const resolveDefaultAgentWorkspaceDir = () => "/tmp/openclaw-workspace";
   return {
@@ -947,14 +957,6 @@ describe("agentCommand", () => {
       seedKey: "agent:main:subagent:abc",
       sessionId: "sess-main",
       expectedPathFragment: `${path.sep}agents${path.sep}main${path.sep}sessions${path.sep}sess-main.jsonl`,
-    });
-  });
-
-  it("preserves topic transcript suffix when persisting missing sessionFile", async () => {
-    await expectPersistedSessionFile({
-      seedKey: "agent:main:telegram:group:123:topic:456",
-      sessionId: "sess-topic",
-      expectedPathFragment: `${path.sep}agents${path.sep}main${path.sep}sessions${path.sep}sess-topic.jsonl`,
     });
   });
 

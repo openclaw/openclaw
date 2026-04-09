@@ -107,6 +107,7 @@ describe("subagent registry persistence resume", () => {
   };
 
   beforeAll(async () => {
+    vi.resetModules();
     mod = await import("./subagent-registry.js");
     callGatewayModule = await import("../gateway/call.js");
     agentEventsModule = await import("../infra/agent-events.js");

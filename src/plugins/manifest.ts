@@ -97,6 +97,11 @@ export type PluginManifest = {
   channels?: string[];
   providers?: string[];
   /**
+   * Optional lightweight module that exports provider plugin metadata for
+   * auth/catalog discovery. It should not import the full plugin runtime.
+   */
+  providerDiscoveryEntry?: string;
+  /**
    * Cheap model-family ownership metadata used before plugin runtime loads.
    * Use this for shorthand model refs that omit an explicit provider prefix.
    */
@@ -531,6 +536,7 @@ export function loadPluginManifest(
   const version = normalizeOptionalString(raw.version);
   const channels = normalizeTrimmedStringList(raw.channels);
   const providers = normalizeTrimmedStringList(raw.providers);
+  const providerDiscoveryEntry = normalizeOptionalString(raw.providerDiscoveryEntry);
   const modelSupport = normalizeManifestModelSupport(raw.modelSupport);
   const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
   const providerAuthEnvVars = normalizeStringListRecord(raw.providerAuthEnvVars);
@@ -560,6 +566,7 @@ export function loadPluginManifest(
       kind,
       channels,
       providers,
+      providerDiscoveryEntry,
       modelSupport,
       cliBackends,
       providerAuthEnvVars,

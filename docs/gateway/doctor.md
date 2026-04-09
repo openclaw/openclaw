@@ -93,6 +93,40 @@ cat ~/.openclaw/openclaw.json
 - Source install checks (pnpm workspace mismatch, missing UI assets, missing tsx binary).
 - Writes updated config + wizard metadata.
 
+## Dreams UI backfill and reset
+
+The Control UI Dreams scene includes **Backfill**, **Reset**, and **Clear Grounded**
+actions for the grounded dreaming workflow. These actions use gateway
+doctor-style RPC methods, but they are **not** part of `openclaw doctor` CLI
+repair/migration.
+
+What they do:
+
+- **Backfill** scans historical `memory/YYYY-MM-DD.md` files in the active
+  workspace, runs the grounded REM diary pass, and writes reversible backfill
+  entries into `DREAMS.md`.
+- **Reset** removes only those marked backfill diary entries from `DREAMS.md`.
+- **Clear Grounded** removes only staged grounded-only short-term entries that
+  came from historical replay and have not accumulated live recall or daily
+  support yet.
+
+What they do **not** do by themselves:
+
+- they do not edit `MEMORY.md`
+- they do not run full doctor migrations
+- they do not automatically stage grounded candidates into the live short-term
+  promotion store unless you explicitly run the staged CLI path first
+
+If you want grounded historical replay to influence the normal deep promotion
+lane, use the CLI flow instead:
+
+```bash
+openclaw memory rem-backfill --path ./memory --stage-short-term
+```
+
+That stages grounded durable candidates into the short-term dreaming store while
+keeping `DREAMS.md` as the review surface.
+
 ## Detailed behavior and rationale
 
 ### 0) Optional update (git installs)

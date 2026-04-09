@@ -232,4 +232,199 @@ describe("matrix doctor", () => {
       ]),
     );
   });
+
+  it("migrates legacy channels.matrix.dm.policy 'trusted' with allowFrom to 'allowlist'", () => {
+    const normalize = matrixDoctor.normalizeCompatibilityConfig;
+    expect(normalize).toBeDefined();
+    if (!normalize) {
+      return;
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          matrix: {
+            dm: {
+              enabled: true,
+              policy: "trusted",
+              allowFrom: ["@alice:example.org", "@bob:example.org"],
+            },
+          },
+        },
+      } as never,
+    });
+
+    const matrixDm = (
+      result.config.channels?.matrix as { dm?: { policy?: string; allowFrom?: string[] } }
+    )?.dm;
+
+    expect(matrixDm?.policy).toBe("allowlist");
+    expect(matrixDm?.allowFrom).toEqual(["@alice:example.org", "@bob:example.org"]);
+    expect(result.changes).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('Migrated channels.matrix.dm.policy "trusted" → "allowlist"'),
+        expect.stringContaining("preserved 2 channels.matrix.dm.allowFrom entries"),
+      ]),
+    );
+  });
+
+  it("migrates legacy 'trusted' policy with whitespace-only allowFrom entries to 'pairing'", () => {
+    // Whitespace-only entries are dropped by downstream allowlist normalization,
+    // so they must not count toward the allowFrom population check — otherwise
+    // the migration would emit policy="allowlist" with an effectively empty
+    // allowlist, silently blocking all DMs.
+    const normalize = matrixDoctor.normalizeCompatibilityConfig;
+    expect(normalize).toBeDefined();
+    if (!normalize) {
+      return;
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          matrix: {
+            dm: {
+              enabled: true,
+              policy: "trusted",
+              allowFrom: ["   ", "\t", ""],
+            },
+          },
+        },
+      } as never,
+    });
+
+    const matrixDm = (result.config.channels?.matrix as { dm?: { policy?: string } })?.dm;
+    expect(matrixDm?.policy).toBe("pairing");
+    expect(result.changes).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('Migrated channels.matrix.dm.policy "trusted" → "pairing"'),
+      ]),
+    );
+  });
+
+  it("migrates legacy channels.matrix.dm.policy 'trusted' without allowFrom to 'pairing'", () => {
+    const normalize = matrixDoctor.normalizeCompatibilityConfig;
+    expect(normalize).toBeDefined();
+    if (!normalize) {
+      return;
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          matrix: {
+            dm: {
+              enabled: true,
+              policy: "trusted",
+            },
+          },
+        },
+      } as never,
+    });
+
+    const matrixDm = (result.config.channels?.matrix as { dm?: { policy?: string } })?.dm;
+    expect(matrixDm?.policy).toBe("pairing");
+    expect(result.changes).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('Migrated channels.matrix.dm.policy "trusted" → "pairing"'),
+      ]),
+    );
+  });
+
+  it("migrates legacy per-account channels.matrix.accounts.<id>.dm.policy 'trusted'", () => {
+    const normalize = matrixDoctor.normalizeCompatibilityConfig;
+    expect(normalize).toBeDefined();
+    if (!normalize) {
+      return;
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          matrix: {
+            accounts: {
+              work: {
+                dm: {
+                  enabled: true,
+                  policy: "trusted",
+                  allowFrom: ["@boss:example.org"],
+                },
+              },
+              personal: {
+                dm: {
+                  enabled: true,
+                  policy: "trusted",
+                },
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    const accounts = (
+      result.config.channels?.matrix as {
+        accounts?: Record<string, { dm?: { policy?: string; allowFrom?: string[] } }>;
+      }
+    )?.accounts;
+
+    expect(accounts?.work?.dm?.policy).toBe("allowlist");
+    expect(accounts?.work?.dm?.allowFrom).toEqual(["@boss:example.org"]);
+    expect(accounts?.personal?.dm?.policy).toBe("pairing");
+    expect(result.changes).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          'Migrated channels.matrix.accounts.work.dm.policy "trusted" → "allowlist"',
+        ),
+        expect.stringContaining(
+          'Migrated channels.matrix.accounts.personal.dm.policy "trusted" → "pairing"',
+        ),
+      ]),
+    );
+  });
+
+  it("leaves modern dm.policy values untouched", () => {
+    const normalize = matrixDoctor.normalizeCompatibilityConfig;
+    expect(normalize).toBeDefined();
+    if (!normalize) {
+      return;
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          matrix: {
+            dm: {
+              enabled: true,
+              policy: "allowlist",
+              allowFrom: ["@alice:example.org"],
+            },
+            accounts: {
+              work: {
+                dm: { enabled: true, policy: "pairing" },
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.changes).toEqual([]);
+    expect(result.config).toEqual({
+      channels: {
+        matrix: {
+          dm: {
+            enabled: true,
+            policy: "allowlist",
+            allowFrom: ["@alice:example.org"],
+          },
+          accounts: {
+            work: {
+              dm: { enabled: true, policy: "pairing" },
+            },
+          },
+        },
+      },
+    });
+  });
 });

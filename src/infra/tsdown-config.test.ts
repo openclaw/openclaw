@@ -4,7 +4,7 @@ import tsdownConfig from "../../tsdown.config.ts";
 
 type TsdownConfigEntry = {
   deps?: {
-    neverBundle?: string[];
+    neverBundle?: string[] | ((id: string) => boolean);
   };
   entry?: Record<string, string> | string[];
   outDir?: string;
@@ -78,7 +78,15 @@ describe("tsdown config", () => {
   it("externalizes staged bundled plugin runtime dependencies", () => {
     const configs = asConfigArray(tsdownConfig);
     const unifiedGraph = configs.find((config) => entryKeys(config).includes("index"));
+    const neverBundle = unifiedGraph?.deps?.neverBundle;
 
-    expect(unifiedGraph?.deps?.neverBundle).toEqual(expect.arrayContaining(["silk-wasm", "ws"]));
+    if (typeof neverBundle === "function") {
+      expect(neverBundle("silk-wasm")).toBe(true);
+      expect(neverBundle("ws")).toBe(true);
+      expect(neverBundle("ws/lib/websocket.js")).toBe(true);
+      expect(neverBundle("not-a-runtime-dependency")).toBe(false);
+    } else {
+      expect(neverBundle).toEqual(expect.arrayContaining(["silk-wasm", "ws"]));
+    }
   });
 });

@@ -3,6 +3,7 @@ import {
   backfillDreamDiary,
   loadDreamDiary,
   loadDreamingStatus,
+  resetGroundedShortTerm,
   resetDreamDiary,
   resolveConfiguredDreaming,
   updateDreamingEnabled,
@@ -52,6 +53,7 @@ describe("dreaming controller", () => {
         shortTermCount: 8,
         recallSignalCount: 14,
         dailySignalCount: 6,
+        groundedSignalCount: 5,
         totalSignalCount: 20,
         phaseSignalCount: 11,
         lightPhaseHitCount: 7,
@@ -67,6 +69,7 @@ describe("dreaming controller", () => {
             snippet: "Emma prefers shorter, lower-pressure check-ins.",
             recallCount: 2,
             dailyCount: 1,
+            groundedCount: 1,
             totalSignalCount: 3,
             lightHits: 1,
             remHits: 2,
@@ -83,6 +86,7 @@ describe("dreaming controller", () => {
             snippet: "Emma prefers shorter, lower-pressure check-ins.",
             recallCount: 2,
             dailyCount: 1,
+            groundedCount: 1,
             totalSignalCount: 3,
             lightHits: 1,
             remHits: 2,
@@ -98,6 +102,7 @@ describe("dreaming controller", () => {
             snippet: "Use the Happy Together calendar for flights.",
             recallCount: 3,
             dailyCount: 2,
+            groundedCount: 0,
             totalSignalCount: 5,
             lightHits: 0,
             remHits: 0,
@@ -146,6 +151,7 @@ describe("dreaming controller", () => {
       expect.objectContaining({
         enabled: true,
         shortTermCount: 8,
+        groundedSignalCount: 5,
         totalSignalCount: 20,
         phaseSignalCount: 11,
         promotedToday: 2,
@@ -153,6 +159,7 @@ describe("dreaming controller", () => {
           expect.objectContaining({
             snippet: "Emma prefers shorter, lower-pressure check-ins.",
             totalSignalCount: 3,
+            groundedCount: 1,
             phaseHitCount: 3,
           }),
         ],
@@ -493,6 +500,29 @@ describe("dreaming controller", () => {
     expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", {});
     expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
     expect(state.dreamDiaryContent).toBeNull();
+    expect(state.dreamDiaryActionLoading).toBe(false);
+  });
+
+  it("clears grounded staged entries and reloads only dreaming status", async () => {
+    const { state, request } = createState();
+    state.dreamDiaryContent = "keep existing diary";
+    request.mockImplementation(async (method: string) => {
+      if (method === "doctor.memory.resetGroundedShortTerm") {
+        return { action: "resetGroundedShortTerm", removedShortTermEntries: 2 };
+      }
+      if (method === "doctor.memory.status") {
+        return { dreaming: null };
+      }
+      return {};
+    });
+
+    const ok = await resetGroundedShortTerm(state);
+
+    expect(ok).toBe(true);
+    expect(request).toHaveBeenCalledWith("doctor.memory.resetGroundedShortTerm", {});
+    expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
+    expect(request).not.toHaveBeenCalledWith("doctor.memory.dreamDiary", {});
+    expect(state.dreamDiaryContent).toBe("keep existing diary");
     expect(state.dreamDiaryActionLoading).toBe(false);
   });
 });
