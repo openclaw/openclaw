@@ -33,6 +33,7 @@ type PackageManifest = {
   name?: string;
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
+  overrides?: Record<string, unknown>;
   peerDependencies?: Record<string, string>;
 };
 
@@ -85,7 +86,7 @@ function buildBlockedDependencyReason(params: {
   findings: Array<{
     dependencyName: string;
     declaredAs?: string;
-    field: "dependencies" | "name" | "optionalDependencies" | "peerDependencies";
+    field: "dependencies" | "name" | "optionalDependencies" | "overrides" | "peerDependencies";
   }>;
   manifestPackageName?: string;
   manifestRelativePath: string;

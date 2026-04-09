@@ -7,7 +7,7 @@ export const blockedInstallDependencyPackageNames = [
 export type BlockedManifestDependencyFinding = {
   dependencyName: string;
   declaredAs?: string;
-  field: "dependencies" | "name" | "optionalDependencies" | "peerDependencies";
+  field: "dependencies" | "name" | "optionalDependencies" | "overrides" | "peerDependencies";
 };
 
 type PackageDependencyFields = {
@@ -15,6 +15,12 @@ type PackageDependencyFields = {
 } & Partial<
   Record<Exclude<BlockedManifestDependencyFinding["field"], "name">, Record<string, string>>
 >;
+
+type PackageOverrideFields = {
+  overrides?: PackageOverrideValue;
+};
+
+type PackageOverrideValue = string | Record<string, PackageOverrideValue>;
 
 const BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAME_SET = new Set<string>(
   blockedInstallDependencyPackageNames,
@@ -44,12 +50,73 @@ function parseNpmAliasTargetPackageName(spec: string): string | undefined {
   return versionSeparatorIndex < 0 ? aliasTarget : aliasTarget.slice(0, versionSeparatorIndex);
 }
 
+function parsePackageNameFromOverrideSelector(selector: string): string | undefined {
+  const normalized = selector.trim();
+  if (!normalized || normalized === ".") {
+    return undefined;
+  }
+
+  if (normalized.startsWith("@")) {
+    const slashIndex = normalized.indexOf("/");
+    if (slashIndex < 0) {
+      return undefined;
+    }
+    const versionSeparatorIndex = normalized.indexOf("@", slashIndex + 1);
+    return versionSeparatorIndex < 0 ? normalized : normalized.slice(0, versionSeparatorIndex);
+  }
+
+  const versionSeparatorIndex = normalized.indexOf("@");
+  return versionSeparatorIndex < 0 ? normalized : normalized.slice(0, versionSeparatorIndex);
+}
+
+function collectBlockedOverrideFindings(
+  value: PackageOverrideValue,
+  path: string[] = [],
+): BlockedManifestDependencyFinding[] {
+  if (typeof value === "string") {
+    const aliasTargetPackageName = parseNpmAliasTargetPackageName(value);
+    if (!aliasTargetPackageName) {
+      return [];
+    }
+    if (!BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAME_SET.has(aliasTargetPackageName)) {
+      return [];
+    }
+    return [
+      {
+        dependencyName: aliasTargetPackageName,
+        declaredAs: path.join(" > "),
+        field: "overrides",
+      },
+    ];
+  }
+
+  const findings: BlockedManifestDependencyFinding[] = [];
+  for (const overrideKey of Object.keys(value).toSorted()) {
+    const overrideSelectorPackageName = parsePackageNameFromOverrideSelector(overrideKey);
+    if (
+      overrideSelectorPackageName &&
+      BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAME_SET.has(overrideSelectorPackageName)
+    ) {
+      findings.push({
+        dependencyName: overrideSelectorPackageName,
+        declaredAs: [...path, overrideKey].join(" > "),
+        field: "overrides",
+      });
+    }
+    findings.push(...collectBlockedOverrideFindings(value[overrideKey], [...path, overrideKey]));
+  }
+  return findings;
+}
+
 export function findBlockedManifestDependencies(
-  manifest: PackageDependencyFields,
+  manifest: PackageDependencyFields & PackageOverrideFields,
 ): BlockedManifestDependencyFinding[] {
   const findings: BlockedManifestDependencyFinding[] = [];
   if (manifest.name && BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAME_SET.has(manifest.name)) {
     findings.push({ dependencyName: manifest.name, field: "name" });
+  }
+  if (manifest.overrides) {
+    findings.push(...collectBlockedOverrideFindings(manifest.overrides));
   }
   for (const field of ["dependencies", "optionalDependencies", "peerDependencies"] as const) {
     const dependencyMap = manifest[field];

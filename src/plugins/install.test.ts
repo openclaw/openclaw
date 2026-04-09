@@ -822,6 +822,38 @@ describe("installPluginFromArchive", () => {
     }
   });
 
+  it("blocks package installs when overrides alias to a blocked package", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "override-aliased-blocked-dependency-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["index.js"] },
+        overrides: {
+          "@scope/parent": {
+            "safe-name": "npm:plain-crypto-js@^4.2.1",
+          },
+        },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n");
+
+    const { result } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain(
+        '"plain-crypto-js" via alias "@scope/parent > safe-name" in overrides',
+      );
+      expect(result.error).toContain(
+        "declared in override-aliased-blocked-dependency-plugin (package.json)",
+      );
+    }
+  });
+
   it("blocks package installs when a nested vendored package manifest declares a blocked dependency", async () => {
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
 

@@ -9,6 +9,7 @@ import {
 type RootPackageManifest = {
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
+  overrides?: Record<string, string>;
   peerDependencies?: Record<string, string>;
   pnpm?: {
     overrides?: Record<string, string>;
@@ -58,8 +59,28 @@ describe("dependency denylist guardrails", () => {
     ]);
   });
 
+  it("finds blocked packages declared through nested override alias specs", () => {
+    expect(
+      findBlockedManifestDependencies({
+        overrides: {
+          axios: "1.14.0",
+          "@scope/parent": {
+            "safe-name": "npm:plain-crypto-js@^4.2.1",
+          },
+        },
+      }),
+    ).toEqual([
+      {
+        dependencyName: "plain-crypto-js",
+        declaredAs: "@scope/parent > safe-name",
+        field: "overrides",
+      },
+    ]);
+  });
+
   it("pins the axios override to an exact version", () => {
     const manifest = readRootManifest();
+    expect(manifest.overrides?.axios).toMatch(/^\d+\.\d+\.\d+$/);
     expect(manifest.pnpm?.overrides?.axios).toMatch(/^\d+\.\d+\.\d+$/);
   });
 

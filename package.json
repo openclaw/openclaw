@@ -1427,6 +1427,9 @@
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
     "openshell": "0.1.0"
   },
+  "overrides": {
+    "axios": "1.14.0"
+  },
   "engines": {
     "node": ">=22.14.0"
   },
