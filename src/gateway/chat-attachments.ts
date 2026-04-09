@@ -304,16 +304,92 @@ export async function parseMessageWithAttachments(
     return { message, images: [], imageOrder: [], offloadedRefs: [] };
   }
 
-  // For text-only models drop all attachments cleanly. Do not save files or
-  // inject media:// markers that would never be resolved and would leak
-  // internal path references into the model's prompt.
+  // For text-only models, save attachments to disk and inject media:// markers
+  // into the message text so that downstream tool calls (e.g. image tool using
+  // imageModel) can still access them. Do not return inline images since the
+  // primary model cannot process them directly.
   if (opts?.supportsImages === false) {
-    if (attachments.length > 0) {
-      log?.warn(
-        `parseMessageWithAttachments: ${attachments.length} attachment(s) dropped — model does not support images`,
+    if (attachments.length === 0) {
+      return { message, images: [], imageOrder: [], offloadedRefs: [] };
+    }
+    const offloadedRefs: OffloadedRef[] = [];
+    const imageOrder: PromptImageOrderEntry[] = [];
+    let updatedMessage = message;
+    const savedMediaIds: string[] = [];
+    try {
+      for (const [idx, att] of attachments.entries()) {
+        const normalized = normalizeAttachment(att, idx, {
+          stripDataUrlPrefix: true,
+          requireImageMime: false,
+        });
+        const { base64: b64, label, mime } = normalized;
+        if (!isValidBase64(b64)) {
+          log?.warn?.(`attachment ${label}: invalid base64 content, skipping`);
+          continue;
+        }
+        const sizeBytes = estimateBase64DecodedBytes(b64);
+        if (sizeBytes <= 0) {
+          log?.warn?.(`attachment ${label}: estimated size is zero, skipping`);
+          continue;
+        }
+        if (sizeBytes > maxBytes) {
+          log?.warn?.(
+            `attachment ${label}: exceeds size limit (${sizeBytes} > ${maxBytes} bytes), skipping`,
+          );
+          continue;
+        }
+        const sniffedMime = normalizeMime(await sniffMimeFromBase64(b64));
+        const providedMime = normalizeMime(mime);
+        const finalMime = sniffedMime ?? providedMime ?? normalizeMime(mime) ?? mime;
+        if (sniffedMime && !isImageMime(sniffedMime)) {
+          log?.warn?.(`attachment ${label}: detected non-image (${sniffedMime}), skipping`);
+          continue;
+        }
+        try {
+          const buffer = Buffer.from(b64, "base64");
+          const labelWithExt = ensureExtension(label, finalMime);
+          const rawResult = await saveMediaBuffer(
+            buffer,
+            finalMime,
+            "inbound",
+            maxBytes,
+            labelWithExt,
+          );
+          const savedMedia = assertSavedMedia(rawResult, label);
+          savedMediaIds.push(savedMedia.id);
+          const mediaRef = `media://inbound/${savedMedia.id}`;
+          updatedMessage += `\n[media attached: ${mediaRef}]`;
+          offloadedRefs.push({
+            mediaRef,
+            id: savedMedia.id,
+            path: savedMedia.path ?? "",
+            mimeType: finalMime,
+            label,
+          });
+          imageOrder.push("offloaded");
+        } catch (err) {
+          log?.warn?.(
+            `attachment ${label}: failed to save for text-only offload: ${formatErrorMessage(err)}`,
+          );
+          // Best-effort cleanup
+          await Promise.allSettled(savedMediaIds.map((id) => deleteMediaBuffer(id, "inbound")));
+          break;
+        }
+      }
+    } catch (err) {
+      log?.warn?.(
+        `parseMessageWithAttachments: unexpected error during text-only offload: ${formatErrorMessage(err)}`,
       );
     }
-    return { message, images: [], imageOrder: [], offloadedRefs: [] };
+    log?.info?.(
+      `parseMessageWithAttachments: ${offloadedRefs.length} attachment(s) saved for text-only model (media:// refs injected)`,
+    );
+    return {
+      message: updatedMessage !== message ? updatedMessage.trimEnd() : message,
+      images: [],
+      imageOrder,
+      offloadedRefs,
+    };
   }
 
   const images: ChatImageContent[] = [];
