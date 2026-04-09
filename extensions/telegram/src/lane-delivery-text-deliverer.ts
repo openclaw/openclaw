@@ -229,6 +229,15 @@ function scorePreviewAffinity(previewText: string | undefined, finalText: string
   return commonPrefixLength(candidate, target);
 }
 
+function shouldConsumeBoundaryPreview(previewText: string | undefined, finalText: string): boolean {
+  const candidate = previewText?.trim();
+  const target = finalText.trim();
+  if (!candidate || !target) {
+    return false;
+  }
+  return candidate.startsWith(target) || target.startsWith(candidate);
+}
+
 export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
   const getLanePreviewText = (lane: DraftLaneState) => lane.lastPartialText;
   const markActivePreviewComplete = (laneName: LaneName) => {
@@ -248,14 +257,8 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     );
   };
 
-  const deleteArchivedPreviewBatch = async (previews: ArchivedPreview[], finalText?: string) => {
+  const deleteArchivedPreviewBatch = async (previews: ArchivedPreview[]) => {
     for (const preview of previews) {
-      if (
-        preview.deleteIfUnused === false &&
-        scorePreviewAffinity(preview.textSnapshot, finalText ?? "") === 0
-      ) {
-        continue;
-      }
       try {
         await params.deletePreviewMessage(preview.messageId);
       } catch (err) {
@@ -276,7 +279,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       params.archivedAnswerPreviews.length,
       ...params.archivedAnswerPreviews.filter((preview) => !staleIds.has(preview.messageId)),
     );
-    await deleteArchivedPreviewBatch(previews, finalText);
+    await deleteArchivedPreviewBatch(previews);
   };
 
   const resolveAnswerPreviewSelection = (
@@ -286,6 +289,10 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     if (params.archivedAnswerPreviews.length === 0) {
       return undefined;
     }
+    const isStaleForFinal = (preview: ArchivedPreview) =>
+      preview.deleteIfUnused === false
+        ? shouldConsumeBoundaryPreview(preview.textSnapshot, text)
+        : scorePreviewAffinity(preview.textSnapshot, text) > 0;
     const bestArchived = params.archivedAnswerPreviews.reduce<
       { index: number; score: number } | undefined
     >((best, preview, index) => {
@@ -299,7 +306,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     if (activePreviewScore > 0 && activePreviewScore >= (bestArchived?.score ?? 0)) {
       return {
         source: "active",
-        staleArchivedPreviews: params.archivedAnswerPreviews.slice(),
+        staleArchivedPreviews: params.archivedAnswerPreviews.filter(isStaleForFinal),
       };
     }
     if (!bestArchived) {
@@ -308,7 +315,9 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     return {
       source: "archived",
       archivedIndex: bestArchived.index,
-      staleArchivedPreviews: params.archivedAnswerPreviews.slice(0, bestArchived.index),
+      staleArchivedPreviews: params.archivedAnswerPreviews
+        .slice(0, bestArchived.index)
+        .filter(isStaleForFinal),
     };
   };
 
@@ -591,7 +600,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     }
     const consumeArchivedSelection = async () => {
       params.archivedAnswerPreviews.splice(0, selection.archivedIndex + 1);
-      await deleteArchivedPreviewBatch(selection.staleArchivedPreviews, text);
+      await deleteArchivedPreviewBatch(selection.staleArchivedPreviews);
     };
     if (canEditViaPreview) {
       const finalized = await tryUpdatePreviewForLane({

@@ -1305,12 +1305,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
       .mockImplementationOnce(() => reasoningDraftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onPartialReply?.({ text: "Attempt A partial" });
+        await replyOptions?.onPartialReply?.({ text: "Attempt C" });
         await replyOptions?.onAssistantMessageStart?.();
-        await replyOptions?.onPartialReply?.({ text: "Attempt B partial" });
+        await replyOptions?.onPartialReply?.({ text: "Attempt C fin" });
         await replyOptions?.onAssistantMessageStart?.();
-        await replyOptions?.onPartialReply?.({ text: "Attempt C partial" });
-        await dispatcherOptions.deliver({ text: "Attempt C final" }, { kind: "final" });
+        await replyOptions?.onPartialReply?.({ text: "Attempt C final" });
+        await dispatcherOptions.deliver({ text: "Attempt C final complete" }, { kind: "final" });
         return { queuedFinal: true };
       },
     );
@@ -1323,7 +1323,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(editMessageTelegram).toHaveBeenCalledWith(
       123,
       1003,
-      "Attempt C final",
+      "Attempt C final complete",
       expect.any(Object),
     );
     expect((bot.api.deleteMessage as ReturnType<typeof vi.fn>).mock.calls).toEqual(
