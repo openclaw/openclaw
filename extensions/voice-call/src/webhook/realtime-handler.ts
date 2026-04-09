@@ -3,7 +3,6 @@ import http from "node:http";
 import type { Duplex } from "node:stream";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
-  RealtimeVoiceBridge,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceProviderPlugin,
 } from "openclaw/plugin-sdk/realtime-voice";
@@ -18,6 +17,7 @@ export type ToolHandlerFn = (args: unknown, callId: string) => Promise<unknown>;
 
 const STREAM_TOKEN_TTL_MS = 30_000;
 const DEFAULT_HOST = "localhost:8443";
+const MAX_REALTIME_MESSAGE_BYTES = 256 * 1024;
 
 function normalizePath(pathname: string): string {
   const trimmed = pathname.trim();
@@ -56,6 +56,16 @@ type PendingStreamToken = {
 type CallRegistration = {
   callId: string;
   initialGreetingInstructions?: string;
+};
+
+type ActiveRealtimeVoiceBridge = {
+  connect(): Promise<void>;
+  sendAudio(audio: Buffer): void;
+  setMediaTimestamp(timestamp: number): void;
+  submitToolResult(callId: string, result: unknown): void;
+  acknowledgeMark(): void;
+  close(): void;
+  triggerGreeting?(instructions?: string): void;
 };
 
 export class RealtimeCallHandler {
@@ -123,9 +133,13 @@ export class RealtimeCallHandler {
       return;
     }
 
-    const wss = new WebSocketServer({ noServer: true });
+    const wss = new WebSocketServer({
+      noServer: true,
+      // Reject oversized realtime frames before JSON parsing or bridge setup runs.
+      maxPayload: MAX_REALTIME_MESSAGE_BYTES,
+    });
     wss.handleUpgrade(request, socket, head, (ws) => {
-      let bridge: RealtimeVoiceBridge | null = null;
+      let bridge: ActiveRealtimeVoiceBridge | null = null;
       let initialized = false;
 
       ws.on("message", (data: Buffer) => {
@@ -174,6 +188,10 @@ export class RealtimeCallHandler {
       ws.on("close", () => {
         bridge?.close();
       });
+
+      ws.on("error", (error) => {
+        console.error("[voice-call] realtime WS error:", error);
+      });
     });
   }
 
@@ -213,7 +231,7 @@ export class RealtimeCallHandler {
     callSid: string,
     ws: WebSocket,
     callerMeta: Omit<PendingStreamToken, "expiry">,
-  ): RealtimeVoiceBridge | null {
+  ): ActiveRealtimeVoiceBridge | null {
     const registration = this.registerCallInManager(callSid, callerMeta);
     if (!registration) {
       ws.close(1008, "Caller rejected by policy");
@@ -221,7 +239,7 @@ export class RealtimeCallHandler {
     }
 
     const { callId, initialGreetingInstructions } = registration;
-    let bridge: RealtimeVoiceBridge | null = null;
+    let bridge: ActiveRealtimeVoiceBridge | null = null;
     let callEndEmitted = false;
     const emitCallEnd = (reason: "completed" | "error") => {
       if (callEndEmitted) {
@@ -397,7 +415,7 @@ export class RealtimeCallHandler {
   }
 
   private async executeToolCall(
-    bridge: RealtimeVoiceBridge,
+    bridge: ActiveRealtimeVoiceBridge,
     callId: string,
     bridgeCallId: string,
     name: string,
