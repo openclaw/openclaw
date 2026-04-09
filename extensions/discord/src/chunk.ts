@@ -234,11 +234,6 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
       let segment = segments[segIndex];
       const isLineContinuation = segIndex > 0;
 
-      // Apply blockquote prefix to continuation segments after a flush
-      if (insideBlockquote && isLineContinuation) {
-        segment = applyBlockquoteToSegment(segment, insideBlockquote);
-      }
-
       const delimiter = isLineContinuation ? "" : current.length > 0 ? "\n" : "";
       const addition = `${delimiter}${segment}`;
       const nextLen = current.length + addition.length;

@@ -357,7 +357,10 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
     if (text.length - start <= contentLimit) {
       let finalContent = text.slice(start);
       if (reopenBlockquote) {
-        finalContent = reapplyBlockquotePrefix(finalContent, reopenBlockquote.prefix);
+        const bqEnd = Math.min(reopenBlockquote.end - start, finalContent.length);
+        finalContent =
+          reapplyBlockquotePrefix(finalContent.slice(0, bqEnd), reopenBlockquote.prefix) +
+          finalContent.slice(bqEnd);
       }
       const finalChunk = `${fullReopenPrefix}${finalContent}`;
       if (finalChunk.length > 0) {
@@ -441,7 +444,12 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
 
     let contentForChunk = rawContent;
     if (reopenBlockquote) {
-      contentForChunk = reapplyBlockquotePrefix(contentForChunk, reopenBlockquote.prefix);
+      // Only apply the prefix up to the end of the blockquote span.
+      // Lines after the span end are plain prose and must not be quoted.
+      const bqEnd = Math.min(reopenBlockquote.end - start, rawContent.length);
+      const insideQuote = rawContent.slice(0, bqEnd);
+      const afterQuote = rawContent.slice(bqEnd);
+      contentForChunk = reapplyBlockquotePrefix(insideQuote, reopenBlockquote.prefix) + afterQuote;
     }
 
     // Detect unmatched inline markers in this chunk (only when not inside a fence)
