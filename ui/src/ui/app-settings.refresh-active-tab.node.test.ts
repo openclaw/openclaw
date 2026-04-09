@@ -96,23 +96,36 @@ describe("refreshActiveTab", () => {
   const expectCommonAgentsTabRefresh = (host: ReturnType<typeof createHost>) => {
     expect(mocks.loadAgentsMock).toHaveBeenCalledOnce();
     expect(mocks.loadConfigMock).toHaveBeenCalledOnce();
+    expect(mocks.loadAgentIdentitiesMock).toHaveBeenCalledWith(host, ["agent-a", "agent-b"]);
     expect(mocks.loadAgentIdentityMock).toHaveBeenCalledWith(host, "agent-b");
   };
 
-  it("loads agents panel files data for the resolved selected agent", async () => {
-    const host = createHost();
-    host.tab = "agents";
-    host.agentsPanel = "files";
+  for (const panel of ["files", "skills", "channels", "tools"] as const) {
+    it(`routes agents ${panel} panel refresh through the expected loaders`, async () => {
+      const host = createHost();
+      host.tab = "agents";
+      host.agentsPanel = panel;
 
-    await refreshActiveTab(host as never);
+      await refreshActiveTab(host as never);
 
-    expectCommonAgentsTabRefresh(host);
-    expect(mocks.loadAgentIdentitiesMock).toHaveBeenCalledWith(host, ["agent-a", "agent-b"]);
-    expect(mocks.loadAgentFilesMock).toHaveBeenCalledWith(host, "agent-b");
-    expect(mocks.loadAgentSkillsMock).not.toHaveBeenCalled();
-    expect(mocks.loadChannelsMock).not.toHaveBeenCalled();
-    expect(mocks.loadCronStatusMock).not.toHaveBeenCalled();
-  });
+      expectCommonAgentsTabRefresh(host);
+      expect(mocks.loadAgentFilesMock).toHaveBeenCalledTimes(panel === "files" ? 1 : 0);
+      expect(mocks.loadAgentSkillsMock).toHaveBeenCalledTimes(panel === "skills" ? 1 : 0);
+      expect(mocks.loadChannelsMock).toHaveBeenCalledTimes(panel === "channels" ? 1 : 0);
+      if (panel === "files") {
+        expect(mocks.loadAgentFilesMock).toHaveBeenCalledWith(host, "agent-b");
+      }
+      if (panel === "skills") {
+        expect(mocks.loadAgentSkillsMock).toHaveBeenCalledWith(host, "agent-b");
+      }
+      if (panel === "channels") {
+        expect(mocks.loadChannelsMock).toHaveBeenCalledWith(host, false);
+      }
+      expect(mocks.loadCronStatusMock).not.toHaveBeenCalled();
+      expect(mocks.loadCronJobsPageMock).not.toHaveBeenCalled();
+      expect(mocks.loadCronRunsMock).not.toHaveBeenCalled();
+    });
+  }
 
   it("routes agents cron panel refresh through cron loaders", async () => {
     const host = createHost();
@@ -130,22 +143,6 @@ describe("refreshActiveTab", () => {
     expect(mocks.loadCronRunsMock).toHaveBeenCalledWith(host, "job-123");
     expect(mocks.loadAgentFilesMock).not.toHaveBeenCalled();
     expect(mocks.loadAgentSkillsMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps tools panel refresh narrow and skips files/skills/channels/cron loaders", async () => {
-    const host = createHost();
-    host.tab = "agents";
-    host.agentsPanel = "tools";
-
-    await refreshActiveTab(host as never);
-
-    expectCommonAgentsTabRefresh(host);
-    expect(mocks.loadAgentFilesMock).not.toHaveBeenCalled();
-    expect(mocks.loadAgentSkillsMock).not.toHaveBeenCalled();
-    expect(mocks.loadChannelsMock).not.toHaveBeenCalled();
-    expect(mocks.loadCronStatusMock).not.toHaveBeenCalled();
-    expect(mocks.loadCronJobsPageMock).not.toHaveBeenCalled();
-    expect(mocks.loadCronRunsMock).not.toHaveBeenCalled();
   });
 
   it("refreshes logs tab by resetting bottom-follow and scheduling scroll", async () => {

@@ -743,6 +743,16 @@ export function renderApp(state: AppViewState) {
       state.agentFilesLoading = false;
     }
   };
+  const resetAgentSelectionPanelState = () => {
+    resetAgentFilesState(true);
+    state.agentSkillsReport = null;
+    state.agentSkillsError = null;
+    state.agentSkillsAgentId = null;
+    state.toolsCatalogResult = null;
+    state.toolsCatalogError = null;
+    state.toolsCatalogLoading = false;
+    resetToolsEffectiveState(state);
+  };
 
   return html`
     ${renderCommandPalette({
@@ -1378,14 +1388,7 @@ export function renderApp(state: AppViewState) {
                     return;
                   }
                   state.agentsSelectedId = agentId;
-                  resetAgentFilesState(true);
-                  state.agentSkillsReport = null;
-                  state.agentSkillsError = null;
-                  state.agentSkillsAgentId = null;
-                  state.toolsCatalogResult = null;
-                  state.toolsCatalogError = null;
-                  state.toolsCatalogLoading = false;
-                  resetToolsEffectiveState(state);
+                  resetAgentSelectionPanelState();
                   void loadAgentIdentity(state, agentId);
                   loadAgentPanelDataForSelectedAgent(agentId);
                 },

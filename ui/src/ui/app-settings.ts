@@ -248,17 +248,13 @@ async function refreshAgentsTab(host: SettingsHost, app: OpenClawApp) {
   void loadAgentIdentity(app, agentId);
   switch (host.agentsPanel) {
     case "files":
-      void loadAgentFiles(app, agentId);
-      return;
+      return void loadAgentFiles(app, agentId);
     case "skills":
-      void loadAgentSkills(app, agentId);
-      return;
+      return void loadAgentSkills(app, agentId);
     case "channels":
-      void loadChannels(app, false);
-      return;
+      return void loadChannels(app, false);
     case "cron":
-      void loadCron(host);
-      return;
+      return void loadCron(host);
   }
 }
 
