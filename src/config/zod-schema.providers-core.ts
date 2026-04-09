@@ -174,6 +174,7 @@ export const TelegramAccountSchemaBase = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     streaming: z.union([z.boolean(), z.enum(["off", "partial", "block", "progress"])]).optional(),
     blockStreaming: z.boolean().optional(),
+    suppressTextBlockDelivery: z.boolean().optional(),
     draftChunk: BlockStreamingChunkSchema.optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     // Legacy key kept for automatic migration to `streaming`.
@@ -420,6 +421,7 @@ export const DiscordAccountSchema = z
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
+    suppressTextBlockDelivery: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     // Canonical streaming mode. Legacy aliases (`streamMode`, boolean `streaming`) are auto-mapped.
     streaming: z.union([z.boolean(), z.enum(["off", "partial", "block", "progress"])]).optional(),
@@ -683,6 +685,7 @@ export const GoogleChatAccountSchema = z
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
+    suppressTextBlockDelivery: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     streamMode: z.enum(["replace", "status_final", "append"]).optional().default("replace"),
     mediaMaxMb: z.number().positive().optional(),
@@ -770,6 +773,7 @@ export const SlackAccountSchema = z
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
+    suppressTextBlockDelivery: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     streaming: z.union([z.boolean(), z.enum(["off", "partial", "block", "progress"])]).optional(),
     nativeStreaming: z.boolean().optional(),
@@ -919,6 +923,7 @@ export const SignalAccountSchemaBase = z
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
+    suppressTextBlockDelivery: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     mediaMaxMb: z.number().int().positive().optional(),
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
@@ -1041,6 +1046,7 @@ export const IrcAccountSchemaBase = z
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
+    suppressTextBlockDelivery: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     mediaMaxMb: z.number().positive().optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
@@ -1156,6 +1162,7 @@ export const IMessageAccountSchemaBase = z
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
+    suppressTextBlockDelivery: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     groups: z
       .record(
@@ -1279,6 +1286,7 @@ export const BlueBubblesAccountSchemaBase = z
     mediaLocalRoots: z.array(z.string()).optional(),
     sendReadReceipts: z.boolean().optional(),
     blockStreaming: z.boolean().optional(),
+    suppressTextBlockDelivery: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     groups: z.record(z.string(), BlueBubblesGroupConfigSchema.optional()).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,

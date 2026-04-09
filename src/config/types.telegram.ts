@@ -116,6 +116,14 @@ export type TelegramAccountConfig = {
   streaming?: TelegramStreamingMode | boolean;
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
+  /**
+   * Suppress delivery of model text blocks to the channel.
+   * When true, only messages sent via the message() tool or gateway send RPC
+   * are delivered. Text blocks from model responses are silently dropped.
+   * Useful when all user-facing replies go through the message() tool and
+   * text blocks are always internal narration (e.g. D0 agents).
+   */
+  suppressTextBlockDelivery?: boolean;
   /** @deprecated Legacy chunking config from `streamMode: "block"`; ignored after migration. */
   draftChunk?: BlockStreamingChunkConfig;
   /** Merge streamed block replies before sending. */

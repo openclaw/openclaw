@@ -475,12 +475,18 @@ export const dispatchTelegramMessage = async ({
         ...prefixOptions,
         typingCallbacks,
         deliver: async (payload, info) => {
+          // When suppressTextBlockDelivery is enabled, skip all model response
+          // deliveries. Messages sent via the message() tool or gateway send RPC
+          // bypass this callback entirely, so only model output blocks are affected.
+          if (telegramCfg.suppressTextBlockDelivery) {
+            return;
+          }
+          const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
           const previewButtons = (
             payload.channelData?.telegram as { buttons?: TelegramInlineButtons } | undefined
           )?.buttons;
           const split = splitTextIntoLaneSegments(payload.text);
           const segments = split.segments;
-          const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
 
           const flushBufferedFinalAnswer = async () => {
             const buffered = reasoningStepState.takeBufferedFinalAnswer();
