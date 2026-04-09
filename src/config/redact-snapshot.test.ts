@@ -79,6 +79,73 @@ describe("redactConfigSnapshot", () => {
     expect(cfg.shortSecret.token).toBe(REDACTED_SENTINEL);
   });
 
+  it("redacts sourceConfig so gateway token does not leak", () => {
+    const snapshot = makeSnapshot({
+      gateway: {
+        auth: {
+          token: "super-secret-gateway-token-do-not-leak",
+        },
+      },
+    });
+    const result = redactConfigSnapshot(snapshot);
+
+    // config, parsed, resolved are known-redacted — verify as baseline
+    const cfg = result.config as Record<string, Record<string, Record<string, string>>>;
+    expect(cfg.gateway.auth.token).toBe(REDACTED_SENTINEL);
+
+    const parsed = result.parsed as Record<string, Record<string, Record<string, string>>>;
+    expect(parsed.gateway.auth.token).toBe(REDACTED_SENTINEL);
+
+    const resolved = result.resolved as Record<string, Record<string, Record<string, string>>>;
+    expect(resolved.gateway.auth.token).toBe(REDACTED_SENTINEL);
+
+    // sourceConfig and runtimeConfig must also be redacted
+    const src = result.sourceConfig as Record<string, Record<string, Record<string, string>>>;
+    expect(src.gateway.auth.token).toBe(REDACTED_SENTINEL);
+
+    const rt = result.runtimeConfig as Record<string, Record<string, Record<string, string>>>;
+    expect(rt.gateway.auth.token).toBe(REDACTED_SENTINEL);
+  });
+
+  it("redacts sourceConfig and runtimeConfig for all sensitive field patterns", () => {
+    const snapshot = makeSnapshot({
+      channels: {
+        telegram: { botToken: "telegram-bot-token-secret-value" },
+        slack: { signingSecret: "slack-signing-secret-value" },
+      },
+      models: {
+        providers: {
+          openai: { apiKey: "sk-proj-secret-key-value", baseUrl: "https://api.openai.com" },
+        },
+      },
+    });
+    const result = redactConfigSnapshot(snapshot);
+
+    // sourceConfig must have secrets redacted
+    const src = result.sourceConfig as typeof snapshot.config;
+    expect(src.channels.telegram.botToken).toBe(REDACTED_SENTINEL);
+    expect(src.channels.slack.signingSecret).toBe(REDACTED_SENTINEL);
+    expect(src.models.providers.openai.apiKey).toBe(REDACTED_SENTINEL);
+    expect(src.models.providers.openai.baseUrl).toBe("https://api.openai.com");
+
+    // runtimeConfig must have secrets redacted
+    const rt = result.runtimeConfig as typeof snapshot.config;
+    expect(rt.channels.telegram.botToken).toBe(REDACTED_SENTINEL);
+    expect(rt.channels.slack.signingSecret).toBe(REDACTED_SENTINEL);
+    expect(rt.models.providers.openai.apiKey).toBe(REDACTED_SENTINEL);
+    expect(rt.models.providers.openai.baseUrl).toBe("https://api.openai.com");
+  });
+
+  it("does not leak raw gateway token anywhere in the serialized snapshot", () => {
+    const secretToken = "gateway-token-that-must-never-appear-in-output";
+    const snapshot = makeSnapshot({
+      gateway: { auth: { token: secretToken } },
+    });
+    const result = redactConfigSnapshot(snapshot);
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain(secretToken);
+  });
+
   it("redacts googlechat serviceAccount object payloads", () => {
     const snapshot = makeSnapshot({
       channels: {

@@ -447,6 +447,11 @@ export function redactConfigSnapshot(
   }
   // Also redact the resolved config (contains values after ${ENV} substitution)
   const redactedResolved = redactConfigObject(snapshot.resolved, uiHints);
+  // Redact sourceConfig and runtimeConfig to prevent leaking secrets through
+  // the spread of the original snapshot (these were previously passed through
+  // unredacted, exposing e.g. gateway.auth.token to operator.read clients).
+  const redactedSourceConfig = redactConfigObject(snapshot.sourceConfig, uiHints);
+  const redactedRuntimeConfig = redactConfigObject(snapshot.runtimeConfig, uiHints);
 
   return {
     ...snapshot,
@@ -454,6 +459,8 @@ export function redactConfigSnapshot(
     raw: redactedRaw,
     parsed: redactedParsed,
     resolved: redactedResolved,
+    sourceConfig: redactedSourceConfig,
+    runtimeConfig: redactedRuntimeConfig,
   };
 }
 
