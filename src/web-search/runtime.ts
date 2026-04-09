@@ -4,8 +4,10 @@ import type {
   PluginWebSearchProviderEntry,
   WebSearchProviderToolDefinition,
 } from "../plugins/types.js";
-import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
-import { resolveRuntimeWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
+import {
+  resolvePluginWebSearchProviders,
+  resolveRuntimeWebSearchProviders,
+} from "../plugins/web-search-providers.runtime.js";
 import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
@@ -331,9 +333,9 @@ export async function runWebSearch(
       ? [
           candidates[0],
           ...configuredFallbacks
-            .map((id) => candidates.find((p) => p.id === id))
+            .map((id) => candidates.find((p) => p.id === normalizeLowercaseStringOrEmpty(id)))
             .filter(
-              (p): p is PluginWebSearchProviderEntry => Boolean(p) && p?.id !== primaryProviderId,
+              (p): p is PluginWebSearchProviderEntry => p != null && p.id !== primaryProviderId,
             ),
         ]
       : candidates;
