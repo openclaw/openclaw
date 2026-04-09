@@ -335,6 +335,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Enables the web channel runtime and related websocket lifecycle behavior. Keep disabled when web chat is unused to reduce active connection management overhead.",
   "web.heartbeatSeconds":
     "Heartbeat interval in seconds for web channel connectivity and liveness maintenance. Use shorter intervals for faster detection, or longer intervals to reduce keepalive chatter.",
+  "web.messageTimeoutMs":
+    "Maximum allowed idle time in milliseconds since the last inbound message before the web-channel watchdog forces a reconnect. Increase this when long-lived quiet sessions are expected and false-positive reconnects are undesirable.",
   "web.reconnect":
     "Reconnect backoff policy for web channel reconnect attempts after transport failure. Keep bounded retries and jitter tuned to avoid thundering-herd reconnect behavior.",
   "web.reconnect.initialMs":

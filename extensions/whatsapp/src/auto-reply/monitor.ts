@@ -22,6 +22,7 @@ import {
   computeBackoff,
   newConnectionId,
   resolveHeartbeatSeconds,
+  resolveMessageTimeoutMs,
   resolveReconnectPolicy,
   sleepWithAbort,
 } from "../reconnect.js";
@@ -122,6 +123,8 @@ export async function monitorWebChannel(
   const maxMediaBytes = resolveWhatsAppMediaMaxBytes(account);
   const heartbeatSeconds = resolveHeartbeatSeconds(cfg, tuning.heartbeatSeconds);
   const reconnectPolicy = resolveReconnectPolicy(cfg, tuning.reconnect);
+  const messageTimeoutMs = resolveMessageTimeoutMs(cfg, tuning.messageTimeoutMs);
+  const messageTimeoutMinutes = Math.floor(messageTimeoutMs / 60000);
   const baseMentionConfig = buildMentionConfig(cfg);
   const groupHistoryLimit =
     cfg.channels?.whatsapp?.accounts?.[tuning.accountId ?? ""]?.historyLimit ??
@@ -191,7 +194,7 @@ export async function monitorWebChannel(
 
     // Watchdog to detect stuck message processing (e.g., event emitter died).
     // Tuning overrides are test-oriented; production defaults remain unchanged.
-    const MESSAGE_TIMEOUT_MS = tuning.messageTimeoutMs ?? 30 * 60 * 1000; // 30m default
+    const MESSAGE_TIMEOUT_MS = messageTimeoutMs;
     const WATCHDOG_CHECK_MS = tuning.watchdogCheckMs ?? 60 * 1000; // 1m default
 
     const onMessage = createWebOnMessageHandler({
@@ -328,13 +331,16 @@ export async function monitorWebChannel(
           lastInboundAt: active.lastInboundAt,
           authAgeMs,
           uptimeMs: Date.now() - active.startedAt,
-          ...(minutesSinceLastMessage !== null && minutesSinceLastMessage > 30
+          ...(minutesSinceLastMessage !== null && minutesSinceLastMessage > messageTimeoutMinutes
             ? { minutesSinceLastMessage }
             : {}),
         };
 
-        if (minutesSinceLastMessage && minutesSinceLastMessage > 30) {
-          heartbeatLogger.warn(logData, "⚠️ web gateway heartbeat - no messages in 30+ minutes");
+        if (minutesSinceLastMessage && minutesSinceLastMessage > messageTimeoutMinutes) {
+          heartbeatLogger.warn(
+            logData,
+            `⚠️ web gateway heartbeat - no messages in ${messageTimeoutMinutes}+ minutes`,
+          );
         } else {
           heartbeatLogger.info(logData, "web gateway heartbeat");
         }

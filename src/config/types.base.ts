@@ -270,6 +270,7 @@ export type WebConfig = {
   /** If false, do not start the WhatsApp web provider. Default: true. */
   enabled?: boolean;
   heartbeatSeconds?: number;
+  messageTimeoutMs?: number;
   reconnect?: WebReconnectConfig;
 };
 

@@ -128,6 +128,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
   web: {
     enabled: true,
     heartbeatSeconds: 60,
+    messageTimeoutMs: 1800000,
     reconnect: {
       initialMs: 2000,
       maxMs: 120000,

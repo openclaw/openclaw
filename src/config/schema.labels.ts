@@ -705,6 +705,7 @@ export const FIELD_LABELS: Record<string, string> = {
   web: "Web Channel",
   "web.enabled": "Web Channel Enabled",
   "web.heartbeatSeconds": "Web Channel Heartbeat Interval (sec)",
+  "web.messageTimeoutMs": "Web Channel Message Timeout (ms)",
   "web.reconnect": "Web Channel Reconnect Policy",
   "web.reconnect.initialMs": "Web Reconnect Initial Delay (ms)",
   "web.reconnect.maxMs": "Web Reconnect Max Delay (ms)",

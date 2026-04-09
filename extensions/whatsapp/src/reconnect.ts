@@ -12,6 +12,7 @@ export type ReconnectPolicy = BackoffPolicy & {
 };
 
 export const DEFAULT_HEARTBEAT_SECONDS = 60;
+export const DEFAULT_MESSAGE_TIMEOUT_MS = 30 * 60 * 1000;
 export const DEFAULT_RECONNECT_POLICY: ReconnectPolicy = {
   initialMs: 2_000,
   maxMs: 30_000,
@@ -26,6 +27,14 @@ export function resolveHeartbeatSeconds(cfg: OpenClawConfig, overrideSeconds?: n
     return candidate;
   }
   return DEFAULT_HEARTBEAT_SECONDS;
+}
+
+export function resolveMessageTimeoutMs(cfg: OpenClawConfig, overrideMs?: number): number {
+  const candidate = overrideMs ?? cfg.web?.messageTimeoutMs;
+  if (typeof candidate === "number" && candidate > 0) {
+    return candidate;
+  }
+  return DEFAULT_MESSAGE_TIMEOUT_MS;
 }
 
 export function resolveReconnectPolicy(
