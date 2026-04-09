@@ -267,6 +267,7 @@ async function maybeConfigureDmPolicies(params: {
         { value: "open", label: "Open (public inbound DMs)" },
         { value: "disabled", label: "Disabled (ignore DMs)" },
       ],
+      initialValue: current,
     })) as DmPolicy;
   };
 
