@@ -42,6 +42,13 @@ vi.mock("./targets.js", () => ({
 
 vi.mock("./deliver.js", () => ({
   deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+  deliverOutboundPayloadsWithStatus: async (...args: unknown[]) => {
+    const results = await mocks.deliverOutboundPayloads(...args);
+    return {
+      results,
+      blockedByHook: Array.isArray(results) && results.length === 0,
+    };
+  },
 }));
 
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -135,5 +142,32 @@ describe("sendMessage", () => {
     });
 
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces explicit blocked outcomes when message_sending cancels delivery", async () => {
+    mocks.deliverOutboundPayloads.mockResolvedValue([]);
+
+    await expect(
+      sendMessage({
+        cfg: {},
+        channel: "telegram",
+        to: "123456",
+        content: "hi",
+        agentId: "work",
+        idempotencyKey: "idem-blocked-1",
+        mirror: {
+          sessionKey: "agent:work:telegram:dm:123456",
+        },
+      }),
+    ).resolves.toMatchObject({
+      channel: "telegram",
+      to: "123456",
+      via: "direct",
+      blocked: true,
+      blockedReason: "blocked by message_sending hook",
+      agentId: "work",
+      sessionKey: "agent:work:telegram:dm:123456",
+      requestId: "idem-blocked-1",
+    });
   });
 });

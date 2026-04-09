@@ -12,12 +12,13 @@ import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
 import {
   deliverOutboundPayloads,
+  deliverOutboundPayloadsWithStatus,
   type OutboundDeliveryResult,
   type OutboundSendDeps,
 } from "./deliver.js";
 import type { OutboundMirror } from "./mirror.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
-import { buildOutboundSessionContext } from "./session-context.js";
+import { buildOutboundSessionContext, type OutboundSessionContext } from "./session-context.js";
 import { resolveOutboundTarget } from "./targets.js";
 
 let messageConfigRuntimePromise: Promise<typeof import("./message.config.runtime.js")> | null =
@@ -66,6 +67,9 @@ type MessageSendParams = {
   mirror?: OutboundMirror;
   abortSignal?: AbortSignal;
   silent?: boolean;
+  resolvedTo?: string;
+  session?: OutboundSessionContext;
+  gatewayClientScopes?: readonly string[];
 };
 
 export type MessageSendResult = {
@@ -75,8 +79,15 @@ export type MessageSendResult = {
   mediaUrl: string | null;
   mediaUrls?: string[];
   result?: OutboundDeliveryResult | { messageId: string };
+  blocked?: boolean;
+  blockedReason?: string;
+  agentId?: string;
+  sessionKey?: string;
+  requestId?: string;
   dryRun?: boolean;
 };
+
+const DEFAULT_MESSAGE_SEND_BLOCKED_REASON = "blocked by message_sending hook";
 
 type MessagePollParams = {
   to: string;
@@ -217,6 +228,75 @@ async function resolveGatewayIdempotencyKey(idempotencyKey?: string): Promise<st
   return randomIdempotencyKey();
 }
 
+export async function sendResolvedDirectMessage(params: {
+  cfg: OpenClawConfig;
+  channel: string;
+  to: string;
+  resolvedTo?: string;
+  normalizedPayloads: Array<{ text?: string; mediaUrl?: string; mediaUrls?: string[] }>;
+  mediaUrl: string | null;
+  mediaUrls: string[];
+  agentId?: string;
+  accountId?: string;
+  replyToId?: string;
+  threadId?: string | number;
+  gifPlayback?: boolean;
+  forceDocument?: boolean;
+  deps?: OutboundSendDeps;
+  bestEffort?: boolean;
+  abortSignal?: AbortSignal;
+  silent?: boolean;
+  mirror?: OutboundMirror;
+  session?: OutboundSessionContext;
+  gatewayClientScopes?: readonly string[];
+  requestId?: string;
+}): Promise<MessageSendResult> {
+  const session =
+    params.session ??
+    buildOutboundSessionContext({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      sessionKey: params.mirror?.sessionKey,
+    });
+  const delivery = await deliverOutboundPayloadsWithStatus({
+    cfg: params.cfg,
+    channel: params.channel,
+    to: params.resolvedTo ?? params.to,
+    session,
+    accountId: params.accountId,
+    payloads: params.normalizedPayloads,
+    replyToId: params.replyToId,
+    threadId: params.threadId,
+    gifPlayback: params.gifPlayback,
+    forceDocument: params.forceDocument,
+    deps: params.deps,
+    bestEffort: params.bestEffort,
+    abortSignal: params.abortSignal,
+    silent: params.silent,
+    mirror: params.mirror,
+    gatewayClientScopes: params.gatewayClientScopes,
+  });
+  const result = delivery.results.at(-1);
+  const blocked = delivery.blockedByHook;
+  return {
+    channel: params.channel,
+    to: params.to,
+    via: "direct",
+    mediaUrl: params.mediaUrl,
+    mediaUrls: params.mediaUrls.length ? params.mediaUrls : undefined,
+    ...(result ? { result } : {}),
+    ...(blocked
+      ? {
+          blocked: true,
+          blockedReason: DEFAULT_MESSAGE_SEND_BLOCKED_REASON,
+        }
+      : {}),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(session?.key ? { sessionKey: session.key } : {}),
+    ...(params.requestId ? { requestId: params.requestId } : {}),
+  };
+}
+
 export async function sendMessage(params: MessageSendParams): Promise<MessageSendResult> {
   const cfg = await resolveMessageConfig(params.cfg);
   const channel = await resolveRequiredChannel({ cfg, channel: params.channel });
@@ -258,29 +338,25 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       accountId: params.accountId,
       mode: "explicit",
     });
-    if (!resolvedTarget.ok) {
+  if (!resolvedTarget.ok) {
       throw resolvedTarget.error;
     }
-
-    const outboundSession = buildOutboundSessionContext({
+    return await sendResolvedDirectMessage({
       cfg,
+      channel,
+      to: params.to,
+      resolvedTo: params.resolvedTo ?? resolvedTarget.to,
+      normalizedPayloads,
+      mediaUrl: primaryMediaUrl,
+      mediaUrls: mirrorMediaUrls,
       agentId: params.agentId,
-      sessionKey: params.mirror?.sessionKey,
-    });
-    const results = await deliverOutboundPayloads({
-      cfg,
-      channel: outboundChannel,
-      to: resolvedTarget.to,
-      session: outboundSession,
       accountId: params.accountId,
-      payloads: normalizedPayloads,
       replyToId: params.replyToId,
       threadId: params.threadId,
       gifPlayback: params.gifPlayback,
       forceDocument: params.forceDocument,
       deps: params.deps,
       bestEffort: params.bestEffort,
-      abortSignal: params.abortSignal,
       silent: params.silent,
       mirror: params.mirror
         ? {
@@ -290,16 +366,11 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
             idempotencyKey: params.mirror.idempotencyKey ?? params.idempotencyKey,
           }
         : undefined,
+      abortSignal: params.abortSignal,
+      session: params.session,
+      gatewayClientScopes: params.gatewayClientScopes,
+      requestId: params.idempotencyKey,
     });
-
-    return {
-      channel,
-      to: params.to,
-      via: "direct",
-      mediaUrl: primaryMediaUrl,
-      mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
-      result: results.at(-1),
-    };
   }
 
   const result = await callMessageGateway<{ messageId: string }>({
@@ -326,6 +397,9 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     mediaUrl: primaryMediaUrl,
     mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
     result,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.mirror?.sessionKey ? { sessionKey: params.mirror.sessionKey } : {}),
+    ...(params.idempotencyKey ? { requestId: params.idempotencyKey } : {}),
   };
 }
 
