@@ -2984,4 +2984,20 @@ describe("before_dispatch hook", () => {
     expect(result.queuedFinal).toBe(true);
     expect(result.counts.final).toBe(1);
   });
+
+  it("does not send the fallback final reply for channel messages", async () => {
+    hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: false });
+    const dispatcher = createDispatcher();
+
+    const result = await dispatchReplyFromConfig({
+      ctx: createHookCtx({ ChatType: "channel", Surface: "slack", Provider: "slack" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => undefined,
+    });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(result.queuedFinal).toBe(false);
+    expect(result.counts.final).toBe(0);
+  });
 });

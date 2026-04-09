@@ -104,6 +104,10 @@ const normalizeMediaType = (value: string): string =>
   normalizeOptionalLowercaseString(value.split(";")[0]) ?? "";
 const EMPTY_RUN_FALLBACK_TEXT =
   "I couldn't produce a reply for that request. Please try again or rephrase your message.";
+const isDirectLikeChatType = (value?: string): boolean => {
+  const normalized = normalizeOptionalLowercaseString(value);
+  return normalized === "direct" || normalized === "dm" || normalized === "private";
+};
 
 const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
   const rawTypes = [
@@ -1044,6 +1048,7 @@ export async function dispatchReplyFromConfig(params: {
     counts.final += routedFinalCount;
 
     const shouldSendEmptyRunFallback =
+      isDirectLikeChatType(ctx.ChatType) &&
       !shouldRouteToOriginating &&
       replies.length === 0 &&
       blockCount === 0 &&
