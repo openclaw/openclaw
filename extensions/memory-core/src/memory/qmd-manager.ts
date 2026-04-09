@@ -1386,11 +1386,11 @@ export class QmdMemoryManager implements MemorySearchManager {
       return false;
     }
     const embedIntervalMs = this.qmd.update.embedIntervalMs;
-    return (
-      Boolean(force) ||
-      this.lastEmbedAt === null ||
-      (embedIntervalMs > 0 && now - this.lastEmbedAt > embedIntervalMs)
-    );
+    // If embedIntervalMs is 0 or negative, embeddings are disabled
+    if (embedIntervalMs <= 0) {
+      return false;
+    }
+    return Boolean(force) || this.lastEmbedAt === null || now - this.lastEmbedAt > embedIntervalMs;
   }
 
   private shouldScheduleEmbedTimer(): boolean {
