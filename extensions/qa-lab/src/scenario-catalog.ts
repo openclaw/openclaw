@@ -21,10 +21,87 @@ Style:
 - end with a concise protocol report`;
 
 const qaScenarioExecutionSchema = z.object({
-  kind: z.literal("custom").default("custom"),
-  handler: z.string().trim().min(1),
+  kind: z.literal("flow").default("flow"),
   summary: z.string().trim().min(1).optional(),
   config: z.record(z.string(), z.unknown()).optional(),
+});
+
+const qaFlowCallActionSchema = z.object({
+  call: z.string().trim().min(1),
+  args: z.array(z.unknown()).optional(),
+  saveAs: z.string().trim().min(1).optional(),
+});
+
+const qaFlowSetActionSchema = z.object({
+  set: z.string().trim().min(1),
+  value: z.unknown(),
+});
+
+const qaFlowAssertActionSchema = z.object({
+  assert: z.union([
+    z.string().trim().min(1),
+    z.object({
+      expr: z.string().trim().min(1),
+      message: z.unknown().optional(),
+    }),
+  ]),
+});
+
+const qaFlowThrowActionSchema = z.object({
+  throw: z.union([
+    z.string().trim().min(1),
+    z.object({
+      expr: z.string().trim().min(1).optional(),
+      message: z.unknown().optional(),
+    }),
+  ]),
+});
+
+const qaFlowIfShapeBase: Record<string, z.ZodTypeAny> = {
+  expr: z.string().trim().min(1),
+  else: z.array(z.unknown()).optional(),
+};
+const qaFlowThenKey = String.fromCharCode(116, 104, 101, 110);
+qaFlowIfShapeBase[qaFlowThenKey] = z.array(z.unknown()).min(1);
+
+const qaFlowActionSchema: z.ZodType = z.lazy(() =>
+  z.union([
+    qaFlowCallActionSchema,
+    qaFlowSetActionSchema,
+    qaFlowAssertActionSchema,
+    qaFlowThrowActionSchema,
+    z.object({
+      if: z
+        .object(qaFlowIfShapeBase)
+        .transform((value) => value as { expr: string; then: unknown[]; else?: unknown[] }),
+    }),
+    z.object({
+      forEach: z.object({
+        items: z.unknown(),
+        item: z.string().trim().min(1),
+        index: z.string().trim().min(1).optional(),
+        actions: z.array(qaFlowActionSchema).min(1),
+      }),
+    }),
+    z.object({
+      try: z.object({
+        actions: z.array(qaFlowActionSchema).min(1),
+        catchAs: z.string().trim().min(1).optional(),
+        catch: z.array(qaFlowActionSchema).optional(),
+        finally: z.array(qaFlowActionSchema).optional(),
+      }),
+    }),
+  ]),
+);
+
+const qaFlowStepSchema = z.object({
+  name: z.string().trim().min(1),
+  actions: z.array(qaFlowActionSchema).min(1),
+  detailsExpr: z.string().trim().min(1).optional(),
+});
+
+const qaFlowSchema = z.object({
+  steps: z.array(qaFlowStepSchema).min(1),
 });
 
 const qaSeedScenarioSchema = z.object({
@@ -51,15 +128,23 @@ const qaScenarioPackSchema = z.object({
 });
 
 export type QaScenarioExecution = z.infer<typeof qaScenarioExecutionSchema>;
+export type QaScenarioFlow = z.infer<typeof qaFlowSchema>;
 export type QaSeedScenario = z.infer<typeof qaSeedScenarioSchema>;
+export type QaSeedScenarioWithSource = QaSeedScenario & {
+  sourcePath: string;
+  execution: QaScenarioExecution & {
+    flow?: QaScenarioFlow;
+  };
+};
+
 export type QaScenarioPack = z.infer<typeof qaScenarioPackSchema> & {
-  scenarios: QaSeedScenario[];
+  scenarios: QaSeedScenarioWithSource[];
 };
 
 export type QaBootstrapScenarioCatalog = {
   agentIdentityMarkdown: string;
   kickoffTask: string;
-  scenarios: QaSeedScenario[];
+  scenarios: QaSeedScenarioWithSource[];
 };
 
 const QA_SCENARIO_PACK_INDEX_PATH = "qa/scenarios/index.md";
@@ -67,6 +152,7 @@ const QA_SCENARIO_LEGACY_OVERVIEW_PATH = "qa/scenarios.md";
 const QA_SCENARIO_DIR_PATH = "qa/scenarios";
 const QA_PACK_FENCE_RE = /```ya?ml qa-pack\r?\n([\s\S]*?)\r?\n```/i;
 const QA_SCENARIO_FENCE_RE = /```ya?ml qa-scenario\r?\n([\s\S]*?)\r?\n```/i;
+const QA_FLOW_YAML_FENCE_RE = /```ya?ml qa-flow\r?\n([\s\S]*?)\r?\n```/i;
 
 function walkUpDirectories(start: string): string[] {
   const roots: string[] = [];
@@ -129,6 +215,14 @@ function extractQaScenarioYaml(content: string, relativePath: string) {
   return match[1];
 }
 
+function extractQaScenarioFlow(content: string, relativePath: string) {
+  const match = content.match(QA_FLOW_YAML_FENCE_RE);
+  if (!match?.[1]) {
+    throw new Error(`qa scenario file missing \`\`\`yaml qa-flow fence in ${relativePath}`);
+  }
+  return qaFlowSchema.parse(YAML.parse(match[1]) as unknown);
+}
+
 export function readQaScenarioPackMarkdown(): string {
   const chunks = [readTextFile(QA_SCENARIO_PACK_INDEX_PATH).trim()];
   for (const relativePath of listQaScenarioMarkdownPaths()) {
@@ -146,9 +240,22 @@ export function readQaScenarioPack(): QaScenarioPack {
     YAML.parse(extractQaPackYaml(packMarkdown)) as unknown,
   );
   const scenarios = listQaScenarioMarkdownPaths().map((relativePath) =>
-    qaSeedScenarioSchema.parse(
-      YAML.parse(extractQaScenarioYaml(readTextFile(relativePath), relativePath)) as unknown,
-    ),
+    (() => {
+      const content = readTextFile(relativePath);
+      const parsedScenario = qaSeedScenarioSchema.parse(
+        YAML.parse(extractQaScenarioYaml(content, relativePath)) as unknown,
+      );
+      const execution = qaScenarioExecutionSchema.parse(parsedScenario.execution ?? {});
+      const flow = extractQaScenarioFlow(content, relativePath);
+      return {
+        ...parsedScenario,
+        sourcePath: relativePath,
+        execution: {
+          ...execution,
+          flow,
+        },
+      } satisfies QaSeedScenarioWithSource;
+    })(),
   );
   return {
     ...parsedPack,

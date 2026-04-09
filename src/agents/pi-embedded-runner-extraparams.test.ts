@@ -567,11 +567,11 @@ describe("applyExtraParamsToAgent", () => {
   it("flattens pure text OpenAI completions message arrays for string-only compat models", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "inferrs",
-      applyModelId: "gg-hf-gg/gemma-4-E2B-it",
+      applyModelId: "google/gemma-4-E2B-it",
       model: {
         api: "openai-completions",
         provider: "inferrs",
-        id: "gg-hf-gg/gemma-4-E2B-it",
+        id: "google/gemma-4-E2B-it",
         name: "Gemma 4 E2B (inferrs)",
         baseUrl: "http://127.0.0.1:8080/v1",
         reasoning: false,

@@ -1,15 +1,7 @@
 #!/usr/bin/env -S node --import tsx
 
 import { execFileSync, execSync } from "node:child_process";
-import {
-  existsSync,
-  mkdtempSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  symlinkSync,
-} from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -19,11 +11,21 @@ import {
   type ExtensionPackageJson as PackageJson,
 } from "./lib/bundled-extension-manifest.ts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
+import {
+  collectBundledPluginRootRuntimeMirrorErrors,
+  collectBundledPluginRuntimeDependencySpecs,
+  collectRootDistBundledRuntimeMirrors,
+} from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
 import { listPluginSdkDistArtifacts } from "./lib/plugin-sdk-entries.mjs";
 import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mjs";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 
 export { collectBundledExtensionManifestErrors } from "./lib/bundled-extension-manifest.ts";
+export {
+  collectBundledPluginRootRuntimeMirrorErrors,
+  collectRootDistBundledRuntimeMirrors,
+  packageNameFromSpecifier,
+} from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
 
 type PackFile = { path: string };
 type PackResult = { files?: PackFile[]; filename?: string; unpackedSize?: number };
@@ -78,16 +80,6 @@ function collectBundledExtensions(): BundledExtension[] {
   });
 }
 
-function collectRuntimeDependencySpecs(packageJson: {
-  dependencies?: Record<string, string>;
-  optionalDependencies?: Record<string, string>;
-}): Map<string, string> {
-  return new Map([
-    ...Object.entries(packageJson.dependencies ?? {}),
-    ...Object.entries(packageJson.optionalDependencies ?? {}),
-  ]);
-}
-
 function checkBundledExtensionMetadata() {
   const extensions = collectBundledExtensions();
   const manifestErrors = collectBundledExtensionManifestErrors(extensions);
@@ -95,11 +87,18 @@ function checkBundledExtensionMetadata() {
     dependencies?: Record<string, string>;
     optionalDependencies?: Record<string, string>;
   };
-  const rootRuntimeDeps = collectRuntimeDependencySpecs(rootPackage);
-  const rootMirrorErrors = collectBundledExtensionRootDependencyMirrorErrors(
-    extensions,
-    rootRuntimeDeps,
+  const bundledRuntimeDependencySpecs = collectBundledPluginRuntimeDependencySpecs(
+    resolve("extensions"),
   );
+  const requiredRootMirrors = collectRootDistBundledRuntimeMirrors({
+    bundledRuntimeDependencySpecs,
+    distDir: resolve("dist"),
+  });
+  const rootMirrorErrors = collectBundledPluginRootRuntimeMirrorErrors({
+    bundledRuntimeDependencySpecs,
+    requiredRootMirrors,
+    rootPackageJson: rootPackage,
+  });
   const errors = [...manifestErrors, ...rootMirrorErrors];
   if (errors.length > 0) {
     console.error("release-check: bundled extension manifest validation failed:");
@@ -108,63 +107,6 @@ function checkBundledExtensionMetadata() {
     }
     process.exit(1);
   }
-}
-
-export function collectBundledExtensionRootDependencyMirrorErrors(
-  extensions: BundledExtension[],
-  rootRuntimeDeps: ReadonlyMap<string, string>,
-): string[] {
-  const errors: string[] = [];
-
-  for (const extension of extensions) {
-    const rawReleaseChecks = extension.packageJson.openclaw?.releaseChecks;
-    const allowlist = (rawReleaseChecks as { rootDependencyMirrorAllowlist?: unknown } | undefined)
-      ?.rootDependencyMirrorAllowlist;
-
-    if (allowlist === undefined) {
-      continue;
-    }
-    if (!Array.isArray(allowlist)) {
-      errors.push(
-        `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist must be an array`,
-      );
-      continue;
-    }
-
-    const extensionRuntimeDeps = collectRuntimeDependencySpecs(extension.packageJson);
-
-    for (const entry of allowlist) {
-      if (typeof entry !== "string" || entry.trim().length === 0) {
-        errors.push(
-          `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entries must be non-empty strings`,
-        );
-        continue;
-      }
-
-      const extensionSpec = extensionRuntimeDeps.get(entry);
-      if (!extensionSpec) {
-        errors.push(
-          `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '${entry}' must be declared in extension runtime dependencies`,
-        );
-      }
-      const rootSpec = rootRuntimeDeps.get(entry);
-      if (!rootSpec) {
-        errors.push(
-          `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '${entry}' must be mirrored in root runtime dependencies`,
-        );
-      }
-      if (!extensionSpec || !rootSpec) {
-        continue;
-      }
-      if (extensionSpec !== rootSpec) {
-        errors.push(
-          `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '${entry}' must match root runtime dependency version (extension '${extensionSpec}', root '${rootSpec}')`,
-        );
-      }
-    }
-  }
-
-  return errors;
 }
 
 function runPackDry(): PackResult[] {
@@ -201,32 +143,47 @@ function resolvePackedTarballPath(packDestination: string, results: PackResult[]
   return resolve(packDestination, filenames[0]);
 }
 
-function linkRootNodeModules(packageRoot: string): void {
-  const rootNodeModules = resolve("node_modules");
-  if (!existsSync(rootNodeModules)) {
-    return;
-  }
-  symlinkSync(
-    rootNodeModules,
-    join(packageRoot, "node_modules"),
-    process.platform === "win32" ? "junction" : "dir",
+function installPackedTarball(prefixDir: string, tarballPath: string, cwd: string): void {
+  execFileSync(
+    "npm",
+    [
+      "install",
+      "-g",
+      "--prefix",
+      prefixDir,
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+      tarballPath,
+    ],
+    {
+      cwd,
+      encoding: "utf8",
+      stdio: "inherit",
+    },
   );
+}
+
+function resolveGlobalRoot(prefixDir: string, cwd: string): string {
+  return execFileSync("npm", ["root", "-g", "--prefix", prefixDir], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
 }
 
 function runPackedBundledChannelEntrySmoke(): void {
   const tmpRoot = mkdtempSync(join(tmpdir(), "openclaw-release-pack-smoke-"));
   try {
     const packDir = join(tmpRoot, "pack");
-    const extractDir = join(tmpRoot, "extract");
     mkdirSync(packDir);
-    mkdirSync(extractDir);
 
     const packResults = runPack(packDir);
     const tarballPath = resolvePackedTarballPath(packDir, packResults);
-    execFileSync("tar", ["-xzf", tarballPath, "-C", extractDir], { stdio: "inherit" });
+    const prefixDir = join(tmpRoot, "prefix");
+    installPackedTarball(prefixDir, tarballPath, tmpRoot);
 
-    const packageRoot = join(extractDir, "package");
-    linkRootNodeModules(packageRoot);
+    const packageRoot = join(resolveGlobalRoot(prefixDir, tmpRoot), "openclaw");
     execFileSync(
       process.execPath,
       [

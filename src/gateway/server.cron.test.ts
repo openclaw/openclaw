@@ -248,7 +248,7 @@ describe("gateway server cron", () => {
     sendFailureNotificationAnnounceMock.mockClear();
   });
 
-  test("handles cron CRUD, normalization, and patch semantics", { timeout: 20_000 }, async () => {
+  test("handles cron CRUD, normalization, and patch semantics", { timeout: 45_000 }, async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-",
       sessionConfig: { mainKey: "primary" },

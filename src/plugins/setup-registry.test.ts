@@ -2,28 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
+import {
+  getRegistryJitiMocks,
+  resetRegistryJitiMocks,
+} from "./test-helpers/registry-jiti-mocks.js";
 
 const tempDirs: string[] = [];
-
-const mocks = vi.hoisted(() => ({
-  createJiti: vi.fn(),
-  discoverOpenClawPlugins: vi.fn(),
-  loadPluginManifestRegistry: vi.fn(),
-}));
-
-vi.mock("jiti", () => ({
-  createJiti: (...args: Parameters<typeof mocks.createJiti>) => mocks.createJiti(...args),
-}));
-
-vi.mock("./discovery.js", () => ({
-  discoverOpenClawPlugins: (...args: Parameters<typeof mocks.discoverOpenClawPlugins>) =>
-    mocks.discoverOpenClawPlugins(...args),
-}));
-
-vi.mock("./manifest-registry.js", () => ({
-  loadPluginManifestRegistry: (...args: Parameters<typeof mocks.loadPluginManifestRegistry>) =>
-    mocks.loadPluginManifestRegistry(...args),
-}));
+const mocks = getRegistryJitiMocks();
 
 let clearPluginSetupRegistryCache: typeof import("./setup-registry.js").clearPluginSetupRegistryCache;
 let resolvePluginSetupRegistry: typeof import("./setup-registry.js").resolvePluginSetupRegistry;
@@ -39,22 +24,11 @@ afterEach(() => {
 
 describe("setup-registry getJiti", () => {
   beforeEach(async () => {
+    resetRegistryJitiMocks();
     vi.resetModules();
     ({ clearPluginSetupRegistryCache, resolvePluginSetupRegistry, runPluginSetupConfigMigrations } =
       await import("./setup-registry.js"));
     clearPluginSetupRegistryCache();
-    mocks.createJiti.mockReset();
-    mocks.discoverOpenClawPlugins.mockReset();
-    mocks.loadPluginManifestRegistry.mockReset();
-    mocks.discoverOpenClawPlugins.mockReturnValue({
-      candidates: [],
-      diagnostics: [],
-    });
-    mocks.createJiti.mockImplementation(
-      (_modulePath: string, _options?: Record<string, unknown>) => {
-        return () => ({ default: {} });
-      },
-    );
   });
 
   it("disables native jiti loading on Windows for setup-api modules", () => {
