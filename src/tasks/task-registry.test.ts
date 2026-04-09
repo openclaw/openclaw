@@ -268,7 +268,7 @@ describe("task-registry", () => {
     });
   });
 
-  it("does not overwrite operator-cancelled terminal status with lifecycle end", async () => {
+  it("ignores late agent events for operator-cancelled tasks", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
@@ -301,9 +301,18 @@ describe("task-registry", () => {
           endedAt: 999,
         },
       });
+      emitAgentEvent({
+        runId: "run-cancel-then-end",
+        stream: "error",
+        data: {
+          error: "late error",
+        },
+      });
 
       expect(findTaskByRunId("run-cancel-then-end")).toMatchObject({
         status: "cancelled",
+        endedAt: 200,
+        lastEventAt: 200,
         error: "Cancelled by operator.",
       });
     });

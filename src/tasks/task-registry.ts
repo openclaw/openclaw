@@ -1305,6 +1305,9 @@ function ensureListener() {
     }
     const now = evt.ts || Date.now();
     for (const current of scopedTasks) {
+      if (isTerminalTaskStatus(current.status)) {
+        continue;
+      }
       const patch: Partial<TaskRecord> = {
         lastEventAt: now,
       };
@@ -1328,9 +1331,6 @@ function ensureListener() {
         }
       } else if (evt.stream === "error") {
         patch.error = typeof evt.data?.error === "string" ? evt.data.error : current.error;
-      }
-      if (isTerminalTaskStatus(current.status)) {
-        delete patch.status;
       }
       const stateChangeEvent =
         patch.status && patch.status !== current.status
@@ -1722,47 +1722,45 @@ export async function cancelTaskById(params: {
     };
   }
   const childSessionKey = task.childSessionKey?.trim();
-  if (!childSessionKey && task.runtime !== "cli") {
-    return {
-      found: true,
-      cancelled: false,
-      reason: "Task has no cancellable child session.",
-      task: cloneTaskRecord(task),
-    };
-  }
   try {
-    if (task.runtime === "acp") {
-      const { getAcpSessionManager } = await loadTaskRegistryControlRuntime();
-      await getAcpSessionManager().cancelSession({
-        cfg: params.cfg,
-        sessionKey: childSessionKey,
-        reason: "task-cancel",
-      });
-    } else if (task.runtime === "subagent") {
-      const { killSubagentRunAdmin } = await loadTaskRegistryControlRuntime();
-      const result = await killSubagentRunAdmin({
-        cfg: params.cfg,
-        sessionKey: childSessionKey,
-      });
-      if (!result.found || !result.killed) {
+    if (task.runtime !== "cli") {
+      if (!childSessionKey) {
         return {
           found: true,
           cancelled: false,
-          reason: result.found ? "Subagent was not running." : "Subagent task not found.",
+          reason: "Task has no cancellable child session.",
           task: cloneTaskRecord(task),
         };
       }
-    } else if (task.runtime === "cli") {
-      // CLI tasks key `childSessionKey` to the main agent session; there is no separate ACP or
-      // subagent session manager to stop. Record operator cancellation in the registry (same as
-      // after ACP/subagent teardown succeeds).
-    } else {
-      return {
-        found: true,
-        cancelled: false,
-        reason: "Task runtime does not support cancellation yet.",
-        task: cloneTaskRecord(task),
-      };
+      if (task.runtime === "acp") {
+        const { getAcpSessionManager } = await loadTaskRegistryControlRuntime();
+        await getAcpSessionManager().cancelSession({
+          cfg: params.cfg,
+          sessionKey: childSessionKey,
+          reason: "task-cancel",
+        });
+      } else if (task.runtime === "subagent") {
+        const { killSubagentRunAdmin } = await loadTaskRegistryControlRuntime();
+        const result = await killSubagentRunAdmin({
+          cfg: params.cfg,
+          sessionKey: childSessionKey,
+        });
+        if (!result.found || !result.killed) {
+          return {
+            found: true,
+            cancelled: false,
+            reason: result.found ? "Subagent was not running." : "Subagent task not found.",
+            task: cloneTaskRecord(task),
+          };
+        }
+      } else {
+        return {
+          found: true,
+          cancelled: false,
+          reason: "Task runtime does not support cancellation yet.",
+          task: cloneTaskRecord(task),
+        };
+      }
     }
     const updated = updateTask(task.taskId, {
       status: "cancelled",
