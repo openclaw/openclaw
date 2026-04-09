@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +9,7 @@ import {
   loadMatrixCredentials,
   clearMatrixCredentials,
   resolveMatrixCredentialsPath,
+  saveBackfilledMatrixDeviceId,
   saveMatrixCredentials,
   touchMatrixCredentials,
 } from "./credentials.js";
@@ -81,6 +83,135 @@ describe("matrix credentials storage", () => {
       expect(touched?.lastUsedAt).toBe("2026-03-01T10:05:00.000Z");
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("backfill updates deviceId when credentials still match the same auth lineage", async () => {
+    setupStateDir();
+    await saveMatrixCredentials(
+      {
+        homeserver: "https://matrix.example.org",
+        userId: "@bot:example.org",
+        accessToken: "tok-123",
+      },
+      {},
+      "default",
+    );
+
+    await expect(
+      saveBackfilledMatrixDeviceId(
+        {
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+          accessToken: "tok-123",
+          deviceId: "DEVICE123",
+        },
+        {},
+        "default",
+      ),
+    ).resolves.toBe("saved");
+
+    expect(loadMatrixCredentials({}, "default")).toMatchObject({
+      accessToken: "tok-123",
+      deviceId: "DEVICE123",
+    });
+  });
+
+  it("backfill skips when newer credentials already changed the token", async () => {
+    setupStateDir();
+    await saveMatrixCredentials(
+      {
+        homeserver: "https://matrix.example.org",
+        userId: "@bot:example.org",
+        accessToken: "tok-new",
+        deviceId: "DEVICE999",
+      },
+      {},
+      "default",
+    );
+
+    await expect(
+      saveBackfilledMatrixDeviceId(
+        {
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+          accessToken: "tok-old",
+          deviceId: "DEVICE123",
+        },
+        {},
+        "default",
+      ),
+    ).resolves.toBe("skipped");
+
+    expect(loadMatrixCredentials({}, "default")).toMatchObject({
+      accessToken: "tok-new",
+      deviceId: "DEVICE999",
+    });
+  });
+
+  it("serializes stale backfill writes behind newer credential saves", async () => {
+    setupStateDir();
+    await saveMatrixCredentials(
+      {
+        homeserver: "https://matrix.example.org",
+        userId: "@bot:example.org",
+        accessToken: "tok-old",
+      },
+      {},
+      "default",
+    );
+
+    let releaseFirstWrite: (() => void) | undefined;
+    let firstWriteStarted = false;
+    const originalRename = fsPromises.rename.bind(fsPromises);
+    const renameSpy = vi
+      .spyOn(fsPromises, "rename")
+      .mockImplementation(async (...args: Parameters<typeof fsPromises.rename>) => {
+        if (!firstWriteStarted) {
+          firstWriteStarted = true;
+          await new Promise<void>((resolve) => {
+            releaseFirstWrite = resolve;
+          });
+        }
+        await originalRename(...args);
+      });
+
+    try {
+      const staleBackfillPromise = saveBackfilledMatrixDeviceId(
+        {
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+          accessToken: "tok-old",
+          deviceId: "DEVICE123",
+        },
+        {},
+        "default",
+      );
+
+      await vi.waitFor(() => {
+        expect(firstWriteStarted).toBe(true);
+      });
+
+      const newerSavePromise = saveMatrixCredentials(
+        {
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+          accessToken: "tok-new",
+          deviceId: "DEVICE999",
+        },
+        {},
+        "default",
+      );
+
+      releaseFirstWrite?.();
+      await Promise.all([staleBackfillPromise, newerSavePromise]);
+
+      expect(loadMatrixCredentials({}, "default")).toMatchObject({
+        accessToken: "tok-new",
+        deviceId: "DEVICE999",
+      });
+    } finally {
+      renameSpy.mockRestore();
     }
   });
 

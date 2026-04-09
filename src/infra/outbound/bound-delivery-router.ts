@@ -1,3 +1,4 @@
+import { normalizeConversationRef } from "./session-binding-normalization.js";
 import {
   getSessionBindingService,
   type ConversationRef,
@@ -90,12 +91,7 @@ export function createBoundDeliveryRouter(
         };
       }
 
-      const requester: ConversationRef = {
-        channel: input.requester.channel.trim().toLowerCase(),
-        accountId: input.requester.accountId.trim(),
-        conversationId: input.requester.conversationId.trim(),
-        parentConversationId: input.requester.parentConversationId?.trim() || undefined,
-      };
+      const requester: ConversationRef = normalizeConversationRef(input.requester);
       if (!requester.channel || !requester.conversationId) {
         return {
           binding: null,

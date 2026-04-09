@@ -17,6 +17,7 @@ import {
   sendPayloadMediaSequenceAndFinalize,
   sendTextMediaPayload,
 } from "openclaw/plugin-sdk/reply-payload";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveSlackAccount } from "./accounts.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import { buildSlackInteractiveBlocks, type SlackBlock } from "./blocks-render.js";
@@ -48,9 +49,9 @@ function resolveSlackSendIdentity(identity?: OutboundIdentity): SlackSendIdentit
   if (!identity) {
     return undefined;
   }
-  const username = identity.name?.trim() || undefined;
-  const iconUrl = identity.avatarUrl?.trim() || undefined;
-  const rawEmoji = identity.emoji?.trim();
+  const username = normalizeOptionalString(identity.name);
+  const iconUrl = normalizeOptionalString(identity.avatarUrl);
+  const rawEmoji = normalizeOptionalString(identity.emoji);
   const iconEmoji = !iconUrl && rawEmoji && /^:[^:\s]+:$/.test(rawEmoji) ? rawEmoji : undefined;
   if (!username && !iconUrl && !iconEmoji) {
     return undefined;

@@ -89,6 +89,9 @@ describe("broadcast dispatch", () => {
       routing: {
         resolveAgentRoute: (params: unknown) => mockResolveAgentRoute(params),
       },
+      session: {
+        resolveStorePath: vi.fn(() => "/tmp/feishu-session-store.json"),
+      },
       reply: {
         resolveEnvelopeFormatOptions: resolveEnvelopeFormatOptionsMock,
         formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),

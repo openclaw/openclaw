@@ -4,15 +4,13 @@ import os from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, expect, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles.js";
-import { resetCliCredentialCachesForTest } from "../agents/cli-credentials.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetProviderRuntimeHookCacheForTest } from "../plugins/provider-runtime.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../test-utils/bundled-plugin-public-surface.js";
+import { withFastReplyConfig } from "./reply/get-reply-fast-path.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
-// oxlint-disable-next-line typescript/no-explicit-any
 type AnyMock = any;
-// oxlint-disable-next-line typescript/no-explicit-any
 type AnyMocks = Record<string, any>;
 
 function getSharedMocks<T>(key: string, create: () => T): T {
@@ -29,6 +27,7 @@ const piEmbeddedMocks = getSharedMocks("openclaw.trigger-handling.pi-embedded-mo
   compactEmbeddedPiSession: vi.fn(),
   runEmbeddedPiAgent: vi.fn(),
   queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+  resolveActiveEmbeddedRunSessionId: vi.fn().mockReturnValue(undefined),
   isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
 }));
@@ -57,6 +56,8 @@ const installPiEmbeddedMock = () =>
     runEmbeddedPiAgent: (...args: unknown[]) => piEmbeddedMocks.runEmbeddedPiAgent(...args),
     queueEmbeddedPiMessage: (...args: unknown[]) => piEmbeddedMocks.queueEmbeddedPiMessage(...args),
     resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
+    resolveActiveEmbeddedRunSessionId: (...args: unknown[]) =>
+      piEmbeddedMocks.resolveActiveEmbeddedRunSessionId(...args),
     isEmbeddedPiRunActive: (...args: unknown[]) => piEmbeddedMocks.isEmbeddedPiRunActive(...args),
     isEmbeddedPiRunStreaming: (...args: unknown[]) =>
       piEmbeddedMocks.isEmbeddedPiRunStreaming(...args),
@@ -271,7 +272,7 @@ export async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise
 }
 
 export function makeCfg(home: string): OpenClawConfig {
-  return {
+  return withFastReplyConfig({
     agents: {
       defaults: {
         model: { primary: "anthropic/claude-opus-4-6" },
@@ -293,7 +294,7 @@ export function makeCfg(home: string): OpenClawConfig {
       },
     },
     session: { store: join(home, "sessions.json") },
-  } as OpenClawConfig;
+  } as OpenClawConfig);
 }
 
 export async function loadGetReplyFromConfig() {
@@ -447,7 +448,6 @@ export async function runGreetingPromptForBareNewOrReset(params: {
 export function installTriggerHandlingE2eTestHooks() {
   afterEach(() => {
     clearRuntimeAuthProfileStoreSnapshots();
-    resetCliCredentialCachesForTest();
     resetProviderRuntimeHookCacheForTest();
     vi.clearAllMocks();
   });

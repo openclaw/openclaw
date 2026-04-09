@@ -1,5 +1,6 @@
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import {
   completeTaskRunByRunId,
   createRunningTaskRun,
@@ -220,7 +221,7 @@ function sortJobs(jobs: CronJob[], sortBy: CronJobsSortBy, sortDir: CronSortDir)
 export async function listPage(state: CronServiceState, opts?: CronListPageOptions) {
   return await locked(state, async () => {
     await ensureLoadedForRead(state);
-    const query = opts?.query?.trim().toLowerCase() ?? "";
+    const query = normalizeLowercaseStringOrEmpty(opts?.query);
     const enabledFilter = resolveEnabledFilter(opts);
     const sortBy = opts?.sortBy ?? "nextRunAtMs";
     const sortDir = opts?.sortDir ?? "asc";
@@ -235,7 +236,9 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
       if (!query) {
         return true;
       }
-      const haystack = [job.name, job.description ?? "", job.agentId ?? ""].join(" ").toLowerCase();
+      const haystack = normalizeLowercaseStringOrEmpty(
+        [job.name, job.description ?? "", job.agentId ?? ""].join(" "),
+      );
       return haystack.includes(query);
     });
     const sorted = sortJobs(filtered, sortBy, sortDir);
@@ -367,7 +370,7 @@ type PreparedManualRun =
   | {
       ok: true;
       ran: false;
-      reason: "already-running" | "not-due";
+      reason: "already-running" | "not-due" | "invalid-spec";
     }
   | {
       ok: true;
@@ -397,6 +400,48 @@ let nextManualRunId = 1;
 
 function createCronTaskRunId(jobId: string, startedAt: number): string {
   return `cron:${jobId}:${startedAt}`;
+}
+
+async function skipInvalidPersistedManualRun(params: {
+  state: CronServiceState;
+  job: CronJob;
+  mode?: "due" | "force";
+  error: unknown;
+}) {
+  const endedAt = params.state.deps.nowMs();
+  const errorText = normalizeCronRunErrorText(params.error);
+  const shouldDelete = applyJobResult(
+    params.state,
+    params.job,
+    {
+      status: "skipped",
+      error: errorText,
+      startedAt: endedAt,
+      endedAt,
+    },
+    { preserveSchedule: params.mode === "force" },
+  );
+
+  emit(params.state, {
+    jobId: params.job.id,
+    action: "finished",
+    status: "skipped",
+    error: errorText,
+    runAtMs: endedAt,
+    durationMs: params.job.state.lastDurationMs,
+    nextRunAtMs: params.job.state.nextRunAtMs,
+    deliveryStatus: params.job.state.lastDeliveryStatus,
+    deliveryError: params.job.state.lastDeliveryError,
+  });
+
+  if (shouldDelete && params.state.store) {
+    params.state.store.jobs = params.state.store.jobs.filter((entry) => entry.id !== params.job.id);
+    emit(params.state, { jobId: params.job.id, action: "removed" });
+  }
+
+  recomputeNextRunsForMaintenance(params.state, { recomputeExpired: true });
+  await persist(params.state);
+  armTimer(params.state);
 }
 
 function tryCreateManualTaskRun(params: {
@@ -489,7 +534,12 @@ async function inspectManualRunPreflight(
     // persist does not block manual triggers for up to STUCK_RUN_MS (#17554).
     recomputeNextRunsForMaintenance(state);
     const job = findJobOrThrow(state, id);
-    assertSupportedJobSpec(job);
+    try {
+      assertSupportedJobSpec(job);
+    } catch (error) {
+      await skipInvalidPersistedManualRun({ state, job, mode, error });
+      return { ok: true, ran: false, reason: "invalid-spec" as const };
+    }
     if (typeof job.state.runningAtMs === "number") {
       return { ok: true, ran: false, reason: "already-running" as const };
     }

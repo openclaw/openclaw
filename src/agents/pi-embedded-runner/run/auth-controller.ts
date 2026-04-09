@@ -1,5 +1,6 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import { prepareProviderRuntimeAuth } from "../../../plugins/provider-runtime.js";
 import {
   type AuthProfileStore,
@@ -19,7 +20,6 @@ import {
   sanitizeRuntimeProviderRequestOverrides,
 } from "../../provider-request-config.js";
 import { clampRuntimeAuthRefreshDelayMs } from "../../runtime-auth-refresh.js";
-import { describeUnknownError } from "../utils.js";
 import {
   RUNTIME_AUTH_REFRESH_MARGIN_MS,
   RUNTIME_AUTH_REFRESH_MIN_DELAY_MS,
@@ -186,7 +186,7 @@ export function createEmbeddedRunAuthController(params: {
       .catch((err) => {
         const runtimeModel = params.getRuntimeModel();
         params.log.warn(
-          `Runtime auth refresh failed for ${runtimeModel.provider}: ${describeUnknownError(err)}`,
+          `Runtime auth refresh failed for ${runtimeModel.provider}: ${formatErrorMessage(err)}`,
         );
         throw err;
       })
@@ -289,7 +289,7 @@ export function createEmbeddedRunAuthController(params: {
     const fallbackMessage = `No available auth profile for ${provider} (all in cooldown or unavailable).`;
     const message =
       failoverParams.message?.trim() ||
-      (failoverParams.error ? describeUnknownError(failoverParams.error).trim() : "") ||
+      (failoverParams.error ? formatErrorMessage(failoverParams.error).trim() : "") ||
       fallbackMessage;
     const reason = resolveAuthProfileFailoverReason({
       allInCooldown: failoverParams.allInCooldown,

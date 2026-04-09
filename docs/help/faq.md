@@ -565,7 +565,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   <Accordion title="What does onboarding actually do?">
     `openclaw onboard` is the recommended setup path. In **local mode** it walks you through:
 
-    - **Model/auth setup** (provider OAuth, Claude CLI reuse, and API keys supported, plus local model options such as LM Studio)
+    - **Model/auth setup** (provider OAuth, API keys, Anthropic setup-token, plus local model options such as LM Studio)
     - **Workspace** location + bootstrap files
     - **Gateway settings** (bind/port/auth/tailscale)
     - **Channels** (WhatsApp, Telegram, Discord, Mattermost, Signal, iMessage, plus bundled channel plugins like QQ Bot)
@@ -581,12 +581,17 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     **local-only models** so your data stays on your device. Subscriptions (Claude
     Pro/Max or OpenAI Codex) are optional ways to authenticate those providers.
 
-    Anthropic's public Claude Code docs still include direct Claude Code terminal
-    use in Claude plan limits. Separately, Anthropic notified OpenClaw users on
-    **April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that the **OpenClaw**
-    Claude-login path counts as third-party harness usage and now requires
-    **Extra Usage** billed separately from the subscription. OpenAI Codex OAuth
-    is explicitly supported for external tools like OpenClaw.
+    For Anthropic in OpenClaw, the practical split is:
+
+    - **Anthropic API key**: normal Anthropic API billing
+    - **Claude CLI / Claude subscription auth in OpenClaw**: Anthropic staff
+      told us this usage is allowed again, and OpenClaw is treating `claude -p`
+      usage as sanctioned for this integration unless Anthropic publishes a new
+      policy
+
+    For long-lived gateway hosts, Anthropic API keys are still the more
+    predictable setup. OpenAI Codex OAuth is explicitly supported for external
+    tools like OpenClaw.
 
     OpenClaw also supports other hosted subscription-style options including
     **Qwen Cloud Coding Plan**, **MiniMax Coding Plan**, and
@@ -600,35 +605,28 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   </Accordion>
 
   <Accordion title="Can I use Claude Max subscription without an API key?">
-    Yes, via a local **Claude CLI** login on the gateway host.
+    Yes.
 
-    Claude Pro/Max subscriptions **do not include an API key**, so Claude CLI
-    reuse is the supported subscription-style path in OpenClaw. Anthropic's
-    public Claude Code docs still cover direct Claude Code terminal use under
-    your plan. Separately, Anthropic told OpenClaw users on **April 4, 2026 at
-    12:00 PM PT / 8:00 PM BST** that the **OpenClaw** Claude-login path
-    requires **Extra Usage** billed separately from the subscription. If you
-    want the clearest and safest supported path for production, use an
-    Anthropic API key.
+    Anthropic staff told us OpenClaw-style Claude CLI usage is allowed again, so
+    OpenClaw treats Claude subscription auth and `claude -p` usage as sanctioned
+    for this integration unless Anthropic publishes a new policy. If you want
+    the most predictable server-side setup, use an Anthropic API key instead.
 
   </Accordion>
 
   <Accordion title="Do you support Claude subscription auth (Claude Pro or Max)?">
-    Yes. Reuse a local **Claude CLI** login on the gateway host with `openclaw models auth login --provider anthropic --method cli --set-default`.
+    Yes.
 
-    Anthropic setup-token is also available again as a legacy/manual OpenClaw path. Anthropic's OpenClaw-specific billing notice still applies there, so use it with the expectation that Anthropic requires **Extra Usage**. See [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).
+    Anthropic staff told us this usage is allowed again, so OpenClaw treats
+    Claude CLI reuse and `claude -p` usage as sanctioned for this integration
+    unless Anthropic publishes a new policy.
 
-    Important: Anthropic's public Claude Code docs still cover direct Claude
-    Code terminal use under Claude plans. Separately, Anthropic told OpenClaw
-    users on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that the
-    **OpenClaw** Claude-login path requires **Extra Usage** billed separately
-    from the subscription.
-
-    For production or multi-user workloads, Anthropic API key auth is the
-    safer, recommended choice. If you want other subscription-style hosted
+    Anthropic setup-token is still available as a supported OpenClaw token path, but OpenClaw now prefers Claude CLI reuse and `claude -p` when available.
+    For production or multi-user workloads, Anthropic API key auth is still the
+    safer, more predictable choice. If you want other subscription-style hosted
     options in OpenClaw, see [OpenAI](/providers/openai), [Qwen / Model
-    Cloud](/providers/qwen), [MiniMax](/providers/minimax), and
-    [GLM Models](/providers/glm).
+    Cloud](/providers/qwen), [MiniMax](/providers/minimax), and [GLM
+    Models](/providers/glm).
 
   </Accordion>
 
@@ -652,11 +650,36 @@ for usage/billing and raise limits as needed.
   </Accordion>
 
   <Accordion title="Is AWS Bedrock supported?">
-    Yes. OpenClaw has a bundled **Amazon Bedrock (Converse)** provider. With AWS env markers present, OpenClaw can auto-discover the streaming/text Bedrock catalog and merge it as an implicit `amazon-bedrock` provider; otherwise you can explicitly enable `models.bedrockDiscovery.enabled` or add a manual provider entry. See [Amazon Bedrock](/providers/bedrock) and [Model providers](/providers/models). If you prefer a managed key flow, an OpenAI-compatible proxy in front of Bedrock is still a valid option.
+    Yes. OpenClaw has a bundled **Amazon Bedrock (Converse)** provider. With AWS env markers present, OpenClaw can auto-discover the streaming/text Bedrock catalog and merge it as an implicit `amazon-bedrock` provider; otherwise you can explicitly enable `plugins.entries.amazon-bedrock.config.discovery.enabled` or add a manual provider entry. See [Amazon Bedrock](/providers/bedrock) and [Model providers](/providers/models). If you prefer a managed key flow, an OpenAI-compatible proxy in front of Bedrock is still a valid option.
   </Accordion>
 
   <Accordion title="How does Codex auth work?">
     OpenClaw supports **OpenAI Code (Codex)** via OAuth (ChatGPT sign-in). Onboarding can run the OAuth flow and will set the default model to `openai-codex/gpt-5.4` when appropriate. See [Model providers](/concepts/model-providers) and [Onboarding (CLI)](/start/wizard).
+  </Accordion>
+
+  <Accordion title="Why does ChatGPT GPT-5.4 not unlock openai/gpt-5.4 in OpenClaw?">
+    OpenClaw treats the two routes separately:
+
+    - `openai-codex/gpt-5.4` = ChatGPT/Codex OAuth
+    - `openai/gpt-5.4` = direct OpenAI Platform API
+
+    In OpenClaw, ChatGPT/Codex sign-in is wired to the `openai-codex/*` route,
+    not the direct `openai/*` route. If you want the direct API path in
+    OpenClaw, set `OPENAI_API_KEY` (or the equivalent OpenAI provider config).
+    If you want ChatGPT/Codex sign-in in OpenClaw, use `openai-codex/*`.
+
+  </Accordion>
+
+  <Accordion title="Why can Codex OAuth limits differ from ChatGPT web?">
+    `openai-codex/*` uses the Codex OAuth route, and its usable quota windows are
+    OpenAI-managed and plan-dependent. In practice, those limits can differ from
+    the ChatGPT website/app experience, even when both are tied to the same account.
+
+    OpenClaw can show the currently visible provider usage/quota windows in
+    `openclaw models status`, but it does not invent or normalize ChatGPT-web
+    entitlements into direct API access. If you want the direct OpenAI Platform
+    billing/limit path, use `openai/*` with an API key.
+
   </Accordion>
 
   <Accordion title="Do you support OpenAI subscription auth (Codex OAuth)?">
@@ -678,7 +701,7 @@ for usage/billing and raise limits as needed.
        - npm: `npm install -g @google/gemini-cli`
     2. Enable the plugin: `openclaw plugins enable google`
     3. Login: `openclaw models auth login --provider google-gemini-cli --set-default`
-    4. Default model after login: `google-gemini-cli/gemini-3.1-pro-preview`
+    4. Default model after login: `google-gemini-cli/gemini-3-flash-preview`
     5. If requests fail, set `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host
 
     This stores OAuth tokens in auth profiles on the gateway host. Details: [Model providers](/concepts/model-providers).
@@ -1793,8 +1816,8 @@ for usage/billing and raise limits as needed.
 
     - `config.schema.lookup`: inspect one config subtree with its shallow schema node, matched UI hint, and immediate child summaries before writing
     - `config.get`: fetch the current snapshot + hash
-    - `config.patch`: safe partial update (preferred for most RPC edits)
-    - `config.apply`: validate + replace the full config, then restart
+    - `config.patch`: safe partial update (preferred for most RPC edits); hot-reloads when possible and restarts when required
+    - `config.apply`: validate + replace the full config; hot-reloads when possible and restarts when required
     - The owner-only `gateway` runtime tool still refuses to rewrite `tools.exec.ask` / `tools.exec.security`; legacy `tools.bash.*` aliases normalize to the same protected exec paths
 
   </Accordion>
@@ -2231,7 +2254,7 @@ for usage/billing and raise limits as needed.
     Quickest setup:
 
     1. Install Ollama from `https://ollama.com/download`
-    2. Pull a local model such as `ollama pull glm-4.7-flash`
+    2. Pull a local model such as `ollama pull gemma4`
     3. If you want cloud models too, run `ollama signin`
     4. Run `openclaw onboard` and choose `Ollama`
     5. Pick `Local` or `Cloud + Local`
@@ -2312,6 +2335,42 @@ for usage/billing and raise limits as needed.
     - **Sub-agents:** route coding tasks to sub-agents with a different default model.
 
     See [Models](/concepts/models) and [Slash commands](/tools/slash-commands).
+
+  </Accordion>
+
+  <Accordion title="How do I configure fast mode for GPT 5.4?">
+    Use either a session toggle or a config default:
+
+    - **Per session:** send `/fast on` while the session is using `openai/gpt-5.4` or `openai-codex/gpt-5.4`.
+    - **Per model default:** set `agents.defaults.models["openai/gpt-5.4"].params.fastMode` to `true`.
+    - **Codex OAuth too:** if you also use `openai-codex/gpt-5.4`, set the same flag there.
+
+    Example:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.4": {
+              params: {
+                fastMode: true,
+              },
+            },
+            "openai-codex/gpt-5.4": {
+              params: {
+                fastMode: true,
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    For OpenAI, fast mode maps to `service_tier = "priority"` on supported native Responses requests. Session `/fast` overrides beat config defaults.
+
+    See [Thinking and fast mode](/tools/thinking) and [OpenAI fast mode](/providers/openai#openai-fast-mode).
 
   </Accordion>
 
@@ -2611,7 +2670,7 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
     for one model can still be usable for a sibling model on the same provider,
     while billing/disabled windows still block the whole profile.
 
-    You can also set a **per-agent** order override (stored in that agent's `auth-profiles.json`) via the CLI:
+    You can also set a **per-agent** order override (stored in that agent's `auth-state.json`) via the CLI:
 
     ```bash
     # Defaults to the configured default agent (omit --agent)

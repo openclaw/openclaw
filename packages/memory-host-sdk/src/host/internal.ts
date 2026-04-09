@@ -77,7 +77,7 @@ export function isMemoryPath(relPath: string): boolean {
   if (!normalized) {
     return false;
   }
-  if (normalized === "MEMORY.md" || normalized === "memory.md") {
+  if (normalized === "MEMORY.md" || normalized === "memory.md" || normalized === "dreams.md") {
     return true;
   }
   return normalized.startsWith("memory/");

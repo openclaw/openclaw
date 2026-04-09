@@ -1,8 +1,9 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   readFileUtf8AndCleanup,
   stubFetchTextResponse,
 } from "../test-utils/camera-url-test-helpers.js";
+import { createNodesTool } from "./tools/nodes-tool.js";
 
 const { callGateway } = vi.hoisted(() => ({
   callGateway: vi.fn(),
@@ -13,8 +14,6 @@ vi.mock("../media/image-ops.js", () => ({
   getImageMetadata: vi.fn(async () => ({ width: 1, height: 1 })),
   resizeToJpeg: vi.fn(async () => Buffer.from("jpeg")),
 }));
-
-let createOpenClawTools: typeof import("./openclaw-tools.js").createOpenClawTools;
 
 const NODE_ID = "mac-1";
 const JPG_PAYLOAD = {
@@ -48,21 +47,12 @@ function unexpectedGatewayMethod(method: unknown): never {
 }
 
 function getNodesTool(options?: { modelHasVision?: boolean; allowMediaInvokeCommands?: boolean }) {
-  const toolOptions: {
-    modelHasVision?: boolean;
-    allowMediaInvokeCommands?: boolean;
-  } = {};
-  if (options?.modelHasVision !== undefined) {
-    toolOptions.modelHasVision = options.modelHasVision;
-  }
-  if (options?.allowMediaInvokeCommands !== undefined) {
-    toolOptions.allowMediaInvokeCommands = options.allowMediaInvokeCommands;
-  }
-  const tool = createOpenClawTools(toolOptions).find((candidate) => candidate.name === "nodes");
-  if (!tool) {
-    throw new Error("missing nodes tool");
-  }
-  return tool;
+  return createNodesTool({
+    ...(options?.modelHasVision !== undefined ? { modelHasVision: options.modelHasVision } : {}),
+    ...(options?.allowMediaInvokeCommands !== undefined
+      ? { allowMediaInvokeCommands: options.allowMediaInvokeCommands }
+      : {}),
+  });
 }
 
 async function executeNodes(
@@ -163,13 +153,9 @@ async function executePhotosLatest(params: { modelHasVision: boolean }) {
   });
 }
 
-beforeEach(async () => {
+beforeEach(() => {
   callGateway.mockClear();
   vi.unstubAllGlobals();
-});
-
-beforeAll(async () => {
-  await loadOpenClawToolsForTest();
 });
 
 describe("nodes camera_snap", () => {
@@ -753,8 +739,3 @@ describe("nodes invoke", () => {
     });
   });
 });
-async function loadOpenClawToolsForTest(): Promise<void> {
-  vi.resetModules();
-  await import("./test-helpers/fast-core-tools.js");
-  ({ createOpenClawTools } = await import("./openclaw-tools.js"));
-}

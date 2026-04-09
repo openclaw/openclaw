@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
+import { normalizeArrayBackedTrimmedStringList } from "../shared/string-normalization.js";
 import { type NodeApprovalScope, resolveNodePairApprovalScopes } from "./node-pairing-authz.js";
 import {
   createAsyncLock,
@@ -66,14 +67,6 @@ const OPERATOR_ROLE = "operator";
 
 const withLock = createAsyncLock();
 
-function normalizeStringList(values?: string[]): string[] | undefined {
-  if (!Array.isArray(values)) {
-    return undefined;
-  }
-  const normalized = values.map((value) => value.trim()).filter(Boolean);
-  return normalized.length > 0 ? normalized : [];
-}
-
 function buildPendingNodePairingRequest(params: {
   requestId?: string;
   req: NodePairingRequestInput;
@@ -88,8 +81,8 @@ function buildPendingNodePairingRequest(params: {
     uiVersion: params.req.uiVersion,
     deviceFamily: params.req.deviceFamily,
     modelIdentifier: params.req.modelIdentifier,
-    caps: normalizeStringList(params.req.caps),
-    commands: normalizeStringList(params.req.commands),
+    caps: normalizeArrayBackedTrimmedStringList(params.req.caps),
+    commands: normalizeArrayBackedTrimmedStringList(params.req.commands),
     permissions: params.req.permissions,
     remoteIp: params.req.remoteIp,
     silent: params.req.silent,
@@ -110,8 +103,8 @@ function refreshPendingNodePairingRequest(
     uiVersion: incoming.uiVersion ?? existing.uiVersion,
     deviceFamily: incoming.deviceFamily ?? existing.deviceFamily,
     modelIdentifier: incoming.modelIdentifier ?? existing.modelIdentifier,
-    caps: normalizeStringList(incoming.caps) ?? existing.caps,
-    commands: normalizeStringList(incoming.commands) ?? existing.commands,
+    caps: normalizeArrayBackedTrimmedStringList(incoming.caps) ?? existing.caps,
+    commands: normalizeArrayBackedTrimmedStringList(incoming.commands) ?? existing.commands,
     permissions: incoming.permissions ?? existing.permissions,
     remoteIp: incoming.remoteIp ?? existing.remoteIp,
     // Preserve interactive visibility if either request needs attention.

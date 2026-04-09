@@ -3,6 +3,7 @@ import { RateLimitError } from "@buape/carbon";
 import { AcpRuntimeError } from "openclaw/plugin-sdk/acp-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeChannel } from "../../../../src/plugins/runtime/runtime-channel.js";
 import {
   baseConfig,
   baseRuntime,
@@ -16,7 +17,7 @@ const {
   clientFetchUserMock,
   clientGetPluginMock,
   clientHandleDeployRequestMock,
-  createDiscordAutoPresenceControllerMock,
+  createDiscordExecApprovalButtonContextMock,
   createDiscordMessageHandlerMock,
   createDiscordNativeCommandMock,
   createdBindingManagers,
@@ -29,7 +30,6 @@ const {
   listSkillCommandsForAgentsMock,
   monitorLifecycleMock,
   reconcileAcpThreadBindingsOnStartupMock,
-  resolveDiscordAllowlistConfigMock,
   resolveDiscordAccountMock,
   resolveNativeCommandsEnabledMock,
   resolveNativeSkillsEnabledMock,
@@ -125,7 +125,7 @@ describe("monitorDiscordProvider", () => {
     if (!reconcileParams?.healthProbe) {
       throw new Error("healthProbe was not wired into ACP startup reconciliation");
     }
-    return reconcileParams.healthProbe as NonNullable<ReconcileStartupParams["healthProbe"]>;
+    return reconcileParams.healthProbe;
   };
 
   beforeAll(async () => {
@@ -196,15 +196,18 @@ describe("monitorDiscordProvider", () => {
         Parameters<typeof providerTesting.setLoadDiscordProviderSessionRuntime>[0]
       >,
     );
-    providerTesting.setCreateClient((options, handlers) => {
+    providerTesting.setCreateClient((options, handlers, plugins = []) => {
       clientConstructorOptionsMock(options);
+      const pluginRegistry = plugins.map((plugin) => ({ id: plugin.id, plugin }));
       return {
         options,
         listeners: handlers.listeners ?? [],
+        plugins: pluginRegistry,
         rest: { put: vi.fn(async () => undefined) },
         handleDeployRequest: async () => await clientHandleDeployRequestMock(),
         fetchUser: async (target: string) => await clientFetchUserMock(target),
-        getPlugin: (name: string) => clientGetPluginMock(name),
+        getPlugin: (name: string) =>
+          clientGetPluginMock(name) ?? pluginRegistry.find((entry) => entry.id === name)?.plugin,
       } as never;
     });
     providerTesting.setGetPluginCommandSpecs((provider?: string) =>
@@ -314,6 +317,64 @@ describe("monitorDiscordProvider", () => {
     });
 
     expect(voiceRuntimeModuleLoadedMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("wires exec approval button context from the resolved Discord account config", async () => {
+    const cfg = createConfigWithDiscordAccount();
+    const execApprovalsConfig = { enabled: true, approvers: ["123"] };
+    resolveDiscordAccountMock.mockReturnValue({
+      accountId: "default",
+      token: "cfg-token",
+      config: {
+        commands: { native: true, nativeSkills: false },
+        voice: { enabled: false },
+        agentComponents: { enabled: false },
+        execApprovals: execApprovalsConfig,
+      },
+    });
+
+    await monitorDiscordProvider({
+      config: cfg,
+      runtime: baseRuntime(),
+    });
+
+    expect(createDiscordExecApprovalButtonContextMock).toHaveBeenCalledWith({
+      cfg,
+      accountId: "default",
+      config: execApprovalsConfig,
+    });
+  });
+
+  it("registers the native approval runtime context when exec approvals are enabled", async () => {
+    const channelRuntime = createRuntimeChannel();
+    const execApprovalsConfig = { enabled: true, approvers: ["123"] };
+    resolveDiscordAccountMock.mockReturnValue({
+      accountId: "default",
+      token: "cfg-token",
+      config: {
+        commands: { native: true, nativeSkills: false },
+        voice: { enabled: false },
+        agentComponents: { enabled: false },
+        execApprovals: execApprovalsConfig,
+      },
+    });
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+      channelRuntime,
+    });
+
+    expect(
+      channelRuntime.runtimeContexts.get({
+        channelId: "discord",
+        accountId: "default",
+        capability: "approval.native",
+      }),
+    ).toEqual({
+      token: "cfg-token",
+      config: execApprovalsConfig,
+    });
   });
 
   it("treats ACP error status as uncertain during startup thread-binding probes", async () => {
@@ -497,7 +558,7 @@ describe("monitorDiscordProvider", () => {
       params.threadBindings.stop();
     });
     clientFetchUserMock.mockImplementationOnce(async () => {
-      emitter.emit("error", new Error("Fatal Gateway error: 4014"));
+      emitter.emit("error", new Error("Fatal gateway close code: 4014"));
       return { id: "bot-1" };
     });
 

@@ -70,6 +70,14 @@ const MattermostSlashCommandsSchema = z
   .strict()
   .optional();
 
+const MattermostNetworkSchema = z
+  .object({
+    /** Dangerous opt-in for self-hosted Mattermost on trusted private/internal hosts. */
+    dangerouslyAllowPrivateNetwork: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 const MattermostAccountSchemaBase = z
   .object({
     name: z.string().optional(),
@@ -91,7 +99,7 @@ const MattermostAccountSchemaBase = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
-    replyToMode: z.enum(["off", "first", "all"]).optional(),
+    replyToMode: z.enum(["off", "first", "all", "batched"]).optional(),
     responsePrefix: z.string().optional(),
     actions: z
       .object({
@@ -107,8 +115,8 @@ const MattermostAccountSchemaBase = z
       .optional(),
     /** Per-group configuration (keyed by Mattermost channel ID or "*" for default). */
     groups: z.record(z.string(), MattermostGroupSchema.optional()).optional(),
-    /** Allow fetching from private/internal IP addresses (e.g. localhost). Required for self-hosted Mattermost on LAN/VPN. */
-    allowPrivateNetwork: z.boolean().optional(),
+    /** Network policy overrides for self-hosted Mattermost on trusted private/internal hosts. */
+    network: MattermostNetworkSchema,
     /** Retry configuration for DM channel creation */
     dmChannelRetry: DmChannelRetrySchema,
   })

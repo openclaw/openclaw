@@ -1,9 +1,6 @@
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  resolveManifestProviderSetupFlowContributions,
-  resolveProviderSetupFlowContributions,
-} from "../flows/provider-flow.js";
+import { resolveProviderSetupFlowContributions } from "../flows/provider-flow.js";
 import {
   CORE_AUTH_CHOICE_OPTIONS,
   type AuthChoiceGroup,
@@ -38,6 +35,12 @@ function resolveProviderChoiceOptions(params?: {
     value: contribution.option.value as AuthChoice,
     label: contribution.option.label,
     ...(contribution.option.hint ? { hint: contribution.option.hint } : {}),
+    ...(contribution.option.assistantPriority !== undefined
+      ? { assistantPriority: contribution.option.assistantPriority }
+      : {}),
+    ...(contribution.option.assistantVisibility
+      ? { assistantVisibility: contribution.option.assistantVisibility }
+      : {}),
     ...(contribution.option.group
       ? {
           groupId: contribution.option.group.id as AuthChoiceGroupId,
@@ -57,7 +60,7 @@ export function formatAuthChoiceChoicesForCli(params?: {
 }): string {
   const values = [
     ...formatStaticAuthChoiceChoicesForCli(params).split("|"),
-    ...resolveManifestProviderSetupFlowContributions({
+    ...resolveProviderSetupFlowContributions({
       ...params,
       scope: "text-inference",
     }).map((contribution) => contribution.option.value),

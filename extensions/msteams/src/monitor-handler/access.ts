@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import {
   DEFAULT_ACCOUNT_ID,
   createChannelPairingController,
@@ -24,7 +25,7 @@ export async function resolveMSTeamsSenderAccess(params: {
   const activity = params.activity;
   const msteamsCfg = params.cfg.channels?.msteams;
   const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "unknown");
-  const convType = activity.conversation?.conversationType?.toLowerCase();
+  const convType = normalizeOptionalLowercaseString(activity.conversation?.conversationType);
   const isDirectMessage = convType === "personal" || (!convType && !activity.conversation?.isGroup);
   const senderId = activity.from?.aadObjectId ?? activity.from?.id ?? "unknown";
   const senderName = activity.from?.name ?? activity.from?.id ?? senderId;

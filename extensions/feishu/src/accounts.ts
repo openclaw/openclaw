@@ -7,6 +7,7 @@ import {
   resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import { coerceSecretRef } from "openclaw/plugin-sdk/provider-auth";
+import { normalizeString } from "./comment-shared.js";
 import type {
   FeishuConfig,
   FeishuAccountConfig,
@@ -15,26 +16,17 @@ import type {
   ResolvedFeishuAccount,
 } from "./types.js";
 
-const {
-  listConfiguredAccountIds,
-  listAccountIds: listFeishuAccountIds,
-  resolveDefaultAccountId,
-} = createAccountListHelpers("feishu", {
-  allowUnlistedDefaultAccount: true,
-});
+const { listAccountIds: listFeishuAccountIds, resolveDefaultAccountId } = createAccountListHelpers(
+  "feishu",
+  {
+    allowUnlistedDefaultAccount: true,
+  },
+);
 
 export { listFeishuAccountIds };
 
 type FeishuCredentialResolutionMode = "inspect" | "strict";
 type FeishuResolvedSecretRef = NonNullable<ReturnType<typeof coerceSecretRef>>;
-
-function normalizeString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
 
 function formatSecretRefLabel(ref: FeishuResolvedSecretRef): string {
   return `${ref.source}:${ref.provider}:${ref.id}`;

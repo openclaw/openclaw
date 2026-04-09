@@ -33,15 +33,31 @@ export const discordChannelConfigUiHints = {
     label: "Discord Streaming Mode",
     help: 'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Discord. Legacy boolean/streamMode keys are auto-mapped.',
   },
-  "draftChunk.minChars": {
+  "streaming.mode": {
+    label: "Discord Streaming Mode",
+    help: 'Canonical Discord preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Discord.',
+  },
+  "streaming.chunkMode": {
+    label: "Discord Chunk Mode",
+    help: 'Chunking mode for outbound Discord text delivery: "length" (default) or "newline".',
+  },
+  "streaming.block.enabled": {
+    label: "Discord Block Streaming Enabled",
+    help: 'Enable chunked block-style Discord preview delivery when channels.discord.streaming.mode="block".',
+  },
+  "streaming.block.coalesce": {
+    label: "Discord Block Streaming Coalesce",
+    help: "Merge streamed Discord block replies before final delivery.",
+  },
+  "streaming.preview.chunk.minChars": {
     label: "Discord Draft Chunk Min Chars",
-    help: 'Minimum chars before emitting a Discord stream preview update when channels.discord.streaming="block" (default: 200).',
+    help: 'Minimum chars before emitting a Discord stream preview update when channels.discord.streaming.mode="block" (default: 200).',
   },
-  "draftChunk.maxChars": {
+  "streaming.preview.chunk.maxChars": {
     label: "Discord Draft Chunk Max Chars",
-    help: 'Target max size for a Discord stream preview chunk when channels.discord.streaming="block" (default: 800; clamped to channels.discord.textChunkLimit).',
+    help: 'Target max size for a Discord stream preview chunk when channels.discord.streaming.mode="block" (default: 800; clamped to channels.discord.textChunkLimit).',
   },
-  "draftChunk.breakPreference": {
+  "streaming.preview.chunk.breakPreference": {
     label: "Discord Draft Chunk Break Preference",
     help: "Preferred breakpoints for Discord draft chunks (paragraph | newline | sentence). Default: paragraph.",
   },

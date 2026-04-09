@@ -1,8 +1,5 @@
+import { isRecord } from "openclaw/plugin-sdk/text-runtime";
 import type { IMessagePayload } from "./types.js";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function isOptionalString(value: unknown): value is string | null | undefined {
   return value === undefined || value === null || typeof value === "string";

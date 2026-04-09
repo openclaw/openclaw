@@ -1,9 +1,14 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { upsertAuthProfileWithLock } from "openclaw/plugin-sdk/provider-auth";
 import { applyAgentDefaultModelPrimary } from "openclaw/plugin-sdk/provider-onboard";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { WizardCancelledError, type WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { OLLAMA_DEFAULT_BASE_URL, OLLAMA_DEFAULT_MODEL } from "./defaults.js";
 import {
   buildOllamaBaseUrlSsrFPolicy,
@@ -15,7 +20,7 @@ import {
 } from "./provider-models.js";
 
 const OLLAMA_SUGGESTED_MODELS_LOCAL = [OLLAMA_DEFAULT_MODEL];
-const OLLAMA_SUGGESTED_MODELS_CLOUD = ["kimi-k2.5:cloud", "minimax-m2.5:cloud", "glm-5:cloud"];
+const OLLAMA_SUGGESTED_MODELS_CLOUD = ["kimi-k2.5:cloud", "minimax-m2.7:cloud", "glm-5.1:cloud"];
 const OLLAMA_CONTEXT_ENRICH_LIMIT = 200;
 
 type OllamaMode = "remote" | "local";
@@ -40,7 +45,7 @@ function normalizeOllamaModelName(value: string | undefined): string | undefined
   if (!trimmed) {
     return undefined;
   }
-  if (trimmed.toLowerCase().startsWith("ollama/")) {
+  if (normalizeLowercaseStringOrEmpty(trimmed).startsWith("ollama/")) {
     const normalized = trimmed.slice("ollama/".length).trim();
     return normalized || undefined;
   }
@@ -48,7 +53,7 @@ function normalizeOllamaModelName(value: string | undefined): string | undefined
 }
 
 function isOllamaCloudModel(modelName: string | undefined): boolean {
-  return Boolean(modelName?.trim().toLowerCase().endsWith(":cloud"));
+  return normalizeOptionalLowercaseString(modelName)?.endsWith(":cloud") === true;
 }
 
 function formatOllamaPullStatus(status: string): { text: string; hidePercent: boolean } {
@@ -195,7 +200,7 @@ async function pullOllamaModelCore(params: {
       await release();
     }
   } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
+    const reason = formatErrorMessage(err);
     return { ok: false, message: `Failed to download ${modelName}: ${reason}` };
   }
 }
@@ -245,9 +250,14 @@ function buildOllamaModelsConfig(
   modelNames: string[],
   discoveredModelsByName?: Map<string, OllamaModelWithContext>,
 ) {
-  return modelNames.map((name) =>
-    buildOllamaModelDefinition(name, discoveredModelsByName?.get(name)?.contextWindow),
-  );
+  return modelNames.map((name) => {
+    const discovered = discoveredModelsByName?.get(name);
+    // Suggested cloud models may be injected before `/api/tags` exposes them,
+    // so keep Kimi vision-capable during setup even without discovered metadata.
+    const capabilities =
+      discovered?.capabilities ?? (name === "kimi-k2.5:cloud" ? ["vision"] : undefined);
+    return buildOllamaModelDefinition(name, discovered?.contextWindow, capabilities);
+  });
 }
 
 function applyOllamaProviderConfig(
@@ -299,7 +309,9 @@ export async function buildOllamaProvider(
   return {
     baseUrl: apiBase,
     api: "ollama",
-    models: discovered.map((model) => buildOllamaModelDefinition(model.name, model.contextWindow)),
+    models: discovered.map((model) =>
+      buildOllamaModelDefinition(model.name, model.contextWindow, model.capabilities),
+    ),
   };
 }
 
@@ -482,7 +494,7 @@ export async function configureOllamaNonInteractive(params: {
 
     defaultModelId =
       allModelNames.find((name) => availableModelNames.has(name)) ??
-      Array.from(availableModelNames)[0]!;
+      Array.from(availableModelNames)[0];
     params.runtime.log(
       `Ollama model ${requestedDefaultModelId} was not available; using ${defaultModelId} instead.`,
     );

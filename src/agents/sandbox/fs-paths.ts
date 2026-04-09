@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveSandboxInputPath, resolveSandboxPath } from "../sandbox-paths.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
@@ -42,7 +43,7 @@ export function parseSandboxBindMount(spec: string): ParsedBindMount | null {
   if (!hostToken || !containerToken || !path.posix.isAbsolute(containerToken)) {
     return null;
   }
-  const optionsToken = parsed.options.trim().toLowerCase();
+  const optionsToken = normalizeOptionalLowercaseString(parsed.options) ?? "";
   const optionParts = optionsToken
     ? optionsToken
         .split(",")

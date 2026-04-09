@@ -1,20 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
-import {
-  applyAccountNameToChannelSection,
-  deleteAccountFromConfigSection,
-  setAccountEnabledInConfigSection,
-} from "openclaw/plugin-sdk/core";
-import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { initApiConfig } from "./api.js";
-import { applyQQBotSetupAccountConfig, validateQQBotSetupInput } from "./channel.setup.js";
+import { qqbotConfigAdapter, qqbotMeta, qqbotSetupAdapterShared } from "./channel-config-shared.js";
 import { qqbotChannelConfigSchema } from "./config-schema.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  listQQBotAccountIds,
-  resolveQQBotAccount,
-  resolveDefaultQQBotAccountId,
-} from "./config.js";
+import { DEFAULT_ACCOUNT_ID, resolveQQBotAccount } from "./config.js";
 import { getQQBotRuntime } from "./runtime.js";
 import { qqbotSetupWizard } from "./setup-surface.js";
 // Re-export text helpers so existing consumers of channel.ts are unaffected.
@@ -35,12 +24,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
   id: "qqbot",
   setupWizard: qqbotSetupWizard,
   meta: {
-    id: "qqbot",
-    label: "QQ Bot",
-    selectionLabel: "QQ Bot",
-    docsPath: "/channels/qqbot",
-    blurb: "Connect to QQ via official QQ Bot API",
-    order: 50,
+    ...qqbotMeta,
   },
   capabilities: {
     chatTypes: ["direct", "group"],
@@ -57,70 +41,10 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
   configSchema: qqbotChannelConfigSchema,
 
   config: {
-    listAccountIds: (cfg) => listQQBotAccountIds(cfg),
-    resolveAccount: (cfg, accountId) =>
-      resolveQQBotAccount(cfg, accountId, { allowUnresolvedSecretRef: true }),
-    defaultAccountId: (cfg) => resolveDefaultQQBotAccountId(cfg),
-    setAccountEnabled: ({ cfg, accountId, enabled }) =>
-      setAccountEnabledInConfigSection({
-        cfg,
-        sectionKey: "qqbot",
-        accountId,
-        enabled,
-        allowTopLevel: true,
-      }),
-    deleteAccount: ({ cfg, accountId }) =>
-      deleteAccountFromConfigSection({
-        cfg,
-        sectionKey: "qqbot",
-        accountId,
-        clearBaseFields: ["appId", "clientSecret", "clientSecretFile", "name"],
-      }),
-    isConfigured: (account) =>
-      Boolean(
-        account?.appId &&
-        (Boolean(account?.clientSecret) ||
-          hasConfiguredSecretInput(account?.config?.clientSecret) ||
-          Boolean(account?.config?.clientSecretFile?.trim())),
-      ),
-    describeAccount: (account) => ({
-      accountId: account?.accountId ?? DEFAULT_ACCOUNT_ID,
-      name: account?.name,
-      enabled: account?.enabled ?? false,
-      configured: Boolean(
-        account?.appId &&
-        (Boolean(account?.clientSecret) ||
-          hasConfiguredSecretInput(account?.config?.clientSecret) ||
-          Boolean(account?.config?.clientSecretFile?.trim())),
-      ),
-      tokenSource: account?.secretSource,
-    }),
-    resolveAllowFrom: ({ cfg, accountId }) => {
-      const account = resolveQQBotAccount(cfg, accountId, { allowUnresolvedSecretRef: true });
-      const allowFrom = account.config?.allowFrom;
-      return allowFrom;
-    },
-    // Normalize allowFrom entries by removing the qqbot: prefix and uppercasing IDs.
-    formatAllowFrom: ({ allowFrom }) =>
-      (allowFrom ?? [])
-        .map((entry) => String(entry).trim())
-        .filter(Boolean)
-        .map((entry) => entry.replace(/^qqbot:/i, ""))
-        .map((entry) => entry.toUpperCase()),
+    ...qqbotConfigAdapter,
   },
   setup: {
-    resolveAccountId: ({ cfg, accountId }) =>
-      accountId?.trim().toLowerCase() || resolveDefaultQQBotAccountId(cfg),
-    applyAccountName: ({ cfg, accountId, name }) =>
-      applyAccountNameToChannelSection({
-        cfg,
-        channelKey: "qqbot",
-        accountId,
-        name,
-      }),
-    validateInput: ({ accountId, input }) => validateQQBotSetupInput({ accountId, input }),
-    applyAccountConfig: ({ cfg, accountId, input }) =>
-      applyQQBotSetupAccountConfig({ cfg, accountId, input }),
+    ...qqbotSetupAdapterShared,
   },
   messaging: {
     /** Normalize common QQ Bot target formats into the canonical qqbot:... form. */

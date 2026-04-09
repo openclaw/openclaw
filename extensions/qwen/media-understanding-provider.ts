@@ -1,7 +1,11 @@
 import {
+  buildOpenAiCompatibleVideoRequestBody,
+  coerceOpenAiCompatibleVideoText,
   describeImageWithModel,
   describeImagesWithModel,
+  resolveMediaUnderstandingString,
   type MediaUnderstandingProvider,
+  type OpenAiCompatibleVideoPayload,
   type VideoDescriptionRequest,
   type VideoDescriptionResult,
 } from "openclaw/plugin-sdk/media-understanding";
@@ -14,15 +18,6 @@ import { QWEN_STANDARD_CN_BASE_URL, QWEN_STANDARD_GLOBAL_BASE_URL } from "./mode
 
 const DEFAULT_QWEN_VIDEO_MODEL = "qwen-vl-max-latest";
 const DEFAULT_QWEN_VIDEO_PROMPT = "Describe the video in detail.";
-
-type QwenVideoPayload = {
-  choices?: Array<{
-    message?: {
-      content?: string | Array<{ text?: string }>;
-      reasoning_content?: string;
-    };
-  }>;
-};
 
 function resolveQwenStandardBaseUrl(
   cfg: { models?: { providers?: Record<string, { baseUrl?: string } | undefined> } } | undefined,
@@ -46,37 +41,13 @@ function resolveQwenStandardBaseUrl(
   }
 }
 
-function coerceQwenText(payload: QwenVideoPayload): string | null {
-  const message = payload.choices?.[0]?.message;
-  if (!message) {
-    return null;
-  }
-  if (typeof message.content === "string" && message.content.trim()) {
-    return message.content.trim();
-  }
-  if (Array.isArray(message.content)) {
-    const text = message.content
-      .map((part) => (typeof part.text === "string" ? part.text.trim() : ""))
-      .filter(Boolean)
-      .join("\n")
-      .trim();
-    if (text) {
-      return text;
-    }
-  }
-  if (typeof message.reasoning_content === "string" && message.reasoning_content.trim()) {
-    return message.reasoning_content.trim();
-  }
-  return null;
-}
-
 export async function describeQwenVideo(
   params: VideoDescriptionRequest,
 ): Promise<VideoDescriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;
-  const model = params.model?.trim() || DEFAULT_QWEN_VIDEO_MODEL;
-  const mime = params.mime?.trim() || "video/mp4";
-  const prompt = params.prompt?.trim() || DEFAULT_QWEN_VIDEO_PROMPT;
+  const model = resolveMediaUnderstandingString(params.model, DEFAULT_QWEN_VIDEO_MODEL);
+  const mime = resolveMediaUnderstandingString(params.mime, "video/mp4");
+  const prompt = resolveMediaUnderstandingString(params.prompt, DEFAULT_QWEN_VIDEO_PROMPT);
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
     resolveProviderHttpRequestConfig({
       baseUrl: params.baseUrl,
@@ -96,23 +67,12 @@ export async function describeQwenVideo(
   const { response: res, release } = await postJsonRequest({
     url: `${baseUrl}/chat/completions`,
     headers,
-    body: {
+    body: buildOpenAiCompatibleVideoRequestBody({
       model,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: prompt },
-            {
-              type: "video_url",
-              video_url: {
-                url: `data:${mime};base64,${params.buffer.toString("base64")}`,
-              },
-            },
-          ],
-        },
-      ],
-    },
+      prompt,
+      mime,
+      buffer: params.buffer,
+    }),
     timeoutMs: params.timeoutMs,
     fetchFn,
     allowPrivateNetwork,
@@ -121,8 +81,8 @@ export async function describeQwenVideo(
 
   try {
     await assertOkOrThrowHttpError(res, "Qwen video description failed");
-    const payload = (await res.json()) as QwenVideoPayload;
-    const text = coerceQwenText(payload);
+    const payload = (await res.json()) as OpenAiCompatibleVideoPayload;
+    const text = coerceOpenAiCompatibleVideoText(payload);
     if (!text) {
       throw new Error("Qwen video description response missing content");
     }

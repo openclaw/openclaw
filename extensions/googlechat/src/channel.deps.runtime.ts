@@ -4,7 +4,6 @@ export {
   createAccountStatusSink,
   DEFAULT_ACCOUNT_ID,
   fetchRemoteMedia,
-  getChatChannelMeta,
   GoogleChatConfigSchema,
   loadOutboundMediaFromUrl,
   missingTargetError,

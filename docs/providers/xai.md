@@ -75,6 +75,34 @@ The bundled `grok` web-search provider uses `XAI_API_KEY` too:
 openclaw config set tools.web.search.provider grok
 ```
 
+## Video generation
+
+The bundled `xai` plugin also registers video generation through the shared
+`video_generate` tool.
+
+- Default video model: `xai/grok-imagine-video`
+- Modes: text-to-video, image-to-video, and remote video edit/extend flows
+- Supports `aspectRatio` and `resolution`
+- Current limit: local video buffers are not accepted; use remote `http(s)`
+  URLs for video-reference/edit inputs
+
+To use xAI as the default video provider:
+
+```json5
+{
+  agents: {
+    defaults: {
+      videoGenerationModel: {
+        primary: "xai/grok-imagine-video",
+      },
+    },
+  },
+}
+```
+
+See [Video Generation](/tools/video-generation) for the shared tool
+parameters, provider selection, and failover behavior.
+
 ## Known limits
 
 - Auth is API-key only today. There is no xAI OAuth/device-code flow in OpenClaw yet.

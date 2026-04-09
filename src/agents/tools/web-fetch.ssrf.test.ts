@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as ssrf from "../../infra/net/ssrf.js";
+import type { LookupFn } from "../../infra/net/ssrf.js";
 import { type FetchMock, withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { makeFetchHeaders } from "./web-fetch.test-harness.js";
+import "./web-fetch.test-mocks.js";
 
 const lookupMock = vi.fn();
-const resolvePinnedHostname = ssrf.resolvePinnedHostname;
 
 function redirectResponse(location: string): Response {
   return {
@@ -58,6 +58,7 @@ async function createWebFetchToolForTest(params?: { firecrawlApiKey?: string }) 
         },
       },
     },
+    lookupFn: lookupMock as unknown as LookupFn,
   });
 }
 
@@ -74,16 +75,12 @@ describe("web_fetch SSRF protection", () => {
 
   beforeEach(() => {
     vi.stubEnv("FIRECRAWL_API_KEY", "");
-    vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation((hostname) =>
-      resolvePinnedHostname(hostname, lookupMock),
-    );
   });
 
   afterEach(() => {
     global.fetch = priorFetch;
     lookupMock.mockClear();
     vi.unstubAllEnvs();
-    vi.restoreAllMocks();
   });
 
   it("blocks localhost hostnames before fetch/firecrawl", async () => {

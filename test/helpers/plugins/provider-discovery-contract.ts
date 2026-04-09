@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../../src/agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { ModelDefinitionConfig } from "../../../src/config/types.models.js";
-import { registerProviders, requireProvider } from "../../../src/plugins/contracts/testkit.js";
+import { registerProviders, requireProvider } from "./contracts-testkit.js";
 
 const resolveCopilotApiTokenMock = vi.hoisted(() => vi.fn());
 const buildOllamaProviderMock = vi.hoisted(() => vi.fn());
@@ -206,6 +206,10 @@ function installDiscoveryHooks(
     });
     vi.doMock(bundledProviderModules.vllmApiModuleId, async () => {
       return {
+        VLLM_DEFAULT_API_KEY_ENV_VAR: "VLLM_API_KEY",
+        VLLM_DEFAULT_BASE_URL: "http://127.0.0.1:8000/v1",
+        VLLM_MODEL_PLACEHOLDER: "meta-llama/Meta-Llama-3-8B-Instruct",
+        VLLM_PROVIDER_LABEL: "vLLM",
         buildVllmProvider: (...args: unknown[]) => buildVllmProviderMock(...args),
       };
     });
@@ -411,6 +415,42 @@ export function describeOllamaProviderDiscoveryContract() {
         }),
       ).resolves.toBeNull();
       expect(buildOllamaProviderMock).toHaveBeenCalledWith(undefined, { quiet: true });
+    });
+
+    it("keeps empty default-ish provider stubs on the quiet ambient path", async () => {
+      buildOllamaProviderMock.mockResolvedValueOnce({
+        baseUrl: "http://127.0.0.1:11434",
+        api: "ollama",
+        models: [],
+      });
+
+      await expect(
+        runCatalog(state, {
+          provider: state.ollamaProvider!,
+          config: {
+            models: {
+              providers: {
+                ollama: {
+                  baseUrl: "http://127.0.0.1:11434",
+                  api: "ollama",
+                  models: [],
+                },
+              },
+            },
+          },
+          env: {} as NodeJS.ProcessEnv,
+          resolveProviderApiKey: () => ({ apiKey: undefined }),
+          resolveProviderAuth: () => ({
+            apiKey: undefined,
+            discoveryApiKey: undefined,
+            mode: "none",
+            source: "none",
+          }),
+        }),
+      ).resolves.toBeNull();
+      expect(buildOllamaProviderMock).toHaveBeenCalledWith("http://127.0.0.1:11434", {
+        quiet: true,
+      });
     });
   });
 }
@@ -654,7 +694,7 @@ export function describeModelStudioProviderDiscoveryContract() {
           apiKey: "modelstudio-key",
           models: expect.arrayContaining([
             expect.objectContaining({ id: "qwen3.5-plus" }),
-            expect.objectContaining({ id: "qwen3.6-plus" }),
+            expect.objectContaining({ id: "qwen3-max-2026-01-23" }),
             expect.objectContaining({ id: "MiniMax-M2.5" }),
           ]),
         },

@@ -1,85 +1,48 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const runCommandWithTimeout = vi.hoisted(() => vi.fn());
-const mkdir = vi.hoisted(() => vi.fn());
-const access = vi.hoisted(() => vi.fn());
-const rename = vi.hoisted(() => vi.fn());
-const tryLoadActivatedBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
+const closeTrackedBrowserTabsForSessionsImpl = vi.hoisted(() => vi.fn());
+const movePathToTrashImpl = vi.hoisted(() => vi.fn());
 
-vi.mock("../process/exec.js", () => ({
-  runCommandWithTimeout,
+vi.mock("../../extensions/browser/browser-maintenance.js", () => ({
+  closeTrackedBrowserTabsForSessions: closeTrackedBrowserTabsForSessionsImpl,
+  movePathToTrash: movePathToTrashImpl,
 }));
-
-vi.mock("./facade-runtime.js", () => ({
-  tryLoadActivatedBundledPluginPublicSurfaceModuleSync,
-}));
-
-vi.mock("node:fs/promises", async () => {
-  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
-  return mockNodeBuiltinModule(
-    () => vi.importActual<typeof import("node:fs/promises")>("node:fs/promises"),
-    { mkdir, access, rename },
-    { mirrorToDefault: true },
-  );
-});
-
-vi.mock("node:os", async () => {
-  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
-  return mockNodeBuiltinModule(
-    () => vi.importActual<typeof import("node:os")>("node:os"),
-    { homedir: () => "/home/test" },
-    { mirrorToDefault: true },
-  );
-});
 
 describe("browser maintenance", () => {
   beforeEach(() => {
-    vi.restoreAllMocks();
-    runCommandWithTimeout.mockReset();
-    mkdir.mockReset();
-    access.mockReset();
-    rename.mockReset();
-    tryLoadActivatedBundledPluginPublicSurfaceModuleSync.mockReset();
-    vi.spyOn(Date, "now").mockReturnValue(123);
+    closeTrackedBrowserTabsForSessionsImpl.mockReset();
+    movePathToTrashImpl.mockReset();
   });
 
-  it("skips browser runtime lookup when no session keys are provided", async () => {
+  it("skips browser cleanup when no session keys are provided", async () => {
+    closeTrackedBrowserTabsForSessionsImpl.mockResolvedValue(0);
+
     const { closeTrackedBrowserTabsForSessions } = await import("./browser-maintenance.js");
 
     await expect(closeTrackedBrowserTabsForSessions({ sessionKeys: [] })).resolves.toBe(0);
-    expect(tryLoadActivatedBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
+    expect(closeTrackedBrowserTabsForSessionsImpl).toHaveBeenCalledWith({ sessionKeys: [] });
+    expect(movePathToTrashImpl).not.toHaveBeenCalled();
   });
 
-  it("returns the target path when trash exits successfully", async () => {
-    const { movePathToTrash } = await import("./browser-maintenance.js");
-    runCommandWithTimeout.mockResolvedValue({
-      stdout: "",
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "exit",
-    });
+  it("delegates cleanup through the browser maintenance surface", async () => {
+    closeTrackedBrowserTabsForSessionsImpl.mockResolvedValue(2);
 
-    await expect(movePathToTrash("/tmp/demo")).resolves.toBe("/tmp/demo");
-    expect(mkdir).not.toHaveBeenCalled();
-    expect(rename).not.toHaveBeenCalled();
+    const { closeTrackedBrowserTabsForSessions } = await import("./browser-maintenance.js");
+
+    await expect(
+      closeTrackedBrowserTabsForSessions({ sessionKeys: ["agent:main:test"] }),
+    ).resolves.toBe(2);
+    expect(closeTrackedBrowserTabsForSessionsImpl).toHaveBeenCalledWith({
+      sessionKeys: ["agent:main:test"],
+    });
   });
 
-  it("falls back to rename when trash exits non-zero", async () => {
-    const { movePathToTrash } = await import("./browser-maintenance.js");
-    runCommandWithTimeout.mockResolvedValue({
-      stdout: "",
-      stderr: "permission denied",
-      code: 1,
-      signal: null,
-      killed: false,
-      termination: "exit",
-    });
-    access.mockRejectedValue(new Error("missing"));
+  it("delegates move-to-trash through the browser maintenance surface", async () => {
+    movePathToTrashImpl.mockImplementation(async (targetPath: string) => `${targetPath}.trashed`);
 
-    await expect(movePathToTrash("/tmp/demo")).resolves.toBe("/home/test/.Trash/demo-123");
-    expect(mkdir).toHaveBeenCalledWith("/home/test/.Trash", { recursive: true });
-    expect(rename).toHaveBeenCalledWith("/tmp/demo", "/home/test/.Trash/demo-123");
+    const { movePathToTrash } = await import("./browser-maintenance.js");
+
+    await expect(movePathToTrash("/tmp/demo")).resolves.toBe("/tmp/demo.trashed");
+    expect(movePathToTrashImpl).toHaveBeenCalledWith("/tmp/demo");
   });
 });

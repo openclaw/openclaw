@@ -93,6 +93,9 @@ export function buildGuardedModelFetch(model: Model<Api>): typeof fetch {
       url,
       init: requestInit ?? init,
       dispatcherPolicy,
+      // Provider transport intentionally keeps the secure default and never
+      // replays unsafe request bodies across cross-origin redirects.
+      allowCrossOriginUnsafeRedirectReplay: false,
       ...(requestConfig.allowPrivateNetwork ? { policy: { allowPrivateNetwork: true } } : {}),
     });
     return buildManagedResponse(result.response, result.release);

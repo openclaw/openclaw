@@ -135,7 +135,7 @@ const whatsappResolveTarget = createWhatsAppTestPlugin().outbound?.resolveTarget
 
 describe("runCronIsolatedAgentTurn core-channel direct delivery", () => {
   beforeEach(() => {
-    setupIsolatedAgentTurnMocks();
+    setupIsolatedAgentTurnMocks({ fast: true });
     setActivePluginRegistry(
       createTestRegistry([
         {

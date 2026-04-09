@@ -98,7 +98,7 @@ Available groups:
 - `group:messaging`: `message`
 - `group:nodes`: `nodes`
 - `group:agents`: `agents_list`
-- `group:media`: `image`, `image_generate`, `tts`
+- `group:media`: `image`, `image_generate`, `video_generate`, `tts`
 - `group:openclaw`: all built-in OpenClaw tools (excludes provider plugins)
 
 ## Elevated: exec-only "run on host"

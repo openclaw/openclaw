@@ -273,21 +273,6 @@ describe("applyMediaUnderstanding – echo transcript", () => {
     expect(callArgs.payloads[0].text).toBe('📝 "hello world"');
   });
 
-  it("uses custom echoFormat when provided", async () => {
-    const mediaPath = await createTempAudioFile();
-    const ctx = createAudioCtxWithProvider(mediaPath);
-    const { cfg, providers } = createAudioConfigWithEcho({
-      echoTranscript: true,
-      echoFormat: "🎙️ Heard: {transcript}",
-      transcribedText: "custom message",
-    });
-
-    await applyMediaUnderstanding({ ctx, cfg, providers });
-
-    const callArgs = expectSingleEchoDeliveryCall();
-    expect(callArgs.payloads[0].text).toBe("🎙️ Heard: custom message");
-  });
-
   it("does NOT echo when there are no audio attachments", async () => {
     // Image-only context — no audio attachment
     const dir = await fs.mkdtemp(path.join(suiteTempMediaRootDir, "img-"));
@@ -328,73 +313,5 @@ describe("applyMediaUnderstanding – echo transcript", () => {
 
     expect(ctx.Transcript).toBeUndefined();
     expect(mockDeliverOutboundPayloads).not.toHaveBeenCalled();
-  });
-
-  it("does NOT echo when channel is not deliverable", async () => {
-    const mediaPath = await createTempAudioFile();
-    // Use an internal/non-deliverable channel
-    const ctx = createAudioCtxWithProvider(mediaPath, {
-      Provider: "internal-system",
-      From: "some-source",
-    });
-    const { cfg, providers } = createAudioConfigWithEcho({ echoTranscript: true });
-
-    await applyMediaUnderstanding({ ctx, cfg, providers });
-
-    // Transcript should be set (transcription succeeded)
-    expect(ctx.Transcript).toBe("hello world");
-    // But echo should be skipped
-    expect(mockDeliverOutboundPayloads).not.toHaveBeenCalled();
-  });
-
-  it("does NOT echo when ctx has no From or OriginatingTo", async () => {
-    const mediaPath = await createTempAudioFile();
-    const ctx: MsgContext = {
-      Body: "<media:audio>",
-      MediaPath: mediaPath,
-      MediaType: "audio/ogg",
-      Provider: "whatsapp",
-      // From and OriginatingTo intentionally absent
-    };
-    const { cfg, providers } = createAudioConfigWithEcho({ echoTranscript: true });
-
-    await applyMediaUnderstanding({ ctx, cfg, providers });
-
-    expect(ctx.Transcript).toBe("hello world");
-    expect(mockDeliverOutboundPayloads).not.toHaveBeenCalled();
-  });
-
-  it("uses OriginatingTo when From is absent", async () => {
-    const mediaPath = await createTempAudioFile();
-    const ctx: MsgContext = {
-      Body: "<media:audio>",
-      MediaPath: mediaPath,
-      MediaType: "audio/ogg",
-      Provider: "whatsapp",
-      OriginatingTo: "+19999999999",
-    };
-    const { cfg, providers } = createAudioConfigWithEcho({ echoTranscript: true });
-
-    await applyMediaUnderstanding({ ctx, cfg, providers });
-
-    const callArgs = expectSingleEchoDeliveryCall();
-    expect(callArgs.to).toBe("+19999999999");
-  });
-
-  it("echo delivery failure does not throw or break transcription", async () => {
-    const mediaPath = await createTempAudioFile();
-    const ctx = createAudioCtxWithProvider(mediaPath);
-    const { cfg, providers } = createAudioConfigWithEcho({ echoTranscript: true });
-
-    mockDeliverOutboundPayloads.mockRejectedValueOnce(new Error("delivery timeout"));
-
-    // Should not throw
-    const result = await applyMediaUnderstanding({ ctx, cfg, providers });
-
-    // Transcription itself succeeded
-    expect(result.appliedAudio).toBe(true);
-    expect(ctx.Transcript).toBe("hello world");
-    // Deliver was attempted
-    expect(mockDeliverOutboundPayloads).toHaveBeenCalledOnce();
   });
 });

@@ -6,6 +6,13 @@ import {
   toAgentModelListLike,
 } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
+import { resolvePluginSetupCliBackendRuntime } from "../plugins/setup-registry.runtime.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { sanitizeForLog, stripAnsi } from "../terminal/ansi.js";
 import {
   resolveAgentConfig,
@@ -16,50 +23,24 @@ import { resolveConfiguredProviderFallback } from "./configured-provider-fallbac
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
-import { modelKey as sharedModelKey, normalizeStaticProviderModelId } from "./model-ref-shared.js";
 import {
+  type ModelRef,
   findNormalizedProviderKey,
   findNormalizedProviderValue,
+  legacyModelKey,
+  modelKey,
+  normalizeModelRef,
   normalizeProviderId,
   normalizeProviderIdForAuth,
-} from "./provider-id.js";
-import { normalizeProviderModelIdWithRuntime } from "./provider-model-normalization.runtime.js";
+  parseModelRef,
+} from "./model-selection-normalize.js";
 
 let log: ReturnType<typeof createSubsystemLogger> | null = null;
-
-type CliBackendRuntimeModule = typeof import("../plugins/cli-backends.runtime.js");
-
-const CLI_BACKEND_RUNTIME_CANDIDATES = [
-  "../plugins/cli-backends.runtime.js",
-  "../plugins/cli-backends.runtime.ts",
-] as const;
-
-let cliBackendRuntimeModule: CliBackendRuntimeModule | undefined;
-
-function loadCliBackendRuntime(): CliBackendRuntimeModule | null {
-  if (cliBackendRuntimeModule) {
-    return cliBackendRuntimeModule;
-  }
-  for (const candidate of CLI_BACKEND_RUNTIME_CANDIDATES) {
-    try {
-      cliBackendRuntimeModule = require(candidate) as CliBackendRuntimeModule;
-      return cliBackendRuntimeModule;
-    } catch {
-      // Try source/runtime candidates in order.
-    }
-  }
-  return null;
-}
 
 function getLog(): ReturnType<typeof createSubsystemLogger> {
   log ??= createSubsystemLogger("model-selection");
   return log;
 }
-
-export type ModelRef = {
-  provider: string;
-  model: string;
-};
 
 export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
 
@@ -67,10 +48,6 @@ export type ModelAliasIndex = {
   byAlias: Map<string, { alias: string; ref: ModelRef }>;
   byKey: Map<string, string[]>;
 };
-
-function normalizeAliasKey(value: string): string {
-  return value.trim().toLowerCase();
-}
 
 function sanitizeModelWarningValue(value: string): string {
   const stripped = value ? stripAnsi(value) : "";
@@ -88,91 +65,55 @@ function sanitizeModelWarningValue(value: string): string {
   return sanitizeForLog(stripped.slice(0, controlBoundary));
 }
 
-export function modelKey(provider: string, model: string) {
-  return sharedModelKey(provider, model);
-}
-
-export function legacyModelKey(provider: string, model: string): string | null {
-  const providerId = provider.trim();
-  const modelId = model.trim();
-  if (!providerId || !modelId) {
-    return null;
-  }
-  const rawKey = `${providerId}/${modelId}`;
-  const canonicalKey = modelKey(providerId, modelId);
-  return rawKey === canonicalKey ? null : rawKey;
-}
-
 export {
   findNormalizedProviderKey,
   findNormalizedProviderValue,
+  legacyModelKey,
+  modelKey,
+  normalizeModelRef,
   normalizeProviderId,
   normalizeProviderIdForAuth,
+  parseModelRef,
 };
+export type { ModelRef };
 
 export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
   const normalized = normalizeProviderId(provider);
-  const cliBackends = loadCliBackendRuntime()?.resolveRuntimeCliBackends() ?? [];
+  const cliBackends = resolveRuntimeCliBackends();
   if (cliBackends.some((backend) => normalizeProviderId(backend.id) === normalized)) {
+    return true;
+  }
+  if (resolvePluginSetupCliBackendRuntime({ backend: normalized })) {
     return true;
   }
   const backends = cfg?.agents?.defaults?.cliBackends ?? {};
   return Object.keys(backends).some((key) => normalizeProviderId(key) === normalized);
 }
 
-function normalizeProviderModelId(provider: string, model: string): string {
-  const staticModelId = normalizeStaticProviderModelId(provider, model);
+export function resolvePersistedOverrideModelRef(params: {
+  defaultProvider: string;
+  overrideProvider?: string;
+  overrideModel?: string;
+}): ModelRef | null {
+  const defaultProvider = params.defaultProvider.trim();
+  const overrideProvider = params.overrideProvider?.trim();
+  const overrideModel = params.overrideModel?.trim();
+  if (!overrideModel) {
+    return null;
+  }
+  const encodedOverride = overrideProvider ? `${overrideProvider}/${overrideModel}` : overrideModel;
   return (
-    normalizeProviderModelIdWithRuntime({
-      provider,
-      context: {
-        provider,
-        modelId: staticModelId,
-      },
-    }) ?? staticModelId
+    parseModelRef(encodedOverride, defaultProvider) ?? {
+      provider: overrideProvider || defaultProvider,
+      model: overrideModel,
+    }
   );
 }
 
-type ModelRefNormalizeOptions = {
-  allowPluginNormalization?: boolean;
-};
-
-export function normalizeModelRef(
-  provider: string,
-  model: string,
-  options?: ModelRefNormalizeOptions,
-): ModelRef {
-  const normalizedProvider = normalizeProviderId(provider);
-  const normalizedModel =
-    options?.allowPluginNormalization === false
-      ? model.trim()
-      : normalizeProviderModelId(normalizedProvider, model.trim());
-  return { provider: normalizedProvider, model: normalizedModel };
-}
-
-type ParseModelRefOptions = ModelRefNormalizeOptions;
-
-export function parseModelRef(
-  raw: string,
-  defaultProvider: string,
-  options?: ParseModelRefOptions,
-): ModelRef | null {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const slash = trimmed.indexOf("/");
-  if (slash === -1) {
-    return normalizeModelRef(defaultProvider, trimmed, options);
-  }
-  const providerRaw = trimmed.slice(0, slash).trim();
-  const model = trimmed.slice(slash + 1).trim();
-  if (!providerRaw || !model) {
-    return null;
-  }
-  return normalizeModelRef(providerRaw, model, options);
-}
-
+/**
+ * Runtime-first resolver for persisted model metadata.
+ * Use this when callers intentionally want the last executed model identity.
+ */
 export function resolvePersistedModelRef(params: {
   defaultProvider: string;
   runtimeProvider?: string;
@@ -194,19 +135,38 @@ export function resolvePersistedModelRef(params: {
       }
     );
   }
+  return resolvePersistedOverrideModelRef({
+    defaultProvider,
+    overrideProvider: params.overrideProvider,
+    overrideModel: params.overrideModel,
+  });
+}
 
-  const overrideProvider = params.overrideProvider?.trim();
-  const overrideModel = params.overrideModel?.trim();
-  if (!overrideModel) {
-    return null;
+/**
+ * Selected-model resolver for persisted model metadata.
+ * Use this for control/status/UI surfaces that should honor explicit session
+ * overrides before falling back to runtime identity.
+ */
+export function resolvePersistedSelectedModelRef(params: {
+  defaultProvider: string;
+  runtimeProvider?: string;
+  runtimeModel?: string;
+  overrideProvider?: string;
+  overrideModel?: string;
+}): ModelRef | null {
+  const override = resolvePersistedOverrideModelRef({
+    defaultProvider: params.defaultProvider,
+    overrideProvider: params.overrideProvider,
+    overrideModel: params.overrideModel,
+  });
+  if (override) {
+    return override;
   }
-  const encodedOverride = overrideProvider ? `${overrideProvider}/${overrideModel}` : overrideModel;
-  return (
-    parseModelRef(encodedOverride, defaultProvider) ?? {
-      provider: overrideProvider || defaultProvider,
-      model: overrideModel,
-    }
-  );
+  return resolvePersistedModelRef({
+    defaultProvider: params.defaultProvider,
+    runtimeProvider: params.runtimeProvider,
+    runtimeModel: params.runtimeModel,
+  });
 }
 
 export function inferUniqueProviderFromConfiguredModels(params: {
@@ -217,7 +177,7 @@ export function inferUniqueProviderFromConfiguredModels(params: {
   if (!model) {
     return undefined;
   }
-  const normalized = model.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(model);
   const providers = new Set<string>();
   const addProvider = (provider: string) => {
     const normalizedProvider = normalizeProviderId(provider);
@@ -239,7 +199,7 @@ export function inferUniqueProviderFromConfiguredModels(params: {
       if (!parsed) {
         continue;
       }
-      if (parsed.model === model || parsed.model.toLowerCase() === normalized) {
+      if (parsed.model === model || normalizeLowercaseStringOrEmpty(parsed.model) === normalized) {
         addProvider(parsed.provider);
         if (providers.size > 1) {
           return undefined;
@@ -259,7 +219,7 @@ export function inferUniqueProviderFromConfiguredModels(params: {
         if (!modelId) {
           continue;
         }
-        if (modelId === model || modelId.toLowerCase() === normalized) {
+        if (modelId === model || normalizeLowercaseStringOrEmpty(modelId) === normalized) {
           addProvider(providerId);
         }
       }
@@ -317,11 +277,13 @@ export function buildModelAliasIndex(params: {
     if (!parsed) {
       continue;
     }
-    const alias = String((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
+    const alias =
+      normalizeOptionalString(String((entryRaw as { alias?: string } | undefined)?.alias ?? "")) ??
+      "";
     if (!alias) {
       continue;
     }
-    const aliasKey = normalizeAliasKey(alias);
+    const aliasKey = normalizeLowercaseStringOrEmpty(alias);
     byAlias.set(aliasKey, { alias, ref: parsed });
     const key = modelKey(parsed.provider, parsed.model);
     const existing = byKey.get(key) ?? [];
@@ -343,7 +305,7 @@ export function resolveModelRefFromString(params: {
     return null;
   }
   if (!model.includes("/")) {
-    const aliasKey = normalizeAliasKey(model);
+    const aliasKey = normalizeLowercaseStringOrEmpty(model);
     const aliasMatch = params.aliasIndex?.byAlias.get(aliasKey);
     if (aliasMatch) {
       return { ref: aliasMatch.ref, alias: aliasMatch.alias };
@@ -373,7 +335,7 @@ export function resolveConfiguredModelRef(params: {
       allowPluginNormalization: params.allowPluginNormalization,
     });
     if (!trimmed.includes("/")) {
-      const aliasKey = normalizeAliasKey(trimmed);
+      const aliasKey = normalizeLowercaseStringOrEmpty(trimmed);
       const aliasMatch = aliasIndex.byAlias.get(aliasKey);
       if (aliasMatch) {
         return aliasMatch.ref;
@@ -575,7 +537,7 @@ export function buildAllowedModelSet(params: {
     // data is stale and does not include the configured model yet.
     allowedKeys.add(key);
 
-    if (!syntheticCatalogEntries.has(key)) {
+    if (!catalogKeys.has(key) && !syntheticCatalogEntries.has(key)) {
       const configuredSynthetic = resolveConfiguredSyntheticEntry(parsed.provider, parsed.model);
       syntheticCatalogEntries.set(key, {
         ...configuredSynthetic,
@@ -644,11 +606,11 @@ export function buildConfiguredModelCatalog(params: { cfg: OpenClawConfig }): Mo
       continue;
     }
     for (const model of provider.models) {
-      const id = typeof model?.id === "string" ? model.id.trim() : "";
+      const id = normalizeOptionalString(model?.id) ?? "";
       if (!id) {
         continue;
       }
-      const name = typeof model?.name === "string" && model.name.trim() ? model.name.trim() : id;
+      const name = normalizeOptionalString(model?.name) || id;
       const contextWindow =
         typeof model?.contextWindow === "number" && model.contextWindow > 0
           ? model.contextWindow
@@ -758,22 +720,23 @@ export function resolveThinkingDefault(params: {
   catalog?: ModelCatalogEntry[];
 }): ThinkLevel {
   const normalizedProvider = normalizeProviderId(params.provider);
-  const normalizedModel = params.model.toLowerCase().replace(/\./g, "-");
+  const normalizedModel = normalizeLowercaseStringOrEmpty(params.model).replace(/\./g, "-");
   const catalogCandidate = params.catalog?.find(
     (entry) => entry.provider === params.provider && entry.id === params.model,
   );
   const configuredModels = params.cfg.agents?.defaults?.models;
   const canonicalKey = modelKey(params.provider, params.model);
   const legacyKey = legacyModelKey(params.provider, params.model);
+  const normalizedCanonicalKey = normalizeLowercaseStringOrEmpty(canonicalKey);
+  const normalizedLegacyKey = normalizeOptionalLowercaseString(legacyKey);
   const primarySelection = normalizeModelSelection(params.cfg.agents?.defaults?.model);
-  const normalizedPrimarySelection =
-    typeof primarySelection === "string" ? primarySelection.trim().toLowerCase() : undefined;
+  const normalizedPrimarySelection = normalizeOptionalLowercaseString(primarySelection);
   const explicitModelConfigured =
     (configuredModels ? canonicalKey in configuredModels : false) ||
     Boolean(legacyKey && configuredModels && legacyKey in configuredModels) ||
-    normalizedPrimarySelection === canonicalKey.toLowerCase() ||
-    Boolean(legacyKey && normalizedPrimarySelection === legacyKey.toLowerCase()) ||
-    normalizedPrimarySelection === params.model.trim().toLowerCase();
+    normalizedPrimarySelection === normalizedCanonicalKey ||
+    Boolean(normalizedLegacyKey && normalizedPrimarySelection === normalizedLegacyKey) ||
+    normalizedPrimarySelection === normalizeLowercaseStringOrEmpty(params.model);
   const perModelThinking =
     configuredModels?.[canonicalKey]?.params?.thinking ??
     (legacyKey ? configuredModels?.[legacyKey]?.params?.thinking : undefined);

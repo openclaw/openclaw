@@ -8,6 +8,10 @@ import type {
   PluginHookMessageReceivedEvent,
   PluginHookMessageSentEvent,
 } from "../plugins/types.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import type {
   MessagePreprocessedHookContext,
   MessageReceivedHookContext,
@@ -75,7 +79,9 @@ export function deriveInboundMessageHookContext(
         : typeof ctx.Body === "string"
           ? ctx.Body
           : "");
-  const channelId = (ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "").toLowerCase();
+  const channelId = normalizeLowercaseStringOrEmpty(
+    ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "",
+  );
   const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
   const isGroup = Boolean(ctx.GroupSubject || ctx.GroupChannel);
   const mediaPaths = Array.isArray(ctx.MediaPaths)
@@ -194,8 +200,8 @@ function resolveInboundConversation(canonical: CanonicalInboundMessageHookContex
     : null;
   if (pluginResolved) {
     return {
-      conversationId: pluginResolved.conversationId?.trim() || undefined,
-      parentConversationId: pluginResolved.parentConversationId?.trim() || undefined,
+      conversationId: normalizeOptionalString(pluginResolved.conversationId),
+      parentConversationId: normalizeOptionalString(pluginResolved.parentConversationId),
     };
   }
   const baseConversationId = stripChannelPrefix(

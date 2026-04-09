@@ -1,29 +1,46 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type DiscoveredModel = { id: string; contextWindow?: number; contextTokens?: number };
 type ContextModule = typeof import("./context.js");
+
+const contextTestState = vi.hoisted(() => {
+  const state = {
+    loadConfigImpl: () => ({}) as unknown,
+    discoveredModels: [] as DiscoveredModel[],
+    ensureOpenClawModelsJson: vi.fn(async () => {}),
+    discoverAuthStorage: vi.fn(() => ({})),
+    discoverModels: vi.fn(() => ({
+      getAll: () => state.discoveredModels,
+    })),
+  };
+  return state;
+});
+
+vi.mock("../config/config.js", () => ({
+  loadConfig: () => contextTestState.loadConfigImpl(),
+}));
+
+vi.mock("./models-config.js", () => ({
+  ensureOpenClawModelsJson: contextTestState.ensureOpenClawModelsJson,
+}));
+
+vi.mock("./agent-paths.js", () => ({
+  resolveOpenClawAgentDir: () => "/tmp/openclaw-agent",
+}));
+
+vi.mock("./pi-model-discovery-runtime.js", () => ({
+  discoverAuthStorage: contextTestState.discoverAuthStorage,
+  discoverModels: contextTestState.discoverModels,
+}));
 
 function mockContextDeps(params: {
   loadConfig: () => unknown;
   discoveredModels?: DiscoveredModel[];
 }) {
-  const ensureOpenClawModelsJson = vi.fn(async () => {});
-  vi.doMock("../config/config.js", () => ({
-    loadConfig: params.loadConfig,
-  }));
-  vi.doMock("./models-config.js", () => ({
-    ensureOpenClawModelsJson,
-  }));
-  vi.doMock("./agent-paths.js", () => ({
-    resolveOpenClawAgentDir: () => "/tmp/openclaw-agent",
-  }));
-  vi.doMock("./pi-model-discovery-runtime.js", () => ({
-    discoverAuthStorage: vi.fn(() => ({})),
-    discoverModels: vi.fn(() => ({
-      getAll: () => params.discoveredModels ?? [],
-    })),
-  }));
-  return { ensureOpenClawModelsJson };
+  contextTestState.loadConfigImpl = params.loadConfig;
+  contextTestState.discoveredModels = params.discoveredModels ?? [];
+  contextTestState.ensureOpenClawModelsJson.mockClear();
+  return { ensureOpenClawModelsJson: contextTestState.ensureOpenClawModelsJson };
 }
 
 function mockContextModuleDeps(loadConfigImpl: () => unknown) {
@@ -61,11 +78,16 @@ async function flushAsyncWarmup() {
   await new Promise((r) => setTimeout(r, 0));
 }
 
-let lastContextModule: ContextModule | null = null;
+let contextModule: ContextModule;
 
 async function importContextModule(): Promise<ContextModule> {
+  await flushAsyncWarmup();
+  return contextModule;
+}
+
+async function importFreshContextModule(): Promise<ContextModule> {
+  vi.resetModules();
   const module = await import("./context.js");
-  lastContextModule = module;
   await flushAsyncWarmup();
   return module;
 }
@@ -76,15 +98,21 @@ async function importResolveContextTokensForModel() {
 }
 
 describe("lookupContextTokens", () => {
+  beforeAll(async () => {
+    contextModule = await import("./context.js");
+  });
+
   beforeEach(() => {
-    vi.resetModules();
-    lastContextModule = null;
+    contextTestState.loadConfigImpl = () => ({});
+    contextTestState.discoveredModels = [];
+    contextTestState.ensureOpenClawModelsJson.mockClear();
+    contextTestState.discoverAuthStorage.mockClear();
+    contextTestState.discoverModels.mockClear();
+    contextModule.resetContextWindowCacheForTest();
   });
 
   afterEach(async () => {
-    if (lastContextModule) {
-      lastContextModule.resetContextWindowCacheForTest();
-    }
+    contextModule.resetContextWindowCacheForTest();
     await flushAsyncWarmup();
   });
 
@@ -147,7 +175,7 @@ describe("lookupContextTokens", () => {
     }));
     mockContextModuleDeps(firstLoadConfigMock);
 
-    let { lookupContextTokens } = await importContextModule();
+    let { lookupContextTokens } = await importFreshContextModule();
     expect(lookupContextTokens("openrouter/claude-sonnet", { allowAsyncLoad: false })).toBe(
       321_000,
     );
@@ -160,7 +188,7 @@ describe("lookupContextTokens", () => {
     });
     mockContextModuleDeps(secondLoadConfigMock);
 
-    ({ lookupContextTokens } = await importContextModule());
+    ({ lookupContextTokens } = await importFreshContextModule());
     expect(lookupContextTokens("openrouter/claude-sonnet", { allowAsyncLoad: false })).toBe(
       321_000,
     );
@@ -192,11 +220,10 @@ describe("lookupContextTokens", () => {
           expectedCalls: 0,
         },
       ]) {
-        vi.resetModules();
         const loadConfigMock = vi.fn(() => ({ models: {} }));
         const { ensureOpenClawModelsJson } = mockContextModuleDeps(loadConfigMock);
         process.argv = scenario.argv;
-        await importContextModule();
+        await importFreshContextModule();
         expect(loadConfigMock).toHaveBeenCalledTimes(scenario.expectedCalls);
         expect(ensureOpenClawModelsJson).toHaveBeenCalledTimes(scenario.expectedCalls);
       }

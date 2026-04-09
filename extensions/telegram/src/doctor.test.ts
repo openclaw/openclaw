@@ -6,6 +6,7 @@ import {
   collectTelegramGroupPolicyWarnings,
   maybeRepairTelegramAllowFromUsernames,
   scanTelegramAllowFromUsernameEntries,
+  telegramDoctor,
 } from "./doctor.js";
 
 const resolveCommandSecretRefsViaGatewayMock = vi.hoisted(() => vi.fn());
@@ -64,6 +65,94 @@ describe("telegram doctor", () => {
       tokenStatus: "configured",
     });
     lookupTelegramChatIdMock.mockReset();
+  });
+
+  it("normalizes legacy telegram streaming aliases into the nested streaming shape", () => {
+    const normalize = telegramDoctor.normalizeCompatibilityConfig;
+    expect(normalize).toBeDefined();
+    if (!normalize) {
+      return;
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          telegram: {
+            streamMode: "block",
+            chunkMode: "newline",
+            blockStreaming: true,
+            draftChunk: {
+              minChars: 120,
+            },
+            accounts: {
+              work: {
+                streaming: false,
+                blockStreamingCoalesce: {
+                  idleMs: 250,
+                },
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.telegram?.streaming).toEqual({
+      mode: "block",
+      chunkMode: "newline",
+      block: {
+        enabled: true,
+      },
+      preview: {
+        chunk: {
+          minChars: 120,
+        },
+      },
+    });
+    expect(result.config.channels?.telegram?.accounts?.work?.streaming).toEqual({
+      mode: "off",
+      block: {
+        coalesce: {
+          idleMs: 250,
+        },
+      },
+    });
+    expect(result.changes).toEqual(
+      expect.arrayContaining([
+        "Moved channels.telegram.streamMode → channels.telegram.streaming.mode (block).",
+        "Moved channels.telegram.chunkMode → channels.telegram.streaming.chunkMode.",
+        "Moved channels.telegram.blockStreaming → channels.telegram.streaming.block.enabled.",
+        "Moved channels.telegram.draftChunk → channels.telegram.streaming.preview.chunk.",
+        "Moved channels.telegram.accounts.work.streaming (boolean) → channels.telegram.accounts.work.streaming.mode (off).",
+        "Moved channels.telegram.accounts.work.blockStreamingCoalesce → channels.telegram.accounts.work.streaming.block.coalesce.",
+      ]),
+    );
+  });
+
+  it("does not duplicate streaming.mode change messages when streamMode wins over boolean streaming", () => {
+    const normalize = telegramDoctor.normalizeCompatibilityConfig;
+    expect(normalize).toBeDefined();
+    if (!normalize) {
+      return;
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          telegram: {
+            streamMode: "block",
+            streaming: false,
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.telegram?.streaming).toEqual({
+      mode: "block",
+    });
+    expect(
+      result.changes.filter((change) => change.includes("channels.telegram.streaming.mode")),
+    ).toEqual(["Moved channels.telegram.streamMode → channels.telegram.streaming.mode (block)."]);
   });
 
   it("finds username allowFrom entries across scopes", () => {
@@ -129,6 +218,52 @@ describe("telegram doctor", () => {
 
     expect(result.config.channels?.telegram?.allowFrom).toEqual(["111"]);
     expect(result.changes[0]).toContain("@testuser");
+  });
+
+  it("warns when @username entries cannot be resolved because configured tokens are unavailable", async () => {
+    resolveCommandSecretRefsViaGatewayMock.mockResolvedValueOnce({
+      resolvedConfig: {
+        channels: {
+          telegram: {
+            accounts: {
+              inactive: {
+                allowFrom: ["@testuser"],
+              },
+            },
+          },
+        },
+      },
+      diagnostics: [],
+      targetStatesByPath: {},
+      hadUnresolvedTargets: false,
+    });
+    listTelegramAccountIdsMock.mockReturnValue(["inactive"]);
+    inspectTelegramAccountMock.mockReturnValue({
+      enabled: false,
+      token: "",
+      tokenSource: "env",
+      tokenStatus: "configured_unavailable",
+      config: {},
+    });
+
+    const result = await maybeRepairTelegramAllowFromUsernames({
+      channels: {
+        telegram: {
+          accounts: {
+            inactive: {
+              botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+              allowFrom: ["@testuser"],
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(result.config.channels?.telegram?.accounts?.inactive?.allowFrom).toEqual(["@testuser"]);
+    expect(result.changes).toEqual([
+      "- Telegram account inactive: failed to inspect bot token (configured but unavailable in this command path).",
+      "- Telegram allowFrom contains @username entries, but configured Telegram bot credentials are unavailable in this command path; cannot auto-resolve.",
+    ]);
   });
 
   it("formats username repair warnings", () => {

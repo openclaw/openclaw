@@ -1,8 +1,8 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "./helpers/import-fresh.js";
+import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
 import { installTestEnv } from "./test-env.js";
 
 const ORIGINAL_ENV = { ...process.env };
@@ -31,9 +31,7 @@ function writeFile(targetPath: string, content: string): void {
 }
 
 function createTempHome(): string {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-env-real-home-"));
-  tempDirs.add(tempDir);
-  return tempDir;
+  return makeTempDir(tempDirs, "openclaw-test-env-real-home-");
 }
 
 afterEach(() => {
@@ -41,10 +39,7 @@ afterEach(() => {
     cleanupFns.pop()?.();
   }
   restoreProcessEnv();
-  for (const tempDir of tempDirs) {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
-  tempDirs.clear();
+  cleanupTempDirs(tempDirs);
 });
 
 describe("installTestEnv", () => {
@@ -72,6 +67,22 @@ describe("installTestEnv", () => {
         models: {
           providers: {
             custom: { baseUrl: "https://example.test/v1" },
+          },
+        },
+        channels: {
+          telegram: {
+            streaming: {
+              mode: "block",
+              chunkMode: "newline",
+              block: {
+                enabled: true,
+              },
+              preview: {
+                chunk: {
+                  minChars: 120,
+                },
+              },
+            },
           },
         },
       }`,
@@ -106,12 +117,28 @@ describe("installTestEnv", () => {
         list?: Array<Record<string, unknown>>;
       };
       models?: { providers?: Record<string, unknown> };
+      channels?: {
+        telegram?: {
+          streaming?: {
+            mode?: string;
+            chunkMode?: string;
+            block?: { enabled?: boolean };
+            preview?: { chunk?: { minChars?: number } };
+          };
+        };
+      };
     };
     expect(copiedConfig.models?.providers?.custom).toEqual({ baseUrl: "https://example.test/v1" });
     expect(copiedConfig.agents?.defaults?.workspace).toBeUndefined();
     expect(copiedConfig.agents?.defaults?.agentDir).toBeUndefined();
     expect(copiedConfig.agents?.list?.[0]?.workspace).toBeUndefined();
     expect(copiedConfig.agents?.list?.[0]?.agentDir).toBeUndefined();
+    expect(copiedConfig.channels?.telegram?.streaming).toEqual({
+      mode: "block",
+      chunkMode: "newline",
+      block: { enabled: true },
+      preview: { chunk: { minChars: 120 } },
+    });
 
     expect(
       fs.existsSync(path.join(testEnv.tempHome, ".openclaw", "credentials", "token.txt")),

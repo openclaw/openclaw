@@ -52,7 +52,7 @@ function mergeMatrixRoomEntries(
     return undefined;
   }
   const merged: MatrixRoomEntries = {
-    ...(inherited ?? {}),
+    ...inherited,
   };
   for (const [key, value] of Object.entries(accountEntries ?? {})) {
     const inheritedValue = merged[key];

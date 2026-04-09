@@ -110,18 +110,22 @@ describe("describeImageWithModel", () => {
     expect(getApiKeyForModelMock).toHaveBeenCalled();
     expect(requireApiKeyMock).toHaveBeenCalled();
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("minimax-portal", "oauth-test");
-    expect(fetchMock).toHaveBeenCalledWith("https://api.minimax.io/v1/coding_plan/vlm", {
-      method: "POST",
-      headers: {
-        Authorization: "Bearer oauth-test",
-        "Content-Type": "application/json",
-        "MM-API-Source": "OpenClaw",
-      },
-      body: JSON.stringify({
-        prompt: "Describe the image.",
-        image_url: `data:image/png;base64,${Buffer.from("png-bytes").toString("base64")}`,
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.minimax.io/v1/coding_plan/vlm",
+      expect.objectContaining({
+        method: "POST",
+        headers: {
+          Authorization: "Bearer oauth-test",
+          "Content-Type": "application/json",
+          "MM-API-Source": "OpenClaw",
+        },
+        body: JSON.stringify({
+          prompt: "Describe the image.",
+          image_url: `data:image/png;base64,${Buffer.from("png-bytes").toString("base64")}`,
+        }),
+        signal: expect.any(AbortSignal),
       }),
-    });
+    );
     expect(completeMock).not.toHaveBeenCalled();
   });
 

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
+import http from "node:http";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -642,6 +643,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       const item = output[0] ?? {};
       expect(item.type).toBe("message");
       expect(item.role).toBe("assistant");
+      expect(item.phase).toBe("final_answer");
 
       const content = item.content as Array<Record<string, unknown>>;
       expect(content.length).toBe(1);
@@ -706,6 +708,14 @@ describe("OpenResponses HTTP API (e2e)", () => {
         })
         .join("");
       expect(deltas).toBe("hello");
+
+      const completedDeltaResponse = deltaEvents.find((e) => e.event === "response.completed");
+      const completedDeltaOutput = (
+        JSON.parse(completedDeltaResponse?.data ?? "{}") as {
+          response?: { output?: Array<Record<string, unknown>> };
+        }
+      ).response?.output;
+      expect(completedDeltaOutput?.[0]?.phase).toBe("final_answer");
 
       agentCommand.mockClear();
       agentCommand.mockResolvedValueOnce({
@@ -865,6 +875,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     };
     expect(json.status).toBe("incomplete");
     expect(json.output?.map((item) => item.type)).toEqual(["message", "function_call"]);
+    expect(json.output?.[0]?.phase).toBe("commentary");
     expect(
       ((json.output?.[0]?.content as Array<Record<string, unknown>> | undefined)?.[0]?.text as
         | string
@@ -916,6 +927,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     ).response;
     expect(response?.status).toBe("incomplete");
     expect(response?.output?.map((item) => item.type)).toEqual(["message", "function_call"]);
+    expect(response?.output?.[0]?.phase).toBe("commentary");
     expect(
       (((response?.output?.[0]?.content as Array<Record<string, unknown>> | undefined) ?? [])[0]
         ?.text as string | undefined) ?? "",
@@ -1158,4 +1170,109 @@ describe("OpenResponses HTTP API (e2e)", () => {
       await capServer.close({ reason: "responses url cap hardening test done" });
     }
   });
+
+  it("aborts agent command when streaming client disconnects", { timeout: 15_000 }, async () => {
+    const port = enabledPort;
+    let serverAbortSignal: AbortSignal | undefined;
+
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce(
+      (opts: unknown) =>
+        new Promise<undefined>((resolve) => {
+          const signal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+          serverAbortSignal = signal;
+          if (signal?.aborted) {
+            resolve(undefined);
+            return;
+          }
+          signal?.addEventListener("abort", () => resolve(undefined), { once: true });
+        }),
+    );
+
+    const clientReq = http.request({
+      hostname: "127.0.0.1",
+      port,
+      path: "/v1/responses",
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer secret",
+      },
+    });
+    clientReq.on("error", () => {});
+    clientReq.end(
+      JSON.stringify({
+        stream: true,
+        model: "openclaw",
+        input: "hi",
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+    });
+
+    clientReq.destroy();
+
+    await vi.waitFor(
+      () => {
+        expect(serverAbortSignal?.aborted).toBe(true);
+      },
+      { timeout: 5_000, interval: 50 },
+    );
+  });
+
+  it(
+    "aborts agent command when non-streaming client disconnects",
+    { timeout: 15_000 },
+    async () => {
+      const port = enabledPort;
+      let serverAbortSignal: AbortSignal | undefined;
+
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce(
+        (opts: unknown) =>
+          new Promise<undefined>((resolve) => {
+            const signal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+            serverAbortSignal = signal;
+            if (signal?.aborted) {
+              resolve(undefined);
+              return;
+            }
+            signal?.addEventListener("abort", () => resolve(undefined), { once: true });
+          }),
+      );
+
+      const clientReq = http.request({
+        hostname: "127.0.0.1",
+        port,
+        path: "/v1/responses",
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer secret",
+        },
+      });
+      clientReq.on("error", () => {});
+      clientReq.end(
+        JSON.stringify({
+          model: "openclaw",
+          input: "hi",
+        }),
+      );
+
+      await vi.waitFor(() => {
+        expect(agentCommand).toHaveBeenCalledTimes(1);
+      });
+
+      clientReq.destroy();
+
+      await vi.waitFor(
+        () => {
+          expect(serverAbortSignal?.aborted).toBe(true);
+        },
+        { timeout: 5_000, interval: 50 },
+      );
+    },
+  );
 });
