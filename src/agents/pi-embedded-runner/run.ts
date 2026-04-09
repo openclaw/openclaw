@@ -143,10 +143,15 @@ export async function runEmbeddedPiAgent(
 
       // When modelId contains a provider prefix (e.g. "ollama-beelink2/qwen2.5-coder:7b"),
       // extract the provider and model name so the API receives just the model name.
-      const parsedRef = parseModelRef(modelId, provider);
-      if (parsedRef && modelId.includes("/")) {
-        provider = parsedRef.provider;
-        modelId = parsedRef.model;
+      // Only do this when params.provider was not explicitly set — otherwise
+      // slash-delimited model IDs like "anthropic/claude-sonnet-4-5" on OpenRouter
+      // (where provider is already "openrouter") would be incorrectly split.
+      if (!params.provider && modelId.includes("/")) {
+        const parsedRef = parseModelRef(modelId, provider);
+        if (parsedRef) {
+          provider = parsedRef.provider;
+          modelId = parsedRef.model;
+        }
       }
       const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
       const fallbackConfigured = hasConfiguredModelFallbacks({

@@ -259,6 +259,18 @@ describe("model-selection", () => {
         expected: { provider: "ollama-beelink2", model: "qwen2.5-coder:7b" },
       },
       {
+        name: "keeps openrouter/auto as self-prefixed canonical model ID",
+        variants: ["openrouter/auto"],
+        defaultProvider: "openrouter",
+        expected: { provider: "openrouter", model: "openrouter/auto" },
+      },
+      {
+        name: "preserves slash-delimited OpenRouter model when defaultProvider is openrouter",
+        variants: ["anthropic/claude-sonnet-4-5"],
+        defaultProvider: "openrouter",
+        expected: { provider: "anthropic", model: "claude-sonnet-4-5" },
+      },
+      {
         name: "normalizes gemini 3.1 flash-lite ids for google-vertex",
         variants: ["google-vertex/gemini-3.1-flash-lite", "gemini-3.1-flash-lite"],
         defaultProvider: "google-vertex",
