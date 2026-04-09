@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   isPureInfrastructureError,
+  mergeRecoveredUserInput,
   stripTrailingErrorFileEntries,
   stripTrailingErrorTurns,
 } from "./attempt.strip-error-turns.js";
@@ -113,7 +114,10 @@ describe("stripTrailingErrorTurns", () => {
     const result = stripTrailingErrorTurns(session);
     expect(result.errorCount).toBe(2);
     // The exposed trailing user turn is also stripped and its text recovered.
-    expect(result.recoveredUserText).toBe("again");
+    expect(result.recoveredUserInput).toEqual({
+      prompt: "again",
+      images: [],
+    });
     expect(session.agent.replaceMessages).toHaveBeenCalledTimes(1);
     const replaced = session.agent.replaceMessages.mock.calls[0][0];
     expect(replaced).toHaveLength(2);
@@ -131,7 +135,7 @@ describe("stripTrailingErrorTurns", () => {
     ]);
     const result = stripTrailingErrorTurns(session);
     expect(result.errorCount).toBe(0);
-    expect(result.recoveredUserText).toBeNull();
+    expect(result.recoveredUserInput).toBeNull();
     expect(session.agent.replaceMessages).not.toHaveBeenCalled();
   });
 
@@ -144,7 +148,7 @@ describe("stripTrailingErrorTurns", () => {
     ]);
     const result = stripTrailingErrorTurns(session);
     expect(result.errorCount).toBe(0);
-    expect(result.recoveredUserText).toBeNull();
+    expect(result.recoveredUserInput).toBeNull();
     expect(session.agent.replaceMessages).not.toHaveBeenCalled();
   });
 
@@ -155,7 +159,7 @@ describe("stripTrailingErrorTurns", () => {
     ]);
     const result = stripTrailingErrorTurns(session);
     expect(result.errorCount).toBe(0);
-    expect(result.recoveredUserText).toBeNull();
+    expect(result.recoveredUserInput).toBeNull();
     expect(session.agent.replaceMessages).not.toHaveBeenCalled();
   });
 
@@ -163,7 +167,7 @@ describe("stripTrailingErrorTurns", () => {
     const session = makeSession([]);
     const result = stripTrailingErrorTurns(session);
     expect(result.errorCount).toBe(0);
-    expect(result.recoveredUserText).toBeNull();
+    expect(result.recoveredUserInput).toBeNull();
   });
 
   it("recovers user text when error follows user turn directly", () => {
@@ -178,7 +182,10 @@ describe("stripTrailingErrorTurns", () => {
     ]);
     const result = stripTrailingErrorTurns(session);
     expect(result.errorCount).toBe(1);
-    expect(result.recoveredUserText).toBe("more");
+    expect(result.recoveredUserInput).toEqual({
+      prompt: "more",
+      images: [],
+    });
     const replaced = session.agent.replaceMessages.mock.calls[0][0];
     // Both the error AND the user turn are stripped.
     expect(replaced).toHaveLength(2);
@@ -194,9 +201,96 @@ describe("stripTrailingErrorTurns", () => {
     ]);
     const result = stripTrailingErrorTurns(session);
     expect(result.errorCount).toBe(1);
-    expect(result.recoveredUserText).toBeNull();
+    expect(result.recoveredUserInput).toBeNull();
     const replaced = session.agent.replaceMessages.mock.calls[0][0];
     expect(replaced).toHaveLength(2);
+  });
+
+  it("recovers string-form user content", () => {
+    const session = makeSession([
+      { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "hi" }] },
+      { role: "user", content: "plain string user prompt" },
+      { role: "assistant", stopReason: "error", content: [] },
+    ]);
+    const result = stripTrailingErrorTurns(session);
+    expect(result.errorCount).toBe(1);
+    expect(result.recoveredUserInput).toEqual({
+      prompt: "plain string user prompt",
+      images: [],
+    });
+    const replaced = session.agent.replaceMessages.mock.calls[0][0];
+    expect(replaced).toHaveLength(1);
+    expect(replaced[0].role).toBe("assistant");
+  });
+
+  it("recovers image-only user content", () => {
+    const session = makeSession([
+      {
+        role: "user",
+        content: [{ type: "image", data: "abc", mimeType: "image/png" }],
+      },
+      { role: "assistant", stopReason: "error", content: [] },
+    ]);
+    const result = stripTrailingErrorTurns(session);
+    expect(result.errorCount).toBe(1);
+    expect(result.recoveredUserInput).toEqual({
+      prompt: "",
+      images: [{ type: "image", data: "abc", mimeType: "image/png" }],
+    });
+    const replaced = session.agent.replaceMessages.mock.calls[0][0];
+    expect(replaced).toHaveLength(0);
+  });
+
+  it("refuses to strip when the exposed user turn has unsupported content", () => {
+    const session = makeSession([
+      {
+        role: "user",
+        content: [{ type: "audio", data: "abc" }],
+      },
+      { role: "assistant", stopReason: "error", content: [] },
+    ]);
+    const result = stripTrailingErrorTurns(session);
+    expect(result.errorCount).toBe(0);
+    expect(result.recoveredUserInput).toBeNull();
+    expect(session.agent.replaceMessages).not.toHaveBeenCalled();
+  });
+});
+
+describe("mergeRecoveredUserInput", () => {
+  it("prepends recovered prompt text and images ahead of the current run input", () => {
+    const merged = mergeRecoveredUserInput(
+      {
+        prompt: "current prompt",
+        images: [{ type: "image", data: "new", mimeType: "image/jpeg" }],
+      },
+      {
+        prompt: "recovered prompt",
+        images: [{ type: "image", data: "old", mimeType: "image/png" }],
+      },
+    );
+    expect(merged).toEqual({
+      prompt: "recovered prompt\n\ncurrent prompt",
+      images: [
+        { type: "image", data: "old", mimeType: "image/png" },
+        { type: "image", data: "new", mimeType: "image/jpeg" },
+      ],
+    });
+  });
+
+  it("preserves the current prompt when recovery only adds images", () => {
+    const merged = mergeRecoveredUserInput(
+      {
+        prompt: "current prompt",
+      },
+      {
+        prompt: "",
+        images: [{ type: "image", data: "old", mimeType: "image/png" }],
+      },
+    );
+    expect(merged).toEqual({
+      prompt: "current prompt",
+      images: [{ type: "image", data: "old", mimeType: "image/png" }],
+    });
   });
 });
 

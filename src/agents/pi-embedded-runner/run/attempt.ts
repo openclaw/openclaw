@@ -155,6 +155,7 @@ import {
 } from "./attempt.sessions-yield.js";
 import { wrapStreamFnHandleSensitiveStopReason } from "./attempt.stop-reason-recovery.js";
 import {
+  mergeRecoveredUserInput,
   stripTrailingErrorFileEntries,
   stripTrailingErrorTurns,
 } from "./attempt.strip-error-turns.js";
@@ -1083,26 +1084,36 @@ export async function runEmbeddedAttempt(
         // sanitize→validate→limit→context pipeline.
         //
         // If stripping exposes a trailing user turn, that turn is also removed
-        // and its text is prepended to the prompt. This prevents silent message
-        // loss: the platform marks GUI messages read on delivery (before run
-        // completion), so no replay source exists for the failed user request.
+        // and its prompt payload is merged into the current prompt/images. This
+        // prevents silent message loss: the platform marks GUI messages read on
+        // delivery (before run completion), so no replay source exists for the
+        // failed user request.
         {
           const stripResult = stripTrailingErrorTurns(activeSession);
           if (stripResult.errorCount > 0) {
-            const recoveredNote = stripResult.recoveredUserText
-              ? ` (recovered user prompt: ${stripResult.recoveredUserText.length} chars)`
+            const recoveredNote = stripResult.recoveredUserInput
+              ? ` (recovered prompt: ${stripResult.recoveredUserInput.prompt.length} chars, ` +
+                `images=${stripResult.recoveredUserInput.images.length})`
               : "";
             log.warn(
               `Stripped ${stripResult.errorCount} infrastructure-error assistant turn(s) from session${recoveredNote}. ` +
                 `runId=${params.runId} sessionId=${params.sessionId}`,
             );
-            stripTrailingErrorFileEntries(sessionManager, stripResult.recoveredUserText !== null);
+            stripTrailingErrorFileEntries(sessionManager, stripResult.recoveredUserInput !== null);
           }
-          if (stripResult.recoveredUserText) {
+          if (stripResult.recoveredUserInput) {
             // Re-inject the failed user prompt so it's re-sent to the LLM.
-            // Prepend to effectivePrompt so the recovered text appears before
-            // any new trigger content (heartbeat, steer, etc).
-            params.prompt = stripResult.recoveredUserText;
+            // Merge rather than overwrite so any current incoming prompt or
+            // prompt-local images for this run are preserved.
+            const mergedRecovery = mergeRecoveredUserInput(
+              {
+                prompt: params.prompt,
+                images: params.images,
+              },
+              stripResult.recoveredUserInput,
+            );
+            params.prompt = mergedRecovery.prompt;
+            params.images = mergedRecovery.images;
           }
         }
 

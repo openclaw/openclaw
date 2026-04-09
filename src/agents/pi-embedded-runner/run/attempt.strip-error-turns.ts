@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { ImageContent } from "@mariozechner/pi-ai";
 
 /**
  * QUEUEFLOOD-02: Strip trailing infrastructure-error assistant turns from a
@@ -25,11 +26,12 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
  * delivery (before run completion), so no replay source exists.
  *
  * To prevent this, `stripTrailingErrorTurns` also strips the exposed trailing
- * user turn and returns its text content. The caller re-injects it by
- * prepending it to `effectivePrompt`, so the user's original request is
- * re-sent to the LLM on recovery. This means:
+ * user turn and returns its prompt payload (text plus any image blocks). The
+ * caller re-injects that payload by prepending the recovered text to the
+ * current prompt and prepending recovered images to the current image list, so
+ * the user's original request is re-sent to the LLM on recovery. This means:
  * - The failed user→error pair is removed from session history (clean slate)
- * - The user's original text is preserved as the next prompt
+ * - The user's original text and images are preserved for the next prompt
  * - No orphan-user repair fires (the tail is no longer a user turn)
  * - `prompt()` creates a fresh user turn with the recovered text
  */
@@ -89,24 +91,114 @@ export function isPureInfrastructureError(msg: unknown): boolean {
 /**
  * Result of stripping trailing error turns from a session.
  *
+ * - `prompt`: recovered text prompt for the trailing user turn. This can be
+ *   an empty string for image-only prompts.
+ * - `images`: recovered image blocks from the trailing user turn.
+ */
+export interface RecoveredUserInput {
+  prompt: string;
+  images: ImageContent[];
+}
+
+/**
+ * Result of stripping trailing error turns from a session.
+ *
  * - `errorCount`: number of infrastructure-error assistant turns removed
- * - `recoveredUserText`: text content of the trailing user turn that was
+ * - `recoveredUserInput`: prompt payload of the trailing user turn that was
  *   also removed to prevent silent loss by orphan-user repair. `null` if
  *   no user turn was exposed (e.g., error turns followed an assistant turn,
  *   or the session was empty after stripping).
  */
 export interface StripErrorResult {
   errorCount: number;
-  recoveredUserText: string | null;
+  recoveredUserInput: RecoveredUserInput | null;
+}
+
+function recoverTrailingUserInput(msg: unknown): RecoveredUserInput | null {
+  if (!msg || typeof msg !== "object") {
+    return null;
+  }
+
+  const user = msg as {
+    role?: string;
+    content?: string | Array<{ type?: string; text?: string; data?: string; mimeType?: string }>;
+  };
+  if (user.role !== "user") {
+    return null;
+  }
+  if (typeof user.content === "string") {
+    return { prompt: user.content, images: [] };
+  }
+  if (!Array.isArray(user.content)) {
+    return null;
+  }
+
+  const promptParts: string[] = [];
+  const images: ImageContent[] = [];
+  for (const block of user.content) {
+    if (!block || typeof block !== "object") {
+      return null;
+    }
+    if (block.type === "text" && typeof block.text === "string") {
+      promptParts.push(block.text);
+      continue;
+    }
+    if (
+      block.type === "image" &&
+      typeof block.data === "string" &&
+      typeof block.mimeType === "string"
+    ) {
+      images.push({
+        type: "image",
+        data: block.data,
+        mimeType: block.mimeType,
+      });
+      continue;
+    }
+    return null;
+  }
+  return {
+    prompt: promptParts.join("\n"),
+    images,
+  };
+}
+
+export function mergeRecoveredUserInput(
+  params: {
+    prompt: string;
+    images?: ImageContent[];
+  },
+  recoveredUserInput: RecoveredUserInput,
+): {
+  prompt: string;
+  images?: ImageContent[];
+} {
+  const promptSegments = [recoveredUserInput.prompt, params.prompt].filter(
+    (segment): segment is string => typeof segment === "string" && segment.length > 0,
+  );
+  const mergedPrompt = promptSegments.join("\n\n");
+  const mergedImages =
+    recoveredUserInput.images.length > 0
+      ? [...recoveredUserInput.images, ...(params.images ?? [])]
+      : params.images;
+  if (mergedImages && mergedImages.length > 0) {
+    return {
+      prompt: mergedPrompt,
+      images: mergedImages,
+    };
+  }
+  return { prompt: mergedPrompt };
 }
 
 /**
  * Strip trailing infrastructure-error assistant turns from the messages array.
  *
  * If stripping exposes a trailing user turn, that turn is ALSO stripped and
- * its text content returned in `recoveredUserText`. The caller must re-inject
- * this text into the prompt to prevent silent message loss — see module
- * docstring for the full rationale.
+ * its prompt payload (text + images) returned in `recoveredUserInput`. The
+ * caller must re-inject this payload into the next prompt to prevent silent
+ * message loss — see module docstring for the full rationale. If the exposed
+ * user turn cannot be recovered safely, stripping is aborted so data is
+ * preserved instead of being dropped.
  */
 export function stripTrailingErrorTurns(activeSession: {
   messages: AgentMessage[];
@@ -127,30 +219,26 @@ export function stripTrailingErrorTurns(activeSession: {
 
   const errorCount = original.length - stripped.length;
   if (errorCount === 0) {
-    return { errorCount: 0, recoveredUserText: null };
+    return { errorCount: 0, recoveredUserInput: null };
   }
 
   // Phase 2: if stripping exposed a trailing user turn, strip it too and
-  // capture its text. Without this, the orphan-user repair (~line 1470 in
-  // attempt.ts) would branch it away — silently losing the user's request,
-  // because the platform marks GUI messages read on delivery (before run
-  // completion) so no replay source exists.
-  let recoveredUserText: string | null = null;
-  const tail = stripped.at(-1) as
-    | (AgentMessage & { content?: { type?: string; text?: string }[] })
-    | undefined;
-  if (tail?.role === "user" && Array.isArray(tail.content)) {
-    const textParts = tail.content
-      .filter((c) => c?.type === "text" && typeof c.text === "string")
-      .map((c) => c.text!);
-    if (textParts.length > 0) {
-      recoveredUserText = textParts.join("\n");
+  // capture its prompt payload. Without this, the orphan-user repair
+  // (~line 1470 in attempt.ts) would branch it away — silently losing the
+  // user's request, because the platform marks GUI messages read on delivery
+  // (before run completion) so no replay source exists.
+  let recoveredUserInput: RecoveredUserInput | null = null;
+  const tail = stripped.at(-1);
+  if ((tail as { role?: string } | undefined)?.role === "user") {
+    recoveredUserInput = recoverTrailingUserInput(tail);
+    if (recoveredUserInput === null) {
+      return { errorCount: 0, recoveredUserInput: null };
     }
     stripped.pop();
   }
 
   activeSession.agent.replaceMessages(stripped);
-  return { errorCount, recoveredUserText };
+  return { errorCount, recoveredUserInput };
 }
 
 // ---------------------------------------------------------------------------
@@ -200,11 +288,7 @@ export function stripTrailingErrorFileEntries(
   // Phase 2: strip the exposed trailing user turn if requested.
   if (stripUserTurn && changed && fileEntries.length > 1) {
     const tail = fileEntries.at(-1);
-    if (
-      tail &&
-      tail.type === "message" &&
-      tail.message?.role === "user"
-    ) {
+    if (tail && tail.type === "message" && tail.message?.role === "user") {
       fileEntries.pop();
       if (tail.id) {
         byId.delete(tail.id);
