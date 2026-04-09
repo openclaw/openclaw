@@ -13,6 +13,7 @@ describe("plugin-sdk browser subpaths", () => {
     expect(DEFAULT_OPENCLAW_BROWSER_ENABLED).toBe(true);
     expect(DEFAULT_BROWSER_DEFAULT_PROFILE_NAME).toBe("openclaw");
     expect(resolved.controlPort).toBeTypeOf("number");
+    expect(resolved.ssrfPolicy).toBeUndefined();
   });
 
   it("parses and redacts CDP urls on the dedicated CDP subpath", () => {

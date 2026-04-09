@@ -122,6 +122,9 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
   const rawPolicy = cfg?.ssrfPolicy as
     | (BrowserConfig["ssrfPolicy"] & { allowPrivateNetwork?: boolean })
     | undefined;
+  if (!rawPolicy) {
+    return undefined;
+  }
   const allowPrivateNetwork = rawPolicy?.allowPrivateNetwork;
   const dangerouslyAllowPrivateNetwork = rawPolicy?.dangerouslyAllowPrivateNetwork;
   const allowedHostnames = normalizeStringList(rawPolicy?.allowedHostnames);
@@ -129,9 +132,7 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
   const hasExplicitPrivateSetting =
     allowPrivateNetwork !== undefined || dangerouslyAllowPrivateNetwork !== undefined;
   const resolvedAllowPrivateNetwork =
-    dangerouslyAllowPrivateNetwork === true ||
-    allowPrivateNetwork === true ||
-    !hasExplicitPrivateSetting;
+    dangerouslyAllowPrivateNetwork === true || allowPrivateNetwork === true;
 
   if (
     !resolvedAllowPrivateNetwork &&

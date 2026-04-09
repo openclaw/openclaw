@@ -267,7 +267,7 @@ export const FIELD_HELP: Record<string, string> = {
   "browser.ssrfPolicy":
     "Server-side request forgery guardrail settings for browser/network fetch paths that could reach internal hosts. Keep restrictive defaults in production and open only explicitly approved targets.",
   "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork":
-    "Allows access to private-network address ranges from browser tooling. Default is enabled for trusted-network operator setups; disable to enforce strict public-only resolution checks.",
+    "Allows access to private-network address ranges from browser tooling. Default is disabled when unset; enable only for explicitly trusted private-network destinations.",
   "browser.ssrfPolicy.allowedHostnames":
     "Explicit hostname allowlist exceptions for SSRF policy checks on browser/network requests. Keep this list minimal and review entries regularly to avoid stale broad access.",
   "browser.ssrfPolicy.hostnameAllowlist":
