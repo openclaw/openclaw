@@ -1,5 +1,5 @@
 # Semgrep + AppSecAI (only)
-name: Scan Triage and Remediation - Prod
+name: OASIS - Scan Triage and Remediation - Prod
 
 permissions:
   contents: write
