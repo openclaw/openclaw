@@ -663,7 +663,9 @@ export function resolveProviderRequestPolicyConfig(
     tls: resolveTlsOverride(params.request?.tls),
     policy,
     capabilities,
-    allowPrivateNetwork: params.allowPrivateNetwork ?? policy.usesExplicitProxyLikeEndpoint,
+    allowPrivateNetwork:
+      params.allowPrivateNetwork ??
+      (policy.endpointClass === "custom" || policy.endpointClass === "local"),
   };
 }
 

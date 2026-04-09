@@ -536,10 +536,10 @@ describe("provider request config", () => {
 
   it("sets allowPrivateNetwork to true for custom (operator-configured) baseUrl endpoints", () => {
     // Reproduces: STT/audio transcription blocked when provider is on a LAN IP.
-    // usesExplicitProxyLikeEndpoint is true for any non-default, non-native-OpenAI
-    // baseUrl (including private-network addresses like 192.168.x.x). Operator-
-    // configured endpoints are trusted infrastructure, so private network access
-    // should be permitted by default — matching the trust model used for LLM inference.
+    // endpointClass is "custom" for any hostname not recognized as a known public LLM
+    // provider (including private-network addresses like 192.168.x.x). Operator-
+    // configured custom endpoints are trusted infrastructure, so private network access
+    // should be permitted by default.
     const resolved = resolveProviderRequestPolicyConfig({
       provider: "openai",
       api: "openai-audio-transcriptions",
@@ -550,7 +550,6 @@ describe("provider request config", () => {
     });
 
     expect(resolved.allowPrivateNetwork).toBe(true);
-    expect(resolved.policy.usesExplicitProxyLikeEndpoint).toBe(true);
     expect(resolved.policy.endpointClass).toBe("custom");
   });
 
@@ -564,7 +563,23 @@ describe("provider request config", () => {
     });
 
     expect(resolved.allowPrivateNetwork).toBe(false);
-    expect(resolved.policy.usesExplicitProxyLikeEndpoint).toBe(false);
+    expect(resolved.policy.endpointClass).toBe("default");
+  });
+
+  it("keeps allowPrivateNetwork false for known public providers even with an explicit baseUrl", () => {
+    // Known public LLM providers (groq-native, mistral-public, etc.) keep default-deny
+    // even when the operator explicitly passes a baseUrl. Only endpointClass "custom" and
+    // "local" permit private-network access.
+    const resolved = resolveProviderRequestPolicyConfig({
+      provider: "openai",
+      api: "openai-audio-transcriptions",
+      baseUrl: "https://api.groq.com/openai/v1",
+      capability: "audio",
+      transport: "media-understanding",
+    });
+
+    expect(resolved.allowPrivateNetwork).toBe(false);
+    expect(resolved.policy.endpointClass).toBe("groq-native");
   });
 
   it("explicit allowPrivateNetwork param always wins over the policy-derived default", () => {
