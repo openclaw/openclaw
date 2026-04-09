@@ -692,8 +692,13 @@ describe("promptParsedAllowFromForAccount", () => {
       placeholder: "placeholder",
       parseEntries: (raw) =>
         parseSetupEntriesWithParser(raw, (entry) => ({ value: entry.toLowerCase() })),
-      getExistingAllowFrom: ({ cfg, accountId }) =>
-        cfg.channels?.bluebubbles?.accounts?.[accountId]?.allowFrom ?? [],
+      getExistingAllowFrom: ({ cfg, accountId }) => [
+        ...((
+          cfg.channels?.bluebubbles?.accounts?.[accountId] as
+            | { allowFrom?: ReadonlyArray<string | number> }
+            | undefined
+        )?.allowFrom ?? []),
+      ],
       applyAllowFrom: ({ cfg, accountId, allowFrom }) =>
         patchChannelConfigForAccount({
           cfg,
@@ -703,7 +708,13 @@ describe("promptParsedAllowFromForAccount", () => {
         }),
     });
 
-    expect(next.channels?.bluebubbles?.accounts?.alt?.allowFrom).toEqual(["alice"]);
+    expect(
+      (
+        next.channels?.bluebubbles?.accounts?.alt as
+          | { allowFrom?: ReadonlyArray<string | number> }
+          | undefined
+      )?.allowFrom,
+    ).toEqual(["alice"]);
     expect(prompter.note).toHaveBeenCalledWith("line", "BlueBubbles allowlist");
   });
 
@@ -723,7 +734,7 @@ describe("promptParsedAllowFromForAccount", () => {
       message: "msg",
       placeholder: "placeholder",
       parseEntries: (raw) => ({ entries: [raw.trim()] }),
-      getExistingAllowFrom: ({ cfg }) => cfg.channels?.nostr?.allowFrom ?? [],
+      getExistingAllowFrom: ({ cfg }) => [...(cfg.channels?.nostr?.allowFrom ?? [])],
       mergeEntries: ({ existing, parsed }) => [...existing.map(String), ...parsed],
       applyAllowFrom: ({ cfg, allowFrom }) =>
         patchTopLevelChannelConfigSection({
@@ -744,8 +755,13 @@ describe("createPromptParsedAllowFromForAccount", () => {
       message: "msg",
       placeholder: "placeholder",
       parseEntries: (raw) => ({ entries: [raw.trim().toLowerCase()] }),
-      getExistingAllowFrom: ({ cfg, accountId }) =>
-        cfg.channels?.bluebubbles?.accounts?.[accountId]?.allowFrom ?? [],
+      getExistingAllowFrom: ({ cfg, accountId }) => [
+        ...((
+          cfg.channels?.bluebubbles?.accounts?.[accountId] as
+            | { allowFrom?: ReadonlyArray<string | number> }
+            | undefined
+        )?.allowFrom ?? []),
+      ],
       applyAllowFrom: ({ cfg, accountId, allowFrom }) =>
         patchChannelConfigForAccount({
           cfg,
@@ -771,7 +787,13 @@ describe("createPromptParsedAllowFromForAccount", () => {
       prompter: prompter as any,
     });
 
-    expect(next.channels?.bluebubbles?.accounts?.work?.allowFrom).toEqual(["alice"]);
+    expect(
+      (
+        next.channels?.bluebubbles?.accounts?.work as
+          | { allowFrom?: ReadonlyArray<string | number> }
+          | undefined
+      )?.allowFrom,
+    ).toEqual(["alice"]);
     expect(prompter.note).not.toHaveBeenCalled();
   });
 });
@@ -1267,7 +1289,7 @@ describe("setTopLevelChannelDmPolicyWithAllowFrom", () => {
       channel: "nextcloud-talk",
       dmPolicy: "open",
       getAllowFrom: (inputCfg) =>
-        normalizeAllowFromEntries(inputCfg.channels?.["nextcloud-talk"]?.allowFrom ?? []),
+        normalizeAllowFromEntries([...(inputCfg.channels?.["nextcloud-talk"]?.allowFrom ?? [])]),
     });
     expect(next.channels?.["nextcloud-talk"]?.allowFrom).toEqual(["alice", "*"]);
   });
@@ -1339,7 +1361,7 @@ describe("patchNestedChannelConfigSection", () => {
       section: "dm",
       clearFields: ["allowFrom"],
       enabled: true,
-      patch: { policy: "disabled" },
+      patch: { policy: "disabled" as const },
     });
 
     expect(next.channels?.matrix?.enabled).toBe(true);
@@ -1355,7 +1377,13 @@ describe("createTopLevelChannelDmPolicy", () => {
       channel: "line",
       policyKey: "channels.line.dmPolicy",
       allowFromKey: "channels.line.allowFrom",
-      getCurrent: (cfg) => cfg.channels?.line?.dmPolicy ?? "pairing",
+      getCurrent: (cfg) =>
+        (cfg.channels?.line?.dmPolicy as
+          | "open"
+          | "pairing"
+          | "allowlist"
+          | "disabled"
+          | undefined) ?? "pairing",
     });
 
     const next = dmPolicy.setPolicy(
@@ -1445,7 +1473,12 @@ describe("createNestedChannelDmPolicy", () => {
       section: "dm",
       policyKey: "channels.matrix.dm.policy",
       allowFromKey: "channels.matrix.dm.allowFrom",
-      getCurrent: (cfg) => cfg.channels?.matrix?.dm?.policy ?? "pairing",
+      getCurrent: (cfg) =>
+        (
+          cfg.channels?.matrix?.dm as
+            | { policy?: "open" | "pairing" | "allowlist" | "disabled" }
+            | undefined
+        )?.policy ?? "pairing",
       enabled: true,
     });
 

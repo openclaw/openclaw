@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { registerQaLabCli } from "../qa-e2e/cli.js";
+import { registerQaLabCli } from "../plugin-sdk/qa-lab.js";
 
 export function registerQaCli(program: Command) {
   registerQaLabCli(program);

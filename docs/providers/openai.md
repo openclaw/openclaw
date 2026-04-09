@@ -28,6 +28,7 @@ Config key:
 Allowed values:
 
 - `"friendly"`: default; enable the OpenAI-specific overlay.
+- `"on"`: alias for `"friendly"`.
 - `"off"`: disable the overlay and use the base OpenClaw prompt only.
 
 Scope:
@@ -76,6 +77,9 @@ You can also set it directly with the config CLI:
 ```bash
 openclaw config set plugins.entries.openai.config.personality off
 ```
+
+OpenClaw normalizes this setting case-insensitively at runtime, so values like
+`"Off"` still disable the friendly overlay.
 
 ## Option A: OpenAI API key (OpenAI Platform)
 

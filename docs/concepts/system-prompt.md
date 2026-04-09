@@ -43,7 +43,7 @@ The prompt is intentionally compact and uses fixed sections:
 - **Sandbox** (when enabled): indicates sandboxed runtime, sandbox paths, and whether elevated exec is available.
 - **Current Date & Time**: user-local time, timezone, and time format.
 - **Reply Tags**: optional reply tag syntax for supported providers.
-- **Heartbeats**: heartbeat prompt and ack behavior.
+- **Heartbeats**: heartbeat prompt and ack behavior, when heartbeats are enabled for the default agent.
 - **Runtime**: host, OS, node, model, repo root (when detected), thinking level (one line).
 - **Reasoning**: current visibility level + /reasoning toggle hint.
 
@@ -103,10 +103,12 @@ Bootstrap files are trimmed and appended under **Project Context** so the model 
 - `BOOTSTRAP.md` (only on brand-new workspaces)
 - `MEMORY.md` when present, otherwise `memory.md` as a lowercase fallback
 
-All of these files are **injected into the context window** on every turn, which
-means they consume tokens. Keep them concise — especially `MEMORY.md`, which can
-grow over time and lead to unexpectedly high context usage and more frequent
-compaction.
+All of these files are **injected into the context window** on every turn unless
+a file-specific gate applies. `HEARTBEAT.md` is omitted on normal runs when
+heartbeats are disabled for the default agent or
+`agents.defaults.heartbeat.includeSystemPromptSection` is false. Keep injected
+files concise — especially `MEMORY.md`, which can grow over time and lead to
+unexpectedly high context usage and more frequent compaction.
 
 > **Note:** `memory/*.md` daily files are **not** injected automatically. They
 > are accessed on demand via the `memory_search` and `memory_get` tools, so they

@@ -113,6 +113,20 @@ function maybeLoadShellEnvForMusicProviders(providerIds: string[]): void {
   });
 }
 
+function resolveLiveLyrics(providerId: string): string | undefined {
+  if (providerId !== "minimax") {
+    return undefined;
+  }
+  return [
+    "[Verse]",
+    "Streetlights shimmer while we race the dawn",
+    "Neon echoes carry us along",
+    "[Chorus]",
+    "Hold the night inside this song",
+    "We run together bright and strong",
+  ].join("\n");
+}
+
 describeLive("music generation provider live", () => {
   it(
     "covers generate plus declared edit paths with shell/profile auth",
@@ -167,6 +181,7 @@ describeLive("music generation provider live", () => {
         );
         const providerModel = resolveProviderModelForLiveTest(testCase.providerId, modelRef);
         const generateCaps = provider.capabilities.generate;
+        const liveLyrics = resolveLiveLyrics(testCase.providerId);
 
         try {
           const result = await provider.generateMusic({
@@ -178,7 +193,8 @@ describeLive("music generation provider live", () => {
             authStore,
             ...(generateCaps?.supportsDuration ? { durationSeconds: 12 } : {}),
             ...(generateCaps?.supportsFormat ? { format: "mp3" as const } : {}),
-            ...(generateCaps?.supportsInstrumental ? { instrumental: true } : {}),
+            ...(liveLyrics ? { lyrics: liveLyrics } : {}),
+            ...(generateCaps?.supportsInstrumental && !liveLyrics ? { instrumental: true } : {}),
           });
 
           expect(result.tracks.length).toBeGreaterThan(0);
@@ -233,6 +249,7 @@ describeLive("music generation provider live", () => {
       );
 
       if (attempted.length === 0) {
+        expect(failures).toEqual([]);
         console.warn("[live:music-generation] no provider had usable auth; skipping assertions");
         return;
       }

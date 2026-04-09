@@ -1,60 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getMediaGenerationRuntimeMocks,
+  resetImageGenerationRuntimeMocks,
+} from "../../test/helpers/media-generation/runtime-module-mocks.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { generateImage, listRuntimeImageGenerationProviders } from "./runtime.js";
 import type { ImageGenerationProvider } from "./types.js";
 
-const mocks = vi.hoisted(() => {
-  const debug = vi.fn();
-  return {
-    createSubsystemLogger: vi.fn(() => ({ debug })),
-    describeFailoverError: vi.fn(),
-    getImageGenerationProvider: vi.fn<
-      (providerId: string, config?: OpenClawConfig) => ImageGenerationProvider | undefined
-    >(() => undefined),
-    getProviderEnvVars: vi.fn<(providerId: string) => string[]>(() => []),
-    isFailoverError: vi.fn<(err: unknown) => boolean>(() => false),
-    listImageGenerationProviders: vi.fn<(config?: OpenClawConfig) => ImageGenerationProvider[]>(
-      () => [],
-    ),
-    parseImageGenerationModelRef: vi.fn<
-      (raw?: string) => { provider: string; model: string } | undefined
-    >((raw?: string) => {
-      const trimmed = raw?.trim();
-      if (!trimmed) {
-        return undefined;
-      }
-      const slash = trimmed.indexOf("/");
-      if (slash <= 0 || slash === trimmed.length - 1) {
-        return undefined;
-      }
-      return {
-        provider: trimmed.slice(0, slash),
-        model: trimmed.slice(slash + 1),
-      };
-    }),
-    resolveAgentModelFallbackValues: vi.fn<(value: unknown) => string[]>(() => []),
-    resolveAgentModelPrimaryValue: vi.fn<(value: unknown) => string | undefined>(() => undefined),
-    debug,
-  };
-});
+const mocks = getMediaGenerationRuntimeMocks();
 
-vi.mock("../agents/failover-error.js", () => ({
-  describeFailoverError: mocks.describeFailoverError,
-  isFailoverError: mocks.isFailoverError,
-}));
-vi.mock("../config/model-input.js", () => ({
-  resolveAgentModelFallbackValues: mocks.resolveAgentModelFallbackValues,
-  resolveAgentModelPrimaryValue: mocks.resolveAgentModelPrimaryValue,
-}));
-vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: mocks.createSubsystemLogger,
-}));
-vi.mock("../secrets/provider-env-vars.js", () => ({
-  getProviderEnvVars: mocks.getProviderEnvVars,
-}));
 vi.mock("./model-ref.js", () => ({
   parseImageGenerationModelRef: mocks.parseImageGenerationModelRef,
 }));
+
 vi.mock("./provider-registry.js", () => ({
   getImageGenerationProvider: mocks.getImageGenerationProvider,
   listImageGenerationProviders: mocks.listImageGenerationProviders,
@@ -62,21 +20,7 @@ vi.mock("./provider-registry.js", () => ({
 
 describe("image-generation runtime", () => {
   beforeEach(() => {
-    mocks.createSubsystemLogger.mockClear();
-    mocks.describeFailoverError.mockReset();
-    mocks.getImageGenerationProvider.mockReset();
-    mocks.getProviderEnvVars.mockReset();
-    mocks.getProviderEnvVars.mockReturnValue([]);
-    mocks.isFailoverError.mockReset();
-    mocks.isFailoverError.mockReturnValue(false);
-    mocks.listImageGenerationProviders.mockReset();
-    mocks.listImageGenerationProviders.mockReturnValue([]);
-    mocks.parseImageGenerationModelRef.mockClear();
-    mocks.resolveAgentModelFallbackValues.mockReset();
-    mocks.resolveAgentModelFallbackValues.mockReturnValue([]);
-    mocks.resolveAgentModelPrimaryValue.mockReset();
-    mocks.resolveAgentModelPrimaryValue.mockReturnValue(undefined);
-    mocks.debug.mockReset();
+    resetImageGenerationRuntimeMocks();
   });
 
   it("generates images through the active image-generation provider", async () => {
@@ -130,6 +74,80 @@ describe("image-generation runtime", () => {
       },
     ]);
     expect(result.ignoredOverrides).toEqual([]);
+  });
+
+  it("auto-detects and falls through to another configured image-generation provider by default", async () => {
+    mocks.getImageGenerationProvider.mockImplementation((providerId: string) => {
+      if (providerId === "openai") {
+        return {
+          id: "openai",
+          defaultModel: "gpt-image-1",
+          capabilities: {
+            generate: {},
+            edit: { enabled: true },
+          },
+          isConfigured: () => true,
+          async generateImage() {
+            throw new Error("OpenAI API key missing");
+          },
+        };
+      }
+      if (providerId === "google") {
+        return {
+          id: "google",
+          defaultModel: "gemini-3.1-flash-image-preview",
+          capabilities: {
+            generate: {},
+            edit: { enabled: true },
+          },
+          isConfigured: () => true,
+          async generateImage() {
+            return {
+              images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+              model: "gemini-3.1-flash-image-preview",
+            };
+          },
+        };
+      }
+      return undefined;
+    });
+    mocks.listImageGenerationProviders.mockReturnValue([
+      {
+        id: "openai",
+        defaultModel: "gpt-image-1",
+        capabilities: {
+          generate: {},
+          edit: { enabled: true },
+        },
+        isConfigured: () => true,
+        generateImage: async () => ({ images: [] }),
+      },
+      {
+        id: "google",
+        defaultModel: "gemini-3.1-flash-image-preview",
+        capabilities: {
+          generate: {},
+          edit: { enabled: true },
+        },
+        isConfigured: () => true,
+        generateImage: async () => ({ images: [] }),
+      },
+    ]);
+
+    const result = await generateImage({
+      cfg: {} as OpenClawConfig,
+      prompt: "draw a cat",
+    });
+
+    expect(result.provider).toBe("google");
+    expect(result.model).toBe("gemini-3.1-flash-image-preview");
+    expect(result.attempts).toEqual([
+      {
+        provider: "openai",
+        model: "gpt-image-1",
+        error: "OpenAI API key missing",
+      },
+    ]);
   });
 
   it("drops unsupported provider geometry overrides and reports them", async () => {
@@ -196,6 +214,77 @@ describe("image-generation runtime", () => {
     ]);
   });
 
+  it("maps requested size to the closest supported fallback geometry", async () => {
+    let seenRequest:
+      | {
+          size?: string;
+          aspectRatio?: string;
+          resolution?: string;
+        }
+      | undefined;
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue("minimax/image-01");
+    mocks.getImageGenerationProvider.mockReturnValue({
+      id: "minimax",
+      capabilities: {
+        generate: {
+          supportsSize: false,
+          supportsAspectRatio: true,
+          supportsResolution: false,
+        },
+        edit: {
+          enabled: true,
+          supportsSize: false,
+          supportsAspectRatio: true,
+          supportsResolution: false,
+        },
+        geometry: {
+          aspectRatios: ["1:1", "16:9"],
+        },
+      },
+      async generateImage(req) {
+        seenRequest = {
+          size: req.size,
+          aspectRatio: req.aspectRatio,
+          resolution: req.resolution,
+        };
+        return {
+          images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+          model: "image-01",
+        };
+      },
+    });
+
+    const result = await generateImage({
+      cfg: {
+        agents: {
+          defaults: {
+            imageGenerationModel: { primary: "minimax/image-01" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "draw a cat",
+      size: "1280x720",
+    });
+
+    expect(seenRequest).toEqual({
+      size: undefined,
+      aspectRatio: "16:9",
+      resolution: undefined,
+    });
+    expect(result.ignoredOverrides).toEqual([]);
+    expect(result.normalization).toMatchObject({
+      aspectRatio: {
+        applied: "16:9",
+        derivedFrom: "size",
+      },
+    });
+    expect(result.metadata).toMatchObject({
+      requestedSize: "1280x720",
+      normalizedAspectRatio: "16:9",
+      aspectRatioDerivedFromSize: "16:9",
+    });
+  });
+
   it("lists runtime image-generation providers through the provider registry", () => {
     const providers: ImageGenerationProvider[] = [
       {
@@ -232,6 +321,7 @@ describe("image-generation runtime", () => {
       {
         id: "vision-one",
         defaultModel: "paint-v1",
+        isConfigured: () => false,
         capabilities: {
           generate: {},
           edit: { enabled: false },
@@ -243,6 +333,7 @@ describe("image-generation runtime", () => {
       {
         id: "vision-two",
         defaultModel: "paint-v2",
+        isConfigured: () => false,
         capabilities: {
           generate: {},
           edit: { enabled: false },

@@ -14,11 +14,17 @@ vi.mock("./pi-embedded-helpers.js", async () => ({
   sanitizeSessionMessagesImages: vi.fn(async (msgs) => msgs),
 }));
 
-vi.mock("../plugins/provider-runtime.js", () => ({
-  resolveProviderRuntimePlugin: vi.fn(() => undefined),
-  sanitizeProviderReplayHistoryWithPlugin: vi.fn(() => undefined),
-  validateProviderReplayTurnsWithPlugin: vi.fn(() => undefined),
-}));
+vi.mock("../plugins/provider-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+    "../plugins/provider-runtime.js",
+  );
+  return {
+    ...actual,
+    resolveProviderRuntimePlugin: vi.fn(() => undefined),
+    sanitizeProviderReplayHistoryWithPlugin: vi.fn(() => undefined),
+    validateProviderReplayTurnsWithPlugin: vi.fn(() => undefined),
+  };
+});
 
 let sanitizeSessionHistory: SanitizeSessionHistoryHarness["sanitizeSessionHistory"];
 let mockedHelpers: SanitizeSessionHistoryHarness["mockedHelpers"];

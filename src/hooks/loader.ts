@@ -9,6 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { openBoundaryFile } from "../infra/boundary-file-read.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { shouldIncludeHook } from "./config.js";
@@ -143,14 +144,12 @@ export async function loadInternalHooks(
         loadedCount++;
       } catch (err) {
         log.error(
-          `Failed to load hook ${safeLogValue(entry.hook.name)}: ${safeLogValue(err instanceof Error ? err.message : String(err))}`,
+          `Failed to load hook ${safeLogValue(entry.hook.name)}: ${safeLogValue(formatErrorMessage(err))}`,
         );
       }
     }
   } catch (err) {
-    log.error(
-      `Failed to load directory-based hooks: ${safeLogValue(err instanceof Error ? err.message : String(err))}`,
-    );
+    log.error(`Failed to load directory-based hooks: ${safeLogValue(formatErrorMessage(err))}`);
   }
 
   // 2. Load legacy config handlers (backwards compatibility)
@@ -232,7 +231,7 @@ export async function loadInternalHooks(
       loadedCount++;
     } catch (err) {
       log.error(
-        `Failed to load hook handler from ${safeLogValue(handlerConfig.module)}: ${safeLogValue(err instanceof Error ? err.message : String(err))}`,
+        `Failed to load hook handler from ${safeLogValue(handlerConfig.module)}: ${safeLogValue(formatErrorMessage(err))}`,
       );
     }
   }

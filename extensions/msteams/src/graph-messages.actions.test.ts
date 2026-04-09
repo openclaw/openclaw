@@ -1,48 +1,28 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
-  pinMessageMSTeams,
-  reactMessageMSTeams,
-  unpinMessageMSTeams,
-  unreactMessageMSTeams,
-} from "./graph-messages.js";
+  CHANNEL_TO,
+  CHAT_ID,
+  TOKEN,
+  type GraphMessagesTestModule,
+  getGraphMessagesMockState,
+  installGraphMessagesMockDefaults,
+  loadGraphMessagesTestModule,
+} from "./graph-messages.test-helpers.js";
 
-const mockState = vi.hoisted(() => ({
-  resolveGraphToken: vi.fn(),
-  fetchGraphJson: vi.fn(),
-  postGraphJson: vi.fn(),
-  postGraphBetaJson: vi.fn(),
-  deleteGraphRequest: vi.fn(),
-  findPreferredDmByUserId: vi.fn(),
-}));
+const mockState = getGraphMessagesMockState();
+installGraphMessagesMockDefaults();
+let pinMessageMSTeams: GraphMessagesTestModule["pinMessageMSTeams"];
+let reactMessageMSTeams: GraphMessagesTestModule["reactMessageMSTeams"];
+let unpinMessageMSTeams: GraphMessagesTestModule["unpinMessageMSTeams"];
+let unreactMessageMSTeams: GraphMessagesTestModule["unreactMessageMSTeams"];
 
-vi.mock("./graph.js", () => {
-  return {
-    resolveGraphToken: mockState.resolveGraphToken,
-    fetchGraphJson: mockState.fetchGraphJson,
-    postGraphJson: mockState.postGraphJson,
-    postGraphBetaJson: mockState.postGraphBetaJson,
-    deleteGraphRequest: mockState.deleteGraphRequest,
-    escapeOData: vi.fn((value: string) => value.replaceAll("'", "''")),
-  };
+beforeAll(async () => {
+  ({ pinMessageMSTeams, reactMessageMSTeams, unpinMessageMSTeams, unreactMessageMSTeams } =
+    await loadGraphMessagesTestModule());
 });
 
-vi.mock("./conversation-store-fs.js", () => ({
-  createMSTeamsConversationStoreFs: () => ({
-    findPreferredDmByUserId: mockState.findPreferredDmByUserId,
-  }),
-}));
-
-const TOKEN = "test-graph-token";
-const CHAT_ID = "19:abc@thread.tacv2";
-const CHANNEL_TO = "team-id-1/channel-id-1";
-
 describe("pinMessageMSTeams", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockState.resolveGraphToken.mockResolvedValue(TOKEN);
-  });
-
   it("pins a message in a chat", async () => {
     mockState.postGraphJson.mockResolvedValue({ id: "pinned-1" });
 
@@ -79,11 +59,6 @@ describe("pinMessageMSTeams", () => {
 });
 
 describe("unpinMessageMSTeams", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockState.resolveGraphToken.mockResolvedValue(TOKEN);
-  });
-
   it("unpins a message from a chat", async () => {
     mockState.deleteGraphRequest.mockResolvedValue(undefined);
 
@@ -118,11 +93,6 @@ describe("unpinMessageMSTeams", () => {
 });
 
 describe("reactMessageMSTeams", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockState.resolveGraphToken.mockResolvedValue(TOKEN);
-  });
-
   it("sets a like reaction on a chat message", async () => {
     mockState.postGraphBetaJson.mockResolvedValue(undefined);
 
@@ -211,11 +181,6 @@ describe("reactMessageMSTeams", () => {
 });
 
 describe("unreactMessageMSTeams", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockState.resolveGraphToken.mockResolvedValue(TOKEN);
-  });
-
   it("removes a reaction from a chat message", async () => {
     mockState.postGraphBetaJson.mockResolvedValue(undefined);
 

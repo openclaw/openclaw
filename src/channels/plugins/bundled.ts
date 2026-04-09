@@ -1,20 +1,19 @@
-import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
-import { createJiti } from "jiti";
-import { openBoundaryFileSync } from "../../infra/boundary-file-read.js";
+import { fileURLToPath } from "node:url";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
   BundledChannelEntryContract,
   BundledChannelSetupEntryContract,
 } from "../../plugin-sdk/channel-entry-contract.js";
-import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
-import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import {
-  buildPluginLoaderAliasMap,
-  buildPluginLoaderJitiOptions,
-  shouldPreferNativeJiti,
-} from "../../plugins/sdk-alias.js";
+  listBundledChannelPluginMetadata,
+  resolveBundledChannelGeneratedPath,
+  type BundledChannelPluginMetadata,
+} from "../../plugins/bundled-channel-runtime.js";
+import type { PluginRuntime } from "../../plugins/runtime/types.js";
+import { isJavaScriptModulePath, loadChannelPluginModule } from "./module-loader.js";
 import type { ChannelId, ChannelPlugin } from "./types.js";
 
 type GeneratedBundledChannelEntry = {
@@ -24,7 +23,15 @@ type GeneratedBundledChannelEntry = {
 };
 
 const log = createSubsystemLogger("channels");
-const nodeRequire = createRequire(import.meta.url);
+const OPENCLAW_PACKAGE_ROOT =
+  resolveOpenClawPackageRootSync({
+    argv1: process.argv[1],
+    cwd: process.cwd(),
+    moduleUrl: import.meta.url.startsWith("file:") ? import.meta.url : undefined,
+  }) ??
+  (import.meta.url.startsWith("file:")
+    ? path.resolve(fileURLToPath(new URL("../../..", import.meta.url)))
+    : process.cwd());
 
 function resolveChannelPluginModuleEntry(
   moduleExport: unknown,
@@ -76,108 +83,103 @@ function resolveChannelSetupModuleEntry(
   return record as BundledChannelSetupEntryContract;
 }
 
-function createModuleLoader() {
-  const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
-
-  return (modulePath: string) => {
-    const tryNative =
-      shouldPreferNativeJiti(modulePath) || modulePath.includes(`${path.sep}dist${path.sep}`);
-    const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
-    const cacheKey = JSON.stringify({
-      tryNative,
-      aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
-    });
-    const cached = jitiLoaders.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-    const loader = createJiti(import.meta.url, {
-      ...buildPluginLoaderJitiOptions(aliasMap),
-      tryNative,
-    });
-    jitiLoaders.set(cacheKey, loader);
-    return loader;
-  };
-}
-
-const loadModule = createModuleLoader();
-
-function loadBundledModule(modulePath: string, rootDir: string): unknown {
-  const boundaryRoot = resolveCompiledBundledModulePath(rootDir);
-  const opened = openBoundaryFileSync({
-    absolutePath: modulePath,
-    rootPath: boundaryRoot,
-    boundaryLabel: "plugin root",
-    rejectHardlinks: false,
-    skipLexicalRootCheck: true,
-  });
-  if (!opened.ok) {
-    throw new Error("plugin entry path escapes plugin root or fails alias checks");
-  }
-  const safePath = opened.path;
-  fs.closeSync(opened.fd);
-  if (
-    process.platform === "win32" &&
-    safePath.includes(`${path.sep}dist${path.sep}`) &&
-    [".js", ".mjs", ".cjs"].includes(path.extname(safePath).toLowerCase())
-  ) {
-    try {
-      return nodeRequire(safePath);
-    } catch {
-      // Fall back to the Jiti loader path when require() cannot handle the entry.
-    }
-  }
-  return loadModule(safePath)(safePath);
-}
-
-function resolveCompiledBundledModulePath(modulePath: string): string {
-  const compiledDistModulePath = modulePath.replace(
-    `${path.sep}dist-runtime${path.sep}`,
-    `${path.sep}dist${path.sep}`,
+function resolveBundledChannelBoundaryRoot(params: {
+  metadata: BundledChannelPluginMetadata;
+  modulePath: string;
+}): string {
+  const distRoot = path.resolve(
+    OPENCLAW_PACKAGE_ROOT,
+    "dist",
+    "extensions",
+    params.metadata.dirName,
   );
-  return compiledDistModulePath !== modulePath && fs.existsSync(compiledDistModulePath)
-    ? compiledDistModulePath
-    : modulePath;
+  if (params.modulePath === distRoot || params.modulePath.startsWith(`${distRoot}${path.sep}`)) {
+    return distRoot;
+  }
+  return path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions", params.metadata.dirName);
+}
+
+function resolveGeneratedBundledChannelModulePath(params: {
+  metadata: BundledChannelPluginMetadata;
+  entry: BundledChannelPluginMetadata["source"] | BundledChannelPluginMetadata["setupSource"];
+}): string | null {
+  if (!params.entry) {
+    return null;
+  }
+  const resolved = resolveBundledChannelGeneratedPath(
+    OPENCLAW_PACKAGE_ROOT,
+    params.entry,
+    params.metadata.dirName,
+  );
+  if (resolved) {
+    return resolved;
+  }
+  return null;
+}
+
+function loadGeneratedBundledChannelModule(params: {
+  metadata: BundledChannelPluginMetadata;
+  entry: BundledChannelPluginMetadata["source"] | BundledChannelPluginMetadata["setupSource"];
+}): unknown {
+  const modulePath = resolveGeneratedBundledChannelModulePath(params);
+  if (!modulePath) {
+    throw new Error(`missing generated module for bundled channel ${params.metadata.manifest.id}`);
+  }
+  return loadChannelPluginModule({
+    modulePath,
+    rootDir: resolveBundledChannelBoundaryRoot({
+      metadata: params.metadata,
+      modulePath,
+    }),
+    boundaryRootDir: resolveBundledChannelBoundaryRoot({
+      metadata: params.metadata,
+      modulePath,
+    }),
+    shouldTryNativeRequire: (safePath) =>
+      safePath.includes(`${path.sep}dist${path.sep}`) && isJavaScriptModulePath(safePath),
+  });
 }
 
 function loadGeneratedBundledChannelEntries(): readonly GeneratedBundledChannelEntry[] {
-  const manifestRegistry = loadPluginManifestRegistry({ cache: false, config: {} });
   const entries: GeneratedBundledChannelEntry[] = [];
 
-  for (const manifest of manifestRegistry.plugins) {
-    if (manifest.origin !== "bundled" || manifest.channels.length === 0) {
+  for (const metadata of listBundledChannelPluginMetadata({
+    includeChannelConfigs: false,
+    includeSyntheticChannelConfigs: false,
+  })) {
+    if ((metadata.manifest.channels?.length ?? 0) === 0) {
       continue;
     }
 
     try {
-      const sourcePath = resolveCompiledBundledModulePath(manifest.source);
       const entry = resolveChannelPluginModuleEntry(
-        loadBundledModule(sourcePath, manifest.rootDir),
+        loadGeneratedBundledChannelModule({
+          metadata,
+          entry: metadata.source,
+        }),
       );
       if (!entry) {
         log.warn(
-          `[channels] bundled channel entry ${manifest.id} missing bundled-channel-entry contract from ${sourcePath}; skipping`,
+          `[channels] bundled channel entry ${metadata.manifest.id} missing bundled-channel-entry contract; skipping`,
         );
         continue;
       }
-      const setupEntry = manifest.setupSource
+      const setupEntry = metadata.setupSource
         ? resolveChannelSetupModuleEntry(
-            loadBundledModule(
-              resolveCompiledBundledModulePath(manifest.setupSource),
-              manifest.rootDir,
-            ),
+            loadGeneratedBundledChannelModule({
+              metadata,
+              entry: metadata.setupSource,
+            }),
           )
         : null;
       entries.push({
-        id: manifest.id,
+        id: metadata.manifest.id,
         entry,
         ...(setupEntry ? { setupEntry } : {}),
       });
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      log.warn(
-        `[channels] failed to load bundled channel ${manifest.id} from ${manifest.source}: ${detail}`,
-      );
+      const detail = formatErrorMessage(error);
+      log.warn(`[channels] failed to load bundled channel ${metadata.manifest.id}: ${detail}`);
     }
   }
 

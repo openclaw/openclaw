@@ -1,21 +1,18 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { listSupportedMusicGenerationModes } from "../../music-generation/capabilities.js";
 import { listRuntimeMusicGenerationProviders } from "../../music-generation/runtime.js";
-import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
 import {
   buildMusicGenerationTaskStatusDetails,
   buildMusicGenerationTaskStatusText,
   findActiveMusicGenerationTaskForSession,
 } from "../music-generation-task-status.js";
+import {
+  createMediaGenerateProviderListActionResult,
+  createMediaGenerateTaskStatusActions,
+  type MediaGenerateActionResult,
+} from "./media-generate-tool-actions-shared.js";
 
-type MusicGenerateActionResult = {
-  content: Array<{ type: "text"; text: string }>;
-  details: Record<string, unknown>;
-};
-
-function getMusicGenerationProviderAuthEnvVars(providerId: string): string[] {
-  return getProviderEnvVars(providerId);
-}
+type MusicGenerateActionResult = MediaGenerateActionResult;
 
 function summarizeMusicGenerationCapabilities(
   provider: ReturnType<typeof listRuntimeMusicGenerationProviders>[number],
@@ -50,89 +47,29 @@ export function createMusicGenerateListActionResult(
   config?: OpenClawConfig,
 ): MusicGenerateActionResult {
   const providers = listRuntimeMusicGenerationProviders({ config });
-  if (providers.length === 0) {
-    return {
-      content: [{ type: "text", text: "No music-generation providers are registered." }],
-      details: { providers: [] },
-    };
-  }
-  const lines = providers.map((provider) => {
-    const authHints = getMusicGenerationProviderAuthEnvVars(provider.id);
-    const capabilities = summarizeMusicGenerationCapabilities(provider);
-    return [
-      `${provider.id}: default=${provider.defaultModel ?? "none"}`,
-      provider.models?.length ? `models=${provider.models.join(", ")}` : null,
-      capabilities ? `capabilities=${capabilities}` : null,
-      authHints.length > 0 ? `auth=${authHints.join(" / ")}` : null,
-    ]
-      .filter((entry): entry is string => Boolean(entry))
-      .join(" | ");
+  return createMediaGenerateProviderListActionResult({
+    providers,
+    emptyText: "No music-generation providers are registered.",
+    listModes: listSupportedMusicGenerationModes,
+    summarizeCapabilities: summarizeMusicGenerationCapabilities,
   });
-  return {
-    content: [{ type: "text", text: lines.join("\n") }],
-    details: {
-      providers: providers.map((provider) => ({
-        id: provider.id,
-        defaultModel: provider.defaultModel,
-        models: provider.models ?? [],
-        modes: listSupportedMusicGenerationModes(provider),
-        authEnvVars: getMusicGenerationProviderAuthEnvVars(provider.id),
-        capabilities: provider.capabilities,
-      })),
-    },
-  };
 }
+
+const musicGenerateTaskStatusActions = createMediaGenerateTaskStatusActions({
+  inactiveText: "No active music generation task is currently running for this session.",
+  findActiveTask: (sessionKey) => findActiveMusicGenerationTaskForSession(sessionKey) ?? undefined,
+  buildStatusText: buildMusicGenerationTaskStatusText,
+  buildStatusDetails: buildMusicGenerationTaskStatusDetails,
+});
 
 export function createMusicGenerateStatusActionResult(
   sessionKey?: string,
 ): MusicGenerateActionResult {
-  const activeTask = findActiveMusicGenerationTaskForSession(sessionKey);
-  if (!activeTask) {
-    return {
-      content: [
-        {
-          type: "text",
-          text: "No active music generation task is currently running for this session.",
-        },
-      ],
-      details: {
-        action: "status",
-        active: false,
-      },
-    };
-  }
-  return {
-    content: [
-      {
-        type: "text",
-        text: buildMusicGenerationTaskStatusText(activeTask),
-      },
-    ],
-    details: {
-      action: "status",
-      ...buildMusicGenerationTaskStatusDetails(activeTask),
-    },
-  };
+  return musicGenerateTaskStatusActions.createStatusActionResult(sessionKey);
 }
 
 export function createMusicGenerateDuplicateGuardResult(
   sessionKey?: string,
-): MusicGenerateActionResult | null {
-  const activeTask = findActiveMusicGenerationTaskForSession(sessionKey);
-  if (!activeTask) {
-    return null;
-  }
-  return {
-    content: [
-      {
-        type: "text",
-        text: buildMusicGenerationTaskStatusText(activeTask, { duplicateGuard: true }),
-      },
-    ],
-    details: {
-      action: "status",
-      duplicateGuard: true,
-      ...buildMusicGenerationTaskStatusDetails(activeTask),
-    },
-  };
+): MusicGenerateActionResult | undefined {
+  return musicGenerateTaskStatusActions.createDuplicateGuardResult(sessionKey);
 }

@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const noop = () => {};
 
@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   onAgentEvent: vi.fn(() => noop),
   loadConfig: vi.fn(() => ({
     agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
-    session: { mainKey: "main", scope: "per-sender" },
+    session: { mainKey: "main", scope: "per-sender" as const },
   })),
   loadSessionStore: vi.fn(() => ({})),
   resolveAgentIdFromSessionKey: vi.fn((sessionKey: string) => {
@@ -21,7 +21,9 @@ const mocks = vi.hoisted(() => ({
   emitSessionLifecycleEvent: vi.fn(),
   persistSubagentRunsToDisk: vi.fn(),
   restoreSubagentRunsFromDisk: vi.fn(() => 0),
-  getSubagentRunsSnapshotForRead: vi.fn((runs: Map<string, unknown>) => new Map(runs)),
+  getSubagentRunsSnapshotForRead: vi.fn(
+    (runs: Map<string, import("./subagent-registry.types.js").SubagentRunRecord>) => new Map(runs),
+  ),
   resetAnnounceQueuesForTests: vi.fn(),
   captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
   runSubagentAnnounceFlow: vi.fn(async () => true),
@@ -99,15 +101,18 @@ vi.mock("./timeout.js", () => ({
 describe("subagent registry seam flow", () => {
   let mod: typeof import("./subagent-registry.js");
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    mod = await import("./subagent-registry.js");
+  });
+
+  beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
     mocks.onAgentEvent.mockReturnValue(noop);
     mocks.loadConfig.mockReturnValue({
       agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
-      session: { mainKey: "main", scope: "per-sender" },
+      session: { mainKey: "main", scope: "per-sender" as const },
     });
     mocks.resolveAgentIdFromSessionKey.mockImplementation((sessionKey: string) => {
       return sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main";
@@ -133,11 +138,23 @@ describe("subagent registry seam flow", () => {
       }
       return {};
     });
-    mod = await import("./subagent-registry.js");
+    mod.__testing.setDepsForTest({
+      callGateway: mocks.callGateway,
+      captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
+      onAgentEvent: mocks.onAgentEvent,
+      persistSubagentRunsToDisk: mocks.persistSubagentRunsToDisk,
+      resolveAgentTimeoutMs: mocks.resolveAgentTimeoutMs,
+      restoreSubagentRunsFromDisk: mocks.restoreSubagentRunsFromDisk,
+      runSubagentAnnounceFlow: mocks.runSubagentAnnounceFlow,
+      ensureContextEnginesInitialized: mocks.ensureContextEnginesInitialized,
+      ensureRuntimePluginsLoaded: mocks.ensureRuntimePluginsLoaded,
+      resolveContextEngine: mocks.resolveContextEngine,
+    });
     mod.resetSubagentRegistryForTests({ persist: false });
   });
 
   afterEach(() => {
+    mod.__testing.setDepsForTest();
     mod.resetSubagentRegistryForTests({ persist: false });
     vi.useRealTimers();
   });

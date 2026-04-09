@@ -1,5 +1,6 @@
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { MediaNormalizationEntry } from "../media-generation/runtime-shared.js";
 
 export type MusicGenerationOutputFormat = "mp3" | "wav";
 
@@ -72,6 +73,10 @@ export type MusicGenerationProviderCapabilities = MusicGenerationModeCapabilitie
   maxInputImages?: number;
   generate?: MusicGenerationModeCapabilities;
   edit?: MusicGenerationEditCapabilities;
+};
+
+export type MusicGenerationNormalization = {
+  durationSeconds?: MediaNormalizationEntry<number>;
 };
 
 export type MusicGenerationProvider = {

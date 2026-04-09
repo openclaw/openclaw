@@ -26,6 +26,7 @@ import type {
 import type { ChannelChoice } from "../commands/onboard-types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -68,7 +69,7 @@ export async function runCollectedChannelOnboardingPostWriteHooks(params: {
     try {
       await hook.run({ cfg: params.cfg, runtime: params.runtime });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err);
       params.runtime.error(
         `Channel ${hook.channel} post-setup warning for "${hook.accountId}": ${message}`,
       );

@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { listTasksForOwnerKey } from "../tasks/runtime-internal.js";
 import type { TaskRecord, TaskRuntime, TaskStatus } from "../tasks/task-registry.types.js";
 
@@ -9,14 +10,14 @@ export function findActiveSessionTask(params: {
   taskKind?: string;
   statuses?: ReadonlySet<TaskStatus>;
   sourceIdPrefix?: string;
-}): TaskRecord | null {
-  const normalizedSessionKey = params.sessionKey?.trim();
+}): TaskRecord | undefined {
+  const normalizedSessionKey = normalizeOptionalString(params.sessionKey);
   if (!normalizedSessionKey) {
-    return null;
+    return undefined;
   }
   const statuses = params.statuses ?? DEFAULT_ACTIVE_STATUSES;
-  const taskKind = params.taskKind?.trim();
-  const sourceIdPrefix = params.sourceIdPrefix?.trim();
+  const taskKind = normalizeOptionalString(params.taskKind);
+  const sourceIdPrefix = normalizeOptionalString(params.sourceIdPrefix);
   const matches = listTasksForOwnerKey(normalizedSessionKey).filter((task) => {
     if (task.scopeKind !== "session") {
       return false;
@@ -31,7 +32,7 @@ export function findActiveSessionTask(params: {
       return false;
     }
     if (sourceIdPrefix) {
-      const sourceId = task.sourceId?.trim() ?? "";
+      const sourceId = normalizeOptionalString(task.sourceId) ?? "";
       if (sourceId !== sourceIdPrefix && !sourceId.startsWith(`${sourceIdPrefix}:`)) {
         return false;
       }
@@ -39,9 +40,9 @@ export function findActiveSessionTask(params: {
     return true;
   });
   if (matches.length === 0) {
-    return null;
+    return undefined;
   }
-  return matches.find((task) => task.status === "running") ?? matches[0] ?? null;
+  return matches.find((task) => task.status === "running") ?? matches[0];
 }
 
 export function buildSessionAsyncTaskStatusDetails(task: TaskRecord): Record<string, unknown> {

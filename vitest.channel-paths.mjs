@@ -16,7 +16,6 @@ export const channelTestRoots = [
   bundledPluginRoot("slack"),
   bundledPluginRoot("signal"),
   bundledPluginRoot("imessage"),
-  bundledPluginRoot("browser"),
   bundledPluginRoot("line"),
 ];
 

@@ -26,6 +26,7 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   isNativeMoonshotBaseUrl,
   MOONSHOT_BASE_URL,
@@ -92,7 +93,7 @@ function resolveKimiApiKey(kimi?: KimiConfig): string | undefined {
 }
 
 function resolveKimiModel(kimi?: KimiConfig): string {
-  const model = typeof kimi?.model === "string" ? kimi.model.trim() : "";
+  const model = normalizeOptionalString(kimi?.model) ?? "";
   return model || DEFAULT_KIMI_SEARCH_MODEL;
 }
 
@@ -101,7 +102,7 @@ function trimTrailingSlashes(url: string): string {
 }
 
 function resolveKimiBaseUrl(kimi?: KimiConfig, openClawConfig?: OpenClawConfig): string {
-  const explicitBaseUrl = typeof kimi?.baseUrl === "string" ? kimi.baseUrl.trim() : "";
+  const explicitBaseUrl = normalizeOptionalString(kimi?.baseUrl) ?? "";
   if (explicitBaseUrl) {
     return trimTrailingSlashes(explicitBaseUrl) || DEFAULT_KIMI_BASE_URL;
   }
@@ -141,12 +142,14 @@ function extractKimiCitations(data: KimiSearchResponse): string[] {
         search_results?: Array<{ url?: string }>;
         url?: string;
       };
-      if (typeof parsed.url === "string" && parsed.url.trim()) {
-        citations.push(parsed.url.trim());
+      const parsedUrl = normalizeOptionalString(parsed.url);
+      if (parsedUrl) {
+        citations.push(parsedUrl);
       }
       for (const result of parsed.search_results ?? []) {
-        if (typeof result.url === "string" && result.url.trim()) {
-          citations.push(result.url.trim());
+        const resultUrl = normalizeOptionalString(result.url);
+        if (resultUrl) {
+          citations.push(resultUrl);
         }
       }
     } catch {
@@ -352,12 +355,10 @@ async function runKimiSearchProviderSetup(
   ctx: WebSearchProviderSetupContext,
 ): Promise<WebSearchProviderSetupContext["config"]> {
   const existingPluginConfig = resolveProviderWebSearchPluginConfig(ctx.config, "moonshot");
-  const existingBaseUrl =
-    typeof existingPluginConfig?.baseUrl === "string" ? existingPluginConfig.baseUrl.trim() : "";
+  const existingBaseUrl = normalizeOptionalString(existingPluginConfig?.baseUrl) ?? "";
   // Normalize trailing slashes so initialValue matches canonical option values.
   const normalizedBaseUrl = existingBaseUrl.replace(/\/+$/, "");
-  const existingModel =
-    typeof existingPluginConfig?.model === "string" ? existingPluginConfig.model.trim() : "";
+  const existingModel = normalizeOptionalString(existingPluginConfig?.model) ?? "";
 
   // Region selection (baseUrl)
   const isCustomBaseUrl = normalizedBaseUrl && !isNativeMoonshotBaseUrl(normalizedBaseUrl);

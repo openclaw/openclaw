@@ -9,6 +9,8 @@ const resolveExternalAuthProfilesWithPluginsMock = vi.fn<
 vi.mock("../../plugins/provider-runtime.js", () => ({
   resolveExternalAuthProfilesWithPlugins: (params: unknown) =>
     resolveExternalAuthProfilesWithPluginsMock(params),
+  resolveExternalOAuthProfilesWithPlugins: (params: unknown) =>
+    resolveExternalAuthProfilesWithPluginsMock(params),
 }));
 
 function createStore(profiles: AuthProfileStore["profiles"] = {}): AuthProfileStore {

@@ -1,6 +1,5 @@
-import { iterateBootstrapChannelPlugins } from "../channels/plugins/bootstrap-registry.js";
-import { loadBundledPluginPublicSurfaceModuleSync } from "../plugin-sdk/facade-runtime.js";
-import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
+import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 
 const SECRET_INPUT_SHAPE = "secret_input"; // pragma: allowlist secret
@@ -8,39 +7,21 @@ const SIBLING_REF_SHAPE = "sibling_ref"; // pragma: allowlist secret
 
 function listChannelSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
   const entries: SecretTargetRegistryEntry[] = [];
-  const handledChannelIds = new Set<string>();
 
-  for (const metadata of listBundledPluginMetadata({
-    includeChannelConfigs: false,
-    includeSyntheticChannelConfigs: false,
-  })) {
-    const channelIds = metadata.manifest.channels ?? [];
+  for (const record of loadPluginManifestRegistry({}).plugins) {
+    if (record.origin !== "bundled") {
+      continue;
+    }
+    const channelIds = record.channels;
     if (channelIds.length === 0) {
       continue;
     }
-    if (!metadata.publicSurfaceArtifacts?.includes("contract-api.js")) {
-      continue;
-    }
     try {
-      const contractApi = loadBundledPluginPublicSurfaceModuleSync<{
-        secretTargetRegistryEntries?: readonly SecretTargetRegistryEntry[];
-      }>({
-        dirName: metadata.dirName,
-        artifactBasename: "contract-api.js",
-      });
-      entries.push(...(contractApi.secretTargetRegistryEntries ?? []));
-      channelIds.forEach((channelId) => handledChannelIds.add(channelId));
+      const contractApi = loadBundledChannelSecretContractApi(record.id);
+      entries.push(...(contractApi?.secretTargetRegistryEntries ?? []));
     } catch {
-      // Fall back to the full bootstrap plugin surface for channels that do not
-      // expose a usable secret contract artifact.
+      // Ignore bundled channels that do not expose a usable secret contract artifact.
     }
-  }
-
-  for (const plugin of iterateBootstrapChannelPlugins()) {
-    if (handledChannelIds.has(plugin.id)) {
-      continue;
-    }
-    entries.push(...(plugin.secrets?.secretTargetRegistryEntries ?? []));
   }
   return entries;
 }
@@ -468,6 +449,10 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
 ];
 
 let cachedSecretTargetRegistry: SecretTargetRegistryEntry[] | null = null;
+
+export function getCoreSecretTargetRegistry(): SecretTargetRegistryEntry[] {
+  return CORE_SECRET_TARGET_REGISTRY;
+}
 
 export function getSecretTargetRegistry(): SecretTargetRegistryEntry[] {
   if (cachedSecretTargetRegistry) {

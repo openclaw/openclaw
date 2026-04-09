@@ -4,8 +4,13 @@ import {
   loadPluginManifestRegistry,
   resolveManifestContractOwnerPluginId,
 } from "../../../plugins/manifest-registry.js";
-
-type JsonRecord = Record<string, unknown>;
+import {
+  cloneRecord,
+  ensureRecord,
+  hasOwnKey,
+  isRecord,
+  type JsonRecord,
+} from "./legacy-config-record-shared.js";
 
 const MODERN_SCOPED_WEB_SEARCH_KEYS = new Set(["openaiCodex"]);
 
@@ -20,24 +25,6 @@ const LEGACY_WEB_SEARCH_PROVIDER_IDS = loadPluginManifestRegistry({ cache: true 
 const LEGACY_WEB_SEARCH_PROVIDER_ID_SET = new Set(LEGACY_WEB_SEARCH_PROVIDER_IDS);
 const LEGACY_GLOBAL_WEB_SEARCH_PROVIDER_ID = "brave";
 
-function isRecord(value: unknown): value is JsonRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function cloneRecord<T extends JsonRecord>(value: T | undefined): T {
-  return { ...value } as T;
-}
-
-function ensureRecord(target: JsonRecord, key: string): JsonRecord {
-  const current = target[key];
-  if (isRecord(current)) {
-    return current;
-  }
-  const next: JsonRecord = {};
-  target[key] = next;
-  return next;
-}
-
 function resolveLegacySearchConfig(raw: unknown): JsonRecord | undefined {
   if (!isRecord(raw)) {
     return undefined;
@@ -50,10 +37,6 @@ function resolveLegacySearchConfig(raw: unknown): JsonRecord | undefined {
 function copyLegacyProviderConfig(search: JsonRecord, providerKey: string): JsonRecord | undefined {
   const current = search[providerKey];
   return isRecord(current) ? cloneRecord(current) : undefined;
-}
-
-function hasOwnKey(target: JsonRecord, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(target, key);
 }
 
 function hasMappedLegacyWebSearchConfig(raw: unknown): boolean {

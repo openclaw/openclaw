@@ -368,19 +368,71 @@ describe("session history HTTP endpoints", () => {
           .messages?.[0]?.content?.[0]?.text,
       ).toBe("second message");
 
-      const appended = await appendAssistantMessageToSessionTranscript({
+      const thirdMessageId = await appendTranscriptMessage({
         sessionKey: "agent:main:main",
-        text: "third message",
         storePath,
+        emitInlineMessage: false,
+        message: makeTranscriptAssistantMessage({ text: "third message" }),
       });
-      expect(appended.ok).toBe(true);
 
       const nextEvent = await readSseEvent(reader!, streamState);
       expect(nextEvent.event).toBe("history");
+      const nextData = nextEvent.data as {
+        messages?: Array<{
+          content?: Array<{ text?: string }>;
+          __openclaw?: { id?: string; seq?: number };
+        }>;
+      };
+      expect(nextData.messages?.[0]?.content?.[0]?.text).toBe("third message");
+      expect(nextData.messages?.[0]?.__openclaw).toMatchObject({
+        id: thirdMessageId,
+        seq: 3,
+      });
+
+      await reader?.cancel();
+    });
+  });
+
+  test("seeds bounded SSE windows from visible history when transcript refreshes are silent", async () => {
+    const { storePath } = await seedSession({ text: "first message" });
+    const second = await appendAssistantMessageToSessionTranscript({
+      sessionKey: "agent:main:main",
+      text: "second message",
+      storePath,
+    });
+    expect(second.ok).toBe(true);
+
+    await withGatewayHarness(async (harness) => {
+      const res = await fetchSessionHistory(harness.port, "agent:main:main", {
+        query: "?limit=1",
+        headers: { Accept: "text/event-stream" },
+      });
+
+      expect(res.status).toBe(200);
+      const reader = res.body?.getReader();
+      expect(reader).toBeTruthy();
+      const streamState = { buffer: "" };
+      const historyEvent = await readSseEvent(reader!, streamState);
+      expect(historyEvent.event).toBe("history");
       expect(
-        (nextEvent.data as { messages?: Array<{ content?: Array<{ text?: string }> }> })
+        (historyEvent.data as { messages?: Array<{ content?: Array<{ text?: string }> }> })
           .messages?.[0]?.content?.[0]?.text,
-      ).toBe("third message");
+      ).toBe("second message");
+
+      await appendTranscriptMessage({
+        sessionKey: "agent:main:main",
+        storePath,
+        emitInlineMessage: false,
+        message: makeTranscriptAssistantMessage({ text: "NO_REPLY" }),
+      });
+
+      const refreshEvent = await readSseEvent(reader!, streamState);
+      expect(refreshEvent.event).toBe("history");
+      const refreshData = refreshEvent.data as {
+        messages?: Array<{ content?: Array<{ text?: string }>; __openclaw?: { seq?: number } }>;
+      };
+      expect(refreshData.messages?.[0]?.content?.[0]?.text).toBe("second message");
+      expect(refreshData.messages?.[0]?.__openclaw?.seq).toBe(2);
 
       await reader?.cancel();
     });

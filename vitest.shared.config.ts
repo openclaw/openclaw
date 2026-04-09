@@ -189,6 +189,10 @@ export const sharedVitestConfig = {
         find: `openclaw/plugin-sdk/${subpath}`,
         replacement: path.join(repoRoot, "src", "plugin-sdk", `${subpath}.ts`),
       })),
+      ...pluginSdkSubpaths.map((subpath) => ({
+        find: `@openclaw/plugin-sdk/${subpath}`,
+        replacement: path.join(repoRoot, "packages", "plugin-sdk", "src", `${subpath}.ts`),
+      })),
       {
         find: "openclaw/plugin-sdk",
         replacement: path.join(repoRoot, "src", "plugin-sdk", "index.ts"),
@@ -252,6 +256,8 @@ export const sharedVitestConfig = {
       "vitest.media.config.ts",
       "vitest.media-understanding.config.ts",
       "vitest.performance-config.ts",
+      "vitest.unit-fast.config.ts",
+      "vitest.unit-fast-paths.mjs",
       "vitest.scoped-config.ts",
       "vitest.shared-core.config.ts",
       "vitest.shared.config.ts",

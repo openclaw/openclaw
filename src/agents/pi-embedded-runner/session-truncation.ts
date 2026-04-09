@@ -6,6 +6,7 @@ import {
   isHeartbeatOkResponse,
   isHeartbeatUserMessage,
 } from "../../auto-reply/heartbeat-filter.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { log } from "./logger.js";
 
 /**
@@ -47,7 +48,7 @@ export async function truncateSessionAfterCompaction(params: {
   try {
     sm = SessionManager.open(sessionFile);
   } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
+    const reason = formatErrorMessage(err);
     log.warn(`[session-truncation] Failed to open session file: ${reason}`);
     return { truncated: false, entriesRemoved: 0, reason };
   }
@@ -205,7 +206,7 @@ export async function truncateSessionAfterCompaction(params: {
       await fs.copyFile(sessionFile, params.archivePath);
       log.info(`[session-truncation] Archived pre-truncation file to ${params.archivePath}`);
     } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
+      const reason = formatErrorMessage(err);
       log.warn(`[session-truncation] Failed to archive: ${reason}`);
     }
   }
@@ -225,7 +226,7 @@ export async function truncateSessionAfterCompaction(params: {
     } catch {
       // Ignore cleanup errors
     }
-    const reason = err instanceof Error ? err.message : String(err);
+    const reason = formatErrorMessage(err);
     log.warn(`[session-truncation] Failed to write truncated file: ${reason}`);
     return { truncated: false, entriesRemoved: 0, reason };
   }

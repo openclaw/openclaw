@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   definePluginEntry,
   fetchWithSsrFGuard,
@@ -35,11 +36,9 @@ function resolveOwnershipAgent(config: OpenClawConfig): { id: string; name: stri
     : [];
   const selected = list.find((entry) => entry.default === true) ?? list[0];
 
-  const id =
-    typeof selected?.id === "string" && selected.id.trim() ? selected.id.trim() : "unknown";
-  const identityName =
-    typeof selected?.identity?.name === "string" ? selected.identity.name.trim() : "";
-  const fallbackName = typeof selected?.name === "string" ? selected.name.trim() : "";
+  const id = normalizeOptionalString(selected?.id) ?? "unknown";
+  const identityName = normalizeOptionalString(selected?.identity?.name) ?? "";
+  const fallbackName = normalizeOptionalString(selected?.name) ?? "";
   const name = identityName || fallbackName;
 
   return { id, name };

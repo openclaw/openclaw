@@ -2,10 +2,12 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
+import { normalizeOptionalLowercaseString, readStringValue } from "../../shared/string-coerce.js";
 import {
   patchCodexNativeWebSearchPayload,
   resolveCodexNativeSearchActivation,
 } from "../codex-native-web-search.js";
+import { flattenCompletionMessagesToStringContent } from "../openai-completions-string-content.js";
 import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
@@ -24,9 +26,9 @@ function resolveOpenAIRequestCapabilities(model: {
   compat?: { supportsStore?: boolean };
 }) {
   return resolveProviderRequestPolicyConfig({
-    provider: typeof model.provider === "string" ? model.provider : undefined,
-    api: typeof model.api === "string" ? model.api : undefined,
-    baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+    provider: readStringValue(model.provider),
+    api: readStringValue(model.api),
+    baseUrl: readStringValue(model.baseUrl),
     compat: model.compat,
     capability: "llm",
     transport: "stream",
@@ -57,17 +59,30 @@ function shouldApplyOpenAIReasoningCompatibility(model: {
   provider?: unknown;
   baseUrl?: unknown;
 }): boolean {
-  if (typeof model.api !== "string" || typeof model.provider !== "string") {
+  const api = readStringValue(model.api);
+  const provider = readStringValue(model.provider);
+  if (!api || !provider) {
     return false;
   }
   return resolveOpenAIRequestCapabilities(model).supportsOpenAIReasoningCompatPayload;
+}
+
+function shouldFlattenOpenAICompletionMessages(model: {
+  api?: unknown;
+  compat?: unknown;
+}): boolean {
+  const compat =
+    model.compat && typeof model.compat === "object"
+      ? (model.compat as { requiresStringContent?: unknown })
+      : undefined;
+  return model.api === "openai-completions" && compat?.requiresStringContent === true;
 }
 
 function normalizeOpenAIServiceTier(value: unknown): OpenAIServiceTier | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = value.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (
     normalized === "auto" ||
     normalized === "default" ||
@@ -95,7 +110,7 @@ function normalizeOpenAITextVerbosity(value: unknown): OpenAITextVerbosity | und
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = value.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "low" || normalized === "medium" || normalized === "high") {
     return normalized;
   }
@@ -118,10 +133,10 @@ function normalizeOpenAIFastMode(value: unknown): boolean | undefined {
   if (typeof value === "boolean") {
     return value;
   }
-  if (typeof value !== "string") {
+  const normalized = normalizeOptionalLowercaseString(value);
+  if (!normalized) {
     return undefined;
   }
-  const normalized = value.trim().toLowerCase();
   if (
     normalized === "on" ||
     normalized === "true" ||
@@ -216,6 +231,21 @@ export function createOpenAIReasoningCompatibilityWrapper(
   };
 }
 
+export function createOpenAIStringContentWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (!shouldFlattenOpenAICompletionMessages(model)) {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      if (!Array.isArray(payloadObj.messages)) {
+        return;
+      }
+      payloadObj.messages = flattenCompletionMessagesToStringContent(payloadObj.messages);
+    });
+  };
+}
+
 export function createOpenAIFastModeWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
@@ -297,8 +327,8 @@ export function createCodexNativeWebSearchWrapper(
   return (model, context, options) => {
     const activation = resolveCodexNativeSearchActivation({
       config: params.config,
-      modelProvider: typeof model.provider === "string" ? model.provider : undefined,
-      modelApi: typeof model.api === "string" ? model.api : undefined,
+      modelProvider: readStringValue(model.provider),
+      modelApi: readStringValue(model.api),
       agentDir: params.agentDir,
     });
 
@@ -378,8 +408,8 @@ export function createOpenAIAttributionHeadersWrapper(
       ...options,
       headers: resolveProviderRequestPolicyConfig({
         provider: attributionProvider,
-        api: typeof model.api === "string" ? model.api : undefined,
-        baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+        api: readStringValue(model.api),
+        baseUrl: readStringValue(model.baseUrl),
         capability: "llm",
         transport: "stream",
         callerHeaders: options?.headers,

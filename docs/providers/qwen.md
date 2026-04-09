@@ -88,7 +88,9 @@ requiring the built-in `qwen` provider id specifically.
 
 ## Built-in catalog
 
-OpenClaw currently ships this bundled Qwen catalog:
+OpenClaw currently ships this bundled Qwen catalog. The configured catalog is
+endpoint-aware: Coding Plan configs omit models that are only known to work on
+the Standard endpoint.
 
 | Model ref                   | Input       | Context   | Notes                                              |
 | --------------------------- | ----------- | --------- | -------------------------------------------------- |

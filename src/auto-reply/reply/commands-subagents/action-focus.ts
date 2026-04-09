@@ -17,6 +17,7 @@ import {
   resolveThreadBindingSpawnPolicy,
 } from "../../../channels/thread-bindings-policy.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
+import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { resolveConversationBindingContextFromAcpCommand } from "../conversation-binding-input.js";
 import { type SubagentsCommandContext, resolveFocusTargetSession, stopWithText } from "./shared.js";
@@ -109,7 +110,7 @@ export async function handleSubagentsFocusAction(
     }
   }
 
-  const senderId = params.command.senderId?.trim() || "";
+  const senderId = normalizeOptionalString(params.command.senderId) ?? "";
   const existingBinding = bindingService.resolveByConversation({
     channel: bindingContext.channel,
     accountId: bindingContext.accountId,

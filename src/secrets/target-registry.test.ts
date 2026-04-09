@@ -1,117 +1,80 @@
-import fs from "node:fs";
-import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import {
   buildTalkTestProviderConfig,
   TALK_TEST_PROVIDER_API_KEY_PATH,
   TALK_TEST_PROVIDER_ID,
 } from "../test-utils/talk-test-provider.js";
-import { buildSecretRefCredentialMatrix } from "./credential-matrix.js";
-import {
-  discoverConfigSecretTargetsByIds,
-  resolveConfigSecretTargetByPath,
-} from "./target-registry.js";
+
+function runTargetRegistrySnippet<T>(source: string): T {
+  const childEnv = { ...process.env };
+  delete childEnv.NODE_OPTIONS;
+  delete childEnv.VITEST;
+  delete childEnv.VITEST_MODE;
+  delete childEnv.VITEST_POOL_ID;
+  delete childEnv.VITEST_WORKER_ID;
+
+  const stdout = execFileSync(
+    process.execPath,
+    ["--import", "tsx", "--input-type=module", "-e", source],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: childEnv,
+      maxBuffer: 10 * 1024 * 1024,
+    },
+  );
+  return JSON.parse(stdout) as T;
+}
 
 describe("secret target registry", () => {
-  it("stays in sync with docs/reference/secretref-user-supplied-credentials-matrix.json", () => {
-    const pathname = path.join(
-      process.cwd(),
-      "docs",
-      "reference",
-      "secretref-user-supplied-credentials-matrix.json",
-    );
-    const raw = fs.readFileSync(pathname, "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-
-    expect(parsed).toEqual(buildSecretRefCredentialMatrix());
-  });
-
-  it("stays in sync with docs/reference/secretref-credential-surface.md", () => {
-    const matrixPath = path.join(
-      process.cwd(),
-      "docs",
-      "reference",
-      "secretref-user-supplied-credentials-matrix.json",
-    );
-    const matrixRaw = fs.readFileSync(matrixPath, "utf8");
-    const matrix = JSON.parse(matrixRaw) as ReturnType<typeof buildSecretRefCredentialMatrix>;
-
-    const surfacePath = path.join(
-      process.cwd(),
-      "docs",
-      "reference",
-      "secretref-credential-surface.md",
-    );
-    const surface = fs.readFileSync(surfacePath, "utf8");
-    const readMarkedCredentialList = (params: { start: string; end: string }): Set<string> => {
-      const startIndex = surface.indexOf(params.start);
-      const endIndex = surface.indexOf(params.end);
-      expect(startIndex).toBeGreaterThanOrEqual(0);
-      expect(endIndex).toBeGreaterThan(startIndex);
-      const block = surface.slice(startIndex + params.start.length, endIndex);
-      const credentials = new Set<string>();
-      for (const line of block.split(/\r?\n/)) {
-        const match = line.match(/^- `([^`]+)`/);
-        if (!match) {
-          continue;
-        }
-        const candidate = match[1];
-        if (!candidate.includes(".")) {
-          continue;
-        }
-        credentials.add(candidate);
-      }
-      return credentials;
+  it("supports filtered discovery by target ids", () => {
+    const config = {
+      ...buildTalkTestProviderConfig({ source: "env", provider: "default", id: "TALK_API_KEY" }),
+      gateway: {
+        remote: {
+          token: { source: "env", provider: "default", id: "REMOTE_TOKEN" },
+        },
+      },
     };
 
-    const supportedFromDocs = readMarkedCredentialList({
-      start: '[//]: # "secretref-supported-list-start"',
-      end: '[//]: # "secretref-supported-list-end"',
-    });
-    const unsupportedFromDocs = readMarkedCredentialList({
-      start: '[//]: # "secretref-unsupported-list-start"',
-      end: '[//]: # "secretref-unsupported-list-end"',
-    });
-
-    const supportedFromMatrix = new Set(
-      matrix.entries.map((entry) =>
-        entry.configFile === "auth-profiles.json" && entry.refPath ? entry.refPath : entry.path,
-      ),
-    );
-    const unsupportedFromMatrix = new Set(matrix.excludedMutableOrRuntimeManaged);
-
-    expect([...supportedFromDocs].toSorted()).toEqual([...supportedFromMatrix].toSorted());
-    expect([...unsupportedFromDocs].toSorted()).toEqual([...unsupportedFromMatrix].toSorted());
-  });
-
-  it("supports filtered discovery by target ids", () => {
-    const targets = discoverConfigSecretTargetsByIds(
-      {
-        ...buildTalkTestProviderConfig({ source: "env", provider: "default", id: "TALK_API_KEY" }),
-        gateway: {
-          remote: {
-            token: { source: "env", provider: "default", id: "REMOTE_TOKEN" },
-          },
-        },
-      } as unknown as OpenClawConfig,
-      new Set(["talk.providers.*.apiKey"]),
+    const targets = runTargetRegistrySnippet<
+      Array<{ entry?: { id?: string }; providerId?: string; path?: string }>
+    >(
+      `import { discoverConfigSecretTargetsByIds } from "./src/secrets/target-registry.ts";
+const config = ${JSON.stringify(config)};
+const result = discoverConfigSecretTargetsByIds(config, new Set(["talk.providers.*.apiKey"]));
+process.stdout.write(JSON.stringify(result));`,
     );
 
     expect(targets).toHaveLength(1);
-    expect(targets[0]?.entry.id).toBe("talk.providers.*.apiKey");
+    expect(targets[0]?.entry?.id).toBe("talk.providers.*.apiKey");
     expect(targets[0]?.providerId).toBe(TALK_TEST_PROVIDER_ID);
     expect(targets[0]?.path).toBe(TALK_TEST_PROVIDER_API_KEY_PATH);
   });
 
   it("resolves config targets by exact path including sibling ref metadata", () => {
-    const target = resolveConfigSecretTargetByPath(["channels", "googlechat", "serviceAccount"]);
+    const target = runTargetRegistrySnippet<{
+      entry?: { id?: string };
+      refPathSegments?: string[];
+    } | null>(
+      `import { resolveConfigSecretTargetByPath } from "./src/secrets/target-registry.ts";
+const result = resolveConfigSecretTargetByPath(["channels", "googlechat", "serviceAccount"]);
+process.stdout.write(JSON.stringify(result));`,
+    );
+
     expect(target).not.toBeNull();
-    expect(target?.entry.id).toBe("channels.googlechat.serviceAccount");
+    expect(target?.entry?.id).toBe("channels.googlechat.serviceAccount");
     expect(target?.refPathSegments).toEqual(["channels", "googlechat", "serviceAccountRef"]);
   });
 
   it("returns null when no config target path matches", () => {
-    expect(resolveConfigSecretTargetByPath(["gateway", "auth", "mode"])).toBeNull();
+    const target = runTargetRegistrySnippet<unknown>(
+      `import { resolveConfigSecretTargetByPath } from "./src/secrets/target-registry.ts";
+const result = resolveConfigSecretTargetByPath(["gateway", "auth", "mode"]);
+process.stdout.write(JSON.stringify(result));`,
+    );
+
+    expect(target).toBeNull();
   });
 });

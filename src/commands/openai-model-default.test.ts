@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   applyOpencodeZenModelDefault,
   OPENCODE_ZEN_DEFAULT_MODEL,
-} from "../plugins/provider-model-defaults.js";
+} from "../plugin-sdk/opencode.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 

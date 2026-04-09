@@ -34,6 +34,21 @@ vi.mock("../agents/model-auth.js", () => ({
   hasUsableCustomProviderApiKey,
 }));
 
+const resolveOwningPluginIdsForProvider = vi.hoisted(() =>
+  vi.fn(({ provider }: { provider: string }) => {
+    if (provider === "byteplus" || provider === "byteplus-plan") {
+      return ["byteplus"];
+    }
+    if (provider === "volcengine" || provider === "volcengine-plan") {
+      return ["volcengine"];
+    }
+    return undefined;
+  }),
+);
+vi.mock("../plugins/providers.js", () => ({
+  resolveOwningPluginIdsForProvider,
+}));
+
 const providerModelPickerContributionRuntime = vi.hoisted(() => ({
   enabled: false,
   resolve: vi.fn(() => []),
@@ -85,6 +100,15 @@ function createSelectAllMultiselect() {
 beforeEach(() => {
   vi.clearAllMocks();
   providerModelPickerContributionRuntime.enabled = false;
+  resolveOwningPluginIdsForProvider.mockImplementation(({ provider }: { provider: string }) => {
+    if (provider === "byteplus" || provider === "byteplus-plan") {
+      return ["byteplus"];
+    }
+    if (provider === "volcengine" || provider === "volcengine-plan") {
+      return ["volcengine"];
+    }
+    return undefined;
+  });
 });
 
 describe("promptDefaultModel", () => {
@@ -167,6 +191,12 @@ describe("promptDefaultModel", () => {
     expect(optionValues[1]).toBe("byteplus-plan/ark-code-latest");
     expect(select.mock.calls[0]?.[0]?.initialValue).toBe("byteplus-plan/ark-code-latest");
     expect(result.model).toBe("byteplus-plan/ark-code-latest");
+    expect(resolveOwningPluginIdsForProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "byteplus" }),
+    );
+    expect(resolveOwningPluginIdsForProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "byteplus-plan" }),
+    );
   });
 
   it("supports configuring vLLM during setup", async () => {

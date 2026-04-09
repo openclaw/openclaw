@@ -1,6 +1,40 @@
 import { Type } from "@sinclair/typebox";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 
+export const SessionCompactionCheckpointReasonSchema = Type.Union([
+  Type.Literal("manual"),
+  Type.Literal("auto-threshold"),
+  Type.Literal("overflow-retry"),
+  Type.Literal("timeout-retry"),
+]);
+
+export const SessionCompactionTranscriptReferenceSchema = Type.Object(
+  {
+    sessionId: NonEmptyString,
+    sessionFile: Type.Optional(NonEmptyString),
+    leafId: Type.Optional(NonEmptyString),
+    entryId: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionCompactionCheckpointSchema = Type.Object(
+  {
+    checkpointId: NonEmptyString,
+    sessionKey: NonEmptyString,
+    sessionId: NonEmptyString,
+    createdAt: Type.Integer({ minimum: 0 }),
+    reason: SessionCompactionCheckpointReasonSchema,
+    tokensBefore: Type.Optional(Type.Integer({ minimum: 0 })),
+    tokensAfter: Type.Optional(Type.Integer({ minimum: 0 })),
+    summary: Type.Optional(Type.String()),
+    firstKeptEntryId: Type.Optional(NonEmptyString),
+    preCompaction: SessionCompactionTranscriptReferenceSchema,
+    postCompaction: SessionCompactionTranscriptReferenceSchema,
+  },
+  { additionalProperties: false },
+);
+
 export const SessionsListParamsSchema = Type.Object(
   {
     limit: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -159,6 +193,90 @@ export const SessionsCompactParamsSchema = Type.Object(
   {
     key: NonEmptyString,
     maxLines: Type.Optional(Type.Integer({ minimum: 1 })),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsCompactionListParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsCompactionGetParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+    checkpointId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsCompactionBranchParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+    checkpointId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsCompactionRestoreParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+    checkpointId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsCompactionListResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    key: NonEmptyString,
+    checkpoints: Type.Array(SessionCompactionCheckpointSchema),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsCompactionGetResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    key: NonEmptyString,
+    checkpoint: SessionCompactionCheckpointSchema,
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsCompactionBranchResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    sourceKey: NonEmptyString,
+    key: NonEmptyString,
+    sessionId: NonEmptyString,
+    checkpoint: SessionCompactionCheckpointSchema,
+    entry: Type.Object(
+      {
+        sessionId: NonEmptyString,
+        updatedAt: Type.Integer({ minimum: 0 }),
+      },
+      { additionalProperties: true },
+    ),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsCompactionRestoreResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    key: NonEmptyString,
+    sessionId: NonEmptyString,
+    checkpoint: SessionCompactionCheckpointSchema,
+    entry: Type.Object(
+      {
+        sessionId: NonEmptyString,
+        updatedAt: Type.Integer({ minimum: 0 }),
+      },
+      { additionalProperties: true },
+    ),
   },
   { additionalProperties: false },
 );

@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 
@@ -14,15 +14,20 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
 }));
 
-vi.mock("../channels/plugins/bootstrap-registry.js", async () => {
-  const telegramSecrets = await import("../../extensions/telegram/src/secret-contract.ts");
+vi.mock("../channels/plugins/bootstrap-registry.js", () => {
   return {
     getBootstrapChannelPlugin: (id: string) =>
       id === "telegram"
         ? {
             secrets: {
-              collectRuntimeConfigAssignments: telegramSecrets.collectRuntimeConfigAssignments,
+              collectRuntimeConfigAssignments: () => {},
             },
+          }
+        : undefined,
+    getBootstrapChannelSecrets: (id: string) =>
+      id === "telegram"
+        ? {
+            collectRuntimeConfigAssignments: () => {},
           }
         : undefined,
   };
@@ -160,10 +165,9 @@ describe("secrets runtime snapshot legacy x_search", () => {
             },
           },
         },
-        channels: {
-          telegram: {
-            groupMentionsOnly: true,
-            groups: [],
+        session: {
+          threadBindings: {
+            ttlHours: 24,
           },
         },
       }),

@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import { isSupportedNodeVersion } from "../infra/runtime-guard.js";
 import { resolveStableNodePath } from "../infra/stable-node-path.js";
 import { getWindowsProgramFilesRoots } from "../infra/windows-install-roots.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 const VERSION_MANAGER_MARKERS = [
   "/.nvm/",
@@ -23,7 +24,7 @@ function getPathModule(platform: NodeJS.Platform) {
 
 function isNodeExecPath(execPath: string, platform: NodeJS.Platform): boolean {
   const pathModule = getPathModule(platform);
-  const base = pathModule.basename(execPath).toLowerCase();
+  const base = normalizeLowercaseStringOrEmpty(pathModule.basename(execPath));
   return base === "node" || base === "node.exe";
 }
 
@@ -31,7 +32,7 @@ function normalizeForCompare(input: string, platform: NodeJS.Platform): string {
   const pathModule = getPathModule(platform);
   const normalized = pathModule.normalize(input).replaceAll("\\", "/");
   if (platform === "win32") {
-    return normalized.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(normalized);
   }
   return normalized;
 }

@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it, type Mock, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, type Mock, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
   type MockAuthProfile = { provider: string; [key: string]: unknown };
@@ -229,6 +229,19 @@ async function withAgentScopeOverrides<T>(
 describe("modelsStatusCommand auth overview", () => {
   beforeAll(async () => {
     await loadFreshModelsStatusCommandModuleForTest();
+  });
+
+  afterAll(() => {
+    vi.doUnmock("../../agents/agent-paths.js");
+    vi.doUnmock("../../agents/agent-scope.js");
+    vi.doUnmock("../../agents/auth-profiles.js");
+    vi.doUnmock("../../agents/model-auth.js");
+    vi.doUnmock("../../agents/model-auth-env-vars.js");
+    vi.doUnmock("../../infra/shell-env.js");
+    vi.doUnmock("../../config/config.js");
+    vi.doUnmock("./load-config.js");
+    vi.doUnmock("../../infra/provider-usage.js");
+    vi.resetModules();
   });
 
   it("includes masked auth sources in JSON output", async () => {

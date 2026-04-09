@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import type {
   ChatCommandDefinition,
@@ -53,13 +54,20 @@ export function registerAlias(
   if (!command) {
     throw new Error(`registerAlias: unknown command key: ${key}`);
   }
-  const existing = new Set(command.textAliases.map((alias) => alias.trim().toLowerCase()));
+  const existing = new Set(
+    command.textAliases
+      .map((alias) => normalizeOptionalLowercaseString(alias))
+      .filter((alias): alias is string => Boolean(alias)),
+  );
   for (const alias of aliases) {
     const trimmed = alias.trim();
     if (!trimmed) {
       continue;
     }
-    const lowered = trimmed.toLowerCase();
+    const lowered = normalizeOptionalLowercaseString(trimmed);
+    if (!lowered) {
+      continue;
+    }
     if (existing.has(lowered)) {
       continue;
     }
@@ -89,7 +97,7 @@ export function assertCommandRegistry(commands: ChatCommandDefinition[]): void {
     } else if (!nativeName) {
       throw new Error(`Native command missing native name: ${command.key}`);
     } else {
-      const nativeKey = nativeName.toLowerCase();
+      const nativeKey = normalizeOptionalLowercaseString(nativeName) ?? "";
       if (nativeNames.has(nativeKey)) {
         throw new Error(`Duplicate native command: ${nativeName}`);
       }
@@ -104,7 +112,7 @@ export function assertCommandRegistry(commands: ChatCommandDefinition[]): void {
       if (!alias.startsWith("/")) {
         throw new Error(`Command alias missing leading '/': ${alias}`);
       }
-      const aliasKey = alias.toLowerCase();
+      const aliasKey = normalizeOptionalLowercaseString(alias) ?? "";
       if (textAliases.has(aliasKey)) {
         throw new Error(`Duplicate command alias: ${alias}`);
       }

@@ -62,6 +62,30 @@ describe("talk normalization", () => {
     });
   });
 
+  it("merges duplicate provider ids after trimming", () => {
+    const normalized = normalizeTalkSection({
+      provider: " elevenlabs ",
+      providers: {
+        " elevenlabs ": {
+          voiceId: "voice-123",
+        },
+        elevenlabs: {
+          apiKey: "secret-key",
+        },
+      },
+    });
+
+    expect(normalized).toEqual({
+      provider: "elevenlabs",
+      providers: {
+        elevenlabs: {
+          voiceId: "voice-123",
+          apiKey: "secret-key",
+        },
+      },
+    });
+  });
+
   it("builds a canonical resolved talk payload for clients", () => {
     const payload = buildTalkConfigResponse({
       provider: "acme",

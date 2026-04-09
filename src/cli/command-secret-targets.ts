@@ -4,6 +4,7 @@ import {
   discoverConfigSecretTargetsByIds,
   listSecretTargetRegistryEntries,
 } from "../secrets/target-registry.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 const STATIC_QR_REMOTE_TARGET_IDS = ["gateway.remote.token", "gateway.remote.password"] as const;
 const STATIC_MODEL_TARGET_IDS = [
@@ -21,7 +22,7 @@ const STATIC_MODEL_TARGET_IDS = [
   "models.providers.*.request.tls.key",
   "models.providers.*.request.tls.passphrase",
 ] as const;
-const STATIC_AGENT_RUNTIME_TARGET_IDS = [
+const STATIC_AGENT_RUNTIME_BASE_TARGET_IDS = [
   ...STATIC_MODEL_TARGET_IDS,
   "agents.defaults.memorySearch.remote.apiKey",
   "agents.list[].memorySearch.remote.apiKey",
@@ -75,7 +76,7 @@ function buildCommandSecretTargets(): CommandSecretTargets {
   const channelTargetIds = getChannelSecretTargetIds();
   return {
     channels: channelTargetIds,
-    agentRuntime: [...STATIC_AGENT_RUNTIME_TARGET_IDS, ...channelTargetIds],
+    agentRuntime: [...STATIC_AGENT_RUNTIME_BASE_TARGET_IDS, ...channelTargetIds],
     status: [...STATIC_STATUS_TARGET_IDS, ...channelTargetIds],
     securityAudit: [...STATIC_SECURITY_AUDIT_TARGET_IDS, ...channelTargetIds],
   };
@@ -88,11 +89,6 @@ function getCommandSecretTargets(): CommandSecretTargets {
 
 function toTargetIdSet(values: readonly string[]): Set<string> {
   return new Set(values);
-}
-
-function normalizeScopedChannelId(value?: string | null): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
 }
 
 function selectChannelTargetIds(channel?: string): Set<string> {
@@ -128,7 +124,7 @@ export function getScopedChannelsCommandSecretTargets(params: {
   targetIds: Set<string>;
   allowedPaths?: Set<string>;
 } {
-  const channel = normalizeScopedChannelId(params.channel);
+  const channel = normalizeOptionalString(params.channel);
   const targetIds = selectChannelTargetIds(channel);
   const normalizedAccountId = normalizeOptionalAccountId(params.accountId);
   if (!channel || !normalizedAccountId) {
@@ -162,7 +158,12 @@ export function getModelsCommandSecretTargetIds(): Set<string> {
   return toTargetIdSet(STATIC_MODEL_TARGET_IDS);
 }
 
-export function getAgentRuntimeCommandSecretTargetIds(): Set<string> {
+export function getAgentRuntimeCommandSecretTargetIds(params?: {
+  includeChannelTargets?: boolean;
+}): Set<string> {
+  if (params?.includeChannelTargets !== true) {
+    return toTargetIdSet(STATIC_AGENT_RUNTIME_BASE_TARGET_IDS);
+  }
   return toTargetIdSet(getCommandSecretTargets().agentRuntime);
 }
 

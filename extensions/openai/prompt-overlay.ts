@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+
 const OPENAI_PROVIDER_IDS = new Set(["openai", "openai-codex"]);
 const OPENAI_GPT5_MODEL_PREFIX = "gpt-5";
 
@@ -54,7 +56,8 @@ export type OpenAIPromptOverlayMode = "friendly" | "off";
 export function resolveOpenAIPromptOverlayMode(
   pluginConfig?: Record<string, unknown>,
 ): OpenAIPromptOverlayMode {
-  return pluginConfig?.personality === "off" ? "off" : "friendly";
+  const normalized = normalizeLowercaseStringOrEmpty(pluginConfig?.personality);
+  return normalized === "off" ? "off" : "friendly";
 }
 
 export function shouldApplyOpenAIPromptOverlay(params: {
@@ -64,7 +67,7 @@ export function shouldApplyOpenAIPromptOverlay(params: {
   if (!OPENAI_PROVIDER_IDS.has(params.modelProviderId ?? "")) {
     return false;
   }
-  const normalizedModelId = params.modelId?.trim().toLowerCase() ?? "";
+  const normalizedModelId = normalizeLowercaseStringOrEmpty(params.modelId);
   return normalizedModelId.startsWith(OPENAI_GPT5_MODEL_PREFIX);
 }
 

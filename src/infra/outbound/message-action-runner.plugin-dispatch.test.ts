@@ -32,91 +32,26 @@ vi.mock("./outbound-session.js", () => ({
   resolveOutboundSessionRoute: vi.fn(async () => null),
 }));
 
-vi.mock("./message-action-threading.js", () => ({
-  resolveAndApplyOutboundThreadId: vi.fn(
-    (
-      actionParams: Record<string, unknown>,
-      context: {
-        cfg: OpenClawConfig;
-        to: string;
-        accountId?: string | null;
-        toolContext?: Record<string, unknown>;
-        resolveAutoThreadId?: (params: {
-          cfg: OpenClawConfig;
-          accountId?: string | null;
-          to: string;
-          toolContext?: Record<string, unknown>;
-          replyToId?: string;
-        }) => string | undefined;
-      },
-    ) => {
-      const explicit =
-        typeof actionParams.threadId === "string" ? actionParams.threadId : undefined;
-      const replyToId = typeof actionParams.replyTo === "string" ? actionParams.replyTo : undefined;
-      const resolved =
-        explicit ??
-        context.resolveAutoThreadId?.({
-          cfg: context.cfg,
-          accountId: context.accountId,
-          to: context.to,
-          toolContext: context.toolContext,
-          replyToId,
-        });
-      if (resolved && !actionParams.threadId) {
-        actionParams.threadId = resolved;
-      }
-      return resolved ?? undefined;
-    },
-  ),
-  prepareOutboundMirrorRoute: vi.fn(
-    async ({
-      actionParams,
-      cfg,
-      to,
-      accountId,
-      toolContext,
-      agentId,
-      resolveAutoThreadId,
-    }: {
-      actionParams: Record<string, unknown>;
-      cfg: OpenClawConfig;
-      to: string;
-      accountId?: string | null;
-      toolContext?: Record<string, unknown>;
-      agentId?: string;
-      resolveAutoThreadId?: (params: {
-        cfg: OpenClawConfig;
-        accountId?: string | null;
-        to: string;
-        toolContext?: Record<string, unknown>;
-        replyToId?: string;
-      }) => string | undefined;
-    }) => {
-      const explicit =
-        typeof actionParams.threadId === "string" ? actionParams.threadId : undefined;
-      const replyToId = typeof actionParams.replyTo === "string" ? actionParams.replyTo : undefined;
-      const resolvedThreadId =
-        explicit ??
-        resolveAutoThreadId?.({
-          cfg,
-          accountId,
-          to,
-          toolContext,
-          replyToId,
-        });
-      if (resolvedThreadId && !actionParams.threadId) {
-        actionParams.threadId = resolvedThreadId;
-      }
-      if (agentId) {
-        actionParams.__agentId = agentId;
-      }
-      return {
-        resolvedThreadId,
-        outboundRoute: null,
-      };
-    },
-  ),
+vi.mock("../../channels/plugins/bootstrap-registry.js", () => ({
+  getBootstrapChannelPlugin: (id: string) =>
+    id === "feishu"
+      ? {
+          actions: {
+            messageActionTargetAliases: {
+              pin: { aliases: ["messageId"] },
+              unpin: { aliases: ["messageId"] },
+              "list-pins": { aliases: ["chatId"] },
+            },
+          },
+        }
+      : undefined,
 }));
+
+vi.mock("./message-action-threading.js", async () => {
+  const { createOutboundThreadingMock } =
+    await import("./message-action-threading.test-helpers.js");
+  return createOutboundThreadingMock();
+});
 
 function createAlwaysConfiguredPluginConfig(account: Record<string, unknown> = { enabled: true }) {
   return {
@@ -231,6 +166,11 @@ describe("runMessageAction plugin dispatch", () => {
       },
       capabilities: { chatTypes: ["direct", "channel"] },
       config: createAlwaysConfiguredPluginConfig(),
+      messaging: {
+        targetResolver: {
+          looksLikeId: () => true,
+        },
+      },
       actions: {
         describeMessageTool: () => ({ actions: ["pin", "list-pins", "member-info"] }),
         supportsAction: ({ action }) =>
@@ -335,7 +275,8 @@ describe("runMessageAction plugin dispatch", () => {
         sessionId: "session-123",
         agentId: "alpha",
         toolContext: {
-          currentChannelId: "chat:oc_123",
+          currentChannelId: "oc_123",
+          currentChannelProvider: "feishu",
           currentThreadTs: "thread-456",
           currentMessageId: "msg-789",
         },
@@ -352,7 +293,8 @@ describe("runMessageAction plugin dispatch", () => {
           agentId: "alpha",
           mediaLocalRoots: expect.arrayContaining([expectedWorkspaceRoot]),
           toolContext: expect.objectContaining({
-            currentChannelId: "chat:oc_123",
+            currentChannelId: "oc_123",
+            currentChannelProvider: "feishu",
             currentThreadTs: "thread-456",
             currentMessageId: "msg-789",
           }),

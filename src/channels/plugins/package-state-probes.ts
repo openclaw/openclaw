@@ -1,19 +1,16 @@
-import fs from "node:fs";
-import { createRequire } from "node:module";
-import path from "node:path";
-import { createJiti } from "jiti";
 import type { OpenClawConfig } from "../../config/config.js";
-import { openBoundaryFileSync } from "../../infra/boundary-file-read.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   listChannelCatalogEntries,
   type PluginChannelCatalogEntry,
 } from "../../plugins/channel-catalog-registry.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
-  buildPluginLoaderAliasMap,
-  buildPluginLoaderJitiOptions,
-  shouldPreferNativeJiti,
-} from "../../plugins/sdk-alias.js";
+  isJavaScriptModulePath,
+  loadChannelPluginModule,
+  resolveExistingPluginModulePath,
+} from "./module-loader.js";
 
 type ChannelPackageStateChecker = (params: {
   cfg: OpenClawConfig;
@@ -34,7 +31,6 @@ type ChannelPackageStateRegistry = {
 };
 
 const log = createSubsystemLogger("channels");
-const nodeRequire = createRequire(import.meta.url);
 const registryCache = new Map<ChannelPackageStateMetadataKey, ChannelPackageStateRegistry>();
 
 function resolveChannelPackageStateMetadata(
@@ -45,39 +41,13 @@ function resolveChannelPackageStateMetadata(
   if (!metadata || typeof metadata !== "object") {
     return null;
   }
-  const specifier = typeof metadata.specifier === "string" ? metadata.specifier.trim() : "";
-  const exportName = typeof metadata.exportName === "string" ? metadata.exportName.trim() : "";
+  const specifier = normalizeOptionalString(metadata.specifier) ?? "";
+  const exportName = normalizeOptionalString(metadata.exportName) ?? "";
   if (!specifier || !exportName) {
     return null;
   }
   return { specifier, exportName };
 }
-
-function createModuleLoader() {
-  const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
-
-  return (modulePath: string) => {
-    const tryNative =
-      shouldPreferNativeJiti(modulePath) || modulePath.includes(`${path.sep}dist${path.sep}`);
-    const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
-    const cacheKey = JSON.stringify({
-      tryNative,
-      aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
-    });
-    const cached = jitiLoaders.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-    const loader = createJiti(import.meta.url, {
-      ...buildPluginLoaderJitiOptions(aliasMap),
-      tryNative,
-    });
-    jitiLoaders.set(cacheKey, loader);
-    return loader;
-  };
-}
-
-const loadModule = createModuleLoader();
 
 function getChannelPackageStateRegistry(
   metadataKey: ChannelPackageStateMetadataKey,
@@ -98,57 +68,6 @@ function getChannelPackageStateRegistry(
   return registry;
 }
 
-function resolveModuleCandidates(entry: PluginChannelCatalogEntry, specifier: string): string[] {
-  const normalizedSpecifier = specifier.replace(/\\/g, "/");
-  const resolvedPath = path.resolve(entry.rootDir, normalizedSpecifier);
-  const ext = path.extname(resolvedPath);
-  if (ext) {
-    return [resolvedPath];
-  }
-  return [
-    resolvedPath,
-    `${resolvedPath}.ts`,
-    `${resolvedPath}.js`,
-    `${resolvedPath}.mjs`,
-    `${resolvedPath}.cjs`,
-  ];
-}
-
-function resolveExistingModulePath(entry: PluginChannelCatalogEntry, specifier: string): string {
-  for (const candidate of resolveModuleCandidates(entry, specifier)) {
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  return path.resolve(entry.rootDir, specifier);
-}
-
-function loadChannelPackageStateModule(modulePath: string, rootDir: string): unknown {
-  const opened = openBoundaryFileSync({
-    absolutePath: modulePath,
-    rootPath: rootDir,
-    boundaryLabel: "plugin root",
-    rejectHardlinks: false,
-    skipLexicalRootCheck: true,
-  });
-  if (!opened.ok) {
-    throw new Error("plugin package-state module escapes plugin root or fails alias checks");
-  }
-  const safePath = opened.path;
-  fs.closeSync(opened.fd);
-  if (
-    process.platform === "win32" &&
-    [".js", ".mjs", ".cjs"].includes(path.extname(safePath).toLowerCase())
-  ) {
-    try {
-      return nodeRequire(safePath);
-    } catch {
-      // Fall back to Jiti when native require cannot load the target.
-    }
-  }
-  return loadModule(safePath)(safePath);
-}
-
 function resolveChannelPackageStateChecker(params: {
   entry: PluginChannelCatalogEntry;
   metadataKey: ChannelPackageStateMetadataKey;
@@ -166,10 +85,11 @@ function resolveChannelPackageStateChecker(params: {
   }
 
   try {
-    const moduleExport = loadChannelPackageStateModule(
-      resolveExistingModulePath(params.entry, metadata.specifier!),
-      params.entry.rootDir,
-    ) as Record<string, unknown>;
+    const moduleExport = loadChannelPluginModule({
+      modulePath: resolveExistingPluginModulePath(params.entry.rootDir, metadata.specifier!),
+      rootDir: params.entry.rootDir,
+      shouldTryNativeRequire: isJavaScriptModulePath,
+    }) as Record<string, unknown>;
     const checker = moduleExport[metadata.exportName!] as ChannelPackageStateChecker | undefined;
     if (typeof checker !== "function") {
       throw new Error(`missing ${params.metadataKey} export ${metadata.exportName}`);
@@ -177,7 +97,7 @@ function resolveChannelPackageStateChecker(params: {
     registry.checkerCache.set(params.entry.pluginId, checker);
     return checker;
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = formatErrorMessage(error);
     log.warn(
       `[channels] failed to load ${params.metadataKey} checker for ${params.entry.pluginId}: ${detail}`,
     );

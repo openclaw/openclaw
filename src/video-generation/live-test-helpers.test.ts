@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  canRunBufferBackedImageToVideoLiveLane,
   canRunBufferBackedVideoToVideoLiveLane,
   parseCsvFilter,
   parseProviderModelMap,
@@ -86,13 +87,13 @@ describe("video-generation live-test helpers", () => {
         providerId: "google",
         modelRef: "google/veo-3.1-fast-generate-preview",
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       canRunBufferBackedVideoToVideoLiveLane({
         providerId: "openai",
         modelRef: "openai/sora-2",
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       canRunBufferBackedVideoToVideoLiveLane({
         providerId: "runway",
@@ -121,6 +122,21 @@ describe("video-generation live-test helpers", () => {
       canRunBufferBackedVideoToVideoLiveLane({
         providerId: "xai",
         modelRef: "xai/grok-imagine-video",
+      }),
+    ).toBe(false);
+  });
+
+  it("runs buffer-backed image-to-video only for providers that accept bundled image inputs", () => {
+    expect(
+      canRunBufferBackedImageToVideoLiveLane({
+        providerId: "openai",
+        modelRef: "openai/sora-2",
+      }),
+    ).toBe(true);
+    expect(
+      canRunBufferBackedImageToVideoLiveLane({
+        providerId: "vydra",
+        modelRef: "vydra/veo3",
       }),
     ).toBe(false);
   });

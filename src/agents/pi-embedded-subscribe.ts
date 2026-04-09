@@ -8,6 +8,7 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
 import { buildCodeSpanIndex, createInlineCodeState } from "../markdown/code-spans.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import {
   isMessagingToolDuplicateNormalized,
@@ -43,7 +44,7 @@ function collectPendingMediaFromInternalEvents(
       continue;
     }
     for (const mediaUrl of event.mediaUrls) {
-      const normalized = typeof mediaUrl === "string" ? mediaUrl.trim() : "";
+      const normalized = normalizeOptionalString(mediaUrl) ?? "";
       if (!normalized || seen.has(normalized)) {
         continue;
       }
@@ -113,6 +114,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingMessagingMediaUrls: new Map(),
     pendingToolMediaUrls: initialPendingToolMediaUrls,
     pendingToolAudioAsVoice: false,
+    deterministicApprovalPromptPending: false,
     deterministicApprovalPromptSent: false,
   };
   const usageTotals = {
@@ -687,6 +689,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.pendingMessagingMediaUrls.clear();
     state.pendingToolMediaUrls = [];
     state.pendingToolAudioAsVoice = false;
+    state.deterministicApprovalPromptPending = false;
     state.deterministicApprovalPromptSent = false;
     resetAssistantMessageState(0);
   };

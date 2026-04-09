@@ -133,6 +133,29 @@ function createQmdCfg(agentId: string): OpenClawConfig {
   };
 }
 
+function createBuiltinCfg(agentId: string): OpenClawConfig {
+  return {
+    agents: {
+      defaults: {
+        workspace: "/tmp/workspace",
+        memorySearch: {
+          provider: "openai",
+          model: "text-embedding-3-small",
+          store: {
+            path: "/tmp/index.sqlite",
+            vector: { enabled: false },
+          },
+          sync: { watch: false, onSessionStart: false, onSearch: false },
+          query: { minScore: 0, hybrid: { enabled: false } },
+          sources: ["memory"],
+          experimental: { sessionMemory: false },
+        },
+      },
+      list: [{ id: agentId, default: true, workspace: "/tmp/workspace" }],
+    },
+  } as OpenClawConfig;
+}
+
 function requireManager(result: SearchManagerResult): SearchManager {
   expect(result.manager).toBeTruthy();
   if (!result.manager) {
@@ -267,6 +290,39 @@ describe("getMemorySearchManager caching", () => {
     await first.manager?.close?.();
     await second.manager?.close?.();
     expect(mockPrimary.close).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache builtin managers for status-only requests", async () => {
+    const agentId = "builtin-status-agent";
+    const cfg = createBuiltinCfg(agentId);
+    const firstBuiltinManager = createManagerMock({
+      backend: "builtin",
+      provider: "openai",
+      model: "text-embedding-3-small",
+      requestedProvider: "openai",
+    });
+    const secondBuiltinManager = createManagerMock({
+      backend: "builtin",
+      provider: "openai",
+      model: "text-embedding-3-small",
+      requestedProvider: "openai",
+    });
+    mockMemoryIndexGet
+      .mockResolvedValueOnce(firstBuiltinManager)
+      .mockResolvedValueOnce(secondBuiltinManager);
+
+    const first = await getMemorySearchManager({ cfg, agentId, purpose: "status" });
+    const second = await getMemorySearchManager({ cfg, agentId, purpose: "status" });
+
+    expect(first.manager).toBe(firstBuiltinManager);
+    expect(second.manager).toBe(secondBuiltinManager);
+    expect(second.manager).not.toBe(first.manager);
+    expect(mockMemoryIndexGet).toHaveBeenCalledTimes(2);
+
+    await first.manager?.close?.();
+    await second.manager?.close?.();
+    expect(firstBuiltinManager.close).toHaveBeenCalledTimes(1);
+    expect(secondBuiltinManager.close).toHaveBeenCalledTimes(1);
   });
 
   it("reports real qmd index counts for status-only requests", async () => {

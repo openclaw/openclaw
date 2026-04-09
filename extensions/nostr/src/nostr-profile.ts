@@ -6,6 +6,7 @@
  */
 
 import { finalizeEvent, SimplePool, type Event } from "nostr-tools";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { type NostrProfile, NostrProfileSchema } from "./config-schema.js";
 
 // ============================================================================
@@ -186,7 +187,7 @@ export async function publishProfileEvent(
 
       successes.push(relay);
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
+      const errorMessage = formatErrorMessage(err);
       failures.push({ relay, error: errorMessage });
     }
   });

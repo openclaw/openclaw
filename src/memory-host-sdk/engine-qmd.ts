@@ -7,6 +7,7 @@ export {
   sessionPathForFile,
   type SessionFileEntry,
 } from "./host/session-files.js";
+export { parseUsageCountedSessionIdFromFileName } from "../config/sessions/artifacts.js";
 export { parseQmdQueryJson, type QmdQueryResult } from "./host/qmd-query-parser.js";
 export {
   deriveQmdScopeChannel,

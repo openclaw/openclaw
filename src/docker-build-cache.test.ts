@@ -111,7 +111,7 @@ describe("docker build cache layout", () => {
     expectPatternBeforeInstall(/^COPY(?:\s+--chown=\S+)?\s+extensions \.\/extensions$/m);
     expectPatternBeforeInstall(/^COPY(?:\s+--chown=\S+)?\s+patches \.\/patches$/m);
     expectPatternBeforeInstall(
-      /^COPY(?:\s+--chown=\S+)?\s+scripts\/postinstall-bundled-plugins\.mjs scripts\/npm-runner\.mjs \.\/scripts\/$/m,
+      /^COPY(?:\s+--chown=\S+)?\s+scripts\/postinstall-bundled-plugins\.mjs scripts\/npm-runner\.mjs scripts\/windows-cmd-helpers\.mjs \.\/scripts\/$/m,
     );
     expectPatternAfterInstall(
       /^COPY(?:\s+--chown=\S+)?\s+tsconfig\.json tsconfig\.plugin-sdk\.dts\.json tsdown\.config\.ts vitest\.config\.ts vitest\.e2e\.config\.ts vitest\.performance-config\.ts vitest\.shared\.config\.ts vitest\.system-load\.ts vitest\.bundled-plugin-paths\.ts openclaw\.mjs \.\/$/m,

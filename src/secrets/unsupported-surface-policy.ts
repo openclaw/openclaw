@@ -1,5 +1,6 @@
-import { iterateBootstrapChannelPlugins } from "../channels/plugins/bootstrap-registry.js";
+import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { isRecord } from "../utils.js";
+import { loadBundledChannelSecurityContractApi } from "./channel-contract-api.js";
 
 const CORE_UNSUPPORTED_SECRETREF_SURFACE_PATTERNS = [
   "commands.ownerDisplaySecret",
@@ -9,10 +10,21 @@ const CORE_UNSUPPORTED_SECRETREF_SURFACE_PATTERNS = [
   "auth-profiles.oauth.*",
 ] as const;
 
+function listBundledChannelIds(): string[] {
+  return [
+    ...new Set(
+      loadPluginManifestRegistry({})
+        .plugins.filter((entry) => entry.origin === "bundled")
+        .flatMap((entry) => entry.channels),
+    ),
+  ].toSorted((left, right) => left.localeCompare(right));
+}
+
 function collectChannelUnsupportedSecretRefSurfacePatterns(): string[] {
   const patterns: string[] = [];
-  for (const plugin of iterateBootstrapChannelPlugins()) {
-    patterns.push(...(plugin.secrets?.unsupportedSecretRefSurfacePatterns ?? []));
+  for (const channelId of listBundledChannelIds()) {
+    const contract = loadBundledChannelSecurityContractApi(channelId);
+    patterns.push(...(contract?.unsupportedSecretRefSurfacePatterns ?? []));
   }
   return patterns;
 }
@@ -76,8 +88,9 @@ export function collectUnsupportedSecretRefConfigCandidates(
   }
 
   if (isRecord(raw.channels)) {
-    for (const plugin of iterateBootstrapChannelPlugins()) {
-      const channelCandidates = plugin.secrets?.collectUnsupportedSecretRefConfigCandidates?.(raw);
+    for (const channelId of Object.keys(raw.channels)) {
+      const contract = loadBundledChannelSecurityContractApi(channelId);
+      const channelCandidates = contract?.collectUnsupportedSecretRefConfigCandidates?.(raw);
       if (!channelCandidates?.length) {
         continue;
       }

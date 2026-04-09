@@ -6,6 +6,7 @@ import {
   shouldUsePluginSnapshotCache,
 } from "./cache-controls.js";
 import {
+  isPluginRegistryLoadInFlight,
   loadOpenClawPlugins,
   resolveCompatibleRuntimePluginRegistry,
   resolveRuntimePluginRegistry,
@@ -170,15 +171,10 @@ export function resolvePluginWebProviders<TEntry>(
       return cached.providers;
     }
   }
-
-  const loadOptions = resolveWebProviderLoadOptions(params, deps);
-  const resolved = deps.mapRegistryProviders({
-    registry:
-      resolveCompatibleRuntimePluginRegistry(loadOptions) ?? loadOpenClawPlugins(loadOptions),
-    onlyPluginIds: params.onlyPluginIds,
-  });
-
-  if (cacheOwnerConfig && shouldMemoizeSnapshot) {
+  const memoizeSnapshot = (providers: TEntry[]) => {
+    if (!cacheOwnerConfig || !shouldMemoizeSnapshot) {
+      return;
+    }
     const ttlMs = resolvePluginSnapshotCacheTtlMs(env);
     let configCache = deps.snapshotCache.get(cacheOwnerConfig);
     if (!configCache) {
@@ -195,10 +191,28 @@ export function resolvePluginWebProviders<TEntry>(
     }
     envCache.set(cacheKey, {
       expiresAt: Date.now() + ttlMs,
-      providers: resolved,
+      providers,
     });
-  }
+  };
 
+  const loadOptions = resolveWebProviderLoadOptions(params, deps);
+  const compatible = resolveCompatibleRuntimePluginRegistry(loadOptions);
+  if (compatible) {
+    const resolved = deps.mapRegistryProviders({
+      registry: compatible,
+      onlyPluginIds: params.onlyPluginIds,
+    });
+    memoizeSnapshot(resolved);
+    return resolved;
+  }
+  if (isPluginRegistryLoadInFlight(loadOptions)) {
+    return [];
+  }
+  const resolved = deps.mapRegistryProviders({
+    registry: loadOpenClawPlugins(loadOptions),
+    onlyPluginIds: params.onlyPluginIds,
+  });
+  memoizeSnapshot(resolved);
   return resolved;
 }
 

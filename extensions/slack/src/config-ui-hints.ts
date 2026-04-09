@@ -95,7 +95,7 @@ export const slackChannelConfigUiHints = {
   },
   "streaming.nativeTransport": {
     label: "Slack Native Streaming",
-    help: "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming.mode is partial (default: true).",
+    help: "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming.mode is partial (default: true). Requires a reply thread target; top-level DMs stay on the non-thread fallback path.",
   },
   "thread.historyScope": {
     label: "Slack Thread History Scope",
@@ -108,5 +108,9 @@ export const slackChannelConfigUiHints = {
   "thread.initialHistoryLimit": {
     label: "Slack Thread Initial History Limit",
     help: "Maximum number of existing Slack thread messages to fetch when starting a new thread session (default: 20, set to 0 to disable).",
+  },
+  "thread.requireExplicitMention": {
+    label: "Slack Thread Require Explicit Mention",
+    help: "If true, require an explicit @mention even inside threads where the bot has participated. Suppresses implicit thread mention behavior so the bot only responds to explicit @bot mentions in threads (default: false).",
   },
 } satisfies Record<string, ChannelConfigUiHint>;

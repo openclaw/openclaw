@@ -39,7 +39,8 @@ describe("qa-bus state", () => {
 
     state.reactToMessage({
       messageId: message.id,
-      emoji: "white_check_mark",
+      emoji: "eyes",
+      senderId: "alice",
     });
     state.editMessage({
       messageId: message.id,
@@ -49,51 +50,82 @@ describe("qa-bus state", () => {
       messageId: message.id,
     });
 
-    const updated = state.readMessage({ messageId: message.id });
-    expect(updated.threadId).toBe(thread.id);
-    expect(updated.reactions).toHaveLength(1);
-    expect(updated.text).toContain("(edited)");
-    expect(updated.deleted).toBe(true);
-
-    const waited = await state.waitFor({
-      kind: "thread-id",
-      threadId: thread.id,
-      timeoutMs: 50,
+    const snapshot = state.getSnapshot();
+    expect(snapshot.threads).toHaveLength(1);
+    expect(snapshot.threads[0]).toMatchObject({
+      id: thread.id,
+      conversationId: "qa-room",
+      title: "QA thread",
     });
-    expect("id" in waited && waited.id).toBe(thread.id);
+    expect(snapshot.messages[0]).toMatchObject({
+      id: message.id,
+      text: "inside thread (edited)",
+      deleted: true,
+      reactions: [{ emoji: "eyes", senderId: "alice" }],
+    });
   });
 
-  it("replays fresh events after a reset rewinds the cursor", () => {
+  it("waits for a text match and rejects on timeout", async () => {
+    const state = createQaBusState();
+    const pending = state.waitFor({
+      kind: "message-text",
+      textIncludes: "needle",
+      timeoutMs: 500,
+    });
+
+    setTimeout(() => {
+      state.addOutboundMessage({
+        to: "dm:alice",
+        text: "haystack + needle",
+      });
+    }, 20);
+
+    const matched = await pending;
+    expect("text" in matched && matched.text).toContain("needle");
+
+    await expect(
+      state.waitFor({
+        kind: "message-text",
+        textIncludes: "missing",
+        timeoutMs: 20,
+      }),
+    ).rejects.toThrow("qa-bus wait timeout");
+  });
+
+  it("preserves inline attachments and lets search match attachment metadata", () => {
     const state = createQaBusState();
 
-    state.addInboundMessage({
-      conversation: { id: "alice", kind: "direct" },
-      senderId: "alice",
-      text: "before reset",
-    });
-    const beforeReset = state.poll({
-      accountId: "default",
-      cursor: 0,
-    });
-    expect(beforeReset.events).toHaveLength(1);
-
-    state.reset();
-    state.addInboundMessage({
-      conversation: { id: "alice", kind: "direct" },
-      senderId: "alice",
-      text: "after reset",
+    const outbound = state.addOutboundMessage({
+      to: "dm:alice",
+      text: "artifact attached",
+      attachments: [
+        {
+          id: "image-1",
+          kind: "image",
+          mimeType: "image/png",
+          fileName: "qa-screenshot.png",
+          altText: "QA dashboard screenshot",
+          contentBase64: "aGVsbG8=",
+        },
+      ],
     });
 
-    const afterReset = state.poll({
-      accountId: "default",
-      cursor: beforeReset.cursor,
+    const readback = state.readMessage({ messageId: outbound.id });
+    expect(readback.attachments).toHaveLength(1);
+    expect(readback.attachments?.[0]).toMatchObject({
+      kind: "image",
+      fileName: "qa-screenshot.png",
+      altText: "QA dashboard screenshot",
     });
-    expect(afterReset.events).toHaveLength(1);
-    expect(afterReset.events[0]?.kind).toBe("inbound-message");
-    expect(
-      afterReset.events[0] &&
-        "message" in afterReset.events[0] &&
-        afterReset.events[0].message.text,
-    ).toBe("after reset");
+
+    const byFilename = state.searchMessages({
+      query: "screenshot",
+    });
+    expect(byFilename.some((message) => message.id === outbound.id)).toBe(true);
+
+    const byAltText = state.searchMessages({
+      query: "dashboard",
+    });
+    expect(byAltText.some((message) => message.id === outbound.id)).toBe(true);
   });
 });

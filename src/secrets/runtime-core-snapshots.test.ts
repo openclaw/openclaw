@@ -18,12 +18,18 @@ import {
 
 type WebProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl";
 
-const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
-  resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
-}));
+const { resolveExternalAuthProfilesWithPluginsMock, resolvePluginWebSearchProvidersMock } =
+  vi.hoisted(() => ({
+    resolveExternalAuthProfilesWithPluginsMock: vi.fn(() => []),
+    resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
+  }));
 
 vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
+}));
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveExternalAuthProfilesWithPlugins: resolveExternalAuthProfilesWithPluginsMock,
 }));
 
 const OPENAI_ENV_KEY_REF = {
@@ -136,6 +142,8 @@ describe("secrets runtime snapshot core lanes", () => {
 
   beforeEach(() => {
     envSnapshot = beginSecretsRuntimeIsolationForTest();
+    resolveExternalAuthProfilesWithPluginsMock.mockReset();
+    resolveExternalAuthProfilesWithPluginsMock.mockReturnValue([]);
     resolvePluginWebSearchProvidersMock.mockReset();
     resolvePluginWebSearchProvidersMock.mockReturnValue(buildTestWebSearchProviders());
   });
@@ -144,7 +152,7 @@ describe("secrets runtime snapshot core lanes", () => {
     endSecretsRuntimeIsolationForTest(envSnapshot);
   });
 
-  async function prepareOpenAiRuntimeSnapshot() {
+  async function prepareOpenAiRuntimeSnapshot(params?: { includeAuthStoreRefs?: boolean }) {
     return withEnvAsync(
       {
         OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
@@ -166,6 +174,7 @@ describe("secrets runtime snapshot core lanes", () => {
           }),
           env: { OPENAI_API_KEY: "sk-runtime" },
           agentDirs: ["/tmp/openclaw-agent-main"],
+          includeAuthStoreRefs: params?.includeAuthStoreRefs,
           loadablePluginOrigins: new Map(),
           loadAuthStore: () =>
             loadAuthStoreWithProfiles({
@@ -212,6 +221,7 @@ describe("secrets runtime snapshot core lanes", () => {
         OPENAI_PROVIDER_AUTH_HEADER: "Bearer sk-env-header",
         REVIEW_SKILL_API_KEY: "sk-skill-ref",
       },
+      includeAuthStoreRefs: false,
       loadablePluginOrigins: new Map(),
     });
 
@@ -256,6 +266,7 @@ describe("secrets runtime snapshot core lanes", () => {
         REMOTE_GATEWAY_TOKEN: "remote-token-ref",
         REMOTE_GATEWAY_PASSWORD: "remote-password-ref",
       },
+      includeAuthStoreRefs: false,
       loadablePluginOrigins: new Map(),
     });
 
@@ -341,7 +352,7 @@ describe("secrets runtime snapshot core lanes", () => {
   });
 
   it("activates runtime snapshots for loadConfig", async () => {
-    const prepared = await prepareOpenAiRuntimeSnapshot();
+    const prepared = await prepareOpenAiRuntimeSnapshot({ includeAuthStoreRefs: false });
     activateSecretsRuntimeSnapshot(prepared);
 
     expect(loadConfig().models?.providers?.openai?.apiKey).toBe("sk-runtime");

@@ -1,11 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
-import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import { createMessageToolButtonsSchema } from "openclaw/plugin-sdk/channel-actions";
-import {
-  adaptScopedAccountAccessor,
-  createScopedChannelConfigAdapter,
-} from "openclaw/plugin-sdk/channel-config-helpers";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
@@ -22,6 +16,7 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { mattermostApprovalAuth } from "./approval-auth.js";
 import {
   chunkTextForOutbound,
@@ -29,6 +24,13 @@ import {
   DEFAULT_ACCOUNT_ID,
   type ChannelPlugin,
 } from "./channel-api.js";
+import {
+  describeMattermostAccount,
+  isMattermostConfigured,
+  mattermostConfigAdapter,
+  mattermostMeta as meta,
+  normalizeMattermostAllowEntry as normalizeAllowEntry,
+} from "./channel-config-shared.js";
 import { MattermostChannelConfigSchema } from "./config-surface.js";
 import { mattermostDoctor } from "./doctor.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
@@ -208,7 +210,8 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     const message = typeof params.message === "string" ? params.message : "";
     // Match the shared runner semantics: trim empty reply IDs away before
     // falling back from replyToId to replyTo on direct plugin calls.
-    const replyToId = readMattermostReplyToId(params);
+    const replyToId =
+      normalizeOptionalString(params.replyToId) ?? normalizeOptionalString(params.replyTo);
     const resolvedAccountId = accountId || undefined;
 
     const mediaUrl =
@@ -241,38 +244,18 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
   },
 };
 
-const meta = {
-  id: "mattermost",
-  label: "Mattermost",
-  selectionLabel: "Mattermost (plugin)",
-  detailLabel: "Mattermost Bot",
-  docsPath: "/channels/mattermost",
-  docsLabel: "mattermost",
-  blurb: "self-hosted Slack-style chat; install the plugin to enable.",
-  systemImage: "bubble.left.and.bubble.right",
-  order: 65,
-  quickstartAllowFrom: true,
-} as const;
-
-function readTrimmedString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
-
 function parseMattermostReactActionParams(params: Record<string, unknown>): {
   postId: string;
   emojiName: string;
   remove: boolean;
 } {
-  const postId = readTrimmedString(params.messageId) ?? readTrimmedString(params.postId);
+  const postId =
+    normalizeOptionalString(params.messageId) ?? normalizeOptionalString(params.postId);
   if (!postId) {
     throw new Error("Mattermost react requires messageId (post id)");
   }
 
-  const emojiName = readTrimmedString(params.emoji)?.replace(/^:+|:+$/g, "");
+  const emojiName = normalizeOptionalString(params.emoji)?.replace(/^:+|:+$/g, "");
   if (!emojiName) {
     throw new Error("Mattermost react requires emoji");
   }
@@ -283,44 +266,6 @@ function parseMattermostReactActionParams(params: Record<string, unknown>): {
     remove: params.remove === true,
   };
 }
-
-function readMattermostReplyToId(params: Record<string, unknown>): string | undefined {
-  return readTrimmedString(params.replyToId) ?? readTrimmedString(params.replyTo);
-}
-
-function normalizeAllowEntry(entry: string): string {
-  return entry
-    .trim()
-    .replace(/^(mattermost|user):/i, "")
-    .replace(/^@/, "")
-    .toLowerCase();
-}
-
-function formatAllowEntry(entry: string): string {
-  const trimmed = entry.trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (trimmed.startsWith("@")) {
-    const username = trimmed.slice(1).trim();
-    return username ? `@${username.toLowerCase()}` : "";
-  }
-  return trimmed.replace(/^(mattermost|user):/i, "").toLowerCase();
-}
-
-const mattermostConfigAdapter = createScopedChannelConfigAdapter<ResolvedMattermostAccount>({
-  sectionKey: "mattermost",
-  listAccountIds: listMattermostAccountIds,
-  resolveAccount: adaptScopedAccountAccessor(resolveMattermostAccount),
-  defaultAccountId: resolveDefaultMattermostAccountId,
-  clearBaseFields: ["botToken", "baseUrl", "name"],
-  resolveAllowFrom: (account: ResolvedMattermostAccount) => account.config.allowFrom,
-  formatAllowFrom: (allowFrom) =>
-    formatNormalizedAllowFromEntries({
-      allowFrom,
-      normalizeEntry: formatAllowEntry,
-    }),
-});
 
 export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = createChatChannelPlugin({
   base: {
@@ -344,18 +289,10 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
     configSchema: MattermostChannelConfigSchema,
     config: {
       ...mattermostConfigAdapter,
-      isConfigured: (account) => Boolean(account.botToken && account.baseUrl),
-      describeAccount: (account) =>
-        describeAccountSnapshot({
-          account,
-          configured: Boolean(account.botToken && account.baseUrl),
-          extra: {
-            botTokenSource: account.botTokenSource,
-            baseUrl: account.baseUrl,
-          },
-        }),
+      isConfigured: isMattermostConfigured,
+      describeAccount: describeMattermostAccount,
     },
-    auth: mattermostApprovalAuth,
+    approvalCapability: mattermostApprovalAuth,
     doctor: mattermostDoctor,
     groups: {
       resolveRequireMention: resolveMattermostGroupRequireMention,
@@ -441,7 +378,9 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       resolveGatewayAuthBypassPaths: ({ cfg }) => {
         const base = cfg.channels?.mattermost;
         const callbackPaths = new Set(
-          collectMattermostSlashCallbackPaths(base?.commands).filter(
+          collectMattermostSlashCallbackPaths(
+            base?.commands as Partial<MattermostSlashCommandConfig> | undefined,
+          ).filter(
             (path) =>
               path === "/api/channels/mattermost/command" ||
               path.startsWith("/api/channels/mattermost/"),
@@ -514,6 +453,10 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
             : "channel",
         ),
     },
+    resolveReplyTransport: ({ threadId, replyToId }) => ({
+      replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
+      threadId,
+    }),
   },
   security: mattermostSecurityAdapter,
   outbound: {

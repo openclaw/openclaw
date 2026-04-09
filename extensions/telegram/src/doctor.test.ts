@@ -220,6 +220,52 @@ describe("telegram doctor", () => {
     expect(result.changes[0]).toContain("@testuser");
   });
 
+  it("warns when @username entries cannot be resolved because configured tokens are unavailable", async () => {
+    resolveCommandSecretRefsViaGatewayMock.mockResolvedValueOnce({
+      resolvedConfig: {
+        channels: {
+          telegram: {
+            accounts: {
+              inactive: {
+                allowFrom: ["@testuser"],
+              },
+            },
+          },
+        },
+      },
+      diagnostics: [],
+      targetStatesByPath: {},
+      hadUnresolvedTargets: false,
+    });
+    listTelegramAccountIdsMock.mockReturnValue(["inactive"]);
+    inspectTelegramAccountMock.mockReturnValue({
+      enabled: false,
+      token: "",
+      tokenSource: "env",
+      tokenStatus: "configured_unavailable",
+      config: {},
+    });
+
+    const result = await maybeRepairTelegramAllowFromUsernames({
+      channels: {
+        telegram: {
+          accounts: {
+            inactive: {
+              botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+              allowFrom: ["@testuser"],
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(result.config.channels?.telegram?.accounts?.inactive?.allowFrom).toEqual(["@testuser"]);
+    expect(result.changes).toEqual([
+      "- Telegram account inactive: failed to inspect bot token (configured but unavailable in this command path).",
+      "- Telegram allowFrom contains @username entries, but configured Telegram bot credentials are unavailable in this command path; cannot auto-resolve.",
+    ]);
+  });
+
   it("formats username repair warnings", () => {
     const warnings = collectTelegramAllowFromUsernameWarnings({
       hits: [{ path: "channels.telegram.allowFrom", entry: "@top" }],

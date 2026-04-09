@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPerSenderSessionConfig } from "./test-helpers/session-config.js";
 
 const callGatewayMock = vi.fn();
@@ -61,27 +61,14 @@ function seedDepthTwoAncestryStore(params?: { sessionIds?: boolean }) {
   return { depth1, callerKey };
 }
 
-async function loadFreshSessionsSpawnModulesForTest() {
-  vi.resetModules();
-  vi.doMock("../gateway/call.js", () => ({
-    callGateway: (opts: unknown) => callGatewayMock(opts),
-  }));
-  vi.doMock("../config/config.js", async () => {
-    const actual =
-      await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-    return {
-      ...actual,
-      loadConfig: () => configOverride,
-    };
-  });
+beforeAll(async () => {
   ({ addSubagentRunForTests, resetSubagentRegistryForTests } =
     await import("./subagent-registry.js"));
   ({ createSessionsSpawnTool } = await import("./tools/sessions-spawn-tool.js"));
-}
+});
 
 describe("sessions_spawn depth + child limits", () => {
-  beforeEach(async () => {
-    await loadFreshSessionsSpawnModulesForTest();
+  beforeEach(() => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockClear();
     storeTemplatePath = path.join(

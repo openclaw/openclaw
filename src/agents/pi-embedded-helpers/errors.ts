@@ -8,6 +8,10 @@ import {
   parseApiErrorInfo,
   parseApiErrorPayload,
 } from "../../shared/assistant-error-format.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../../shared/string-coerce.js";
 export {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
@@ -120,7 +124,7 @@ function formatTransportErrorCopy(raw: string): string | undefined {
   if (!raw) {
     return undefined;
   }
-  const lower = raw.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(raw);
 
   if (
     /\beconnrefused\b/i.test(raw) ||
@@ -171,7 +175,7 @@ function formatDiskSpaceErrorCopy(raw: string): string | undefined {
   if (!raw) {
     return undefined;
   }
-  const lower = raw.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(raw);
   if (
     /\benospc\b/i.test(raw) ||
     lower.includes("no space left on device") ||
@@ -189,7 +193,7 @@ export function isReasoningConstraintErrorMessage(raw: string): boolean {
   if (!raw) {
     return false;
   }
-  const lower = raw.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(raw);
   return (
     lower.includes("reasoning is mandatory") ||
     lower.includes("reasoning is required") ||
@@ -202,7 +206,7 @@ function isInvalidStreamingEventOrderError(raw: string): boolean {
   if (!raw) {
     return false;
   }
-  const lower = raw.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(raw);
   return (
     lower.includes("unexpected event order") &&
     lower.includes("message_start") &&
@@ -211,7 +215,7 @@ function isInvalidStreamingEventOrderError(raw: string): boolean {
 }
 
 function hasRateLimitTpmHint(raw: string): boolean {
-  const lower = raw.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(raw);
   return /\btpm\b/i.test(lower) || lower.includes("tokens per minute");
 }
 
@@ -219,7 +223,7 @@ export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
   }
-  const lower = errorMessage.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(errorMessage);
 
   // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context overflow.
   if (hasRateLimitTpmHint(errorMessage)) {
@@ -316,7 +320,7 @@ export function isCompactionFailureError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
   }
-  const lower = errorMessage.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(errorMessage);
   const hasCompactionTerm =
     lower.includes("summarization failed") ||
     lower.includes("auto-compaction") ||
@@ -483,7 +487,7 @@ function hasRetryable402TransientSignal(text: string): boolean {
 }
 
 function normalize402Message(raw: string): string {
-  return raw.trim().toLowerCase().replace(LEADING_402_WRAPPER_RE, "").trim();
+  return normalizeOptionalLowercaseString(raw)?.replace(LEADING_402_WRAPPER_RE, "").trim() ?? "";
 }
 
 function classify402Message(message: string): PaymentRequiredFailoverReason {
@@ -584,10 +588,7 @@ function classifyFailoverClassificationFromHttpStatus(
     return toReasonClassification("timeout");
   }
   if (status === 410) {
-    // HTTP 410 is only a true session-expiry signal when the payload says the
-    // remote session/conversation is gone. Generic 410/no-body responses from
-    // OpenAI-compatible proxies are better treated as retryable transport-path
-    // failures so we do not clear session state or poison auth-profile health.
+    // Generic 410/no-body responses behave like transport failures, not session expiry.
     if (
       messageReason === "session_expired" ||
       messageReason === "billing" ||
@@ -597,6 +598,20 @@ function classifyFailoverClassificationFromHttpStatus(
       return messageClassification;
     }
     return toReasonClassification("timeout");
+  }
+  if (status === 404) {
+    if (messageClassification?.kind === "context_overflow") {
+      return messageClassification;
+    }
+    if (
+      messageReason === "session_expired" ||
+      messageReason === "billing" ||
+      messageReason === "auth_permanent" ||
+      messageReason === "auth"
+    ) {
+      return messageClassification;
+    }
+    return toReasonClassification("model_not_found");
   }
   if (status === 503) {
     if (messageReason === "overloaded") {
@@ -653,19 +668,21 @@ function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason
 }
 
 function isProvider(provider: string | undefined, match: string): boolean {
-  const normalized = provider?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(provider);
   return Boolean(normalized && normalized.includes(match));
 }
 
 function isAnthropicGenericUnknownError(raw: string, provider?: string): boolean {
   return (
-    isProvider(provider, "anthropic") && raw.toLowerCase().includes("an unknown error occurred")
+    isProvider(provider, "anthropic") &&
+    (normalizeOptionalLowercaseString(raw)?.includes("an unknown error occurred") ?? false)
   );
 }
 
 function isOpenRouterProviderReturnedError(raw: string, provider?: string): boolean {
   return (
-    isProvider(provider, "openrouter") && raw.toLowerCase().includes("provider returned error")
+    isProvider(provider, "openrouter") &&
+    (normalizeOptionalLowercaseString(raw)?.includes("provider returned error") ?? false)
   );
 }
 
@@ -851,7 +868,7 @@ function isLikelyHttpErrorText(raw: string): boolean {
   if (status.code < 400) {
     return false;
   }
-  const message = status.rest.toLowerCase();
+  const message = normalizeLowercaseStringOrEmpty(status.rest);
   return HTTP_ERROR_HINTS.some((hint) => message.includes(hint));
 }
 
@@ -883,7 +900,7 @@ export function isRawApiErrorPayload(raw?: string): boolean {
 }
 
 function isLikelyProviderErrorType(type?: string): boolean {
-  const normalized = type?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(type);
   if (!normalized) {
     return false;
   }
@@ -1141,7 +1158,7 @@ function isJsonApiInternalServerError(raw: string): boolean {
   if (!raw) {
     return false;
   }
-  const value = raw.toLowerCase();
+  const value = normalizeLowercaseStringOrEmpty(raw);
   // Providers wrap transient 5xx errors in JSON payloads like:
   // {"type":"error","error":{"type":"api_error","message":"Internal server error"}}
   // Non-standard providers (e.g. MiniMax) may use different message text:
@@ -1169,7 +1186,7 @@ export function parseImageDimensionError(raw: string): {
   if (!raw) {
     return null;
   }
-  const lower = raw.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(raw);
   if (!lower.includes("image dimensions exceed max allowed size")) {
     return null;
   }
@@ -1194,7 +1211,7 @@ export function parseImageSizeError(raw: string): {
   if (!raw) {
     return null;
   }
-  const lower = raw.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(raw);
   if (!lower.includes("image exceeds") || !lower.includes("mb")) {
     return null;
   }
@@ -1227,7 +1244,7 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
   if (!raw) {
     return false;
   }
-  const lower = raw.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(raw);
 
   // Direct pattern matches from OpenClaw internals and common providers.
   if (
@@ -1258,7 +1275,7 @@ function isCliSessionExpiredErrorMessage(raw: string): boolean {
   if (!raw) {
     return false;
   }
-  const lower = raw.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(raw);
   return (
     lower.includes("session not found") ||
     lower.includes("session does not exist") ||

@@ -5,6 +5,7 @@ import type {
   OpenClawConfig,
 } from "../config/config.js";
 import { replaceConfigFile } from "../config/config.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   hasConfiguredGatewayAuthSecretInput,
   resolveGatewayPasswordSecretRefValue,
@@ -15,7 +16,7 @@ import { resolveGatewayAuth, type ResolvedGatewayAuth } from "./auth.js";
 import {
   hasGatewayPasswordEnvCandidate,
   hasGatewayTokenEnvCandidate,
-  readGatewayTokenEnv,
+  trimToUndefined,
 } from "./credentials.js";
 
 export function mergeGatewayAuthConfig(
@@ -104,7 +105,7 @@ function hasGatewayTokenCandidate(params: {
   env: NodeJS.ProcessEnv;
   authOverride?: GatewayAuthConfig;
 }): boolean {
-  const envToken = readGatewayTokenEnv(params.env);
+  const envToken = trimToUndefined(params.env.OPENCLAW_GATEWAY_TOKEN);
   if (envToken) {
     return true;
   }
@@ -244,15 +245,12 @@ export function assertHooksTokenSeparateFromGatewayAuth(params: {
   if (params.cfg.hooks?.enabled !== true) {
     return;
   }
-  const hooksToken =
-    typeof params.cfg.hooks.token === "string" ? params.cfg.hooks.token.trim() : "";
+  const hooksToken = normalizeOptionalString(params.cfg.hooks.token) ?? "";
   if (!hooksToken) {
     return;
   }
   const gatewayToken =
-    params.auth.mode === "token" && typeof params.auth.token === "string"
-      ? params.auth.token.trim()
-      : "";
+    params.auth.mode === "token" ? (normalizeOptionalString(params.auth.token) ?? "") : "";
   if (!gatewayToken) {
     return;
   }
