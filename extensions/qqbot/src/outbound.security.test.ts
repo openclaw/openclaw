@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedQQBotAccount } from "./types.js";
-import { getQQBotMediaDir } from "./utils/platform.js";
+import { getQQBotDataDir, getQQBotMediaDir } from "./utils/platform.js";
 
 const apiMocks = vi.hoisted(() => ({
   getAccessToken: vi.fn(async () => "token"),
@@ -118,6 +118,14 @@ function createOutsideFile(ext: string): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "qqbot-outbound-security-"));
   createdRoots.push(root);
   const filePath = path.join(root, `payload${ext}`);
+  fs.writeFileSync(filePath, "payload", "utf8");
+  return filePath;
+}
+
+function createAllowedCommandDownloadPath(ext: string): string {
+  const root = fs.mkdtempSync(path.join(getQQBotDataDir("downloads"), "command-download-"));
+  createdRoots.push(root);
+  const filePath = path.join(root, `download${ext}`);
   fs.writeFileSync(filePath, "payload", "utf8");
   return filePath;
 }
@@ -301,6 +309,24 @@ describe("qqbot outbound local media path security", () => {
     const result = await sendDocument(buildTarget(), outsidePath);
 
     expectBlocked(result, "File path must be inside QQ Bot media storage");
+  });
+
+  it("blocks QQ Bot command-download paths for sendDocument by default", async () => {
+    const commandDownloadPath = createAllowedCommandDownloadPath(".txt");
+    const result = await sendDocument(buildTarget(), commandDownloadPath);
+
+    expectBlocked(result, "File path must be inside QQ Bot media storage");
+  });
+
+  it("allows QQ Bot command-download paths for sendDocument when explicitly enabled", async () => {
+    const commandDownloadPath = createAllowedCommandDownloadPath(".txt");
+    const result = await sendDocument(buildTarget(), commandDownloadPath, {
+      allowQQBotDataDownloads: true,
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(apiMocks.getAccessToken).toHaveBeenCalledTimes(1);
+    expect(apiMocks.sendC2CFileMessage).toHaveBeenCalledTimes(1);
   });
 
   it("blocks non-dot relative traversal paths for document sends", async () => {

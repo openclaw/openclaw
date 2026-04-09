@@ -40,6 +40,7 @@ import {
 import { normalizeMediaTags } from "./utils/media-tags.js";
 import { decodeCronPayload } from "./utils/payload.js";
 import {
+  getQQBotDataDir,
   getQQBotMediaDir,
   isLocalPath as isLocalFilePath,
   normalizePath,
@@ -287,6 +288,10 @@ const qqBotMediaKindLabel: Record<QQBotMediaKind, string> = {
 type ResolvedOutboundMediaPath = { ok: true; mediaPath: string } | { ok: false; error: string };
 type ResolveOutboundMediaPathOptions = {
   allowMissingLocalPath?: boolean;
+  extraLocalRoots?: string[];
+};
+type SendDocumentOptions = {
+  allowQQBotDataDownloads?: boolean;
 };
 
 function isHttpOrDataSource(pathValue: string): boolean {
@@ -343,6 +348,35 @@ function resolveMissingPathWithinMediaRoot(normalizedPath: string): string | nul
   return isPathWithinRoot(canonicalCandidate, canonicalAllowedRoot) ? canonicalCandidate : null;
 }
 
+function resolveExistingPathWithinRoots(
+  normalizedPath: string,
+  allowedRoots: readonly string[],
+): string | null {
+  const resolvedCandidate = path.resolve(normalizedPath);
+  if (!fs.existsSync(resolvedCandidate)) {
+    return null;
+  }
+
+  let canonicalCandidate: string;
+  try {
+    canonicalCandidate = fs.realpathSync(resolvedCandidate);
+  } catch {
+    return null;
+  }
+
+  for (const root of allowedRoots) {
+    const resolvedRoot = path.resolve(root);
+    const canonicalRoot = fs.existsSync(resolvedRoot)
+      ? fs.realpathSync(resolvedRoot)
+      : resolvedRoot;
+    if (isPathWithinRoot(canonicalCandidate, canonicalRoot)) {
+      return canonicalCandidate;
+    }
+  }
+
+  return null;
+}
+
 function resolveOutboundMediaPath(
   rawPath: string,
   prefix: string,
@@ -357,6 +391,16 @@ function resolveOutboundMediaPath(
   const allowedPath = resolveQQBotPayloadLocalFilePath(normalizedPath);
   if (allowedPath) {
     return { ok: true, mediaPath: allowedPath };
+  }
+
+  if (options.extraLocalRoots && options.extraLocalRoots.length > 0) {
+    const extraAllowedPath = resolveExistingPathWithinRoots(
+      normalizedPath,
+      options.extraLocalRoots,
+    );
+    if (extraAllowedPath) {
+      return { ok: true, mediaPath: extraAllowedPath };
+    }
   }
 
   if (options.allowMissingLocalPath) {
@@ -791,9 +835,15 @@ async function sendVideoFromLocal(
 export async function sendDocument(
   ctx: MediaTargetContext,
   filePath: string,
+  options: SendDocumentOptions = {},
 ): Promise<OutboundResult> {
   const prefix = ctx.logPrefix ?? "[qqbot]";
-  const resolvedMediaPath = resolveOutboundMediaPath(filePath, prefix, "file");
+  const extraLocalRoots = options.allowQQBotDataDownloads
+    ? [getQQBotDataDir("downloads")]
+    : undefined;
+  const resolvedMediaPath = resolveOutboundMediaPath(filePath, prefix, "file", {
+    extraLocalRoots,
+  });
   if (!resolvedMediaPath.ok) {
     return { channel: "qqbot", error: resolvedMediaPath.error };
   }

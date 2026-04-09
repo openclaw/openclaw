@@ -173,7 +173,9 @@ export default defineBundledChannelEntry({
                 account,
                 logPrefix: `[qqbot:${account.accountId}]`,
               };
-              await sendDocument(mediaCtx, String(result.filePath));
+              await sendDocument(mediaCtx, String(result.filePath), {
+                allowQQBotDataDownloads: true,
+              });
             } catch {
               // File send failed; the text summary is still returned below.
             }
