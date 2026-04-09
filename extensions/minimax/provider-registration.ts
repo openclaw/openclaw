@@ -19,7 +19,11 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { isMiniMaxModernModelId, MINIMAX_DEFAULT_MODEL_ID } from "./api.js";
 import type { MiniMaxRegion } from "./oauth.js";
 import { applyMinimaxApiConfig, applyMinimaxApiConfigCn } from "./onboard.js";
-import { buildMinimaxPortalProvider, buildMinimaxProvider } from "./provider-catalog.js";
+import {
+  buildMinimaxPortalProvider,
+  buildMinimaxProvider,
+  normalizeMinimaxAnthropicBaseUrl,
+} from "./provider-catalog.js";
 
 const API_PROVIDER_ID = "minimax";
 const PORTAL_PROVIDER_ID = "minimax-portal";
@@ -238,6 +242,22 @@ export function registerMinimaxProviders(api: OpenClawPluginApi) {
       });
       return apiKey ? { token: apiKey } : null;
     },
+    normalizeConfig: ({ providerConfig }) => {
+      // If the user overrides baseUrl to the OpenAI-compatible path (e.g.
+      // https://api.minimaxi.com/v1) while keeping api: "anthropic-messages",
+      // the Anthropic client hits the wrong endpoint and MiniMax returns
+      // OpenAI-format tool_calls, causing tool_call_id mismatches (error 2013).
+      // Only normalize when the transport is Anthropic; leave explicit
+      // openai-completions configs unchanged.
+      if (providerConfig.api && providerConfig.api !== "anthropic-messages") {
+        return undefined;
+      }
+      const normalized = normalizeMinimaxAnthropicBaseUrl(providerConfig.baseUrl);
+      if (!normalized) {
+        return undefined;
+      }
+      return { ...providerConfig, baseUrl: normalized };
+    },
     ...HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS,
     ...MINIMAX_FAST_MODE_STREAM_HOOKS,
     resolveReasoningOutputMode: () => resolveMinimaxReasoningOutputMode(),
@@ -287,6 +307,16 @@ export function registerMinimaxProviders(api: OpenClawPluginApi) {
         run: createOAuthHandler("cn"),
       },
     ],
+    normalizeConfig: ({ providerConfig }) => {
+      if (providerConfig.api && providerConfig.api !== "anthropic-messages") {
+        return undefined;
+      }
+      const normalized = normalizeMinimaxAnthropicBaseUrl(providerConfig.baseUrl);
+      if (!normalized) {
+        return undefined;
+      }
+      return { ...providerConfig, baseUrl: normalized };
+    },
     ...HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS,
     ...MINIMAX_FAST_MODE_STREAM_HOOKS,
     resolveReasoningOutputMode: () => resolveMinimaxReasoningOutputMode(),
