@@ -240,12 +240,13 @@ func extractTranslationResult(raw json.RawMessage) (string, error) {
 		if message.Role != "assistant" {
 			continue
 		}
+		if message.ErrorMessage != "" || isTerminalPiStopReason(message.StopReason) {
+			text, _ := extractContentText(message.Content)
+			return "", formatPiAgentError(message, text)
+		}
 		text, err := extractContentText(message.Content)
 		if err != nil {
 			return "", err
-		}
-		if message.ErrorMessage != "" || isTerminalPiStopReason(message.StopReason) {
-			return "", formatPiAgentError(message, text)
 		}
 		return text, nil
 	}

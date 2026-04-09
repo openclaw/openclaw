@@ -387,6 +387,21 @@ func TestValidateDocChunkTranslationRejectsProtocolTokenLeakage(t *testing.T) {
 	}
 }
 
+func TestValidateDocChunkTranslationRejectsTopLevelBodyWrapperLeakEvenWhenSourceMentionsBodyTag(t *testing.T) {
+	t.Parallel()
+
+	source := "Use `<body>` in examples, but keep prose outside wrappers.\n"
+	translated := "<body>\nTranslated paragraph.\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected top-level wrapper leakage to be rejected")
+	}
+	if !strings.Contains(err.Error(), "protocol token leaked") {
+		t.Fatalf("expected protocol token leakage error, got %v", err)
+	}
+}
+
 func TestTranslateDocBodyChunkedSplitsOnProtocolTokenLeakage(t *testing.T) {
 	body := strings.Join([]string{
 		"First chunk",
@@ -420,6 +435,31 @@ func TestSanitizeDocChunkProtocolWrappersStripsTopLevelWrapperEvenWhenSourceMent
 	}
 	if strings.TrimSpace(got) != "Translated paragraph." {
 		t.Fatalf("unexpected sanitized body %q", got)
+	}
+}
+
+func TestSplitDocBodyIntoBlocksKeepsInfoStringExampleInsideFence(t *testing.T) {
+	t.Parallel()
+
+	body := strings.Join([]string{
+		"```md",
+		"```ts",
+		"console.log('inside example')",
+		"```",
+		"",
+		"Outside paragraph",
+		"",
+	}, "\n")
+
+	blocks := splitDocBodyIntoBlocks(body)
+	if len(blocks) != 2 {
+		t.Fatalf("expected 2 blocks, got %d", len(blocks))
+	}
+	if !strings.Contains(blocks[0], "console.log('inside example')") || !strings.Contains(blocks[0], "```ts") {
+		t.Fatalf("expected fenced example to stay together:\n%s", blocks[0])
+	}
+	if !strings.Contains(blocks[1], "Outside paragraph") {
+		t.Fatalf("expected trailing paragraph in second block:\n%s", blocks[1])
 	}
 }
 

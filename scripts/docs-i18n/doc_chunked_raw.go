@@ -193,6 +193,9 @@ func groupDocBlocks(blocks []string, maxBytes int) [][]string {
 }
 
 func validateDocChunkTranslation(source, translated string) error {
+	if hasUnexpectedTopLevelProtocolWrapper(source, translated) {
+		return fmt.Errorf("protocol token leaked: top-level wrapper")
+	}
 	for _, token := range docsProtocolTokens {
 		if strings.Contains(source, token) {
 			continue
@@ -335,7 +338,7 @@ func updateFenceDelimiter(current, line string) (string, bool) {
 	if current == "" {
 		return delimiter, true
 	}
-	if delimiter[0] == current[0] && len(delimiter) >= len(current) {
+	if delimiter[0] == current[0] && len(delimiter) >= len(current) && isClosingFenceLine(line, delimiter) {
 		return "", true
 	}
 	return current, false
@@ -360,6 +363,34 @@ func leadingFenceDelimiter(line string) string {
 		return ""
 	}
 	return trimmed[:index]
+}
+
+func isClosingFenceLine(line, delimiter string) bool {
+	trimmed := strings.TrimLeft(line, " \t")
+	if !strings.HasPrefix(trimmed, delimiter) {
+		return false
+	}
+	return strings.TrimSpace(trimmed[len(delimiter):]) == ""
+}
+
+func hasUnexpectedTopLevelProtocolWrapper(source, translated string) bool {
+	sourceTrimmed := strings.TrimSpace(source)
+	translatedTrimmed := strings.TrimSpace(translated)
+	checks := []struct {
+		token string
+		match func(string) bool
+	}{
+		{token: frontmatterTagStart, match: func(text string) bool { return strings.HasPrefix(text, frontmatterTagStart) }},
+		{token: bodyTagStart, match: func(text string) bool { return strings.HasPrefix(text, bodyTagStart) }},
+		{token: frontmatterTagEnd, match: func(text string) bool { return strings.HasSuffix(text, frontmatterTagEnd) }},
+		{token: bodyTagEnd, match: func(text string) bool { return strings.HasSuffix(text, bodyTagEnd) }},
+	}
+	for _, check := range checks {
+		if check.match(translatedTrimmed) && !check.match(sourceTrimmed) {
+			return true
+		}
+	}
+	return false
 }
 
 func docsI18nDocChunkMaxBytes() int {

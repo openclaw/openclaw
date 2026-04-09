@@ -52,3 +52,33 @@ func TestPreviewPiAssistantTextTruncatesAndFlattensWhitespace(t *testing.T) {
 		t.Fatalf("expected truncation suffix, got %q", preview)
 	}
 }
+
+func TestExtractTranslationResultReturnsPiErrorBeforeDecodingStructuredErrorContent(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte(`{
+		"type":"agent_end",
+		"messages":[
+			{
+				"role":"assistant",
+				"stopReason":"terminated",
+				"content":{"type":"error","message":"provider disconnected"}
+			}
+		]
+	}`)
+
+	_, err := extractTranslationResult(raw)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	message := err.Error()
+	if !strings.Contains(message, "pi error:") {
+		t.Fatalf("expected normalized pi error, got %q", message)
+	}
+	if !strings.Contains(message, "stopReason=terminated") {
+		t.Fatalf("expected stopReason in error, got %q", message)
+	}
+	if strings.Contains(message, "cannot unmarshal") {
+		t.Fatalf("expected terminal pi error before decode failure, got %q", message)
+	}
+}
