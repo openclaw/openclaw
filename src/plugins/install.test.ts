@@ -786,11 +786,11 @@ describe("installPluginFromArchive", () => {
     if (!result.ok) {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain('Plugin "blocked-dependency-plugin" installation blocked');
-      expect(result.error).toContain('blocked dependency "plain-crypto-js"');
-      expect(result.error).toContain("dependencies of blocked-dependency-plugin (package.json)");
+      expect(result.error).toContain('blocked dependencies "plain-crypto-js" in dependencies');
+      expect(result.error).toContain("declared in blocked-dependency-plugin (package.json)");
     }
     expect(warnings).toContain(
-      'WARNING: Plugin "blocked-dependency-plugin" installation blocked: blocked dependency "plain-crypto-js" declared in dependencies of blocked-dependency-plugin (package.json).',
+      'WARNING: Plugin "blocked-dependency-plugin" installation blocked: blocked dependencies "plain-crypto-js" in dependencies declared in blocked-dependency-plugin (package.json).',
     );
   });
 
@@ -823,8 +823,38 @@ describe("installPluginFromArchive", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
-      expect(result.error).toContain('blocked dependency "plain-crypto-js"');
-      expect(result.error).toContain("dependencies of axios (vendor/axios/package.json)");
+      expect(result.error).toContain('blocked dependencies "plain-crypto-js" in dependencies');
+      expect(result.error).toContain("declared in axios (vendor/axios/package.json)");
+    }
+  });
+
+  it("reports all blocked dependencies from the same manifest", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "multiple-blocked-dependencies-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["index.js"] },
+        dependencies: {
+          "plain-crypto-js": "^4.2.1",
+        },
+        peerDependencies: {
+          "plain-crypto-js": "^4.2.1",
+        },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n");
+
+    const { result } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain('"plain-crypto-js" in dependencies');
+      expect(result.error).toContain('"plain-crypto-js" in peerDependencies');
+      expect(result.error).toContain("multiple-blocked-dependencies-plugin (package.json)");
     }
   });
 
@@ -885,11 +915,11 @@ describe("installPluginFromArchive", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
-      expect(result.error).toContain('blocked dependency "plain-crypto-js"');
+      expect(result.error).toContain('blocked dependencies "plain-crypto-js" in dependencies');
     }
     expect(
       warnings.some((warning) =>
-        warning.includes('blocked dependency "plain-crypto-js" declared in dependencies'),
+        warning.includes('blocked dependencies "plain-crypto-js" in dependencies'),
       ),
     ).toBe(true);
     expect(

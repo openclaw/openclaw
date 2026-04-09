@@ -70,18 +70,34 @@ function buildScanFailureBlockReason(params: { error: string; targetLabel: strin
   return `${params.targetLabel} blocked: code safety scan failed (${params.error}). Run "openclaw security audit --deep" for details.`;
 }
 
-function buildBlockedDependencyReason(params: {
-  dependencyName: string;
-  field: "dependencies" | "optionalDependencies" | "peerDependencies";
+function buildBlockedDependencyManifestLabel(params: {
   manifestPackageName?: string;
   manifestRelativePath: string;
-  targetLabel: string;
 }) {
   const manifestLabel =
     typeof params.manifestPackageName === "string" && params.manifestPackageName.trim()
       ? `${params.manifestPackageName.trim()} (${params.manifestRelativePath})`
       : params.manifestRelativePath;
-  return `${params.targetLabel} blocked: blocked dependency "${params.dependencyName}" declared in ${params.field} of ${manifestLabel}.`;
+  return manifestLabel;
+}
+
+function buildBlockedDependencyReason(params: {
+  findings: Array<{
+    dependencyName: string;
+    field: "dependencies" | "optionalDependencies" | "peerDependencies";
+  }>;
+  manifestPackageName?: string;
+  manifestRelativePath: string;
+  targetLabel: string;
+}) {
+  const manifestLabel = buildBlockedDependencyManifestLabel({
+    manifestPackageName: params.manifestPackageName,
+    manifestRelativePath: params.manifestRelativePath,
+  });
+  const findingSummary = params.findings
+    .map((finding) => `"${finding.dependencyName}" in ${finding.field}`)
+    .join(", ");
+  return `${params.targetLabel} blocked: blocked dependencies ${findingSummary} declared in ${manifestLabel}.`;
 }
 
 function buildBuiltinScanFromError(error: unknown): BuiltinInstallScan {
@@ -123,7 +139,15 @@ async function collectPackageManifestPaths(rootDir: string): Promise<string[]> {
       continue;
     }
 
-    const entries = await fs.readdir(currentDir, { withFileTypes: true });
+    let entries: Awaited<ReturnType<typeof fs.readdir>>;
+    try {
+      entries = await fs.readdir(currentDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    // Intentionally walk vendored/node_modules trees so bundled transitive
+    // manifests cannot hide blocked packages from install-time policy checks.
     for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
       const nextPath = path.join(currentDir, entry.name);
       if (entry.isDirectory()) {
@@ -158,15 +182,9 @@ async function scanManifestDependencyDenylist(params: {
       continue;
     }
 
-    const finding = blockedDependencies[0];
-    if (!finding) {
-      continue;
-    }
-
     const manifestRelativePath = path.relative(params.packageDir, manifestPath) || "package.json";
     const reason = buildBlockedDependencyReason({
-      dependencyName: finding.dependencyName,
-      field: finding.field,
+      findings: blockedDependencies,
       manifestPackageName: manifest.name,
       manifestRelativePath,
       targetLabel: params.targetLabel,

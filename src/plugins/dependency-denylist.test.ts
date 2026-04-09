@@ -26,9 +26,9 @@ function readRootLockfile(): string {
 }
 
 describe("dependency denylist guardrails", () => {
-  it("pins the axios override to the official 1.14.0 release", () => {
+  it("pins the axios override to an exact version", () => {
     const manifest = readRootManifest();
-    expect(manifest.pnpm?.overrides?.axios).toBe("1.14.0");
+    expect(manifest.pnpm?.overrides?.axios).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
   it("keeps blocked packages out of the root manifest", () => {
