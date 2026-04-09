@@ -114,6 +114,10 @@ export const WhatsAppAccountSchema = WhatsAppSharedSchema.extend({
   /** Override auth directory for this WhatsApp account (Baileys multi-file auth state). */
   authDir: z.string().optional(),
   mediaMaxMb: z.number().int().positive().optional(),
+  // Channel `WhatsAppSharedSchema` defaults `dmPolicy` to "pairing". That default must not be
+  // applied to parsed `accounts.*` objects: `resolveMergedAccountConfig` shallow-merges account
+  // fields over the channel, so an injected default would override channel `dmPolicy=allowlist`.
+  dmPolicy: DmPolicySchema.optional(),
 }).strict();
 
 export const WhatsAppConfigSchema = WhatsAppSharedSchema.extend({

@@ -47,6 +47,7 @@ Docs: https://docs.openclaw.ai
 - Plugin SDK: export the channel plugin base and web-search config contract through the public package so plugins can use them without private imports.
 - Plugins/contracts: keep test-only helpers out of production contract barrels, load shared contract harnesses through bundled test surfaces, and harden guardrails so indirect re-exports and canonical `*.test.ts` files stay blocked. (#63311) Thanks @altaywtf.
 - Control UI/models: preserve provider-qualified refs for OpenRouter catalog models whose ids already contain slashes so picker selections submit allowlist-compatible model refs instead of dropping the `openrouter/` prefix. (#63416) Thanks @sallyom.
+- WhatsApp/config: stop applying the channel default `dmPolicy` to parsed `accounts.*` entries when those entries omit `dmPolicy`, so merged account config inherits channel `dmPolicy=allowlist` and unknown senders no longer receive pairing challenges in that setup. (#63366)
 
 ## 2026.4.8
 
