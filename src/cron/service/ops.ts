@@ -13,6 +13,7 @@ import {
   computeJobNextRunAtMs,
   createJob,
   findJobOrThrow,
+  hasScheduledNextRunAtMs,
   isJobEnabled,
   isJobDue,
   nextWakeAtMs,
@@ -236,7 +237,9 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
       if (!query) {
         return true;
       }
-      const haystack = [job.name, job.description ?? "", job.agentId ?? ""].join(" ").toLowerCase();
+      const haystack = normalizeLowercaseStringOrEmpty(
+        [job.name, job.description ?? "", job.agentId ?? ""].join(" "),
+      );
       return haystack.includes(query);
     });
     const sorted = sortJobs(filtered, sortBy, sortDir);
@@ -325,13 +328,8 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
         job.state.nextRunAtMs = undefined;
         job.state.runningAtMs = undefined;
       }
-    } else if (isJobEnabled(job)) {
-      // Non-schedule edits should not mutate other jobs, but still repair a
-      // missing/corrupt nextRunAtMs for the updated job.
-      const nextRun = job.state.nextRunAtMs;
-      if (typeof nextRun !== "number" || !Number.isFinite(nextRun)) {
-        job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
-      }
+    } else if (isJobEnabled(job) && !hasScheduledNextRunAtMs(job.state.nextRunAtMs)) {
+      job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
     }
 
     await persist(state);

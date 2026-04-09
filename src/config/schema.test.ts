@@ -289,6 +289,22 @@ describe("config schema", () => {
     expect(parsed?.web?.fetch?.maxResponseBytes).toBe(2_000_000);
   });
 
+  it("accepts web fetch ssrfPolicy in the runtime zod schema", () => {
+    const parsed = ToolsSchema.parse({
+      web: {
+        fetch: {
+          ssrfPolicy: {
+            allowRfc2544BenchmarkRange: true,
+          },
+        },
+      },
+    });
+
+    expect(parsed?.web?.fetch?.ssrfPolicy).toEqual({
+      allowRfc2544BenchmarkRange: true,
+    });
+  });
+
   it("rejects unknown keys inside web fetch firecrawl config", () => {
     expect(() =>
       ToolsSchema.parse({

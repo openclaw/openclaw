@@ -1,45 +1,21 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildOpenAIVideoGenerationProvider } from "./video-generation-provider.js";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  getProviderHttpMocks,
+  installProviderHttpMockCleanup,
+} from "../../test/helpers/media-generation/provider-http-mocks.js";
 
-const {
-  resolveApiKeyForProviderMock,
-  postJsonRequestMock,
-  fetchWithTimeoutMock,
-  assertOkOrThrowHttpErrorMock,
-  resolveProviderHttpRequestConfigMock,
-} = vi.hoisted(() => ({
-  resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "openai-key" })),
-  postJsonRequestMock: vi.fn(),
-  fetchWithTimeoutMock: vi.fn(),
-  assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
-  resolveProviderHttpRequestConfigMock: vi.fn((params) => ({
-    baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-    allowPrivateNetwork: false,
-    headers: new Headers(params.defaultHeaders),
-    dispatcherPolicy: undefined,
-  })),
-}));
+const { postJsonRequestMock, fetchWithTimeoutMock, resolveProviderHttpRequestConfigMock } =
+  getProviderHttpMocks();
 
-vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
-  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
-}));
+let buildOpenAIVideoGenerationProvider: typeof import("./video-generation-provider.js").buildOpenAIVideoGenerationProvider;
 
-vi.mock("openclaw/plugin-sdk/provider-http", () => ({
-  assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
-  fetchWithTimeout: fetchWithTimeoutMock,
-  postJsonRequest: postJsonRequestMock,
-  resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
-}));
+beforeAll(async () => {
+  ({ buildOpenAIVideoGenerationProvider } = await import("./video-generation-provider.js"));
+});
+
+installProviderHttpMockCleanup();
 
 describe("openai video generation provider", () => {
-  afterEach(() => {
-    resolveApiKeyForProviderMock.mockClear();
-    postJsonRequestMock.mockReset();
-    fetchWithTimeoutMock.mockReset();
-    assertOkOrThrowHttpErrorMock.mockClear();
-    resolveProviderHttpRequestConfigMock.mockClear();
-  });
-
   it("uses JSON for text-only Sora requests", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: {

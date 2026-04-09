@@ -76,7 +76,7 @@ export function parseTtsDirectives(
       if (!rawKey || !rawValue) {
         continue;
       }
-      const key = rawKey.toLowerCase();
+      const key = normalizeLowercaseStringOrEmpty(rawKey);
       if (key === "provider") {
         if (policy.allowProvider) {
           const providerId = normalizeLowercaseStringOrEmpty(rawValue);

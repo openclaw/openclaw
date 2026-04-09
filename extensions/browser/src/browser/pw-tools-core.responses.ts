@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { formatCliCommand } from "../cli/command-format.js";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
 import { normalizeTimeoutMs } from "./pw-tools-core.shared.js";
@@ -16,7 +17,7 @@ export async function responseBodyViaPlaywright(opts: {
   body: string;
   truncated?: boolean;
 }> {
-  const pattern = String(opts.url ?? "").trim();
+  const pattern = normalizeOptionalString(opts.url) ?? "";
   if (!pattern) {
     throw new Error("url is required");
   }

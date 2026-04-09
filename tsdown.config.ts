@@ -115,6 +115,18 @@ const bundledHookEntries = buildBundledHookEntries();
 const bundledPluginRoot = (pluginId: string) => ["extensions", pluginId].join("/");
 const bundledPluginFile = (pluginId: string, relativePath: string) =>
   `${bundledPluginRoot(pluginId)}/${relativePath}`;
+const explicitNeverBundleDependencies = [
+  "@lancedb/lancedb",
+  "@matrix-org/matrix-sdk-crypto-nodejs",
+  "matrix-js-sdk",
+  ...bundledPluginRuntimeDependencies,
+].toSorted((left, right) => left.localeCompare(right));
+
+function shouldNeverBundleDependency(id: string): boolean {
+  return explicitNeverBundleDependencies.some((dependency) => {
+    return id === dependency || id.startsWith(`${dependency}/`);
+  });
+}
 
 function buildCoreDistEntries(): Record<string, string> {
   return {
@@ -170,12 +182,7 @@ export default defineConfig([
     // and bundled hooks in one graph so runtime singletons are emitted once.
     entry: buildUnifiedDistEntries(),
     deps: {
-      neverBundle: [
-        "@lancedb/lancedb",
-        "@matrix-org/matrix-sdk-crypto-nodejs",
-        "matrix-js-sdk",
-        ...bundledPluginRuntimeDependencies,
-      ],
+      neverBundle: shouldNeverBundleDependency,
     },
   }),
 ]);

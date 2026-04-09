@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { escapeRegExp } from "../utils.js";
 import { getChatCommands, getNativeCommandSurfaces } from "./commands-registry.data.js";
@@ -58,7 +59,7 @@ function getTextAliasMap(): Map<string, TextAliasSpec> {
     // Canonicalize to the *primary* text alias, not `/${key}`. Some command keys are
     // internal identifiers (e.g. `dock:telegram`) while the public text command is
     // the alias (e.g. `/dock-telegram`).
-    const canonical = command.textAliases[0]?.trim() || `/${command.key}`;
+    const canonical = normalizeOptionalString(command.textAliases[0]) || `/${command.key}`;
     const acceptsArgs = Boolean(command.acceptsArgs);
     for (const alias of command.textAliases) {
       const normalized = normalizeOptionalLowercaseString(alias);

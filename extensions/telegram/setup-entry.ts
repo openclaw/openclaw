@@ -3,11 +3,11 @@ import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entr
 export default defineBundledChannelSetupEntry({
   importMetaUrl: import.meta.url,
   plugin: {
-    specifier: "./src/channel.setup.js",
+    specifier: "./setup-plugin-api.js",
     exportName: "telegramSetupPlugin",
   },
   secrets: {
-    specifier: "./src/secret-contract.js",
+    specifier: "./secret-contract-api.js",
     exportName: "channelSecrets",
   },
 });

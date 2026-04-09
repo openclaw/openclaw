@@ -1,6 +1,9 @@
 import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { getTerminalTableWidth, renderTable } from "../../terminal/table.js";
 import { shortenHomePath } from "../../utils.js";
 import {
@@ -23,7 +26,7 @@ import {
 import type { NodesRpcOpts } from "./types.js";
 
 const parseFacing = (value: string): CameraFacing => {
-  const v = normalizeLowercaseStringOrEmpty(String(value ?? "").trim());
+  const v = normalizeLowercaseStringOrEmpty(normalizeOptionalString(value) ?? "");
   if (v === "front" || v === "back") {
     return v;
   }
@@ -112,9 +115,11 @@ export function registerNodesCameraCommands(nodes: Command) {
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 20000)", "20000")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("camera snap", async () => {
-          const node = await resolveNode(opts, String(opts.node ?? ""));
+          const node = await resolveNode(opts, normalizeOptionalString(opts.node) ?? "");
           const nodeId = node.nodeId;
-          const facingOpt = normalizeLowercaseStringOrEmpty(String(opts.facing ?? "both").trim());
+          const facingOpt = normalizeLowercaseStringOrEmpty(
+            normalizeOptionalString(opts.facing) ?? "both",
+          );
           const facings: CameraFacing[] =
             facingOpt === "both"
               ? ["front", "back"]
@@ -129,7 +134,7 @@ export function registerNodesCameraCommands(nodes: Command) {
           const maxWidth = opts.maxWidth ? Number.parseInt(String(opts.maxWidth), 10) : undefined;
           const quality = opts.quality ? Number.parseFloat(String(opts.quality)) : undefined;
           const delayMs = opts.delayMs ? Number.parseInt(String(opts.delayMs), 10) : undefined;
-          const deviceId = opts.deviceId ? String(opts.deviceId).trim() : undefined;
+          const deviceId = normalizeOptionalString(opts.deviceId);
           if (deviceId && facings.length > 1) {
             throw new Error("facing=both is not allowed when --device-id is set");
           }
@@ -206,7 +211,7 @@ export function registerNodesCameraCommands(nodes: Command) {
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 90000)", "90000")
       .action(async (opts: NodesRpcOpts & { audio?: boolean }) => {
         await runNodesCommand("camera clip", async () => {
-          const node = await resolveNode(opts, String(opts.node ?? ""));
+          const node = await resolveNode(opts, normalizeOptionalString(opts.node) ?? "");
           const nodeId = node.nodeId;
           const facing = parseFacing(String(opts.facing ?? "front"));
           const durationMs = parseDurationMs(String(opts.duration ?? "3000"));
@@ -214,7 +219,7 @@ export function registerNodesCameraCommands(nodes: Command) {
           const timeoutMs = opts.invokeTimeout
             ? Number.parseInt(String(opts.invokeTimeout), 10)
             : undefined;
-          const deviceId = opts.deviceId ? String(opts.deviceId).trim() : undefined;
+          const deviceId = normalizeOptionalString(opts.deviceId);
 
           const invokeParams = buildNodeInvokeParams({
             nodeId,

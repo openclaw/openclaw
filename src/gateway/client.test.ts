@@ -8,6 +8,7 @@ const clearDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const loadDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const storeDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const logDebugMock = vi.hoisted(() => vi.fn());
+const logErrorMock = vi.hoisted(() => vi.fn());
 
 type WsEvent = "open" | "message" | "close" | "error";
 type WsEventHandlers = {
@@ -117,6 +118,7 @@ vi.mock("../logger.js", async () => {
   return {
     ...actual,
     logDebug: (...args: unknown[]) => logDebugMock(...args),
+    logError: (...args: unknown[]) => logErrorMock(...args),
   };
 });
 
@@ -419,6 +421,8 @@ describe("GatewayClient connect auth payload", () => {
     wsInstances.length = 0;
     loadDeviceAuthTokenMock.mockReset();
     storeDeviceAuthTokenMock.mockReset();
+    logDebugMock.mockClear();
+    logErrorMock.mockClear();
   });
 
   type ParsedConnectRequest = {
@@ -578,6 +582,32 @@ describe("GatewayClient connect auth payload", () => {
     });
     emitHelloOk(ws, connect.id);
     client.stop();
+  });
+
+  it("logs stopped connect handshakes at debug level during teardown", async () => {
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-token",
+      onConnectError,
+    });
+
+    const { ws } = startClientAndConnect({ client });
+    ws.autoCloseOnClose = false;
+    client.stop();
+
+    await vi.waitFor(() =>
+      expect(onConnectError).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "gateway client stopped" }),
+      ),
+    );
+    expect(logDebugMock).toHaveBeenCalledWith(
+      "gateway connect failed: Error: gateway client stopped",
+    );
+    expect(logErrorMock).not.toHaveBeenCalledWith(
+      "gateway connect failed: Error: gateway client stopped",
+    );
+    expect(ws.closeCalls).toBe(1);
   });
 
   it("uses explicit shared password and does not inject stored device token", () => {

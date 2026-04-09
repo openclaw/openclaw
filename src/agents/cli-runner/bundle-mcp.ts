@@ -16,6 +16,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { serializeTomlInlineValue } from "./toml-inline.js";
 
 type PreparedCliBundleMcpConfig = {
   backend: CliBackendConfig;
@@ -116,8 +117,10 @@ function decodeHeaderEnvPlaceholder(value: string): { envVar: string; bearer: bo
   return null;
 }
 
-function normalizeCodexServerConfig(server: BundleMcpServerConfig): Record<string, unknown> {
-  const next: Record<string, unknown> = {};
+function applyCommonServerConfig(
+  next: Record<string, unknown>,
+  server: BundleMcpServerConfig,
+): void {
   if (typeof server.command === "string") {
     next.command = server.command;
   }
@@ -135,6 +138,11 @@ function normalizeCodexServerConfig(server: BundleMcpServerConfig): Record<strin
   if (typeof server.url === "string") {
     next.url = server.url;
   }
+}
+
+function normalizeCodexServerConfig(server: BundleMcpServerConfig): Record<string, unknown> {
+  const next: Record<string, unknown> = {};
+  applyCommonServerConfig(next, server);
   const httpHeaders = normalizeStringRecord(server.headers);
   if (httpHeaders) {
     const staticHeaders: Record<string, string> = {};
@@ -178,23 +186,7 @@ function normalizeGeminiServerConfig(
   inheritedEnv: Record<string, string> | undefined,
 ): Record<string, unknown> {
   const next: Record<string, unknown> = {};
-  if (typeof server.command === "string") {
-    next.command = server.command;
-  }
-  const args = normalizeStringArray(server.args);
-  if (args) {
-    next.args = args;
-  }
-  const env = normalizeStringRecord(server.env);
-  if (env) {
-    next.env = env;
-  }
-  if (typeof server.cwd === "string") {
-    next.cwd = server.cwd;
-  }
-  if (typeof server.url === "string") {
-    next.url = server.url;
-  }
+  applyCommonServerConfig(next, server);
   if (typeof server.type === "string") {
     next.type = server.type;
   }
@@ -211,35 +203,6 @@ function normalizeGeminiServerConfig(
     next.trust = server.trust;
   }
   return next;
-}
-
-function escapeTomlString(value: string): string {
-  return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
-}
-
-function formatTomlKey(key: string): string {
-  return /^[A-Za-z0-9_-]+$/.test(key) ? key : `"${escapeTomlString(key)}"`;
-}
-
-function serializeTomlInlineValue(value: unknown): string {
-  if (typeof value === "string") {
-    return `"${escapeTomlString(value)}"`;
-  }
-  if (typeof value === "number" || typeof value === "bigint") {
-    return String(value);
-  }
-  if (typeof value === "boolean") {
-    return value ? "true" : "false";
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => serializeTomlInlineValue(entry)).join(", ")}]`;
-  }
-  if (isRecord(value)) {
-    return `{ ${Object.entries(value)
-      .map(([key, entry]) => `${formatTomlKey(key)} = ${serializeTomlInlineValue(entry)}`)
-      .join(", ")} }`;
-  }
-  throw new Error(`Unsupported TOML value for Codex MCP config: ${String(value)}`);
 }
 
 function injectCodexMcpConfigArgs(args: string[] | undefined, config: BundleMcpConfig): string[] {

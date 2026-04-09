@@ -28,6 +28,12 @@ function nextGatewayId(prefix: string): string {
   return `${prefix}-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}-${gatewayTestSeq++}`;
 }
 
+async function createEmptyBundledPluginsDir(tempHome: string): Promise<string> {
+  const bundledPluginsDir = path.join(tempHome, "openclaw-test-empty-bundled-plugins");
+  await fs.mkdir(bundledPluginsDir, { recursive: true });
+  return bundledPluginsDir;
+}
+
 async function writeWorkspacePlugin(params: {
   workspaceDir: string;
   id: string;
@@ -103,6 +109,8 @@ describe("gateway e2e", () => {
         "OPENCLAW_SKIP_CRON",
         "OPENCLAW_SKIP_CANVAS_HOST",
         "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
+        "OPENCLAW_SKIP_PROVIDERS",
+        "OPENCLAW_BUNDLED_PLUGINS_DIR",
         "OPENCLAW_TEST_MINIMAL_GATEWAY",
       ]);
 
@@ -117,6 +125,7 @@ describe("gateway e2e", () => {
       process.env.OPENCLAW_SKIP_CRON = "1";
       process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
       process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
+      process.env.OPENCLAW_SKIP_PROVIDERS = "1";
       process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "1";
 
       const token = nextGatewayId("test-token");
@@ -124,6 +133,7 @@ describe("gateway e2e", () => {
 
       const workspaceDir = path.join(tempHome, "openclaw");
       await fs.mkdir(workspaceDir, { recursive: true });
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = await createEmptyBundledPluginsDir(tempHome);
 
       const configDir = path.join(tempHome, ".openclaw");
       await fs.mkdir(configDir, { recursive: true });
@@ -210,6 +220,8 @@ describe("gateway e2e", () => {
         "OPENCLAW_SKIP_CRON",
         "OPENCLAW_SKIP_CANVAS_HOST",
         "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
+        "OPENCLAW_SKIP_PROVIDERS",
+        "OPENCLAW_BUNDLED_PLUGINS_DIR",
       ]);
 
       const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-http-tools-home-"));
@@ -221,12 +233,14 @@ describe("gateway e2e", () => {
       process.env.OPENCLAW_SKIP_CRON = "1";
       process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
       process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
+      process.env.OPENCLAW_SKIP_PROVIDERS = "1";
 
       const token = nextGatewayId("http-tools-token");
       process.env.OPENCLAW_GATEWAY_TOKEN = token;
 
       const workspaceDir = path.join(tempHome, "openclaw");
       await fs.mkdir(workspaceDir, { recursive: true });
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = await createEmptyBundledPluginsDir(tempHome);
       const registerCountPath = path.join(tempHome, "workspace-plugin-register-count.txt");
       await writeWorkspacePlugin({
         workspaceDir,
@@ -316,6 +330,8 @@ module.exports = {
         "OPENCLAW_SKIP_CRON",
         "OPENCLAW_SKIP_CANVAS_HOST",
         "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
+        "OPENCLAW_SKIP_PROVIDERS",
+        "OPENCLAW_BUNDLED_PLUGINS_DIR",
         "OPENCLAW_TEST_MINIMAL_GATEWAY",
       ]);
 
@@ -324,11 +340,13 @@ module.exports = {
       process.env.OPENCLAW_SKIP_CRON = "1";
       process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
       process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
+      process.env.OPENCLAW_SKIP_PROVIDERS = "1";
       process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "1";
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
 
       const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wizard-home-"));
       process.env.HOME = tempHome;
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = await createEmptyBundledPluginsDir(tempHome);
       delete process.env.OPENCLAW_STATE_DIR;
       delete process.env.OPENCLAW_CONFIG_PATH;
 

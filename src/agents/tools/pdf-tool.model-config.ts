@@ -12,6 +12,29 @@ import {
 import { hasAuthForProvider, resolveDefaultModelRef } from "./model-config.helpers.js";
 import { coercePdfModelConfig } from "./pdf-tool.helpers.js";
 
+function resolveBundledImageCandidateRefs(params: {
+  cfg?: OpenClawConfig;
+  agentDir: string;
+  filter?: (providerId: string) => boolean;
+}): string[] {
+  return resolveBundledAutoMediaKeyProviders("image")
+    .filter((providerId) => !params.filter || params.filter(providerId))
+    .filter((providerId) => hasAuthForProvider({ provider: providerId, agentDir: params.agentDir }))
+    .map((providerId) => {
+      const modelId =
+        resolveProviderVisionModelFromConfig({
+          cfg: params.cfg,
+          provider: providerId,
+        })?.split("/")[1] ??
+        resolveBundledDefaultMediaModel({
+          providerId,
+          capability: "image",
+        });
+      return modelId ? `${providerId}/${modelId}` : null;
+    })
+    .filter((value): value is string => Boolean(value));
+}
+
 export function resolvePdfModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   agentDir: string;
@@ -51,37 +74,15 @@ export function resolvePdfModelConfigForTool(params: {
       capability: "image",
     });
   const primarySupportsNativePdf = bundledProviderSupportsNativePdfDocument(primary.provider);
-  const nativePdfCandidates = resolveBundledAutoMediaKeyProviders("image")
-    .filter((providerId) => bundledProviderSupportsNativePdfDocument(providerId))
-    .filter((providerId) => hasAuthForProvider({ provider: providerId, agentDir: params.agentDir }))
-    .map((providerId) => {
-      const modelId =
-        resolveProviderVisionModelFromConfig({
-          cfg: params.cfg,
-          provider: providerId,
-        })?.split("/")[1] ??
-        resolveBundledDefaultMediaModel({
-          providerId,
-          capability: "image",
-        });
-      return modelId ? `${providerId}/${modelId}` : null;
-    })
-    .filter((value): value is string => Boolean(value));
-  const genericImageCandidates = resolveBundledAutoMediaKeyProviders("image")
-    .filter((providerId) => hasAuthForProvider({ provider: providerId, agentDir: params.agentDir }))
-    .map((providerId) => {
-      const modelId =
-        resolveProviderVisionModelFromConfig({
-          cfg: params.cfg,
-          provider: providerId,
-        })?.split("/")[1] ??
-        resolveBundledDefaultMediaModel({
-          providerId,
-          capability: "image",
-        });
-      return modelId ? `${providerId}/${modelId}` : null;
-    })
-    .filter((value): value is string => Boolean(value));
+  const nativePdfCandidates = resolveBundledImageCandidateRefs({
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+    filter: bundledProviderSupportsNativePdfDocument,
+  });
+  const genericImageCandidates = resolveBundledImageCandidateRefs({
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+  });
 
   if (params.cfg?.models?.providers && typeof params.cfg.models.providers === "object") {
     for (const [providerKey, providerCfg] of Object.entries(params.cfg.models.providers)) {
@@ -90,9 +91,14 @@ export function resolvePdfModelConfigForTool(params: {
         continue;
       }
       const models = providerCfg?.models ?? [];
-      const modelId = models.find(
-        (model) => Boolean(model?.id?.trim()) && Array.isArray(model?.input) && model.input.includes("image"),
-      )?.id?.trim();
+      const modelId = models
+        .find(
+          (model) =>
+            Boolean(model?.id?.trim()) &&
+            Array.isArray(model?.input) &&
+            model.input.includes("image"),
+        )
+        ?.id?.trim();
       if (!modelId) {
         continue;
       }

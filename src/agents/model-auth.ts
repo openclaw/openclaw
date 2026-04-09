@@ -355,9 +355,9 @@ export async function resolveApiKeyForProvider(params: {
   credentialPrecedence?: ProviderCredentialPrecedence;
 }): Promise<ResolvedProviderAuth> {
   const { provider, cfg, profileId, preferredProfile } = params;
-  const store = params.store ?? ensureAuthProfileStore(params.agentDir);
 
   if (profileId) {
+    const store = params.store ?? ensureAuthProfileStore(params.agentDir);
     const resolved = await resolveApiKeyForProfile({
       cfg,
       store,
@@ -407,6 +407,10 @@ export async function resolveApiKeyForProvider(params: {
       };
     }
   }
+  const normalized = normalizeProviderId(provider);
+  if (authOverride === undefined && normalized === "amazon-bedrock") {
+    return resolveAwsSdkAuthInfo();
+  }
 
   if (params.credentialPrecedence === "env-first") {
     const envResolved = resolveEnvApiKey(provider);
@@ -423,6 +427,7 @@ export async function resolveApiKeyForProvider(params: {
   }
 
   const providerConfig = resolveProviderConfig(cfg, provider);
+  const store = params.store ?? ensureAuthProfileStore(params.agentDir);
   const order = resolveAuthProfileOrder({
     cfg,
     store,
@@ -491,11 +496,6 @@ export async function resolveApiKeyForProvider(params: {
   const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider });
   if (syntheticLocalAuth) {
     return syntheticLocalAuth;
-  }
-
-  const normalized = normalizeProviderId(provider);
-  if (authOverride === undefined && normalized === "amazon-bedrock") {
-    return resolveAwsSdkAuthInfo();
   }
 
   const hasInlineConfiguredModels =
@@ -603,13 +603,25 @@ export async function hasAvailableAuthForProvider(params: {
   agentDir?: string;
 }): Promise<boolean> {
   const { provider, cfg, preferredProfile } = params;
-  const store = params.store ?? ensureAuthProfileStore(params.agentDir);
 
   const authOverride = resolveProviderAuthOverride(cfg, provider);
   if (authOverride === "aws-sdk") {
     return true;
   }
+  if (resolveEnvApiKey(provider)) {
+    return true;
+  }
+  if (resolveUsableCustomProviderApiKey({ cfg, provider })) {
+    return true;
+  }
+  if (resolveSyntheticLocalProviderAuth({ cfg, provider })) {
+    return true;
+  }
+  if (authOverride === undefined && normalizeProviderId(provider) === "amazon-bedrock") {
+    return true;
+  }
 
+  const store = params.store ?? ensureAuthProfileStore(params.agentDir);
   const order = resolveAuthProfileOrder({
     cfg,
     store,
@@ -631,18 +643,7 @@ export async function hasAvailableAuthForProvider(params: {
       log.debug?.(`auth profile "${candidate}" failed for provider "${provider}": ${String(err)}`);
     }
   }
-
-  if (resolveEnvApiKey(provider)) {
-    return true;
-  }
-  if (resolveUsableCustomProviderApiKey({ cfg, provider })) {
-    return true;
-  }
-  if (resolveSyntheticLocalProviderAuth({ cfg, provider })) {
-    return true;
-  }
-
-  return authOverride === undefined && normalizeProviderId(provider) === "amazon-bedrock";
+  return false;
 }
 
 export async function getApiKeyForModel(params: {

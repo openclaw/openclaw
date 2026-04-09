@@ -342,8 +342,8 @@ function readExecApprovalPendingDetails(result: unknown): {
   if (details.status !== "approval-pending") {
     return null;
   }
-  const approvalId = typeof details.approvalId === "string" ? details.approvalId.trim() : "";
-  const approvalSlug = typeof details.approvalSlug === "string" ? details.approvalSlug.trim() : "";
+  const approvalId = readStringValue(details.approvalId) ?? "";
+  const approvalSlug = readStringValue(details.approvalSlug) ?? "";
   const command = typeof details.command === "string" ? details.command : "";
   const host = details.host === "node" ? "node" : details.host === "gateway" ? "gateway" : null;
   if (!approvalId || !approvalSlug || !command || !host) {

@@ -39,11 +39,7 @@ export const nextcloudTalkSecurityAdapter = {
     resolveAllowFrom: (account) => account.config.allowFrom,
     policyPathSuffix: "dmPolicy",
     normalizeEntry: (raw) =>
-      raw
-        .trim()
-        .replace(/^(nextcloud-talk|nc-talk|nc):/i, "")
-        .trim()
-        .toLowerCase(),
+      normalizeLowercaseStringOrEmpty(raw.trim().replace(/^(nextcloud-talk|nc-talk|nc):/i, "")),
   }),
 };
 

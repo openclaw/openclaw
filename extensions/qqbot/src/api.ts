@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import os from "node:os";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { debugLog, debugError } from "./utils/debug-log.js";
 import { sanitizeFileName } from "./utils/platform.js";
 import { computeFileHash, getCachedFileInfo, setCachedFileInfo } from "./utils/upload-cache.js";
@@ -37,17 +38,17 @@ const onMessageSentHookMap = new Map<string, OnMessageSentCallback>();
 
 /** Register an outbound-message hook scoped to one appId. */
 export function onMessageSent(appId: string, callback: OnMessageSentCallback): void {
-  onMessageSentHookMap.set(String(appId).trim(), callback);
+  onMessageSentHookMap.set(normalizeOptionalString(appId) ?? "", callback);
 }
 
 /** Initialize per-app API behavior such as markdown support. */
 export function initApiConfig(appId: string, options: { markdownSupport?: boolean }): void {
-  markdownSupportMap.set(String(appId).trim(), options.markdownSupport === true);
+  markdownSupportMap.set(normalizeOptionalString(appId) ?? "", options.markdownSupport === true);
 }
 
 /** Return whether markdown is enabled for the given appId. */
 export function isMarkdownSupport(appId: string): boolean {
-  return markdownSupportMap.get(String(appId).trim()) ?? false;
+  return markdownSupportMap.get(normalizeOptionalString(appId) ?? "") ?? false;
 }
 
 // Keep token state per appId to avoid multi-account cross-talk.
@@ -58,7 +59,7 @@ const tokenFetchPromises = new Map<string, Promise<string>>();
  * Resolve an access token with caching and singleflight semantics.
  */
 export async function getAccessToken(appId: string, clientSecret: string): Promise<string> {
-  const normalizedAppId = String(appId).trim();
+  const normalizedAppId = normalizeOptionalString(appId) ?? "";
   const cachedToken = tokenCacheMap.get(normalizedAppId);
 
   // Refresh slightly ahead of expiry without making short-lived tokens unusable.
@@ -153,7 +154,7 @@ async function doFetchToken(appId: string, clientSecret: string): Promise<string
 /** Clear one token cache or all token caches. */
 export function clearTokenCache(appId?: string): void {
   if (appId) {
-    const normalizedAppId = String(appId).trim();
+    const normalizedAppId = normalizeOptionalString(appId) ?? "";
     tokenCacheMap.delete(normalizedAppId);
     debugLog(`[qqbot-api:${normalizedAppId}] Token cache cleared manually.`);
   } else {
@@ -347,7 +348,7 @@ async function sendAndNotify(
   meta: OutboundMeta,
 ): Promise<MessageResponse> {
   const result = await apiRequest<MessageResponse>(accessToken, method, path, body);
-  const hook = onMessageSentHookMap.get(String(appId).trim());
+  const hook = onMessageSentHookMap.get(normalizeOptionalString(appId) ?? "");
   if (result.ext_info?.ref_idx && hook) {
     try {
       hook(result.ext_info.ref_idx, meta);

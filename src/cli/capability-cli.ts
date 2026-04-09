@@ -1,10 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Command } from "commander";
-import {
-  createEmbeddingProvider,
-  registerBuiltInMemoryEmbeddingProviders,
-} from "../../extensions/memory-core/runtime-api.js";
 import { agentCommand } from "../agents/agent-command.js";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
@@ -31,11 +27,19 @@ import { getImageMetadata } from "../media/image-ops.js";
 import { detectMime, extensionForMime, normalizeMimeType } from "../media/mime.js";
 import { saveMediaBuffer } from "../media/store.js";
 import {
+  createEmbeddingProvider,
+  registerBuiltInMemoryEmbeddingProviders,
+} from "../plugin-sdk/memory-core-bundled-runtime.js";
+import {
   listMemoryEmbeddingProviders,
   registerMemoryEmbeddingProvider,
 } from "../plugins/memory-embedding-providers.js";
 import { writeRuntimeJson, defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { canonicalizeSpeechProviderId, listSpeechProviders } from "../tts/provider-registry.js";
@@ -877,7 +881,7 @@ async function runTtsConvert(params: {
       params: {
         text: params.text,
         channel: params.channel,
-        provider: params.provider?.trim() || undefined,
+        provider: normalizeOptionalString(params.provider),
         modelId: params.modelId,
         voiceId: params.voiceId,
       },
@@ -920,7 +924,9 @@ async function runTtsConvert(params: {
     voiceId: params.voiceId,
   });
   const hasExplicitSelection = Boolean(
-    overrides.provider || params.modelId?.trim() || params.voiceId?.trim(),
+    overrides.provider ||
+    normalizeOptionalString(params.modelId) ||
+    normalizeOptionalString(params.voiceId),
   );
   const result = await textToSpeech({
     text: params.text,
@@ -1003,7 +1009,7 @@ async function runTtsVoices(providerRaw?: string) {
   const cfg = loadConfig();
   const config = resolveTtsConfig(cfg);
   const prefsPath = resolveTtsPrefsPath(config);
-  const provider = providerRaw?.trim() || getTtsProvider(config, prefsPath);
+  const provider = normalizeOptionalString(providerRaw) || getTtsProvider(config, prefsPath);
   return await listSpeechVoices({
     provider,
     cfg,
@@ -1105,7 +1111,7 @@ async function runMemoryEmbeddingCreate(params: {
   ensureMemoryEmbeddingProvidersRegistered();
   const cfg = loadConfig();
   const modelRef = resolveModelRefOverride(params.model);
-  const requestedProvider = params.provider?.trim() || modelRef.provider || "auto";
+  const requestedProvider = normalizeOptionalString(params.provider) || modelRef.provider || "auto";
   const result = await createEmbeddingProvider({
     config: cfg,
     agentDir: resolveAgentDir(cfg, resolveDefaultAgentId(cfg)),
@@ -1237,7 +1243,7 @@ export function registerCapabilityCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const target = String(opts.model).trim();
+        const target = normalizeStringifiedOptionalString(opts.model) ?? "";
         const catalog = await loadModelCatalog({ config: loadConfig() });
         const entry =
           catalog.find((candidate) => `${candidate.provider}/${candidate.id}` === target) ??

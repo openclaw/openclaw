@@ -26,6 +26,7 @@ import { isVerbose, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
 import {
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
   normalizeOptionalString,
   resolveConfigDir,
   resolveUserPath,
@@ -329,9 +330,7 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
     mode: raw.mode ?? "final",
     provider:
       normalizeConfiguredSpeechProviderId(raw.provider) ??
-      (providerSource === "config"
-        ? (normalizeOptionalString(raw.provider)?.toLowerCase() ?? "")
-        : ""),
+      (providerSource === "config" ? (normalizeOptionalLowercaseString(raw.provider) ?? "") : ""),
     providerSource,
     summaryModel: normalizeOptionalString(raw.summaryModel),
     modelOverrides: resolveModelOverridePolicy(raw.modelOverrides),

@@ -7,7 +7,12 @@ import { enqueueSystemEvent as enqueueSystemEventImpl } from "../../infra/system
 import { getProcessSupervisor as getProcessSupervisorImpl } from "../../process/supervisor/index.js";
 import { scopedHeartbeatWakeOptions } from "../../routing/session-key.js";
 import { prependBootstrapPromptWarning } from "../bootstrap-budget.js";
-import { createCliJsonlStreamingParser, parseCliOutput, type CliOutput } from "../cli-output.js";
+import {
+  createCliJsonlStreamingParser,
+  extractCliErrorMessage,
+  parseCliOutput,
+  type CliOutput,
+} from "../cli-output.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { classifyFailoverReason } from "../pi-embedded-helpers.js";
 import {
@@ -20,6 +25,7 @@ import {
   resolvePromptInput,
   resolveSessionIdToSend,
   resolveSystemPromptUsage,
+  writeCliSystemPromptFile,
 } from "./helpers.js";
 import {
   cliBackendLog,
@@ -108,6 +114,13 @@ export async function executePreparedCliRun(
     isNewSession: isNew,
     systemPrompt: context.systemPrompt,
   });
+  const systemPromptFile =
+    !useResume && systemPromptArg
+      ? await writeCliSystemPromptFile({
+          backend,
+          systemPrompt: systemPromptArg,
+        })
+      : undefined;
 
   let prompt = prependBootstrapPromptWarning(params.prompt, context.bootstrapPromptWarningLines, {
     preserveExactPrompt: context.heartbeatPrompt,
@@ -139,6 +152,7 @@ export async function executePreparedCliRun(
     modelId: context.normalizedModel,
     sessionId: resolvedSessionId,
     systemPrompt: systemPromptArg,
+    systemPromptFilePath: systemPromptFile?.filePath,
     imagePaths,
     promptArg: argsPrompt,
     useResume,
@@ -321,7 +335,11 @@ export async function executePreparedCliRun(
             status: resolveFailoverStatus("timeout"),
           });
         }
-        const err = stderr || stdout || "CLI failed.";
+        const primaryErrorText = stderr || stdout;
+        const structuredError =
+          extractCliErrorMessage(primaryErrorText) ??
+          (stderr ? extractCliErrorMessage(stdout) : null);
+        const err = structuredError || primaryErrorText || "CLI failed.";
         const reason = classifyFailoverReason(err, { provider: params.provider }) ?? "unknown";
         const status = resolveFailoverStatus(reason);
         throw new FailoverError(err, {
@@ -341,6 +359,9 @@ export async function executePreparedCliRun(
       });
     });
   } finally {
+    if (systemPromptFile) {
+      await systemPromptFile.cleanup();
+    }
     if (cleanupImages) {
       await cleanupImages();
     }

@@ -67,6 +67,7 @@ import {
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
 import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type {
   PluginRuntimeChannelContextEvent,
   PluginRuntimeChannelContextKey,
@@ -86,7 +87,7 @@ type StoredRuntimeContext = {
 const log = createSubsystemLogger("plugins/runtime-channel");
 
 function normalizeRuntimeContextString(value: string | null | undefined): string {
-  return value?.trim() ?? "";
+  return normalizeOptionalString(value) ?? "";
 }
 
 function normalizeRuntimeContextKey(params: PluginRuntimeChannelContextKey): {

@@ -341,6 +341,18 @@ describe("formatExecFailureReason", () => {
     ).toContain("45 seconds");
   });
 
+  it("points long-running work to registered exec backgrounding", () => {
+    const reason = formatExecFailureReason({
+      failureKind: "overall-timeout",
+      exitSignal: "SIGKILL",
+      timeoutSec: 45,
+    });
+
+    expect(reason).toContain("background=true");
+    expect(reason).toContain("yieldMs");
+    expect(reason).toContain("Do not rely on shell backgrounding");
+  });
+
   it("formats shell failures without timeout-specific guidance", () => {
     expect(
       formatExecFailureReason({
@@ -400,5 +412,30 @@ describe("buildExecExitOutcome", () => {
       timedOut: true,
       reason: expect.stringContaining("30 seconds"),
     });
+  });
+
+  it("keeps timed out shell-backgrounded commands on the failed path", () => {
+    const outcome = buildExecExitOutcome({
+      exit: {
+        reason: "overall-timeout",
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 123,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: false,
+      },
+      aggregated: "started worker",
+      durationMs: 123,
+      timeoutSec: 30,
+    });
+
+    if (outcome.status !== "failed") {
+      throw new Error(`Expected timeout to fail, got ${outcome.status}`);
+    }
+    expect(outcome).toMatchObject({ failureKind: "overall-timeout", timedOut: true });
+    expect(outcome.reason).toContain("background=true");
+    expect(outcome.reason).toContain("Do not rely on shell backgrounding");
   });
 });

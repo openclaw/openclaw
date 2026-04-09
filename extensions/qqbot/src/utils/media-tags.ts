@@ -49,36 +49,44 @@ ALL_TAG_NAMES.sort((a, b) => b.length - a.length);
 
 const TAG_NAME_PATTERN = ALL_TAG_NAMES.join("|");
 
+const LEFT_BRACKET = "(?:[<＜<]|&lt;)";
+const RIGHT_BRACKET = "(?:[>＞>]|&gt;)";
 /** Match self-closing media-tag syntax with file/src/path/url attributes. */
-const SELF_CLOSING_TAG_REGEX = new RegExp(
+export const SELF_CLOSING_TAG_REGEX = new RegExp(
   "`?" +
-    "[<＜<]\\s*(" +
+    LEFT_BRACKET +
+    "\\s*(" +
     TAG_NAME_PATTERN +
     ")" +
-    "(?:\\s+(?!file|src|path|url)[a-z_-]+\\s*=\\s*[\"']?[^\"'/>＞>]*?[\"']?)*" +
+    "(?:\\s+(?!file|src|path|url)[a-z_-]+\\s*=\\s*[\"']?[^\"'\\s＜<>＞>]*?[\"']?)*" +
     "\\s+(?:file|src|path|url)\\s*=\\s*" +
     "[\"']?" +
-    "([^\"'/>＞>]+?)" +
+    "([^\"'\\s>＞]+?)" +
     "[\"']?" +
-    "(?:\\s+[a-z_-]+\\s*=\\s*[\"']?[^\"'/>＞>]*?[\"']?)*" +
+    "(?:\\s+[a-z_-]+\\s*=\\s*[\"']?[^\"'\\s＜<>＞>]*?[\"']?)*" +
     "\\s*/?" +
-    "\\s*[>＞>]" +
+    "\\s*" +
+    RIGHT_BRACKET +
     "`?",
   "gi",
 );
 
 /** Match malformed wrapped media tags that should be normalized. */
-const FUZZY_MEDIA_TAG_REGEX = new RegExp(
+export const FUZZY_MEDIA_TAG_REGEX = new RegExp(
   "`?" +
-    "[<＜<]\\s*(" +
+    LEFT_BRACKET +
+    "\\s*(" +
     TAG_NAME_PATTERN +
-    ")\\s*[>＞>]" +
+    ")\\s*" +
+    RIGHT_BRACKET +
     "[\"']?\\s*" +
     "([^<＜<＞>\"'`]+?)" +
     "\\s*[\"']?" +
-    "[<＜<]\\s*/?\\s*(?:" +
+    LEFT_BRACKET +
+    "\\s*/?\\s*(?:" +
     TAG_NAME_PATTERN +
-    ")\\s*[>＞>]" +
+    ")\\s*" +
+    RIGHT_BRACKET +
     "`?",
   "gi",
 );
@@ -94,13 +102,21 @@ function resolveTagName(raw: string): (typeof VALID_TAGS)[number] {
 
 /** Match wrapped tags whose bodies need newline and tab cleanup. */
 const MULTILINE_TAG_CLEANUP = new RegExp(
-  "([<＜<]\\s*(?:" +
+  "(" +
+    LEFT_BRACKET +
+    "\\s*(?:" +
     TAG_NAME_PATTERN +
-    ")\\s*[>＞>])" +
+    ")\\s*" +
+    RIGHT_BRACKET +
+    ")" +
     "([\\s\\S]*?)" +
-    "([<＜<]\\s*/?\\s*(?:" +
+    "(" +
+    LEFT_BRACKET +
+    "\\s*/?\\s*(?:" +
     TAG_NAME_PATTERN +
-    ")\\s*[>＞>])",
+    ")\\s*" +
+    RIGHT_BRACKET +
+    ")",
   "gi",
 );
 

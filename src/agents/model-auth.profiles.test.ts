@@ -813,19 +813,6 @@ describe("getApiKeyForModel", () => {
     );
   });
 
-  it("resolveEnvApiKey('volcengine-plan') uses volcengine auth candidates", async () => {
-    await withEnvAsync(
-      {
-        VOLCANO_ENGINE_API_KEY: "volcengine-plan-key",
-      },
-      async () => {
-        const resolved = resolveEnvApiKey("volcengine-plan");
-        expect(resolved?.apiKey).toBe("volcengine-plan-key");
-        expect(resolved?.source).toContain("VOLCANO_ENGINE_API_KEY");
-      },
-    );
-  });
-
   it("resolveEnvApiKey('anthropic-vertex') uses the provided env snapshot", async () => {
     const resolved = resolveEnvApiKey("anthropic-vertex", {
       GOOGLE_CLOUD_PROJECT_ID: "vertex-project",

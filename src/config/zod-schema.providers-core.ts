@@ -6,6 +6,7 @@ import {
   normalizeTelegramCommandName,
   resolveTelegramCustomCommands,
 } from "../plugin-sdk/telegram-command-config.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
 import {
   ChannelHealthMonitorSchema,
@@ -645,10 +646,10 @@ export const DiscordAccountSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
-    const activityText = typeof value.activity === "string" ? value.activity.trim() : "";
+    const activityText = normalizeOptionalString(value.activity) ?? "";
     const hasActivity = Boolean(activityText);
     const hasActivityType = value.activityType !== undefined;
-    const activityUrl = typeof value.activityUrl === "string" ? value.activityUrl.trim() : "";
+    const activityUrl = normalizeOptionalString(value.activityUrl) ?? "";
     const hasActivityUrl = Boolean(activityUrl);
 
     if ((hasActivityType || hasActivityUrl) && !hasActivity) {

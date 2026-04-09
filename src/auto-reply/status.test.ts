@@ -11,8 +11,16 @@ import {
   buildCommandsMessage,
   buildCommandsMessagePaginated,
   buildHelpMessage,
-  buildStatusMessage,
+  buildStatusMessage as buildStatusMessageRaw,
 } from "./status.js";
+import type { buildStatusMessage as BuildStatusMessage } from "./status.js";
+
+const buildStatusMessage: typeof BuildStatusMessage = (args) =>
+  buildStatusMessageRaw({
+    modelAuth: "api-key",
+    activeModelAuth: "api-key",
+    ...args,
+  });
 
 const { listPluginCommands } = vi.hoisted(() => ({
   listPluginCommands: vi.fn(
@@ -283,7 +291,7 @@ describe("buildStatusMessage", () => {
         channel: "discord",
         groupId: "123",
       },
-      sessionKey: "agent:main:discord:channel:123",
+      sessionKey: "agent:main:main",
       sessionScope: "per-sender",
       queue: { mode: "collect", depth: 0 },
     });
@@ -846,6 +854,41 @@ describe("buildStatusMessage", () => {
 
     const normalized = normalizeTestText(text);
     expect(normalized).not.toContain("Fallback:");
+  });
+
+  it("shows configured fallback models when provided", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: {
+          primary: "anthropic/claude-opus-4-6",
+          fallbacks: ["google/gemini-2.5-flash", "openai/gpt-5-mini"],
+        },
+      },
+      sessionEntry: { sessionId: "fb1", updatedAt: 0 },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fallbacks: google/gemini-2.5-flash, openai/gpt-5-mini");
+  });
+
+  it("omits configured fallbacks line when no fallbacks provided", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-6",
+      },
+      sessionEntry: { sessionId: "fb2", updatedAt: 0 },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).not.toContain("Fallbacks:");
   });
 
   it("keeps provider prefix from configured model", () => {

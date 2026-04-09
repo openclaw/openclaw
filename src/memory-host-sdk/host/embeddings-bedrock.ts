@@ -1,7 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
 import { debugEmbeddingsLog } from "./embeddings-debug.js";
-import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
+import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.types.js";
 
 // ---------------------------------------------------------------------------
 // Types & constants

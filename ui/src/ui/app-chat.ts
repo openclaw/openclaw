@@ -425,10 +425,24 @@ async function refreshChatModels(host: ChatHost) {
 }
 
 export const flushChatQueueForEvent = flushChatQueue;
+const chatAvatarRequestVersions = new WeakMap<object, number>();
 
 type SessionDefaultsSnapshot = {
   defaultAgentId?: string;
 };
+
+function beginChatAvatarRequest(host: ChatHost): number {
+  const key = host as object;
+  const nextVersion = (chatAvatarRequestVersions.get(key) ?? 0) + 1;
+  chatAvatarRequestVersions.set(key, nextVersion);
+  return nextVersion;
+}
+
+function shouldApplyChatAvatarResult(host: ChatHost, version: number, sessionKey: string): boolean {
+  return (
+    chatAvatarRequestVersions.get(host as object) === version && host.sessionKey === sessionKey
+  );
+}
 
 function resolveAgentIdForSession(host: ChatHost): string | null {
   const parsed = parseAgentSessionKey(host.sessionKey);
@@ -453,23 +467,35 @@ export async function refreshChatAvatar(host: ChatHost) {
     host.chatAvatarUrl = null;
     return;
   }
+  const sessionKey = host.sessionKey;
+  const requestVersion = beginChatAvatarRequest(host);
   const agentId = resolveAgentIdForSession(host);
   if (!agentId) {
-    host.chatAvatarUrl = null;
+    if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
+      host.chatAvatarUrl = null;
+    }
     return;
   }
   host.chatAvatarUrl = null;
   const url = buildAvatarMetaUrl(host.basePath, agentId);
   try {
     const res = await fetch(url, { method: "GET" });
+    if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
+      return;
+    }
     if (!res.ok) {
       host.chatAvatarUrl = null;
       return;
     }
     const data = (await res.json()) as { avatarUrl?: unknown };
+    if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
+      return;
+    }
     const avatarUrl = typeof data.avatarUrl === "string" ? data.avatarUrl.trim() : "";
     host.chatAvatarUrl = avatarUrl || null;
   } catch {
-    host.chatAvatarUrl = null;
+    if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
+      host.chatAvatarUrl = null;
+    }
   }
 }

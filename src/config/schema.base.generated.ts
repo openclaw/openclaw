@@ -3425,6 +3425,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     systemPromptArg: {
                       type: "string",
                     },
+                    systemPromptFileConfigArg: {
+                      type: "string",
+                    },
+                    systemPromptFileConfigKey: {
+                      type: "string",
+                    },
                     systemPromptMode: {
                       anyOf: [
                         {
@@ -7346,6 +7352,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     title: "Web Fetch Readability Extraction",
                     description:
                       "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
+                  },
+                  ssrfPolicy: {
+                    type: "object",
+                    properties: {
+                      allowRfc2544BenchmarkRange: {
+                        type: "boolean",
+                        title: "Web Fetch Allow RFC 2544 Benchmark Range",
+                        description:
+                          "Allow RFC 2544 benchmark-range IPs (198.18.0.0/15) for fake-IP proxy compatibility such as Clash or Surge.",
+                      },
+                    },
+                    additionalProperties: false,
+                    title: "Web Fetch SSRF Policy",
+                    description:
+                      "Scoped SSRF policy overrides for web_fetch. Keep this narrow and opt in only for known local-network proxy environments.",
                   },
                   firecrawl: {
                     type: "object",
@@ -17180,7 +17201,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 type: "boolean",
                 title: "Enable Structured Plan Tool",
                 description:
-                  "Enable the experimental structured `update_plan` tool for non-trivial multi-step work tracking across all providers. OpenAI and OpenAI Codex runs auto-enable it even when this flag is unset.",
+                  "Enable or disable the experimental structured `update_plan` tool for non-trivial multi-step work tracking. OpenAI and OpenAI Codex runs auto-enable it when this flag is unset; set false to disable that auto-enable.",
               },
             },
             additionalProperties: false,
@@ -23556,7 +23577,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "tools.experimental.planTool": {
       label: "Enable Structured Plan Tool",
-      help: "Enable the experimental structured `update_plan` tool for non-trivial multi-step work tracking across all providers. OpenAI and OpenAI Codex runs auto-enable it even when this flag is unset.",
+      help: "Enable or disable the experimental structured `update_plan` tool for non-trivial multi-step work tracking. OpenAI and OpenAI Codex runs auto-enable it when this flag is unset; set false to disable that auto-enable.",
       tags: ["security", "tools", "advanced"],
     },
     "tools.elevated": {
@@ -23878,6 +23899,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Web Fetch Readability Extraction",
       help: "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
       tags: ["tools"],
+    },
+    "tools.web.fetch.ssrfPolicy": {
+      label: "Web Fetch SSRF Policy",
+      help: "Scoped SSRF policy overrides for web_fetch. Keep this narrow and opt in only for known local-network proxy environments.",
+      tags: ["access", "tools"],
+    },
+    "tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange": {
+      label: "Web Fetch Allow RFC 2544 Benchmark Range",
+      help: "Allow RFC 2544 benchmark-range IPs (198.18.0.0/15) for fake-IP proxy compatibility such as Clash or Surge.",
+      tags: ["access", "tools"],
     },
     "gateway.controlUi.basePath": {
       label: "Control UI Base Path",
@@ -26904,6 +26935,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.6",
+  version: "2026.4.10",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };

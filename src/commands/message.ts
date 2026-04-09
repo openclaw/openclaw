@@ -12,7 +12,10 @@ import { loadConfig } from "../config/config.js";
 import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
 import { runMessageAction } from "../infra/outbound/message-action-runner.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildMessageCliJson, formatMessageCliText } from "./message-format.js";
 
@@ -41,7 +44,7 @@ export async function messageCommand(
     runtime,
     autoEnable: true,
   });
-  const rawAction = typeof opts.action === "string" ? opts.action.trim() : "";
+  const rawAction = normalizeOptionalString(opts.action) ?? "";
   const actionInput = rawAction || "send";
   const normalizedActionInput = normalizeLowercaseStringOrEmpty(actionInput);
   const actionMatch = (CHANNEL_MESSAGE_ACTION_NAMES as readonly string[]).find(

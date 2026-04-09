@@ -276,13 +276,13 @@ function targetsMatchTelegramReplySuppression(params: {
   const origin = parseTelegramTarget(params.originTarget);
   const target = parseTelegramTarget(params.targetKey);
   const originThreadId =
-    origin.messageThreadId != null && String(origin.messageThreadId).trim()
-      ? String(origin.messageThreadId).trim()
+    origin.messageThreadId != null && normalizeOptionalString(String(origin.messageThreadId))
+      ? normalizeOptionalString(String(origin.messageThreadId))
       : undefined;
   const targetThreadId =
-    params.targetThreadId?.trim() ||
-    (target.messageThreadId != null && String(target.messageThreadId).trim()
-      ? String(target.messageThreadId).trim()
+    normalizeOptionalString(params.targetThreadId) ||
+    (target.messageThreadId != null && normalizeOptionalString(String(target.messageThreadId))
+      ? normalizeOptionalString(String(target.messageThreadId))
       : undefined);
   if (
     normalizeOptionalLowercaseString(origin.chatId) !==
@@ -304,8 +304,8 @@ function resolveTelegramCommandConversation(params: {
 }) {
   const chatId = [params.originatingTo, params.commandTo, params.fallbackTo]
     .map((candidate) => {
-      const trimmed = candidate?.trim();
-      return trimmed ? parseTelegramTarget(trimmed).chatId.trim() : "";
+      const trimmed = normalizeOptionalString(candidate) ?? "";
+      return trimmed ? (normalizeOptionalString(parseTelegramTarget(trimmed).chatId) ?? "") : "";
     })
     .find((candidate) => candidate.length > 0);
   if (!chatId) {
@@ -331,12 +331,13 @@ function resolveTelegramInboundConversation(params: {
   conversationId?: string;
   threadId?: string | number;
 }) {
-  const rawTarget = params.to?.trim() || params.conversationId?.trim() || "";
+  const rawTarget =
+    normalizeOptionalString(params.to) ?? normalizeOptionalString(params.conversationId) ?? "";
   if (!rawTarget) {
     return null;
   }
   const parsedTarget = parseTelegramTarget(rawTarget);
-  const chatId = parsedTarget.chatId.trim();
+  const chatId = normalizeOptionalString(parsedTarget.chatId) ?? "";
   if (!chatId) {
     return null;
   }

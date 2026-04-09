@@ -13,7 +13,7 @@ import {
   resolveNonEnvSecretRefHeaderValueMarker,
 } from "./model-auth-markers.js";
 import { resolveAwsSdkEnvVarName } from "./model-auth-runtime-shared.js";
-import { normalizeProviderIdForAuth } from "./provider-id.js";
+import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
@@ -45,6 +45,14 @@ export type ProviderAuthResolver = (
   source: "env" | "profile" | "none";
   profileId?: string;
 };
+
+type AuthProfileStoreInput =
+  | ReturnType<typeof ensureAuthProfileStore>
+  | (() => ReturnType<typeof ensureAuthProfileStore>);
+
+function resolveAuthProfileStoreInput(input: AuthProfileStoreInput) {
+  return typeof input === "function" ? input() : input;
+}
 
 const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
 
@@ -321,11 +329,11 @@ export function resolveMissingProviderApiKey(params: {
 
 export function createProviderApiKeyResolver(
   env: NodeJS.ProcessEnv,
-  authStore: ReturnType<typeof ensureAuthProfileStore>,
+  authStoreInput: AuthProfileStoreInput,
   config?: OpenClawConfig,
 ): ProviderApiKeyResolver {
   return (provider: string): { apiKey: string | undefined; discoveryApiKey?: string } => {
-    const authProvider = normalizeProviderIdForAuth(provider);
+    const authProvider = resolveProviderIdForAuth(provider, { config, env });
     const envVar = resolveEnvApiKeyVarName(authProvider, env);
     if (envVar) {
       return {
@@ -333,36 +341,40 @@ export function createProviderApiKeyResolver(
         discoveryApiKey: toDiscoveryApiKey(env[envVar]),
       };
     }
-    const fromProfiles = resolveApiKeyFromProfiles({
-      provider: authProvider,
-      store: authStore,
-      env,
-    });
-    if (fromProfiles?.apiKey) {
-      return {
-        apiKey: fromProfiles.apiKey,
-        discoveryApiKey: fromProfiles.discoveryApiKey,
-      };
-    }
     const fromConfig = resolveConfigBackedProviderAuth({
       provider: authProvider,
       config,
     });
-    return {
-      apiKey: fromConfig?.apiKey,
-      discoveryApiKey: fromConfig?.discoveryApiKey,
-    };
+    if (fromConfig?.apiKey) {
+      return {
+        apiKey: fromConfig.apiKey,
+        discoveryApiKey: fromConfig.discoveryApiKey,
+      };
+    }
+    const fromProfiles = resolveApiKeyFromProfiles({
+      provider: authProvider,
+      store: resolveAuthProfileStoreInput(authStoreInput),
+      env,
+    });
+    return fromProfiles?.apiKey
+      ? {
+          apiKey: fromProfiles.apiKey,
+          discoveryApiKey: fromProfiles.discoveryApiKey,
+        }
+      : { apiKey: undefined, discoveryApiKey: undefined };
   };
 }
 
 export function createProviderAuthResolver(
   env: NodeJS.ProcessEnv,
-  authStore: ReturnType<typeof ensureAuthProfileStore>,
+  authStoreInput: AuthProfileStoreInput,
   config?: OpenClawConfig,
 ): ProviderAuthResolver {
   return (provider: string, options?: { oauthMarker?: string }) => {
-    const authProvider = normalizeProviderIdForAuth(provider);
+    const authProvider = resolveProviderIdForAuth(provider, { config, env });
+    const authStore = resolveAuthProfileStoreInput(authStoreInput);
     const ids = listProfilesForProvider(authStore, authProvider);
+
     let oauthCandidate:
       | {
           apiKey: string | undefined;
@@ -425,7 +437,6 @@ export function createProviderAuthResolver(
         source: "none",
       };
     }
-
     return {
       apiKey: undefined,
       discoveryApiKey: undefined,
@@ -446,7 +457,7 @@ function resolveConfigBackedProviderAuth(params: { provider: string; config?: Op
   // Providers own any provider-specific fallback auth logic via
   // resolveSyntheticAuth(...). Discovery/bootstrap callers may consume
   // non-secret markers from source config, but must never persist plaintext.
-  const authProvider = normalizeProviderIdForAuth(params.provider);
+  const authProvider = resolveProviderIdForAuth(params.provider, { config: params.config });
   const synthetic = resolveProviderSyntheticAuthWithPlugin({
     provider: authProvider,
     config: params.config,

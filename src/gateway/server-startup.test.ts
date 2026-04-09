@@ -84,4 +84,28 @@ describe("gateway startup primary model warmup", () => {
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
     expect(resolveModelMock).not.toHaveBeenCalled();
   });
+
+  it("skips static warmup for configured CLI backends", async () => {
+    await prewarmConfiguredPrimaryModel({
+      cfg: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "codex-cli/gpt-5.4",
+            },
+            cliBackends: {
+              "codex-cli": {
+                command: "codex",
+                args: ["exec"],
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      log: { warn: vi.fn() },
+    });
+
+    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(resolveModelMock).not.toHaveBeenCalled();
+  });
 });

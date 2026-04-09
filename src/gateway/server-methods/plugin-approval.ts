@@ -6,6 +6,7 @@ import {
   DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
   MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
 } from "../../infra/plugin-approvals.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
   ErrorCodes,
@@ -76,7 +77,7 @@ export function createPluginApprovalHandlers(
       );
 
       const normalizeTrimmedString = (value?: string | null): string | null =>
-        value?.trim() || null;
+        normalizeOptionalString(value) || null;
 
       const request: PluginApprovalRequestPayload = {
         pluginId: p.pluginId ?? null,

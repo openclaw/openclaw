@@ -27,6 +27,7 @@ const piEmbeddedMocks = getSharedMocks("openclaw.trigger-handling.pi-embedded-mo
   compactEmbeddedPiSession: vi.fn(),
   runEmbeddedPiAgent: vi.fn(),
   queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+  resolveActiveEmbeddedRunSessionId: vi.fn().mockReturnValue(undefined),
   isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
 }));
@@ -55,6 +56,8 @@ const installPiEmbeddedMock = () =>
     runEmbeddedPiAgent: (...args: unknown[]) => piEmbeddedMocks.runEmbeddedPiAgent(...args),
     queueEmbeddedPiMessage: (...args: unknown[]) => piEmbeddedMocks.queueEmbeddedPiMessage(...args),
     resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
+    resolveActiveEmbeddedRunSessionId: (...args: unknown[]) =>
+      piEmbeddedMocks.resolveActiveEmbeddedRunSessionId(...args),
     isEmbeddedPiRunActive: (...args: unknown[]) => piEmbeddedMocks.isEmbeddedPiRunActive(...args),
     isEmbeddedPiRunStreaming: (...args: unknown[]) =>
       piEmbeddedMocks.isEmbeddedPiRunStreaming(...args),

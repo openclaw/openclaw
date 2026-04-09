@@ -30,12 +30,15 @@ export type SubsystemLogger = {
 };
 
 function shouldLogToConsole(level: LogLevel, settings: { level: LogLevel }): boolean {
+  if (level === "silent") {
+    return false;
+  }
   if (settings.level === "silent") {
     return false;
   }
   const current = levelToMinLevel(level);
   const min = levelToMinLevel(settings.level);
-  return current <= min;
+  return current >= min;
 }
 
 type ChalkInstance = InstanceType<typeof Chalk>;

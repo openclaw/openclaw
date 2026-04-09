@@ -7,6 +7,7 @@ import type {
 } from "openclaw/plugin-sdk/config-runtime";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { firstDefined, normalizeAllowFrom, type NormalizedAllowFrom } from "../bot-access.js";
 import { normalizeTelegramReplyToMessageId } from "../outbound-params.js";
 import { resolveTelegramPreviewStreamMode } from "../preview-streaming.js";
@@ -279,7 +280,8 @@ export function resolveTelegramDirectPeerId(params: {
   chatId: number | string;
   senderId?: number | string | null;
 }) {
-  const senderId = params.senderId != null ? String(params.senderId).trim() : "";
+  const senderId =
+    params.senderId != null ? (normalizeOptionalString(String(params.senderId)) ?? "") : "";
   if (senderId) {
     return senderId;
   }
