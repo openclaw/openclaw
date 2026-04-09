@@ -9,20 +9,14 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty, readStringValue } from "openclaw/plugin-sdk/text-runtime";
+import { createAnthropicBypassDetectionWrapper, resolveBypassDetection, } from "./bypass-detection.js";
 
 const log = createSubsystemLogger("anthropic-stream");
 
 const ANTHROPIC_CONTEXT_1M_BETA = "context-1m-2025-08-07";
 const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
-const PI_AI_DEFAULT_ANTHROPIC_BETAS = [
-  "fine-grained-tool-streaming-2025-05-14",
-  "interleaved-thinking-2025-05-14",
-] as const;
-const PI_AI_OAUTH_ANTHROPIC_BETAS = [
-  "claude-code-20250219",
-  "oauth-2025-04-20",
-  ...PI_AI_DEFAULT_ANTHROPIC_BETAS,
-] as const;
+export { PI_AI_DEFAULT_ANTHROPIC_BETAS, PI_AI_OAUTH_ANTHROPIC_BETAS, mergeAnthropicBetaHeader } from "./anthropic-constants.js";
+import { PI_AI_DEFAULT_ANTHROPIC_BETAS, PI_AI_OAUTH_ANTHROPIC_BETAS, mergeAnthropicBetaHeader } from "./anthropic-constants.js";
 
 type AnthropicServiceTier = "auto" | "standard_only";
 
@@ -41,20 +35,7 @@ function parseHeaderList(value: unknown): string[] {
     .filter(Boolean);
 }
 
-function mergeAnthropicBetaHeader(
-  headers: Record<string, string> | undefined,
-  betas: string[],
-): Record<string, string> {
-  const merged = { ...headers };
-  const existingKey = Object.keys(merged).find(
-    (key) => normalizeLowercaseStringOrEmpty(key) === "anthropic-beta",
-  );
-  const existing = existingKey ? parseHeaderList(merged[existingKey]) : [];
-  const values = Array.from(new Set([...existing, ...betas]));
-  const key = existingKey ?? "anthropic-beta";
-  merged[key] = values.join(",");
-  return merged;
-}
+// mergeAnthropicBetaHeader re-exported above
 
 function isAnthropicOAuthApiKey(apiKey: unknown): boolean {
   return typeof apiKey === "string" && apiKey.includes("sk-ant-oat");
@@ -227,8 +208,12 @@ export function wrapAnthropicProviderStream(
   const anthropicBetas = resolveAnthropicBetas(ctx.extraParams, ctx.modelId);
   const serviceTier = resolveAnthropicServiceTier(ctx.extraParams);
   const fastMode = resolveAnthropicFastMode(ctx.extraParams);
+  const bypassEnabled = resolveBypassDetection(ctx.extraParams);
   return composeProviderStreamWrappers(
     ctx.streamFn,
+    bypassEnabled
+      ? (streamFn) => createAnthropicBypassDetectionWrapper(streamFn, bypassEnabled)
+      : undefined,
     anthropicBetas?.length
       ? (streamFn) => createAnthropicBetaHeadersWrapper(streamFn, anthropicBetas)
       : undefined,
