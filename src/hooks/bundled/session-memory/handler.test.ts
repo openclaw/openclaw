@@ -71,6 +71,8 @@ async function runNewWithPreviousSessionEntry(params: {
   action?: "new" | "reset";
   sessionKey?: string;
   workspaceDirOverride?: string;
+  /** Pin wall time for deterministic filename/header assertions */
+  timestamp?: Date;
 }): Promise<{ files: string[]; memoryContent: string }> {
   const event = createHookEvent(
     "command",
@@ -86,6 +88,9 @@ async function runNewWithPreviousSessionEntry(params: {
       ...(params.workspaceDirOverride ? { workspaceDir: params.workspaceDirOverride } : {}),
     },
   );
+  if (params.timestamp) {
+    event.timestamp = params.timestamp;
+  }
 
   await handler(event);
 
@@ -100,6 +105,7 @@ async function runNewWithPreviousSession(params: {
   sessionContent: string;
   cfg?: (tempDir: string) => OpenClawConfig;
   action?: "new" | "reset";
+  timestamp?: Date;
 }): Promise<{ tempDir: string; files: string[]; memoryContent: string }> {
   const tempDir = await createCaseWorkspace("workspace");
   const sessionsDir = path.join(tempDir, "sessions");
@@ -125,6 +131,7 @@ async function runNewWithPreviousSession(params: {
       sessionId: "test-123",
       sessionFile,
     },
+    timestamp: params.timestamp,
   });
   return { tempDir, files, memoryContent };
 }
@@ -212,6 +219,24 @@ describe("session-memory hook", () => {
     // Memory directory should not be created for other commands
     const memoryDir = path.join(tempDir, "memory");
     await expect(fs.access(memoryDir)).rejects.toThrow();
+  });
+
+  it("uses agents.defaults.userTimezone for filename date and session header", async () => {
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "Jakarta time check" },
+      { role: "assistant", content: "Noted" },
+    ]);
+    const { files, memoryContent } = await runNewWithPreviousSession({
+      sessionContent,
+      cfg: (tempDir) =>
+        ({
+          agents: { defaults: { workspace: tempDir, userTimezone: "Asia/Jakarta" } },
+        }) satisfies OpenClawConfig,
+      timestamp: new Date("2026-04-09T00:44:38.000Z"),
+    });
+    expect(files.length).toBe(1);
+    expect(files[0]).toMatch(/^2026-04-09-.*\.md$/);
+    expect(memoryContent).toMatch(/^# Session: 2026-04-09 07:44:38 Asia\/Jakarta\n/m);
   });
 
   it("creates memory file with session content on /new command", async () => {

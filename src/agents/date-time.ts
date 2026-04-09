@@ -191,3 +191,47 @@ export function formatUserTime(
     return undefined;
   }
 }
+
+/** Calendar date in `YYYY-MM-DD` for the instant in the given IANA time zone. */
+export function formatDateStampInTimezone(nowMs: number, timeZone: string): string {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date(nowMs));
+    const year = parts.find((part) => part.type === "year")?.value;
+    const month = parts.find((part) => part.type === "month")?.value;
+    const day = parts.find((part) => part.type === "day")?.value;
+    if (year && month && day) {
+      return `${year}-${month}-${day}`;
+    }
+  } catch {
+    // fall through
+  }
+  return new Date(nowMs).toISOString().slice(0, 10);
+}
+
+/** 24-hour wall time `HH:MM:SS` for the instant in the given IANA time zone. */
+export function formatWallClockHmsInTimezone(nowMs: number, timeZone: string): string {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+      hourCycle: "h23",
+    }).formatToParts(new Date(nowMs));
+    const hour = parts.find((part) => part.type === "hour")?.value;
+    const minute = parts.find((part) => part.type === "minute")?.value;
+    const second = parts.find((part) => part.type === "second")?.value;
+    if (hour != null && minute != null && second != null) {
+      return `${hour}:${minute}:${second}`;
+    }
+  } catch {
+    // fall through
+  }
+  return new Date(nowMs).toISOString().split("T")[1]?.split(".")[0] ?? "00:00:00";
+}

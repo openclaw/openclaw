@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Hooks/session-memory: format saved memory filenames and `# Session` headers using `agents.defaults.userTimezone` instead of always using UTC wall time. (#63454)
 - fix(browser): auto-generate browser control auth token for none/trusted-proxy modes [AI]. (#63280) Thanks @pgondhi987.
 - fix(exec): replace TOCTOU check-then-read with atomic pinned-fd open in script preflight [AI]. (#62333) Thanks @pgondhi987.
 - WhatsApp/auto-reply: keep inbound reply, media, and composing sends on the current socket across reconnects, wait through reconnect gaps, and retry timeout-only send failures without dropping the active socket ref. (#62892) Thanks @mcaxtr.

@@ -25,14 +25,14 @@ When you run `/new` or `/reset` to start a fresh session:
 1. **Finds the previous session** - Uses the pre-reset session entry to locate the correct transcript
 2. **Extracts conversation** - Reads the last N user/assistant messages from the session (default: 15, configurable)
 3. **Generates descriptive slug** - Uses LLM to create a meaningful filename slug based on conversation content
-4. **Saves to memory** - Creates a new file at `<workspace>/memory/YYYY-MM-DD-slug.md`
+4. **Saves to memory** - Creates a new file at `<workspace>/memory/YYYY-MM-DD-slug.md` (calendar day and header clock use `agents.defaults.userTimezone`, falling back to the host zone or `UTC`)
 
 ## Output Format
 
 Memory files are created with the following format:
 
 ```markdown
-# Session: 2026-01-16 14:30:00 UTC
+# Session: 2026-01-16 09:30:00 America/New_York
 
 - **Session Key**: agent:main:main
 - **Session ID**: abc123def456

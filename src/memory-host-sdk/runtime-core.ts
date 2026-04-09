@@ -2,6 +2,7 @@
 
 export type { AnyAgentTool } from "../agents/tools/common.js";
 export { resolveCronStyleNow } from "../agents/current-time.js";
+export { formatDateStampInTimezone } from "../agents/date-time.js";
 export { DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR } from "../agents/pi-settings.js";
 export { resolveDefaultAgentId, resolveSessionAgentId } from "../agents/agent-scope.js";
 export { resolveMemorySearchConfig } from "../agents/memory-search.js";

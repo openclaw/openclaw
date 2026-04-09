@@ -12,6 +12,11 @@ import {
   resolveAgentIdByWorkspacePath,
   resolveAgentWorkspaceDir,
 } from "../../../agents/agent-scope.js";
+import {
+  formatDateStampInTimezone,
+  formatWallClockHmsInTimezone,
+  resolveUserTimezone,
+} from "../../../agents/date-time.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import { writeFileWithinRoot } from "../../../infra/fs-safe.js";
@@ -80,9 +85,9 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const memoryDir = path.join(workspaceDir, "memory");
     await fs.mkdir(memoryDir, { recursive: true });
 
-    // Get today's date for filename
-    const now = new Date(event.timestamp);
-    const dateStr = now.toISOString().split("T")[0]; // YYYY-MM-DD
+    const nowMs = event.timestamp.getTime();
+    const userTimezone = resolveUserTimezone(cfg?.agents?.defaults?.userTimezone);
+    const dateStr = formatDateStampInTimezone(nowMs, userTimezone);
 
     // Generate descriptive slug from session using LLM
     // Prefer previousSessionEntry (old session before /new) over current (which may be empty)
@@ -158,9 +163,9 @@ const saveSessionToMemory: HookHandler = async (event) => {
       }
     }
 
-    // If no slug, use timestamp
+    // If no slug, use local wall-clock HHMM in userTimezone (matches filename date semantics)
     if (!slug) {
-      const timeSlug = now.toISOString().split("T")[1].split(".")[0].replace(/:/g, "");
+      const timeSlug = formatWallClockHmsInTimezone(nowMs, userTimezone).replace(/:/g, "");
       slug = timeSlug.slice(0, 4); // HHMM
       log.debug("Using fallback timestamp slug", { slug });
     }
@@ -173,8 +178,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
       path: memoryFilePath.replace(os.homedir(), "~"),
     });
 
-    // Format time as HH:MM:SS UTC
-    const timeStr = now.toISOString().split("T")[1].split(".")[0];
+    const timeStr = formatWallClockHmsInTimezone(nowMs, userTimezone);
 
     // Extract context details
     const sessionId = (sessionEntry.sessionId as string) || "unknown";
@@ -182,7 +186,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     // Build Markdown entry
     const entryParts = [
-      `# Session: ${dateStr} ${timeStr} UTC`,
+      `# Session: ${dateStr} ${timeStr} ${userTimezone}`,
       "",
       `- **Session Key**: ${displaySessionKey}`,
       `- **Session ID**: ${sessionId}`,

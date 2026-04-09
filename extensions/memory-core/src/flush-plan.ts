@@ -1,5 +1,6 @@
 import {
   DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR,
+  formatDateStampInTimezone,
   parseNonNegativeByteSize,
   resolveCronStyleNow,
   SILENT_REPLY_TOKEN,
@@ -39,22 +40,6 @@ export const DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT = [
   MEMORY_FLUSH_APPEND_ONLY_HINT,
   `You may reply, but usually ${SILENT_REPLY_TOKEN} is correct.`,
 ].join(" ");
-
-function formatDateStampInTimezone(nowMs: number, timezone: string): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date(nowMs));
-  const year = parts.find((part) => part.type === "year")?.value;
-  const month = parts.find((part) => part.type === "month")?.value;
-  const day = parts.find((part) => part.type === "day")?.value;
-  if (year && month && day) {
-    return `${year}-${month}-${day}`;
-  }
-  return new Date(nowMs).toISOString().slice(0, 10);
-}
 
 function normalizeNonNegativeInt(value: unknown): number | null {
   if (typeof value !== "number" || !Number.isFinite(value)) {
