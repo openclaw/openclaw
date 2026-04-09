@@ -432,7 +432,7 @@ export async function generateAndAppendDreamNarrative(params: {
 
   try {
     const { runId } = await params.subagent.run({
-      idempotencyKey: `dreaming-narrative-${params.workspaceDir}-${params.data.phase}-${nowMs}`,
+      idempotencyKey: sessionKey,
       sessionKey,
       message,
       extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,

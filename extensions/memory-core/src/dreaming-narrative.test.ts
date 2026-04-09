@@ -356,7 +356,7 @@ describe("generateAndAppendDreamNarrative", () => {
 
     expect(subagent.run).toHaveBeenCalledOnce();
     expect(subagent.run.mock.calls[0][0]).toMatchObject({
-      idempotencyKey: expect.stringMatching(/^dreaming-narrative-.*-rem-/),
+      idempotencyKey: expect.stringContaining("dreaming-narrative-"),
       deliver: false,
     });
     expect(subagent.waitForRun).toHaveBeenCalledOnce();
