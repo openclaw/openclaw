@@ -338,8 +338,15 @@ export async function runWebSearch(
           ...configuredFallbacks
             .map((id) => candidates.find((p) => p.id === normalizeLowercaseStringOrEmpty(id)))
             .filter(
-              (p): p is PluginWebSearchProviderEntry => p != null && p.id !== primaryProviderId,
-            ),
+              (p): p is PluginWebSearchProviderEntry =>
+                p != null && p.id !== primaryProviderId,
+            )
+            .reduce<PluginWebSearchProviderEntry[]>((deduped, p) => {
+              if (p && !deduped.some((d) => d.id === p.id)) {
+                deduped.push(p);
+              }
+              return deduped;
+            }, []),
         ]
       : candidates;
 
