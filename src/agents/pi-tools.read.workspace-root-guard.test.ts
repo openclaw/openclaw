@@ -2,8 +2,13 @@ import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
+type AssertSandboxPath = typeof import("./sandbox-paths.js").assertSandboxPath;
+
 const mocks = vi.hoisted(() => ({
-  assertSandboxPath: vi.fn(async () => ({ resolved: "/tmp/root", relative: "" })),
+  assertSandboxPath: vi.fn<AssertSandboxPath>(async () => ({
+    resolved: "/tmp/root",
+    relative: "",
+  })),
 }));
 
 vi.mock("./sandbox-paths.js", () => ({
@@ -31,11 +36,19 @@ let wrapToolWorkspaceRootGuardWithOptions: typeof import("./pi-tools.read.js").w
 
 describe("wrapToolWorkspaceRootGuardWithOptions", () => {
   const root = "/tmp/root";
+  const assertSandboxPathImpl: AssertSandboxPath = async ({ filePath }) => ({
+    resolved:
+      filePath.startsWith("file://") || path.isAbsolute(filePath)
+        ? filePath
+        : path.resolve(root, filePath),
+    relative: "",
+  });
 
   beforeAll(loadModule);
 
   beforeEach(() => {
-    mocks.assertSandboxPath.mockClear();
+    mocks.assertSandboxPath.mockReset();
+    mocks.assertSandboxPath.mockImplementation(assertSandboxPathImpl);
   });
 
   it("maps container workspace paths to host workspace root", async () => {
