@@ -15,9 +15,11 @@ import type {
   WebhookInboundQuote,
 } from "./types.js";
 
-function asRec(val: unknown): Record<string, unknown> {
-  return (val ?? {}) as Record<string, unknown>;
+/* oxlint-disable typescript/no-explicit-any -- asRec() helper for chain property access on dynamic SDK objects */
+function asRec(val: unknown): Record<string, any> {
+  return (val ?? {}) as Record<string, any>;
 }
+/* oxlint-enable typescript/no-explicit-any */
 
 // ============================================================================
 // Constants

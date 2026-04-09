@@ -56,7 +56,8 @@ interface SdkExports {
 }
 
 const _sdkReady: Promise<SdkExports> = import("openclaw/plugin-sdk/core")
-  .then((sdk: Record<string, unknown>) => {
+  // oxlint-disable-next-line typescript/no-explicit-any -- dynamic SDK import with unknown shape
+  .then((sdk: any) => {
     const exports: SdkExports = {};
     if (typeof sdk.loadOutboundMediaFromUrl === "function") {
       exports.loadOutboundMediaFromUrl = sdk.loadOutboundMediaFromUrl;
@@ -81,7 +82,8 @@ const _sdkReady: Promise<SdkExports> = import("openclaw/plugin-sdk/core")
 let _cachedAddWildcardAllowFrom: ((allowFrom: string[]) => string[]) | undefined;
 
 const _setupSdkReady: Promise<void> = import("openclaw/plugin-sdk/setup")
-  .then((sdk: Record<string, unknown>) => {
+  // oxlint-disable-next-line typescript/no-explicit-any -- dynamic SDK import with unknown shape
+  .then((sdk: any) => {
     if (typeof sdk.addWildcardAllowFrom === "function") {
       _cachedAddWildcardAllowFrom = sdk.addWildcardAllowFrom;
     }
