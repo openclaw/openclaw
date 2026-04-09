@@ -1057,9 +1057,16 @@ For direct Slack slash command routing, the first-pass bridge stays intentionall
 - expose `/nemoclaw` as a Slack slash command name
 - let the Slack native command surface pass `/nemoclaw digest` and `/nemoclaw job <id>`
   into the existing plugin command handler
+- let `/nemoclaw recent` reuse the existing runner journal plus job-status source for a
+  shallow recent-job list without introducing a new persistence layer
 
 This keeps the Slack layer aligned with the existing `summary_parts` formatter path instead
 of introducing a separate command-specific render contract.
+
+`/nemoclaw recent` is the matching lightweight list view: it reads the most recent job ids
+from the existing runner journal, looks up each job through the existing job-status source,
+formats digest-bearing rows with the shared Slack digest formatter, and otherwise returns a
+short `error / summary / status` line for each recent job.
 
 The runtime entrypoint now also emits a lightweight feedback layer for the next turn:
 

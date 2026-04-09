@@ -1,15 +1,20 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
 export type SenseClientConfig = {
   baseUrl?: string;
   timeoutMs?: number;
   token?: string;
   tokenEnv?: string;
   logger?: {
-    debug?: (...args: unknown[]) => void;
-    info?: (...args: unknown[]) => void;
-    warn?: (...args: unknown[]) => void;
-    error?: (...args: unknown[]) => void;
+    debug?: (message: string) => void;
+    info?: (message: string) => void;
+    warn?: (message: string) => void;
+    error?: (message: string) => void;
   };
 };
+
+const execFileAsync = promisify(execFile);
 
 export type SenseExecutePayload = {
   task: string;
@@ -24,9 +29,27 @@ export type SenseCallResult = {
   body: unknown;
 };
 
+export type SenseJobEnvelope = {
+  job_id?: string;
+  status?: string;
+  stage?: string;
+  target?: string;
+  message?: string;
+};
+
+export type SenseRecentJobRef = {
+  jobId: string;
+  source: "completed" | "picked";
+};
+
 const DEFAULT_BASE_URL = "http://192.168.11.11:8787";
 const DEFAULT_TIMEOUT_MS = 5_000;
 const DEFAULT_TOKEN_ENV = "SENSE_WORKER_TOKEN";
+const DEFAULT_RECENT_JOB_LIMIT = 3;
+const DEFAULT_RECENT_JOB_JOURNAL_LINES = 4000;
+const RUNNER_SYSTEMD_UNIT = "openclaw-nemoclaw-runner.service";
+const JOB_ID_PATTERN =
+  /\b(completed|picked)\s+job_id=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/i;
 
 function trimTrailingSlash(url: string): string {
   return url.replace(/\/+$/, "");
@@ -36,6 +59,39 @@ function buildUrl(baseUrl: string, path: string): string {
   return `${trimTrailingSlash(baseUrl)}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
+function normalizeJobEnvelope(body: unknown): SenseJobEnvelope | undefined {
+  if (!body || typeof body !== "object") {
+    return undefined;
+  }
+  const record = body as Record<string, unknown>;
+  if (record.error === "job_not_found") {
+    return {
+      job_id: typeof record.job_id === "string" ? record.job_id : undefined,
+      status: "job_not_found",
+    };
+  }
+  const result = record.result;
+  if (!result || typeof result !== "object") {
+    return undefined;
+  }
+  const resultRecord = result as Record<string, unknown>;
+  if (typeof resultRecord.job_id !== "string") {
+    return undefined;
+  }
+  return {
+    job_id: resultRecord.job_id,
+    status:
+      typeof resultRecord.status === "string"
+        ? resultRecord.status
+        : typeof record.status === "string"
+          ? record.status
+          : undefined,
+    stage: typeof resultRecord.stage === "string" ? resultRecord.stage : undefined,
+    target: typeof resultRecord.target === "string" ? resultRecord.target : undefined,
+    message: typeof resultRecord.message === "string" ? resultRecord.message : undefined,
+  };
+}
+
 async function fetchJson(params: {
   method: "GET" | "POST";
   url: string;
@@ -43,7 +99,7 @@ async function fetchJson(params: {
   token?: string;
   body?: unknown;
   logger?: SenseClientConfig["logger"];
-}): Promise<SenseCallResult> {
+}): Promise<SenseCallResult & { job?: SenseJobEnvelope }> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), Math.max(100, params.timeoutMs));
   const startedAt = Date.now();
@@ -77,12 +133,14 @@ async function fetchJson(params: {
     params.logger?.info?.(
       `[sense-worker] response method=${params.method} status=${response.status} elapsed_ms=${elapsedMs}`,
     );
-    return {
+    const result = {
       ok: response.ok,
       status: response.status,
       url: params.url,
       body: parsed,
     };
+    const job = normalizeJobEnvelope(parsed);
+    return job ? { ...result, job } : result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (error instanceof Error && error.name === "AbortError") {
@@ -148,9 +206,74 @@ export async function callSense(
   });
 }
 
+export async function getSenseJobStatus(
+  jobId: string,
+  config: SenseClientConfig = {},
+): Promise<SenseCallResult & { job?: SenseJobEnvelope }> {
+  const trimmedJobId = jobId.trim();
+  if (!trimmedJobId) {
+    throw new Error("jobId required");
+  }
+  const baseUrl = config.baseUrl?.trim() || DEFAULT_BASE_URL;
+  return await fetchJson({
+    method: "GET",
+    url: buildUrl(baseUrl, `/jobs/${encodeURIComponent(trimmedJobId)}`),
+    timeoutMs: config.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    token: resolveToken(config),
+    logger: config.logger,
+  });
+}
+
+export async function getRecentSenseJobRefs(
+  limit = DEFAULT_RECENT_JOB_LIMIT,
+): Promise<SenseRecentJobRef[]> {
+  const normalizedLimit = Math.max(1, Math.min(10, Math.trunc(limit || DEFAULT_RECENT_JOB_LIMIT)));
+  try {
+    const { stdout } = await execFileAsync(
+      "journalctl",
+      [
+        "--user",
+        "-u",
+        RUNNER_SYSTEMD_UNIT,
+        "-n",
+        String(DEFAULT_RECENT_JOB_JOURNAL_LINES),
+        "--no-pager",
+        "-o",
+        "cat",
+      ],
+      { encoding: "utf8", maxBuffer: 1024 * 1024 },
+    );
+    const refs: SenseRecentJobRef[] = [];
+    const seen = new Set<string>();
+    const lines = stdout.split(/\r?\n/).reverse();
+    for (const line of lines) {
+      const match = JOB_ID_PATTERN.exec(line);
+      if (!match) {
+        continue;
+      }
+      const source = match[1].toLowerCase() === "completed" ? "completed" : "picked";
+      const jobId = match[2];
+      if (seen.has(jobId)) {
+        continue;
+      }
+      seen.add(jobId);
+      refs.push({ jobId, source });
+      if (refs.length >= normalizedLimit) {
+        break;
+      }
+    }
+    return refs;
+  } catch {
+    return [];
+  }
+}
+
 export const __testing = {
   DEFAULT_BASE_URL,
   DEFAULT_TIMEOUT_MS,
   DEFAULT_TOKEN_ENV,
+  DEFAULT_RECENT_JOB_LIMIT,
+  RUNNER_SYSTEMD_UNIT,
   resolveToken,
+  normalizeJobEnvelope,
 };

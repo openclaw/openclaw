@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
-import { getSenseJobStatus } from "./client.js";
+import { getRecentSenseJobRefs, getSenseJobStatus } from "./client.js";
 import { readLatestNemoClawDigestCache } from "./latest-digest-cache.js";
 import { formatSlackDigestNotification } from "./slack-digest.js";
 
@@ -46,6 +46,65 @@ function formatJobSummary(params: { jobId: string; body: unknown }): string {
   return lines.join("\n");
 }
 
+function shortenText(value: string | undefined, maxLength = 96): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.length > maxLength ? `${trimmed.slice(0, maxLength - 1)}...` : trimmed;
+}
+
+function formatRecentDigestLine(body: unknown): string | undefined {
+  const digestText = formatSlackDigestNotification(body);
+  if (!digestText) {
+    return undefined;
+  }
+  return shortenText(digestText.split(/\r?\n/).join(" | "), 120);
+}
+
+function formatRecentFallbackLine(body: unknown): string | undefined {
+  const record = asRecord(body);
+  const result = asRecord(record?.result);
+  const errorText = typeof result?.error === "string" ? shortenText(result.error, 120) : undefined;
+  if (errorText) {
+    return `error=${errorText}`;
+  }
+  const summaryText =
+    typeof result?.summary === "string" ? shortenText(result.summary, 120) : undefined;
+  if (summaryText) {
+    return summaryText;
+  }
+  return undefined;
+}
+
+function formatRecentHeader(params: { index: number; jobId: string; body: unknown }): string {
+  const record = asRecord(params.body);
+  const result = asRecord(record?.result);
+  const status = typeof record?.status === "string" ? record.status : "unknown";
+  const exitCode = typeof result?.exit_code === "number" ? ` exit=${String(result.exit_code)}` : "";
+  const shortJobId = params.jobId.length > 8 ? `${params.jobId.slice(0, 8)}...` : params.jobId;
+  return `${params.index}) ${shortJobId} ${status}${exitCode}`;
+}
+
+async function formatRecentJobs(config: OpenClawConfig | undefined): Promise<string> {
+  const refs = await getRecentSenseJobRefs(3);
+  if (!refs.length) {
+    return "No recent jobs.";
+  }
+  const lines = ["recent jobs"];
+  let index = 1;
+  for (const ref of refs) {
+    const result = await getSenseJobStatus(ref.jobId, resolveSenseWorkerConfig(config));
+    lines.push(formatRecentHeader({ index, jobId: ref.jobId, body: result.body }));
+    lines.push(
+      `   ${formatRecentDigestLine(result.body) ?? formatRecentFallbackLine(result.body) ?? "status only"}`,
+    );
+    lines.push("");
+    index += 1;
+  }
+  return lines.join("\n").trimEnd();
+}
+
 export async function handleNemoClawCommand(
   args: string | undefined,
   config?: OpenClawConfig,
@@ -58,6 +117,9 @@ export async function handleNemoClawCommand(
       return { text };
     }
     return { text: "No notification_digest_summary available." };
+  }
+  if (normalized === "recent") {
+    return { text: await formatRecentJobs(config) };
   }
   if (normalized === "job") {
     return { text: "Usage: /nemoclaw job <id>" };
@@ -74,5 +136,5 @@ export async function handleNemoClawCommand(
     }
     return { text: formatJobSummary({ jobId, body: result.body }) };
   }
-  return { text: "Usage: /nemoclaw digest\nUsage: /nemoclaw job <id>" };
+  return { text: "Usage: /nemoclaw digest\nUsage: /nemoclaw recent\nUsage: /nemoclaw job <id>" };
 }

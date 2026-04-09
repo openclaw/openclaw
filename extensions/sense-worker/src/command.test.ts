@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const readLatestNemoClawDigestCacheMock = vi.fn();
 const getSenseJobStatusMock = vi.fn();
+const getRecentSenseJobRefsMock = vi.fn();
 
 vi.mock("./latest-digest-cache.js", () => ({
   readLatestNemoClawDigestCache: readLatestNemoClawDigestCacheMock,
@@ -9,12 +10,14 @@ vi.mock("./latest-digest-cache.js", () => ({
 
 vi.mock("./client.js", () => ({
   getSenseJobStatus: getSenseJobStatusMock,
+  getRecentSenseJobRefs: getRecentSenseJobRefsMock,
 }));
 
 describe("handleNemoClawCommand", () => {
   beforeEach(() => {
     readLatestNemoClawDigestCacheMock.mockReset();
     getSenseJobStatusMock.mockReset();
+    getRecentSenseJobRefsMock.mockReset();
   });
 
   it("returns formatted latest digest text", async () => {
@@ -115,6 +118,66 @@ describe("handleNemoClawCommand", () => {
     const { handleNemoClawCommand } = await import("./command.js");
     await expect(handleNemoClawCommand("job")).resolves.toEqual({
       text: "Usage: /nemoclaw job <id>",
+    });
+  });
+
+  it("returns recent jobs with digest and fallback lines", async () => {
+    getRecentSenseJobRefsMock.mockResolvedValue([
+      { jobId: "14c197e7-e508-45f1-a28f-eccd49f83c2c", source: "completed" },
+      { jobId: "9fb06324-8f9d-4c6b-bac5-57af00bc8207", source: "completed" },
+    ]);
+    getSenseJobStatusMock
+      .mockResolvedValueOnce({
+        body: {
+          status: "done",
+          result: {
+            exit_code: 0,
+            notification_digest_summary: [
+              {
+                digest_title: "Auth failures (immediate)",
+                digest_bucket_ui_layouts: {
+                  meta: {
+                    summary_parts: {
+                      display: {
+                        badge: { short: "MAJ" },
+                        leader: { compact: "Leader ★" },
+                      },
+                      percent: "50.0%",
+                      share: 0.5,
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        body: {
+          status: "done",
+          result: {
+            exit_code: 1,
+            error: "<urlopen error [Errno 111] Connection refused>",
+          },
+        },
+      });
+    const { handleNemoClawCommand } = await import("./command.js");
+    await expect(handleNemoClawCommand("recent")).resolves.toEqual({
+      text:
+        "recent jobs\n" +
+        "1) 14c197e7... done exit=0\n" +
+        "   Auth failures (immediate) | MAJ | 50.0% | Leader ★ | share=0.5\n" +
+        "\n" +
+        "2) 9fb06324... done exit=1\n" +
+        "   error=<urlopen error [Errno 111] Connection refused>",
+    });
+  });
+
+  it("returns no-data text when there are no recent jobs", async () => {
+    getRecentSenseJobRefsMock.mockResolvedValue([]);
+    const { handleNemoClawCommand } = await import("./command.js");
+    await expect(handleNemoClawCommand("recent")).resolves.toEqual({
+      text: "No recent jobs.",
     });
   });
 });
