@@ -45,6 +45,16 @@ describe("createFireworksKimiThinkingDisabledWrapper", () => {
     ).toMatchObject({ thinking: { type: "disabled" } });
   });
 
+  it("forces thinking disabled for Fireworks Kimi k2.5 aliases", () => {
+    expect(
+      capturePayload({
+        provider: "fireworks",
+        api: "openai-completions",
+        modelId: "accounts/fireworks/routers/kimi-k2.5-turbo",
+      }),
+    ).toMatchObject({ thinking: { type: "disabled" } });
+  });
+
   it("strips reasoning fields when disabling Fireworks Kimi thinking", () => {
     const payload = capturePayload({
       provider: "fireworks",

@@ -142,4 +142,34 @@ describe("fireworks provider plugin", () => {
       reasoning: false,
     });
   });
+
+  it("disables reasoning metadata for Fireworks Kimi k2.5 aliases", async () => {
+    const provider = await registerSingleProviderPlugin(fireworksPlugin);
+    const resolved = provider.resolveDynamicModel?.(
+      createDynamicContext({
+        provider: "fireworks",
+        modelId: "accounts/fireworks/routers/kimi-k2.5-turbo",
+        models: [
+          {
+            id: FIREWORKS_DEFAULT_MODEL_ID,
+            name: FIREWORKS_DEFAULT_MODEL_ID,
+            provider: "fireworks",
+            api: "openai-completions",
+            baseUrl: FIREWORKS_BASE_URL,
+            reasoning: false,
+            input: ["text", "image"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: FIREWORKS_DEFAULT_CONTEXT_WINDOW,
+            maxTokens: FIREWORKS_DEFAULT_MAX_TOKENS,
+          },
+        ],
+      }),
+    );
+
+    expect(resolved).toMatchObject({
+      provider: "fireworks",
+      id: "accounts/fireworks/routers/kimi-k2.5-turbo",
+      reasoning: false,
+    });
+  });
 });
