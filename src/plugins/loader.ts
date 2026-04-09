@@ -35,6 +35,7 @@ import {
 } from "./memory-embedding-providers.js";
 import {
   clearMemoryPluginState,
+  getMemoryCapabilityRegistration,
   getMemoryFlushPlanResolver,
   getMemoryPromptSectionBuilder,
   getMemoryRuntime,
@@ -129,6 +130,7 @@ export class PluginLoadFailureError extends Error {
 type CachedPluginState = {
   registry: PluginRegistry;
   memoryEmbeddingProviders: ReturnType<typeof listRegisteredMemoryEmbeddingProviders>;
+  memoryCapability: ReturnType<typeof getMemoryCapabilityRegistration>;
   memoryFlushPlanResolver: ReturnType<typeof getMemoryFlushPlanResolver>;
   memoryPromptBuilder: ReturnType<typeof getMemoryPromptSectionBuilder>;
   memoryRuntime: ReturnType<typeof getMemoryRuntime>;
@@ -982,6 +984,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     if (cached) {
       restoreRegisteredMemoryEmbeddingProviders(cached.memoryEmbeddingProviders);
       restoreMemoryPluginState({
+        capability: cached.memoryCapability,
         promptBuilder: cached.memoryPromptBuilder,
         flushPlanResolver: cached.memoryFlushPlanResolver,
         runtime: cached.memoryRuntime,
@@ -1542,6 +1545,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       registrationMode,
     });
     const previousMemoryEmbeddingProviders = listRegisteredMemoryEmbeddingProviders();
+    const previousMemoryCapability = getMemoryCapabilityRegistration();
     const previousMemoryFlushPlanResolver = getMemoryFlushPlanResolver();
     const previousMemoryPromptBuilder = getMemoryPromptSectionBuilder();
     const previousMemoryRuntime = getMemoryRuntime();
@@ -1560,6 +1564,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       if (!shouldActivate) {
         restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
         restoreMemoryPluginState({
+          capability: previousMemoryCapability,
           promptBuilder: previousMemoryPromptBuilder,
           flushPlanResolver: previousMemoryFlushPlanResolver,
           runtime: previousMemoryRuntime,
@@ -1570,6 +1575,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     } catch (err) {
       restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
       restoreMemoryPluginState({
+        capability: previousMemoryCapability,
         promptBuilder: previousMemoryPromptBuilder,
         flushPlanResolver: previousMemoryFlushPlanResolver,
         runtime: previousMemoryRuntime,
@@ -1623,6 +1629,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     setCachedPluginRegistry(cacheKey, {
       registry,
       memoryEmbeddingProviders: listRegisteredMemoryEmbeddingProviders(),
+      memoryCapability: getMemoryCapabilityRegistration(),
       memoryFlushPlanResolver: getMemoryFlushPlanResolver(),
       memoryPromptBuilder: getMemoryPromptSectionBuilder(),
       memoryRuntime: getMemoryRuntime(),

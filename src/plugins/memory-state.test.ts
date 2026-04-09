@@ -3,14 +3,17 @@ import {
   _resetMemoryPluginState,
   buildMemoryPromptSection,
   clearMemoryPluginState,
+  getMemoryCapabilityRegistration,
   getMemoryFlushPlanResolver,
   getMemoryPromptSectionBuilder,
   getMemoryRuntime,
+  registerMemoryCapability,
   registerMemoryFlushPlanResolver,
   registerMemoryPromptSection,
   registerMemoryRuntime,
   resolveMemoryFlushPlan,
   restoreMemoryPluginState,
+  listActiveMemoryPublicArtifacts,
 } from "./memory-state.js";
 
 function createMemoryRuntime() {
@@ -39,10 +42,12 @@ function expectClearedMemoryState() {
   expect(resolveMemoryFlushPlan({})).toBeNull();
   expect(buildMemoryPromptSection({ availableTools: new Set(["memory_search"]) })).toEqual([]);
   expect(getMemoryRuntime()).toBeUndefined();
+  expect(getMemoryCapabilityRegistration()).toBeUndefined();
 }
 
 function createMemoryStateSnapshot() {
   return {
+    capability: getMemoryCapabilityRegistration(),
     promptBuilder: getMemoryPromptSectionBuilder(),
     flushPlanResolver: getMemoryFlushPlanResolver(),
     runtime: getMemoryRuntime(),
@@ -128,6 +133,43 @@ describe("memory plugin state", () => {
         agentId: "main",
       }),
     ).resolves.toEqual({ manager: null, error: "missing" });
+  });
+
+  it("prefers capability registrations and preserves them across restore", async () => {
+    const runtime = createMemoryRuntime();
+    const artifact = {
+      workspaceDir: "/tmp/workspace",
+      relativePath: "memory/today.md",
+      absolutePath: "/tmp/workspace/memory/today.md",
+      kind: "markdown",
+      contentType: "text/markdown",
+      agentIds: ["main"],
+    };
+
+    registerMemoryCapability("memory-core", {
+      promptBuilder: () => ["capability section"],
+      flushPlanResolver: () => createMemoryFlushPlan("memory/capability.md"),
+      runtime,
+      publicArtifacts: {
+        listArtifacts: async () => [artifact],
+      },
+    });
+
+    const snapshot = createMemoryStateSnapshot();
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["capability section"]);
+    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/capability.md");
+    expect(getMemoryRuntime()).toBe(runtime);
+    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([
+      artifact,
+    ]);
+
+    clearMemoryPluginState();
+    restoreMemoryPluginState(snapshot);
+
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["capability section"]);
+    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/capability.md");
+    expect(getMemoryRuntime()).toBe(runtime);
+    expect(getMemoryCapabilityRegistration()?.pluginId).toBe("memory-core");
   });
 
   it("restoreMemoryPluginState swaps both prompt and flush state", () => {

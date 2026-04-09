@@ -67,13 +67,56 @@ export type MemoryPluginRuntime = {
   closeAllMemorySearchManagers?(): Promise<void>;
 };
 
+export type MemoryPublicArtifact = {
+  workspaceDir: string;
+  relativePath: string;
+  absolutePath: string;
+  kind: string;
+  contentType: string;
+  agentIds: string[];
+};
+
+export type MemoryPluginCapability = {
+  promptBuilder?: MemoryPromptSectionBuilder;
+  flushPlanResolver?: MemoryFlushPlanResolver;
+  runtime?: MemoryPluginRuntime;
+  publicArtifacts?: {
+    listArtifacts(params: { cfg: OpenClawConfig }): Promise<MemoryPublicArtifact[]>;
+  };
+};
+
+export type MemoryCapabilityRegistration = {
+  pluginId: string;
+  capability: MemoryPluginCapability;
+};
+
 type MemoryPluginState = {
+  capability?: MemoryCapabilityRegistration;
   promptBuilder?: MemoryPromptSectionBuilder;
   flushPlanResolver?: MemoryFlushPlanResolver;
   runtime?: MemoryPluginRuntime;
 };
 
 const memoryPluginState: MemoryPluginState = {};
+
+export function registerMemoryCapability(
+  pluginId: string,
+  capability: MemoryPluginCapability,
+): void {
+  memoryPluginState.capability = {
+    pluginId,
+    capability: { ...capability },
+  };
+}
+
+export function getMemoryCapabilityRegistration(): MemoryCapabilityRegistration | undefined {
+  return memoryPluginState.capability
+    ? {
+        pluginId: memoryPluginState.capability.pluginId,
+        capability: { ...memoryPluginState.capability.capability },
+      }
+    : undefined;
+}
 
 export function registerMemoryPromptSection(builder: MemoryPromptSectionBuilder): void {
   memoryPluginState.promptBuilder = builder;
@@ -83,11 +126,15 @@ export function buildMemoryPromptSection(params: {
   availableTools: Set<string>;
   citationsMode?: MemoryCitationsMode;
 }): string[] {
-  return memoryPluginState.promptBuilder?.(params) ?? [];
+  return (
+    memoryPluginState.capability?.capability.promptBuilder?.(params) ??
+    memoryPluginState.promptBuilder?.(params) ??
+    []
+  );
 }
 
 export function getMemoryPromptSectionBuilder(): MemoryPromptSectionBuilder | undefined {
-  return memoryPluginState.promptBuilder;
+  return memoryPluginState.capability?.capability.promptBuilder ?? memoryPluginState.promptBuilder;
 }
 
 export function registerMemoryFlushPlanResolver(resolver: MemoryFlushPlanResolver): void {
@@ -98,11 +145,18 @@ export function resolveMemoryFlushPlan(params: {
   cfg?: OpenClawConfig;
   nowMs?: number;
 }): MemoryFlushPlan | null {
-  return memoryPluginState.flushPlanResolver?.(params) ?? null;
+  return (
+    memoryPluginState.capability?.capability.flushPlanResolver?.(params) ??
+    memoryPluginState.flushPlanResolver?.(params) ??
+    null
+  );
 }
 
 export function getMemoryFlushPlanResolver(): MemoryFlushPlanResolver | undefined {
-  return memoryPluginState.flushPlanResolver;
+  return (
+    memoryPluginState.capability?.capability.flushPlanResolver ??
+    memoryPluginState.flushPlanResolver
+  );
 }
 
 export function registerMemoryRuntime(runtime: MemoryPluginRuntime): void {
@@ -110,20 +164,42 @@ export function registerMemoryRuntime(runtime: MemoryPluginRuntime): void {
 }
 
 export function getMemoryRuntime(): MemoryPluginRuntime | undefined {
-  return memoryPluginState.runtime;
+  return memoryPluginState.capability?.capability.runtime ?? memoryPluginState.runtime;
 }
 
 export function hasMemoryRuntime(): boolean {
-  return memoryPluginState.runtime !== undefined;
+  return getMemoryRuntime() !== undefined;
+}
+
+function cloneMemoryPublicArtifact(artifact: MemoryPublicArtifact): MemoryPublicArtifact {
+  return {
+    ...artifact,
+    agentIds: [...artifact.agentIds],
+  };
+}
+
+export async function listActiveMemoryPublicArtifacts(params: {
+  cfg: OpenClawConfig;
+}): Promise<MemoryPublicArtifact[]> {
+  const listed =
+    (await memoryPluginState.capability?.capability.publicArtifacts?.listArtifacts(params)) ?? [];
+  return listed.map(cloneMemoryPublicArtifact);
 }
 
 export function restoreMemoryPluginState(state: MemoryPluginState): void {
+  memoryPluginState.capability = state.capability
+    ? {
+        pluginId: state.capability.pluginId,
+        capability: { ...state.capability.capability },
+      }
+    : undefined;
   memoryPluginState.promptBuilder = state.promptBuilder;
   memoryPluginState.flushPlanResolver = state.flushPlanResolver;
   memoryPluginState.runtime = state.runtime;
 }
 
 export function clearMemoryPluginState(): void {
+  memoryPluginState.capability = undefined;
   memoryPluginState.promptBuilder = undefined;
   memoryPluginState.flushPlanResolver = undefined;
   memoryPluginState.runtime = undefined;

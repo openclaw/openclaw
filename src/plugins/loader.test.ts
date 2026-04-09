@@ -27,7 +27,10 @@ import {
 } from "./memory-embedding-providers.js";
 import {
   buildMemoryPromptSection,
+  clearMemoryPluginState,
+  getMemoryCapabilityRegistration,
   getMemoryRuntime,
+  registerMemoryCapability,
   registerMemoryFlushPlanResolver,
   registerMemoryPromptSection,
   registerMemoryRuntime,
@@ -1381,6 +1384,17 @@ module.exports = { id: "throws-after-import", register() {} };`,
       id: "active",
       create: async () => ({ provider: null }),
     });
+    registerMemoryCapability("active-memory", {
+      promptBuilder: () => ["active capability section"],
+      flushPlanResolver: () => ({
+        softThresholdTokens: 11,
+        forceFlushTranscriptBytes: 12,
+        reserveTokensFloor: 13,
+        prompt: "active-capability",
+        systemPrompt: "active-capability",
+        relativePath: "memory/active-capability.md",
+      }),
+    });
     registerMemoryPromptSection(() => ["active memory section"]);
     registerMemoryFlushPlanResolver(() => ({
       softThresholdTokens: 1,
@@ -1447,9 +1461,10 @@ module.exports = { id: "throws-after-import", register() {} };`,
 
     expect(scoped.plugins.find((entry) => entry.id === "snapshot-memory")?.status).toBe("loaded");
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([
-      "active memory section",
+      "active capability section",
     ]);
-    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/active.md");
+    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/active-capability.md");
+    expect(getMemoryCapabilityRegistration()?.pluginId).toBe("active-memory");
     expect(getMemoryRuntime()).toBe(activeRuntime);
     expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["active"]);
   });
@@ -1505,8 +1520,72 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(registry.plugins.find((entry) => entry.id === "failing-memory")?.status).toBe("error");
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([]);
     expect(resolveMemoryFlushPlan({})).toBeNull();
+    expect(getMemoryCapabilityRegistration()).toBeUndefined();
     expect(getMemoryRuntime()).toBeUndefined();
     expect(listMemoryEmbeddingProviders()).toEqual([]);
+  });
+
+  it("restores cached memory capability registrations on cache hits", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "cached-memory-capability",
+      filename: "cached-memory-capability.cjs",
+      body: `module.exports = {
+        id: "cached-memory-capability",
+        kind: "memory",
+        register(api) {
+          api.registerMemoryCapability({
+            promptBuilder: () => ["cached capability section"],
+            flushPlanResolver: () => ({
+              softThresholdTokens: 10,
+              forceFlushTranscriptBytes: 20,
+              reserveTokensFloor: 30,
+              prompt: "cached",
+              systemPrompt: "cached",
+              relativePath: "memory/cached.md",
+            }),
+          });
+          api.registerMemoryRuntime({
+            async getMemorySearchManager() {
+              return { manager: null, error: "cached" };
+            },
+            resolveMemoryBackendConfig() {
+              return { backend: "builtin" };
+            },
+          });
+        },
+      };`,
+    });
+
+    const options = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["cached-memory-capability"],
+          slots: { memory: "cached-memory-capability" },
+        },
+      },
+    };
+
+    const first = loadOpenClawPlugins(options);
+    expect(first.plugins.find((entry) => entry.id === "cached-memory-capability")?.status).toBe(
+      "loaded",
+    );
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([
+      "cached capability section",
+    ]);
+
+    clearMemoryPluginState();
+    expect(getMemoryCapabilityRegistration()).toBeUndefined();
+
+    const second = loadOpenClawPlugins(options);
+    expect(second).toBe(first);
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([
+      "cached capability section",
+    ]);
+    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/cached.md");
+    expect(getMemoryCapabilityRegistration()?.pluginId).toBe("cached-memory-capability");
   });
 
   it("throws when activate:false is used without cache:false", () => {

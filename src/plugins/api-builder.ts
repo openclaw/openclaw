@@ -40,6 +40,7 @@ export type BuildPluginApiParams = {
       | "registerCommand"
       | "registerContextEngine"
       | "registerMemoryPromptSection"
+      | "registerMemoryCapability"
       | "registerMemoryFlushPlan"
       | "registerMemoryRuntime"
       | "registerMemoryEmbeddingProvider"
@@ -76,6 +77,7 @@ const noopOnConversationBindingResolved: OpenClawPluginApi["onConversationBindin
 const noopRegisterCommand: OpenClawPluginApi["registerCommand"] = () => {};
 const noopRegisterContextEngine: OpenClawPluginApi["registerContextEngine"] = () => {};
 const noopRegisterMemoryPromptSection: OpenClawPluginApi["registerMemoryPromptSection"] = () => {};
+const noopRegisterMemoryCapability: OpenClawPluginApi["registerMemoryCapability"] = () => {};
 const noopRegisterMemoryFlushPlan: OpenClawPluginApi["registerMemoryFlushPlan"] = () => {};
 const noopRegisterMemoryRuntime: OpenClawPluginApi["registerMemoryRuntime"] = () => {};
 const noopRegisterMemoryEmbeddingProvider: OpenClawPluginApi["registerMemoryEmbeddingProvider"] =
@@ -126,6 +128,7 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerContextEngine: handlers.registerContextEngine ?? noopRegisterContextEngine,
     registerMemoryPromptSection:
       handlers.registerMemoryPromptSection ?? noopRegisterMemoryPromptSection,
+    registerMemoryCapability: handlers.registerMemoryCapability ?? noopRegisterMemoryCapability,
     registerMemoryFlushPlan: handlers.registerMemoryFlushPlan ?? noopRegisterMemoryFlushPlan,
     registerMemoryRuntime: handlers.registerMemoryRuntime ?? noopRegisterMemoryRuntime,
     registerMemoryEmbeddingProvider:

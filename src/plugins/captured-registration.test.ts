@@ -47,6 +47,7 @@ describe("captured plugin registration", () => {
 
     expect(captured.tools.map((tool) => tool.name)).toEqual(["captured-tool"]);
     expect(captured.providers.map((provider) => provider.id)).toEqual(["captured-provider"]);
+    expect(captured.api.registerMemoryCapability).toBeTypeOf("function");
     expect(captured.api.registerMemoryEmbeddingProvider).toBeTypeOf("function");
   });
 });

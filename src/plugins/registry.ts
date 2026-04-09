@@ -22,6 +22,7 @@ import {
   registerMemoryEmbeddingProvider,
 } from "./memory-embedding-providers.js";
 import {
+  registerMemoryCapability,
   registerMemoryFlushPlanResolver,
   registerMemoryPromptSection,
   registerMemoryRuntime,
@@ -1154,6 +1155,32 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   return;
                 }
                 registerMemoryPromptSection(builder);
+              },
+              registerMemoryCapability: (capability) => {
+                if (!hasKind(record.kind, "memory")) {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: "only memory plugins can register a memory capability",
+                  });
+                  return;
+                }
+                if (
+                  Array.isArray(record.kind) &&
+                  record.kind.length > 1 &&
+                  !record.memorySlotSelected
+                ) {
+                  pushDiagnostic({
+                    level: "warn",
+                    pluginId: record.id,
+                    source: record.source,
+                    message:
+                      "dual-kind plugin not selected for memory slot; skipping memory capability registration",
+                  });
+                  return;
+                }
+                registerMemoryCapability(record.id, capability);
               },
               registerMemoryFlushPlan: (resolver) => {
                 if (!hasKind(record.kind, "memory")) {
