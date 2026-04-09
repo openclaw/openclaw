@@ -332,6 +332,33 @@ describe("resolveAnnounceTarget", () => {
       accountId: "work",
     });
   });
+
+  it("preserves threadId when sessions.list fallback resolves the announce target", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [
+        {
+          key: "agent:main:whatsapp:group:123@g.us",
+          deliveryContext: {
+            channel: "whatsapp",
+            to: "123@g.us",
+            accountId: "ops",
+            threadId: 77,
+          },
+        },
+      ],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "agent:main:whatsapp:group:123@g.us",
+      displayKey: "agent:main:whatsapp:group:123@g.us",
+    });
+    expect(target).toEqual({
+      channel: "whatsapp",
+      to: "123@g.us",
+      accountId: "ops",
+      threadId: "77",
+    });
+  });
 });
 
 describe("sessions_list gating", () => {
