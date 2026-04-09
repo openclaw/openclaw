@@ -90,6 +90,23 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
+  it("validates in-workdir symlinked script entrypoints", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const targetPath = path.join(tmp, "bad-target.js");
+      const linkPath = path.join(tmp, "link.js");
+      await fs.writeFile(targetPath, "const value = $DM_JSON;", "utf-8");
+      await fs.symlink(targetPath, linkPath);
+
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      await expect(
+        tool.execute("call-symlink-entrypoint", {
+          command: "node link.js",
+          workdir: tmp,
+        }),
+      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
+    });
+  });
+
   it("validates scripts under literal tilde directories in workdir", async () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const literalTildeDir = path.join(tmp, "~");

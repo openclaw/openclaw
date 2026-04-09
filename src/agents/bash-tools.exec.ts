@@ -976,6 +976,7 @@ async function validateScriptFileForShellBleed(params: {
         rootDir: params.workdir,
         relativePath,
         nonBlockingRead: true,
+        allowSymlinkTargetWithinRoot: true,
         maxBytes: 512 * 1024,
       });
       content = safeRead.buffer.toString("utf-8");

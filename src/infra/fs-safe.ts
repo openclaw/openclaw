@@ -54,6 +54,8 @@ const SUPPORTS_NOFOLLOW = process.platform !== "win32" && "O_NOFOLLOW" in fsCons
 const NONBLOCK_OPEN_FLAG = "O_NONBLOCK" in fsConstants ? fsConstants.O_NONBLOCK : 0;
 const OPEN_READ_FLAGS = fsConstants.O_RDONLY | (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
 const OPEN_READ_NONBLOCK_FLAGS = OPEN_READ_FLAGS | NONBLOCK_OPEN_FLAG;
+const OPEN_READ_FOLLOW_FLAGS = fsConstants.O_RDONLY;
+const OPEN_READ_FOLLOW_NONBLOCK_FLAGS = OPEN_READ_FOLLOW_FLAGS | NONBLOCK_OPEN_FLAG;
 const OPEN_WRITE_EXISTING_FLAGS =
   fsConstants.O_WRONLY | (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
 const OPEN_WRITE_CREATE_FLAGS =
@@ -87,6 +89,7 @@ async function openVerifiedLocalFile(
   options?: {
     rejectHardlinks?: boolean;
     nonBlockingRead?: boolean;
+    allowSymlinkTargetWithinRoot?: boolean;
   },
 ): Promise<SafeOpenResult> {
   // Reject directories before opening so we never surface EISDIR to callers (e.g. tool
@@ -105,10 +108,14 @@ async function openVerifiedLocalFile(
 
   let handle: FileHandle;
   try {
-    handle = await fs.open(
-      filePath,
-      options?.nonBlockingRead ? OPEN_READ_NONBLOCK_FLAGS : OPEN_READ_FLAGS,
-    );
+    const openFlags = options?.allowSymlinkTargetWithinRoot
+      ? options?.nonBlockingRead
+        ? OPEN_READ_FOLLOW_NONBLOCK_FLAGS
+        : OPEN_READ_FOLLOW_FLAGS
+      : options?.nonBlockingRead
+        ? OPEN_READ_NONBLOCK_FLAGS
+        : OPEN_READ_FLAGS;
+    handle = await fs.open(filePath, openFlags);
   } catch (err) {
     if (isNotFoundPathError(err)) {
       throw new SafeOpenError("not-found", "file not found");
@@ -124,8 +131,11 @@ async function openVerifiedLocalFile(
   }
 
   try {
-    const [stat, lstat] = await Promise.all([handle.stat(), fs.lstat(filePath)]);
-    if (lstat.isSymbolicLink()) {
+    const [stat, pathStat] = await Promise.all([
+      handle.stat(),
+      options?.allowSymlinkTargetWithinRoot ? fs.stat(filePath) : fs.lstat(filePath),
+    ]);
+    if (!options?.allowSymlinkTargetWithinRoot && pathStat.isSymbolicLink()) {
       throw new SafeOpenError("symlink", "symlink not allowed");
     }
     if (!stat.isFile()) {
@@ -134,7 +144,7 @@ async function openVerifiedLocalFile(
     if (options?.rejectHardlinks && stat.nlink > 1) {
       throw new SafeOpenError("invalid-path", "hardlinked path not allowed");
     }
-    if (!sameFileIdentity(stat, lstat)) {
+    if (!sameFileIdentity(stat, pathStat)) {
       throw new SafeOpenError("path-mismatch", "path changed during read");
     }
 
@@ -187,6 +197,7 @@ export async function openFileWithinRoot(params: {
   relativePath: string;
   rejectHardlinks?: boolean;
   nonBlockingRead?: boolean;
+  allowSymlinkTargetWithinRoot?: boolean;
 }): Promise<SafeOpenResult> {
   const { rootWithSep, resolved } = await resolvePathWithinRoot(params);
 
@@ -194,6 +205,7 @@ export async function openFileWithinRoot(params: {
   try {
     opened = await openVerifiedLocalFile(resolved, {
       nonBlockingRead: params.nonBlockingRead,
+      allowSymlinkTargetWithinRoot: params.allowSymlinkTargetWithinRoot,
     });
   } catch (err) {
     if (err instanceof SafeOpenError) {
@@ -225,6 +237,7 @@ export async function readFileWithinRoot(params: {
   relativePath: string;
   rejectHardlinks?: boolean;
   nonBlockingRead?: boolean;
+  allowSymlinkTargetWithinRoot?: boolean;
   maxBytes?: number;
 }): Promise<SafeLocalReadResult> {
   const opened = await openFileWithinRoot({
@@ -232,6 +245,7 @@ export async function readFileWithinRoot(params: {
     relativePath: params.relativePath,
     rejectHardlinks: params.rejectHardlinks,
     nonBlockingRead: params.nonBlockingRead,
+    allowSymlinkTargetWithinRoot: params.allowSymlinkTargetWithinRoot,
   });
   try {
     return await readOpenedFileSafely({ opened, maxBytes: params.maxBytes });
