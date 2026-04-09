@@ -3,8 +3,15 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core";
 import { describe, expect, it, vi } from "vitest";
 import {
+  clearInternalHooks,
+  createInternalHookEvent,
+  registerInternalHook,
+  triggerInternalHook,
+} from "../../../src/hooks/internal-hooks.js";
+import {
   __testing,
   reconcileShortTermDreamingCronJob,
+  registerShortTermPromotionDreaming,
   resolveShortTermPromotionDreamingConfig,
   runShortTermDreamingPromotionIfTriggered,
 } from "./dreaming.js";
@@ -658,6 +665,63 @@ describe("short-term dreaming cron reconciliation", () => {
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("failed to remove managed dreaming cron job job-managed"),
     );
+  });
+});
+
+describe("gateway startup reconciliation", () => {
+  it("uses the startup cfg when reconciling the managed dreaming cron job", async () => {
+    clearInternalHooks();
+    const logger = createLogger();
+    const harness = createCronHarness();
+    const api = {
+      config: { plugins: { entries: {} } },
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      registerHook: (event: string, handler: Parameters<typeof registerInternalHook>[1]) => {
+        registerInternalHook(event, handler);
+      },
+      on: vi.fn(),
+    } as never;
+
+    try {
+      registerShortTermPromotionDreaming(api);
+      await triggerInternalHook(
+        createInternalHookEvent("gateway", "startup", "gateway:startup", {
+          cfg: {
+            hooks: { internal: { enabled: true } },
+            plugins: {
+              entries: {
+                "memory-core": {
+                  config: {
+                    dreaming: {
+                      enabled: true,
+                      frequency: "15 4 * * *",
+                      timezone: "UTC",
+                    },
+                  },
+                },
+              },
+            },
+          } as OpenClawConfig,
+          deps: { cron: harness.cron },
+        }),
+      );
+
+      expect(harness.addCalls).toHaveLength(1);
+      expect(harness.addCalls[0]).toMatchObject({
+        schedule: {
+          kind: "cron",
+          expr: "15 4 * * *",
+          tz: "UTC",
+        },
+      });
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.stringContaining("created managed dreaming cron job"),
+      );
+    } finally {
+      clearInternalHooks();
+    }
   });
 });
 
