@@ -3,9 +3,19 @@
  *
  * Manages WSClient instances, message state (with TTL cleanup), and ReqId storage.
  * Solves memory leak issues with global Maps.
+ *
+ * All mutable state is stored on globalThis via Symbol.for keys so that multiple
+ * Jiti loader instances (created by the openclaw framework during different loading
+ * phases) share the same state. Without this, each Jiti instance would get its own
+ * module-level variables, causing WSClient lookups to fail, message dedup to break,
+ * and cleanup timers to multiply.
+ *
+ * @see extensions/discord/src/monitor/thread-bindings.state.ts for the same pattern.
+ * @see openclaw/plugin-sdk/global-singleton for the resolveGlobalMap/resolveGlobalSingleton helpers.
  */
 
 import type { WSClient } from "@wecom/aibot-node-sdk";
+import { resolveGlobalMap, resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import {
   MESSAGE_STATE_TTL_MS,
   MESSAGE_STATE_CLEANUP_INTERVAL_MS,
@@ -15,11 +25,41 @@ import type { MessageState } from "./interface.js";
 import { createPersistentReqIdStore, type PersistentReqIdStore } from "./reqid-store.js";
 
 // ============================================================================
-// WSClient instance management
+// Cross-Jiti shared state via globalThis + Symbol.for
 // ============================================================================
 
-/** WSClient instance management */
-const wsClientInstances = new Map<string, WSClient>();
+/** Message state entry (with creation timestamp for TTL cleanup) */
+interface MessageStateEntry {
+  state: MessageState;
+  createdAt: number;
+}
+
+/** Cleanup timer state (shared across Jiti instances) */
+interface CleanupTimerState {
+  timer: ReturnType<typeof setInterval> | null;
+  refCount: number;
+}
+
+const wsClientInstances = resolveGlobalMap<string, WSClient>(
+  Symbol.for("openclaw.wecom.wsClientInstances"),
+);
+
+const messageStates = resolveGlobalMap<string, MessageStateEntry>(
+  Symbol.for("openclaw.wecom.messageStates"),
+);
+
+const timerState = resolveGlobalSingleton<CleanupTimerState>(
+  Symbol.for("openclaw.wecom.cleanupTimerState"),
+  () => ({ timer: null, refCount: 0 }),
+);
+
+const reqIdStores = resolveGlobalMap<string, PersistentReqIdStore>(
+  Symbol.for("openclaw.wecom.reqIdStores"),
+);
+
+// ============================================================================
+// WSClient instance management
+// ============================================================================
 
 /**
  * Get the WSClient instance for a specified account
@@ -46,21 +86,6 @@ export function deleteWeComWebSocket(accountId: string): void {
 // Message state management (with TTL cleanup to prevent memory leaks)
 // ============================================================================
 
-/** Message state entry (with creation timestamp for TTL cleanup) */
-interface MessageStateEntry {
-  state: MessageState;
-  createdAt: number;
-}
-
-/** Message state management */
-const messageStates = new Map<string, MessageStateEntry>();
-
-/** Periodic cleanup timer */
-let cleanupTimer: ReturnType<typeof setInterval> | null = null;
-
-/** Reference count of active accounts relying on the cleanup timer */
-let cleanupRefCount = 0;
-
 /**
  * Start periodic message state cleanup (automatic TTL cleanup + capacity limit)
  *
@@ -68,19 +93,19 @@ let cleanupRefCount = 0;
  * and only destroyed when the last account calls stopMessageStateCleanup().
  */
 export function startMessageStateCleanup(): void {
-  cleanupRefCount++;
+  timerState.refCount++;
 
-  if (cleanupTimer) {
+  if (timerState.timer) {
     return;
   }
 
-  cleanupTimer = setInterval(() => {
+  timerState.timer = setInterval(() => {
     pruneMessageStates();
   }, MESSAGE_STATE_CLEANUP_INTERVAL_MS);
 
   // Allow process exit without blocking
-  if (cleanupTimer && typeof cleanupTimer === "object" && "unref" in cleanupTimer) {
-    cleanupTimer.unref();
+  if (timerState.timer && typeof timerState.timer === "object" && "unref" in timerState.timer) {
+    timerState.timer.unref();
   }
 }
 
@@ -91,13 +116,13 @@ export function startMessageStateCleanup(): void {
  * reaches zero (i.e., no active accounts remain).
  */
 export function stopMessageStateCleanup(): void {
-  if (cleanupRefCount > 0) {
-    cleanupRefCount--;
+  if (timerState.refCount > 0) {
+    timerState.refCount--;
   }
 
-  if (cleanupRefCount === 0 && cleanupTimer) {
-    clearInterval(cleanupTimer);
-    cleanupTimer = null;
+  if (timerState.refCount === 0 && timerState.timer) {
+    clearInterval(timerState.timer);
+    timerState.timer = null;
   }
 }
 
@@ -169,13 +194,6 @@ export function clearAllMessageStates(): void {
 // ReqId persistent storage management (isolated by accountId)
 // ============================================================================
 
-/**
- * ReqId persistent storage management
- * Based on the createPersistentDedupe pattern: memory + disk dual layer, file lock, atomic write, TTL expiry, debounced write.
- * Can recover from disk after restart, ensuring reqId is available for proactive message sending.
- */
-const reqIdStores = new Map<string, PersistentReqIdStore>();
-
 function getOrCreateReqIdStore(accountId: string): PersistentReqIdStore {
   let store = reqIdStores.get(accountId);
   if (!store) {
@@ -229,7 +247,6 @@ export async function warmupReqIdStore(
   accountId = "default",
   log?: (...args: unknown[]) => void,
 ): Promise<number> {
-  // Since disk storage was removed, a warmup process is no longer needed
   log?.("[WeCom] reqid-store warmup: no-op (disk storage removed)");
   return 0;
 }
@@ -251,7 +268,6 @@ export async function flushReqIdStore(_accountId = "default"): Promise<void> {
  * Clean up all resources for the specified account
  */
 export async function cleanupAccount(accountId: string): Promise<void> {
-  // 1. Disconnect WSClient
   const wsClient = wsClientInstances.get(accountId);
   if (wsClient) {
     try {
@@ -261,9 +277,6 @@ export async function cleanupAccount(accountId: string): Promise<void> {
     }
     wsClientInstances.delete(accountId);
   }
-
-  // 2. Since disk storage has been removed, no need to flush reqId storage
-  // Note: do not delete the store, as it may still be needed after reconnection
 }
 
 /**
@@ -271,7 +284,7 @@ export async function cleanupAccount(accountId: string): Promise<void> {
  */
 export async function cleanupAll(): Promise<void> {
   // Force-stop periodic cleanup regardless of ref count
-  cleanupRefCount = 0;
+  timerState.refCount = 0;
   stopMessageStateCleanup();
 
   // Clean up all WSClient instances
@@ -283,8 +296,6 @@ export async function cleanupAll(): Promise<void> {
     }
   }
   wsClientInstances.clear();
-
-  // Since disk storage has been removed, no need to flush all reqId stores
 
   // Clear all message states
   clearAllMessageStates();
