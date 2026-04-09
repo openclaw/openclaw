@@ -33,10 +33,7 @@ function parseMaybeJsonString(value: unknown) {
   }
   try {
     const parsed = JSON.parse(trimmed) as unknown;
-    if (!parsed || typeof parsed !== "object") {
-      return null;
-    }
-    return parsed as Record<string, unknown>;
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
   } catch {
     return null;
   }
@@ -102,13 +99,14 @@ export function parseLogLine(line: string): LogEntry {
 }
 
 export async function loadLogs(state: LogsState, opts?: { reset?: boolean; quiet?: boolean }) {
+  const quiet = opts?.quiet === true;
   if (!state.client || !state.connected) {
     return;
   }
-  if (state.logsLoading && !opts?.quiet) {
+  if (state.logsLoading && !quiet) {
     return;
   }
-  if (!opts?.quiet) {
+  if (!quiet) {
     state.logsLoading = true;
   }
   state.logsError = null;
@@ -150,7 +148,7 @@ export async function loadLogs(state: LogsState, opts?: { reset?: boolean; quiet
       state.logsError = String(err);
     }
   } finally {
-    if (!opts?.quiet) {
+    if (!quiet) {
       state.logsLoading = false;
     }
   }
