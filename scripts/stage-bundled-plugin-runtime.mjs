@@ -65,7 +65,8 @@ function ensureSymlink(targetValue, targetPath, type, fallbackSourcePath) {
 }
 
 function symlinkPath(sourcePath, targetPath, type) {
-  ensureSymlink(relativeSymlinkTarget(sourcePath, targetPath), targetPath, type, sourcePath);
+  // 改为复制文件而不是创建符号链接，避免权限问题
+  fs.copyFileSync(sourcePath, targetPath);
 }
 
 function shouldWrapRuntimeJsFile(sourcePath) {
@@ -143,12 +144,21 @@ function linkPluginNodeModules(params) {
   if (!fs.existsSync(params.sourcePluginNodeModulesDir)) {
     return;
   }
-  ensureSymlink(
-    params.sourcePluginNodeModulesDir,
-    runtimeNodeModulesDir,
-    symlinkType(),
-    params.sourcePluginNodeModulesDir,
-  );
+  // 改为复制目录而不是创建符号链接，避免权限问题
+  // 注意：这可能会增加构建时间和磁盘空间使用
+  function copyDirectory(source, target) {
+    fs.mkdirSync(target, { recursive: true });
+    for (const dirent of fs.readdirSync(source, { withFileTypes: true })) {
+      const sourcePath = path.join(source, dirent.name);
+      const targetPath = path.join(target, dirent.name);
+      if (dirent.isDirectory()) {
+        copyDirectory(sourcePath, targetPath);
+      } else if (dirent.isFile()) {
+        fs.copyFileSync(sourcePath, targetPath);
+      }
+    }
+  }
+  copyDirectory(params.sourcePluginNodeModulesDir, runtimeNodeModulesDir);
 }
 
 export function stageBundledPluginRuntime(params = {}) {
