@@ -5,14 +5,11 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/live-runtime-benchmark.yml"
+      - "scripts/cyborgclaw/voltaris-v2-live-benchmark-gate.ts"
   schedule:
-    - cron: "0 */6 * * *"
+    - cron: "17 5 * * *"
   workflow_dispatch:
     inputs:
-      checkout_ref:
-        description: "Git ref to check out for the benchmark implementation"
-        required: false
-        default: "m20-trust-the-refusal-closeout"
       pack:
         description: "Pack reference to prove during the live benchmark run"
         required: false
@@ -48,25 +45,25 @@ permissions:
 
 jobs:
   live-runtime-benchmark:
+    if: ${{ github.event_name != 'schedule' || vars.OPENCLAW_LIVE_BENCHMARK_ENABLED == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      CHECKOUT_REF: ${{ github.event.inputs.checkout_ref || vars.OPENCLAW_LIVE_BENCHMARK_CHECKOUT_REF || 'm20-trust-the-refusal-closeout' }}
       LIVE_BENCHMARK_PACK_REF: ${{ github.event.inputs.pack || 'examples/voltaris-v2-pack' }}
       LIVE_BENCHMARK_PROFILE: ${{ github.event.inputs.profile || 'voltaris-proof' }}
-      OPENCLAW_LIVE_BENCHMARK_ENABLED: ${{ vars.OPENCLAW_LIVE_BENCHMARK_ENABLED || 'true' }}
       OPENCLAW_LIVE_BENCHMARK_MODEL: ${{ github.event.inputs.model || vars.OPENCLAW_LIVE_BENCHMARK_MODEL || 'openai-codex/gpt-5.3-codex' }}
-      OPENCLAW_LIVE_BENCHMARK_AUTH_PROFILES_JSON: ${{ secrets.OPENCLAW_LIVE_BENCHMARK_AUTH_PROFILES_JSON }}
       OPENCLAW_LIVE_BENCHMARK_REPEAT_RUNS: ${{ github.event.inputs.repeat_runs || vars.OPENCLAW_LIVE_BENCHMARK_REPEAT_RUNS || '2' }}
       OPENCLAW_LIVE_BENCHMARK_REPEAT_DELAY_MS: ${{ github.event.inputs.repeat_delay_ms || vars.OPENCLAW_LIVE_BENCHMARK_REPEAT_DELAY_MS || '10000' }}
       OPENCLAW_LIVE_BENCHMARK_HISTORY_MAX: ${{ vars.OPENCLAW_LIVE_BENCHMARK_HISTORY_MAX || '540' }}
       LIVE_BENCHMARK_PREFLIGHT_ONLY: ${{ github.event.inputs.preflight_only || 'false' }}
       OPENCLAW_LIVE_BENCHMARK_DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
     steps:
-      - name: Checkout benchmark ref
+      - name: Checkout canonical repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ env.CHECKOUT_REF }}
+          repository: openclaw/openclaw
+          ref: refs/heads/${{ env.OPENCLAW_LIVE_BENCHMARK_DEFAULT_BRANCH }}
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -75,14 +72,25 @@ jobs:
           install-bun: "false"
           use-sticky-disk: "false"
 
-      - name: Prepare benchmark directories
+      - name: Prepare benchmark directories and detect canonical implementation
+        id: benchmark_impl
         shell: bash
         run: |
           set -euo pipefail
-          echo "REPORT_DIR=$RUNNER_TEMP/live-runtime-benchmark" >> "$GITHUB_ENV"
-          echo "PERSIST_DIR=$RUNNER_TEMP/live-runtime-benchmark-persisted" >> "$GITHUB_ENV"
+          report_dir="$RUNNER_TEMP/live-runtime-benchmark"
+          persist_dir="$RUNNER_TEMP/live-runtime-benchmark-persisted"
+          mkdir -p "$report_dir" "$persist_dir"
+          echo "REPORT_DIR=$report_dir" >> "$GITHUB_ENV"
+          echo "PERSIST_DIR=$persist_dir" >> "$GITHUB_ENV"
+
+          if [ -f scripts/cyborgclaw/voltaris-v2-live-benchmark-gate.ts ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Restore persisted runway cache
+        if: steps.benchmark_impl.outputs.available == 'true'
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/live-runtime-benchmark-persisted
@@ -90,8 +98,24 @@ jobs:
           restore-keys: |
             live-runtime-benchmark-${{ github.ref_name }}-
 
-      - name: Run live benchmark preflight
+      - name: Skip until benchmark implementation lands on canonical main
+        if: steps.benchmark_impl.outputs.available != 'true'
         shell: bash
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ## Live runtime benchmark
+
+          - Benchmark implementation not present on canonical `main` yet.
+          - No external repository checkout was used.
+          - No benchmark auth secret was exposed during this run.
+          - Scheduled runs stay disabled unless `OPENCLAW_LIVE_BENCHMARK_ENABLED=true`.
+          EOF
+
+      - name: Run live benchmark preflight
+        if: steps.benchmark_impl.outputs.available == 'true'
+        shell: bash
+        env:
+          OPENCLAW_LIVE_BENCHMARK_AUTH_PROFILES_JSON: ${{ secrets.OPENCLAW_LIVE_BENCHMARK_AUTH_PROFILES_JSON }}
         run: |
           set -euo pipefail
           mkdir -p "$REPORT_DIR"
@@ -103,8 +127,10 @@ jobs:
             --profile "$LIVE_BENCHMARK_PROFILE"
 
       - name: Run strict live runtime benchmark
-        if: env.LIVE_BENCHMARK_PREFLIGHT_ONLY != 'true'
+        if: steps.benchmark_impl.outputs.available == 'true' && env.LIVE_BENCHMARK_PREFLIGHT_ONLY != 'true'
         shell: bash
+        env:
+          OPENCLAW_LIVE_BENCHMARK_AUTH_PROFILES_JSON: ${{ secrets.OPENCLAW_LIVE_BENCHMARK_AUTH_PROFILES_JSON }}
         run: |
           set -euo pipefail
           node --import tsx scripts/cyborgclaw/voltaris-v2-live-benchmark-gate.ts \
@@ -127,13 +153,23 @@ jobs:
           import os
           import pathlib
 
-          report_path = pathlib.Path(os.environ["REPORT_DIR"]) / "gate-report.json"
-          history_summary_path = pathlib.Path(os.environ["PERSIST_DIR"]) / "history-summary.json"
+          report_dir = pathlib.Path(
+              os.environ.get("REPORT_DIR", os.path.join(os.environ["RUNNER_TEMP"], "live-runtime-benchmark"))
+          )
+          persist_dir = pathlib.Path(
+              os.environ.get(
+                  "PERSIST_DIR",
+                  os.path.join(os.environ["RUNNER_TEMP"], "live-runtime-benchmark-persisted"),
+              )
+          )
+          report_path = report_dir / "gate-report.json"
+          history_summary_path = persist_dir / "history-summary.json"
           summary_path = pathlib.Path(os.environ["GITHUB_STEP_SUMMARY"])
           lines: list[str] = [
             "## Live runtime benchmark",
             "",
-            f"- Checkout ref: `{os.environ.get('CHECKOUT_REF', 'unknown')}`",
+            "- Execution source: `openclaw/openclaw` canonical checkout",
+            f"- Benchmark implementation present: `{report_path.exists() or history_summary_path.exists()}`",
           ]
 
           if report_path.exists():
@@ -151,8 +187,13 @@ jobs:
                 f"- Green runs observed: `{report.get('greenRunCount', 0)}`",
               ]
             )
-          else:
-            lines.append("- Gate result: `missing report`")
+          elif not history_summary_path.exists():
+            lines.extend(
+              [
+                "- Gate result: `skipped`",
+                "- Reason: `benchmark implementation not present on canonical main`",
+              ]
+            )
 
           if history_summary_path.exists():
             history_summary = json.loads(history_summary_path.read_text(encoding="utf-8"))
@@ -167,7 +208,8 @@ jobs:
               ]
             )
 
-          summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          with summary_path.open("a", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
           PY
 
       - name: Upload benchmark artifacts
@@ -180,7 +222,7 @@ jobs:
           retention-days: 14
 
       - name: Upload persisted benchmark receipts
-        if: always()
+        if: steps.benchmark_impl.outputs.available == 'true' && always()
         uses: actions/upload-artifact@v4
         with:
           name: live-runtime-benchmark-receipts-${{ github.run_id }}
@@ -189,7 +231,7 @@ jobs:
           retention-days: 90
 
       - name: Save persisted runway cache
-        if: always()
+        if: steps.benchmark_impl.outputs.available == 'true' && always()
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/live-runtime-benchmark-persisted
