@@ -15,6 +15,11 @@ export type BlockedPackageDirectoryFinding = {
   directoryRelativePath: string;
 };
 
+export type BlockedPackageFileFinding = {
+  dependencyName: string;
+  fileRelativePath: string;
+};
+
 type PackageDependencyMapFields = Partial<
   Record<
     Exclude<BlockedManifestDependencyFinding["field"], "name" | "overrides">,
@@ -50,6 +55,52 @@ function isBlockedInstallDependencyPackageName(packageName: string): boolean {
 
 function isBlockedInstallDependencyPackagePathName(packageName: string): boolean {
   return BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAME_LOWER_SET.has(packageName.toLowerCase());
+}
+
+function normalizePathSegments(relativePath: string): string[] {
+  return relativePath
+    .split(/[\\/]+/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+}
+
+function parseBlockedNodeModulesPackageId(
+  segments: string[],
+  packageNameSegmentTransform: (packageNameSegment: string) => string | undefined,
+): string | undefined {
+  for (let index = 0; index < segments.length; index += 1) {
+    if (segments[index]?.toLowerCase() !== "node_modules") {
+      continue;
+    }
+    const packageScopeOrName = segments[index + 1];
+    if (!packageScopeOrName) {
+      continue;
+    }
+
+    if (packageScopeOrName.startsWith("@")) {
+      const packageNameSegment = segments[index + 2];
+      if (!packageNameSegment) {
+        continue;
+      }
+      const packageName = packageNameSegmentTransform(packageNameSegment);
+      if (!packageName) {
+        continue;
+      }
+      const scopedPackageId = `${packageScopeOrName}/${packageName}`;
+      if (!isBlockedInstallDependencyPackagePathName(scopedPackageId)) {
+        continue;
+      }
+      return scopedPackageId;
+    }
+
+    const packageName = packageNameSegmentTransform(packageScopeOrName);
+    if (!packageName || !isBlockedInstallDependencyPackagePathName(packageName)) {
+      continue;
+    }
+    return packageName;
+  }
+
+  return undefined;
 }
 
 function parseNpmAliasTargetPackageName(spec: string): string | undefined {
@@ -179,43 +230,37 @@ export function findBlockedManifestDependencies(
 export function findBlockedNodeModulesDirectory(params: {
   directoryRelativePath: string;
 }): BlockedPackageDirectoryFinding | undefined {
-  const segments = params.directoryRelativePath
-    .split(/[\\/]+/)
-    .map((segment) => segment.trim())
-    .filter(Boolean);
-
-  for (let index = 0; index < segments.length; index += 1) {
-    if (segments[index]?.toLowerCase() !== "node_modules") {
-      continue;
-    }
-    const packageScopeOrName = segments[index + 1];
-    if (!packageScopeOrName) {
-      continue;
-    }
-
-    if (packageScopeOrName.startsWith("@")) {
-      const packageName = segments[index + 2];
-      if (!packageName) {
-        continue;
-      }
-      const scopedPackageId = `${packageScopeOrName}/${packageName}`;
-      if (!isBlockedInstallDependencyPackagePathName(scopedPackageId)) {
-        continue;
-      }
-      return {
-        dependencyName: scopedPackageId,
+  const dependencyName = parseBlockedNodeModulesPackageId(
+    normalizePathSegments(params.directoryRelativePath),
+    (packageNameSegment) => packageNameSegment,
+  );
+  return dependencyName
+    ? {
+        dependencyName,
         directoryRelativePath: params.directoryRelativePath,
-      };
-    }
+      }
+    : undefined;
+}
 
-    if (!isBlockedInstallDependencyPackagePathName(packageScopeOrName)) {
-      continue;
-    }
-    return {
-      dependencyName: packageScopeOrName,
-      directoryRelativePath: params.directoryRelativePath,
-    };
+function parseBlockedPackageFileAliasName(fileName: string): string | undefined {
+  const extensionMatch = /^(.+)\.(js|json|node)$/i.exec(fileName);
+  if (!extensionMatch) {
+    return undefined;
   }
+  return extensionMatch[1];
+}
 
-  return undefined;
+export function findBlockedNodeModulesFileAlias(params: {
+  fileRelativePath: string;
+}): BlockedPackageFileFinding | undefined {
+  const dependencyName = parseBlockedNodeModulesPackageId(
+    normalizePathSegments(params.fileRelativePath),
+    parseBlockedPackageFileAliasName,
+  );
+  return dependencyName
+    ? {
+        dependencyName,
+        fileRelativePath: params.fileRelativePath,
+      }
+    : undefined;
 }

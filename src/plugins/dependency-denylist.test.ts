@@ -5,6 +5,7 @@ import {
   blockedInstallDependencyPackageNames,
   findBlockedManifestDependencies,
   findBlockedNodeModulesDirectory,
+  findBlockedNodeModulesFileAlias,
 } from "./dependency-denylist.js";
 
 type RootPackageManifest = {
@@ -107,10 +108,29 @@ describe("dependency denylist guardrails", () => {
     });
   });
 
+  it("finds blocked package file aliases under node_modules regardless of casing", () => {
+    expect(
+      findBlockedNodeModulesFileAlias({
+        fileRelativePath: "vendor/Node_Modules/Plain-Crypto-Js.Js",
+      }),
+    ).toEqual({
+      dependencyName: "Plain-Crypto-Js",
+      fileRelativePath: "vendor/Node_Modules/Plain-Crypto-Js.Js",
+    });
+  });
+
   it("does not treat similarly named non-node_modules segments as package-resolution paths", () => {
     expect(
       findBlockedNodeModulesDirectory({
         directoryRelativePath: "vendor/node_modules_backup/plain-crypto-js",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not treat similarly named non-node_modules file aliases as package-resolution paths", () => {
+    expect(
+      findBlockedNodeModulesFileAlias({
+        fileRelativePath: "vendor/plain-crypto-js.js",
       }),
     ).toBeUndefined();
   });

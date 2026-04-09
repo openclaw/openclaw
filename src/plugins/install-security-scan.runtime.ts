@@ -5,6 +5,7 @@ import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
 import {
   findBlockedManifestDependencies,
   findBlockedNodeModulesDirectory,
+  findBlockedNodeModulesFileAlias,
 } from "./dependency-denylist.js";
 import { getGlobalHookRunner } from "./hook-runner-global.js";
 import { createBeforeInstallHookPayload } from "./install-policy-context.js";
@@ -51,8 +52,14 @@ type BlockedPackageDirectoryFinding = {
   directoryRelativePath: string;
 };
 
+type BlockedPackageFileFinding = {
+  dependencyName: string;
+  fileRelativePath: string;
+};
+
 type PackageManifestTraversalResult = {
   blockedDirectoryFinding?: BlockedPackageDirectoryFinding;
+  blockedFileFinding?: BlockedPackageFileFinding;
   packageManifestPaths: string[];
 };
 
@@ -133,6 +140,14 @@ function buildBlockedDependencyDirectoryReason(params: {
   targetLabel: string;
 }) {
   return `${params.targetLabel} blocked: blocked dependency directory "${params.dependencyName}" declared at ${params.directoryRelativePath}.`;
+}
+
+function buildBlockedDependencyFileReason(params: {
+  dependencyName: string;
+  fileRelativePath: string;
+  targetLabel: string;
+}) {
+  return `${params.targetLabel} blocked: blocked dependency file alias "${params.dependencyName}" declared at ${params.fileRelativePath}.`;
 }
 
 function buildBuiltinScanFromError(error: unknown): BuiltinInstallScan {
@@ -277,6 +292,17 @@ async function collectPackageManifestPaths(
         queue.push({ depth: current.depth + 1, dir: nextPath });
         continue;
       }
+      if (entry.isFile()) {
+        const blockedFileFinding = findBlockedNodeModulesFileAlias({
+          fileRelativePath: relativeNextPath,
+        });
+        if (blockedFileFinding) {
+          return {
+            blockedFileFinding,
+            packageManifestPaths,
+          };
+        }
+      }
       if (entry.isFile() && entry.name === "package.json") {
         packageManifestPaths.push(nextPath);
         if (packageManifestPaths.length > limits.maxManifests) {
@@ -301,6 +327,20 @@ async function scanManifestDependencyDenylist(params: {
     const reason = buildBlockedDependencyDirectoryReason({
       dependencyName: traversalResult.blockedDirectoryFinding.dependencyName,
       directoryRelativePath: traversalResult.blockedDirectoryFinding.directoryRelativePath,
+      targetLabel: params.targetLabel,
+    });
+    params.logger.warn?.(`WARNING: ${reason}`);
+    return {
+      blocked: {
+        code: "security_scan_blocked",
+        reason,
+      },
+    };
+  }
+  if (traversalResult.blockedFileFinding) {
+    const reason = buildBlockedDependencyFileReason({
+      dependencyName: traversalResult.blockedFileFinding.dependencyName,
+      fileRelativePath: traversalResult.blockedFileFinding.fileRelativePath,
       targetLabel: params.targetLabel,
     });
     params.logger.warn?.(`WARNING: ${reason}`);
