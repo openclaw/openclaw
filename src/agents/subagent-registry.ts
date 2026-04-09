@@ -628,13 +628,6 @@ const subagentRunManager = createSubagentRunManager({
   resumedRuns,
   endedHookInFlightRunIds,
   persist: persistSubagentRuns,
-  callGateway: (request) => subagentRegistryDeps.callGateway(request),
-  loadConfig: () => subagentRegistryDeps.loadConfig(),
-  ensureRuntimePluginsLoaded: (args: {
-    config: ReturnType<typeof loadConfig>;
-    workspaceDir?: string;
-    allowGatewaySubagentBinding?: boolean;
-  }) => ensureSubagentRegistryPluginRuntimeLoaded(args),
   ensureListener,
   startSweeper,
   stopSweeper,
