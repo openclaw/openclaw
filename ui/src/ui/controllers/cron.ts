@@ -278,10 +278,10 @@ export async function loadCronJobsPage(state: CronState, opts?: { append?: boole
     return;
   }
   const append = opts?.append === true;
+  if (append && !state.cronJobsHasMore) {
+    return;
+  }
   if (append) {
-    if (!state.cronJobsHasMore) {
-      return;
-    }
     state.cronJobsLoadingMore = true;
   } else {
     state.cronLoading = true;
