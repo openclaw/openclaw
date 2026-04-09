@@ -68,7 +68,7 @@ const LenientListToolsResultSchema = PaginatedResultSchema.extend({
  * which is required by LLM providers. Some MCP servers omit this field.
  */
 function normalizeInputSchema(raw: Record<string, unknown>): Record<string, unknown> {
-  if (raw.type === "object") {
+  if (raw.type !== undefined) {
     return raw;
   }
   return { ...raw, type: "object" };
@@ -681,4 +681,5 @@ export const __testing = {
     return getSessionMcpRuntimeManager().listSessionIds();
   },
   resolveSessionMcpRuntimeIdleTtlMs,
+  normalizeInputSchema,
 };

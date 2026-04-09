@@ -141,6 +141,34 @@ describe("session MCP runtime", () => {
     ]);
   });
 
+  it("backfills type: 'object' only when inputSchema omits the type field", () => {
+    const { normalizeInputSchema } = __testing;
+
+    // Schema without type should get type: "object" backfilled
+    expect(normalizeInputSchema({ properties: { foo: { type: "string" } } })).toEqual({
+      type: "object",
+      properties: { foo: { type: "string" } },
+    });
+
+    // Schema with explicit type: "object" should be returned as-is
+    expect(
+      normalizeInputSchema({ type: "object", properties: { bar: { type: "number" } } }),
+    ).toEqual({
+      type: "object",
+      properties: { bar: { type: "number" } },
+    });
+
+    // Schema with explicit non-object type should NOT be overwritten
+    expect(normalizeInputSchema({ type: "string" })).toEqual({
+      type: "string",
+    });
+
+    // Empty schema (no type, no properties) should still get type: "object"
+    expect(normalizeInputSchema({})).toEqual({
+      type: "object",
+    });
+  });
+
   it("holds a runtime lease until the materialized tool runtime is disposed", async () => {
     let activeLeases = 0;
     const runtime = {
