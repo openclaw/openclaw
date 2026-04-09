@@ -100,10 +100,7 @@ export function parseLogLine(line: string): LogEntry {
 
 export async function loadLogs(state: LogsState, opts?: { reset?: boolean; quiet?: boolean }) {
   const quiet = opts?.quiet === true;
-  if (!state.client || !state.connected) {
-    return;
-  }
-  if (state.logsLoading && !quiet) {
+  if (!state.client || !state.connected || (state.logsLoading && !quiet)) {
     return;
   }
   if (!quiet) {
