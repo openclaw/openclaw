@@ -178,3 +178,75 @@ describe("shared attachment validation", () => {
     }
   });
 });
+
+describe("parseMessageWithAttachments with supportsImages=false", () => {
+  it("saves attachments to disk and injects media:// refs instead of dropping them", async () => {
+    const logs: string[] = [];
+    const parsed = await parseMessageWithAttachments(
+      "analyze this",
+      [
+        {
+          type: "image",
+          mimeType: "image/png",
+          fileName: "dot.png",
+          content: PNG_1x1,
+        },
+      ],
+      {
+        supportsImages: false,
+        log: {
+          warn: (msg: string) => logs.push(msg),
+          info: (msg: string) => logs.push(msg),
+        },
+      },
+    );
+    // Should NOT drop silently — should save and inject media:// ref
+    expect(parsed.message).not.toBe("analyze this");
+    expect(parsed.message).toMatch(/media:\/\/inbound\//);
+    expect(parsed.message).toContain("[media attached:");
+    // No inline images since the model can't process them
+    expect(parsed.images).toHaveLength(0);
+    // Offloaded refs should be populated
+    expect(parsed.offloadedRefs.length).toBeGreaterThanOrEqual(1);
+    expect(parsed.offloadedRefs[0]?.mediaRef).toMatch(/media:\/\/inbound\//);
+    expect(parsed.imageOrder).toContain("offloaded");
+    // Should log info, not the old "dropped" warning
+    expect(logs.some((l) => /saved for text-only model/.test(l))).toBe(true);
+    expect(logs.some((l) => /dropped/.test(l))).toBe(false);
+  });
+
+  it("returns empty result when no attachments", async () => {
+    const parsed = await parseMessageWithAttachments("hello", [], {
+      supportsImages: false,
+    });
+    expect(parsed.message).toBe("hello");
+    expect(parsed.images).toHaveLength(0);
+    expect(parsed.offloadedRefs).toHaveLength(0);
+  });
+
+  it("skips non-image attachments when model does not support images", async () => {
+    const pdf = Buffer.from("%PDF-1.4\n").toString("base64");
+    const logs: string[] = [];
+    const parsed = await parseMessageWithAttachments(
+      "x",
+      [
+        {
+          type: "file",
+          mimeType: "application/pdf",
+          fileName: "doc.pdf",
+          content: pdf,
+        },
+      ],
+      {
+        supportsImages: false,
+        log: {
+          warn: (msg: string) => logs.push(msg),
+          info: (msg: string) => logs.push(msg),
+        },
+      },
+    );
+    // Non-image should be skipped, no media:// injected
+    expect(parsed.offloadedRefs).toHaveLength(0);
+    expect(parsed.message).not.toMatch(/media:\/\//);
+  });
+});
