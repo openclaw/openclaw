@@ -63,7 +63,7 @@ export function buildListContextPrefix(context: ListContext): string {
   return (
     context.levels
       .slice(0, -1)
-      .map((level) => `${level}...`)
+      .map((level) => level)
       .join("\n") + "\n"
   );
 }

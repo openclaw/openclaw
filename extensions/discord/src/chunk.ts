@@ -168,9 +168,9 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
 
   // Helper: apply blockquote prefix to a line if we're inside a blockquote
   const applyBlockquoteToSegment = (segment: string, prefix: string | null): string => {
-    if (!prefix) return segment;
-    if (segment.trim() === "") return segment;
-    if (segment.startsWith(prefix.trimEnd())) return segment;
+    if (!prefix) { return segment; }
+    if (segment.trim() === "") { return segment; }
+    if (segment.startsWith(prefix.trimEnd())) { return segment; }
     return `${prefix}${segment}`;
   };
 
