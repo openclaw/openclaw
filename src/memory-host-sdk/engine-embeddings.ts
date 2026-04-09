@@ -17,6 +17,10 @@ export type {
 } from "../plugins/memory-embedding-providers.js";
 export { createLocalEmbeddingProvider, DEFAULT_LOCAL_MODEL } from "./host/embeddings.js";
 export {
+  createBedrockEmbeddingProvider,
+  DEFAULT_BEDROCK_EMBEDDING_MODEL,
+} from "./host/embeddings-bedrock.js";
+export {
   createGeminiEmbeddingProvider,
   DEFAULT_GEMINI_EMBEDDING_MODEL,
   buildGeminiEmbeddingRequest,

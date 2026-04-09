@@ -1,5 +1,6 @@
 import fsSync from "node:fs";
 import {
+  DEFAULT_BEDROCK_EMBEDDING_MODEL,
   DEFAULT_GEMINI_EMBEDDING_MODEL,
   DEFAULT_LOCAL_MODEL,
   DEFAULT_MISTRAL_EMBEDDING_MODEL,
@@ -7,6 +8,7 @@ import {
   DEFAULT_VOYAGE_EMBEDDING_MODEL,
   OPENAI_BATCH_ENDPOINT,
   buildGeminiEmbeddingRequest,
+  createBedrockEmbeddingProvider,
   createGeminiEmbeddingProvider,
   createLocalEmbeddingProvider,
   createMistralEmbeddingProvider,
@@ -116,7 +118,13 @@ function supportsGeminiMultimodalEmbeddings(model: string): boolean {
 }
 
 function resolveMemoryEmbeddingAuthProviderId(providerId: string): string {
-  return providerId === "gemini" ? "google" : providerId;
+  if (providerId === "gemini") {
+    return "google";
+  }
+  if (providerId === "bedrock") {
+    return "amazon-bedrock";
+  }
+  return providerId;
 }
 
 const openAiAdapter: MemoryEmbeddingProviderAdapter = {
@@ -288,6 +296,34 @@ const mistralAdapter: MemoryEmbeddingProviderAdapter = {
   },
 };
 
+const bedrockAdapter: MemoryEmbeddingProviderAdapter = {
+  id: "bedrock",
+  defaultModel: DEFAULT_BEDROCK_EMBEDDING_MODEL,
+  transport: "remote",
+  autoSelectPriority: 60,
+  allowExplicitWhenConfiguredAuto: true,
+  shouldContinueAutoSelection: isMissingApiKeyError,
+  create: async (options) => {
+    const { provider, client } = await createBedrockEmbeddingProvider({
+      ...options,
+      provider: "bedrock",
+      fallback: "none",
+    });
+    return {
+      provider,
+      runtime: {
+        id: "bedrock",
+        cacheKeyData: {
+          provider: "bedrock",
+          region: client.region,
+          model: client.model,
+          dimensions: client.dimensions,
+        },
+      },
+    };
+  },
+};
+
 const localAdapter: MemoryEmbeddingProviderAdapter = {
   id: "local",
   defaultModel: DEFAULT_LOCAL_MODEL,
@@ -320,6 +356,7 @@ export const builtinMemoryEmbeddingProviderAdapters = [
   geminiAdapter,
   voyageAdapter,
   mistralAdapter,
+  bedrockAdapter,
 ] as const;
 
 const builtinMemoryEmbeddingProviderAdapterById = new Map(
@@ -377,6 +414,7 @@ export function listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata(): Ar
 }
 
 export {
+  DEFAULT_BEDROCK_EMBEDDING_MODEL,
   DEFAULT_GEMINI_EMBEDDING_MODEL,
   DEFAULT_LOCAL_MODEL,
   DEFAULT_MISTRAL_EMBEDDING_MODEL,
