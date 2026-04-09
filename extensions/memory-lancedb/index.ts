@@ -544,7 +544,8 @@ export default definePluginEntry({
         }
 
         // Prevent re-injection on subsequent agent runs within the same session
-        if (event.sessionState?.getCustomEntries().some((e) => e.customType === AUTO_RECALL_MARKER)) {
+        // Note: sessionState exists at runtime but not yet in before_agent_start TypeScript types
+        if ((event as any).sessionState?.getCustomEntries().some((e: any) => e.customType === AUTO_RECALL_MARKER)) {
           return;
         }
 
@@ -559,7 +560,8 @@ export default definePluginEntry({
           api.logger.info?.(`memory-lancedb: injecting ${results.length} memories into context`);
 
           // Mark as done so future agent runs in this session won't re-trigger
-          event.sessionState?.appendCustomEntry(AUTO_RECALL_MARKER, { timestamp: Date.now() });
+          // Note: sessionState exists at runtime but not yet in before_agent_start TypeScript types
+          (event as any).sessionState?.appendCustomEntry(AUTO_RECALL_MARKER, { timestamp: Date.now() });
 
           return {
             prependContext: formatRelevantMemoriesContext(
