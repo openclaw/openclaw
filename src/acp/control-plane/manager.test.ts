@@ -1579,6 +1579,47 @@ describe("AcpSessionManager", () => {
     expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
   });
 
+  it("does not swallow non-stale gateway closure errors during close", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.close.mockRejectedValueOnce(new Error("gateway closed (1008): pairing required"));
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: {
+          ...readySessionMeta(),
+          runtimeSessionName: `runtime:${sessionKey}`,
+        },
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-a",
+      text: "first",
+      mode: "prompt",
+      requestId: "r1",
+    });
+
+    await expect(
+      manager.closeSession({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-a",
+        reason: "manual-close",
+        allowBackendUnavailable: true,
+      }),
+    ).rejects.toMatchObject({
+      code: "ACP_TURN_FAILED",
+      message: "gateway closed (1008): pairing required",
+    });
+  });
+
   it("treats stale session init failures as recoverable during discard resets", async () => {
     const runtimeState = createRuntime();
     runtimeState.ensureSession.mockRejectedValueOnce(
@@ -2108,6 +2149,46 @@ describe("AcpSessionManager", () => {
     expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
   });
 
+  it("does not swallow non-stale gateway closure errors during cancel", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.cancel.mockRejectedValueOnce(new Error("gateway closed (1008): pairing required"));
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: {
+          ...readySessionMeta(),
+          runtimeSessionName: `runtime:${sessionKey}`,
+        },
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-a",
+      text: "first",
+      mode: "prompt",
+      requestId: "r1",
+    });
+
+    await expect(
+      manager.cancelSession({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-a",
+        reason: "manual-cancel",
+      }),
+    ).rejects.toMatchObject({
+      code: "ACP_TURN_FAILED",
+      message: "gateway closed (1008): pairing required",
+    });
+  });
+
   it("cleans actor-tail bookkeeping after session turns complete", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
@@ -2345,6 +2426,46 @@ describe("AcpSessionManager", () => {
     expect(states).toContain("running");
     expect(states).toContain("idle");
     expect(states).not.toContain("error");
+  });
+
+  it("does not retry early turns for non-stale gateway closures", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+    runtimeState.runTurn.mockImplementationOnce(async function* () {
+      yield {
+        type: "error" as const,
+        message: "Gateway disconnected: 1008: pairing required",
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "do work",
+        mode: "prompt",
+        requestId: "run-1",
+      }),
+    ).rejects.toMatchObject({
+      code: "ACP_TURN_FAILED",
+      message: "Gateway disconnected: 1008: pairing required",
+    });
+
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
+    expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
+    const states = extractStatesFromUpserts();
+    expect(states).toContain("running");
+    expect(states).toContain("error");
+    expect(states.at(-1)).toBe("error");
   });
 
   it("retries once with a fresh persistent session after an early missing-session turn failure", async () => {

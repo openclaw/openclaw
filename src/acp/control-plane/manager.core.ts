@@ -88,6 +88,7 @@ const ACP_TURN_TIMEOUT_CLEANUP_GRACE_MS = 2_000;
 const ACP_TURN_TIMEOUT_REASON = "turn-timeout";
 const ACP_BACKGROUND_TASK_TEXT_MAX_LENGTH = 160;
 const ACP_BACKGROUND_TASK_PROGRESS_MAX_LENGTH = 240;
+const RECOVERABLE_GATEWAY_DISCONNECT_CLOSE_CODES = new Set(["1000", "1001", "1006", "1012"]);
 
 function summarizeBackgroundTaskText(text: string): string {
   const normalized = normalizeText(text) ?? "ACP background task";
@@ -1775,10 +1776,10 @@ export class AcpSessionManager {
 
   private isRecoverableGatewayDisconnectError(message: string): boolean {
     const normalized = message.trim();
-    return (
-      /^gateway disconnected:\s*\d{3,4}\b/i.test(normalized) ||
-      /^gateway closed\s*\(\d{3,4}\)/i.test(normalized)
-    );
+    const closeCode =
+      normalized.match(/^gateway disconnected:\s*(\d{3,4})(?::|\b)/i)?.[1] ??
+      normalized.match(/^gateway closed\s*\((\d{3,4})(?:\b|\))/i)?.[1];
+    return closeCode ? RECOVERABLE_GATEWAY_DISCONNECT_CLOSE_CODES.has(closeCode) : false;
   }
 
   private isRecoverableMissingPersistentSessionError(message: string): boolean {
