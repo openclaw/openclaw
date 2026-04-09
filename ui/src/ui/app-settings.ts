@@ -92,10 +92,7 @@ export function applySettings(host: SettingsHost, next: UiSettings) {
 
 export function setLastActiveSessionKey(host: SettingsHost, next: string) {
   const trimmed = next.trim();
-  if (!trimmed) {
-    return;
-  }
-  if (host.settings.lastActiveSessionKey === trimmed) {
+  if (!trimmed || host.settings.lastActiveSessionKey === trimmed) {
     return;
   }
   applySettings(host, { ...host.settings, lastActiveSessionKey: trimmed });
@@ -275,44 +272,42 @@ async function refreshAgentsTab(host: SettingsHost, app: OpenClawApp) {
     case "cron":
       void loadCron(host);
       return;
-    default:
-      return;
   }
 }
 
 export async function refreshActiveTab(host: SettingsHost) {
   const app = host as unknown as OpenClawApp;
-  if (
-    (
-      [
-        "config",
-        "communications",
-        "appearance",
-        "automation",
-        "infrastructure",
-        "aiAgents",
-      ] as Tab[]
-    ).includes(host.tab)
-  ) {
-    await loadConfigSchema(app);
-    await loadConfig(app);
-    return;
-  }
-  const simpleTabLoaders: Partial<Record<Tab, () => Promise<void>>> = {
-    overview: () => loadOverview(host),
-    channels: () => loadChannelsTab(host),
-    instances: () => loadPresence(app),
-    usage: () => loadUsage(app),
-    sessions: () => loadSessions(app),
-    cron: () => loadCron(host),
-    skills: () => loadSkills(app),
-  };
-  const simpleTabLoader = simpleTabLoaders[host.tab];
-  if (simpleTabLoader) {
-    await simpleTabLoader();
-    return;
-  }
   switch (host.tab) {
+    case "config":
+    case "communications":
+    case "appearance":
+    case "automation":
+    case "infrastructure":
+    case "aiAgents":
+      await loadConfigSchema(app);
+      await loadConfig(app);
+      return;
+    case "overview":
+      await loadOverview(host);
+      return;
+    case "channels":
+      await loadChannelsTab(host);
+      return;
+    case "instances":
+      await loadPresence(app);
+      return;
+    case "usage":
+      await loadUsage(app);
+      return;
+    case "sessions":
+      await loadSessions(app);
+      return;
+    case "cron":
+      await loadCron(host);
+      return;
+    case "skills":
+      await loadSkills(app);
+      return;
     case "agents":
       await refreshAgentsTab(host, app);
       return;
@@ -480,9 +475,7 @@ function applyTabSelection(
   options: { refreshPolicy: "always" | "connected"; syncUrl?: boolean },
 ) {
   const prev = host.tab;
-  if (host.tab !== next) {
-    host.tab = next;
-  }
+  host.tab = next;
 
   // Cleanup chat module state when navigating away from chat
   if (prev === "chat" && next !== "chat") {
