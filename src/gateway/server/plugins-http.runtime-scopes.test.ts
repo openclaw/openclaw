@@ -16,6 +16,7 @@ import { createGatewayPluginRequestHandler } from "./plugins-http.js";
 function createRoute(params: {
   path: string;
   auth: "gateway" | "plugin";
+  match?: "exact" | "prefix";
   gatewayRuntimeScopeSurface?: "write-default" | "trusted-operator";
   handler?: (req: IncomingMessage, res: ServerResponse) => boolean | Promise<boolean>;
 }) {
@@ -24,7 +25,7 @@ function createRoute(params: {
     path: params.path,
     auth: params.auth,
     gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface,
-    match: "exact" as const,
+    match: params.match ?? "exact",
     handler: params.handler ?? (() => true),
     source: "route",
   };
@@ -204,6 +205,71 @@ describe("plugin HTTP route runtime scopes", () => {
     expect(response.res.statusCode).toBe(200);
     expect(log.warn).not.toHaveBeenCalled();
     expect(observedScopes).toEqual(
+      expect.arrayContaining(["operator.admin", "operator.read", "operator.write"]),
+    );
+  });
+
+  it("scopes runtime privileges per matched route for exact/prefix overlap", async () => {
+    const observed: Array<{ route: "exact" | "prefix"; scopes: string[] }> = [];
+    const log = createMockLogger();
+    const handler = createGatewayPluginRequestHandler({
+      registry: createTestRegistry({
+        httpRoutes: [
+          createRoute({
+            path: "/secure-admin-hook",
+            auth: "gateway",
+            match: "exact",
+            handler: async () => {
+              observed.push({
+                route: "exact",
+                scopes:
+                  getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes?.slice() ?? [],
+              });
+              return false;
+            },
+          }),
+          createRoute({
+            path: "/secure",
+            auth: "gateway",
+            match: "prefix",
+            gatewayRuntimeScopeSurface: "trusted-operator",
+            handler: async () => {
+              observed.push({
+                route: "prefix",
+                scopes:
+                  getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes?.slice() ?? [],
+              });
+              assertAdminHelperAllowed();
+              return true;
+            },
+          }),
+        ],
+      }),
+      log,
+    });
+
+    const response = makeMockHttpResponse();
+    const handled = await handler(
+      { url: "/secure-admin-hook" } as IncomingMessage,
+      response.res,
+      undefined,
+      {
+        gatewayAuthSatisfied: true,
+        gatewayRequestAuth: { authMethod: "token", trustDeclaredOperatorScopes: false },
+        gatewayRequestOperatorScopes: ["operator.write"],
+      },
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(200);
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(observed).toHaveLength(2);
+    expect(observed[0]).toEqual({
+      route: "exact",
+      scopes: ["operator.write"],
+    });
+    expect(observed[1]?.route).toBe("prefix");
+    expect(observed[1]?.scopes).toEqual(
       expect.arrayContaining(["operator.admin", "operator.read", "operator.write"]),
     );
   });

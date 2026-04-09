@@ -83,62 +83,58 @@ export function createGatewayPluginRequestHandler(params: {
       return false;
     }
     const requiresGatewayAuth = matchedPluginRoutesRequireGatewayAuth(matchedRoutes);
-    const usesTrustedOperatorSurface = matchedRoutes.some(
-      (route) => route.gatewayRuntimeScopeSurface === "trusted-operator",
-    );
-    let runtimeScopes: readonly string[] = [];
-    if (requiresGatewayAuth) {
-      if (dispatchContext?.gatewayAuthSatisfied !== true) {
-        log.warn(`plugin http route blocked without gateway auth (${pathContext.canonicalPath})`);
-        return false;
-      }
-      if (usesTrustedOperatorSurface) {
-        if (!dispatchContext.gatewayRequestAuth) {
+    if (requiresGatewayAuth && dispatchContext?.gatewayAuthSatisfied !== true) {
+      log.warn(`plugin http route blocked without gateway auth (${pathContext.canonicalPath})`);
+      return false;
+    }
+
+    for (const route of matchedRoutes) {
+      let runtimeScopes: readonly string[] = [];
+      if (route.auth === "gateway") {
+        if (route.gatewayRuntimeScopeSurface === "trusted-operator") {
+          if (!dispatchContext?.gatewayRequestAuth) {
+            log.warn(
+              `plugin http route blocked without caller auth context (${pathContext.canonicalPath})`,
+            );
+            return false;
+          }
+          runtimeScopes = resolvePluginRouteRuntimeOperatorScopes(
+            req,
+            dispatchContext.gatewayRequestAuth,
+            "trusted-operator",
+          );
+        } else if (dispatchContext?.gatewayRequestOperatorScopes === undefined) {
           log.warn(
-            `plugin http route blocked without caller auth context (${pathContext.canonicalPath})`,
+            `plugin http route blocked without caller scope context (${pathContext.canonicalPath})`,
           );
           return false;
+        } else {
+          runtimeScopes = dispatchContext.gatewayRequestOperatorScopes;
         }
-        runtimeScopes = resolvePluginRouteRuntimeOperatorScopes(
-          req,
-          dispatchContext.gatewayRequestAuth,
-          "trusted-operator",
+      }
+
+      const runtimeClient = createPluginRouteRuntimeClient(runtimeScopes);
+      try {
+        const handled = await withPluginRuntimeGatewayRequestScope(
+          {
+            client: runtimeClient,
+            isWebchatConnect: () => false,
+          },
+          async () => route.handler(req, res),
         );
-      } else if (dispatchContext.gatewayRequestOperatorScopes === undefined) {
-        log.warn(
-          `plugin http route blocked without caller scope context (${pathContext.canonicalPath})`,
-        );
-        return false;
-      } else {
-        runtimeScopes = dispatchContext.gatewayRequestOperatorScopes;
+        if (handled !== false) {
+          return true;
+        }
+      } catch (err) {
+        log.warn(`plugin http route failed (${route.pluginId ?? "unknown"}): ${String(err)}`);
+        if (!res.headersSent) {
+          res.statusCode = 500;
+          res.setHeader("Content-Type", "text/plain; charset=utf-8");
+          res.end("Internal Server Error");
+        }
+        return true;
       }
     }
-    const runtimeClient = createPluginRouteRuntimeClient(runtimeScopes);
-
-    return await withPluginRuntimeGatewayRequestScope(
-      {
-        client: runtimeClient,
-        isWebchatConnect: () => false,
-      },
-      async () => {
-        for (const route of matchedRoutes) {
-          try {
-            const handled = await route.handler(req, res);
-            if (handled !== false) {
-              return true;
-            }
-          } catch (err) {
-            log.warn(`plugin http route failed (${route.pluginId ?? "unknown"}): ${String(err)}`);
-            if (!res.headersSent) {
-              res.statusCode = 500;
-              res.setHeader("Content-Type", "text/plain; charset=utf-8");
-              res.end("Internal Server Error");
-            }
-            return true;
-          }
-        }
-        return false;
-      },
-    );
+    return false;
   };
 }
