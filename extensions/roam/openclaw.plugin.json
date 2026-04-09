@@ -1,0 +1,9 @@
+{
+  "id": "roam",
+  "channels": ["roam"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

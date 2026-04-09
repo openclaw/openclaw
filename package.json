@@ -366,6 +366,10 @@
       "types": "./dist/plugin-sdk/acp-binding-runtime.d.ts",
       "default": "./dist/plugin-sdk/acp-binding-runtime.js"
     },
+    "./plugin-sdk/roam": {
+      "types": "./dist/plugin-sdk/roam.d.ts",
+      "default": "./dist/plugin-sdk/roam.js"
+    },
     "./plugin-sdk/lazy-runtime": {
       "types": "./dist/plugin-sdk/lazy-runtime.d.ts",
       "default": "./dist/plugin-sdk/lazy-runtime.js"

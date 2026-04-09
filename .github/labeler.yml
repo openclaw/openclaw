@@ -75,6 +75,11 @@
           - "extensions/qa-lab/**"
           - "docs/concepts/qa-e2e-automation.md"
           - "docs/channels/qa-channel.md"
+"channel: roam":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/roam/**"
+          - "docs/channels/roam.md"
 "channel: signal":
   - changed-files:
       - any-glob-to-any-file:

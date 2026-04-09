@@ -8,7 +8,10 @@ import type { DispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/rep
 import type { ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
+import {
+  createChannelReplyPipeline,
+  type CreateTypingCallbacksParams,
+} from "./channel-reply-pipeline.js";
 import { createNormalizedOutboundDeliverer, type OutboundReplyPayload } from "./reply-payload.js";
 
 type ReplyOptionsWithoutModelSelected = Omit<
@@ -88,7 +91,7 @@ export async function dispatchInboundReplyWithBase(
   params: BuildInboundReplyDispatchBaseParams &
     Pick<
       RecordInboundSessionAndDispatchReplyParams,
-      "deliver" | "onRecordError" | "onDispatchError" | "replyOptions"
+      "deliver" | "onRecordError" | "onDispatchError" | "replyOptions" | "typing"
     >,
 ): Promise<void> {
   const dispatchBase = buildInboundReplyDispatchBase(params);
@@ -98,6 +101,7 @@ export async function dispatchInboundReplyWithBase(
     onRecordError: params.onRecordError,
     onDispatchError: params.onDispatchError,
     replyOptions: params.replyOptions,
+    typing: params.typing,
   });
 }
 
@@ -116,6 +120,8 @@ export async function recordInboundSessionAndDispatchReply(params: {
   onRecordError: (err: unknown) => void;
   onDispatchError: (err: unknown, info: { kind: string }) => void;
   replyOptions?: ReplyOptionsWithoutModelSelected;
+  /** Optional channel-specific typing indicator callbacks. */
+  typing?: CreateTypingCallbacksParams;
 }): Promise<void> {
   await params.recordInboundSession({
     storePath: params.storePath,
@@ -129,6 +135,7 @@ export async function recordInboundSessionAndDispatchReply(params: {
     agentId: params.agentId,
     channel: params.channel,
     accountId: params.accountId,
+    typing: params.typing,
   });
   const deliver = createNormalizedOutboundDeliverer(params.deliver);
 

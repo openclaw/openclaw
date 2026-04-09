@@ -79,6 +79,7 @@
   "windows-spawn",
   "acp-runtime",
   "acp-binding-runtime",
+  "roam",
   "lazy-runtime",
   "testing",
   "temp-path",
