@@ -170,10 +170,7 @@ function toErrorMessage(err: unknown): string {
   }
   if (err && typeof err === "object") {
     try {
-      const serialized = JSON.stringify(err);
-      if (serialized) {
-        return serialized;
-      }
+      return JSON.stringify(err) || "request failed";
     } catch {
       // ignore
     }
@@ -201,12 +198,12 @@ export async function loadUsage(
   try {
     const startDate = overrides?.startDate ?? state.usageStartDate;
     const endDate = overrides?.endDate ?? state.usageEndDate;
-    const runUsageRequests = async (includeDateInterpretation: boolean) => {
+    const runUsageRequests = (includeDateInterpretation: boolean) => {
       const dateInterpretation = buildDateInterpretationParams(
         state.usageTimeZone,
         includeDateInterpretation,
       );
-      return await Promise.all([
+      return Promise.all([
         client.request("sessions.usage", {
           startDate,
           endDate,
