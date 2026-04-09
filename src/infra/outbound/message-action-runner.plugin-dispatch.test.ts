@@ -473,6 +473,87 @@ describe("runMessageAction plugin dispatch", () => {
       expect(pluginCall?.mediaAccess).toBeDefined();
       expect(pluginCall?.mediaAccess?.readFile).toBeUndefined();
     });
+
+    it("falls back to the resolved account policy when requester account is unavailable", async () => {
+      const handlePolicyCheckedAction = vi.fn(async ({ mediaAccess }) =>
+        jsonResult({
+          ok: true,
+          hasHostReadCapability: typeof mediaAccess?.readFile === "function",
+        }),
+      );
+      const policyPlugin: ChannelPlugin = {
+        id: "whatsapp",
+        meta: {
+          id: "whatsapp",
+          label: "WhatsApp",
+          selectionLabel: "WhatsApp",
+          docsPath: "/channels/whatsapp",
+          blurb: "WhatsApp account policy fallback test plugin.",
+        },
+        capabilities: { chatTypes: ["direct", "channel"], media: true },
+        config: createAlwaysConfiguredPluginConfig(),
+        messaging: {
+          targetResolver: {
+            looksLikeId: () => true,
+          },
+        },
+        actions: {
+          describeMessageTool: () => ({ actions: ["send"] }),
+          supportsAction: ({ action }) => action === "send",
+          handleAction: handlePolicyCheckedAction,
+        },
+      };
+
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "whatsapp",
+            source: "test",
+            plugin: policyPlugin,
+          },
+        ]),
+      );
+
+      await runMessageAction({
+        cfg: {
+          tools: { allow: ["read"] },
+          channels: {
+            whatsapp: {
+              enabled: true,
+              accounts: {
+                source: {
+                  groups: {
+                    ops: {
+                      toolsBySender: {
+                        "id:trusted-user": {
+                          deny: ["read"],
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "whatsapp",
+          accountId: "source",
+          target: "group:ops",
+          message: "hello",
+          media: "/tmp/host.png",
+        },
+        requesterSenderId: "trusted-user",
+        sessionKey: "agent:alpha:whatsapp:group:ops",
+        dryRun: false,
+      });
+
+      const pluginCall = handlePolicyCheckedAction.mock.calls[0]?.[0];
+      expect(pluginCall?.accountId).toBe("source");
+      expect(pluginCall?.mediaAccess).toBeDefined();
+      expect(pluginCall?.mediaAccess?.readFile).toBeUndefined();
+    });
   });
 
   describe("card-only send behavior", () => {

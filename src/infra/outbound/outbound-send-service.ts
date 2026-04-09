@@ -75,7 +75,9 @@ async function tryHandleWithPluginAction(params: {
     sessionKey: params.ctx.sessionKey,
     messageProvider: params.ctx.sessionKey ? undefined : params.ctx.channel,
     accountId:
-      (params.ctx.sessionKey ? params.ctx.requesterAccountId : params.ctx.accountId) ?? undefined,
+      (params.ctx.sessionKey
+        ? (params.ctx.requesterAccountId ?? params.ctx.accountId)
+        : params.ctx.accountId) ?? undefined,
     requesterSenderId: params.ctx.requesterSenderId,
     mediaAccess: params.ctx.mediaAccess,
     mediaReadFile: params.ctx.mediaReadFile,
@@ -154,7 +156,7 @@ export async function executeSendAction(params: {
     content: params.message,
     agentId: params.ctx.agentId,
     requesterSessionKey: params.ctx.sessionKey,
-    requesterAccountId: params.ctx.requesterAccountId,
+    requesterAccountId: params.ctx.requesterAccountId ?? params.ctx.accountId ?? undefined,
     requesterSenderId: params.ctx.requesterSenderId,
     mediaUrl: params.mediaUrl || undefined,
     mediaUrls: params.mediaUrls,

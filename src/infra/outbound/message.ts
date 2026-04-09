@@ -272,7 +272,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       cfg,
       agentId: params.agentId,
       sessionKey: params.requesterSessionKey ?? params.mirror?.sessionKey,
-      requesterAccountId: params.requesterAccountId,
+      requesterAccountId: params.requesterAccountId ?? params.accountId,
       requesterSenderId: params.requesterSenderId,
     });
     const results = await deliverOutboundPayloads({
