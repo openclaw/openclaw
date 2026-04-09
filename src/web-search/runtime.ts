@@ -330,13 +330,14 @@ export async function runWebSearch(
   const providerIdExplicitlyProvided = Boolean(params.providerId?.trim());
 
   // Resolve the explicit primary provider from config (not runtime ordering) for fallback mode
-  const configuredPrimaryProviderId =
+  const configuredProviderId =
     search && "provider" in search && typeof search.provider === "string"
       ? normalizeLowercaseStringOrEmpty(search.provider)
-      : candidates[0]?.id ?? "";
-  const configuredPrimaryProvider = candidates.find(
-    (p) => p.id === configuredPrimaryProviderId,
-  );
+      : "";
+  const configuredPrimaryProvider = candidates.find((p) => p.id === configuredProviderId);
+  const primaryProvider =
+    configuredPrimaryProvider ?? candidates[0];
+  const primaryProviderId = primaryProvider?.id ?? "";
 
   // When explicit + fallbacks: primary provider first, then fallbacks (deduped); otherwise use candidates
   // Only enter fallback path if the configured primary actually exists in candidates
@@ -344,15 +345,15 @@ export async function runWebSearch(
     hasExplicitProvider &&
     configuredFallbacks.length > 0 &&
     !providerIdExplicitlyProvided &&
-    configuredPrimaryProvider != null;
+    primaryProvider != null;
   const effectiveCandidates = canUseExplicitFallbacks
     ? [
-        configuredPrimaryProvider,
+        primaryProvider,
         ...configuredFallbacks
           .map((id) => candidates.find((p) => p.id === normalizeLowercaseStringOrEmpty(id)))
           .filter(
             (p): p is PluginWebSearchProviderEntry =>
-              p != null && p.id !== configuredPrimaryProviderId,
+              p != null && p.id !== primaryProviderId,
           )
           .reduce<PluginWebSearchProviderEntry[]>((deduped, p) => {
             if (p && !deduped.some((d) => d.id === p.id)) {
