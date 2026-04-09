@@ -29,12 +29,10 @@ import {
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
-  extractAssistantText,
   resolveEffectiveSessionToolsVisibility,
   resolveSessionReference,
   resolveSessionToolContext,
   resolveVisibleSessionReference,
-  stripToolMessages,
 } from "./sessions-helpers.js";
 import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./sessions-send-helpers.js";
 import { type SessionsSendAnnouncePlan, runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
@@ -49,27 +47,6 @@ const SessionsSendToolSchema = Type.Object({
 
 type GatewayCaller = typeof callGateway;
 const SESSIONS_SEND_REPLY_HISTORY_LIMIT = 50;
-
-function resolveLatestAssistantReplySnapshot(messages: unknown[]): {
-  text?: string;
-  fingerprint?: string;
-} {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    const text = extractAssistantText(message);
-    if (!text) {
-      continue;
-    }
-    let fingerprint: string | undefined;
-    try {
-      fingerprint = JSON.stringify(message);
-    } catch {
-      fingerprint = text;
-    }
-    return { text, fingerprint };
-  }
-  return {};
-}
 
 function resolveImmediateFireAndForgetAnnounceDecision(params: {
   sessionKey: string;
@@ -442,11 +419,11 @@ export function createSessionsSendTool(opts?: {
         });
       }
       const reply = result.replyText;
-      const announcePlan = announcePlanPromise
-        ? (settledAnnouncePlan ?? (await announcePlanPromise))
-        : immediatePlan;
+      const announcePlan = settledAnnouncePlan ?? immediatePlan;
       if (announcePlan?.shouldRunAnnounceFlow) {
         startA2AFlow(announcePlan, reply ?? undefined);
+      } else if (!announcePlan && announcePlanPromise) {
+        startA2AFlow(announcePlanPromise, reply ?? undefined);
       }
 
       return jsonResult({

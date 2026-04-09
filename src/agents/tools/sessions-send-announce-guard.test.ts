@@ -52,6 +52,16 @@ let resolveAnnounceTarget: (typeof import("./sessions-announce-target.js"))["res
 let createSessionsSendTool: (typeof import("./sessions-send-tool.js"))["createSessionsSendTool"];
 let setActivePluginRegistry: (typeof import("../../plugins/runtime.js"))["setActivePluginRegistry"];
 
+function createDeferredPromise<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 async function loadFreshModules() {
   vi.resetModules();
   vi.doMock("../../gateway/call.js", () => ({
@@ -504,6 +514,79 @@ describe("sessions_send fail-closed announce flow", () => {
       delivery: { status: "skipped", mode: "none" },
     });
     expect(runSessionsSendA2AFlowMock).not.toHaveBeenCalled();
+  });
+
+  it("does not await lookup-based announce planning after the reply is ready", async () => {
+    const sessionsListDeferred = createDeferredPromise<{
+      sessions: Array<{ key: string; displayName: string }>;
+    }>();
+    let historyReads = 0;
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: { runId?: string } };
+      if (request.method === "sessions.list") {
+        return sessionsListDeferred.promise;
+      }
+      if (request.method === "agent") {
+        return { runId: "run-delayed-announce-lookup", status: "accepted" };
+      }
+      if (request.method === "agent.wait") {
+        return { runId: request.params?.runId ?? "run-delayed-announce-lookup", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        historyReads += 1;
+        if (historyReads === 1) {
+          return { messages: [] };
+        }
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "done" }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    try {
+      const resultPromise = createTool().execute("call-delayed-announce-lookup", {
+        sessionKey: "main",
+        message: "ping",
+        timeoutSeconds: 1,
+      });
+      const timeoutSentinel = Symbol("timeout");
+      const resultOrTimeout = await Promise.race([
+        resultPromise,
+        new Promise<typeof timeoutSentinel>((resolve) => {
+          setTimeout(() => resolve(timeoutSentinel), 0);
+        }),
+      ]);
+
+      expect(resultOrTimeout).not.toBe(timeoutSentinel);
+      const result = resultOrTimeout as Awaited<
+        ReturnType<ReturnType<typeof createTool>["execute"]>
+      >;
+      expect(result.details).toMatchObject({
+        runId: "run-delayed-announce-lookup",
+        status: "ok",
+        reply: "done",
+        delivery: { status: "pending", mode: "announce" },
+      });
+      expect(runSessionsSendA2AFlowMock).toHaveBeenCalledTimes(1);
+      expect(
+        (
+          runSessionsSendA2AFlowMock.mock.calls[0]?.[0] as {
+            announcePlan?: Promise<unknown>;
+          }
+        ).announcePlan,
+      ).toBeInstanceOf(Promise);
+    } finally {
+      sessionsListDeferred.resolve({
+        sessions: [{ key: "main", displayName: "main" }],
+      });
+    }
   });
 
   it("does not consult sessions.list for fire-and-forget sends that would need metadata to classify", async () => {
