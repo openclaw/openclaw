@@ -1036,6 +1036,12 @@ Current first-pass wiring is intentionally limited to:
 
 These notifications are emitted from the NemoClaw runner completion path and rendered through the same shallow digest selector/formatter chain used by preview-oriented consumers. This phase prioritizes execution visibility only; `job_queued`, `job_running`, and `digest_alert` stay for later phases.
 
+`digest_ready` naturally fires when the completion payload includes
+`notification_digest_summary`. The smallest current verification path is `heavy_task`
+with `mode=nemoclaw_job` plus `params.digest_ready_probe=true`, which returns one digest
+item whose primary display entrypoint remains
+`digest_bucket_ui_layouts.meta.summary_parts`.
+
 The runtime entrypoint now also emits a lightweight feedback layer for the next turn:
 
 - `feedback_summary`

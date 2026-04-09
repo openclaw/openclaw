@@ -180,6 +180,38 @@ def make_key_points(text: str) -> list[str]:
     return points[:5]
 
 
+def build_probe_digest_summary(input_text: str) -> list[dict]:
+    title = summarize_text(input_text or "NemoClaw digest ready probe", 60)
+    return [
+        {
+            "notification_group_key": "nemoclaw.digest-ready.probe",
+            "digest_title": title,
+            "digest_bucket_ui_layouts": {
+                "meta": {
+                    "summary_parts": {
+                        "display": {
+                            "badge": {
+                                "label": "Major",
+                                "short": "MAJ",
+                                "palette": "warning",
+                                "order": 3,
+                            },
+                            "leader": {
+                                "label": "Leader",
+                                "symbol": "★",
+                                "compact": "Leader ★",
+                                "tokens": ["Leader", "★"],
+                            },
+                        },
+                        "percent": "50.0%",
+                        "share": 0.5,
+                    }
+                }
+            },
+        }
+    ]
+
+
 def build_prompt(job: dict) -> str:
     input_text = str(job.get("input") or "")
     params = job.get("params") if isinstance(job.get("params"), dict) else {}
@@ -237,6 +269,18 @@ def ollama_generate(job: dict, ollama_url: str, ollama_model: str, timeout: floa
 
 def build_result(job: dict, runner_name: str, ollama_url: str, ollama_model: str, ollama_timeout: float) -> dict:
     input_text = str(job.get("input") or "")
+    params = job.get("params") if isinstance(job.get("params"), dict) else {}
+    mode = str(params.get("mode") or "")
+    if mode == "digest_ready_probe" or bool(params.get("digest_ready_probe")):
+        return {
+            "summary": summarize_text(input_text or "NemoClaw digest ready probe"),
+            "key_points": make_key_points(input_text or "NemoClaw digest ready probe"),
+            "suggested_next_action": "Use this probe to verify digest_ready delivery in Slack.",
+            "raw_output": input_text or "NemoClaw digest ready probe",
+            "runner": runner_name,
+            "exit_code": 0,
+            "notification_digest_summary": build_probe_digest_summary(input_text),
+        }
     try:
         generated = ollama_generate(job, ollama_url, ollama_model, ollama_timeout)
         summary, key_points, next_step = generated["parsed"]
