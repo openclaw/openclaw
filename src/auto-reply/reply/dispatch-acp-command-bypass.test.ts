@@ -1,9 +1,42 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { shouldBypassAcpDispatchForCommand } from "./dispatch-acp-command-bypass.js";
 import { buildTestCtx } from "./test-ctx.js";
 
+function setDispatchBypassTestRegistry(params?: { discordNativeCommands?: boolean }): void {
+  if (!params?.discordNativeCommands) {
+    setActivePluginRegistry(createTestRegistry([]));
+    return;
+  }
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "discord",
+        source: "test",
+        plugin: createChannelTestPluginBase({
+          id: "discord",
+          label: "Discord",
+          capabilities: { nativeCommands: true, chatTypes: ["direct"] },
+        }),
+      },
+    ]),
+  );
+}
+
 describe("shouldBypassAcpDispatchForCommand", () => {
+  beforeEach(() => {
+    setDispatchBypassTestRegistry();
+  });
+
+  afterEach(() => {
+    setDispatchBypassTestRegistry();
+  });
+
   it("returns false for plain-text ACP turns", () => {
     const ctx = buildTestCtx({
       Provider: "discord",
@@ -52,7 +85,7 @@ describe("shouldBypassAcpDispatchForCommand", () => {
     expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
   });
 
-  it("returns true for /acp slash commands when text commands are allowed on the surface", () => {
+  it("returns true for /acp slash commands when allowTextCommands resolves to true", () => {
     const ctx = buildTestCtx({
       Provider: "discord",
       Surface: "discord",
@@ -68,6 +101,26 @@ describe("shouldBypassAcpDispatchForCommand", () => {
     } as OpenClawConfig;
 
     expect(shouldBypassAcpDispatchForCommand(ctx, cfg)).toBe(true);
+  });
+
+  it("returns false for /acp slash commands when allowTextCommands resolves to false", () => {
+    setDispatchBypassTestRegistry({ discordNativeCommands: true });
+
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      CommandBody: "/acp cancel",
+      BodyForCommands: "/acp cancel",
+      BodyForAgent: "/acp cancel",
+      CommandSource: "text",
+    });
+    const cfg = {
+      commands: {
+        text: false,
+      },
+    } as OpenClawConfig;
+
+    expect(shouldBypassAcpDispatchForCommand(ctx, cfg)).toBe(false);
   });
 
   it("returns false for unauthorized bang-prefixed commands", () => {
