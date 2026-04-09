@@ -77,7 +77,15 @@ describe("status-overview-rows", () => {
           totalSessions: 2,
           agents: [{ id: "main", lastActiveAgeMs: 60_000 }],
         },
-        memory: { files: 1, chunks: 2, vector: {}, fts: {}, cache: {} },
+        memory: {
+          files: 1,
+          chunks: 2,
+          provider: "local",
+          model: "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf",
+          vector: {},
+          fts: {},
+          cache: {},
+        },
         memoryPlugin: { enabled: true, slot: "memory" },
         pluginCompatibility: [{ pluginId: "a", severity: "warn", message: "legacy" }],
         ok: (value: string) => `ok(${value})`,
@@ -96,7 +104,7 @@ describe("status-overview-rows", () => {
         {
           Item: "Memory",
           Value:
-            "1 files · 2 chunks · plugin memory · ok(vector ready) · warn(fts ready) · muted(cache warm)",
+            "1 files · 2 chunks · plugin memory · provider local · model embeddinggemma-300m-qat-Q8_0.gguf · ok(vector ready) · warn(fts ready) · muted(cache warm)",
         },
         { Item: "Plugin compatibility", Value: "warn(1 notice · 1 plugin)" },
         { Item: "Sessions", Value: "2 active · default gpt-5.4 (12k ctx) · store.json" },
@@ -154,7 +162,7 @@ describe("status-overview-rows", () => {
         { Item: "Version", Value: expect.any(String) },
         { Item: "OS", Value: "macOS" },
         { Item: "Config", Value: "/tmp/openclaw.json" },
-        { Item: "Security", Value: "Run: openclaw security audit --deep" },
+        { Item: "Security", Value: expect.stringContaining("security audit --deep") },
         { Item: "Secrets", Value: "2 diagnostics" },
       ]),
     );

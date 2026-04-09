@@ -27,6 +27,20 @@ type PairingRecoveryLike = {
   requestId?: string | null;
 };
 
+function shortenStatusMemoryModelLabel(value: string, max = 40): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  const basename = trimmed.split(/[/\\]/).at(-1) ?? trimmed;
+  if (basename.length <= max) {
+    return basename;
+  }
+  const head = Math.max(8, Math.floor((max - 1) / 2));
+  const tail = Math.max(8, max - head - 1);
+  return `${basename.slice(0, head)}…${basename.slice(-tail)}`;
+}
+
 export const statusHealthColumns: TableColumn[] = [
   { key: "Item", header: "Item", minWidth: 10 },
   { key: "Status", header: "Status", minWidth: 8 },
@@ -150,6 +164,13 @@ export function buildStatusMemoryValue(params: {
   }
   if (params.memoryPlugin.slot) {
     parts.push(`plugin ${params.memoryPlugin.slot}`);
+  }
+  if (params.memory.provider?.trim()) {
+    parts.push(`provider ${params.memory.provider.trim()}`);
+  }
+  const modelLabel = params.memory.model?.trim();
+  if (modelLabel && normalizeLowercaseStringOrEmpty(params.memory.provider) === "local") {
+    parts.push(`model ${shortenStatusMemoryModelLabel(modelLabel)}`);
   }
   const colorByTone = (tone: Tone, text: string) =>
     tone === "ok" ? params.ok(text) : tone === "warn" ? params.warn(text) : params.muted(text);
