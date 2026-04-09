@@ -432,7 +432,10 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
           const fsMod = await import("node:fs/promises");
           const resolved = pathMod.resolve(mediaUrl);
           const roots = mediaLocalRoots ?? [];
-          if (roots.length > 0 && !roots.some((r) => resolved.startsWith(pathMod.resolve(r)))) {
+          if (roots.length > 0 && !roots.some((r) => {
+            const root = pathMod.resolve(r);
+            return resolved === root || resolved.startsWith(root + pathMod.sep);
+          })) {
             throw new Error(`Path "${mediaUrl}" outside allowed media roots`);
           }
           buffer = await fsMod.readFile(resolved);

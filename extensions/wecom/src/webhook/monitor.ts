@@ -441,7 +441,10 @@ export async function startAgentForStream(params: {
         try {
           // Validate path against allowed media roots
           const resolved = pathModule.resolve(p);
-          if (allowedRoots.length > 0 && !allowedRoots.some((r) => resolved.startsWith(pathModule.resolve(r)))) {
+          if (allowedRoots.length > 0 && !allowedRoots.some((r) => {
+            const root = pathModule.resolve(r);
+            return resolved === root || resolved.startsWith(root + pathModule.sep);
+          })) {
             target.runtime.error?.(`[webhook] local-path: path ${p} outside allowed media roots, skipping`);
             continue;
           }

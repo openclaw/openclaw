@@ -61,7 +61,7 @@ export async function resolveWecomCommandAuthorization(params: {
   // - open: commands are allowed for everyone by default (unless higher-level access-groups deny).
   // - allowlist: commands require allowFrom entries.
   // - pairing: treated the same as allowlist for WeCom (since pairing CLI is unsupported).
-  const effectiveAllowFrom = dmPolicy === "open" ? ["*"] : configAllowFrom;
+  const effectiveAllowFrom = dmPolicy === "disabled" ? [] : dmPolicy === "open" ? ["*"] : configAllowFrom;
 
   const senderAllowed = isWecomSenderAllowed(senderUserId, effectiveAllowFrom);
   const allowAllConfigured = effectiveAllowFrom.some(
