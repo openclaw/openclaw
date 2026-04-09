@@ -121,6 +121,7 @@ Docs: https://docs.openclaw.ai
 
 - Cron/isolated agent: run scheduled agent turns as non-owner senders so owner-only tools stay unavailable during cron execution. (#63878)
 - Voice Call/realtime: reject oversized realtime WebSocket frames before bridge setup so large pre-start payloads cannot crash the gateway. (#63890) Thanks @mmaps.
+- Browser/sandbox: gate `/sandbox/novnc` behind bridge auth and stop surfacing sandbox observer URLs in model-visible prompt context. (#63882) Thanks @eleqtrizit.
 
 ## 2026.4.9
 
