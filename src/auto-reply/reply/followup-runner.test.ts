@@ -395,7 +395,7 @@ function createAsyncReplySpy() {
 
 describe("createFollowupRunner runtime config", () => {
   it("uses the active runtime snapshot for queued embedded followup runs", async () => {
-    const sourceConfig: OpenClawConfig = {
+    const sourceConfig = {
       models: {
         providers: {
           openai: {
@@ -409,8 +409,8 @@ describe("createFollowupRunner runtime config", () => {
           },
         },
       },
-    };
-    const runtimeConfig: OpenClawConfig = {
+    } as unknown as OpenClawConfig;
+    const runtimeConfig = {
       models: {
         providers: {
           openai: {
@@ -420,7 +420,7 @@ describe("createFollowupRunner runtime config", () => {
           },
         },
       },
-    };
+    } as unknown as OpenClawConfig;
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [],
@@ -452,7 +452,7 @@ describe("createFollowupRunner runtime config", () => {
   });
 
   it("resolves queued embedded followups before preflight helpers read config", async () => {
-    const sourceConfig: OpenClawConfig = {
+    const sourceConfig = {
       skills: {
         entries: {
           whisper: {
@@ -464,8 +464,8 @@ describe("createFollowupRunner runtime config", () => {
           },
         },
       },
-    };
-    const runtimeConfig: OpenClawConfig = {
+    } as unknown as OpenClawConfig;
+    const runtimeConfig = {
       skills: {
         entries: {
           whisper: {
@@ -473,7 +473,7 @@ describe("createFollowupRunner runtime config", () => {
           },
         },
       },
-    };
+    } as unknown as OpenClawConfig;
     resolveCommandSecretRefsViaGatewayMock.mockResolvedValueOnce({
       resolvedConfig: runtimeConfig,
       diagnostics: [],
@@ -1145,7 +1145,7 @@ describe("createFollowupRunner messaging tool dedupe", () => {
                   },
                 },
               },
-            } as OpenClawConfig,
+            } as unknown as OpenClawConfig,
           },
         }),
       ),
