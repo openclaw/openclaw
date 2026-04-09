@@ -1,4 +1,5 @@
 import {
+  buildChannelConfigSchema,
   collectAllowlistProviderRestrictSendersWarnings,
   formatAllowFromLowercase,
   mapAllowFromEntries,
@@ -17,6 +18,7 @@ import {
   listFeishuAccountIds,
   resolveDefaultFeishuAccountId,
 } from "./accounts.js";
+import { FeishuConfigSchema } from "./config-schema.js";
 import {
   listFeishuDirectoryPeers,
   listFeishuDirectoryGroups,
@@ -41,22 +43,6 @@ const meta: ChannelMeta = {
   aliases: ["lark"],
   order: 70,
 };
-
-const secretInputJsonSchema = {
-  oneOf: [
-    { type: "string" },
-    {
-      type: "object",
-      additionalProperties: false,
-      required: ["source", "provider", "id"],
-      properties: {
-        source: { type: "string", enum: ["env", "file", "exec"] },
-        provider: { type: "string", minLength: 1 },
-        id: { type: "string", minLength: 1 },
-      },
-    },
-  ],
-} as const;
 
 function setFeishuNamedAccountEnabled(
   cfg: ClawdbotConfig,
@@ -120,69 +106,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
     stripPatterns: () => ['<at user_id="[^"]*">[^<]*</at>'],
   },
   reload: { configPrefixes: ["channels.feishu"] },
-  configSchema: {
-    schema: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        enabled: { type: "boolean" },
-        defaultAccount: { type: "string" },
-        appId: { type: "string" },
-        appSecret: secretInputJsonSchema,
-        encryptKey: secretInputJsonSchema,
-        verificationToken: secretInputJsonSchema,
-        domain: {
-          oneOf: [
-            { type: "string", enum: ["feishu", "lark"] },
-            { type: "string", format: "uri", pattern: "^https://" },
-          ],
-        },
-        connectionMode: { type: "string", enum: ["websocket", "webhook"] },
-        webhookPath: { type: "string" },
-        webhookHost: { type: "string" },
-        webhookPort: { type: "integer", minimum: 1 },
-        dmPolicy: { type: "string", enum: ["open", "pairing", "allowlist"] },
-        allowFrom: { type: "array", items: { oneOf: [{ type: "string" }, { type: "number" }] } },
-        groupPolicy: { type: "string", enum: ["open", "allowlist", "disabled"] },
-        groupAllowFrom: {
-          type: "array",
-          items: { oneOf: [{ type: "string" }, { type: "number" }] },
-        },
-        requireMention: { type: "boolean" },
-        groupSessionScope: {
-          type: "string",
-          enum: ["group", "group_sender", "group_topic", "group_topic_sender"],
-        },
-        topicSessionMode: { type: "string", enum: ["disabled", "enabled"] },
-        replyInThread: { type: "string", enum: ["disabled", "enabled"] },
-        historyLimit: { type: "integer", minimum: 0 },
-        dmHistoryLimit: { type: "integer", minimum: 0 },
-        textChunkLimit: { type: "integer", minimum: 1 },
-        chunkMode: { type: "string", enum: ["length", "newline"] },
-        mediaMaxMb: { type: "number", minimum: 0 },
-        renderMode: { type: "string", enum: ["auto", "raw", "card"] },
-        accounts: {
-          type: "object",
-          additionalProperties: {
-            type: "object",
-            properties: {
-              enabled: { type: "boolean" },
-              name: { type: "string" },
-              appId: { type: "string" },
-              appSecret: secretInputJsonSchema,
-              encryptKey: secretInputJsonSchema,
-              verificationToken: secretInputJsonSchema,
-              domain: { type: "string", enum: ["feishu", "lark"] },
-              connectionMode: { type: "string", enum: ["websocket", "webhook"] },
-              webhookHost: { type: "string" },
-              webhookPath: { type: "string" },
-              webhookPort: { type: "integer", minimum: 1 },
-            },
-          },
-        },
-      },
-    },
-  },
+  configSchema: buildChannelConfigSchema(FeishuConfigSchema),
   config: {
     listAccountIds: (cfg) => listFeishuAccountIds(cfg),
     resolveAccount: (cfg, accountId) => resolveFeishuAccount({ cfg, accountId }),
