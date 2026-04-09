@@ -27,6 +27,12 @@ export type {
   AudioTranscriptionResult,
   MediaUnderstandingProvider,
 } from "openclaw/plugin-sdk/media-understanding";
+export type {
+  GeneratedVideoAsset,
+  VideoGenerationProvider,
+  VideoGenerationRequest,
+  VideoGenerationResult,
+} from "openclaw/plugin-sdk/video-generation";
 
 export const PROVIDER_ID = "huggingface-extras" as const;
 

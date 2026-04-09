@@ -24,7 +24,8 @@
   "contracts": {
     "imageGenerationProviders": ["huggingface-extras"],
     "memoryEmbeddingProviders": ["huggingface-extras"],
-    "mediaUnderstandingProviders": ["huggingface-extras"]
+    "mediaUnderstandingProviders": ["huggingface-extras"],
+    "videoGenerationProviders": ["huggingface-extras"]
   },
   "configSchema": {
     "type": "object",

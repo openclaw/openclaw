@@ -14,6 +14,7 @@ import { PROVIDER_ID, createProviderApiKeyAuthMethod, definePluginEntry } from "
 import { huggingFaceExtrasMemoryEmbeddingProviderAdapter } from "./embeddings-provider.js";
 import { buildHuggingFaceExtrasImageGenerationProvider } from "./image-generation-provider.js";
 import { huggingFaceExtrasMediaUnderstandingProvider } from "./stt-provider.js";
+import { buildHuggingFaceExtrasVideoGenerationProvider } from "./video-generation-provider.js";
 
 export default definePluginEntry({
   id: PROVIDER_ID,
@@ -52,5 +53,6 @@ export default definePluginEntry({
     api.registerImageGenerationProvider(buildHuggingFaceExtrasImageGenerationProvider());
     api.registerMemoryEmbeddingProvider(huggingFaceExtrasMemoryEmbeddingProviderAdapter);
     api.registerMediaUnderstandingProvider(huggingFaceExtrasMediaUnderstandingProvider);
+    api.registerVideoGenerationProvider(buildHuggingFaceExtrasVideoGenerationProvider());
   },
 });
