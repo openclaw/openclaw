@@ -39,6 +39,7 @@ const MEDIA_ATTACHED_PATH_REGEX_SOURCE =
 const MESSAGE_IMAGE_REGEX_SOURCE =
   "\\[Image:\\s*source:\\s*([^\\]]+\\.(?:" + IMAGE_EXTENSION_PATTERN + "))\\]";
 const FILE_URL_REGEX_SOURCE = "file://[^\\s<>\"'`\\]]+\\.(?:" + IMAGE_EXTENSION_PATTERN + ")";
+const HTTP_URL_REGEX_SOURCE = "https?://[^\\s<>\"'`\\]，。！？；：、]+";
 const PATH_REGEX_SOURCE =
   "(?:^|\\s|[\"'`(])((\\.\\.?/|[~/])[^\\s\"'`()\\[\\]]*\\.(?:" + IMAGE_EXTENSION_PATTERN + "))";
 
@@ -75,7 +76,7 @@ export interface DetectedImageRef {
   /** The raw matched string from the prompt */
   raw: string;
   /** The type of reference */
-  type: "path" | "media-uri";
+  type: "path" | "media-uri" | "remote-url";
   /** The resolved/normalized path, or the raw media URI for media-uri type */
   resolved: string;
 }
@@ -90,6 +91,22 @@ function isImageExtension(filePath: string): boolean {
 
 function normalizeRefForDedupe(raw: string): string {
   return process.platform === "win32" ? normalizeLowercaseStringOrEmpty(raw) : raw;
+}
+
+function normalizeHttpUrlRef(raw: string): string | null {
+  let candidate = raw.trim();
+  while (candidate.length > 0) {
+    try {
+      const parsed = new URL(candidate);
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+        return parsed.toString();
+      }
+      return null;
+    } catch {
+      candidate = candidate.slice(0, -1).trimEnd();
+    }
+  }
+  return null;
 }
 
 export function mergePromptAttachmentImages(params: {
@@ -215,6 +232,7 @@ async function sanitizeImagesWithLog(
  * - Relative paths: ./image.png, ../images/photo.jpg
  * - Home paths: ~/Pictures/screenshot.png
  * - file:// URLs: file:///path/to/image.png
+ * - Explicit HTTP(S) URLs written in the prompt
  * - Message attachments: [Image: source: /path/to/image.jpg]
  * - Gateway claim-check URIs: [media attached: media://inbound/<id>]
  *
@@ -248,6 +266,19 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
     refs.push({ raw: trimmed, type: "path", resolved });
   };
 
+  const addRemoteUrlRef = (raw: string) => {
+    const resolved = normalizeHttpUrlRef(raw);
+    if (!resolved) {
+      return;
+    }
+    const dedupeKey = normalizeRefForDedupe(resolved);
+    if (seen.has(dedupeKey)) {
+      return;
+    }
+    seen.add(dedupeKey);
+    refs.push({ raw: resolved, type: "remote-url", resolved });
+  };
+
   // Pattern for [media attached: path (type) | url] or [media attached N/M: path (type) | url] format
   // Each bracket = ONE file. The | separates path from URL, not multiple files.
   // Multi-file format uses separate brackets on separate lines.
@@ -255,6 +286,8 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
   const mediaAttachedPathPattern = new RegExp(MEDIA_ATTACHED_PATH_REGEX_SOURCE, "i");
   const messageImagePattern = new RegExp(MESSAGE_IMAGE_REGEX_SOURCE, "gi");
   const fileUrlPattern = new RegExp(FILE_URL_REGEX_SOURCE, "gi");
+  const remoteHttpUrlPattern = new RegExp(HTTP_URL_REGEX_SOURCE, "i");
+  const httpUrlPattern = new RegExp(HTTP_URL_REGEX_SOURCE, "gi");
   const pathPattern = new RegExp(PATH_REGEX_SOURCE, "gi");
   let match: RegExpExecArray | null;
   while ((match = mediaAttachedPattern.exec(prompt)) !== null) {
@@ -287,6 +320,17 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
     if (pathMatch?.[1]) {
       addPathRef(pathMatch[1].trim());
     }
+
+    const bracketRemoteUrl = normalizeHttpUrlRef(content.match(remoteHttpUrlPattern)?.[0] ?? "");
+    if (bracketRemoteUrl) {
+      const dedupeKey = normalizeRefForDedupe(bracketRemoteUrl);
+      if (!pathMatch?.[1] && !seen.has(dedupeKey)) {
+        seen.add(dedupeKey);
+        refs.push({ raw: bracketRemoteUrl, type: "remote-url", resolved: bracketRemoteUrl });
+      } else {
+        seen.add(dedupeKey);
+      }
+    }
   }
 
   // Pattern for [Image: source: /path/...] format from messaging systems
@@ -297,7 +341,15 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
     }
   }
 
-  // Remote HTTP(S) URLs are intentionally ignored. Native image injection is local-only.
+  // Explicit remote URLs are loaded into native vision up front so mixed
+  // attachment + URL turns do not depend on the model deciding to call the
+  // fallback image tool later.
+  while ((match = httpUrlPattern.exec(prompt)) !== null) {
+    const raw = match[0];
+    if (raw) {
+      addRemoteUrlRef(raw);
+    }
+  }
 
   // Pattern for file:// URLs - treat as paths since loadWebMedia handles them
   while ((match = fileUrlPattern.exec(prompt)) !== null) {
@@ -383,6 +435,24 @@ export async function loadImageFromRef(
       log.debug(
         `Native image: failed to load media-uri ${ref.resolved}: ${formatErrorMessage(err)}`,
       );
+      return null;
+    }
+  }
+
+  if (ref.type === "remote-url") {
+    try {
+      const media = await loadWebMedia(ref.resolved, {
+        maxBytes: options?.maxBytes,
+      });
+      if (media.kind !== "image") {
+        log.debug(`Native image: remote URL is not an image: ${ref.resolved}`);
+        return null;
+      }
+      const mimeType = media.contentType ?? "image/jpeg";
+      const data = media.buffer.toString("base64");
+      return { type: "image", data, mimeType };
+    } catch (err) {
+      log.debug(`Native image: failed to load ${ref.resolved}: ${formatErrorMessage(err)}`);
       return null;
     }
   }
