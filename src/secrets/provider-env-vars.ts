@@ -1,4 +1,4 @@
-import { normalizeProviderId } from "../agents/provider-id.js";
+import { resolveProviderAuthAliasMap } from "../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 
@@ -17,6 +17,7 @@ export type ProviderEnvVarLookupParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  includeUntrustedWorkspacePlugins?: boolean;
 };
 
 function appendUniqueEnvVarCandidates(
@@ -59,18 +60,7 @@ function resolveManifestProviderAuthEnvVarCandidates(
       appendUniqueEnvVarCandidates(candidates, providerId, keys);
     }
   }
-  const aliases: Record<string, string> = Object.create(null) as Record<string, string>;
-  for (const plugin of registry.plugins) {
-    for (const [alias, target] of Object.entries(plugin.providerAuthAliases ?? {}).toSorted(
-      ([left], [right]) => left.localeCompare(right),
-    )) {
-      const normalizedAlias = normalizeProviderId(alias);
-      const normalizedTarget = normalizeProviderId(target);
-      if (normalizedAlias && normalizedTarget) {
-        aliases[normalizedAlias] = normalizedTarget;
-      }
-    }
-  }
+  const aliases = resolveProviderAuthAliasMap(params);
   for (const [alias, target] of Object.entries(aliases).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {

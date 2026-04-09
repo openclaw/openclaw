@@ -2,13 +2,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
 
 const mocks = vi.hoisted(() => ({
-  applyProviderConfigDefaultsWithPlugin: vi.fn(),
+  applyProviderConfigDefaultsForConfig: vi.fn(),
 }));
 
-vi.mock("../plugins/provider-runtime.js", () => ({
-  applyProviderConfigDefaultsWithPlugin: (
-    ...args: Parameters<typeof mocks.applyProviderConfigDefaultsWithPlugin>
-  ) => mocks.applyProviderConfigDefaultsWithPlugin(...args),
+vi.mock("./provider-policy.js", () => ({
+  applyProviderConfigDefaultsForConfig: (
+    ...args: Parameters<typeof mocks.applyProviderConfigDefaultsForConfig>
+  ) => mocks.applyProviderConfigDefaultsForConfig(...args),
+  normalizeProviderConfigForConfigDefaults: (_params: { providerConfig: unknown }) =>
+    _params.providerConfig,
 }));
 
 let applyContextPruningDefaults: typeof import("./defaults.js").applyContextPruningDefaults;
@@ -20,7 +22,7 @@ describe("config defaults", () => {
     vi.resetModules();
     ({ applyAgentDefaults, applyContextPruningDefaults, applyMessageDefaults } =
       await import("./defaults.js"));
-    mocks.applyProviderConfigDefaultsWithPlugin.mockReset();
+    mocks.applyProviderConfigDefaultsForConfig.mockReset();
   });
 
   it("skips provider defaults when agent defaults are absent", () => {
@@ -35,7 +37,7 @@ describe("config defaults", () => {
     };
 
     expect(applyContextPruningDefaults(cfg as never)).toBe(cfg);
-    expect(mocks.applyProviderConfigDefaultsWithPlugin).not.toHaveBeenCalled();
+    expect(mocks.applyProviderConfigDefaultsForConfig).not.toHaveBeenCalled();
   });
 
   it("uses anthropic provider defaults when agent defaults exist", () => {
@@ -53,10 +55,10 @@ describe("config defaults", () => {
         },
       },
     };
-    mocks.applyProviderConfigDefaultsWithPlugin.mockReturnValue(nextCfg);
+    mocks.applyProviderConfigDefaultsForConfig.mockReturnValue(nextCfg);
 
     expect(applyContextPruningDefaults(cfg as never)).toBe(nextCfg);
-    expect(mocks.applyProviderConfigDefaultsWithPlugin).toHaveBeenCalledTimes(1);
+    expect(mocks.applyProviderConfigDefaultsForConfig).toHaveBeenCalledTimes(1);
   });
 
   it("defaults ackReactionScope without deriving other message fields", () => {

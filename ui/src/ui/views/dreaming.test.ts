@@ -8,6 +8,7 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
   return {
     active: true,
     shortTermCount: 47,
+    groundedSignalCount: 9,
     totalSignalCount: 182,
     promotedCount: 12,
     phaseSignalCount: 29,
@@ -52,8 +53,8 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
         snippet: "Use the Happy Together calendar for flights.",
         recallCount: 3,
         dailyCount: 2,
-        groundedCount: 0,
-        totalSignalCount: 5,
+        groundedCount: 4,
+        totalSignalCount: 9,
         lightHits: 0,
         remHits: 0,
         phaseHitCount: 0,
@@ -76,6 +77,7 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
     onRefreshDiary: () => {},
     onBackfillDiary: () => {},
     onResetDiary: () => {},
+    onResetGroundedShortTerm: () => {},
     onToggleEnabled: () => {},
     ...overrides,
   };
@@ -114,36 +116,44 @@ describe("dreaming view", () => {
   it("displays memory stats", () => {
     const container = renderInto(buildProps());
     const values = container.querySelectorAll(".dreams__stat-value");
-    expect(values.length).toBe(3);
+    expect(values.length).toBe(4);
     expect(values[0]?.textContent).toBe("47");
-    expect(values[1]?.textContent).toBe("182");
-    expect(values[2]?.textContent).toBe("12");
+    expect(values[1]?.textContent).toBe("9");
+    expect(values[2]?.textContent).toBe("182");
+    expect(values[3]?.textContent).toBe("12");
   });
 
-  it("renders short-term, signals, and promoted detail sections", () => {
+  it("renders short-term, grounded, signals, and promoted detail sections", () => {
     const container = renderInto(buildProps());
     const titles = [...container.querySelectorAll(".dreams__trace-title")].map((node) =>
       node.textContent?.trim(),
     );
-    expect(titles).toEqual(["Short-term", "Signals", "Promoted"]);
+    expect(titles).toEqual(["Short-term", "Grounded", "Signals", "Promoted"]);
     expect(
       container.querySelector('[data-kind="shortTerm"] .dreams__trace-snippet')?.textContent,
     ).toContain("Emma prefers shorter");
+    expect(
+      container.querySelector('[data-kind="grounded"] .dreams__trace-meta')?.textContent,
+    ).toContain("1 grounded");
     expect(
       container.querySelector('[data-kind="signals"] .dreams__trace-meta')?.textContent,
     ).toContain("3 signals");
     expect(
       container.querySelector('[data-kind="promoted"] .dreams__trace-source')?.textContent,
     ).toContain("memory/2026-04-04.md:4-5");
+    expect(
+      container.querySelector('[data-kind="promoted"] .dreams__trace-meta')?.textContent,
+    ).toContain("grounded-led");
   });
 
-  it("renders scene backfill and reset controls", () => {
+  it("renders scene backfill, reset, and clear grounded controls", () => {
     const container = renderInto(buildProps());
     const buttons = [...container.querySelectorAll("button")].map((node) =>
       node.textContent?.trim(),
     );
     expect(buttons).toContain("Backfill");
     expect(buttons).toContain("Reset");
+    expect(buttons).toContain("Clear Grounded");
   });
 
   it("shows dream bubble when active", () => {

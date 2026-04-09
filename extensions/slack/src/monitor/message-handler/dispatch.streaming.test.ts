@@ -25,26 +25,38 @@ describe("slack turn delivery tracker", () => {
     const tracker = createSlackTurnDeliveryTracker();
     const payload = { text: "same reply" };
 
-    expect(tracker.hasDelivered({ payload, threadTs: "123.456" })).toBe(false);
-    tracker.markDelivered({ payload, threadTs: "123.456" });
-    expect(tracker.hasDelivered({ payload, threadTs: "123.456" })).toBe(true);
-    expect(tracker.hasDelivered({ payload, threadTs: "other-thread" })).toBe(false);
+    expect(tracker.hasDelivered({ kind: "final", payload, threadTs: "123.456" })).toBe(false);
+    tracker.markDelivered({ kind: "final", payload, threadTs: "123.456" });
+    expect(tracker.hasDelivered({ kind: "final", payload, threadTs: "123.456" })).toBe(true);
+    expect(tracker.hasDelivered({ kind: "final", payload, threadTs: "other-thread" })).toBe(false);
   });
 
   it("keeps explicit reply targets distinct from the shared thread target", () => {
     const tracker = createSlackTurnDeliveryTracker();
 
     tracker.markDelivered({
+      kind: "final",
       payload: { text: "same reply", replyToId: "thread-A" },
       threadTs: "123.456",
     });
 
     expect(
       tracker.hasDelivered({
+        kind: "final",
         payload: { text: "same reply", replyToId: "thread-B" },
         threadTs: "123.456",
       }),
     ).toBe(false);
+  });
+
+  it("keeps distinct dispatch kinds separate for identical payloads", () => {
+    const tracker = createSlackTurnDeliveryTracker();
+    const payload = { text: "same reply" };
+
+    tracker.markDelivered({ kind: "tool", payload, threadTs: "123.456" });
+
+    expect(tracker.hasDelivered({ kind: "tool", payload, threadTs: "123.456" })).toBe(true);
+    expect(tracker.hasDelivered({ kind: "final", payload, threadTs: "123.456" })).toBe(false);
   });
 });
 

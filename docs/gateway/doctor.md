@@ -95,9 +95,10 @@ cat ~/.openclaw/openclaw.json
 
 ## Dreams UI backfill and reset
 
-The Control UI Dreams scene includes **Backfill** and **Reset** actions for the
-grounded diary workflow. These actions use gateway doctor-style RPC methods, but
-they are **not** part of `openclaw doctor` CLI repair/migration.
+The Control UI Dreams scene includes **Backfill**, **Reset**, and **Clear Grounded**
+actions for the grounded dreaming workflow. These actions use gateway
+doctor-style RPC methods, but they are **not** part of `openclaw doctor` CLI
+repair/migration.
 
 What they do:
 
@@ -105,13 +106,16 @@ What they do:
   workspace, runs the grounded REM diary pass, and writes reversible backfill
   entries into `DREAMS.md`.
 - **Reset** removes only those marked backfill diary entries from `DREAMS.md`.
+- **Clear Grounded** removes only staged grounded-only short-term entries that
+  came from historical replay and have not accumulated live recall or daily
+  support yet.
 
 What they do **not** do by themselves:
 
 - they do not edit `MEMORY.md`
 - they do not run full doctor migrations
 - they do not automatically stage grounded candidates into the live short-term
-  promotion store
+  promotion store unless you explicitly run the staged CLI path first
 
 If you want grounded historical replay to influence the normal deep promotion
 lane, use the CLI flow instead:

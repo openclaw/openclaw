@@ -595,20 +595,14 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       }
 
       const runId = normalizeOptionalString(obj.runId) ?? "";
-      const command = sanitizeInboundSystemTags(
-        normalizeOptionalString(obj.command) ?? "",
-      );
+      const command = sanitizeInboundSystemTags(normalizeOptionalString(obj.command) ?? "");
       const exitCode =
         typeof obj.exitCode === "number" && Number.isFinite(obj.exitCode)
           ? obj.exitCode
           : undefined;
       const timedOut = obj.timedOut === true;
-      const output = sanitizeInboundSystemTags(
-        normalizeOptionalString(obj.output) ?? "",
-      );
-      const reason = sanitizeInboundSystemTags(
-        normalizeOptionalString(obj.reason) ?? "",
-      );
+      const output = sanitizeInboundSystemTags(normalizeOptionalString(obj.output) ?? "");
+      const reason = sanitizeInboundSystemTags(normalizeOptionalString(obj.reason) ?? "");
 
       let text = "";
       if (evt.event === "exec.started") {

@@ -134,10 +134,11 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "sessions.steer",
     "sessions.abort",
     "sessions.compaction.branch",
-    "push.test",
-    "node.pending.enqueue",
     "doctor.memory.backfillDreamDiary",
     "doctor.memory.resetDreamDiary",
+    "doctor.memory.resetGroundedShortTerm",
+    "push.test",
+    "node.pending.enqueue",
   ],
   [ADMIN_SCOPE]: [
     "channels.logout",
