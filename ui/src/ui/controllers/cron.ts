@@ -248,7 +248,6 @@ export async function loadCronJobs(state: CronState) {
 
 function normalizeCronPageMeta(params: {
   totalRaw: unknown;
-  limitRaw: unknown;
   offsetRaw: unknown;
   nextOffsetRaw: unknown;
   hasMoreRaw: unknown;
@@ -258,10 +257,6 @@ function normalizeCronPageMeta(params: {
     typeof params.totalRaw === "number" && Number.isFinite(params.totalRaw)
       ? Math.max(0, Math.floor(params.totalRaw))
       : params.pageCount;
-  const limit =
-    typeof params.limitRaw === "number" && Number.isFinite(params.limitRaw)
-      ? Math.max(1, Math.floor(params.limitRaw))
-      : Math.max(1, params.pageCount);
   const offset =
     typeof params.offsetRaw === "number" && Number.isFinite(params.offsetRaw)
       ? Math.max(0, Math.floor(params.offsetRaw))
@@ -276,7 +271,7 @@ function normalizeCronPageMeta(params: {
       : hasMore
         ? offset + params.pageCount
         : null;
-  return { total, limit, offset, hasMore, nextOffset };
+  return { total, hasMore, nextOffset };
 }
 
 export async function loadCronJobsPage(state: CronState, opts?: { append?: boolean }) {
@@ -311,7 +306,6 @@ export async function loadCronJobsPage(state: CronState, opts?: { append?: boole
     state.cronJobs = append ? [...state.cronJobs, ...jobs] : jobs;
     const meta = normalizeCronPageMeta({
       totalRaw: res.total,
-      limitRaw: res.limit,
       offsetRaw: res.offset,
       nextOffsetRaw: res.nextOffset,
       hasMoreRaw: res.hasMore,
@@ -800,7 +794,6 @@ export async function loadCronRuns(
     }
     const meta = normalizeCronPageMeta({
       totalRaw: res.total,
-      limitRaw: res.limit,
       offsetRaw: res.offset,
       nextOffsetRaw: res.nextOffset,
       hasMoreRaw: res.hasMore,
