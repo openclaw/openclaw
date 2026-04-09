@@ -13,6 +13,7 @@ export type RecoverySummary = {
   recovered: number;
   failed: number;
   skippedMaxRetries: number;
+  skippedStale: number;
   deferredBackoff: number;
 };
 
@@ -31,6 +32,16 @@ export interface RecoveryLogger {
 }
 
 const MAX_RETRIES = 5;
+
+/**
+ * Maximum age for a pending delivery entry before it is considered stale.
+ * Applies only to first-attempt entries (retryCount === 0, no lastAttemptAt).
+ * Entries that have already been attempted at least once are legitimate retries
+ * and are not subject to this limit.
+ *
+ * Default: 10 minutes. Set maxEntryAgeMs to 0 in opts to disable.
+ */
+const DEFAULT_MAX_ENTRY_AGE_MS = 10 * 60 * 1_000;
 
 /** Backoff delays in milliseconds indexed by retry count (1-based). */
 const BACKOFF_MS: readonly number[] = [
@@ -83,6 +94,7 @@ function createEmptyRecoverySummary(): RecoverySummary {
     recovered: 0,
     failed: 0,
     skippedMaxRetries: 0,
+    skippedStale: 0,
     deferredBackoff: 0,
   };
 }
@@ -269,6 +281,20 @@ export async function recoverPendingDeliveries(opts: {
   stateDir?: string;
   /** Maximum wall-clock time for recovery in ms. Remaining entries are deferred to next startup. Default: 60 000. */
   maxRecoveryMs?: number;
+  /**
+   * Maximum age in ms for a first-attempt entry (retryCount === 0, no lastAttemptAt)
+   * before it is considered stale and moved to failed/ rather than replayed.
+   *
+   * This prevents messages enqueued in a prior session from being delivered after a
+   * gateway restart — a confusing user experience when out-of-context messages appear
+   * long after the conversation that generated them.
+   *
+   * Entries with retryCount > 0 are unaffected; they are legitimate retry candidates
+   * for messages that genuinely failed to send (e.g., transient network error).
+   *
+   * Set to 0 to disable staleness checks entirely. Default: 10 minutes.
+   */
+  maxEntryAgeMs?: number;
 }): Promise<RecoverySummary> {
   const pending = await loadPendingDeliveries(opts.stateDir);
   if (pending.length === 0) {
@@ -303,6 +329,24 @@ export async function recoverPendingDeliveries(opts: {
       } finally {
         releaseRecoveryEntry(entry.id);
       }
+      continue;
+    }
+
+    // Skip first-attempt entries that are too old. These are typically messages
+    // enqueued during a prior session that were never sent before the gateway
+    // restarted. Replaying them would deliver stale, out-of-context content.
+    // Entries with retryCount > 0 have already been attempted and are legitimate
+    // retry candidates regardless of age.
+    const maxEntryAgeMs =
+      opts.maxEntryAgeMs !== undefined ? opts.maxEntryAgeMs : DEFAULT_MAX_ENTRY_AGE_MS;
+    const isFirstAttempt = entry.retryCount === 0 && entry.lastAttemptAt === undefined;
+    if (maxEntryAgeMs > 0 && isFirstAttempt && now - entry.enqueuedAt > maxEntryAgeMs) {
+      const ageSeconds = Math.round((now - entry.enqueuedAt) / 1_000);
+      opts.log.warn(
+        `Delivery ${entry.id} is stale (${ageSeconds}s old, limit ${maxEntryAgeMs / 1_000}s) — moving to failed/`,
+      );
+      await moveEntryToFailedWithLogging(entry.id, opts.log, opts.stateDir);
+      summary.skippedStale += 1;
       continue;
     }
 
@@ -346,7 +390,7 @@ export async function recoverPendingDeliveries(opts: {
   }
 
   opts.log.info(
-    `Delivery recovery complete: ${summary.recovered} recovered, ${summary.failed} failed, ${summary.skippedMaxRetries} skipped (max retries), ${summary.deferredBackoff} deferred (backoff)`,
+    `Delivery recovery complete: ${summary.recovered} recovered, ${summary.failed} failed, ${summary.skippedMaxRetries} skipped (max retries), ${summary.skippedStale} skipped (stale), ${summary.deferredBackoff} deferred (backoff)`,
   );
   return summary;
 }
