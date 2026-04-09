@@ -5,12 +5,15 @@ import {
 
 export function readQaAgentIdentityMarkdown(): string {
   return (
-    readQaBootstrapScenarioCatalog().agentIdentityMarkdown || DEFAULT_QA_AGENT_IDENTITY_MARKDOWN
+    readQaBootstrapScenarioCatalog()?.agentIdentityMarkdown || DEFAULT_QA_AGENT_IDENTITY_MARKDOWN
   );
 }
 
 export function buildQaScenarioPlanMarkdown(): string {
   const catalog = readQaBootstrapScenarioCatalog();
+  if (!catalog) {
+    return "";
+  }
   const lines = ["# QA Scenario Plan", ""];
   for (const scenario of catalog.scenarios) {
     lines.push(`## ${scenario.title}`);

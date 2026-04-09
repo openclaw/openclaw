@@ -1239,6 +1239,9 @@ export async function runQaSuite(params?: {
     });
     await sleep(1_000);
     const catalog = readQaBootstrapScenarioCatalog();
+    if (!catalog) {
+      throw new Error("QA scenario catalog not found. Ensure qa/scenarios/ directory exists.");
+    }
     const requestedScenarioIds =
       params?.scenarioIds && params.scenarioIds.length > 0 ? new Set(params.scenarioIds) : null;
     const selectedCatalogScenarios = requestedScenarioIds

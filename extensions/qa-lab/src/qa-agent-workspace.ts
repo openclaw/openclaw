@@ -5,6 +5,9 @@ import { readQaBootstrapScenarioCatalog, readQaScenarioPackMarkdown } from "./sc
 
 export async function seedQaAgentWorkspace(params: { workspaceDir: string; repoRoot?: string }) {
   const catalog = readQaBootstrapScenarioCatalog();
+  if (!catalog) {
+    return;
+  }
   await fs.mkdir(params.workspaceDir, { recursive: true });
 
   const kickoffTask = catalog.kickoffTask || "QA mission unavailable.";

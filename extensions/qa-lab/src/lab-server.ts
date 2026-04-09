@@ -24,7 +24,7 @@ import {
   normalizeQaRunSelection,
 } from "./run-config.js";
 import { qaChannelPlugin, setQaChannelRuntime, type OpenClawConfig } from "./runtime-api.js";
-import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
+import { DEFAULT_QA_AGENT_IDENTITY_MARKDOWN, readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import { runQaSelfCheckAgainstState, type QaSelfCheckResult } from "./self-check.js";
 
 type QaLabLatestReport = {
@@ -482,7 +482,11 @@ export async function startQaLabServer(params?: {
   const state = createQaBusState();
   let latestReport: QaLabLatestReport | null = null;
   let latestScenarioRun: QaLabScenarioRun | null = null;
-  const scenarioCatalog = readQaBootstrapScenarioCatalog();
+  const scenarioCatalog = readQaBootstrapScenarioCatalog() ?? {
+    agentIdentityMarkdown: DEFAULT_QA_AGENT_IDENTITY_MARKDOWN,
+    kickoffTask: "",
+    scenarios: [],
+  };
   const bootstrapDefaults = createBootstrapDefaults(params?.autoKickoffTarget);
   let runnerModelOptions: QaRunnerModelOption[] = [];
   let runnerModelCatalogStatus: "loading" | "ready" | "failed" = "loading";

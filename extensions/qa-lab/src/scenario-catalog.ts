@@ -231,10 +231,15 @@ export function readQaScenarioPackMarkdown(): string {
   return chunks.filter(Boolean).join("\n\n");
 }
 
-export function readQaScenarioPack(): QaScenarioPack {
+/**
+ * Read and parse the QA scenario pack.
+ * Returns null when QA scenario files are missing (e.g. npm global install),
+ * rather than throwing an exception.
+ */
+export function readQaScenarioPack(): QaScenarioPack | null {
   const packMarkdown = readTextFile(QA_SCENARIO_PACK_INDEX_PATH).trim();
   if (!packMarkdown) {
-    throw new Error(`qa scenario pack not found: ${QA_SCENARIO_PACK_INDEX_PATH}`);
+    return null;
   }
   const parsedPack = qaScenarioPackSchema.parse(
     YAML.parse(extractQaPackYaml(packMarkdown)) as unknown,
@@ -274,8 +279,16 @@ export function readQaScenarioOverviewMarkdown(): string {
   return readTextFile(QA_SCENARIO_LEGACY_OVERVIEW_PATH).trim();
 }
 
-export function readQaBootstrapScenarioCatalog(): QaBootstrapScenarioCatalog {
+/**
+ * Read the QA bootstrap scenario catalog.
+ * Returns null when QA scenario files are missing (e.g. npm global install),
+ * rather than throwing an exception.
+ */
+export function readQaBootstrapScenarioCatalog(): QaBootstrapScenarioCatalog | null {
   const pack = readQaScenarioPack();
+  if (!pack) {
+    return null;
+  }
   return {
     agentIdentityMarkdown: pack.agent.identityMarkdown,
     kickoffTask: pack.kickoffTask,
@@ -283,8 +296,12 @@ export function readQaBootstrapScenarioCatalog(): QaBootstrapScenarioCatalog {
   };
 }
 
-export function readQaScenarioById(id: string): QaSeedScenario {
-  const scenario = readQaScenarioPack().scenarios.find((candidate) => candidate.id === id);
+export function readQaScenarioById(id: string): QaSeedScenario | null {
+  const pack = readQaScenarioPack();
+  if (!pack) {
+    return null;
+  }
+  const scenario = pack.scenarios.find((candidate) => candidate.id === id);
   if (!scenario) {
     throw new Error(`unknown qa scenario: ${id}`);
   }
@@ -292,5 +309,5 @@ export function readQaScenarioById(id: string): QaSeedScenario {
 }
 
 export function readQaScenarioExecutionConfig(id: string): Record<string, unknown> | undefined {
-  return readQaScenarioById(id).execution?.config;
+  return readQaScenarioById(id)?.execution?.config;
 }
