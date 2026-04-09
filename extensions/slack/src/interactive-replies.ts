@@ -37,10 +37,7 @@ function parseChoice(raw: string, options?: { allowStyle?: boolean }): SlackChoi
   if (options?.allowStyle) {
     const styleDelimiter = value.lastIndexOf(":");
     if (styleDelimiter !== -1) {
-      const maybeStyle = value
-        .slice(styleDelimiter + 1)
-        .trim()
-        .toLowerCase();
+      const maybeStyle = normalizeLowercaseStringOrEmpty(value.slice(styleDelimiter + 1));
       if (
         maybeStyle === "primary" ||
         maybeStyle === "secondary" ||
@@ -139,7 +136,7 @@ function parseSimpleSlackOptions(raw: string): SlackChoice[] | null {
   if (!entries.every((entry) => SLACK_SIMPLE_OPTION_RE.test(entry))) {
     return null;
   }
-  const deduped = new Set(entries.map((entry) => entry.toLowerCase()));
+  const deduped = new Set(entries.map((entry) => normalizeLowercaseStringOrEmpty(entry)));
   if (deduped.size !== entries.length) {
     return null;
   }
@@ -201,7 +198,7 @@ export function compileSlackInteractiveReplies(payload: ReplyPayload): ReplyPayl
       generatedBlocks.push(section);
     }
     const block =
-      directiveType.toLowerCase() === "slack_buttons"
+      normalizeLowercaseStringOrEmpty(directiveType) === "slack_buttons"
         ? buildButtonsBlock(body)
         : buildSelectBlock(body);
     if (block) {

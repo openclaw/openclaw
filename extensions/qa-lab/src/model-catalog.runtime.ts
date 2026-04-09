@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { buildQaGatewayConfig } from "./qa-gateway-config.js";
 
+const QA_FRONTIER_PROVIDER_IDS = ["anthropic", "google", "openai"] as const;
+
 type ModelRow = {
   key: string;
   name: string;
@@ -76,9 +78,11 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string }) {
       gatewayToken: "qa-model-catalog",
       qaBusBaseUrl: "http://127.0.0.1:9",
       workspaceDir,
-      providerMode: "live-openai",
+      providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.4",
-      alternateModel: "openai/gpt-5.4",
+      alternateModel: "anthropic/claude-sonnet-4-6",
+      enabledProviderIds: [...QA_FRONTIER_PROVIDER_IDS],
+      imageGenerationModel: null,
       controlUiEnabled: false,
     });
     await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");

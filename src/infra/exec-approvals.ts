@@ -3,16 +3,19 @@ import fs from "node:fs";
 import path from "node:path";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
   readStringValue,
 } from "../shared/string-coerce.js";
 import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
+import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import { expandHomePrefix } from "./home-dir.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
+export type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 
 export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecTarget = "auto" | ExecHost;
@@ -123,17 +126,6 @@ export type ExecApprovalsDefaults = {
   autoAllowSkills?: boolean;
 };
 
-export type ExecAllowlistEntry = {
-  id?: string;
-  pattern: string;
-  source?: "allow-always";
-  commandText?: string;
-  argPattern?: string;
-  lastUsedAt?: number;
-  lastUsedCommand?: string;
-  lastResolvedPath?: string;
-};
-
 export type ExecApprovalsAgent = ExecApprovalsDefaults & {
   allowlist?: ExecAllowlistEntry[];
 };
@@ -198,7 +190,7 @@ export function resolveExecApprovalsSocketPath(): string {
 
 function normalizeAllowlistPattern(value: string | undefined): string | null {
   const trimmed = normalizeOptionalString(value) ?? "";
-  return trimmed ? trimmed.toLowerCase() : null;
+  return trimmed ? normalizeLowercaseStringOrEmpty(trimmed) : null;
 }
 
 function mergeLegacyAgent(

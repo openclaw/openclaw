@@ -1,7 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { resetProviderRuntimeHookCacheForTest } from "../plugins/provider-runtime.js";
 
 type PiSdkModule = typeof import("./pi-model-discovery.js");
 
@@ -10,6 +9,12 @@ let findModelInCatalog: typeof import("./model-catalog.js").findModelInCatalog;
 let loadModelCatalog: typeof import("./model-catalog.js").loadModelCatalog;
 let resetModelCatalogCacheForTest: typeof import("./model-catalog.js").resetModelCatalogCacheForTest;
 let augmentCatalogMock: ReturnType<typeof vi.fn>;
+
+vi.mock("./model-suppression.runtime.js", () => ({
+  shouldSuppressBuiltInModel: (params: { provider?: string; id?: string }) =>
+    (params.provider === "openai" || params.provider === "azure-openai-responses") &&
+    params.id === "gpt-5.3-codex-spark",
+}));
 
 function mockCatalogImportFailThenRecover() {
   let call = 0;
@@ -51,8 +56,7 @@ function mockSingleOpenAiCatalogModel() {
 }
 
 describe("loadModelCatalog", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     vi.doMock("./models-config.js", () => ({
       ensureOpenClawModelsJson: vi.fn().mockResolvedValue({ agentDir: "/tmp", wrote: false }),
     }));
@@ -71,16 +75,22 @@ describe("loadModelCatalog", () => {
     } = await import("./model-catalog.js"));
     const providerRuntime = await import("../plugins/provider-runtime.runtime.js");
     augmentCatalogMock = vi.mocked(providerRuntime.augmentModelCatalogWithProviderPlugins);
+  });
 
+  beforeEach(() => {
     resetModelCatalogCacheForTest();
-    resetProviderRuntimeHookCacheForTest();
   });
 
   afterEach(() => {
     __setModelCatalogImportForTest();
     resetModelCatalogCacheForTest();
-    resetProviderRuntimeHookCacheForTest();
     vi.restoreAllMocks();
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./models-config.js");
+    vi.doUnmock("./agent-paths.js");
+    vi.doUnmock("../plugins/provider-runtime.runtime.js");
   });
 
   it("retries after import failure without poisoning the cache", async () => {

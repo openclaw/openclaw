@@ -144,10 +144,7 @@ function isValidNodeId(value: string): boolean {
 }
 
 function normalizeApnsToken(value: string): string {
-  return value
-    .trim()
-    .replace(/[<>\s]/g, "")
-    .toLowerCase();
+  return normalizeLowercaseStringOrEmpty(value.trim().replace(/[<>\s]/g, ""));
 }
 
 function normalizeRelayHandle(value: string): string {
@@ -187,10 +184,7 @@ function normalizeTokenDebugSuffix(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^0-9a-z]/g, "");
+  const normalized = normalizeLowercaseStringOrEmpty(value.trim()).replace(/[^0-9a-z]/g, "");
   return normalized.length > 0 ? normalized.slice(-8) : undefined;
 }
 
@@ -266,7 +260,9 @@ function normalizeDistribution(value: unknown): "official" | null {
   if (typeof value !== "string") {
     return null;
   }
-  const normalized = normalizeOptionalString(value)?.toLowerCase();
+  const normalized = normalizeOptionalString(value)
+    ? normalizeLowercaseStringOrEmpty(value)
+    : undefined;
   return normalized === "official" ? "official" : null;
 }
 

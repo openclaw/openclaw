@@ -3,7 +3,10 @@ import { estimateBase64DecodedBytes } from "../media/base64.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import { deleteMediaBuffer, saveMediaBuffer } from "../media/store.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 
 export type ChatAttachment = {
   type?: string;
@@ -174,7 +177,7 @@ function ensureExtension(label: string, mime: string): string {
   if (/\.[a-zA-Z0-9]+$/.test(label)) {
     return label;
   }
-  const ext = MIME_TO_EXT[mime.toLowerCase()] ?? "";
+  const ext = MIME_TO_EXT[normalizeLowercaseStringOrEmpty(mime)] ?? "";
   return ext ? `${label}${ext}` : label;
 }
 

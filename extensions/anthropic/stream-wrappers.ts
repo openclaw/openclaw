@@ -8,11 +8,7 @@ import {
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-  readStringValue,
-} from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty, readStringValue } from "openclaw/plugin-sdk/text-runtime";
 
 const log = createSubsystemLogger("anthropic-stream");
 
@@ -50,7 +46,9 @@ function mergeAnthropicBetaHeader(
   betas: string[],
 ): Record<string, string> {
   const merged = { ...headers };
-  const existingKey = Object.keys(merged).find((key) => key.toLowerCase() === "anthropic-beta");
+  const existingKey = Object.keys(merged).find(
+    (key) => normalizeLowercaseStringOrEmpty(key) === "anthropic-beta",
+  );
   const existing = existingKey ? parseHeaderList(merged[existingKey]) : [];
   const values = Array.from(new Set([...existing, ...betas]));
   const key = existingKey ?? "anthropic-beta";
@@ -73,7 +71,7 @@ function normalizeFastMode(raw?: string | boolean | null): boolean | undefined {
   if (!raw) {
     return undefined;
   }
-  const key = raw.toLowerCase();
+  const key = normalizeLowercaseStringOrEmpty(raw);
   if (["off", "false", "no", "0", "disable", "disabled", "normal"].includes(key)) {
     return false;
   }
@@ -87,7 +85,7 @@ function normalizeAnthropicServiceTier(value: unknown): AnthropicServiceTier | u
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = normalizeOptionalString(value)?.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(value);
   if (normalized === "auto" || normalized === "standard_only") {
     return normalized;
   }

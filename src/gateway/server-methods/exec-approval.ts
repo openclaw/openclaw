@@ -16,6 +16,7 @@ import {
   buildSystemRunApprovalEnvBinding,
 } from "../../infra/system-run-approval-binding.js";
 import { resolveSystemRunApprovalRequestContext } from "../../infra/system-run-approval-context.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
   ErrorCodes,
@@ -38,6 +39,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 const APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS = {
   reason: "APPROVAL_ALLOW_ALWAYS_UNAVAILABLE",
 } as const;
+const RESERVED_PLUGIN_APPROVAL_ID_PREFIX = "plugin:";
 
 type ExecApprovalIosPushDelivery = {
   handleRequested?: (request: ExecApprovalRequest) => Promise<boolean>;
@@ -92,6 +94,18 @@ export function createExecApprovalHandlers(
         undefined,
       );
     },
+    "exec.approval.list": async ({ respond }) => {
+      respond(
+        true,
+        manager.listPendingRecords().map((record) => ({
+          id: record.id,
+          request: record.request,
+          createdAtMs: record.createdAtMs,
+          expiresAtMs: record.expiresAtMs,
+        })),
+        undefined,
+      );
+    },
     "exec.approval.request": async ({ params, respond, context, client }) => {
       if (!validateExecApprovalRequestParams(params)) {
         respond(
@@ -130,9 +144,9 @@ export function createExecApprovalHandlers(
       const twoPhase = p.twoPhase === true;
       const timeoutMs =
         typeof p.timeoutMs === "number" ? p.timeoutMs : DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
-      const explicitId = typeof p.id === "string" && p.id.trim().length > 0 ? p.id.trim() : null;
-      const host = typeof p.host === "string" ? p.host.trim() : "";
-      const nodeId = typeof p.nodeId === "string" ? p.nodeId.trim() : "";
+      const explicitId = normalizeOptionalString(p.id) ?? null;
+      const host = normalizeOptionalString(p.host) ?? "";
+      const nodeId = normalizeOptionalString(p.nodeId) ?? "";
       const approvalContext = resolveSystemRunApprovalRequestContext({
         host,
         command: p.command,
@@ -165,6 +179,17 @@ export function createExecApprovalHandlers(
       }
       if (!effectiveCommandText) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "command is required"));
+        return;
+      }
+      if (explicitId?.startsWith(RESERVED_PLUGIN_APPROVAL_ID_PREFIX)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `approval ids starting with ${RESERVED_PLUGIN_APPROVAL_ID_PREFIX} are reserved`,
+          ),
+        );
         return;
       }
       if (
@@ -216,11 +241,9 @@ export function createExecApprovalHandlers(
         agentId: effectiveAgentId ?? null,
         resolvedPath: p.resolvedPath ?? null,
         sessionKey: effectiveSessionKey ?? null,
-        turnSourceChannel:
-          typeof p.turnSourceChannel === "string" ? p.turnSourceChannel.trim() || null : null,
-        turnSourceTo: typeof p.turnSourceTo === "string" ? p.turnSourceTo.trim() || null : null,
-        turnSourceAccountId:
-          typeof p.turnSourceAccountId === "string" ? p.turnSourceAccountId.trim() || null : null,
+        turnSourceChannel: normalizeOptionalString(p.turnSourceChannel) ?? null,
+        turnSourceTo: normalizeOptionalString(p.turnSourceTo) ?? null,
+        turnSourceAccountId: normalizeOptionalString(p.turnSourceAccountId) ?? null,
         turnSourceThreadId: p.turnSourceThreadId ?? null,
       };
       const record = manager.create(request, timeoutMs, explicitId);

@@ -77,6 +77,10 @@
       "destination": "/plugins/building-plugins#registering-agent-tools"
     },
     {
+      "source": "/cli/capability",
+      "destination": "/cli/infer"
+    },
+    {
       "source": "/tools/capability-cookbook",
       "destination": "/plugins/architecture"
     },

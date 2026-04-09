@@ -1,5 +1,5 @@
 export { buildChannelConfigSchema, formatPairingApproveHint } from "openclaw/plugin-sdk/core";
-export type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+export type { ChannelOutboundAdapter, ChannelPlugin } from "openclaw/plugin-sdk/core";
 export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/core";
 export {
   collectStatusIssuesFromLastError,

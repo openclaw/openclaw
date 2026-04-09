@@ -1,4 +1,7 @@
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import { isLoopbackHost, normalizeHostHeader } from "./net.js";
 
 type OriginCheckResult =
@@ -18,9 +21,9 @@ function parseOrigin(
   try {
     const url = new URL(trimmed);
     return {
-      origin: url.origin.toLowerCase(),
-      host: url.host.toLowerCase(),
-      hostname: url.hostname.toLowerCase(),
+      origin: normalizeLowercaseStringOrEmpty(url.origin),
+      host: normalizeLowercaseStringOrEmpty(url.host),
+      hostname: normalizeLowercaseStringOrEmpty(url.hostname),
     };
   } catch {
     return null;

@@ -860,3 +860,18 @@ export async function runSecretsApply(params: {
     warnings: projected.warnings,
   };
 }
+
+export const __testing = {
+  async projectConfigForTest(params: {
+    plan: SecretsApplyPlan;
+    env?: NodeJS.ProcessEnv;
+  }): Promise<OpenClawConfig> {
+    const projected = await projectPlanState({
+      plan: params.plan,
+      env: params.env ?? process.env,
+      write: false,
+      allowExecInDryRun: false,
+    });
+    return projected.nextConfig;
+  },
+};

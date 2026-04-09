@@ -45,7 +45,7 @@ function defaultModelsForProviderMode(
   bootstrap?: Bootstrap | null,
 ): Pick<RunnerSelection, "primaryModel" | "alternateModel" | "fastMode"> {
   const preferredLiveModel = bootstrap?.runnerCatalog.real[0]?.key;
-  if (mode === "live-openai") {
+  if (mode === "live-frontier") {
     const primaryModel = defaultQaModelForMode(mode, { preferredLiveModel });
     const alternateModel = defaultQaModelForMode(mode, { alternate: true, preferredLiveModel });
     return {
@@ -526,8 +526,8 @@ export async function createQaLabApp(root: HTMLDivElement) {
     /* Config form */
     root.querySelector<HTMLSelectElement>("#provider-mode")?.addEventListener("change", (e) => {
       const mode =
-        (e.currentTarget as HTMLSelectElement).value === "live-openai"
-          ? "live-openai"
+        (e.currentTarget as HTMLSelectElement).value === "live-frontier"
+          ? "live-frontier"
           : "mock-openai";
       updateRunnerDraft((d) => ({
         ...d,

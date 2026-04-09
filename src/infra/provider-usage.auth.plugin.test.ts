@@ -9,7 +9,7 @@ const ensureAuthProfileStoreMock = vi.fn(() => ({
 
 vi.mock("../agents/auth-profiles.js", () => ({
   dedupeProfileIds: (profileIds: string[]) => [...new Set(profileIds)],
-  ensureAuthProfileStore: (...args: unknown[]) => ensureAuthProfileStoreMock(...args),
+  ensureAuthProfileStore: () => ensureAuthProfileStoreMock(),
   listProfilesForProvider: () => [],
   resolveApiKeyForProfile: async () => null,
   resolveAuthProfileOrder: () => [],

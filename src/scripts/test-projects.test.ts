@@ -41,7 +41,7 @@ const VITEST_NODE_PREFIX = [
   "exec",
   "node",
   "--no-maglev",
-  expect.stringContaining("/node_modules/vitest/vitest.mjs"),
+  expect.stringMatching(/(?:^|[\\/])node_modules[\\/]vitest[\\/]vitest\.mjs$/),
 ];
 
 describe("test-projects args", () => {
@@ -635,10 +635,10 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes browser extension targets to the extension channel config", () => {
+  it("routes browser extension targets to the extensions config", () => {
     expect(buildVitestRunPlans(["extensions/browser/index.test.ts"])).toEqual([
       {
-        config: "vitest.extension-channels.config.ts",
+        config: "vitest.extensions.config.ts",
         forwardedArgs: [],
         includePatterns: ["extensions/browser/index.test.ts"],
         watchMode: false,

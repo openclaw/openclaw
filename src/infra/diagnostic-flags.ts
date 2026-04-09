@@ -8,10 +8,10 @@ function parseEnvFlags(raw?: string): string[] {
     return [];
   }
   const trimmed = raw.trim();
-  if (!trimmed) {
+  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
+  if (!lowered) {
     return [];
   }
-  const lowered = trimmed.toLowerCase();
   if (["0", "false", "off", "none"].includes(lowered)) {
     return [];
   }

@@ -15,15 +15,12 @@ import {
   resolveReasoningDefault,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
-import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { ThinkLevel } from "./directives.js";
+import { resolveStoredModelOverride } from "./stored-model-override.js";
 
 export type ModelDirectiveSelection = {
   provider: string;
@@ -142,61 +139,6 @@ function boundedLevenshteinDistance(a: string, b: string, maxDistance: number): 
   return dist;
 }
 
-export type StoredModelOverride = {
-  provider?: string;
-  model: string;
-  source: "session" | "parent";
-};
-
-function resolveParentSessionKeyCandidate(params: {
-  sessionKey?: string;
-  parentSessionKey?: string;
-}): string | null {
-  const explicit = normalizeOptionalString(params.parentSessionKey);
-  if (explicit && explicit !== params.sessionKey) {
-    return explicit;
-  }
-  const derived = resolveSessionParentSessionKey(params.sessionKey);
-  if (derived && derived !== params.sessionKey) {
-    return derived;
-  }
-  return null;
-}
-
-export function resolveStoredModelOverride(params: {
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
-  sessionKey?: string;
-  parentSessionKey?: string;
-  defaultProvider: string;
-}): StoredModelOverride | null {
-  const direct = resolvePersistedOverrideModelRef({
-    defaultProvider: params.defaultProvider,
-    overrideProvider: params.sessionEntry?.providerOverride,
-    overrideModel: params.sessionEntry?.modelOverride,
-  });
-  if (direct) {
-    return { ...direct, source: "session" };
-  }
-  const parentKey = resolveParentSessionKeyCandidate({
-    sessionKey: params.sessionKey,
-    parentSessionKey: params.parentSessionKey,
-  });
-  if (!parentKey || !params.sessionStore) {
-    return null;
-  }
-  const parentEntry = params.sessionStore[parentKey];
-  const parentOverride = resolvePersistedOverrideModelRef({
-    defaultProvider: params.defaultProvider,
-    overrideProvider: parentEntry?.providerOverride,
-    overrideModel: parentEntry?.modelOverride,
-  });
-  if (!parentOverride) {
-    return null;
-  }
-  return { ...parentOverride, source: "parent" };
-}
-
 function scoreFuzzyMatch(params: {
   provider: string;
   model: string;
@@ -215,8 +157,8 @@ function scoreFuzzyMatch(params: {
   const provider = normalizeProviderId(params.provider);
   const model = params.model;
   const fragment = normalizeLowercaseStringOrEmpty(params.fragment);
-  const providerLower = provider.toLowerCase();
-  const modelLower = model.toLowerCase();
+  const providerLower = normalizeLowercaseStringOrEmpty(provider);
+  const modelLower = normalizeLowercaseStringOrEmpty(model);
   const haystack = `${providerLower}/${modelLower}`;
   const key = modelKey(provider, model);
 
@@ -262,7 +204,7 @@ function scoreFuzzyMatch(params: {
 
   const aliases = params.aliasIndex.byKey.get(key) ?? [];
   for (const alias of aliases) {
-    score += scoreFragment(alias.toLowerCase(), {
+    score += scoreFragment(normalizeLowercaseStringOrEmpty(alias), {
       exact: 140,
       starts: 90,
       includes: 60,
@@ -525,7 +467,7 @@ export function resolveModelDirectiveSelection(params: {
   const { raw, defaultProvider, defaultModel, aliasIndex, allowedModelKeys } = params;
 
   const rawTrimmed = raw.trim();
-  const rawLower = rawTrimmed.toLowerCase();
+  const rawLower = normalizeLowercaseStringOrEmpty(rawTrimmed);
 
   const pickAliasForKey = (provider: string, model: string): string | undefined =>
     aliasIndex.byKey.get(modelKey(provider, model))?.[0];

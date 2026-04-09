@@ -280,7 +280,6 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
     bodyStripped,
   } = sessionState;
-
   if (resetTriggered && normalizeOptionalString(bodyStripped)) {
     const { applyResetModelOverride } = await loadSessionResetModelRuntime();
     await applyResetModelOverride({

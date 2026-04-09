@@ -216,7 +216,7 @@ function canonicalizeSessionKeyForAgent(params: {
   }
   if (rawLower.startsWith("subagent:")) {
     const rest = raw.slice("subagent:".length);
-    return `agent:${agentId}:subagent:${rest}`.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(`agent:${agentId}:subagent:${rest}`);
   }
   // Channel-owned legacy shapes must win before the generic group/channel
   // fallback. WhatsApp shipped channel-qualified group sessions, so
@@ -233,12 +233,12 @@ function canonicalizeSessionKeyForAgent(params: {
     }
   }
   if (rawLower.startsWith("group:") || rawLower.startsWith("channel:")) {
-    return `agent:${agentId}:unknown:${raw}`.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(`agent:${agentId}:unknown:${raw}`);
   }
   if (isSurfaceGroupKey(raw)) {
-    return `agent:${agentId}:${raw}`.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(`agent:${agentId}:${raw}`);
   }
-  return `agent:${agentId}:${raw}`.toLowerCase();
+  return normalizeLowercaseStringOrEmpty(`agent:${agentId}:${raw}`);
 }
 
 function pickLatestLegacyDirectEntry(

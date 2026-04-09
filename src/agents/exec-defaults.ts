@@ -1,6 +1,12 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
-import type { ExecAsk, ExecHost, ExecSecurity, ExecTarget } from "../infra/exec-approvals.js";
+import {
+  loadExecApprovals,
+  type ExecAsk,
+  type ExecHost,
+  type ExecSecurity,
+  type ExecTarget,
+} from "../infra/exec-approvals.js";
 import { resolveAgentConfig, resolveSessionAgentId } from "./agent-scope.js";
 import { isRequestedExecTargetAllowed, resolveExecTarget } from "./bash-tools.exec-runtime.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
@@ -88,6 +94,8 @@ export function resolveExecDefaults(params: {
     elevatedRequested: false,
     sandboxAvailable,
   });
+  const approvalDefaults = loadExecApprovals().defaults;
+  const defaultSecurity = resolved.effectiveHost === "sandbox" ? "deny" : "full";
   return {
     host,
     effectiveHost: resolved.effectiveHost,
@@ -95,12 +103,14 @@ export function resolveExecDefaults(params: {
       (params.sessionEntry?.execSecurity as ExecSecurity | undefined) ??
       agentExec?.security ??
       globalExec?.security ??
-      "deny",
+      approvalDefaults?.security ??
+      defaultSecurity,
     ask:
       (params.sessionEntry?.execAsk as ExecAsk | undefined) ??
       agentExec?.ask ??
       globalExec?.ask ??
-      "on-miss",
+      approvalDefaults?.ask ??
+      "off",
     node: params.sessionEntry?.execNode ?? agentExec?.node ?? globalExec?.node,
     canRequestNode: isRequestedExecTargetAllowed({
       configuredTarget: host,

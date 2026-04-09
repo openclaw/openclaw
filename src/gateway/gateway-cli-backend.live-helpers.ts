@@ -13,6 +13,7 @@ import {
   requestDevicePairing,
 } from "../infra/device-pairing.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
@@ -95,6 +96,29 @@ export function shouldRunCliMcpProbe(providerId: string): boolean {
     return isTruthyEnvValue(raw);
   }
   return resolveCliBackendLiveTest(providerId)?.defaultMcpProbe === true;
+}
+
+export function resolveCliModelSwitchProbeTarget(
+  providerId: string,
+  modelRef: string,
+): string | undefined {
+  const normalizedProvider = normalizeLowercaseStringOrEmpty(providerId);
+  const normalizedModelRef = normalizeLowercaseStringOrEmpty(modelRef);
+  if (normalizedProvider !== "claude-cli") {
+    return undefined;
+  }
+  if (normalizedModelRef !== "claude-cli/claude-sonnet-4-6") {
+    return undefined;
+  }
+  return "claude-cli/claude-opus-4-6";
+}
+
+export function shouldRunCliModelSwitchProbe(providerId: string, modelRef: string): boolean {
+  const raw = process.env.OPENCLAW_LIVE_CLI_BACKEND_MODEL_SWITCH_PROBE?.trim();
+  if (raw) {
+    return isTruthyEnvValue(raw);
+  }
+  return typeof resolveCliModelSwitchProbeTarget(providerId, modelRef) === "string";
 }
 
 export function matchesCliBackendReply(text: string, expected: string): boolean {
@@ -231,7 +255,7 @@ async function connectClientOnce(params: {
 }
 
 function isRetryableGatewayConnectError(error: Error): boolean {
-  const message = error.message.toLowerCase();
+  const message = normalizeLowercaseStringOrEmpty(error.message);
   return (
     message.includes("gateway closed during connect (1000)") ||
     message.includes("gateway connect timeout") ||

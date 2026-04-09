@@ -1,4 +1,5 @@
 import type { GatewayBrowserClient } from "../gateway.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type { LogEntry, LogLevel } from "../types.ts";
 import {
   formatMissingOperatorReadScopeMessage,
@@ -45,7 +46,7 @@ function normalizeLevel(value: unknown): LogLevel | null {
   if (typeof value !== "string") {
     return null;
   }
-  const lowered = value.toLowerCase() as LogLevel;
+  const lowered = normalizeLowercaseStringOrEmpty(value) as LogLevel;
   return LEVELS.has(lowered) ? lowered : null;
 }
 

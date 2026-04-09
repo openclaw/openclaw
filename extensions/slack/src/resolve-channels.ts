@@ -86,7 +86,9 @@ function resolveByName(
   if (!target) {
     return undefined;
   }
-  const matches = channels.filter((channel) => channel.name.toLowerCase() === target);
+  const matches = channels.filter(
+    (channel) => normalizeLowercaseStringOrEmpty(channel.name) === target,
+  );
   if (matches.length === 0) {
     return undefined;
   }

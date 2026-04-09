@@ -30,6 +30,11 @@ function isSlowReplyTestAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
 }
 
 function resolveFastSessionKey(ctx: MsgContext): string {
+  const nativeCommandTarget =
+    ctx.CommandSource === "native" ? normalizeOptionalString(ctx.CommandTargetSessionKey) : "";
+  if (nativeCommandTarget) {
+    return nativeCommandTarget;
+  }
   const existing = normalizeOptionalString(ctx.SessionKey);
   if (existing) {
     return existing;

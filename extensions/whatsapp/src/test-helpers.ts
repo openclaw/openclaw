@@ -36,7 +36,7 @@ export function resetLoadConfigMock() {
 
 function resolveStorePathFallback(store?: string, opts?: { agentId?: string }) {
   if (!store) {
-    const agentId = (opts?.agentId?.trim() || "main").toLowerCase();
+    const agentId = normalizeLowercaseStringOrEmpty(opts?.agentId?.trim() || "main");
     return path.join(
       process.env.HOME ?? "/tmp",
       ".openclaw",
@@ -82,6 +82,47 @@ function loadSessionStoreMock(storePath: string) {
   }
 }
 
+type BufferedDispatchReplyParams = {
+  ctx: Record<string, unknown>;
+  replyResolver: (ctx: Record<string, unknown>) => Promise<Record<string, unknown> | undefined>;
+  dispatcherOptions: {
+    deliver: (
+      payload: Record<string, unknown>,
+      info: { kind: "tool" | "block" | "final" },
+    ) => Promise<void>;
+    onReplyStart?: (() => Promise<void>) | (() => void);
+  };
+};
+
+function createBufferedDispatchReplyMock() {
+  return vi.fn(async (params: BufferedDispatchReplyParams) => {
+    await params.dispatcherOptions.onReplyStart?.();
+    const payload = await params.replyResolver(params.ctx);
+    if (!payload || typeof payload !== "object") {
+      return {
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+      };
+    }
+    const text = typeof payload.text === "string" ? payload.text.trim() : "";
+    const hasMedia =
+      typeof payload.mediaUrl === "string" ||
+      typeof payload.mediaPath === "string" ||
+      typeof payload.fileUrl === "string";
+    if (!text && !hasMedia) {
+      return {
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+      };
+    }
+    await params.dispatcherOptions.deliver(payload, { kind: "final" });
+    return {
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    };
+  });
+}
+
 function resolveChannelContextVisibilityModeMock(params: {
   cfg: {
     channels?: Record<
@@ -107,6 +148,7 @@ function resolveChannelContextVisibilityModeMock(params: {
 function resolveGroupSessionKeyMock(ctx: { From?: string; ChatType?: string; Provider?: string }) {
   const from = ctx.From?.trim() ?? "";
   const chatType = normalizeLowercaseStringOrEmpty(ctx.ChatType);
+  const normalizedFrom = normalizeLowercaseStringOrEmpty(from);
   if (!from) {
     return null;
   }
@@ -119,9 +161,9 @@ function resolveGroupSessionKeyMock(ctx: { From?: string; ChatType?: string; Pro
     return null;
   }
   return {
-    key: `whatsapp:group:${from.toLowerCase()}`,
+    key: `whatsapp:group:${normalizedFrom}`,
     channel: normalizeLowercaseStringOrEmpty(ctx.Provider) || "whatsapp",
-    id: from.toLowerCase(),
+    id: normalizedFrom,
     chatType: chatType === "channel" ? "channel" : "group",
   };
 }
@@ -224,44 +266,7 @@ vi.mock("./auto-reply/monitor/inbound-dispatch.runtime.js", () => ({
     onModelSelected: undefined,
     responsePrefix: undefined,
   }),
-  dispatchReplyWithBufferedBlockDispatcher: vi.fn(
-    async (params: {
-      ctx: Record<string, unknown>;
-      replyResolver: (ctx: Record<string, unknown>) => Promise<Record<string, unknown> | undefined>;
-      dispatcherOptions: {
-        deliver: (
-          payload: Record<string, unknown>,
-          info: { kind: "tool" | "block" | "final" },
-        ) => Promise<void>;
-        onReplyStart?: (() => Promise<void>) | (() => void);
-      };
-    }) => {
-      await params.dispatcherOptions.onReplyStart?.();
-      const payload = await params.replyResolver(params.ctx);
-      if (!payload || typeof payload !== "object") {
-        return {
-          queuedFinal: false,
-          counts: { tool: 0, block: 0, final: 0 },
-        };
-      }
-      const text = typeof payload.text === "string" ? payload.text.trim() : "";
-      const hasMedia =
-        typeof payload.mediaUrl === "string" ||
-        typeof payload.mediaPath === "string" ||
-        typeof payload.fileUrl === "string";
-      if (!text && !hasMedia) {
-        return {
-          queuedFinal: false,
-          counts: { tool: 0, block: 0, final: 0 },
-        };
-      }
-      await params.dispatcherOptions.deliver(payload, { kind: "final" });
-      return {
-        queuedFinal: true,
-        counts: { tool: 0, block: 0, final: 1 },
-      };
-    },
-  ),
+  dispatchReplyWithBufferedBlockDispatcher: createBufferedDispatchReplyMock(),
   finalizeInboundContext: <T>(ctx: T) => ctx,
   getAgentScopedMediaLocalRoots: () => [] as string[],
   jidToE164: (jid: string) => {
@@ -303,44 +308,7 @@ vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
     onModelSelected: undefined,
     responsePrefix: undefined,
   }),
-  dispatchReplyWithBufferedBlockDispatcher: vi.fn(
-    async (params: {
-      ctx: Record<string, unknown>;
-      replyResolver: (ctx: Record<string, unknown>) => Promise<Record<string, unknown> | undefined>;
-      dispatcherOptions: {
-        deliver: (
-          payload: Record<string, unknown>,
-          info: { kind: "tool" | "block" | "final" },
-        ) => Promise<void>;
-        onReplyStart?: (() => Promise<void>) | (() => void);
-      };
-    }) => {
-      await params.dispatcherOptions.onReplyStart?.();
-      const payload = await params.replyResolver(params.ctx);
-      if (!payload || typeof payload !== "object") {
-        return {
-          queuedFinal: false,
-          counts: { tool: 0, block: 0, final: 0 },
-        };
-      }
-      const text = typeof payload.text === "string" ? payload.text.trim() : "";
-      const hasMedia =
-        typeof payload.mediaUrl === "string" ||
-        typeof payload.mediaPath === "string" ||
-        typeof payload.fileUrl === "string";
-      if (!text && !hasMedia) {
-        return {
-          queuedFinal: false,
-          counts: { tool: 0, block: 0, final: 0 },
-        };
-      }
-      await params.dispatcherOptions.deliver(payload, { kind: "final" });
-      return {
-        queuedFinal: true,
-        counts: { tool: 0, block: 0, final: 1 },
-      };
-    },
-  ),
+  dispatchReplyWithBufferedBlockDispatcher: createBufferedDispatchReplyMock(),
   finalizeInboundContext: <T>(ctx: T) => ctx,
   formatInboundEnvelope: (params: { body: string; senderLabel?: string }) =>
     `${params.senderLabel ? `${params.senderLabel}: ` : ""}${params.body}`,

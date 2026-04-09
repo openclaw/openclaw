@@ -213,15 +213,16 @@ describe("gateway shared auth rotation with unchanged SecretRefs", () => {
     return ws;
   }
 
-  it("keeps shared-auth websocket sessions connected when config.apply reapplies an unchanged SecretRef token", async () => {
+  it("disconnects shared-auth websocket sessions when config.apply rewrites a SecretRef token", async () => {
     const ws = await openSecretRefAuthenticatedWs();
     try {
+      const closed = waitForClose(ws);
       const res = await applyCurrentConfig(ws);
       expect(res.ok).toBe(true);
-
-      const followUp = await rpcReq<{ hash?: string }>(ws, "config.get", {});
-      expect(followUp.ok).toBe(true);
-      expect(typeof followUp.payload?.hash).toBe("string");
+      await expect(closed).resolves.toEqual({
+        code: 4001,
+        reason: "gateway auth changed",
+      });
     } finally {
       ws.close();
     }

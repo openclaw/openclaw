@@ -4,7 +4,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { parseFrontmatterBlock } from "../markdown/frontmatter.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import {
   CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
   mergeBundlePathLists,
@@ -100,7 +103,7 @@ function listMarkdownFilesRecursive(rootDir: string): string[] {
         pending.push(fullPath);
         continue;
       }
-      if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) {
+      if (entry.isFile() && normalizeOptionalLowercaseString(entry.name)?.endsWith(".md")) {
         files.push(fullPath);
       }
     }
@@ -142,14 +145,15 @@ function loadBundleCommandsFromRoot(params: {
     if (!promptTemplate) {
       continue;
     }
-    const rawName = (
-      frontmatter.name?.trim() || toDefaultCommandName(params.commandRoot, filePath)
-    ).trim();
+    const rawName =
+      normalizeOptionalString(frontmatter.name) ||
+      toDefaultCommandName(params.commandRoot, filePath);
     if (!rawName) {
       continue;
     }
     const description =
-      frontmatter.description?.trim() || toDefaultDescription(rawName, promptTemplate);
+      normalizeOptionalString(frontmatter.description) ||
+      toDefaultDescription(rawName, promptTemplate);
     entries.push({
       pluginId: params.pluginId,
       rawName,

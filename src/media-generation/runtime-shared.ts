@@ -26,6 +26,13 @@ export type MediaNormalizationEntry<TValue extends MediaNormalizationValue> = {
   supportedValues?: readonly TValue[];
 };
 
+export type MediaGenerationNormalizationMetadataInput = {
+  size?: MediaNormalizationEntry<string>;
+  aspectRatio?: MediaNormalizationEntry<string>;
+  resolution?: MediaNormalizationEntry<string>;
+  durationSeconds?: MediaNormalizationEntry<number>;
+};
+
 export function hasMediaNormalizationEntry<TValue extends MediaNormalizationValue>(
   entry: MediaNormalizationEntry<TValue> | undefined,
 ): entry is MediaNormalizationEntry<TValue> {
@@ -399,6 +406,55 @@ export function normalizeDurationToClosestMax(
     return rounded;
   }
   return Math.min(rounded, Math.max(1, Math.round(maxDurationSeconds)));
+}
+
+export function buildMediaGenerationNormalizationMetadata(params: {
+  normalization?: MediaGenerationNormalizationMetadataInput;
+  requestedSizeForDerivedAspectRatio?: string;
+  includeSupportedDurationSeconds?: boolean;
+}): Record<string, unknown> {
+  const metadata: Record<string, unknown> = {};
+  const { normalization } = params;
+  if (normalization?.size?.requested !== undefined && normalization.size.applied !== undefined) {
+    metadata.requestedSize = normalization.size.requested;
+    metadata.normalizedSize = normalization.size.applied;
+  }
+  if (normalization?.aspectRatio?.applied !== undefined) {
+    if (normalization.aspectRatio.requested !== undefined) {
+      metadata.requestedAspectRatio = normalization.aspectRatio.requested;
+    }
+    metadata.normalizedAspectRatio = normalization.aspectRatio.applied;
+    if (
+      normalization.aspectRatio.derivedFrom === "size" &&
+      params.requestedSizeForDerivedAspectRatio
+    ) {
+      metadata.requestedSize = params.requestedSizeForDerivedAspectRatio;
+      metadata.aspectRatioDerivedFromSize = deriveAspectRatioFromSize(
+        params.requestedSizeForDerivedAspectRatio,
+      );
+    }
+  }
+  if (
+    normalization?.resolution?.requested !== undefined &&
+    normalization.resolution.applied !== undefined
+  ) {
+    metadata.requestedResolution = normalization.resolution.requested;
+    metadata.normalizedResolution = normalization.resolution.applied;
+  }
+  if (
+    normalization?.durationSeconds?.requested !== undefined &&
+    normalization.durationSeconds.applied !== undefined
+  ) {
+    metadata.requestedDurationSeconds = normalization.durationSeconds.requested;
+    metadata.normalizedDurationSeconds = normalization.durationSeconds.applied;
+    if (
+      params.includeSupportedDurationSeconds &&
+      normalization.durationSeconds.supportedValues?.length
+    ) {
+      metadata.supportedDurationSeconds = normalization.durationSeconds.supportedValues;
+    }
+  }
+  return metadata;
 }
 
 export function throwCapabilityGenerationFailure(params: {

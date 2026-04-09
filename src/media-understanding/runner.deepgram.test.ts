@@ -1,7 +1,27 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { buildProviderRegistry, runCapability } from "./runner.js";
 import { withAudioFixture } from "./runner.test-utils.js";
+
+const modelAuthMocks = vi.hoisted(() => ({
+  hasAvailableAuthForProvider: vi.fn(() => true),
+  resolveApiKeyForProvider: vi.fn(async () => ({
+    apiKey: "test-key",
+    source: "test",
+    mode: "api-key",
+  })),
+  requireApiKey: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? "test-key"),
+}));
+
+vi.mock("../agents/model-auth.js", () => ({
+  hasAvailableAuthForProvider: modelAuthMocks.hasAvailableAuthForProvider,
+  resolveApiKeyForProvider: modelAuthMocks.resolveApiKeyForProvider,
+  requireApiKey: modelAuthMocks.requireApiKey,
+}));
+
+vi.mock("../plugins/capability-provider-runtime.js", () => ({
+  resolvePluginCapabilityProviders: () => [],
+}));
 
 describe("runCapability deepgram provider options", () => {
   it("merges provider options, headers, and baseUrl overrides", async () => {

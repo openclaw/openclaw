@@ -8,6 +8,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/run-command";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { CONFIG_DIR, extractArchive, resolveBrewExecutable } from "openclaw/plugin-sdk/setup-tools";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 export type ReleaseAsset = {
   name?: string;
@@ -64,10 +65,12 @@ export function pickAsset(
   );
 
   // Archives only, excluding signature files (.asc)
-  const archives = withName.filter((a) => looksLikeArchive(a.name.toLowerCase()));
+  const archives = withName.filter((a) =>
+    looksLikeArchive(normalizeLowercaseStringOrEmpty(a.name)),
+  );
 
   const byName = (pattern: RegExp) =>
-    archives.find((asset) => pattern.test(asset.name.toLowerCase()));
+    archives.find((asset) => pattern.test(normalizeLowercaseStringOrEmpty(asset.name)));
 
   if (platform === "linux") {
     // The official "Linux-native" asset is an x86-64 GraalVM binary.
@@ -253,7 +256,7 @@ async function installSignalCliFromRelease(runtime: RuntimeEnv): Promise<SignalI
   const installRoot = path.join(CONFIG_DIR, "tools", "signal-cli", version);
   await fs.mkdir(installRoot, { recursive: true });
 
-  if (!looksLikeArchive(asset.name.toLowerCase())) {
+  if (!looksLikeArchive(normalizeLowercaseStringOrEmpty(asset.name))) {
     return { ok: false, error: `Unsupported archive type: ${asset.name}` };
   }
   try {

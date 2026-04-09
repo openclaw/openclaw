@@ -214,11 +214,14 @@ export function isLocalGatewayAddress(ip: string | undefined): boolean {
     return false;
   }
   const tailnetIPv4 = pickPrimaryTailnetIPv4();
-  if (tailnetIPv4 && normalized === tailnetIPv4.toLowerCase()) {
+  if (tailnetIPv4 && normalized === normalizeLowercaseStringOrEmpty(tailnetIPv4)) {
     return true;
   }
   const tailnetIPv6 = pickPrimaryTailnetIPv6();
-  if (tailnetIPv6 && normalizeLowercaseStringOrEmpty(ip) === tailnetIPv6.toLowerCase()) {
+  if (
+    tailnetIPv6 &&
+    normalizeLowercaseStringOrEmpty(ip) === normalizeLowercaseStringOrEmpty(tailnetIPv6)
+  ) {
     return true;
   }
   return false;

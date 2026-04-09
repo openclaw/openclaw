@@ -31,7 +31,9 @@ function parseListenerAddress(address: string): { host: string; port: number } |
   const bracketMatch = normalized.match(/^\[([^\]]+)\]:(\d+)$/);
   if (bracketMatch) {
     const port = Number.parseInt(bracketMatch[2], 10);
-    return Number.isFinite(port) ? { host: bracketMatch[1].toLowerCase(), port } : null;
+    return Number.isFinite(port)
+      ? { host: normalizeLowercaseStringOrEmpty(bracketMatch[1]), port }
+      : null;
   }
   const lastColon = normalized.lastIndexOf(":");
   if (lastColon <= 0 || lastColon >= normalized.length - 1) {

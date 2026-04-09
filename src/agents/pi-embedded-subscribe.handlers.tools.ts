@@ -342,8 +342,8 @@ function readExecApprovalPendingDetails(result: unknown): {
   if (details.status !== "approval-pending") {
     return null;
   }
-  const approvalId = typeof details.approvalId === "string" ? details.approvalId.trim() : "";
-  const approvalSlug = typeof details.approvalSlug === "string" ? details.approvalSlug.trim() : "";
+  const approvalId = readStringValue(details.approvalId) ?? "";
+  const approvalSlug = readStringValue(details.approvalSlug) ?? "";
   const command = typeof details.command === "string" ? details.command : "";
   const host = details.host === "node" ? "node" : details.host === "gateway" ? "gateway" : null;
   if (!approvalId || !approvalSlug || !command || !host) {
@@ -429,6 +429,7 @@ async function emitToolResultOutput(params: {
     if (!ctx.params.onToolResult) {
       return;
     }
+    ctx.state.deterministicApprovalPromptPending = true;
     try {
       await ctx.params.onToolResult(
         buildExecApprovalPendingReplyPayload({
@@ -445,7 +446,9 @@ async function emitToolResultOutput(params: {
       );
       ctx.state.deterministicApprovalPromptSent = true;
     } catch {
-      // ignore delivery failures
+      ctx.state.deterministicApprovalPromptSent = false;
+    } finally {
+      ctx.state.deterministicApprovalPromptPending = false;
     }
     return;
   }
@@ -455,6 +458,7 @@ async function emitToolResultOutput(params: {
     if (!ctx.params.onToolResult) {
       return;
     }
+    ctx.state.deterministicApprovalPromptPending = true;
     try {
       await ctx.params.onToolResult?.(
         buildExecApprovalUnavailableReplyPayload({
@@ -468,7 +472,9 @@ async function emitToolResultOutput(params: {
       );
       ctx.state.deterministicApprovalPromptSent = true;
     } catch {
-      // ignore delivery failures
+      ctx.state.deterministicApprovalPromptSent = false;
+    } finally {
+      ctx.state.deterministicApprovalPromptPending = false;
     }
     return;
   }
@@ -991,7 +997,9 @@ export async function handleToolExecutionEnd(
           const approvalData: AgentApprovalEventData = {
             phase: "resolved",
             kind: "exec",
-            status: parsedApprovalResult.metadata.toLowerCase().includes("approval-request-failed")
+            status: normalizeOptionalLowercaseString(parsedApprovalResult.metadata)?.includes(
+              "approval-request-failed",
+            )
               ? "failed"
               : "denied",
             title: "Command approval resolved",
