@@ -354,6 +354,7 @@ describe("plugin-sdk subpath exports", () => {
     });
     expectSourceContract("provider-web-search-contract", {
       mentions: [
+        "createWebSearchProviderContractFields",
         "enablePluginInConfig",
         "getScopedCredentialValue",
         "resolveProviderWebSearchPluginConfig",
@@ -368,6 +369,22 @@ describe("plugin-sdk subpath exports", () => {
         "resolveCitationRedirectUrl",
       ],
     });
+    expectSourceContract("provider-web-search-config-contract", {
+      mentions: [
+        "getScopedCredentialValue",
+        "resolveProviderWebSearchPluginConfig",
+        "setScopedCredentialValue",
+        "setProviderWebSearchPluginConfigValue",
+        "WebSearchProviderPlugin",
+      ],
+      omits: [
+        "enablePluginInConfig",
+        "buildSearchCacheKey",
+        "withTrustedWebSearchEndpoint",
+        "writeCachedSearchPayload",
+        "resolveCitationRedirectUrl",
+      ],
+    });
     expectSourceContract("provider-web-fetch-contract", {
       mentions: ["enablePluginInConfig", "WebFetchProviderPlugin"],
       omits: [
@@ -376,6 +393,10 @@ describe("plugin-sdk subpath exports", () => {
         "resolveCacheTtlMs",
         "wrapExternalContent",
       ],
+    });
+    expectSourceContract("tool-payload", {
+      mentions: ["extractToolPayload", "ToolPayloadCarrier"],
+      omits: ["createAnthropicToolPayloadCompatibilityWrapper", "extractToolSend"],
     });
     expectSourceMentions("compat", [
       "createPluginRuntimeStore",
@@ -668,7 +689,10 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expectSourceMentions("command-auth", [
       "buildCommandTextFromArgs",
+      "buildCommandsMessage",
+      "buildCommandsMessagePaginated",
       "buildCommandsPaginationKeyboard",
+      "buildHelpMessage",
       "buildModelsProviderData",
       "hasControlCommand",
       "listNativeCommandSpecsForConfig",
@@ -685,6 +709,12 @@ describe("plugin-sdk subpath exports", () => {
       "shouldComputeCommandAuthorized",
       "shouldHandleTextCommands",
     ]);
+    expectSourceMentions("command-status", [
+      "buildCommandsMessage",
+      "buildCommandsMessagePaginated",
+      "buildHelpMessage",
+    ]);
+    expectSourceOmitsImportPattern("command-auth", "../auto-reply/status.js");
     expectSourceOmitsSnippet("command-auth", "../../extensions/");
     expectSourceOmitsSnippet("matrix-runtime-heavy", "../../extensions/");
     expectSourceMentions("channel-send-result", [

@@ -62,6 +62,7 @@ const EXTENSION_VOICE_CALL_VITEST_CONFIG = "vitest.extension-voice-call.config.t
 const EXTENSION_WHATSAPP_VITEST_CONFIG = "vitest.extension-whatsapp.config.ts";
 const EXTENSION_ZALO_VITEST_CONFIG = "vitest.extension-zalo.config.ts";
 const EXTENSIONS_VITEST_CONFIG = "vitest.extensions.config.ts";
+const FULL_EXTENSIONS_VITEST_CONFIG = "vitest.full-extensions.config.ts";
 const GATEWAY_VITEST_CONFIG = "vitest.gateway.config.ts";
 const HOOKS_VITEST_CONFIG = "vitest.hooks.config.ts";
 const INFRA_VITEST_CONFIG = "vitest.infra.config.ts";
@@ -279,6 +280,13 @@ function classifyTarget(arg, cwd) {
     return "unitFast";
   }
   if (relative.endsWith(".e2e.test.ts")) {
+    return "e2e";
+  }
+  if (
+    relative === "src/gateway/gateway.test.ts" ||
+    relative === "src/gateway/server.startup-matrix-migration.integration.test.ts" ||
+    relative === "src/gateway/sessions-history-http.test.ts"
+  ) {
     return "e2e";
   }
   if (relative.startsWith("extensions/")) {
@@ -612,12 +620,33 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
       },
     ];
   }
-  return fullSuiteVitestShards.map((shard) => ({
-    config: shard.config,
-    forwardedArgs,
-    includePatterns: null,
-    watchMode: false,
-  }));
+  const parallelShardCount = Number.parseInt(process.env.OPENCLAW_TEST_PROJECTS_PARALLEL ?? "", 10);
+  const expandToProjectConfigs =
+    process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS === "1" ||
+    (Number.isFinite(parallelShardCount) && parallelShardCount > 1) ||
+    shouldUseLocalFullSuiteParallelByDefault(process.env);
+  return fullSuiteVitestShards.flatMap((shard) => {
+    if (
+      process.env.OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD === "1" &&
+      shard.config === FULL_EXTENSIONS_VITEST_CONFIG
+    ) {
+      return [];
+    }
+    const expandShard = expandToProjectConfigs || shard.config === FULL_EXTENSIONS_VITEST_CONFIG;
+    const configs = expandShard ? shard.projects : [shard.config];
+    return configs.map((config) => ({
+      config,
+      forwardedArgs,
+      includePatterns: null,
+      watchMode: false,
+    }));
+  });
+}
+
+export function shouldUseLocalFullSuiteParallelByDefault(env = process.env) {
+  return (
+    env.OPENCLAW_TEST_PROJECTS_SERIAL !== "1" && env.CI !== "true" && env.GITHUB_ACTIONS !== "true"
+  );
 }
 
 export function createVitestRunSpecs(args, params = {}) {

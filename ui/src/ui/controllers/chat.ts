@@ -11,6 +11,26 @@ import {
 } from "./scope-errors.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
+const chatHistoryRequestVersions = new WeakMap<object, number>();
+
+function beginChatHistoryRequest(state: ChatState): number {
+  const key = state as object;
+  const nextVersion = (chatHistoryRequestVersions.get(key) ?? 0) + 1;
+  chatHistoryRequestVersions.set(key, nextVersion);
+  return nextVersion;
+}
+
+function isLatestChatHistoryRequest(state: ChatState, version: number): boolean {
+  return chatHistoryRequestVersions.get(state as object) === version;
+}
+
+function shouldApplyChatHistoryResult(
+  state: ChatState,
+  version: number,
+  sessionKey: string,
+): boolean {
+  return isLatestChatHistoryRequest(state, version) && state.sessionKey === sessionKey;
+}
 
 function isSilentReplyStream(text: string): boolean {
   return SILENT_REPLY_PATTERN.test(text);
@@ -73,16 +93,21 @@ export async function loadChatHistory(state: ChatState) {
   if (!state.client || !state.connected) {
     return;
   }
+  const sessionKey = state.sessionKey;
+  const requestVersion = beginChatHistoryRequest(state);
   state.chatLoading = true;
   state.lastError = null;
   try {
     const res = await state.client.request<{ messages?: Array<unknown>; thinkingLevel?: string }>(
       "chat.history",
       {
-        sessionKey: state.sessionKey,
+        sessionKey,
         limit: 200,
       },
     );
+    if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey)) {
+      return;
+    }
     const messages = Array.isArray(res.messages) ? res.messages : [];
     state.chatMessages = messages.filter((message) => !isAssistantSilentReply(message));
     state.chatThinkingLevel = res.thinkingLevel ?? null;
@@ -92,6 +117,9 @@ export async function loadChatHistory(state: ChatState) {
     state.chatStream = null;
     state.chatStreamStartedAt = null;
   } catch (err) {
+    if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey)) {
+      return;
+    }
     if (isMissingOperatorReadScopeError(err)) {
       state.chatMessages = [];
       state.chatThinkingLevel = null;
@@ -100,7 +128,9 @@ export async function loadChatHistory(state: ChatState) {
       state.lastError = String(err);
     }
   } finally {
-    state.chatLoading = false;
+    if (isLatestChatHistoryRequest(state, requestVersion)) {
+      state.chatLoading = false;
+    }
   }
 }
 

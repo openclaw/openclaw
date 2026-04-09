@@ -635,9 +635,9 @@ export type ToolsConfig = {
       deny?: string[];
     };
   };
-  /** Experimental tool flags. Default off unless explicitly enabled. */
+  /** Experimental tool flags. Default off unless explicitly enabled or runtime auto-enabled. */
   experimental?: {
-    /** Enable the structured `update_plan` tool for all providers. OpenAI-family runs auto-enable it. */
+    /** Enable or disable the structured `update_plan` tool. OpenAI-family runs auto-enable it unless this is false. */
     planTool?: boolean;
   };
 };

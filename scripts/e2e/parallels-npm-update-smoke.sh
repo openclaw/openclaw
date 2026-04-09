@@ -586,6 +586,57 @@ raise SystemExit(completed.returncode)
 PY
 }
 
+resolve_macos_desktop_user() {
+  local user
+  user="$(prlctl exec "$MACOS_VM" /usr/bin/stat -f '%Su' /dev/console 2>/dev/null | tr -d '\r' | tail -n 1 || true)"
+  if [[ "$user" =~ ^[A-Za-z0-9._-]+$ && "$user" != "root" && "$user" != "loginwindow" ]]; then
+    printf '%s\n' "$user"
+    return 0
+  fi
+  prlctl exec "$MACOS_VM" /usr/bin/dscl . -list /Users NFSHomeDirectory 2>/dev/null \
+    | tr -d '\r' \
+    | awk '$2 ~ /^\/Users\// && $1 !~ /^_/ && $1 != "Shared" && $1 != ".localized" { print $1; exit }'
+}
+
+resolve_macos_desktop_home() {
+  local user="$1"
+  local home
+  home="$(
+    prlctl exec "$MACOS_VM" /usr/bin/dscl . -read "/Users/$user" NFSHomeDirectory 2>/dev/null \
+      | tr -d '\r' \
+      | awk '/NFSHomeDirectory:/ { print $2; exit }'
+  )"
+  if [[ -n "$home" ]]; then
+    printf '%s\n' "$home"
+  else
+    printf '/Users/%s\n' "$user"
+  fi
+}
+
+macos_current_user_available() {
+  prlctl exec "$MACOS_VM" --current-user /usr/bin/whoami >/dev/null 2>&1
+}
+
+macos_desktop_user_exec() {
+  if macos_current_user_available; then
+    prlctl exec "$MACOS_VM" --current-user /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" "$@"
+    return
+  fi
+
+  local user home
+  user="$(resolve_macos_desktop_user)"
+  [[ -n "$user" ]] || die "unable to resolve macOS desktop user for sudo fallback"
+  home="$(resolve_macos_desktop_home "$user")"
+  warn "macOS --current-user unavailable; using root sudo fallback for $user"
+  prlctl exec "$MACOS_VM" /usr/bin/sudo -u "$user" /usr/bin/env \
+    "HOME=$home" \
+    "USER=$user" \
+    "LOGNAME=$user" \
+    "PATH=/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin" \
+    "$API_KEY_ENV=$API_KEY_VALUE" \
+    "$@"
+}
+
 guest_powershell_poll() {
   local timeout_s="$1"
   local script="$2"
@@ -734,10 +785,14 @@ PY
 run_macos_update() {
   local tgz_url="$1"
   local head_short="$2"
-  cat <<EOF | prlctl exec "$MACOS_VM" --current-user /usr/bin/tee /tmp/openclaw-main-update.sh >/dev/null
+  cat <<EOF | prlctl exec "$MACOS_VM" /usr/bin/tee /tmp/openclaw-main-update.sh >/dev/null
 set -euo pipefail
 export PATH=/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin
 if [ -z "\${HOME:-}" ]; then export HOME="/Users/\$(id -un)"; fi
+if [ -z "\${$API_KEY_ENV:-}" ]; then
+  echo "$API_KEY_ENV is required in the macOS update environment" >&2
+  exit 1
+fi
 cd "\$HOME"
 curl -fsSL "$tgz_url" -o /tmp/openclaw-main-update.tgz
 /opt/homebrew/bin/npm install -g /tmp/openclaw-main-update.tgz
@@ -761,9 +816,9 @@ for _ in 1 2 3 4 5 6 7 8; do
   sleep 2
 done
 /opt/homebrew/bin/openclaw gateway status --deep --require-rpc
-/usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" /opt/homebrew/bin/openclaw agent --agent main --session-id parallels-npm-update-macos-$head_short --message "Reply with exact ASCII text OK only." --json
+/opt/homebrew/bin/openclaw agent --agent main --session-id parallels-npm-update-macos-$head_short --message "Reply with exact ASCII text OK only." --json
 EOF
-  prlctl exec "$MACOS_VM" --current-user /bin/bash /tmp/openclaw-main-update.sh
+  macos_desktop_user_exec /bin/bash /tmp/openclaw-main-update.sh
 }
 
 run_windows_update() {

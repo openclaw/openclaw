@@ -153,6 +153,9 @@ describe("opt-in extension package boundaries", () => {
     expect(packageJson.exports?.["./provider-web-search-contract"]?.types).toBe(
       "./dist/src/plugin-sdk/provider-web-search-contract.d.ts",
     );
+    expect(packageJson.exports?.["./provider-web-search-config-contract"]?.types).toBe(
+      "./dist/src/plugin-sdk/provider-web-search-config-contract.d.ts",
+    );
     expect(packageJson.exports?.["./runtime-doctor"]?.types).toBe(
       "./dist/src/plugin-sdk/runtime-doctor.d.ts",
     );

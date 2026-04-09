@@ -135,6 +135,9 @@ function buildOpenAICodexCliBackendFixture(): CliBackendPlugin {
       modelArg: "--model",
       sessionIdFields: ["thread_id"],
       sessionMode: "existing",
+      systemPromptFileConfigArg: "-c",
+      systemPromptFileConfigKey: "model_instructions_file",
+      systemPromptWhen: "first",
       imageArg: "--image",
       imageMode: "repeat",
       reliability: {

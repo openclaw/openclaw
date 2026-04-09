@@ -1,5 +1,4 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
 import { listSupportedVideoGenerationModes } from "../../video-generation/capabilities.js";
 import { listRuntimeVideoGenerationProviders } from "../../video-generation/runtime.js";
 import {
@@ -8,8 +7,8 @@ import {
   findActiveVideoGenerationTaskForSession,
 } from "../video-generation-task-status.js";
 import {
-  createMediaGenerateDuplicateGuardResult,
-  createMediaGenerateStatusActionResult,
+  createMediaGenerateProviderListActionResult,
+  createMediaGenerateTaskStatusActions,
   type MediaGenerateActionResult,
 } from "./media-generate-tool-actions-shared.js";
 
@@ -52,60 +51,29 @@ export function createVideoGenerateListActionResult(
   config?: OpenClawConfig,
 ): VideoGenerateActionResult {
   const providers = listRuntimeVideoGenerationProviders({ config });
-  if (providers.length === 0) {
-    return {
-      content: [{ type: "text", text: "No video-generation providers are registered." }],
-      details: { providers: [] },
-    };
-  }
-  const lines = providers.map((provider) => {
-    const authHints = getProviderEnvVars(provider.id);
-    const capabilities = summarizeVideoGenerationCapabilities(provider);
-    return [
-      `${provider.id}: default=${provider.defaultModel ?? "none"}`,
-      provider.models?.length ? `models=${provider.models.join(", ")}` : null,
-      capabilities ? `capabilities=${capabilities}` : null,
-      authHints.length > 0 ? `auth=${authHints.join(" / ")}` : null,
-    ]
-      .filter((entry): entry is string => Boolean(entry))
-      .join(" | ");
+  return createMediaGenerateProviderListActionResult({
+    providers,
+    emptyText: "No video-generation providers are registered.",
+    listModes: listSupportedVideoGenerationModes,
+    summarizeCapabilities: summarizeVideoGenerationCapabilities,
   });
-  return {
-    content: [{ type: "text", text: lines.join("\n") }],
-    details: {
-      providers: providers.map((provider) => ({
-        id: provider.id,
-        defaultModel: provider.defaultModel,
-        models: provider.models ?? [],
-        modes: listSupportedVideoGenerationModes(provider),
-        authEnvVars: getProviderEnvVars(provider.id),
-        capabilities: provider.capabilities,
-      })),
-    },
-  };
 }
+
+const videoGenerateTaskStatusActions = createMediaGenerateTaskStatusActions({
+  inactiveText: "No active video generation task is currently running for this session.",
+  findActiveTask: (sessionKey) => findActiveVideoGenerationTaskForSession(sessionKey) ?? undefined,
+  buildStatusText: buildVideoGenerationTaskStatusText,
+  buildStatusDetails: buildVideoGenerationTaskStatusDetails,
+});
 
 export function createVideoGenerateStatusActionResult(
   sessionKey?: string,
 ): VideoGenerateActionResult {
-  return createMediaGenerateStatusActionResult({
-    sessionKey,
-    inactiveText: "No active video generation task is currently running for this session.",
-    findActiveTask: (activeSessionKey) =>
-      findActiveVideoGenerationTaskForSession(activeSessionKey) ?? undefined,
-    buildStatusText: buildVideoGenerationTaskStatusText,
-    buildStatusDetails: buildVideoGenerationTaskStatusDetails,
-  });
+  return videoGenerateTaskStatusActions.createStatusActionResult(sessionKey);
 }
 
 export function createVideoGenerateDuplicateGuardResult(
   sessionKey?: string,
 ): VideoGenerateActionResult | undefined {
-  return createMediaGenerateDuplicateGuardResult({
-    sessionKey,
-    findActiveTask: (activeSessionKey) =>
-      findActiveVideoGenerationTaskForSession(activeSessionKey) ?? undefined,
-    buildStatusText: buildVideoGenerationTaskStatusText,
-    buildStatusDetails: buildVideoGenerationTaskStatusDetails,
-  });
+  return videoGenerateTaskStatusActions.createDuplicateGuardResult(sessionKey);
 }

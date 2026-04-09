@@ -104,10 +104,15 @@ export function unsetEnv(vars: string[]) {
 }
 
 export const COPILOT_TOKEN_ENV_VARS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
+const COPILOT_DISCOVERY_ENV_VARS = [
+  ...COPILOT_TOKEN_ENV_VARS,
+  "OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS",
+];
 
 export async function withUnsetCopilotTokenEnv<T>(fn: () => Promise<T>): Promise<T> {
-  return withTempEnv(COPILOT_TOKEN_ENV_VARS, async () => {
+  return withTempEnv(COPILOT_DISCOVERY_ENV_VARS, async () => {
     unsetEnv(COPILOT_TOKEN_ENV_VARS);
+    process.env.OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS = "github-copilot";
     return fn();
   });
 }
@@ -129,8 +134,11 @@ export async function withCopilotGithubToken<T>(
   token: string,
   fn: (fetchMock: MockFn) => Promise<T>,
 ): Promise<T> {
-  return withTempEnv(["COPILOT_GITHUB_TOKEN"], async () => {
+  return withTempEnv(COPILOT_DISCOVERY_ENV_VARS, async () => {
     process.env.COPILOT_GITHUB_TOKEN = token;
+    delete process.env.GH_TOKEN;
+    delete process.env.GITHUB_TOKEN;
+    process.env.OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS = "github-copilot";
     const fetchMock = mockCopilotTokenExchangeSuccess();
     return fn(fetchMock);
   });
