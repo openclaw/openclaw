@@ -5,8 +5,8 @@
  *
  * Complete native skill management: list, enable/disable, install,
  * update, set environment variables, and display requirements/config
- * checks. RPC fetch via skills.status, mutations via skills.enable,
- * skills.install, skills.update, skills.setEnv.
+ * checks. RPC fetch via skills.status, mutations via skills.update
+ * and skills.install.
  *
  * Author: Thiago Camargo <thiagocmc@proton.me>
  */

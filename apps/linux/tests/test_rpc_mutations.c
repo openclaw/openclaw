@@ -125,6 +125,7 @@ static void test_skills_disable(void) {
     stub_reset();
     gchar *rid = mutation_skills_enable("code-runner", FALSE, noop_cb, NULL);
     ASSERT(rid != NULL, "skills_disable: rid");
+    ASSERT(g_strcmp0(stub_last_method, "skills.update") == 0, "skills_disable: method");
     JsonObject *p = get_stub_params_obj();
     ASSERT(obj_get_bool(p, "enabled") == FALSE, "skills_disable: enabled false");
     g_free(rid);
@@ -347,8 +348,13 @@ static void test_channels_status_no_probe(void) {
     stub_reset();
     gchar *rid = mutation_channels_status(FALSE, noop_cb, NULL);
     ASSERT(rid != NULL, "ch_no_probe: rid");
+    ASSERT(g_strcmp0(stub_last_method, "channels.status") == 0, "ch_no_probe: method");
     JsonObject *p = get_stub_params_obj();
+    ASSERT(p != NULL, "ch_no_probe: params obj");
+    ASSERT(json_object_get_size(p) == 0, "ch_no_probe: params empty object");
     ASSERT(!json_object_has_member(p, "probe"), "ch_no_probe: no probe field");
+    ASSERT(!json_object_has_member(p, "channelId"), "ch_no_probe: no channelId");
+    ASSERT(!json_object_has_member(p, "channel"), "ch_no_probe: no channel");
     g_free(rid);
 }
 
