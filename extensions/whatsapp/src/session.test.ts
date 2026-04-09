@@ -12,6 +12,7 @@ let formatError: typeof import("./session.js").formatError;
 let logWebSelfId: typeof import("./session.js").logWebSelfId;
 let waitForWaConnection: typeof import("./session.js").waitForWaConnection;
 let waitForCredsSaveQueue: typeof import("./session.js").waitForCredsSaveQueue;
+let writeCredsJsonAtomically: typeof import("./session.js").writeCredsJsonAtomically;
 
 async function flushCredsUpdate() {
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -19,10 +20,8 @@ async function flushCredsUpdate() {
 
 async function emitCredsUpdateAndReadSaveCreds() {
   const sock = getLastSocket();
-  const saveCreds = (await useMultiFileAuthStateMock.mock.results[0]?.value)?.saveCreds;
   sock.ev.emit("creds.update", {});
   await flushCredsUpdate();
-  return saveCreds;
 }
 
 function mockCredsJsonSpies(readContents: string) {
@@ -60,8 +59,14 @@ function mockCredsJsonSpies(readContents: string) {
 
 describe("web session", () => {
   beforeAll(async () => {
-    ({ createWaSocket, formatError, logWebSelfId, waitForWaConnection, waitForCredsSaveQueue } =
-      await import("./session.js"));
+    ({
+      createWaSocket,
+      formatError,
+      logWebSelfId,
+      waitForWaConnection,
+      waitForCredsSaveQueue,
+      writeCredsJsonAtomically,
+    } = await import("./session.js"));
   });
 
   beforeEach(() => {
@@ -79,6 +84,8 @@ describe("web session", () => {
   });
 
   it("creates WA socket with QR handler", async () => {
+    const writeFileSpy = vi.spyOn(fsSync.promises, "writeFile").mockResolvedValue(undefined);
+    vi.spyOn(fsSync.promises, "rename").mockResolvedValue(undefined);
     await createWaSocket(true, false);
     const makeWASocket = baileys.makeWASocket as ReturnType<typeof vi.fn>;
     expect(makeWASocket).toHaveBeenCalledWith(
@@ -89,11 +96,10 @@ describe("web session", () => {
     expect(passedLogger?.level).toBe("silent");
     expect(typeof passedLogger?.trace).toBe("function");
     const sock = getLastSocket();
-    const saveCreds = (await useMultiFileAuthStateMock.mock.results[0]?.value)?.saveCreds;
     // trigger creds.update listener
     sock.ev.emit("creds.update", {});
     await flushCredsUpdate();
-    expect(saveCreds).toHaveBeenCalled();
+    expect(writeFileSpy).toHaveBeenCalled();
   });
 
   it("uses ambient env proxy agent when HTTPS_PROXY is configured", async () => {
@@ -220,12 +226,14 @@ describe("web session", () => {
 
   it("does not clobber creds backup when creds.json is corrupted", async () => {
     const creds = mockCredsJsonSpies("{");
+    const writeFileSpy = vi.spyOn(fsSync.promises, "writeFile").mockResolvedValue(undefined);
+    vi.spyOn(fsSync.promises, "rename").mockResolvedValue(undefined);
 
     await createWaSocket(false, false);
-    const saveCreds = await emitCredsUpdateAndReadSaveCreds();
+    await emitCredsUpdateAndReadSaveCreds();
 
     expect(creds.copySpy).not.toHaveBeenCalled();
-    expect(saveCreds).toHaveBeenCalled();
+    expect(writeFileSpy).toHaveBeenCalled();
 
     creds.restore();
   });
@@ -238,15 +246,16 @@ describe("web session", () => {
       release = resolve;
     });
 
-    const saveCreds = vi.fn(async () => {
+    const writeFileSpy = vi.spyOn(fsSync.promises, "writeFile").mockImplementation(async () => {
       inFlight += 1;
       maxInFlight = Math.max(maxInFlight, inFlight);
       await gate;
       inFlight -= 1;
     });
+    vi.spyOn(fsSync.promises, "rename").mockResolvedValue(undefined);
     useMultiFileAuthStateMock.mockResolvedValueOnce({
       state: { creds: {} as never, keys: {} as never },
-      saveCreds,
+      saveCreds: vi.fn(),
     });
 
     await createWaSocket(false, false);
@@ -264,7 +273,7 @@ describe("web session", () => {
     await flushCredsUpdate();
     await flushCredsUpdate();
 
-    expect(saveCreds).toHaveBeenCalledTimes(2);
+    expect(writeFileSpy).toHaveBeenCalledTimes(2);
     expect(maxInFlight).toBe(1);
     expect(inFlight).toBe(0);
   });
@@ -281,24 +290,32 @@ describe("web session", () => {
       releaseB = resolve;
     });
 
-    const saveCredsA = vi.fn(async () => {
-      inFlightA += 1;
-      await gateA;
-      inFlightA -= 1;
-    });
-    const saveCredsB = vi.fn(async () => {
-      inFlightB += 1;
-      await gateB;
-      inFlightB -= 1;
-    });
+    const writeFileSpy = vi
+      .spyOn(fsSync.promises, "writeFile")
+      .mockImplementation(async (...args) => {
+        const normalized = String(args[0]);
+        if (normalized.includes("/tmp/wa-a/")) {
+          inFlightA += 1;
+          await gateA;
+          inFlightA -= 1;
+          return;
+        }
+        if (normalized.includes("/tmp/wa-b/")) {
+          inFlightB += 1;
+          await gateB;
+          inFlightB -= 1;
+          return;
+        }
+      });
+    vi.spyOn(fsSync.promises, "rename").mockResolvedValue(undefined);
     useMultiFileAuthStateMock
       .mockResolvedValueOnce({
         state: { creds: {} as never, keys: {} as never },
-        saveCreds: saveCredsA,
+        saveCreds: vi.fn(),
       })
       .mockResolvedValueOnce({
         state: { creds: {} as never, keys: {} as never },
-        saveCreds: saveCredsB,
+        saveCreds: vi.fn(),
       });
 
     await createWaSocket(false, false, { authDir: "/tmp/wa-a" });
@@ -311,8 +328,7 @@ describe("web session", () => {
 
     await flushCredsUpdate();
 
-    expect(saveCredsA).toHaveBeenCalledTimes(1);
-    expect(saveCredsB).toHaveBeenCalledTimes(1);
+    expect(writeFileSpy).toHaveBeenCalledTimes(2);
     expect(inFlightA).toBe(1);
     expect(inFlightB).toBe(1);
 
@@ -327,6 +343,8 @@ describe("web session", () => {
 
   it("rotates creds backup when creds.json is valid JSON", async () => {
     const creds = mockCredsJsonSpies("{}");
+    const writeFileSpy = vi.spyOn(fsSync.promises, "writeFile").mockResolvedValue(undefined);
+    vi.spyOn(fsSync.promises, "rename").mockResolvedValue(undefined);
     const backupSuffix = path.join(
       "/tmp",
       "openclaw-oauth",
@@ -336,14 +354,36 @@ describe("web session", () => {
     );
 
     await createWaSocket(false, false);
-    const saveCreds = await emitCredsUpdateAndReadSaveCreds();
+    await emitCredsUpdateAndReadSaveCreds();
 
     expect(creds.copySpy).toHaveBeenCalledTimes(1);
     const args = creds.copySpy.mock.calls[0] ?? [];
     expect(String(args[0] ?? "")).toContain(creds.credsSuffix);
     expect(String(args[1] ?? "")).toContain(backupSuffix);
-    expect(saveCreds).toHaveBeenCalled();
+    expect(writeFileSpy).toHaveBeenCalled();
 
     creds.restore();
+  });
+
+  it("writes creds.json atomically via temp file and rename", async () => {
+    const writeFileSpy = vi.spyOn(fsSync.promises, "writeFile").mockResolvedValue(undefined);
+    const renameSpy = vi.spyOn(fsSync.promises, "rename").mockResolvedValue(undefined);
+    const rmSpy = vi.spyOn(fsSync.promises, "rm").mockResolvedValue(undefined);
+
+    await writeCredsJsonAtomically(
+      "/tmp/openclaw-oauth/whatsapp/default",
+      { me: { id: "123@s.whatsapp.net" } },
+      { warn: vi.fn() } as never,
+    );
+
+    expect(writeFileSpy).toHaveBeenCalledTimes(1);
+    expect(renameSpy).toHaveBeenCalledTimes(1);
+    expect(rmSpy).not.toHaveBeenCalled();
+    const writePath = String(writeFileSpy.mock.calls[0]?.[0] ?? "");
+    const renameArgs = renameSpy.mock.calls[0] ?? [];
+    expect(writePath).toContain(".creds.");
+    expect(String(renameArgs[1] ?? "")).toContain(
+      path.join("/tmp", "openclaw-oauth", "whatsapp", "default", "creds.json"),
+    );
   });
 });
