@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { clearInternalHooks, getRegisteredEventKeys } from "../hooks/internal-hooks.js";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
@@ -1478,8 +1479,133 @@ module.exports = { id: "throws-after-import", register() {} };`,
       "loaded",
     );
     expect(scoped.hooks.map((entry) => entry.entry.hook.name)).toEqual(["snapshot-hook"]);
+    expect(scoped.hooks[0]?.handler).toBeTypeOf("function");
+    expect(scoped.hooks[0]?.registerWhenHooksEnabled).toBe(true);
     expect(getRegisteredEventKeys()).toEqual([]);
 
+    clearInternalHooks();
+  });
+
+  it("restores cached plugin hooks using the current internal hook config", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "internal-hook-cache",
+      filename: "internal-hook-cache.cjs",
+      body: `module.exports = {
+        id: "internal-hook-cache",
+        register(api) {
+          api.registerHook("gateway:startup", () => {}, { name: "cache-hook" });
+        },
+      };`,
+    });
+    const enabledConfig = {
+      hooks: {
+        internal: {
+          enabled: true,
+        },
+      },
+      plugins: {
+        load: { paths: [plugin.file] },
+        allow: ["internal-hook-cache"],
+      },
+    } as OpenClawConfig;
+    const disabledConfig = {
+      hooks: {
+        internal: {
+          enabled: false,
+        },
+      },
+      plugins: {
+        load: { paths: [plugin.file] },
+        allow: ["internal-hook-cache"],
+      },
+    } as OpenClawConfig;
+    const {
+      __testing: { reRegisterPluginInternalHooks },
+    } = await import("../gateway/server-startup.js");
+
+    clearPluginLoaderCache();
+    clearInternalHooks();
+
+    const enabledRegistry = loadOpenClawPlugins({
+      workspaceDir: plugin.dir,
+      config: enabledConfig,
+    });
+    expect(getRegisteredEventKeys()).toEqual(["gateway:startup"]);
+
+    clearInternalHooks();
+
+    const disabledRegistry = loadOpenClawPlugins({
+      workspaceDir: plugin.dir,
+      config: disabledConfig,
+    });
+    expect(disabledRegistry).toBe(enabledRegistry);
+
+    const disabledRestored = reRegisterPluginInternalHooks(disabledRegistry, disabledConfig);
+    expect(disabledRestored).toBe(0);
+    expect(getRegisteredEventKeys()).toEqual([]);
+
+    const enabledRestored = reRegisterPluginInternalHooks(disabledRegistry, enabledConfig);
+    expect(enabledRestored).toBe(1);
+    expect(getRegisteredEventKeys()).toEqual(["gateway:startup"]);
+
+    clearPluginLoaderCache();
+    clearInternalHooks();
+  });
+
+  it("does not restore hooks from plugins that failed during register", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "internal-hook-register-failure",
+      filename: "internal-hook-register-failure.cjs",
+      body: `module.exports = {
+        id: "internal-hook-register-failure",
+        register(api) {
+          api.registerHook("gateway:startup", () => {}, { name: "failed-hook" });
+          throw new Error("boom");
+        },
+      };`,
+    });
+    const config = {
+      hooks: {
+        internal: {
+          enabled: true,
+        },
+      },
+      plugins: {
+        load: { paths: [plugin.file] },
+        allow: ["internal-hook-register-failure"],
+      },
+    } as OpenClawConfig;
+    const {
+      __testing: { reRegisterPluginInternalHooks },
+    } = await import("../gateway/server-startup.js");
+
+    clearPluginLoaderCache();
+    clearInternalHooks();
+
+    const registry = loadOpenClawPlugins({
+      workspaceDir: plugin.dir,
+      config,
+    });
+
+    expect(
+      registry.plugins.find((entry) => entry.id === "internal-hook-register-failure"),
+    ).toMatchObject({
+      status: "error",
+      failurePhase: "register",
+      error: expect.stringContaining("boom"),
+    });
+    expect(registry.hooks.map((entry) => entry.entry.hook.name)).toEqual(["failed-hook"]);
+    expect(getRegisteredEventKeys()).toEqual(["gateway:startup"]);
+
+    clearInternalHooks();
+
+    const restored = reRegisterPluginInternalHooks(registry, config);
+    expect(restored).toBe(0);
+    expect(getRegisteredEventKeys()).toEqual([]);
+
+    clearPluginLoaderCache();
     clearInternalHooks();
   });
 

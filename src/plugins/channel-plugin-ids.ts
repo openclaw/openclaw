@@ -28,6 +28,10 @@ function isGatewayStartupSidecar(plugin: PluginManifestRecord): boolean {
   return plugin.channels.length === 0 && !hasRuntimeContractSurface(plugin);
 }
 
+function isGatewayStartupMemoryPlugin(plugin: PluginManifestRecord): boolean {
+  return hasKind(plugin.kind, "memory");
+}
+
 export function resolveChannelPluginIds(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
@@ -105,7 +109,7 @@ export function resolveGatewayStartupPluginIds(params: {
       if (plugin.channels.some((channelId) => configuredChannelIds.has(channelId))) {
         return true;
       }
-      if (!isGatewayStartupSidecar(plugin)) {
+      if (!isGatewayStartupSidecar(plugin) && !isGatewayStartupMemoryPlugin(plugin)) {
         return false;
       }
       const activationState = resolveEffectivePluginActivationState({

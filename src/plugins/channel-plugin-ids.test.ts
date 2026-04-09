@@ -58,6 +58,15 @@ function createManifestRegistryFixture() {
         cliBackends: [],
       },
       {
+        id: "memory-core",
+        kind: "memory",
+        channels: [],
+        origin: "bundled",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+      {
         id: "demo-global-sidecar",
         channels: [],
         origin: "global",
@@ -180,26 +189,33 @@ describe("resolveGatewayStartupPluginIds", () => {
         enabledPluginIds: ["voice-call"],
         modelId: "demo-cli/demo-model",
       }),
-      ["demo-channel", "browser", "voice-call"],
+      ["demo-channel", "browser", "voice-call", "memory-core"],
     ],
     [
       "keeps bundled startup sidecars with enabledByDefault at idle startup",
       {} as OpenClawConfig,
-      ["demo-channel", "browser"],
+      ["demo-channel", "browser", "memory-core"],
     ],
     [
       "keeps provider plugins out of idle startup when only provider config references them",
       createStartupConfig({
         providerIds: ["demo-provider"],
       }),
-      ["demo-channel", "browser"],
+      ["demo-channel", "browser", "memory-core"],
     ],
     [
       "includes explicitly enabled non-channel sidecars in startup scope",
       createStartupConfig({
         enabledPluginIds: ["demo-global-sidecar", "voice-call"],
       }),
-      ["demo-channel", "browser", "voice-call", "demo-global-sidecar"],
+      ["demo-channel", "browser", "voice-call", "memory-core", "demo-global-sidecar"],
+    ],
+    [
+      "includes explicitly enabled memory plugins in startup scope",
+      createStartupConfig({
+        enabledPluginIds: ["memory-core"],
+      }),
+      ["demo-channel", "browser", "memory-core"],
     ],
     [
       "keeps default-enabled startup sidecars when a restrictive allowlist permits them",
@@ -207,14 +223,14 @@ describe("resolveGatewayStartupPluginIds", () => {
         allowPluginIds: ["browser"],
         noConfiguredChannels: true,
       }),
-      ["browser"],
+      ["browser", "memory-core"],
     ],
     [
       "includes every configured channel plugin and excludes other channels",
       createStartupConfig({
         channelIds: ["demo-channel", "demo-other-channel"],
       }),
-      ["demo-channel", "demo-other-channel", "browser"],
+      ["demo-channel", "demo-other-channel", "browser", "memory-core"],
     ],
   ] as const)("%s", (_name, config, expected) => {
     expectStartupPluginIdsCase({ config, expected });
@@ -239,7 +255,7 @@ describe("resolveGatewayStartupPluginIds", () => {
     expectStartupPluginIdsCase({
       config: effectiveConfig,
       activationSourceConfig: rawConfig,
-      expected: ["demo-channel", "browser"],
+      expected: ["demo-channel", "browser", "memory-core"],
     });
   });
 });

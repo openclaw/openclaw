@@ -256,20 +256,24 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           invocation: { enabled: true },
         };
 
+    const hookSystemEnabled = config?.hooks?.internal?.enabled !== false;
+    const registerWhenHooksEnabled = opts?.register !== false;
+    const shouldRegister =
+      registryParams.activateGlobalSideEffects === true &&
+      hookSystemEnabled &&
+      registerWhenHooksEnabled;
+
     record.hookNames.push(name);
     registry.hooks.push({
       pluginId: record.id,
       entry: hookEntry,
       events: normalizedEvents,
+      handler,
+      registerWhenHooksEnabled,
       source: record.source,
     });
 
-    const hookSystemEnabled = config?.hooks?.internal?.enabled !== false;
-    if (
-      !registryParams.activateGlobalSideEffects ||
-      !hookSystemEnabled ||
-      opts?.register === false
-    ) {
+    if (!shouldRegister) {
       return;
     }
 

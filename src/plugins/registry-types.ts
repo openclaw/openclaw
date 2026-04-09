@@ -135,6 +135,8 @@ export type PluginHookRegistration = {
   pluginId: string;
   entry: HookEntry;
   events: string[];
+  handler?: import("../hooks/internal-hooks.js").InternalHookHandler;
+  registerWhenHooksEnabled: boolean;
   source: string;
   rootDir?: string;
 };

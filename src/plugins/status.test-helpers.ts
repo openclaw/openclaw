@@ -94,6 +94,7 @@ export function createCustomHook(params: {
     pluginId: params.pluginId,
     events: params.events,
     source,
+    registerWhenHooksEnabled: true,
     entry: {
       hook: {
         name: params.name ?? "legacy",

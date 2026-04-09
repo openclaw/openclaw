@@ -22,6 +22,7 @@ import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
 import {
   clearInternalHooks,
   createInternalHookEvent,
+  registerInternalHook,
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
 import { loadInternalHooks } from "../hooks/loader.js";
@@ -35,6 +36,31 @@ import {
 import { startGatewayMemoryBackend } from "./server-startup-memory.js";
 
 const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
+
+function reRegisterPluginInternalHooks(
+  pluginRegistry: ReturnType<typeof loadOpenClawPlugins>,
+  cfg: ReturnType<typeof loadConfig>,
+): number {
+  if (cfg.hooks?.internal?.enabled === false) {
+    return 0;
+  }
+  const loadedPluginIds = new Set(
+    pluginRegistry.plugins
+      .filter((plugin) => plugin.status === "loaded")
+      .map((plugin) => plugin.id),
+  );
+  let restored = 0;
+  for (const hook of pluginRegistry.hooks) {
+    if (!hook.handler || !hook.registerWhenHooksEnabled || !loadedPluginIds.has(hook.pluginId)) {
+      continue;
+    }
+    for (const event of hook.events) {
+      registerInternalHook(event, hook.handler);
+      restored += 1;
+    }
+  }
+  return restored;
+}
 
 async function prewarmConfiguredPrimaryModel(params: {
   cfg: ReturnType<typeof loadConfig>;
@@ -142,9 +168,14 @@ export async function startGatewaySidecars(params: {
     // Clear any previously registered hooks to ensure fresh loading
     clearInternalHooks();
     const loadedCount = await loadInternalHooks(params.cfg, params.defaultWorkspaceDir);
-    if (loadedCount > 0) {
+    const restoredPluginHookCount = reRegisterPluginInternalHooks(
+      params.pluginRegistry,
+      params.cfg,
+    );
+    const totalHookCount = loadedCount + restoredPluginHookCount;
+    if (totalHookCount > 0) {
       params.logHooks.info(
-        `loaded ${loadedCount} internal hook handler${loadedCount > 1 ? "s" : ""}`,
+        `loaded ${totalHookCount} internal hook handler${totalHookCount > 1 ? "s" : ""}`,
       );
     }
   } catch (err) {
@@ -229,4 +260,5 @@ export async function startGatewaySidecars(params: {
 
 export const __testing = {
   prewarmConfiguredPrimaryModel,
+  reRegisterPluginInternalHooks,
 };
