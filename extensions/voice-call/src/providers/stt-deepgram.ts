@@ -32,7 +32,7 @@ export interface DeepgramSTTConfig {
   apiKey: string;
   /** Model to use (default: nova-3) */
   model?: string;
-  /** Endpointing silence duration in ms (default: 600) */
+  /** Endpointing silence duration in ms (default: 800) */
   endpointingMs?: number;
   /** Language code (default: en) */
   language?: string;
@@ -40,6 +40,10 @@ export interface DeepgramSTTConfig {
   smartFormat?: boolean;
   /** Custom vocabulary terms for improved accuracy (up to 100) */
   keywords?: string[];
+  /** Audio encoding sent to Deepgram (default: mulaw). Set to linear16 when transcoding from G722. */
+  encoding?: string;
+  /** Sample rate of audio sent to Deepgram (default: 8000). Set to 16000 for G722-decoded PCM. */
+  sampleRate?: number;
 }
 
 /**
@@ -53,6 +57,8 @@ export class DeepgramSTTProvider implements STTProvider {
   private language: string;
   private smartFormat: boolean;
   private keywords: string[];
+  private encoding: string;
+  private sampleRate: number;
 
   constructor(config: DeepgramSTTConfig) {
     if (!config.apiKey) {
@@ -60,10 +66,12 @@ export class DeepgramSTTProvider implements STTProvider {
     }
     this.apiKey = config.apiKey;
     this.model = config.model || "nova-3";
-    this.endpointingMs = config.endpointingMs ?? 600;
+    this.endpointingMs = config.endpointingMs ?? 800;
     this.language = config.language || "en";
     this.smartFormat = config.smartFormat ?? true;
     this.keywords = config.keywords ?? [];
+    this.encoding = config.encoding || "mulaw";
+    this.sampleRate = config.sampleRate ?? 8000;
   }
 
   /**
@@ -77,6 +85,8 @@ export class DeepgramSTTProvider implements STTProvider {
       this.language,
       this.smartFormat,
       this.keywords,
+      this.encoding,
+      this.sampleRate,
     );
   }
 }
@@ -103,6 +113,11 @@ class DeepgramSTTSession implements RealtimeSTTSession {
   private onPartialCallback: ((partial: string) => void) | null = null;
   private onSpeechStartCallback: (() => void) | null = null;
   private speechActive = false;
+  private _eventCount = 0;
+  private _connectTimestamp = 0;
+  private _audioBytesSent = 0;
+  private _audioCapture: fs.WriteStream | null = null;
+  private _keepAliveInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly apiKey: string,
@@ -111,6 +126,8 @@ class DeepgramSTTSession implements RealtimeSTTSession {
     private readonly language: string,
     private readonly smartFormat: boolean,
     private readonly keywords: string[],
+    private readonly encoding: string = "mulaw",
+    private readonly sampleRate: number = 8000,
   ) {}
 
   async connect(): Promise<void> {
@@ -124,8 +141,8 @@ class DeepgramSTTSession implements RealtimeSTTSession {
       // Build query parameters for Deepgram live streaming API
       const params = new URLSearchParams({
         model: this.model,
-        encoding: "mulaw",
-        sample_rate: "8000",
+        encoding: this.encoding,
+        sample_rate: String(this.sampleRate),
         channels: "1",
         language: this.language,
         punctuate: "true",
@@ -149,18 +166,43 @@ class DeepgramSTTSession implements RealtimeSTTSession {
         },
       });
 
-      dgDebug(`Connecting to Deepgram: model=${this.model} encoding=mulaw sample_rate=8000`);
+      dgDebug(`Connecting to Deepgram: model=${this.model} encoding=${this.encoding} sample_rate=${this.sampleRate}`);
 
       this.ws.on("open", () => {
         dgDebug("WebSocket connected to Deepgram");
         this.connected = true;
+        this._connectTimestamp = Date.now();
+        this._audioBytesSent = 0;
+        this._eventCount = 0;
         this.reconnectAttempts = 0;
+
+        // Start audio capture if DEEPGRAM_CAPTURE_AUDIO is set
+        if (process.env.DEEPGRAM_CAPTURE_AUDIO === "1") {
+          const capturePath = path.join(os.homedir(), ".openclaw", `deepgram-capture-${Date.now()}.mulaw`);
+          this._audioCapture = fs.createWriteStream(capturePath);
+          dgDebug(`Audio capture started: ${capturePath}`);
+        }
+
+        // KeepAlive: send every 8 seconds to prevent session dormancy
+        this._keepAliveInterval = setInterval(() => {
+          if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            try { this.ws.send(JSON.stringify({ type: "KeepAlive" })); } catch { /* ignore */ }
+          }
+        }, 8000);
+
         resolve();
       });
 
       this.ws.on("message", (data: Buffer) => {
         try {
           const event = JSON.parse(data.toString());
+          this._eventCount++;
+          // Log ALL events for first 30 seconds to capture the full picture
+          const elapsed = Date.now() - this._connectTimestamp;
+          if (elapsed < 30000 || this._eventCount <= 10) {
+            const alt = event.channel?.alternatives?.[0];
+            dgDebug(`Event #${this._eventCount} @${elapsed}ms: type=${event.type} is_final=${event.is_final} speech_final=${event.speech_final} transcript="${alt?.transcript?.slice(0, 80) || ""}" audio_sent=${this._audioBytesSent}`);
+          }
           this.handleEvent(event);
         } catch (e) {
           dgDebug(`Failed to parse event: ${e}`);
@@ -305,6 +347,16 @@ class DeepgramSTTSession implements RealtimeSTTSession {
     if (!this.connected || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return;
     }
+    // Log first frame hex for format verification
+    if (this._audioBytesSent === 0 && muLawData.length > 0) {
+      const hexBytes = Array.from(muLawData.slice(0, 8)).map(b => "0x" + b.toString(16).padStart(2, "0")).join(", ");
+      dgDebug(`First audio frame: ${muLawData.length} bytes, first 8: [${hexBytes}]`);
+    }
+    this._audioBytesSent += muLawData.length;
+    // Capture audio to disk if enabled
+    if (this._audioCapture) {
+      this._audioCapture.write(muLawData);
+    }
     this.ws.send(muLawData);
   }
 
@@ -337,6 +389,17 @@ class DeepgramSTTSession implements RealtimeSTTSession {
 
   close(): void {
     this.closed = true;
+    // Clean up keepalive
+    if (this._keepAliveInterval) {
+      clearInterval(this._keepAliveInterval);
+      this._keepAliveInterval = null;
+    }
+    // Clean up audio capture
+    if (this._audioCapture) {
+      this._audioCapture.end();
+      this._audioCapture = null;
+      dgDebug(`Audio capture ended (${this._audioBytesSent} bytes sent to Deepgram)`);
+    }
     if (this.ws) {
       // Send CloseStream message to gracefully close the Deepgram session
       if (this.ws.readyState === WebSocket.OPEN) {
@@ -350,6 +413,7 @@ class DeepgramSTTSession implements RealtimeSTTSession {
       this.ws = null;
     }
     this.connected = false;
+    dgDebug(`Session closed: ${this._eventCount} events received, ${this._audioBytesSent} audio bytes sent`);
   }
 
   isConnected(): boolean {

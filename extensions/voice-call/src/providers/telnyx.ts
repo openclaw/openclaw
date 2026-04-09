@@ -183,6 +183,7 @@ export class TelnyxProvider implements VoiceCallProvider {
       }
 
       case "call.hangup":
+        console.log(`[telnyx] call.hangup: callId=${baseEvent.callId} cause=${data.payload?.hangup_cause} source=${data.payload?.hangup_source} sip_cause=${data.payload?.sip_hangup_cause}`);
         return {
           ...baseEvent,
           type: "call.ended",
@@ -314,12 +315,27 @@ export class TelnyxProvider implements VoiceCallProvider {
   }
 
   /**
+   * Stop audio playback on a call (barge-in).
+   * Cancels any active playback_start audio so the caller can speak.
+   */
+  async playbackStop(input: { providerCallId: string }): Promise<void> {
+    await this.apiRequest(
+      `/calls/${input.providerCallId}/actions/playback_stop`,
+      { command_id: crypto.randomUUID() },
+      { allowNotFound: true },
+    );
+  }
+
+  /**
    * Start transcription (STT) via Telnyx.
    */
   async startListening(input: StartListeningInput): Promise<void> {
     await this.apiRequest(`/calls/${input.providerCallId}/actions/transcription_start`, {
       command_id: crypto.randomUUID(),
-      language: input.language || "en",
+      transcription_engine: "B",
+      transcription_engine_config: {
+        language: input.language || "en",
+      },
     });
   }
 
@@ -392,11 +408,15 @@ export class TelnyxProvider implements VoiceCallProvider {
     to: string;
     from?: string;
   }): Promise<void> {
-    await this.apiRequest(`/calls/${input.providerCallId}/actions/transfer`, {
+    const body = {
       command_id: crypto.randomUUID(),
       to: input.to,
       ...(input.from && { from: input.from }),
-    });
+      timeout_secs: 60,
+    };
+    console.log(`[telnyx] transferCall: providerCallId=${input.providerCallId} to=${input.to} from=${input.from} timeout=60s`);
+    const result = await this.apiRequest(`/calls/${input.providerCallId}/actions/transfer`, body);
+    console.log(`[telnyx] transferCall result:`, JSON.stringify(result));
   }
 
   async getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult> {

@@ -347,6 +347,33 @@ export const VoiceCallConfigSchema = z
     /** Model for generating voice responses (e.g., "anthropic/claude-sonnet-4", "openai/gpt-4o") */
     responseModel: z.string().default("openai/gpt-4o-mini"),
 
+    /** Model for complex/escalated queries (e.g., "anthropic/claude-sonnet-4-5-20250514") */
+    escalationModel: z.string().optional(),
+
+    /** Enable automatic escalation to escalationModel for complex queries */
+    escalationEnabled: z.boolean().default(false),
+
+    /** Enable Google Calendar booking tools during voice calls */
+    calendarEnabled: z.boolean().default(false),
+
+    /** Google Calendar ID to book appointments on (default: "primary") */
+    calendarId: z.string().optional(),
+
+    /** Enable Gmail post-call summary drafts */
+    gmailSummaryEnabled: z.boolean().default(false),
+
+    /** Email address to send post-call summaries to */
+    gmailSummaryRecipient: z.string().optional(),
+
+    /** Enable periodic health checks with ntfy alerts */
+    healthCheckEnabled: z.boolean().default(false),
+
+    /** Health check interval in minutes (default: 30) */
+    healthCheckIntervalMin: z.number().int().positive().default(30),
+
+    /** ntfy topic for health check alerts (e.g. "Jared-CC-Tasks") */
+    healthCheckNtfyTopic: z.string().optional(),
+
     /** System prompt for voice responses */
     responseSystemPrompt: z.string().optional(),
 

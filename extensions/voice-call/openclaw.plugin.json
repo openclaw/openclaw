@@ -182,6 +182,42 @@
       "label": "Response Model",
       "advanced": true
     },
+    "escalationModel": {
+      "label": "Escalation Model (for complex queries)",
+      "advanced": true
+    },
+    "escalationEnabled": {
+      "label": "Enable Automatic Model Escalation",
+      "advanced": true
+    },
+    "calendarEnabled": {
+      "label": "Enable Google Calendar Booking",
+      "advanced": true
+    },
+    "calendarId": {
+      "label": "Google Calendar ID",
+      "advanced": true
+    },
+    "gmailSummaryEnabled": {
+      "label": "Enable Gmail Post-Call Summaries",
+      "advanced": true
+    },
+    "gmailSummaryRecipient": {
+      "label": "Summary Email Recipient",
+      "advanced": true
+    },
+    "healthCheckEnabled": {
+      "label": "Enable Health Monitoring",
+      "advanced": true
+    },
+    "healthCheckIntervalMin": {
+      "label": "Health Check Interval (minutes)",
+      "advanced": true
+    },
+    "healthCheckNtfyTopic": {
+      "label": "ntfy Topic for Health Alerts",
+      "advanced": true
+    },
     "responseSystemPrompt": {
       "label": "Response System Prompt",
       "advanced": true
@@ -660,6 +696,33 @@
         "type": "string"
       },
       "responseModel": {
+        "type": "string"
+      },
+      "escalationModel": {
+        "type": "string"
+      },
+      "escalationEnabled": {
+        "type": "boolean"
+      },
+      "calendarEnabled": {
+        "type": "boolean"
+      },
+      "calendarId": {
+        "type": "string"
+      },
+      "gmailSummaryEnabled": {
+        "type": "boolean"
+      },
+      "gmailSummaryRecipient": {
+        "type": "string"
+      },
+      "healthCheckEnabled": {
+        "type": "boolean"
+      },
+      "healthCheckIntervalMin": {
+        "type": "integer"
+      },
+      "healthCheckNtfyTopic": {
         "type": "string"
       },
       "responseSystemPrompt": {

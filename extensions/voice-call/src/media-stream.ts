@@ -14,6 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
+import { G722Decoder } from "./g722-decoder.js";
 
 const STREAM_DEBUG_LOG = path.join(os.homedir(), ".openclaw", "voice-debug.log");
 function streamDebug(msg: string): void {
@@ -61,6 +62,9 @@ interface StreamSession {
   streamSid: string;
   ws: WebSocket;
   sttSession: RealtimeSTTSession;
+  _mediaCount?: number;
+  /** G722 decoder instance — set when Telnyx sends G722 encoded audio */
+  g722Decoder?: G722Decoder;
 }
 
 type TtsQueueEntry = {
@@ -159,7 +163,8 @@ export class MediaStreamHandler {
 
           case "start": {
             const callId = message.start?.callSid || "unknown";
-            streamDebug(`Start event: callSid=${callId} streamSid=${message.streamSid} raw_keys=${Object.keys(raw.start || {}).join(",")}`);
+            const mf = raw.start?.media_format || raw.start?.mediaFormat;
+            streamDebug(`Start event: callSid=${callId} streamSid=${message.streamSid} media_format=${JSON.stringify(mf)} raw_keys=${Object.keys(raw.start || {}).join(",")}`);
             session = await this.handleStart(ws, message, streamToken);
             if (session) {
               streamDebug(`Session created: callId=${session.callId} streamSid=${session.streamSid}`);
@@ -172,9 +177,18 @@ export class MediaStreamHandler {
 
           case "media":
             if (session && message.media?.payload) {
-              // Forward audio to STT
-              const audioBuffer = Buffer.from(message.media.payload, "base64");
+              // Forward audio to STT (transcode G722 → linear16 if needed)
+              const rawAudio = Buffer.from(message.media.payload, "base64");
+              const audioBuffer = session.g722Decoder
+                ? session.g722Decoder.decode(rawAudio)
+                : rawAudio;
               session.sttSession.sendAudio(audioBuffer);
+              // Diagnostic: log every 100th media frame to confirm audio flow
+              if (!session._mediaCount) session._mediaCount = 0;
+              session._mediaCount++;
+              if (session._mediaCount % 100 === 1) {
+                streamDebug(`Media frame #${session._mediaCount}: ${rawAudio.length} bytes${session.g722Decoder ? ` → ${audioBuffer.length} bytes PCM16` : ""}, STT connected=${session.sttSession.isConnected?.() ?? "?"}`);
+              }
             }
             break;
 
@@ -255,11 +269,19 @@ export class MediaStreamHandler {
       this.config.onSpeechStart?.(callSid);
     });
 
+    // Detect G722 encoding from Telnyx media format and set up decoder
+    const encoding = message.start?.mediaFormat?.encoding?.toUpperCase() || "";
+    const isG722 = encoding === "G722" || encoding === "G.722";
+    if (isG722) {
+      streamDebug(`G722 audio detected — enabling real-time transcoding to linear16 @ 16kHz`);
+    }
+
     const session: StreamSession = {
       callId: callSid,
       streamSid,
       ws,
       sttSession,
+      g722Decoder: isG722 ? new G722Decoder() : undefined,
     };
 
     this.sessions.set(streamSid, session);
@@ -267,7 +289,7 @@ export class MediaStreamHandler {
     // Notify connection BEFORE STT connect so TTS can work even if STT fails
     this.config.onConnect?.(callSid, streamSid);
 
-    // Connect to OpenAI STT (non-blocking, log errors but don't fail the call)
+    // Connect to STT (non-blocking, log errors but don't fail the call)
     sttSession.connect().catch((err) => {
       console.warn(`[MediaStream] STT connection failed (TTS still works):`, err.message);
     });
