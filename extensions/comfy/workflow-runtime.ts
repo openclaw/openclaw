@@ -132,8 +132,11 @@ function mergeSsrFPolicies(...policies: Array<SsrFPolicy | undefined>): SsrFPoli
 }
 
 export function getComfyConfig(cfg?: OpenClawConfig): ComfyProviderConfig {
-  const raw = cfg?.models?.providers?.comfy;
-  return isRecord(raw) ? raw : {};
+  const legacyRaw = cfg?.models?.providers?.comfy;
+  const pluginRaw = cfg?.plugins?.entries?.comfy?.config;
+  const legacyConfig = isRecord(legacyRaw) ? legacyRaw : {};
+  const pluginConfig = isRecord(pluginRaw) ? pluginRaw : {};
+  return { ...pluginConfig, ...legacyConfig };
 }
 
 function stripNestedCapabilityConfig(config: ComfyProviderConfig): ComfyProviderConfig {

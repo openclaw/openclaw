@@ -90,4 +90,71 @@ describe("comfy music-generation provider", () => {
     });
     expect(result.tracks[0]?.buffer).toEqual(Buffer.from("music-bytes"));
   });
+
+  it("accepts the bundled plugin config shape for music workflows", async () => {
+    _setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(JSON.stringify({ prompt_id: "music-job-plugin" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            "music-job-plugin": {
+              outputs: {
+                "9": {
+                  audio: [{ filename: "song.mp3", subfolder: "", type: "output" }],
+                },
+              },
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: new Response(Buffer.from("music-bytes"), {
+          status: 200,
+          headers: { "content-type": "audio/mpeg" },
+        }),
+        release: vi.fn(async () => {}),
+      });
+
+    const provider = buildComfyMusicGenerationProvider();
+    const result = await provider.generateMusic({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "gentle ambient synth loop",
+      cfg: {
+        plugins: {
+          entries: {
+            comfy: {
+              config: {
+                music: {
+                  workflow: {
+                    "6": { inputs: { text: "" } },
+                    "9": { inputs: {} },
+                  },
+                  promptNodeId: "6",
+                  outputNodeId: "9",
+                },
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.metadata).toMatchObject({
+      promptId: "music-job-plugin",
+      outputNodeIds: ["9"],
+    });
+  });
 });
