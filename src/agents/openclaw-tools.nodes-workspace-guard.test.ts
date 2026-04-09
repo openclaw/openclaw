@@ -65,10 +65,15 @@ describe("createOpenClawTools nodes workspace guard", () => {
     mocks.nodesExecute.mockClear();
   });
 
-  function getNodesTool(workspaceOnly: boolean): AnyAgentTool {
+  function getNodesTool(
+    workspaceOnly: boolean,
+    options?: { sandboxRoot?: string; sandboxContainerWorkdir?: string },
+  ): AnyAgentTool {
     const tools = createOpenClawTools({
       workspaceDir: WORKSPACE_ROOT,
       fsPolicy: { workspaceOnly },
+      sandboxRoot: options?.sandboxRoot,
+      sandboxContainerWorkdir: options?.sandboxContainerWorkdir,
       disablePluginTools: true,
       disableMessageTool: true,
     });
@@ -109,6 +114,32 @@ describe("createOpenClawTools nodes workspace guard", () => {
     });
     expect(mocks.nodesExecute).toHaveBeenCalledWith(
       "call-rel",
+      {
+        action: "screen_record",
+        outPath: `${WORKSPACE_ROOT}/videos/capture.mp4`,
+      },
+      undefined,
+      undefined,
+    );
+  });
+
+  it("maps sandbox container outPath to host root when containerWorkdir is provided", async () => {
+    const nodesTool = getNodesTool(true, {
+      sandboxRoot: WORKSPACE_ROOT,
+      sandboxContainerWorkdir: "/workspace",
+    });
+    await nodesTool.execute("call-sandbox", {
+      action: "screen_record",
+      outPath: "/workspace/videos/capture.mp4",
+    });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: `${WORKSPACE_ROOT}/videos/capture.mp4`,
+      cwd: WORKSPACE_ROOT,
+      root: WORKSPACE_ROOT,
+    });
+    expect(mocks.nodesExecute).toHaveBeenCalledWith(
+      "call-sandbox",
       {
         action: "screen_record",
         outPath: `${WORKSPACE_ROOT}/videos/capture.mp4`,

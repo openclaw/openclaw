@@ -61,6 +61,7 @@ export function createOpenClawTools(
     agentThreadId?: string | number;
     agentDir?: string;
     sandboxRoot?: string;
+    sandboxContainerWorkdir?: string;
     sandboxFsBridge?: SandboxFsBridge;
     fsPolicy?: ToolFsPolicy;
     sandboxed?: boolean;
@@ -219,6 +220,7 @@ export function createOpenClawTools(
   const nodesTool =
     options?.fsPolicy?.workspaceOnly === true
       ? wrapToolWorkspaceRootGuardWithOptions(nodesToolBase, options?.sandboxRoot ?? workspaceDir, {
+          containerWorkdir: options?.sandboxContainerWorkdir,
           pathParamKeys: ["outPath"],
           normalizeGuardedPathParams: true,
         })
