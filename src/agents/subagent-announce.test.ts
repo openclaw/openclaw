@@ -152,7 +152,7 @@ describe("subagent announce seam flow", () => {
     subagentRegistryRuntimeMock.resolveRequesterForChildSession.mockReturnValue(null);
   });
 
-  it("suppresses ANNOUNCE_SKIP delivery while still deleting the child session", async () => {
+  it("proceeds with ANNOUNCE_SKIP delivery while still deleting the child session", async () => {
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
       childRunId: "run-direct-skip-whitespace",
@@ -169,7 +169,7 @@ describe("subagent announce seam flow", () => {
     });
 
     expect(didAnnounce).toBe(true);
-    expect(agentSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1);
     expect(sessionsDeleteSpy).toHaveBeenCalledTimes(1);
     expect(sessionsDeleteSpy).toHaveBeenCalledWith({
       method: "sessions.delete",
