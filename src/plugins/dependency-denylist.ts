@@ -286,6 +286,7 @@ export function findBlockedPackageDirectoryInPath(params: {
       }
       const scopedPackageId = `${packageScopeOrName}/${packageName}`;
       if (!isBlockedInstallDependencyPackagePathName(scopedPackageId)) {
+        index += 1;
         continue;
       }
       return {

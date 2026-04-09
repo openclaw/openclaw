@@ -186,6 +186,14 @@ describe("dependency denylist guardrails", () => {
     ).toBeUndefined();
   });
 
+  it("does not flag the unscoped name segment from an allowed scoped package path", () => {
+    expect(
+      findBlockedPackageDirectoryInPath({
+        pathRelativeToRoot: "vendor/@scope/plain-crypto-js/dist/index.js",
+      }),
+    ).toBeUndefined();
+  });
+
   it("keeps blocked packages out of the root manifest", () => {
     const manifest = readRootManifest();
     expect(findBlockedManifestDependencies(manifest)).toEqual([]);
