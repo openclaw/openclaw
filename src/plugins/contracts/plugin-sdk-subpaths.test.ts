@@ -213,6 +213,51 @@ describe("plugin-sdk subpath exports", () => {
     expect(banned).toEqual([]);
   });
 
+  it("keeps browser compatibility helper subpaths as thin facades", () => {
+    expectSourceMentions("browser-control-auth", [
+      "loadBundledPluginPublicSurfaceModuleSync",
+      "resolveBrowserControlAuth",
+      "shouldAutoGenerateBrowserAuth",
+      "ensureBrowserControlAuth",
+    ]);
+    expectSourceContains("browser-control-auth", 'artifactBasename: "browser-control-auth.js"');
+    expectSourceOmits("browser-control-auth", [
+      "resolveGatewayAuth",
+      "writeConfigFile",
+      "generateBrowserControlToken",
+      "ensureGatewayStartupAuth",
+    ]);
+
+    expectSourceMentions("browser-profiles", [
+      "loadBundledPluginPublicSurfaceModuleSync",
+      "resolveBrowserConfig",
+      "resolveProfile",
+    ]);
+    expectSourceContains("browser-profiles", 'artifactBasename: "browser-profiles.js"');
+    expectSourceOmits("browser-profiles", [
+      "resolveBrowserSsrFPolicy",
+      "ensureDefaultProfile",
+      "ensureDefaultUserBrowserProfile",
+      "normalizeHexColor",
+    ]);
+
+    expectSourceMentions("browser-host-inspection", [
+      "loadBundledPluginPublicSurfaceModuleSync",
+      "resolveGoogleChromeExecutableForPlatform",
+      "readBrowserVersion",
+      "parseBrowserMajorVersion",
+    ]);
+    expectSourceContains(
+      "browser-host-inspection",
+      'artifactBasename: "browser-host-inspection.js"',
+    );
+    expectSourceOmits("browser-host-inspection", [
+      "findFirstChromeExecutable",
+      "findGoogleChromeExecutableLinux",
+      "execText",
+    ]);
+  });
+
   it("keeps helper subpaths aligned", () => {
     expectSourceMentions("core", [
       "emptyPluginConfigSchema",
