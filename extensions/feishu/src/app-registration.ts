@@ -124,7 +124,8 @@ export async function beginAppRegistration(domain: FeishuDomain = "feishu"): Pro
   });
 
   const qrUrl = new URL(res.verification_uri_complete);
-  qrUrl.searchParams.set("from", "onboard");
+  qrUrl.searchParams.set("from", "oc_onboard");
+  qrUrl.searchParams.set("tp", "ob_cli_app");
 
   return {
     deviceCode: res.device_code,
