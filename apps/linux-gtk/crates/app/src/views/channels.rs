@@ -125,7 +125,7 @@ impl ChannelsView {
                                 glib::spawn_future_local(async move {
                                     let params =
                                         serde_json::json!({ "channelId": channel_id });
-                                    match gw.request("channels.probe", params).await {
+                                    match gw.request("channels.status", params).await {
                                         Ok(result) => {
                                             debug!("channels.probe ok for {channel_id}");
                                             let new_status = result

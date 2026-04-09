@@ -124,7 +124,7 @@ impl SkillsView {
                                                 "skillId": sid2,
                                                 "enabled": new_enabled,
                                             });
-                                            match gw2.request("skills.enable", params).await {
+                                            match gw2.request("skills.update", params).await {
                                                 Ok(_) => {
                                                     debug!("skills.enable ok for {sid2}");
                                                 }

@@ -328,7 +328,7 @@ fn build_job_row(
                 "jobId": jid,
                 "enabled": new_enabled,
             });
-            match gw2.request("cron.enable", params).await {
+            match gw2.request("cron.update", params).await {
                 Ok(_) => debug!("cron.enable ok"),
                 Err(e) => warn!("cron.enable failed: {e}"),
             }

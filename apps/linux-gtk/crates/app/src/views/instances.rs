@@ -83,10 +83,10 @@ impl InstancesView {
                     // Fetch nodes and pair requests in parallel-ish (sequential
                     // for simplicity; both are fast RPCs).
                     let nodes_result = gw_outer
-                        .request("nodes.list", serde_json::json!({}))
+                        .request("node.list", serde_json::json!({}))
                         .await;
                     let pairs_result = gw_outer
-                        .request("nodes.pair.list", serde_json::json!({}))
+                        .request("node.pair.list", serde_json::json!({}))
                         .await;
 
                     // -- Pair requests --
@@ -289,7 +289,7 @@ fn build_pair_request_row(
         let g = group_approve.clone();
         glib::spawn_future_local(async move {
             let params = serde_json::json!({ "requestId": rid });
-            match gw2.request("nodes.pair.approve", params).await {
+            match gw2.request("node.pair.approve", params).await {
                 Ok(_) => {
                     debug!("nodes.pair.approve ok for {rid}");
                     g.remove(&r);
@@ -320,7 +320,7 @@ fn build_pair_request_row(
         let g = group_reject.clone();
         glib::spawn_future_local(async move {
             let params = serde_json::json!({ "requestId": rid });
-            match gw2.request("nodes.pair.reject", params).await {
+            match gw2.request("node.pair.reject", params).await {
                 Ok(_) => {
                     debug!("nodes.pair.reject ok for {rid}");
                     g.remove(&r);

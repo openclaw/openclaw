@@ -53,7 +53,7 @@ impl GatewayConfig {
         Self {
             url: env_url
                 .or(file_url)
-                .unwrap_or_else(|| "wss://127.0.0.1:9443".to_string()),
+                .unwrap_or_else(|| "ws://127.0.0.1:18789".to_string()),
             token: env_token.or(file_token),
             tls_accept_invalid: env_insecure,
         }
@@ -134,8 +134,9 @@ mod tests {
         // Sanity: if nothing is set, resolve() must fall back to loopback.
         // Can't safely mutate env in parallel tests, so just check the literal.
         // If the default changes, this test changes with it.
-        let default = "wss://127.0.0.1:9443";
-        assert!(default.starts_with("wss://"));
+        let default = "ws://127.0.0.1:18789";
+        assert!(default.starts_with("ws://"));
         assert!(default.contains("127.0.0.1"));
+        assert!(default.contains("18789"));
     }
 }
