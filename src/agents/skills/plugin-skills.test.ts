@@ -261,4 +261,69 @@ describe("resolvePluginSkillDirs", () => {
 
     expect(dirs).toEqual([path.resolve(pluginRoot, "skills")]);
   });
+
+  it("includes bundled plugin skills when enabledByDefault is true without explicit config", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-");
+    const pluginRoot = await tempDirs.make("openclaw-bundled-default-");
+    await fs.mkdir(path.join(pluginRoot, "skills"), { recursive: true });
+
+    hoisted.loadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "open-prose",
+          name: "OpenProse",
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          skills: ["./skills"],
+          hooks: [],
+          origin: "bundled",
+          enabledByDefault: true,
+          rootDir: pluginRoot,
+          source: pluginRoot,
+          manifestPath: path.join(pluginRoot, "openclaw.plugin.json"),
+        },
+      ],
+    });
+
+    const dirs = resolvePluginSkillDirs({
+      workspaceDir,
+      config: {} as OpenClawConfig,
+    });
+
+    expect(dirs).toEqual([path.resolve(pluginRoot, "skills")]);
+  });
+
+  it("excludes bundled plugin skills when enabledByDefault is not set", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-");
+    const pluginRoot = await tempDirs.make("openclaw-bundled-nodefault-");
+    await fs.mkdir(path.join(pluginRoot, "skills"), { recursive: true });
+
+    hoisted.loadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "some-plugin",
+          name: "Some Plugin",
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          skills: ["./skills"],
+          hooks: [],
+          origin: "bundled",
+          rootDir: pluginRoot,
+          source: pluginRoot,
+          manifestPath: path.join(pluginRoot, "openclaw.plugin.json"),
+        },
+      ],
+    });
+
+    const dirs = resolvePluginSkillDirs({
+      workspaceDir,
+      config: {} as OpenClawConfig,
+    });
+
+    expect(dirs).toEqual([]);
+  });
 });
