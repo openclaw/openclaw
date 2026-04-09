@@ -18,11 +18,11 @@
 | Category                   | Issues  | PRs     | Total   | Closed  | Remaining |
 | -------------------------- | ------- | ------- | ------- | ------- | --------- |
 | MS Teams (channel plugin)  | 66      | 76      | 142     | 102     | 40        |
-| Windows (platform)         | 125     | 52      | 177     | 49      | 128       |
+| Windows (platform)         | 125     | 53      | 178     | 55      | 123       |
 | WSL                        | 17      | 12      | 29      | 13      | 16        |
 | Azure (provider/infra)     | 20      | 23      | 43      | 18      | 25        |
 | Microsoft 365 / SharePoint | 3       | 0       | 3       | 2       | 1         |
-| **Total**                  | **231** | **163** | **394** | **184** | **210**   |
+| **Total**                  | **231** | **164** | **395** | **190** | **205**   |
 
 ---
 
