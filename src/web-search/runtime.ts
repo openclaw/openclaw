@@ -326,10 +326,13 @@ export async function runWebSearch(
     providers: candidates,
   });
 
+  // Caller-provided providerId always fails fast, ignores config fallbacks
+  const providerIdExplicitlyProvided = Boolean(params.providerId?.trim());
+
   // When explicit + fallbacks: primary provider first, then fallbacks (deduped); otherwise use candidates
   const primaryProviderId = candidates[0]?.id;
   const effectiveCandidates =
-    hasExplicitProvider && configuredFallbacks.length > 0
+    hasExplicitProvider && configuredFallbacks.length > 0 && !providerIdExplicitlyProvided
       ? [
           candidates[0],
           ...configuredFallbacks
@@ -340,7 +343,8 @@ export async function runWebSearch(
         ]
       : candidates;
 
-  const allowFallback = !hasExplicitProvider || configuredFallbacks.length > 0;
+  const allowFallback =
+    !hasExplicitProvider || (configuredFallbacks.length > 0 && !providerIdExplicitlyProvided);
   let sawUnavailableProvider = false;
 
   for (const candidate of effectiveCandidates) {
