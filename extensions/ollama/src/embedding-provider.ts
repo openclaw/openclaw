@@ -159,6 +159,8 @@ export async function createOllamaEmbeddingProvider(
 ): Promise<{ provider: OllamaEmbeddingProvider; client: OllamaEmbeddingClient }> {
   const client = resolveOllamaEmbeddingClient(options);
   const embedUrl = `${client.baseUrl.replace(/\/$/, "")}/api/embeddings`;
+  const batchEmbedUrl = `${client.baseUrl.replace(/\/$/, "")}/api/embed`;
+  let useBatchEndpoint = true;
 
   const embedOne = async (text: string): Promise<number[]> => {
     const json = await withRemoteHttpResponse({
@@ -187,6 +189,38 @@ export async function createOllamaEmbeddingProvider(
     model: client.model,
     embedQuery: embedOne,
     embedBatch: async (texts) => {
+      if (texts.length === 0) {
+        return [];
+      }
+      if (useBatchEndpoint) {
+        try {
+          const json = await withRemoteHttpResponse({
+            url: batchEmbedUrl,
+            ssrfPolicy: client.ssrfPolicy,
+            init: {
+              method: "POST",
+              headers: client.headers,
+              body: JSON.stringify({ model: client.model, input: texts }),
+            },
+            onResponse: async (response) => {
+              if (!response.ok) {
+                throw new Error(`Ollama embed HTTP ${response.status}: ${await response.text()}`);
+              }
+              return (await response.json()) as { embeddings?: number[][] };
+            },
+          });
+          if (!Array.isArray(json.embeddings)) {
+            throw new Error("Ollama embed response missing embeddings[]");
+          }
+          return json.embeddings.map((embedding) => sanitizeAndNormalizeEmbedding(embedding ?? []));
+        } catch (err) {
+          const message = formatErrorMessage(err);
+          if (!/Ollama embed HTTP (400|404|405)|missing embeddings\[\]/i.test(message)) {
+            throw err;
+          }
+          useBatchEndpoint = false;
+        }
+      }
       return await Promise.all(texts.map(embedOne));
     },
   };
