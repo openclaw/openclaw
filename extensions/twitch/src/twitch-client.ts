@@ -2,7 +2,8 @@ import { RefreshingAuthProvider, StaticAuthProvider } from "@twurple/auth";
 import { ChatClient, LogLevel } from "@twurple/chat";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
-import { resolveTwitchToken } from "./token.js";
+import { persistRefreshedTwitchTokens } from "./token-writeback.js";
+import { resolveTwitchToken, type TwitchTokenSource } from "./token.js";
 import type { ChannelLogSink, TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 import { normalizeToken } from "./utils/twitch.js";
 
@@ -21,6 +22,10 @@ export class TwitchClientManager {
   private async createAuthProvider(
     account: TwitchAccountConfig,
     normalizedToken: string,
+    options: {
+      accountId?: string;
+      tokenSource: TwitchTokenSource;
+    },
   ): Promise<StaticAuthProvider | RefreshingAuthProvider> {
     if (!account.clientId) {
       throw new Error("Missing Twitch client ID");
@@ -50,10 +55,27 @@ export class TwitchClientManager {
           );
         });
 
-      authProvider.onRefresh((userId, token) => {
+      authProvider.onRefresh(async (userId, token) => {
         this.logger.info(
           `Access token refreshed for user ${userId} (expires in ${token.expiresIn ? `${token.expiresIn}s` : "unknown"})`,
         );
+
+        try {
+          await persistRefreshedTwitchTokens({
+            accountId: options.accountId,
+            tokenSource: options.tokenSource,
+            token: {
+              accessToken: token.accessToken,
+              refreshToken: token.refreshToken,
+              expiresIn: token.expiresIn,
+              obtainmentTimestamp: token.obtainmentTimestamp,
+            },
+          });
+        } catch (error) {
+          this.logger.warn(
+            `Failed to persist refreshed Twitch token for ${account.username}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
       });
 
       authProvider.onRefreshFailure((userId, error) => {
@@ -107,7 +129,10 @@ export class TwitchClientManager {
 
     const normalizedToken = normalizeToken(tokenResolution.token);
 
-    const authProvider = await this.createAuthProvider(account, normalizedToken);
+    const authProvider = await this.createAuthProvider(account, normalizedToken, {
+      accountId,
+      tokenSource: tokenResolution.source,
+    });
 
     const client = new ChatClient({
       authProvider,

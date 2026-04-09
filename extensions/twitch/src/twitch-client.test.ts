@@ -34,6 +34,9 @@ const mockOnMessage = vi.fn((handler: any) => {
 const mockAddUserForToken = vi.fn().mockResolvedValue("123456");
 const mockOnRefresh = vi.fn();
 const mockOnRefreshFailure = vi.fn();
+const { mockPersistRefreshedTwitchTokens } = vi.hoisted(() => ({
+  mockPersistRefreshedTwitchTokens: vi.fn().mockResolvedValue(false),
+}));
 
 vi.mock("@twurple/chat", () => ({
   ChatClient: class {
@@ -77,6 +80,10 @@ vi.mock("./token.js", () => ({
     source: "config" as const,
   })),
   DEFAULT_ACCOUNT_ID: "default",
+}));
+
+vi.mock("./token-writeback.js", () => ({
+  persistRefreshedTwitchTokens: mockPersistRefreshedTwitchTokens,
 }));
 
 describe("TwitchClientManager", () => {
@@ -400,6 +407,50 @@ describe("TwitchClientManager", () => {
 
       expect(result.ok).toBe(true);
       expect(mockConnect.mock.calls.length).toBeGreaterThan(connectCallCountBefore);
+    });
+  });
+
+  describe("token refresh persistence", () => {
+    it("persists refreshed tokens for config-backed accounts", async () => {
+      const refreshingAccount: TwitchAccountConfig = {
+        ...testAccount,
+        clientSecret: "client-secret",
+        refreshToken: "refresh-token",
+      };
+
+      await manager.getClient(refreshingAccount, undefined, "alerts");
+
+      const refreshHandler = mockOnRefresh.mock.calls[0]?.[0] as
+        | ((
+            userId: string,
+            token: {
+              accessToken: string;
+              refreshToken?: string;
+              expiresIn?: number | null;
+              obtainmentTimestamp?: number;
+            },
+          ) => Promise<void>)
+        | undefined;
+
+      expect(refreshHandler).toBeDefined();
+
+      await refreshHandler?.("123456", {
+        accessToken: "new-access-token",
+        refreshToken: "new-refresh-token",
+        expiresIn: 3600,
+        obtainmentTimestamp: 123456789,
+      });
+
+      expect(mockPersistRefreshedTwitchTokens).toHaveBeenCalledWith({
+        accountId: "alerts",
+        tokenSource: "config",
+        token: {
+          accessToken: "new-access-token",
+          refreshToken: "new-refresh-token",
+          expiresIn: 3600,
+          obtainmentTimestamp: 123456789,
+        },
+      });
     });
   });
 

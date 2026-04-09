@@ -105,43 +105,43 @@ if observation.blocking_error:
   # Skip if low confidence (needs human)
   if diagnosis.confidence == "low":
     output { status: "needs_human", diagnosis }
+  else:
+    # Auto-triage
+    let triage_result = session: triage
+      prompt: """Triage: {diagnosis}"""
+      context: diagnosis
 
-  # Auto-triage
-  let triage_result = session: triage
-    prompt: """Triage: {diagnosis}"""
-    context: diagnosis
+    if triage_result.decision == "bigger":
+      # Bigger changes need human oversight
+      output { status: "needs_planning", diagnosis, triage: triage_result }
+    else:
+      # Quick fix: implement + test + deploy in one flow
+      let fix = session: fixer
+        prompt: """Fix this issue:
 
-  if triage_result.decision == "bigger":
-    # Bigger changes need human oversight
-    output { status: "needs_planning", diagnosis, triage: triage_result }
+        DIAGNOSIS: {diagnosis}
+        APPROACH: {diagnosis.fix_approach}
 
-  # Quick fix: implement + test + deploy in one flow
-  let fix = session: fixer
-    prompt: """Fix this issue:
+        Implement, test, self-review, commit."""
+        context: diagnosis
 
-    DIAGNOSIS: {diagnosis}
-    APPROACH: {diagnosis.fix_approach}
+      if not fix.tests_pass:
+        output { status: "fix_failed", diagnosis, fix }
+      else:
+        # Deploy (auto if tests pass)
+        let deploy = session "Deploy"
+          prompt: """Deploy per docs/DEPLOYMENT.md. Verify health endpoint."""
+          retry: 2
 
-    Implement, test, self-review, commit."""
-    context: diagnosis
+        # Quick smoke test
+        let smoke = http.get("{API_URL}/health")
 
-  if not fix.tests_pass:
-    output { status: "fix_failed", diagnosis, fix }
-
-  # Deploy (auto if tests pass)
-  let deploy = session "Deploy"
-    prompt: """Deploy per docs/DEPLOYMENT.md. Verify health endpoint."""
-    retry: 2
-
-  # Quick smoke test
-  let smoke = http.get("{API_URL}/health")
-
-  output {
-    status: smoke.status == "ok" ? "fixed" : "deploy_failed",
-    diagnosis,
-    fix,
-    deploy
-  }
+        output {
+          status: smoke.status == "ok" ? "fixed" : "deploy_failed",
+          diagnosis,
+          fix,
+          deploy
+        }
 
 else:
   # No blocking error - just output UX feedback
