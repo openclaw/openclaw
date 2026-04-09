@@ -741,6 +741,8 @@ Notes:
   - `--labels` adds a viewport-only screenshot with overlayed ref labels (prints `MEDIA:<path>`).
 - `click`/`type`/etc require a `ref` from `snapshot` (either numeric `12` or role ref `e12`).
   CSS selectors are intentionally not supported for actions.
+- For interactive automation, prefer role snapshots (`--interactive`, refs like `e12`). They are the most reliable path for `click`/`type`/`hover` across dynamic pages and recent OpenClaw builds.
+- Treat plain accessibility-tree refs (`ax...` from `snapshotFormat=aria`) as inspection-oriented. They can be useful for reading the tree, but if interaction is flaky, re-snapshot in interactive mode and use a fresh role ref instead.
 
 ## Snapshots and refs
 
@@ -750,6 +752,7 @@ OpenClaw supports two “snapshot” styles:
   - Output: a text snapshot that includes numeric refs.
   - Actions: `openclaw browser click 12`, `openclaw browser type 23 "hello"`.
   - Internally, the ref is resolved via Playwright’s `aria-ref`.
+  - Best for compact AI-readable inspection. If an interaction fails, prefer re-snapshotting with `--interactive` and retrying with a role ref before assuming the page itself is broken.
 
 - **Role snapshot (role refs like `e12`)**: `openclaw browser snapshot --interactive` (or `--compact`, `--depth`, `--selector`, `--frame`)
   - Output: a role-based list/tree with `[ref=e12]` (and optional `[nth=1]`).
@@ -761,6 +764,7 @@ Ref behavior:
 
 - Refs are **not stable across navigations**; if something fails, re-run `snapshot` and use a fresh ref.
 - If the role snapshot was taken with `--frame`, role refs are scoped to that iframe until the next role snapshot.
+- If you can inspect a page but `click`/`type` fails on an AI or ARIA-style ref, switch to an interactive role snapshot and retry with the returned `e..` ref. This is the recommended fallback path for real-world automation.
 
 ## Wait power-ups
 
