@@ -325,7 +325,7 @@ describe("qqbot outbound local media path security", () => {
     });
 
     expect(result.error).toBeUndefined();
-    expect(apiMocks.getAccessToken).toHaveBeenCalledTimes(1);
+    expect(apiMocks.getAccessToken).toHaveBeenCalledTimes(2);
     expect(apiMocks.sendC2CFileMessage).toHaveBeenCalledTimes(1);
   });
 
