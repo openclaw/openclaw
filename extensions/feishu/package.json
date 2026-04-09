@@ -19,9 +19,6 @@
       "optional": true
     }
   },
-  "overrides": {
-    "axios": "1.15.0"
-  },
   "openclaw": {
     "extensions": [
       "./index.ts"
