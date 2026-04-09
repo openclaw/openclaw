@@ -184,6 +184,33 @@ func (t *docPromptBudgetTranslator) TranslateRaw(_ context.Context, text, _, _ s
 
 func (t *docPromptBudgetTranslator) Close() {}
 
+type uppercaseWrapperTranslator struct{}
+
+func (uppercaseWrapperTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
+	return text, nil
+}
+
+func (uppercaseWrapperTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
+	return "<BODY>\n" + strings.ReplaceAll(text, "Regular paragraph.", "Translated paragraph.") + "\n</BODY>\n", nil
+}
+
+func (uppercaseWrapperTranslator) Close() {}
+
+type oversizedBlockTranslator struct {
+	rawInputs []string
+}
+
+func (t *oversizedBlockTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
+	return text, nil
+}
+
+func (t *oversizedBlockTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
+	t.rawInputs = append(t.rawInputs, text)
+	return strings.ReplaceAll(text, "Line ", "Translated line "), nil
+}
+
+func (t *oversizedBlockTranslator) Close() {}
+
 func TestParseTaggedDocumentRejectsMissingBodyCloseAtEOF(t *testing.T) {
 	t.Parallel()
 
@@ -423,6 +450,22 @@ func TestTranslateDocBodyChunkedSplitsOnProtocolTokenLeakage(t *testing.T) {
 	}
 }
 
+func TestTranslateDocBodyChunkedStripsUppercaseBodyWrapper(t *testing.T) {
+	body := "Regular paragraph.\n"
+
+	t.Setenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_MAX_BYTES", "4096")
+	translated, err := translateDocBodyChunked(context.Background(), uppercaseWrapperTranslator{}, "gateway/configuration-reference.md", body, "en", "zh-CN")
+	if err != nil {
+		t.Fatalf("translateDocBodyChunked returned error: %v", err)
+	}
+	if strings.Contains(strings.ToLower(translated), "<body>") {
+		t.Fatalf("expected uppercase wrapper to be stripped:\n%s", translated)
+	}
+	if !strings.Contains(translated, "Translated paragraph.") {
+		t.Fatalf("expected translated body content to survive unwrap:\n%s", translated)
+	}
+}
+
 func TestSanitizeDocChunkProtocolWrappersStripsTopLevelWrapperEvenWhenSourceMentionsBodyTag(t *testing.T) {
 	t.Parallel()
 
@@ -505,6 +548,36 @@ func TestTranslateDocBodyChunkedPreSplitsOversizedPromptBudget(t *testing.T) {
 	}
 	if !strings.Contains(translated, "第一块") || !strings.Contains(translated, "第二块") {
 		t.Fatalf("expected split chunks to translate successfully:\n%s", translated)
+	}
+}
+
+func TestTranslateDocBodyChunkedSplitsOversizedSingletonBlock(t *testing.T) {
+	body := strings.Join([]string{
+		"Line 01",
+		"Line 02",
+		"Line 03",
+		"Line 04",
+		"Line 05",
+		"Line 06",
+		"",
+	}, "\n")
+
+	t.Setenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_MAX_BYTES", "24")
+	translator := &oversizedBlockTranslator{}
+	translated, err := translateDocBodyChunked(context.Background(), translator, "gateway/configuration-reference.md", body, "en", "zh-CN")
+	if err != nil {
+		t.Fatalf("translateDocBodyChunked returned error: %v", err)
+	}
+	if len(translator.rawInputs) < 2 {
+		t.Fatalf("expected oversized singleton block to be split before translation, saw %d input(s)", len(translator.rawInputs))
+	}
+	for _, input := range translator.rawInputs {
+		if len(input) > 24 {
+			t.Fatalf("expected split chunk under byte budget, got %d bytes:\n%s", len(input), input)
+		}
+	}
+	if !strings.Contains(translated, "Translated line 01") || !strings.Contains(translated, "Translated line 06") {
+		t.Fatalf("expected translated singleton parts to be reassembled:\n%s", translated)
 	}
 }
 

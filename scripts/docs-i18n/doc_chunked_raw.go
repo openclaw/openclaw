@@ -56,6 +56,11 @@ func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chun
 	if strings.TrimSpace(source) == "" {
 		return source, nil
 	}
+	if len(blocks) == 1 {
+		if translated, handled, err := translateOversizedDocBlock(ctx, translator, chunkID, source, srcLang, tgtLang, docsI18nDocChunkMaxBytes()); handled {
+			return translated, err
+		}
+	}
 	normalizedSource, commonIndent := stripCommonIndent(source)
 	estimatedPromptCost := estimateDocPromptCost(normalizedSource)
 	if len(blocks) > 1 && estimatedPromptCost > docsI18nDocChunkPromptBudget() {
@@ -196,11 +201,14 @@ func validateDocChunkTranslation(source, translated string) error {
 	if hasUnexpectedTopLevelProtocolWrapper(source, translated) {
 		return fmt.Errorf("protocol token leaked: top-level wrapper")
 	}
+	sourceLower := strings.ToLower(source)
+	translatedLower := strings.ToLower(translated)
 	for _, token := range docsProtocolTokens {
-		if strings.Contains(source, token) {
+		tokenLower := strings.ToLower(token)
+		if strings.Contains(sourceLower, tokenLower) {
 			continue
 		}
-		if strings.Contains(translated, token) {
+		if strings.Contains(translatedLower, tokenLower) {
 			return fmt.Errorf("protocol token leaked: %s", token)
 		}
 	}
@@ -221,7 +229,7 @@ func validateDocChunkTranslation(source, translated string) error {
 }
 
 func sanitizeDocChunkProtocolWrappers(source, translated string) string {
-	if !strings.Contains(translated, bodyTagStart) && !strings.Contains(translated, frontmatterTagStart) {
+	if !containsProtocolWrapperToken(translated) {
 		return translated
 	}
 	trimmedTranslated := strings.TrimSpace(translated)
@@ -243,12 +251,15 @@ func sanitizeDocChunkProtocolWrappers(source, translated string) string {
 }
 
 func stripBodyOnlyWrapper(text string) (string, bool) {
-	if !strings.HasPrefix(text, bodyTagStart) || !strings.HasSuffix(text, bodyTagEnd) {
+	lower := strings.ToLower(text)
+	bodyStartLower := strings.ToLower(bodyTagStart)
+	bodyEndLower := strings.ToLower(bodyTagEnd)
+	if !strings.HasPrefix(lower, bodyStartLower) || !strings.HasSuffix(lower, bodyEndLower) {
 		return "", false
 	}
-	body := strings.TrimPrefix(text, bodyTagStart)
-	body = strings.TrimSuffix(body, bodyTagEnd)
-	if strings.Contains(body, bodyTagStart) || strings.Contains(body, bodyTagEnd) {
+	body := text[len(bodyTagStart) : len(text)-len(bodyTagEnd)]
+	bodyLower := lower[len(bodyTagStart) : len(lower)-len(bodyTagEnd)]
+	if strings.Contains(bodyLower, bodyStartLower) || strings.Contains(bodyLower, bodyEndLower) {
 		return "", false
 	}
 	return trimTagNewlines(body), true
@@ -378,16 +389,16 @@ func isClosingFenceLine(line, delimiter string) bool {
 }
 
 func hasUnexpectedTopLevelProtocolWrapper(source, translated string) bool {
-	sourceTrimmed := strings.TrimSpace(source)
-	translatedTrimmed := strings.TrimSpace(translated)
+	sourceTrimmed := strings.ToLower(strings.TrimSpace(source))
+	translatedTrimmed := strings.ToLower(strings.TrimSpace(translated))
 	checks := []struct {
 		token string
 		match func(string) bool
 	}{
-		{token: frontmatterTagStart, match: func(text string) bool { return strings.HasPrefix(text, frontmatterTagStart) }},
-		{token: bodyTagStart, match: func(text string) bool { return strings.HasPrefix(text, bodyTagStart) }},
-		{token: frontmatterTagEnd, match: func(text string) bool { return strings.HasSuffix(text, frontmatterTagEnd) }},
-		{token: bodyTagEnd, match: func(text string) bool { return strings.HasSuffix(text, bodyTagEnd) }},
+		{token: frontmatterTagStart, match: func(text string) bool { return strings.HasPrefix(text, strings.ToLower(frontmatterTagStart)) }},
+		{token: bodyTagStart, match: func(text string) bool { return strings.HasPrefix(text, strings.ToLower(bodyTagStart)) }},
+		{token: frontmatterTagEnd, match: func(text string) bool { return strings.HasSuffix(text, strings.ToLower(frontmatterTagEnd)) }},
+		{token: bodyTagEnd, match: func(text string) bool { return strings.HasSuffix(text, strings.ToLower(bodyTagEnd)) }},
 	}
 	for _, check := range checks {
 		if check.match(translatedTrimmed) && !check.match(sourceTrimmed) {
@@ -395,6 +406,137 @@ func hasUnexpectedTopLevelProtocolWrapper(source, translated string) bool {
 		}
 	}
 	return false
+}
+
+func containsProtocolWrapperToken(text string) bool {
+	lower := strings.ToLower(text)
+	return strings.Contains(lower, strings.ToLower(bodyTagStart)) || strings.Contains(lower, strings.ToLower(frontmatterTagStart))
+}
+
+func translateOversizedDocBlock(ctx context.Context, translator docsTranslator, chunkID, block, srcLang, tgtLang string, maxBytes int) (string, bool, error) {
+	if maxBytes <= 0 || len(block) <= maxBytes {
+		return "", false, nil
+	}
+	if translated, ok, err := translateOversizedFencedDocBlock(ctx, translator, chunkID, block, srcLang, tgtLang, maxBytes); ok {
+		return translated, true, err
+	}
+	parts, ok := splitDocTextByLines(block, maxBytes)
+	if !ok {
+		return "", false, nil
+	}
+	log.Printf("docs-i18n: chunk singleton-split %s parts=%d bytes=%d", chunkID, len(parts), len(block))
+	var out strings.Builder
+	for index, part := range parts {
+		translated, err := translateDocBlockGroup(ctx, translator, fmt.Sprintf("%s.%02d", chunkID, index+1), []string{part}, srcLang, tgtLang)
+		if err != nil {
+			return "", true, err
+		}
+		out.WriteString(translated)
+	}
+	return out.String(), true, nil
+}
+
+func translateOversizedFencedDocBlock(ctx context.Context, translator docsTranslator, chunkID, block, srcLang, tgtLang string, maxBytes int) (string, bool, error) {
+	lines := strings.SplitAfter(block, "\n")
+	if len(lines) < 3 {
+		return "", false, nil
+	}
+	opening := lines[0]
+	delimiter := leadingFenceDelimiter(opening)
+	if delimiter == "" {
+		return "", false, nil
+	}
+	closingIndex := -1
+	for index := len(lines) - 1; index >= 1; index-- {
+		if strings.TrimSpace(lines[index]) == "" {
+			continue
+		}
+		if isClosingFenceLine(lines[index], delimiter) {
+			closingIndex = index
+		}
+		break
+	}
+	if closingIndex < 1 {
+		return "", false, nil
+	}
+	closing := lines[closingIndex]
+	inner := strings.Join(lines[1:closingIndex], "")
+	trailing := strings.Join(lines[closingIndex+1:], "")
+	parts, ok := splitDocTextByLines(inner, maxBytes-len(opening)-len(closing))
+	if !ok {
+		return "", false, nil
+	}
+	log.Printf("docs-i18n: chunk singleton-fence-split %s parts=%d bytes=%d", chunkID, len(parts), len(block))
+	var innerOut strings.Builder
+	for index, part := range parts {
+		wrapped := opening + part + closing
+		translated, err := translateDocBlockGroup(ctx, translator, fmt.Sprintf("%s.%02d", chunkID, index+1), []string{wrapped}, srcLang, tgtLang)
+		if err != nil {
+			return "", true, err
+		}
+		unwrapped, ok := unwrapTranslatedFencedDocChunk(translated, delimiter)
+		if !ok {
+			return "", true, fmt.Errorf("%s.%02d: fenced chunk lost wrapper", chunkID, index+1)
+		}
+		innerOut.WriteString(unwrapped)
+	}
+	return opening + innerOut.String() + closing + trailing, true, nil
+}
+
+func splitDocTextByLines(text string, maxBytes int) ([]string, bool) {
+	if maxBytes <= 0 {
+		return nil, false
+	}
+	lines := strings.SplitAfter(text, "\n")
+	if len(lines) <= 1 {
+		return nil, false
+	}
+	parts := make([]string, 0, len(lines))
+	var current strings.Builder
+	currentBytes := 0
+	for _, line := range lines {
+		if len(line) > maxBytes {
+			return nil, false
+		}
+		if currentBytes > 0 && currentBytes+len(line) > maxBytes {
+			parts = append(parts, current.String())
+			current.Reset()
+			currentBytes = 0
+		}
+		current.WriteString(line)
+		currentBytes += len(line)
+	}
+	if current.Len() > 0 {
+		parts = append(parts, current.String())
+	}
+	if len(parts) <= 1 {
+		return nil, false
+	}
+	return parts, true
+}
+
+func unwrapTranslatedFencedDocChunk(text, delimiter string) (string, bool) {
+	lines := strings.SplitAfter(text, "\n")
+	if len(lines) < 2 {
+		return "", false
+	}
+	if leadingFenceDelimiter(lines[0]) == "" {
+		return "", false
+	}
+	closingIndex := -1
+	for index := len(lines) - 1; index >= 1; index-- {
+		if strings.TrimSpace(lines[index]) == "" {
+			continue
+		}
+		if isClosingFenceLine(lines[index], delimiter) {
+			closingIndex = index
+		}
+		break
+	}
+	if closingIndex < 1 {
+		return "", false
+	}
+	return strings.Join(lines[1:closingIndex], ""), true
 }
 
 func docsI18nDocChunkMaxBytes() int {
