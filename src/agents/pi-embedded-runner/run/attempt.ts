@@ -160,6 +160,8 @@ import { mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import {
   assembleAttemptContextEngine,
+  buildContextEnginePromptCacheInfo,
+  findCurrentAttemptAssistantMessage,
   finalizeAttemptContextEngineTurn,
   resolveAttemptBootstrapContext,
   runAttemptContextEngineBootstrap,
@@ -247,60 +249,6 @@ export {
   wrapOllamaCompatNumCtx,
 } from "../../../plugin-sdk/ollama-runtime.js";
 
-function buildContextEnginePromptCacheInfo(params: {
-  retention?: "none" | "short" | "long";
-  lastCallUsage?: NormalizedUsage;
-  observation?:
-    | {
-        broke: boolean;
-        previousCacheRead?: number;
-        cacheRead?: number;
-        changes?: PromptCacheChange[] | null;
-      }
-    | undefined;
-  lastCacheTouchAt?: number | null;
-}): EmbeddedRunAttemptResult["promptCache"] {
-  const promptCache: NonNullable<EmbeddedRunAttemptResult["promptCache"]> = {};
-  if (params.retention) {
-    promptCache.retention = params.retention;
-  }
-  if (params.lastCallUsage) {
-    promptCache.lastCallUsage = { ...params.lastCallUsage };
-  }
-  if (params.observation) {
-    promptCache.observation = {
-      broke: params.observation.broke,
-      ...(typeof params.observation.previousCacheRead === "number"
-        ? { previousCacheRead: params.observation.previousCacheRead }
-        : {}),
-      ...(typeof params.observation.cacheRead === "number"
-        ? { cacheRead: params.observation.cacheRead }
-        : {}),
-      ...(params.observation.changes && params.observation.changes.length > 0
-        ? {
-            changes: params.observation.changes.map((change) => ({
-              code: change.code,
-              detail: change.detail,
-            })),
-          }
-        : {}),
-    };
-  }
-  if (typeof params.lastCacheTouchAt === "number" && Number.isFinite(params.lastCacheTouchAt)) {
-    promptCache.lastCacheTouchAt = params.lastCacheTouchAt;
-  }
-  return Object.keys(promptCache).length > 0 ? promptCache : undefined;
-}
-
-function findCurrentAttemptAssistantMessage(params: {
-  messagesSnapshot: AgentMessage[];
-  prePromptMessageCount: number;
-}): AgentMessage | undefined {
-  return params.messagesSnapshot
-    .slice(Math.max(0, params.prePromptMessageCount))
-    .toReversed()
-    .find((message) => message.role === "assistant");
-}
 export {
   decodeHtmlEntitiesInObject,
   wrapStreamFnRepairMalformedToolCallArguments,
