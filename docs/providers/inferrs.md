@@ -70,9 +70,6 @@ This example uses Gemma 4 on a local `inferrs` server.
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 131072,
             maxTokens: 4096,
-            compat: {
-              requiresStringContent: true,
-            },
           },
         ],
       },
@@ -80,50 +77,6 @@ This example uses Gemma 4 on a local `inferrs` server.
   },
 }
 ```
-
-## Why `requiresStringContent` matters
-
-Some `inferrs` Chat Completions routes accept only string
-`messages[].content`, not structured content-part arrays.
-
-If OpenClaw runs fail with an error like:
-
-```text
-messages[1].content: invalid type: sequence, expected a string
-```
-
-set:
-
-```json5
-compat: {
-  requiresStringContent: true
-}
-```
-
-OpenClaw will flatten pure text content parts into plain strings before sending
-the request.
-
-## Gemma and tool-schema caveat
-
-Some current `inferrs` + Gemma combinations accept small direct
-`/v1/chat/completions` requests but still fail on full OpenClaw agent-runtime
-turns.
-
-If that happens, try this first:
-
-```json5
-compat: {
-  requiresStringContent: true,
-  supportsTools: false
-}
-```
-
-That disables OpenClaw's tool schema surface for the model and can reduce prompt
-pressure on stricter local backends.
-
-If tiny direct requests still work but normal OpenClaw agent turns continue to
-crash inside `inferrs`, the remaining issue is usually upstream model/server
-behavior rather than OpenClaw's transport layer.
 
 ## Manual smoke test
 
@@ -147,13 +100,14 @@ below.
 
 - `curl /v1/models` fails: `inferrs` is not running, not reachable, or not
   bound to the expected host/port.
-- `messages[].content ... expected a string`: set
-  `compat.requiresStringContent: true`.
 - Direct tiny `/v1/chat/completions` calls pass, but `openclaw infer model run`
-  fails: try `compat.supportsTools: false`.
-- OpenClaw no longer gets schema errors, but `inferrs` still crashes on larger
-  agent turns: treat it as an upstream `inferrs` or model limitation and reduce
-  prompt pressure or switch local backend/model.
+  fails: check `openclaw logs --follow` for the specific error and continue in
+  the deep runbook below.
+- `inferrs` crashes only on larger agent turns: reduce prompt pressure (shorter
+  session history, lighter model) or upgrade `inferrs` to the latest release.
+- On older `inferrs` releases (before structured content-part support was added),
+  you may see `messages[].content: invalid type: sequence, expected a string`.
+  Add `compat.requiresStringContent: true` as a workaround until you upgrade.
 
 ## Proxy-style behavior
 
