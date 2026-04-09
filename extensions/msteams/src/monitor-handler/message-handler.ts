@@ -543,6 +543,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       conversationType,
       conversationId: graphConversationId,
       conversationMessageId: conversationMessageId ?? undefined,
+      serviceUrl: activity.serviceUrl,
       activity: {
         id: activity.id,
         replyToId: activity.replyToId,
