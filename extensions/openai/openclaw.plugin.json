@@ -19,7 +19,7 @@
       "choiceHint": "Browser sign-in",
       "groupId": "openai",
       "groupLabel": "OpenAI",
-      "groupHint": "API key only (use separate OpenAI Codex for OAuth)"
+      "groupHint": "Codex OAuth + API key"
     },
     {
       "provider": "openai",
