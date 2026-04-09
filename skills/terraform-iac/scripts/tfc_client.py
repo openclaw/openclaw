@@ -1151,6 +1151,10 @@ Best practice:
 ────────────────────────────────────────────────────────""")
 
     name   = prompt("Landing zone name (e.g. marsmovers-lz)", default="landing-zone")
+    import re
+    if not re.match(r'^[a-z0-9][a-z0-9-_]{1,60}[a-z0-9]$', name.lower().replace(" ", "-")):
+        print("❌ Invalid landing zone name. Use 3-62 chars of lowercase letters, numbers, hyphens, or underscores, and start/end with a letter or number.")
+        sys.exit(1)
     region = prompt("Home region", default="us-east-1")
 
     # Existing organization check
@@ -1714,6 +1718,9 @@ resource "aws_guardduty_organization_admin_account" "audit" {{
 #     auto_enable_organization_members = "ALL"
 #     detector_id                      = aws_guardduty_detector.admin.id
 #   }}
+#
+# Also configure the Audit account to enable the detector and organization
+# configuration itself; the management workspace only delegates admin.
 """
 
     # Security Hub
