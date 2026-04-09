@@ -512,18 +512,15 @@ func TestTranslateDocBodyChunkedStripsUppercaseBodyWrapper(t *testing.T) {
 	}
 }
 
-func TestSanitizeDocChunkProtocolWrappersStripsTopLevelWrapperEvenWhenSourceMentionsBodyTag(t *testing.T) {
+func TestSanitizeDocChunkProtocolWrappersKeepsBodyOnlyWrapperWhenSourceMentionsBodyTag(t *testing.T) {
 	t.Parallel()
 
 	source := "Use `<body>` and `</body>` in examples, but keep the paragraph text plain.\n"
 	translated := "<body>\nTranslated paragraph.\n</body>\n"
 
 	got := sanitizeDocChunkProtocolWrappers(source, translated)
-	if strings.Contains(got, "<body>") || strings.Contains(got, "</body>") {
-		t.Fatalf("expected top-level wrapper to be stripped, got %q", got)
-	}
-	if strings.TrimSpace(got) != "Translated paragraph." {
-		t.Fatalf("unexpected sanitized body %q", got)
+	if got != translated {
+		t.Fatalf("expected ambiguous body-only wrapper to remain unchanged for retry\nwant:\n%s\ngot:\n%s", translated, got)
 	}
 }
 
@@ -536,6 +533,21 @@ func TestSanitizeDocChunkProtocolWrappersKeepsLegitimateTopLevelBodyBlock(t *tes
 	got := sanitizeDocChunkProtocolWrappers(source, translated)
 	if got != translated {
 		t.Fatalf("expected legitimate top-level body block to remain unchanged\nwant:\n%s\ngot:\n%s", translated, got)
+	}
+}
+
+func TestSanitizeDocChunkProtocolWrappersStripsBodyOnlyWrapperWhenSourceHasNoBodyTokens(t *testing.T) {
+	t.Parallel()
+
+	source := "Regular paragraph.\n"
+	translated := "<body>\nTranslated paragraph.\n</body>\n"
+
+	got := sanitizeDocChunkProtocolWrappers(source, translated)
+	if strings.Contains(got, "<body>") || strings.Contains(got, "</body>") {
+		t.Fatalf("expected body-only wrapper to be stripped, got %q", got)
+	}
+	if strings.TrimSpace(got) != "Translated paragraph." {
+		t.Fatalf("unexpected sanitized body %q", got)
 	}
 }
 

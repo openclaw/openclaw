@@ -26,6 +26,7 @@ Most days:
 - Faster local full-suite run on a roomy machine: `pnpm test:max`
 - Direct Vitest watch loop: `pnpm test:watch`
 - Direct file targeting now routes extension/channel paths too: `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts`
+- Prefer targeted runs first when you are iterating on a single failure.
 - Docker-backed QA site: `pnpm qa:lab:up`
 
 When you touch tests or want extra confidence:
