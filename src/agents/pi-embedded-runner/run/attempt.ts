@@ -104,6 +104,7 @@ import {
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { buildModelAliasLines } from "../model.js";
+import { runPromptWithRateLimitRetry } from "../rate-limit-retry.js";
 import {
   clearActiveEmbeddedRun,
   type EmbeddedPiQueueHandle,
@@ -1544,6 +1545,8 @@ export async function runEmbeddedAttempt(
         getMessagingToolSentTargets,
         getSuccessfulCronAdds,
         didSendViaMessagingTool,
+        getReasoningEmitCount,
+        didEmitAssistantUpdate,
         getLastToolError,
         getUsageTotals,
         getCompactionCount,
@@ -1775,13 +1778,26 @@ export async function runEmbeddedAttempt(
               });
           }
 
-          // Only pass images option if there are actually images to pass
-          // This avoids potential issues with models that don't expect the images parameter
-          if (imageResult.images.length > 0) {
-            await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
-          } else {
-            await abortable(activeSession.prompt(effectivePrompt));
-          }
+          await runPromptWithRateLimitRetry({
+            activeSession: {
+              prompt: activeSession.prompt.bind(activeSession),
+              messages: activeSession.messages,
+              agent: activeSession.agent,
+            },
+            effectivePrompt,
+            images: imageResult.images,
+            abortable,
+            assistantTexts,
+            toolMetas,
+            didSendViaMessagingTool,
+            getSuccessfulCronAdds,
+            getReasoningEmitCount,
+            didEmitAssistantUpdate,
+            getCompactionCount,
+            abortSignal: runAbortController.signal,
+            provider: params.provider,
+            modelId: params.modelId,
+          });
         } catch (err) {
           promptError = err;
           promptErrorSource = "prompt";

@@ -72,9 +72,16 @@ function getStatusCode(err: unknown): number | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
   }
+  // Dig into nested `err.error` shapes (e.g. Google Vertex abort wrappers)
+  const nestedError =
+    "error" in err && err.error && typeof err.error === "object"
+      ? (err.error as { status?: unknown; code?: unknown })
+      : undefined;
   const candidate =
     (err as { status?: unknown; statusCode?: unknown }).status ??
-    (err as { statusCode?: unknown }).statusCode;
+    (err as { statusCode?: unknown }).statusCode ??
+    nestedError?.code ??
+    nestedError?.status;
   if (typeof candidate === "number") {
     return candidate;
   }
@@ -88,12 +95,27 @@ function getErrorCode(err: unknown): string | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
   }
-  const candidate = (err as { code?: unknown }).code;
-  if (typeof candidate !== "string") {
-    return undefined;
+  const nestedError =
+    "error" in err && err.error && typeof err.error === "object"
+      ? (err.error as { code?: unknown; status?: unknown })
+      : undefined;
+  const directCode = (err as { code?: unknown }).code;
+  if (typeof directCode === "string") {
+    const trimmed = directCode.trim();
+    return trimmed ? trimmed : undefined;
   }
-  const trimmed = candidate.trim();
-  return trimmed ? trimmed : undefined;
+  // Treat a non-numeric `.status` string as a symbolic error code (e.g. "RESOURCE_EXHAUSTED")
+  const statusStr = (err as { status?: unknown }).status;
+  if (typeof statusStr === "string" && !/^\d+$/.test(statusStr)) {
+    const trimmed = statusStr.trim();
+    return trimmed ? trimmed : undefined;
+  }
+  const nestedCandidate = nestedError?.code ?? nestedError?.status;
+  if (typeof nestedCandidate === "string") {
+    const trimmed = nestedCandidate.trim();
+    return trimmed ? trimmed : undefined;
+  }
+  return undefined;
 }
 
 function getErrorMessage(err: unknown): string {
@@ -114,8 +136,51 @@ function getErrorMessage(err: unknown): string {
     if (typeof message === "string") {
       return message;
     }
+    // Extract message from nested `err.error.message` (e.g. Google Vertex wrappers)
+    const nestedMessage =
+      "error" in err &&
+      err.error &&
+      typeof err.error === "object" &&
+      typeof (err.error as { message?: unknown }).message === "string"
+        ? ((err.error as { message: string }).message ?? "")
+        : "";
+    if (nestedMessage) {
+      return nestedMessage;
+    }
   }
   return "";
+}
+
+function getErrorCause(err: unknown): unknown {
+  if (!err || typeof err !== "object" || !("cause" in err)) {
+    return undefined;
+  }
+  return (err as { cause?: unknown }).cause;
+}
+
+/** Classify rate-limit / overloaded from symbolic error codes like RESOURCE_EXHAUSTED. */
+function classifyFailoverReasonFromSymbolicCode(raw: string | undefined): FailoverReason | null {
+  const normalized = raw?.trim().toUpperCase();
+  if (!normalized) {
+    return null;
+  }
+  switch (normalized) {
+    case "RESOURCE_EXHAUSTED":
+    case "RATE_LIMIT":
+    case "RATE_LIMITED":
+    case "RATE_LIMIT_EXCEEDED":
+    case "TOO_MANY_REQUESTS":
+    case "THROTTLED":
+    case "THROTTLING":
+    case "THROTTLINGEXCEPTION":
+    case "THROTTLING_EXCEPTION":
+      return "rate_limit";
+    case "OVERLOADED":
+    case "OVERLOADED_ERROR":
+      return "overloaded";
+    default:
+      return null;
+  }
 }
 
 function hasTimeoutHint(err: unknown): boolean {
@@ -160,6 +225,12 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
     return statusReason;
   }
 
+  // Check symbolic error codes (e.g. RESOURCE_EXHAUSTED from Google APIs)
+  const symbolicCodeReason = classifyFailoverReasonFromSymbolicCode(getErrorCode(err));
+  if (symbolicCodeReason) {
+    return symbolicCodeReason;
+  }
+
   const code = (getErrorCode(err) ?? "").toUpperCase();
   if (
     [
@@ -175,6 +246,16 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
     ].includes(code)
   ) {
     return "timeout";
+  }
+  // Walk into error cause chain *before* timeout heuristics so that a specific
+  // cause (e.g. RESOURCE_EXHAUSTED wrapped in AbortError) overrides a parent
+  // message-based "timeout" guess from isTimeoutError.
+  const cause = getErrorCause(err);
+  if (cause && cause !== err) {
+    const causeReason = resolveFailoverReasonFromError(cause);
+    if (causeReason) {
+      return causeReason;
+    }
   }
   if (isTimeoutError(err)) {
     return "timeout";

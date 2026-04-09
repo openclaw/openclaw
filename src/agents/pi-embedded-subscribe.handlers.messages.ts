@@ -350,6 +350,7 @@ export function handleMessageEnd(
     }
     ctx.state.lastReasoningSent = formattedReasoning;
     emitBlockReplySafely({ text: formattedReasoning, isReasoning: true });
+    ctx.state.reasoningEmitCount += 1;
   };
 
   if (shouldEmitReasoningBeforeAnswer) {
