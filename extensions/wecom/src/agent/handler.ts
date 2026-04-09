@@ -545,6 +545,12 @@ async function processAgentMessage(params: {
     `[wecom-agent] authz: dmPolicy=${authz.dmPolicy} shouldCompute=${authz.shouldComputeAuth} sender=${fromUser.toLowerCase()} senderAllowed=${authz.senderAllowed} authorizerConfigured=${authz.authorizerConfigured} commandAuthorized=${String(authz.commandAuthorized)}`,
   );
 
+  // Non-command sender gate: if dmPolicy is not "open" and sender not in allowlist, skip silently
+  if (!authz.shouldComputeAuth && authz.dmPolicy !== "open" && !authz.senderAllowed) {
+    log?.(`[wecom-agent] sender ${fromUser} not allowed by dmPolicy=${authz.dmPolicy}, skipping`);
+    return;
+  }
+
   // 命令门禁：未授权时必须明确回复（Agent 侧用私信提示）
   if (authz.shouldComputeAuth && authz.commandAuthorized !== true) {
     const prompt = buildWecomUnauthorizedCommandPrompt({

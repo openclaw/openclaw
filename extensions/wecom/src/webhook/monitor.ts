@@ -436,9 +436,16 @@ export async function startAgentForStream(params: {
     // Images: deliver via Bot in-session (base64 msg_item)
     if (imagePaths.length > 0 && otherPaths.length === 0) {
       const loaded: Array<{ base64: string; md5: string; path: string }> = [];
+      const allowedRoots = target.account.config.mediaLocalRoots ?? [];
       for (const p of imagePaths) {
         try {
-          const buf = await fs.readFile(p);
+          // Validate path against allowed media roots
+          const resolved = pathModule.resolve(p);
+          if (allowedRoots.length > 0 && !allowedRoots.some((r) => resolved.startsWith(pathModule.resolve(r)))) {
+            target.runtime.error?.(`[webhook] local-path: path ${p} outside allowed media roots, skipping`);
+            continue;
+          }
+          const buf = await fs.readFile(resolved);
           const base64 = buf.toString("base64");
           const md5 = computeMd5(buf);
           loaded.push({ base64, md5, path: p });
@@ -727,6 +734,15 @@ export async function startAgentForStream(params: {
   target.runtime.log?.(
     `[webhook] authz: dmPolicy=${authz.dmPolicy} shouldCompute=${authz.shouldComputeAuth} sender=${userid.toLowerCase()} senderAllowed=${authz.senderAllowed} authorizerConfigured=${authz.authorizerConfigured} commandAuthorized=${String(commandAuthorized)}`,
   );
+
+  // Non-command sender gate: if dmPolicy is not "open" and sender not in allowlist, skip silently
+  if (!authz.shouldComputeAuth && authz.dmPolicy !== "open" && !authz.senderAllowed) {
+    target.runtime.log?.(
+      `[webhook] sender ${userid} not allowed by dmPolicy=${authz.dmPolicy}, skipping`,
+    );
+    streamStore.onStreamFinished(streamId);
+    return;
+  }
 
   // Command gate: if this is a command and unauthorized, must give user a clear Chinese reply (cannot silently ignore)
   if (authz.shouldComputeAuth && authz.commandAuthorized !== true) {

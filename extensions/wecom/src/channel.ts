@@ -45,7 +45,7 @@ async function sendWeComMessage({
   accountId?: string;
   cfg?: OpenClawConfig;
 }): Promise<{ channel: string; messageId: string; chatId: string }> {
-  const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
+  const resolvedAccountId = accountId ?? (cfg ? resolveDefaultWeComAccountId(cfg) : DEFAULT_ACCOUNT_ID);
 
   // Extract target from `to` (format is "${CHANNEL_ID}:xxx" or a plain target string)
   const channelPrefix = new RegExp(`^${CHANNEL_ID}:`, "i");
@@ -332,7 +332,7 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
       return sendWeComMessage({ to, content: text, accountId: accountId ?? undefined, cfg });
     },
     sendMedia: async ({ to, text, mediaUrl, mediaLocalRoots, accountId, cfg }) => {
-      const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
+      const resolvedAccountId = accountId ?? (cfg ? resolveDefaultWeComAccountId(cfg) : DEFAULT_ACCOUNT_ID);
       const channelPrefix = new RegExp(`^${CHANNEL_ID}:`, "i");
       const chatId = to.replace(channelPrefix, "");
 
@@ -414,12 +414,32 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
         `[wecom-outbound] Bot WS unavailable, sending media via Agent HTTP API to ${JSON.stringify(target)}`,
       );
 
-      // Try downloading and uploading media to WeCom
+      // Try loading and uploading media to WeCom
       try {
-        const mediaResponse = await fetch(mediaUrl);
-        if (mediaResponse.ok) {
-          const buffer = Buffer.from(await mediaResponse.arrayBuffer());
-          const filename = mediaUrl.split("/").pop() || "file.bin";
+        let buffer: Buffer;
+        let filename: string;
+
+        if (/^https?:\/\//i.test(mediaUrl)) {
+          const mediaResponse = await fetch(mediaUrl);
+          if (!mediaResponse.ok) {
+            throw new Error(`download failed: ${mediaResponse.status}`);
+          }
+          buffer = Buffer.from(await mediaResponse.arrayBuffer());
+          filename = mediaUrl.split("/").pop() || "file.bin";
+        } else {
+          // Local path — validate against allowed media roots
+          const pathMod = await import("node:path");
+          const fsMod = await import("node:fs/promises");
+          const resolved = pathMod.resolve(mediaUrl);
+          const roots = mediaLocalRoots ?? [];
+          if (roots.length > 0 && !roots.some((r) => resolved.startsWith(pathMod.resolve(r)))) {
+            throw new Error(`Path "${mediaUrl}" outside allowed media roots`);
+          }
+          buffer = await fsMod.readFile(resolved);
+          filename = pathMod.basename(resolved);
+        }
+
+        if (buffer.length > 0) {
           const mediaId = await uploadAgentMedia({
             agent,
             type: "file",
