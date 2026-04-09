@@ -1678,6 +1678,7 @@ data "aws_ssoadmin_instances" "this" {{}}
     guardduty_block = ""
     if enable_gd:
         guardduty_block = f"""
+# GuardDuty: management account enables detector and delegates admin to Audit
 resource "aws_guardduty_detector" "this" {{
   enable = true
   tags   = local.tags
@@ -1688,11 +1689,18 @@ resource "aws_guardduty_organization_admin_account" "audit" {{
   depends_on       = [aws_guardduty_detector.this]
 }}
 
-resource "aws_guardduty_organization_configuration" "this" {{
-  auto_enable_organization_members = "ALL"
-  detector_id                      = aws_guardduty_detector.this.id
-  depends_on                       = [aws_guardduty_organization_admin_account.audit]
-}}
+# NOTE: aws_guardduty_organization_configuration must be applied from the
+# delegated admin (Audit) account, not the management account.
+# Deploy the following in a separate workspace with Audit account credentials:
+#
+#   resource "aws_guardduty_detector" "admin" {{
+#     enable = true
+#   }}
+#
+#   resource "aws_guardduty_organization_configuration" "this" {{
+#     auto_enable_organization_members = "ALL"
+#     detector_id                      = aws_guardduty_detector.admin.id
+#   }}
 """
 
     # Security Hub
@@ -1721,11 +1729,18 @@ resource "aws_securityhub_organization_admin_account" "audit" {{
   depends_on       = [aws_securityhub_account.this]
 }}
 
-resource "aws_securityhub_organization_configuration" "this" {{
-  auto_enable           = true
-  auto_enable_standards = "DEFAULT"
-  depends_on            = [aws_securityhub_organization_admin_account.audit]
-}}
+# NOTE: aws_securityhub_organization_configuration and standards subscriptions
+# must be applied from the delegated admin (Audit) account, not the management
+# account. Deploy the following in a separate workspace with Audit account
+# credentials:
+#
+#   resource "aws_securityhub_account" "admin" {{}}
+#
+#   resource "aws_securityhub_organization_configuration" "this" {{
+#     auto_enable           = true
+#     auto_enable_standards = "DEFAULT"
+#     depends_on            = [aws_securityhub_account.admin]
+#   }}
 {standards_blocks}
 """
 
