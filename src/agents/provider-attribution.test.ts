@@ -867,4 +867,25 @@ describe("provider attribution", () => {
       },
     });
   });
+
+  it("skips direct-completion OpenRouter attribution for custom proxy baseUrls", () => {
+    expect(
+      applyProviderAttributionHeadersToModel(
+        {
+          provider: "openrouter",
+          baseUrl: "https://proxy.example.com/v1",
+          headers: {
+            "X-Custom": "1",
+          },
+        },
+        { OPENCLAW_VERSION: "2026.3.22" },
+      ),
+    ).toEqual({
+      provider: "openrouter",
+      baseUrl: "https://proxy.example.com/v1",
+      headers: {
+        "X-Custom": "1",
+      },
+    });
+  });
 });

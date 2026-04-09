@@ -461,12 +461,20 @@ export function resolveProviderAttributionHeaders(
 }
 
 export function applyProviderAttributionHeadersToModel<
-  T extends { provider?: string | null; headers?: Record<string, string> | undefined },
+  T extends {
+    provider?: string | null;
+    baseUrl?: string | null;
+    headers?: Record<string, string> | undefined;
+  },
 >(model: T, env: RuntimeVersionEnv = process.env as RuntimeVersionEnv): T {
   const normalizedProvider = normalizeProviderId(model.provider ?? "");
   // Only OpenRouter attribution is applied via direct-completion model headers.
   // OpenAI / OpenAI-Codex attribution stays on the stream-wrapper path for now.
   if (normalizedProvider !== "openrouter") {
+    return model;
+  }
+  const endpointClass = resolveProviderEndpoint(model.baseUrl).endpointClass;
+  if (endpointClass !== "default" && endpointClass !== "openrouter") {
     return model;
   }
   const attributionHeaders = resolveProviderAttributionHeaders(normalizedProvider, env);
