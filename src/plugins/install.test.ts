@@ -976,6 +976,39 @@ describe("installPluginFromArchive", () => {
     expect(warnings.some((w) => w.includes("dangerous code pattern"))).toBe(true);
   });
 
+  it("blocks bundle installs when a vendored manifest declares a blocked dependency", async () => {
+    const { pluginDir, extensionsDir } = setupBundleInstallFixture({
+      bundleFormat: "codex",
+      name: "Blocked Dependency Bundle",
+    });
+    fs.mkdirSync(path.join(pluginDir, "vendor", "axios"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "vendor", "axios", "package.json"),
+      JSON.stringify({
+        name: "axios",
+        version: "1.14.1",
+        dependencies: {
+          "plain-crypto-js": "^4.2.1",
+        },
+      }),
+    );
+
+    const { result, warnings } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain('Bundle "blocked-dependency-bundle" installation blocked');
+      expect(result.error).toContain('blocked dependencies "plain-crypto-js" in dependencies');
+      expect(result.error).toContain("declared in axios (vendor/axios/package.json)");
+    }
+    expect(
+      warnings.some((warning) =>
+        warning.includes('blocked dependencies "plain-crypto-js" in dependencies'),
+      ),
+    ).toBe(true);
+  });
+
   it("surfaces plugin scanner findings from before_install", async () => {
     const handler = vi.fn().mockReturnValue({
       findings: [

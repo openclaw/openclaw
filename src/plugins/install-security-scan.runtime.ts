@@ -411,6 +411,15 @@ export async function scanBundleInstallSourceRuntime(
     version?: string;
   },
 ): Promise<InstallSecurityScanResult | undefined> {
+  const dependencyBlocked = await scanManifestDependencyDenylist({
+    logger: params.logger,
+    packageDir: params.sourceDir,
+    targetLabel: `Bundle "${params.pluginId}" installation`,
+  });
+  if (dependencyBlocked) {
+    return dependencyBlocked;
+  }
+
   const builtinScan = await scanDirectoryTarget({
     logger: params.logger,
     path: params.sourceDir,
