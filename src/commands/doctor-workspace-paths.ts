@@ -189,6 +189,25 @@ export function detectStaleWorkspacePaths(
  * interactive mode, prompt to rewrite them to `~`-relative form. Returns a
  * new config object; callers should assign the result back to `ctx.cfg`.
  */
+function resolveCurrentUsername(): string {
+  // os.userInfo() throws (`SystemError [ERR_SYSTEM_ERROR]: A system error
+  // occurred: uv_os_get_passwd returned ENOENT`) on systems where the
+  // running UID has no /etc/passwd entry — common in containerized or
+  // NSS-restricted environments. Doctor must not crash there, so fall
+  // back to env vars and finally to an empty string. An empty username
+  // is fine for detection: every home-shaped prefix will compare unequal
+  // and the path will be flagged for review rather than auto-skipped.
+  try {
+    const fromUserInfo = os.userInfo().username;
+    if (fromUserInfo) {
+      return fromUserInfo;
+    }
+  } catch {
+    // fall through to env-based fallback
+  }
+  return process.env.USER ?? process.env.LOGNAME ?? process.env.USERNAME ?? "";
+}
+
 export async function maybeRepairStaleWorkspacePaths(
   cfg: OpenClawConfig,
   prompter: DoctorPrompter,
@@ -196,7 +215,7 @@ export async function maybeRepairStaleWorkspacePaths(
 ): Promise<OpenClawConfig> {
   const findings = detectStaleWorkspacePaths(cfg, {
     homedir: os.homedir(),
-    username: os.userInfo().username,
+    username: resolveCurrentUsername(),
     platform: process.platform,
     pathExists: (p) => {
       try {
