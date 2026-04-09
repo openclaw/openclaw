@@ -103,7 +103,6 @@ export async function start(state: CronServiceState) {
     return;
   }
 
-  const interruptedOneShotIds = new Set<string>();
   let clearedAnyRunningMarker = false;
   await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
@@ -116,12 +115,6 @@ export async function start(state: CronServiceState) {
         );
         job.state.runningAtMs = undefined;
         clearedAnyRunningMarker = true;
-        // One-shot jobs are not retried after interruption; recurring jobs
-        // (cron/every) are eligible for startup catch-up so they don't
-        // require a second restart to recover (#60495).
-        if (job.schedule.kind === "at") {
-          interruptedOneShotIds.add(job.id);
-        }
       }
     }
     if (clearedAnyRunningMarker) {
@@ -129,9 +122,16 @@ export async function start(state: CronServiceState) {
     }
   });
 
-  await runMissedJobs(state, {
-    skipJobIds: interruptedOneShotIds.size > 0 ? interruptedOneShotIds : undefined,
-  });
+  // Let startup catch-up re-run any job that was interrupted mid-execution,
+  // regardless of schedule kind. Recurring jobs were already eligible via
+  // #60583. One-shot ("at") jobs are now also eligible: an interrupted run
+  // leaves `runningAtMs` set but `lastStatus` unset (timer.ts writes both
+  // atomically on completion), so the existing `skipAtIfAlreadyRan` guard in
+  // `runMissedJobs -> isRunnableJob` (timer.ts:850-866) correctly distinguishes
+  // "never settled" from "already completed" and retries only the former.
+  // This prevents one-shot reminders from silently disappearing when the
+  // gateway restarts mid-delivery (#63657).
+  await runMissedJobs(state);
 
   await locked(state, async () => {
     // Startup catch-up already persisted the latest in-memory store state, and

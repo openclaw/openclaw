@@ -30,6 +30,52 @@ function createInterruptedMainJob(now: number): CronJob {
   };
 }
 
+function createInterruptedOneShotJob(now: number): CronJob {
+  // One-shot (`kind: "at"`) job that was mid-execution when the gateway
+  // went down: `runningAtMs` is set but `lastStatus` is unset because the
+  // run never reached the settle step. See #63657.
+  return {
+    id: "startup-interrupted-one-shot",
+    name: "startup interrupted one-shot",
+    enabled: true,
+    createdAtMs: now - 86_400_000,
+    updatedAtMs: now - 30 * 60_000,
+    schedule: { kind: "at", at: new Date(now - 60_000).toISOString() },
+    sessionTarget: "main",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "systemEvent", text: "one-shot reminder" },
+    state: {
+      nextRunAtMs: now - 60_000,
+      runningAtMs: now - 30 * 60_000,
+    },
+  };
+}
+
+function createCompletedOneShotJob(now: number): CronJob {
+  // One-shot that already settled successfully before the restart. The
+  // `runningAtMs` marker is stale (should have been cleared by timer.ts:408
+  // in the same block that set `lastStatus`), but defensive code should
+  // still treat it as completed and refuse to re-run it.
+  return {
+    id: "startup-completed-one-shot",
+    name: "startup completed one-shot",
+    enabled: true,
+    createdAtMs: now - 86_400_000,
+    updatedAtMs: now - 30 * 60_000,
+    schedule: { kind: "at", at: new Date(now - 3_600_000).toISOString() },
+    sessionTarget: "main",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "systemEvent", text: "already delivered" },
+    state: {
+      nextRunAtMs: now - 3_600_000,
+      lastRunAtMs: now - 3_600_000,
+      lastStatus: "ok",
+      // Stale runningAtMs to simulate a crash between marker set and clear.
+      runningAtMs: now - 3_600_000,
+    },
+  };
+}
+
 function createDueIsolatedJob(now: number): CronJob {
   return {
     id: "isolated-timeout",
@@ -113,6 +159,103 @@ describe("cron service ops seam coverage", () => {
     expect(delays.some((delay) => delay > 0)).toBe(true);
 
     timeoutSpy.mockRestore();
+    stop(state);
+  });
+
+  it("replays interrupted one-shot jobs on startup recovery (#63657)", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [createInterruptedOneShotJob(now)],
+    });
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    await start(state);
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: "startup-interrupted-one-shot" }),
+      "cron: clearing stale running marker on startup",
+    );
+    // Interrupted one-shot jobs must now be replayed on first restart —
+    // previously they were silently skipped, losing any reminder or
+    // scheduled delivery that happened to be mid-flight at the restart
+    // moment (#63657).
+    expect(enqueueSystemEvent).toHaveBeenCalled();
+    expect(requestHeartbeatNow).toHaveBeenCalled();
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as {
+      jobs: CronJob[];
+    };
+    const job = persisted.jobs[0];
+    expect(job).toBeDefined();
+    expect(job?.state.runningAtMs).toBeUndefined();
+    expect(job?.state.lastStatus).toBe("ok");
+    expect(job?.state.lastRunAtMs).toBe(now);
+
+    stop(state);
+  });
+
+  it("does not re-run a completed one-shot with stale runningAtMs on startup (#63657)", async () => {
+    // Safety guard: if a crash leaves a completed one-shot with a stale
+    // `runningAtMs` marker (e.g. the gateway died between the settle write
+    // and the state flush), the `skipAtIfAlreadyRan` guard in
+    // `runMissedJobs -> isRunnableJob` must still refuse to re-run it
+    // because `lastStatus` is already set. Without this guarantee, fixing
+    // #63657 would regress the #56509 class of one-shot double-delivery
+    // bugs. See timer.ts:850-866.
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [createCompletedOneShotJob(now)],
+    });
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    await start(state);
+
+    // Startup still clears the stale marker.
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: "startup-completed-one-shot" }),
+      "cron: clearing stale running marker on startup",
+    );
+    // But the already-delivered one-shot is NOT re-enqueued.
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as {
+      jobs: CronJob[];
+    };
+    const job = persisted.jobs[0];
+    expect(job).toBeDefined();
+    expect(job?.state.runningAtMs).toBeUndefined();
+    // Completion state is preserved — still "ok", still the original lastRun.
+    expect(job?.state.lastStatus).toBe("ok");
+    expect(job?.state.lastRunAtMs).toBe(now - 3_600_000);
+
     stop(state);
   });
 
