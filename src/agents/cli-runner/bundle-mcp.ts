@@ -16,6 +16,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { serializeTomlInlineValue } from "./toml-inline.js";
 
 type PreparedCliBundleMcpConfig = {
   backend: CliBackendConfig;
@@ -202,35 +203,6 @@ function normalizeGeminiServerConfig(
     next.trust = server.trust;
   }
   return next;
-}
-
-function escapeTomlString(value: string): string {
-  return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
-}
-
-function formatTomlKey(key: string): string {
-  return /^[A-Za-z0-9_-]+$/.test(key) ? key : `"${escapeTomlString(key)}"`;
-}
-
-function serializeTomlInlineValue(value: unknown): string {
-  if (typeof value === "string") {
-    return `"${escapeTomlString(value)}"`;
-  }
-  if (typeof value === "number" || typeof value === "bigint") {
-    return String(value);
-  }
-  if (typeof value === "boolean") {
-    return value ? "true" : "false";
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => serializeTomlInlineValue(entry)).join(", ")}]`;
-  }
-  if (isRecord(value)) {
-    return `{ ${Object.entries(value)
-      .map(([key, entry]) => `${formatTomlKey(key)} = ${serializeTomlInlineValue(entry)}`)
-      .join(", ")} }`;
-  }
-  throw new Error(`Unsupported TOML value for Codex MCP config: ${String(value)}`);
 }
 
 function injectCodexMcpConfigArgs(args: string[] | undefined, config: BundleMcpConfig): string[] {

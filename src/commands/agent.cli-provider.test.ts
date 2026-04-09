@@ -22,6 +22,16 @@ import {
 } from "./agent-command.test-support.js";
 import { agentCommand } from "./agent.js";
 
+vi.mock("../agents/auth-profiles/store.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/auth-profiles/store.js")>(
+    "../agents/auth-profiles/store.js",
+  );
+  return {
+    ...actual,
+    ensureAuthProfileStore: vi.fn(() => ({ version: 1, profiles: {} })),
+  };
+});
+
 const runtime: RuntimeEnv = {
   log: vi.fn(),
   error: vi.fn(),

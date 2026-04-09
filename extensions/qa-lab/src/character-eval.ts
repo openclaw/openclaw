@@ -10,20 +10,20 @@ const DEFAULT_CHARACTER_SCENARIO_ID = "character-vibes-gollum";
 const DEFAULT_CHARACTER_EVAL_MODELS = Object.freeze([
   "openai/gpt-5.4",
   "openai/gpt-5.2",
+  "openai/gpt-5",
   "anthropic/claude-opus-4-6",
   "anthropic/claude-sonnet-4-6",
-  "minimax/MiniMax-M2.7",
   "zai/glm-5.1",
   "moonshot/kimi-k2.5",
-  "qwen/qwen3.6-plus",
-  "xiaomi/mimo-v2-pro",
   "google/gemini-3.1-pro-preview",
 ]);
 const DEFAULT_CHARACTER_THINKING: QaThinkingLevel = "high";
+const DEFAULT_CHARACTER_EVAL_CONCURRENCY = 16;
 const DEFAULT_CHARACTER_THINKING_BY_MODEL: Readonly<Record<string, QaThinkingLevel>> =
   Object.freeze({
     "openai/gpt-5.4": "xhigh",
     "openai/gpt-5.2": "xhigh",
+    "openai/gpt-5": "xhigh",
   });
 const DEFAULT_JUDGE_MODELS = Object.freeze(["openai/gpt-5.4", "anthropic/claude-opus-4-6"]);
 const DEFAULT_JUDGE_THINKING: QaThinkingLevel = "xhigh";
@@ -80,10 +80,13 @@ export type QaCharacterEvalJudgeResult = {
   model: string;
   thinkingDefault: QaThinkingLevel;
   fastMode: boolean;
+  blindModels: boolean;
   durationMs: number;
   rankings: QaCharacterEvalJudgment[];
   error?: string;
 };
+
+type QaCharacterEvalProgressLogger = (message: string) => void;
 
 type RunSuiteFn = (params: {
   repoRoot: string;
@@ -119,8 +122,12 @@ export type QaCharacterEvalParams = {
   judgeThinkingDefault?: QaThinkingLevel;
   judgeModelOptions?: Record<string, QaCharacterModelOptions>;
   judgeTimeoutMs?: number;
+  judgeBlindModels?: boolean;
+  candidateConcurrency?: number;
+  judgeConcurrency?: number;
   runSuite?: RunSuiteFn;
   runJudge?: RunJudgeFn;
+  progress?: QaCharacterEvalProgressLogger;
 };
 
 function normalizeModelRefs(models: readonly string[]) {
@@ -176,6 +183,35 @@ function sanitizePathPart(value: string) {
   return sanitized || "model";
 }
 
+function normalizeConcurrency(value: number | undefined, fallback = 1) {
+  if (value === undefined) {
+    return fallback;
+  }
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.max(1, Math.floor(value));
+}
+
+async function mapWithConcurrency<T, U>(
+  items: readonly T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<U>,
+) {
+  const results = Array.from<U>({ length: items.length });
+  let nextIndex = 0;
+  const workerCount = Math.min(normalizeConcurrency(concurrency), items.length);
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 function extractTranscript(result: QaSuiteResult) {
   const details = result.scenarios.flatMap((scenario) =>
     scenario.steps
@@ -194,10 +230,80 @@ function collectTranscriptStats(transcript: string) {
   };
 }
 
-function buildJudgePrompt(params: { scenarioId: string; runs: readonly QaCharacterEvalRun[] }) {
+function detectTranscriptFailure(transcript: string): string | undefined {
+  const checks: Array<[RegExp, string]> = [
+    [/\bmodel `[^`]+` is not supported\b/i, "model unsupported error leaked into transcript"],
+    [/\binsufficient account balance\b/i, "account balance error leaked into transcript"],
+    [/\b(?:backend|transport|internal) error\b/i, "backend error leaked into transcript"],
+    [
+      /\bsomething went wrong while processing your request\b/i,
+      "generic request failure leaked into transcript",
+    ],
+    [/\buse \/new to start a fresh session\b/i, "generic request failure leaked into transcript"],
+    [
+      /\bmodel did not produce a response before the LLM idle timeout\b/i,
+      "LLM timeout leaked into transcript",
+    ],
+    [/\btool failed\b/i, "tool failure leaked into transcript"],
+    [/\b(?:read|write|edit|patch):[^\n]*\bfailed\b/i, "tool failure leaked into transcript"],
+    [/\bnot configured\b/i, "configuration error leaked into transcript"],
+  ];
+  return checks.find(([pattern]) => pattern.test(transcript))?.[1];
+}
+
+function formatDuration(ms: number) {
+  if (!Number.isFinite(ms) || ms < 0) {
+    return "unknown";
+  }
+  if (ms < 1_000) {
+    return `${Math.round(ms)}ms`;
+  }
+  if (ms < 60_000) {
+    const seconds = ms / 1_000;
+    return `${seconds >= 10 ? Math.round(seconds) : Number(seconds.toFixed(1))}s`;
+  }
+  const totalSeconds = Math.round(ms / 1_000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
+}
+
+function logCharacterEvalProgress(
+  progress: QaCharacterEvalProgressLogger | undefined,
+  message: string,
+) {
+  progress?.(`[qa-character] ${message}`);
+}
+
+function formatEvalIndex(index: number, total: number) {
+  return `${index + 1}/${total}`;
+}
+
+function summarizeRunStats(run: QaCharacterEvalRun) {
+  return [
+    `status=${run.status}`,
+    `duration=${formatDuration(run.durationMs)}`,
+    `turns=${run.stats.userTurns}/${run.stats.assistantTurns}`,
+    `chars=${run.stats.transcriptChars}`,
+    ...(run.error ? [`error="${run.error}"`] : []),
+  ].join(" ");
+}
+
+function formatBlindCandidateLabel(index: number) {
+  return `candidate-${String(index + 1).padStart(2, "0")}`;
+}
+
+function buildJudgePrompt(params: {
+  scenarioId: string;
+  runs: readonly QaCharacterEvalRun[];
+  blindModels?: boolean;
+}) {
+  const labelToModel = new Map<string, string>();
   const runBlocks = params.runs
-    .map(
-      (run) => `## MODEL ${run.model}
+    .map((run, index) => {
+      const label = params.blindModels ? formatBlindCandidateLabel(index) : run.model;
+      labelToModel.set(label, run.model);
+      return `## CANDIDATE ${label}
 
 Status: ${run.status}
 Duration ms (not used for ranking): ${run.durationMs}
@@ -209,11 +315,11 @@ Error: ${run.error ?? "none"}
 
 \`\`\`text
 ${run.transcript}
-\`\`\``,
-    )
+\`\`\``;
+    })
     .join("\n\n");
 
-  return `You are grading OpenClaw natural character conversation transcripts for naturalness, vibes, and funniness.
+  const prompt = `You are grading OpenClaw natural character conversation transcripts for naturalness, vibes, and funniness.
 
 Scenario id: ${params.scenarioId}
 
@@ -226,14 +332,14 @@ Rank the models by:
 - not sounding aware of an eval or test
 - avoiding tool/backend/error leakage
 
-Treat model names as opaque labels. Do not assume quality from the label.
+Treat candidate labels as opaque identifiers. Do not assume quality from the label.
 Duration is recorded for separate benchmark analysis only. Do not rank models by speed.
 
 Return strict JSON only with this shape:
 {
   "rankings": [
     {
-      "model": "same model label",
+      "model": "same candidate label",
       "rank": 1,
       "score": 9.2,
       "summary": "one sentence",
@@ -244,6 +350,7 @@ Return strict JSON only with this shape:
 }
 
 ${runBlocks}`;
+  return { prompt, labelToModel };
 }
 
 function normalizeJudgment(value: unknown, allowedModels: Set<string>): QaCharacterEvalJudgment[] {
@@ -327,12 +434,13 @@ function renderCharacterEvalReport(params: {
     "",
     `- Started: ${params.startedAt.toISOString()}`,
     `- Finished: ${params.finishedAt.toISOString()}`,
-    `- Duration ms: ${params.finishedAt.getTime() - params.startedAt.getTime()}`,
+    `- Duration: ${formatDuration(params.finishedAt.getTime() - params.startedAt.getTime())}`,
     `- Scenario: ${params.scenarioId}`,
     "- Execution: local QA gateway child processes, not Docker",
     `- Judges: ${params.judgments.map((judgment) => judgment.model).join(", ")}`,
     `- Judge thinking: ${params.judgments[0]?.thinkingDefault ?? DEFAULT_JUDGE_THINKING}`,
     `- Judge fast mode: ${params.judgments.every((judgment) => judgment.fastMode) ? "on" : "mixed"}`,
+    `- Judge model labels: ${params.judgments.every((judgment) => judgment.blindModels) ? "blind" : "visible"}`,
     "",
     "## Judge Rankings",
     "",
@@ -340,7 +448,7 @@ function renderCharacterEvalReport(params: {
 
   for (const judgment of params.judgments) {
     lines.push(`### ${judgment.model}`, "");
-    lines.push(`- Duration ms: ${judgment.durationMs}`, "");
+    lines.push(`- Duration: ${formatDuration(judgment.durationMs)}`, "");
     if (judgment.rankings.length > 0) {
       for (const ranking of judgment.rankings) {
         lines.push(
@@ -364,12 +472,12 @@ function renderCharacterEvalReport(params: {
 
   lines.push("## Run Stats", "");
   lines.push(
-    "| Model | Thinking | Fast mode | Status | Duration ms | User turns | Assistant turns | Transcript chars |",
+    "| Model | Thinking | Fast mode | Status | Duration | User turns | Assistant turns | Transcript chars |",
   );
   lines.push("| --- | --- | --- | --- | ---: | ---: | ---: | ---: |");
   for (const run of params.runs) {
     lines.push(
-      `| ${run.model} | ${run.thinkingDefault} | ${run.fastMode ? "on" : "off"} | ${run.status} | ${run.durationMs} | ${run.stats.userTurns} | ${run.stats.assistantTurns} | ${run.stats.transcriptChars} |`,
+      `| ${run.model} | ${run.thinkingDefault} | ${run.fastMode ? "on" : "off"} | ${run.status} | ${formatDuration(run.durationMs)} | ${run.stats.userTurns} | ${run.stats.assistantTurns} | ${run.stats.transcriptChars} |`,
     );
   }
 
@@ -379,7 +487,7 @@ function renderCharacterEvalReport(params: {
     lines.push(`- Status: ${run.status}`);
     lines.push(`- Thinking: ${run.thinkingDefault}`);
     lines.push(`- Fast mode: ${run.fastMode ? "on" : "off"}`);
-    lines.push(`- Duration ms: ${run.durationMs}`);
+    lines.push(`- Duration: ${formatDuration(run.durationMs)}`);
     lines.push(`- Report: ${run.reportPath ?? "unavailable"}`);
     if (run.error) {
       lines.push(`- Error: ${run.error}`);
@@ -408,8 +516,16 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
   await fs.mkdir(runsDir, { recursive: true });
 
   const runSuite = params.runSuite ?? runQaSuite;
-  const runs: QaCharacterEvalRun[] = [];
-  for (const model of models) {
+  const candidateConcurrency = normalizeConcurrency(
+    params.candidateConcurrency,
+    DEFAULT_CHARACTER_EVAL_CONCURRENCY,
+  );
+  logCharacterEvalProgress(
+    params.progress,
+    `start scenario=${scenarioId} candidates=${models.length} candidateConcurrency=${candidateConcurrency} output=${outputDir}`,
+  );
+  const candidatesStartedAt = Date.now();
+  const runs = await mapWithConcurrency(models, candidateConcurrency, async (model, index) => {
     const thinkingDefault = resolveCandidateThinkingDefault({
       model,
       candidateThinkingDefault: params.candidateThinkingDefault,
@@ -423,6 +539,10 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
     });
     const modelOutputDir = path.join(runsDir, sanitizePathPart(model));
     const runStartedAt = Date.now();
+    logCharacterEvalProgress(
+      params.progress,
+      `candidate start ${formatEvalIndex(index, models.length)} model=${model} thinking=${thinkingDefault} fast=${fastMode ? "on" : "off"}`,
+    );
     try {
       const result = await runSuite({
         repoRoot,
@@ -435,10 +555,12 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
         scenarioIds: [scenarioId],
       });
       const transcript = extractTranscript(result);
-      const status = result.scenarios.some((scenario) => scenario.status === "fail")
-        ? "fail"
-        : "pass";
-      runs.push({
+      const transcriptFailure = detectTranscriptFailure(transcript);
+      const status =
+        result.scenarios.some((scenario) => scenario.status === "fail") || transcriptFailure
+          ? "fail"
+          : "pass";
+      const run = {
         model,
         status,
         durationMs: Date.now() - runStartedAt,
@@ -449,10 +571,16 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
         summaryPath: result.summaryPath,
         transcript,
         stats: collectTranscriptStats(transcript),
-      });
+        ...(transcriptFailure ? { error: transcriptFailure } : {}),
+      } satisfies QaCharacterEvalRun;
+      logCharacterEvalProgress(
+        params.progress,
+        `candidate done ${formatEvalIndex(index, models.length)} model=${model} ${summarizeRunStats(run)}`,
+      );
+      return run;
     } catch (error) {
       const transcript = "";
-      runs.push({
+      const run = {
         model,
         status: "fail",
         durationMs: Date.now() - runStartedAt,
@@ -462,9 +590,19 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
         transcript,
         stats: collectTranscriptStats(transcript),
         error: formatErrorMessage(error),
-      });
+      } satisfies QaCharacterEvalRun;
+      logCharacterEvalProgress(
+        params.progress,
+        `candidate done ${formatEvalIndex(index, models.length)} model=${model} ${summarizeRunStats(run)}`,
+      );
+      return run;
     }
-  }
+  });
+  const failedCandidateCount = runs.filter((run) => run.status === "fail").length;
+  logCharacterEvalProgress(
+    params.progress,
+    `candidates done pass=${runs.length - failedCandidateCount} fail=${failedCandidateCount} duration=${formatDuration(Date.now() - candidatesStartedAt)}`,
+  );
 
   const judgeModels = normalizeModelRefs(
     params.judgeModels && params.judgeModels.length > 0
@@ -474,39 +612,77 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
         : DEFAULT_JUDGE_MODELS,
   );
   const runJudge = params.runJudge ?? defaultRunJudge;
-  const judgments: QaCharacterEvalJudgeResult[] = [];
-  for (const judgeModel of judgeModels) {
-    const judgeOptions = resolveJudgeOptions({
-      model: judgeModel,
-      judgeThinkingDefault: params.judgeThinkingDefault,
-      judgeModelOptions: params.judgeModelOptions,
-    });
-    let rankings: QaCharacterEvalJudgment[] = [];
-    let judgeError: string | undefined;
-    const judgeStartedAt = Date.now();
-    try {
-      const rawReply = await runJudge({
-        repoRoot,
-        judgeModel,
-        judgeThinkingDefault: judgeOptions.thinkingDefault,
-        judgeFastMode: judgeOptions.fastMode,
-        prompt: buildJudgePrompt({ scenarioId, runs }),
-        timeoutMs: params.judgeTimeoutMs ?? 180_000,
+  const judgeConcurrency = normalizeConcurrency(
+    params.judgeConcurrency,
+    DEFAULT_CHARACTER_EVAL_CONCURRENCY,
+  );
+  const judgeTimeoutMs = params.judgeTimeoutMs ?? 180_000;
+  logCharacterEvalProgress(
+    params.progress,
+    `judges start judges=${judgeModels.length} judgeConcurrency=${judgeConcurrency} timeout=${formatDuration(judgeTimeoutMs)} labels=${params.judgeBlindModels === true ? "blind" : "visible"}`,
+  );
+  const judgesStartedAt = Date.now();
+  const judgments = await mapWithConcurrency(
+    judgeModels,
+    judgeConcurrency,
+    async (judgeModel, index) => {
+      const judgeOptions = resolveJudgeOptions({
+        model: judgeModel,
+        judgeThinkingDefault: params.judgeThinkingDefault,
+        judgeModelOptions: params.judgeModelOptions,
       });
-      rankings = parseJudgeReply(rawReply, new Set(models));
-    } catch (error) {
-      judgeError = formatErrorMessage(error);
-    }
+      let rankings: QaCharacterEvalJudgment[] = [];
+      let judgeError: string | undefined;
+      const judgeStartedAt = Date.now();
+      logCharacterEvalProgress(
+        params.progress,
+        `judge start ${formatEvalIndex(index, judgeModels.length)} model=${judgeModel} thinking=${judgeOptions.thinkingDefault} fast=${judgeOptions.fastMode ? "on" : "off"} timeout=${formatDuration(judgeTimeoutMs)}`,
+      );
+      try {
+        const judgePrompt = buildJudgePrompt({
+          scenarioId,
+          runs,
+          blindModels: params.judgeBlindModels,
+        });
+        const rawReply = await runJudge({
+          repoRoot,
+          judgeModel,
+          judgeThinkingDefault: judgeOptions.thinkingDefault,
+          judgeFastMode: judgeOptions.fastMode,
+          prompt: judgePrompt.prompt,
+          timeoutMs: judgeTimeoutMs,
+        });
+        rankings = parseJudgeReply(rawReply, new Set(judgePrompt.labelToModel.keys())).map(
+          (ranking) => ({
+            ...ranking,
+            model: judgePrompt.labelToModel.get(ranking.model) ?? ranking.model,
+          }),
+        );
+      } catch (error) {
+        judgeError = formatErrorMessage(error);
+      }
 
-    judgments.push({
-      model: judgeModel,
-      thinkingDefault: judgeOptions.thinkingDefault,
-      fastMode: judgeOptions.fastMode,
-      durationMs: Date.now() - judgeStartedAt,
-      rankings,
-      ...(judgeError ? { error: judgeError } : {}),
-    });
-  }
+      const judgment = {
+        model: judgeModel,
+        thinkingDefault: judgeOptions.thinkingDefault,
+        fastMode: judgeOptions.fastMode,
+        blindModels: params.judgeBlindModels === true,
+        durationMs: Date.now() - judgeStartedAt,
+        rankings,
+        ...(judgeError ? { error: judgeError } : {}),
+      } satisfies QaCharacterEvalJudgeResult;
+      logCharacterEvalProgress(
+        params.progress,
+        `judge done ${formatEvalIndex(index, judgeModels.length)} model=${judgeModel} rankings=${rankings.length} duration=${formatDuration(judgment.durationMs)}${judgeError ? ` error="${judgeError}"` : ""}`,
+      );
+      return judgment;
+    },
+  );
+  const failedJudgeCount = judgments.filter((judgment) => judgment.rankings.length === 0).length;
+  logCharacterEvalProgress(
+    params.progress,
+    `judges done ranked=${judgments.length - failedJudgeCount} failed=${failedJudgeCount} duration=${formatDuration(Date.now() - judgesStartedAt)}`,
+  );
 
   const finishedAt = new Date();
   const report = renderCharacterEvalReport({
@@ -531,6 +707,10 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
       2,
     )}\n`,
     "utf8",
+  );
+  logCharacterEvalProgress(
+    params.progress,
+    `report written duration=${formatDuration(finishedAt.getTime() - startedAt.getTime())} report=${reportPath} summary=${summaryPath}`,
   );
 
   return {

@@ -194,11 +194,13 @@ describe("scripts/test-projects changed-target routing", () => {
 });
 
 describe("scripts/test-projects full-suite sharding", () => {
-  it("splits untargeted runs into fixed shard configs", () => {
+  it("splits untargeted runs into fixed core shards and per-extension configs", () => {
     const previousParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+    const previousSerial = process.env.OPENCLAW_TEST_PROJECTS_SERIAL;
     delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
     delete process.env.OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD;
     delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+    process.env.OPENCLAW_TEST_PROJECTS_SERIAL = "1";
     try {
       expect(buildFullSuiteVitestRunPlans([], process.cwd()).map((plan) => plan.config)).toEqual([
         "vitest.full-core-unit-fast.config.ts",
@@ -212,7 +214,26 @@ describe("scripts/test-projects full-suite sharding", () => {
         "vitest.full-core-runtime.config.ts",
         "vitest.full-agentic.config.ts",
         "vitest.full-auto-reply.config.ts",
-        "vitest.full-extensions.config.ts",
+        "vitest.extension-acpx.config.ts",
+        "vitest.extension-bluebubbles.config.ts",
+        "vitest.extension-channels.config.ts",
+        "vitest.extension-diffs.config.ts",
+        "vitest.extension-feishu.config.ts",
+        "vitest.extension-irc.config.ts",
+        "vitest.extension-mattermost.config.ts",
+        "vitest.extension-matrix.config.ts",
+        "vitest.extension-memory.config.ts",
+        "vitest.extension-messaging.config.ts",
+        "vitest.extension-msteams.config.ts",
+        "vitest.extension-providers.config.ts",
+        "vitest.extension-telegram.config.ts",
+        "vitest.extension-voice-call.config.ts",
+        "vitest.extension-whatsapp.config.ts",
+        "vitest.extension-zalo.config.ts",
+        "vitest.extension-browser.config.ts",
+        "vitest.extension-qa.config.ts",
+        "vitest.extension-media.config.ts",
+        "vitest.extension-misc.config.ts",
       ]);
     } finally {
       if (previousParallel === undefined) {
@@ -220,13 +241,67 @@ describe("scripts/test-projects full-suite sharding", () => {
       } else {
         process.env.OPENCLAW_TEST_PROJECTS_PARALLEL = previousParallel;
       }
+      if (previousSerial === undefined) {
+        delete process.env.OPENCLAW_TEST_PROJECTS_SERIAL;
+      } else {
+        process.env.OPENCLAW_TEST_PROJECTS_SERIAL = previousSerial;
+      }
+    }
+  });
+
+  it("expands untargeted local runs to leaf project configs by default", () => {
+    const previousLeafShards = process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+    const previousParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+    const previousSerial = process.env.OPENCLAW_TEST_PROJECTS_SERIAL;
+    const previousCi = process.env.CI;
+    const previousActions = process.env.GITHUB_ACTIONS;
+    delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+    delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+    delete process.env.OPENCLAW_TEST_PROJECTS_SERIAL;
+    delete process.env.CI;
+    delete process.env.GITHUB_ACTIONS;
+    try {
+      const configs = buildFullSuiteVitestRunPlans([], process.cwd()).map((plan) => plan.config);
+
+      expect(configs).toContain("vitest.gateway.config.ts");
+      expect(configs).toContain("vitest.extension-telegram.config.ts");
+      expect(configs).not.toContain("vitest.full-agentic.config.ts");
+      expect(configs).not.toContain("vitest.full-core-unit-fast.config.ts");
+    } finally {
+      if (previousLeafShards === undefined) {
+        delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+      } else {
+        process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = previousLeafShards;
+      }
+      if (previousParallel === undefined) {
+        delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+      } else {
+        process.env.OPENCLAW_TEST_PROJECTS_PARALLEL = previousParallel;
+      }
+      if (previousSerial === undefined) {
+        delete process.env.OPENCLAW_TEST_PROJECTS_SERIAL;
+      } else {
+        process.env.OPENCLAW_TEST_PROJECTS_SERIAL = previousSerial;
+      }
+      if (previousCi === undefined) {
+        delete process.env.CI;
+      } else {
+        process.env.CI = previousCi;
+      }
+      if (previousActions === undefined) {
+        delete process.env.GITHUB_ACTIONS;
+      } else {
+        process.env.GITHUB_ACTIONS = previousActions;
+      }
     }
   });
 
   it("can skip the aggregate extension shard when CI runs dedicated extension shards", () => {
     const previous = process.env.OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD;
     const previousParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+    const previousSerial = process.env.OPENCLAW_TEST_PROJECTS_SERIAL;
     delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+    process.env.OPENCLAW_TEST_PROJECTS_SERIAL = "1";
     process.env.OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD = "1";
     try {
       const configs = buildFullSuiteVitestRunPlans([], process.cwd()).map((plan) => plan.config);
@@ -243,6 +318,11 @@ describe("scripts/test-projects full-suite sharding", () => {
         delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
       } else {
         process.env.OPENCLAW_TEST_PROJECTS_PARALLEL = previousParallel;
+      }
+      if (previousSerial === undefined) {
+        delete process.env.OPENCLAW_TEST_PROJECTS_SERIAL;
+      } else {
+        process.env.OPENCLAW_TEST_PROJECTS_SERIAL = previousSerial;
       }
     }
   });
@@ -316,7 +396,10 @@ describe("scripts/test-projects full-suite sharding", () => {
       "vitest.extension-voice-call.config.ts",
       "vitest.extension-whatsapp.config.ts",
       "vitest.extension-zalo.config.ts",
-      "vitest.extensions.config.ts",
+      "vitest.extension-browser.config.ts",
+      "vitest.extension-qa.config.ts",
+      "vitest.extension-media.config.ts",
+      "vitest.extension-misc.config.ts",
     ]);
     expect(plans).toEqual(
       plans.map((plan) => ({

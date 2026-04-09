@@ -9,6 +9,7 @@ import {
   runProviderCatalog,
 } from "../plugins/provider-discovery.js";
 import type { ProviderPlugin } from "../plugins/types.js";
+import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import type { ProviderConfig } from "./models-config.providers.js";
 
 describe("Ollama auto-discovery", () => {
@@ -21,10 +22,21 @@ describe("Ollama auto-discovery", () => {
     delete process.env.OLLAMA_API_KEY;
   });
 
+  function createCleanProviderDiscoveryEnv(): NodeJS.ProcessEnv {
+    const env = { ...process.env };
+    delete env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    delete env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+    delete env.OPENCLAW_SKIP_PROVIDERS;
+    delete env.OPENCLAW_SKIP_CHANNELS;
+    delete env.OPENCLAW_SKIP_CRON;
+    delete env.OPENCLAW_TEST_MINIMAL_GATEWAY;
+    return env;
+  }
+
   function createCatalogLoadEnv(): NodeJS.ProcessEnv {
     originalFetch = globalThis.fetch;
     return {
-      ...process.env,
+      ...createCleanProviderDiscoveryEnv(),
       OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS: "ollama",
       VITEST: "1",
       NODE_ENV: "test",
@@ -33,7 +45,7 @@ describe("Ollama auto-discovery", () => {
 
   function createDiscoveryRunEnv(): NodeJS.ProcessEnv {
     return {
-      ...process.env,
+      ...createCleanProviderDiscoveryEnv(),
       OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS: "ollama",
       VITEST: "",
       NODE_ENV: "development",
@@ -79,31 +91,31 @@ describe("Ollama auto-discovery", () => {
   }
 
   function mockOllamaUnreachable() {
-    globalThis.fetch = vi
-      .fn()
-      .mockRejectedValue(
-        new Error("connect ECONNREFUSED 127.0.0.1:11434"),
-      ) as unknown as typeof fetch;
+    globalThis.fetch = withFetchPreconnect(
+      vi.fn().mockRejectedValue(new Error("connect ECONNREFUSED 127.0.0.1:11434")),
+    ) as typeof fetch;
   }
 
   it("auto-registers ollama provider when models are discovered locally", async () => {
-    globalThis.fetch = vi.fn().mockImplementation(async (url: string | URL) => {
-      if (String(url).includes("/api/tags")) {
-        return {
-          ok: true,
-          json: async () => ({
-            models: [{ name: "deepseek-r1:latest" }, { name: "llama3.3:latest" }],
-          }),
-        };
-      }
-      if (String(url).includes("/api/show")) {
-        return {
-          ok: true,
-          json: async () => ({ model_info: {} }),
-        };
-      }
-      throw new Error(`Unexpected fetch: ${url}`);
-    }) as unknown as typeof fetch;
+    globalThis.fetch = withFetchPreconnect(
+      vi.fn().mockImplementation(async (url: string | URL) => {
+        if (String(url).includes("/api/tags")) {
+          return {
+            ok: true,
+            json: async () => ({
+              models: [{ name: "deepseek-r1:latest" }, { name: "llama3.3:latest" }],
+            }),
+          };
+        }
+        if (String(url).includes("/api/show")) {
+          return {
+            ok: true,
+            json: async () => ({ model_info: {} }),
+          };
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      }),
+    ) as typeof fetch;
 
     const provider = await runOllamaCatalog();
 
@@ -138,7 +150,7 @@ describe("Ollama auto-discovery", () => {
     await runOllamaCatalog({
       explicitProviders: {
         ollama: {
-          baseUrl: "http://gpu-node-server:11434/v1",
+          baseUrl: "http://127.0.0.1:11435/v1",
           api: "openai-completions",
           models: [],
         },

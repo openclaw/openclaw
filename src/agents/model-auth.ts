@@ -407,6 +407,10 @@ export async function resolveApiKeyForProvider(params: {
       };
     }
   }
+  const normalized = normalizeProviderId(provider);
+  if (authOverride === undefined && normalized === "amazon-bedrock") {
+    return resolveAwsSdkAuthInfo();
+  }
 
   if (params.credentialPrecedence === "env-first") {
     const envResolved = resolveEnvApiKey(provider);
@@ -492,11 +496,6 @@ export async function resolveApiKeyForProvider(params: {
   const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider });
   if (syntheticLocalAuth) {
     return syntheticLocalAuth;
-  }
-
-  const normalized = normalizeProviderId(provider);
-  if (authOverride === undefined && normalized === "amazon-bedrock") {
-    return resolveAwsSdkAuthInfo();
   }
 
   const hasInlineConfiguredModels =

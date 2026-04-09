@@ -1,6 +1,7 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { applyQwenNativeStreamingUsageCompat } from "./api.js";
 import { buildQwenMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import { isQwenCodingPlanBaseUrl, QWEN_36_PLUS_MODEL_ID, QWEN_BASE_URL } from "./models.js";
 import {
   applyQwenConfig,
   applyQwenConfigCn,
@@ -12,6 +13,38 @@ import { buildQwenProvider } from "./provider-catalog.js";
 import { buildQwenVideoGenerationProvider } from "./video-generation-provider.js";
 
 const PROVIDER_ID = "qwen";
+const LEGACY_PROVIDER_ID = "modelstudio";
+
+function normalizeProviderId(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function resolveConfiguredQwenBaseUrl(
+  config: { models?: { providers?: Record<string, { baseUrl?: string } | undefined> } } | undefined,
+): string | undefined {
+  const providers = config?.models?.providers;
+  if (!providers) {
+    return undefined;
+  }
+  for (const [providerId, provider] of Object.entries(providers)) {
+    const normalized = normalizeProviderId(providerId);
+    if (normalized !== PROVIDER_ID && normalized !== LEGACY_PROVIDER_ID) {
+      continue;
+    }
+    const baseUrl = provider?.baseUrl?.trim();
+    if (baseUrl) {
+      return baseUrl;
+    }
+  }
+  return undefined;
+}
+
+function isQwen36PlusUnsupportedForConfig(params: {
+  config: Parameters<typeof resolveConfiguredQwenBaseUrl>[0];
+  baseUrl?: string;
+}): boolean {
+  return isQwenCodingPlanBaseUrl(params.baseUrl ?? resolveConfiguredQwenBaseUrl(params.config));
+}
 
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
@@ -82,7 +115,7 @@ export default defineSingleProviderPluginEntry({
           "Manage API keys: https://home.qwencloud.com/api-keys",
           "Docs: https://docs.qwencloud.com/",
           "Endpoint: coding.dashscope.aliyuncs.com",
-          "Models: qwen3.6-plus, glm-5, kimi-k2.5, MiniMax-M2.5, etc.",
+          "Models: qwen3.5-plus, glm-5, kimi-k2.5, MiniMax-M2.5, etc.",
         ].join("\n"),
         noteTitle: "Qwen Cloud Coding Plan (China)",
         wizard: {
@@ -105,7 +138,7 @@ export default defineSingleProviderPluginEntry({
           "Manage API keys: https://home.qwencloud.com/api-keys",
           "Docs: https://docs.qwencloud.com/",
           "Endpoint: coding-intl.dashscope.aliyuncs.com",
-          "Models: qwen3.6-plus, glm-5, kimi-k2.5, MiniMax-M2.5, etc.",
+          "Models: qwen3.5-plus, glm-5, kimi-k2.5, MiniMax-M2.5, etc.",
         ].join("\n"),
         noteTitle: "Qwen Cloud Coding Plan (Global/Intl)",
         wizard: {
@@ -116,11 +149,46 @@ export default defineSingleProviderPluginEntry({
       },
     ],
     catalog: {
-      buildProvider: buildQwenProvider,
-      allowExplicitBaseUrl: true,
+      run: async (ctx) => {
+        const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
+        if (!apiKey) {
+          return null;
+        }
+        const baseUrl = resolveConfiguredQwenBaseUrl(ctx.config) ?? QWEN_BASE_URL;
+        return {
+          provider: {
+            ...buildQwenProvider({ baseUrl }),
+            apiKey,
+          },
+        };
+      },
     },
     applyNativeStreamingUsageCompat: ({ providerConfig }) =>
       applyQwenNativeStreamingUsageCompat(providerConfig),
+    normalizeConfig: ({ providerConfig }) => {
+      if (!isQwenCodingPlanBaseUrl(providerConfig.baseUrl)) {
+        return undefined;
+      }
+      const models = providerConfig.models?.filter((model) => model.id !== QWEN_36_PLUS_MODEL_ID);
+      return models && models.length !== providerConfig.models?.length
+        ? { ...providerConfig, models }
+        : undefined;
+    },
+    suppressBuiltInModel: (ctx) => {
+      const provider = normalizeProviderId(ctx.provider);
+      if (
+        (provider !== PROVIDER_ID && provider !== LEGACY_PROVIDER_ID) ||
+        ctx.modelId !== QWEN_36_PLUS_MODEL_ID ||
+        !isQwen36PlusUnsupportedForConfig({ config: ctx.config, baseUrl: ctx.baseUrl })
+      ) {
+        return undefined;
+      }
+      return {
+        suppress: true,
+        errorMessage:
+          "Unknown model: qwen/qwen3.6-plus. qwen3.6-plus is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint or choose qwen/qwen3.5-plus.",
+      };
+    },
   },
   register(api) {
     api.registerMediaUnderstandingProvider(buildQwenMediaUnderstandingProvider());

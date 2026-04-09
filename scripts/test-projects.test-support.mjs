@@ -623,7 +623,8 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
   const parallelShardCount = Number.parseInt(process.env.OPENCLAW_TEST_PROJECTS_PARALLEL ?? "", 10);
   const expandToProjectConfigs =
     process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS === "1" ||
-    (Number.isFinite(parallelShardCount) && parallelShardCount > 1);
+    (Number.isFinite(parallelShardCount) && parallelShardCount > 1) ||
+    shouldUseLocalFullSuiteParallelByDefault(process.env);
   return fullSuiteVitestShards.flatMap((shard) => {
     if (
       process.env.OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD === "1" &&
@@ -631,7 +632,8 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
     ) {
       return [];
     }
-    const configs = expandToProjectConfigs ? shard.projects : [shard.config];
+    const expandShard = expandToProjectConfigs || shard.config === FULL_EXTENSIONS_VITEST_CONFIG;
+    const configs = expandShard ? shard.projects : [shard.config];
     return configs.map((config) => ({
       config,
       forwardedArgs,
@@ -639,6 +641,12 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
       watchMode: false,
     }));
   });
+}
+
+export function shouldUseLocalFullSuiteParallelByDefault(env = process.env) {
+  return (
+    env.OPENCLAW_TEST_PROJECTS_SERIAL !== "1" && env.CI !== "true" && env.GITHUB_ACTIONS !== "true"
+  );
 }
 
 export function createVitestRunSpecs(args, params = {}) {

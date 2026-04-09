@@ -158,6 +158,9 @@ describe("qa cli runtime", () => {
       modelThinking: ["codex-cli/test-model=medium"],
       judgeModel: ["openai/gpt-5.4,thinking=xhigh,fast", "anthropic/claude-opus-4-6,thinking=high"],
       judgeTimeoutMs: 180_000,
+      blindJudgeModels: true,
+      concurrency: 4,
+      judgeConcurrency: 3,
     });
 
     expect(runQaCharacterEval).toHaveBeenCalledWith({
@@ -178,6 +181,10 @@ describe("qa cli runtime", () => {
         "anthropic/claude-opus-4-6": { thinkingDefault: "high" },
       },
       judgeTimeoutMs: 180_000,
+      judgeBlindModels: true,
+      candidateConcurrency: 4,
+      judgeConcurrency: 3,
+      progress: expect.any(Function),
     });
   });
 
@@ -199,6 +206,10 @@ describe("qa cli runtime", () => {
       judgeModels: undefined,
       judgeModelOptions: undefined,
       judgeTimeoutMs: undefined,
+      judgeBlindModels: undefined,
+      candidateConcurrency: undefined,
+      judgeConcurrency: undefined,
+      progress: expect.any(Function),
     });
   });
 

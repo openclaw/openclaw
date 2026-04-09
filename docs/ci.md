@@ -21,7 +21,7 @@ The CI runs on every push to `main` and every pull request. It uses smart scopin
 | `checks-fast-extensions` | Aggregate the extension shard lanes after `checks-fast-extensions-shard` completes       | Node-relevant changes               |
 | `extension-fast`         | Focused tests for only the changed bundled plugins                                       | When extension changes are detected |
 | `check`                  | Main local gate in CI: `pnpm check` plus `pnpm build:strict-smoke`                       | Node-relevant changes               |
-| `check-additional`       | Architecture and boundary guards plus the gateway watch regression harness               | Node-relevant changes               |
+| `check-additional`       | Architecture, boundary, import-cycle guards plus the gateway watch regression harness    | Node-relevant changes               |
 | `build-smoke`            | Built-CLI smoke tests and startup-memory smoke                                           | Node-relevant changes               |
 | `checks`                 | Heavier Linux Node lanes: full tests, channel tests, and push-only Node 22 compatibility | Node-relevant changes               |
 | `check-docs`             | Docs formatting, lint, and broken-link checks                                            | Docs changed                        |
@@ -58,6 +58,7 @@ On pushes, the `checks` matrix adds the push-only `compat-node22` lane. On pull 
 ```bash
 pnpm check          # types + lint + format
 pnpm build:strict-smoke
+pnpm check:import-cycles
 pnpm test:gateway:watch-regression
 pnpm test           # vitest tests
 pnpm test:channels

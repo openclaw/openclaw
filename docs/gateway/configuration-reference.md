@@ -1088,7 +1088,7 @@ Time format in system prompt. Default: `auto` (OS preference).
   - Typical values: `qwen/wan2.6-t2v`, `qwen/wan2.6-i2v`, `qwen/wan2.6-r2v`, `qwen/wan2.6-r2v-flash`, or `qwen/wan2.7-r2v`.
   - If omitted, `video_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered video-generation providers in provider-id order.
   - If you select a provider/model directly, configure the matching provider auth/API key too.
-  - The bundled Qwen video-generation provider currently supports up to 1 output video, 1 input image, 4 input videos, 10 seconds duration, and provider-level `size`, `aspectRatio`, `resolution`, `audio`, and `watermark` options.
+  - The bundled Qwen video-generation provider supports up to 1 output video, 1 input image, 4 input videos, 10 seconds duration, and provider-level `size`, `aspectRatio`, `resolution`, `audio`, and `watermark` options.
 - `pdfModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - Used by the `pdf` tool for model routing.
   - If omitted, the PDF tool falls back to `imageModel`, then to the resolved session/default model.
@@ -1558,7 +1558,7 @@ noVNC observer access uses VNC auth by default and OpenClaw emits a short-lived 
 
 </Accordion>
 
-Browser sandboxing and `sandbox.docker.binds` are currently Docker-only.
+Browser sandboxing and `sandbox.docker.binds` are Docker-only.
 
 Build images:
 
@@ -1835,7 +1835,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
 - **`parentForkMaxTokens`**: max parent-session `totalTokens` allowed when creating a forked thread session (default `100000`).
   - If parent `totalTokens` is above this value, OpenClaw starts a fresh thread session instead of inheriting parent transcript history.
   - Set `0` to disable this guard and always allow parent forking.
-- **`mainKey`**: legacy field. Runtime now always uses `"main"` for the main direct-chat bucket.
+- **`mainKey`**: legacy field. Runtime always uses `"main"` for the main direct-chat bucket.
 - **`agentToAgent.maxPingPongTurns`**: maximum reply-back turns between agents during agent-to-agent exchanges (integer, range: `0`–`5`). `0` disables ping-pong chaining.
 - **`sendPolicy`**: match by `channel`, `chatType` (`direct|group|channel`, with legacy `dm` alias), `keyPrefix`, or `rawKeyPrefix`. First deny wins.
 - **`maintenance`**: session-store cleanup + retention controls.
@@ -2531,8 +2531,8 @@ Set `ZAI_API_KEY`. `z.ai/*` and `z-ai/*` are accepted aliases. Shortcut: `opencl
 For the China endpoint: `baseUrl: "https://api.moonshot.cn/v1"` or `openclaw onboard --auth-choice moonshot-api-key-cn`.
 
 Native Moonshot endpoints advertise streaming usage compatibility on the shared
-`openai-completions` transport, and OpenClaw now keys that off endpoint
-capabilities rather than the built-in provider id alone.
+`openai-completions` transport, and OpenClaw keys that off endpoint capabilities
+rather than the built-in provider id alone.
 
 </Accordion>
 
@@ -2632,7 +2632,7 @@ Base URL should omit `/v1` (Anthropic client appends it). Shortcut: `openclaw on
 Set `MINIMAX_API_KEY`. Shortcuts:
 `openclaw onboard --auth-choice minimax-global-api` or
 `openclaw onboard --auth-choice minimax-cn-api`.
-The model catalog now defaults to M2.7 only.
+The model catalog defaults to M2.7 only.
 On the Anthropic-compatible streaming path, OpenClaw disables MiniMax thinking
 by default unless you explicitly set `thinking` yourself. `/fast on` or
 `params.fastMode: true` rewrites `MiniMax-M2.7` to
@@ -3638,7 +3638,7 @@ Applies only to one-shot cron jobs. Recurring jobs use separate failure handling
 - `to`: explicit announce target or webhook URL. Required for webhook mode.
 - `accountId`: optional account override for delivery.
 - Per-job `delivery.failureDestination` overrides this global default.
-- When neither global nor per-job failure destination is set, jobs that already deliver via `announce` now fall back to that primary announce target on failure.
+- When neither global nor per-job failure destination is set, jobs that already deliver via `announce` fall back to that primary announce target on failure.
 - `delivery.failureDestination` is only supported for `sessionTarget="isolated"` jobs unless the job's primary `delivery.mode` is `"webhook"`.
 
 See [Cron Jobs](/automation/cron-jobs). Isolated cron executions are tracked as [background tasks](/automation/tasks).
