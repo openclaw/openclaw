@@ -1153,6 +1153,14 @@ Best practice:
     name   = prompt("Landing zone name (e.g. marsmovers-lz)", default="landing-zone")
     region = prompt("Home region", default="us-east-1")
 
+    # Existing organization check
+    print("\n  AWS Organizations:")
+    print("    If your management account already has an organization,")
+    print("    provide the org ID so Terraform can import it instead of")
+    print("    trying to create a new one (which would fail).")
+    existing_org_id = prompt("Existing Organization ID (e.g. o-abc123, or 'none' to create new)", default="none")
+    has_existing_org = existing_org_id.lower() != "none"
+
     # Organizational Units
     print("\n  Organizational Units (OUs):")
     print("    Default OUs (always created):")
@@ -1863,6 +1871,16 @@ resource "aws_ssoadmin_account_assignment" "{grp_safe}_workload" {{
     if extra_principals:
         extra_principals_str = "\n".join([f"    {p}," for p in extra_principals])
 
+    # Generate import block for existing organizations
+    org_import_block = ""
+    if has_existing_org:
+        org_import_block = f"""
+import {{
+  to = aws_organizations_organization.this
+  id = "{existing_org_id}"
+}}
+"""
+
     main_tf = f"""terraform {{
   required_providers {{
     aws = {{ source = "hashicorp/aws", version = "~> 5.0" }}
@@ -1882,7 +1900,7 @@ locals {{
     LandingZone = "{name}"
   }}
 }}
-
+{org_import_block}
 resource "aws_organizations_organization" "this" {{
   aws_service_access_principals = [
     "cloudtrail.amazonaws.com",
@@ -1892,6 +1910,10 @@ resource "aws_organizations_organization" "this" {{
   ]
   enabled_policy_types = ["SERVICE_CONTROL_POLICY"]
   feature_set          = "ALL"
+
+  # If your organization already exists, import it:
+  #   terraform import aws_organizations_organization.this <org-id>
+  # The org-id is printed by: aws organizations describe-organization
 }}
 {ou_blocks}
 {account_blocks}
