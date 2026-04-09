@@ -297,6 +297,52 @@ describe("resolveSlackMedia", () => {
     expect(result).toBeNull();
   });
 
+  it("keeps Authorization on Slack-host redirects during media downloads", async () => {
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
+      createSavedMedia("/tmp/test.jpg", "image/jpeg"),
+    );
+    mockFetch.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://files.slack.com/test.jpg") {
+        return new Response(null, {
+          status: 302,
+          headers: { location: "https://cdn.slack-edge.com/presigned-url?sig=abc123" },
+        });
+      }
+      if (url === "https://cdn.slack-edge.com/presigned-url?sig=abc123") {
+        const auth = new Headers(init?.headers).get("authorization");
+        if (auth !== "Bearer xoxb-test-token") {
+          return new Response("<!DOCTYPE html><html><body>login</body></html>", {
+            status: 200,
+            headers: { "content-type": "text/html; charset=utf-8" },
+          });
+        }
+        return new Response(Buffer.from("image data"), {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        });
+      }
+      return new Response("Not Found", { status: 404 });
+    });
+
+    const result = await resolveSlackMedia({
+      files: [{ url_private: "https://files.slack.com/test.jpg", name: "test.jpg" }],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.[0]?.path).toBe("/tmp/test.jpg");
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(new Headers(mockFetch.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
+      "Bearer xoxb-test-token",
+    );
+    expect(new Headers(mockFetch.mock.calls[1]?.[1]?.headers).get("authorization")).toBe(
+      "Bearer xoxb-test-token",
+    );
+  });
+
   it("returns null when no files are provided", async () => {
     const result = await resolveSlackMedia({
       files: [],
