@@ -16,12 +16,25 @@ export type {
   ImageGenerationSourceImage,
 } from "openclaw/plugin-sdk/image-generation";
 export { resolveApiKeyForProvider } from "openclaw/plugin-sdk/image-generation-core";
+export type {
+  MemoryEmbeddingProvider,
+  MemoryEmbeddingProviderAdapter,
+  MemoryEmbeddingProviderCreateOptions,
+  MemoryEmbeddingProviderCreateResult,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+export type {
+  AudioTranscriptionRequest,
+  AudioTranscriptionResult,
+  MediaUnderstandingProvider,
+} from "openclaw/plugin-sdk/media-understanding";
 
 export const PROVIDER_ID = "huggingface-extras" as const;
-// HF deprecated `api-inference.huggingface.co` in 2026 in favor of the
-// Inference Providers router. The `hf-inference` route is the closest
-// drop-in replacement (still serverless, free for HF Pro users), and it
-// keeps the `/models/<id>` -> raw image bytes shape we already use.
+
+// HF Inference Providers router routes:
+// - hf-inference: legacy serverless replacement (raw /models/<id> POST,
+//   accepts image bytes for text-to-image and audio bytes for whisper).
+//   Free for HF Pro users on the warm pool.
+// - scaleway: OpenAI-compatible /v1/embeddings endpoint with managed Qwen3
+//   embeddings; also free under the Pro Inference Providers tier.
 export const HUGGINGFACE_INFERENCE_BASE_URL = "https://router.huggingface.co/hf-inference" as const;
-export const HUGGINGFACE_FEATURE_EXTRACTION_BASE_URL =
-  "https://router.huggingface.co/hf-inference" as const;
+export const HUGGINGFACE_SCALEWAY_BASE_URL = "https://router.huggingface.co/scaleway" as const;

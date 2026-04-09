@@ -1,12 +1,19 @@
 // Plugin entrypoint for huggingface-extras.
 //
-// Phase 1 scope: register a `huggingface-extras` provider with API-key auth
-// and an image-generation contract backed by the HF Inference API.
-// Phases 2 and 3 (embeddings + speech) will register additional contracts
-// against the same provider id without changing the auth surface.
+// Registers a `huggingface-extras` provider with three contracts on top of
+// the Hugging Face Inference Providers router:
+//   - image generation (FLUX / SDXL via the hf-inference route)
+//   - memory embeddings (Qwen3-Embedding-8B via the scaleway route)
+//   - audio transcription / STT (whisper-large-v3 via the hf-inference route)
+//
+// All three share the same HF API token and onboarding choice. We do not
+// register chat completion here because the existing `huggingface` plugin
+// already covers that via the OpenAI-compatible router.
 
 import { PROVIDER_ID, createProviderApiKeyAuthMethod, definePluginEntry } from "./api.js";
+import { huggingFaceExtrasMemoryEmbeddingProviderAdapter } from "./embeddings-provider.js";
 import { buildHuggingFaceExtrasImageGenerationProvider } from "./image-generation-provider.js";
+import { huggingFaceExtrasMediaUnderstandingProvider } from "./stt-provider.js";
 
 export default definePluginEntry({
   id: PROVIDER_ID,
@@ -43,5 +50,7 @@ export default definePluginEntry({
       ],
     });
     api.registerImageGenerationProvider(buildHuggingFaceExtrasImageGenerationProvider());
+    api.registerMemoryEmbeddingProvider(huggingFaceExtrasMemoryEmbeddingProviderAdapter);
+    api.registerMediaUnderstandingProvider(huggingFaceExtrasMediaUnderstandingProvider);
   },
 });

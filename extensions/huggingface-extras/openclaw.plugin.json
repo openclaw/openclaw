@@ -22,7 +22,9 @@
     }
   ],
   "contracts": {
-    "imageGenerationProviders": ["huggingface-extras"]
+    "imageGenerationProviders": ["huggingface-extras"],
+    "memoryEmbeddingProviders": ["huggingface-extras"],
+    "mediaUnderstandingProviders": ["huggingface-extras"]
   },
   "configSchema": {
     "type": "object",
