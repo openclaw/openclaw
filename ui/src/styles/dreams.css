@@ -319,11 +319,14 @@
 .dreams__trace {
   width: min(900px, calc(100% - 40px));
   margin-top: 28px;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: 12px;
   z-index: 1;
   user-select: text;
+  max-height: 500px;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .dreams__trace-section {
@@ -333,6 +336,8 @@
   padding: 12px;
   min-height: 180px;
   backdrop-filter: blur(14px);
+  overflow: hidden;
+  flex-shrink: 0;
 }
 
 .dreams__trace-header {
@@ -369,6 +374,8 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 .dreams__trace-item {
@@ -376,12 +383,18 @@
   border-radius: 12px;
   background: color-mix(in oklab, var(--panel-raised) 88%, transparent);
   border: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
+  overflow: hidden;
+  word-wrap: break-word;
+  word-break: break-word;
 }
 
 .dreams__trace-snippet {
   font-size: 13px;
   line-height: 1.35;
   color: var(--text);
+  word-wrap: break-word;
+  word-break: break-word;
+  white-space: normal;
 }
 
 .dreams__trace-source,
@@ -395,6 +408,25 @@
 
 .dreams__trace-source {
   font-family: var(--mono);
+}
+
+/* 滚动条样式（可选） */
+.dreams__trace::-webkit-scrollbar {
+  width: 6px;
+}
+
+.dreams__trace::-webkit-scrollbar-track {
+  background: color-mix(in oklab, var(--border) 30%, transparent);
+  border-radius: 3px;
+}
+
+.dreams__trace::-webkit-scrollbar-thumb {
+  background: color-mix(in oklab, var(--accent) 40%, transparent);
+  border-radius: 3px;
+}
+
+.dreams__trace::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--accent) 60%, transparent);
 }
 
 @media (max-width: 980px) {
