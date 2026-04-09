@@ -20433,6 +20433,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Enables serving the gateway Control UI from the gateway HTTP process when true. Keep enabled for local administration, and disable when an external control surface replaces it.",
               },
+              title: {
+                type: "string",
+              },
               basePath: {
                 type: "string",
                 title: "Control UI Base Path",

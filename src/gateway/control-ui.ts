@@ -365,6 +365,7 @@ export function handleControlUiHttpRequest(
       basePath,
       assistantName: identity.name,
       assistantAvatar: avatarValue ?? identity.avatar,
+      assistantAgentId: identity.agentId,
       title: config?.gateway?.controlUi?.title,
     } satisfies ControlUiBootstrapConfig);
     return true;
