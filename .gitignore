@@ -22,7 +22,6 @@ ui/playwright-report/
 ui/test-results/
 packages/dashboard-next/.next/
 packages/dashboard-next/out/
-RCA.md
 # Mise configuration files
 mise.toml
 
