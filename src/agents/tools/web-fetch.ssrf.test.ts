@@ -175,9 +175,6 @@ describe("web_fetch SSRF protection", () => {
       extractor: "raw",
     });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-
-    // A stricter tool instance must still block the same URL instead of reusing
-    // the permissive-policy cache entry.
     const stricterTool = await createWebFetchToolForTest({ cacheTtlMinutes: 1 });
     await expectBlockedUrl(stricterTool, url, /private|internal|blocked/i);
   });

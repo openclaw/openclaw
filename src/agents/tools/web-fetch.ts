@@ -363,14 +363,9 @@ async function maybeFetchProviderWebFetchPayload(
 }
 
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
-  const policy =
-    params.ssrfPolicy?.allowRfc2544BenchmarkRange === true
-      ? { allowRfc2544BenchmarkRange: true }
-      : undefined;
-  // Include the effective SSRF policy in the cache key to prevent cross-policy cache bypass
-  const ssrfPolicySuffix = policy ? `:${JSON.stringify(policy)}` : "";
+  const allowRfc2544BenchmarkRange = params.ssrfPolicy?.allowRfc2544BenchmarkRange === true;
   const cacheKey = normalizeCacheKey(
-    `fetch:${params.url}:${params.extractMode}:${params.maxChars}${ssrfPolicySuffix}`,
+    `fetch:${params.url}:${params.extractMode}:${params.maxChars}${allowRfc2544BenchmarkRange ? ":allow-rfc2544" : ""}`,
   );
   const cached = readCache(FETCH_CACHE, cacheKey);
   if (cached) {
@@ -391,14 +386,13 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   let res: Response;
   let release: (() => Promise<void>) | null = null;
   let finalUrl = params.url;
-
   try {
     const result = await fetchWithWebToolsNetworkGuard({
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
       lookupFn: params.lookupFn,
-      policy,
+      policy: allowRfc2544BenchmarkRange ? { allowRfc2544BenchmarkRange } : undefined,
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
@@ -584,7 +578,6 @@ export function createWebFetchTool(options?: {
     return null;
   }
   const readabilityEnabled = resolveFetchReadabilityEnabled(fetch);
-  const ssrfPolicy = fetch?.ssrfPolicy;
   const userAgent =
     (fetch && "userAgent" in fetch && typeof fetch.userAgent === "string" && fetch.userAgent) ||
     DEFAULT_FETCH_USER_AGENT;
@@ -629,7 +622,7 @@ export function createWebFetchTool(options?: {
         cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         userAgent,
         readabilityEnabled,
-        ssrfPolicy,
+        ssrfPolicy: fetch?.ssrfPolicy,
         lookupFn: options?.lookupFn,
         resolveProviderFallback,
       });
