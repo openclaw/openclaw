@@ -31,7 +31,7 @@ import { validateUrlSafety } from "./nostr-profile-url-safety.js";
 
 export interface NostrProfileHttpContext {
   /** Get current profile from config */
-  getConfigProfile: (accountId: string) => Record<string, unknown> | undefined;
+  getConfigProfile: (accountId: string) => NostrProfile | undefined;
   /** Update profile in config (after successful publish) */
   updateConfigProfile: (accountId: string, profile: NostrProfile) => Promise<void>;
   /** Get account's public key and relays */
