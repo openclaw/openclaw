@@ -113,6 +113,17 @@ type ChatAbortRequester = {
   isAdmin: boolean;
 };
 
+/** True when a reply payload carries at least one media reference (mediaUrl or mediaUrls). */
+function isMediaBearingPayload(payload: ReplyPayload): boolean {
+  if (payload.mediaUrl?.trim()) {
+    return true;
+  }
+  if (payload.mediaUrls?.some((url) => url.trim())) {
+    return true;
+  }
+  return false;
+}
+
 export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
 const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
@@ -1751,10 +1762,19 @@ export const chatHandlers: GatewayRequestHandlers = {
           context.logGateway.warn(`webchat dispatch failed: ${formatForLog(err)}`);
         },
         deliver: async (payload, info) => {
-          if (info.kind !== "block" && info.kind !== "final") {
-            return;
+          switch (info.kind) {
+            case "block":
+            case "final":
+              deliveredReplies.push({ payload, kind: info.kind });
+              break;
+            case "tool":
+              // Tool results that carry audio (e.g. the TTS tool) must be promoted
+              // to "final" so the downstream audio extraction path can pick them up.
+              if (isMediaBearingPayload(payload)) {
+                deliveredReplies.push({ payload, kind: "final" });
+              }
+              break;
           }
-          deliveredReplies.push({ payload, kind: info.kind });
         },
       });
 
