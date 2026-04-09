@@ -339,30 +339,33 @@ export async function runWebSearch(
   );
 
   // When explicit + fallbacks: primary provider first, then fallbacks (deduped); otherwise use candidates
-  const effectiveCandidates =
-    hasExplicitProvider && configuredFallbacks.length > 0 && !providerIdExplicitlyProvided
-      ? [
-          configuredPrimaryProvider,
-          ...configuredFallbacks
-            .map((id) => candidates.find((p) => p.id === normalizeLowercaseStringOrEmpty(id)))
-            .filter(
-              (p): p is PluginWebSearchProviderEntry =>
-                p != null && p.id !== configuredPrimaryProviderId,
-            )
-            .reduce<PluginWebSearchProviderEntry[]>((deduped, p) => {
-              if (p && !deduped.some((d) => d.id === p.id)) {
-                deduped.push(p);
-              }
-              return deduped;
-            }, []),
-        ].filter((p): p is PluginWebSearchProviderEntry => p != null)
-      : candidates;
+  // Only enter fallback path if the configured primary actually exists in candidates
+  const canUseExplicitFallbacks =
+    hasExplicitProvider &&
+    configuredFallbacks.length > 0 &&
+    !providerIdExplicitlyProvided &&
+    configuredPrimaryProvider != null;
+  const effectiveCandidates = canUseExplicitFallbacks
+    ? [
+        configuredPrimaryProvider,
+        ...configuredFallbacks
+          .map((id) => candidates.find((p) => p.id === normalizeLowercaseStringOrEmpty(id)))
+          .filter(
+            (p): p is PluginWebSearchProviderEntry =>
+              p != null && p.id !== configuredPrimaryProviderId,
+          )
+          .reduce<PluginWebSearchProviderEntry[]>((deduped, p) => {
+            if (p && !deduped.some((d) => d.id === p.id)) {
+              deduped.push(p);
+            }
+            return deduped;
+          }, []),
+      ].filter((p): p is PluginWebSearchProviderEntry => p != null)
+    : candidates;
 
   // Enable fallback only when at least one fallback resolves to a usable provider
-  const hasUsableFallback =
-    hasExplicitProvider && configuredFallbacks.length > 0 && !providerIdExplicitlyProvided;
   const allowFallback =
-    !hasExplicitProvider || (hasUsableFallback && effectiveCandidates.length > 1);
+    !hasExplicitProvider || (canUseExplicitFallbacks && effectiveCandidates.length > 1);
   let sawUnavailableProvider = false;
 
   for (const candidate of effectiveCandidates) {
