@@ -32,6 +32,11 @@ type docChunkStructure struct {
 	tagCounts  map[string]int
 }
 
+type docChunkSplitPlan struct {
+	groups [][]string
+	reason string
+}
+
 func translateDocBodyChunked(ctx context.Context, translator docsTranslator, relPath, body, srcLang, tgtLang string) (string, error) {
 	if strings.TrimSpace(body) == "" {
 		return body, nil
@@ -56,32 +61,11 @@ func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chun
 	if strings.TrimSpace(source) == "" {
 		return source, nil
 	}
-	if len(blocks) == 1 {
-		if translated, handled, err := translateOversizedDocBlock(ctx, translator, chunkID, source, srcLang, tgtLang, docsI18nDocChunkMaxBytes()); handled {
-			return translated, err
-		}
+	if plan, ok := planDocChunkSplit(blocks, docsI18nDocChunkMaxBytes(), docsI18nDocChunkPromptBudget()); ok {
+		logDocChunkPlanSplit(chunkID, plan, source)
+		return translatePlannedDocChunkGroups(ctx, translator, chunkID, plan.groups, srcLang, tgtLang)
 	}
 	normalizedSource, commonIndent := stripCommonIndent(source)
-	estimatedPromptCost := estimateDocPromptCost(normalizedSource)
-	if len(blocks) > 1 && estimatedPromptCost > docsI18nDocChunkPromptBudget() {
-		mid := len(blocks) / 2
-		log.Printf(
-			"docs-i18n: chunk pre-split %s blocks=%d est_cost=%d budget=%d",
-			chunkID,
-			len(blocks),
-			estimatedPromptCost,
-			docsI18nDocChunkPromptBudget(),
-		)
-		left, err := translateDocBlockGroup(ctx, translator, chunkID+"a", blocks[:mid], srcLang, tgtLang)
-		if err != nil {
-			return "", err
-		}
-		right, err := translateDocBlockGroup(ctx, translator, chunkID+"b", blocks[mid:], srcLang, tgtLang)
-		if err != nil {
-			return "", err
-		}
-		return left + right, nil
-	}
 	log.Printf("docs-i18n: chunk start %s blocks=%d bytes=%d", chunkID, len(blocks), len(source))
 	translated, err := translator.TranslateRaw(ctx, normalizedSource, srcLang, tgtLang)
 	if err == nil {
@@ -100,17 +84,15 @@ func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chun
 		}
 		return "", fmt.Errorf("%s: %w", chunkID, err)
 	}
-	mid := len(blocks) / 2
-	logDocChunkSplit(chunkID, len(blocks), err)
-	left, err := translateDocBlockGroup(ctx, translator, chunkID+"a", blocks[:mid], srcLang, tgtLang)
-	if err != nil {
-		return "", err
+	if plan, ok := planDocChunkSplit(blocks, docsI18nDocChunkMaxBytes(), docsI18nDocChunkPromptBudget()); ok {
+		logDocChunkSplit(chunkID, len(blocks), err)
+		return translatePlannedDocChunkGroups(ctx, translator, chunkID, plan.groups, srcLang, tgtLang)
 	}
-	right, err := translateDocBlockGroup(ctx, translator, chunkID+"b", blocks[mid:], srcLang, tgtLang)
-	if err != nil {
-		return "", err
+	if plan, ok := splitDocChunkBlocksMidpointSimple(blocks); ok {
+		logDocChunkSplit(chunkID, len(blocks), err)
+		return translatePlannedDocChunkGroups(ctx, translator, chunkID, plan.groups, srcLang, tgtLang)
 	}
-	return left + right, nil
+	return "", fmt.Errorf("%s: %w", chunkID, err)
 }
 
 func translateDocLeafBlock(ctx context.Context, translator docsTranslator, chunkID, source, srcLang, tgtLang string) (string, error) {
@@ -293,6 +275,13 @@ func logDocChunkSplit(chunkID string, blockCount int, err error) {
 	}
 }
 
+func logDocChunkPlanSplit(chunkID string, plan docChunkSplitPlan, source string) {
+	if plan.reason == "" {
+		plan.reason = "unknown"
+	}
+	log.Printf("docs-i18n: chunk pre-split %s reason=%s groups=%d bytes=%d", chunkID, plan.reason, len(plan.groups), len(source))
+}
+
 func summarizeDocChunkStructure(text string) docChunkStructure {
 	counts := map[string]int{}
 	lines := strings.Split(text, "\n")
@@ -413,130 +402,243 @@ func containsProtocolWrapperToken(text string) bool {
 	return strings.Contains(lower, strings.ToLower(bodyTagStart)) || strings.Contains(lower, strings.ToLower(frontmatterTagStart))
 }
 
-func translateOversizedDocBlock(ctx context.Context, translator docsTranslator, chunkID, block, srcLang, tgtLang string, maxBytes int) (string, bool, error) {
-	if maxBytes <= 0 || len(block) <= maxBytes {
-		return "", false, nil
-	}
-	if translated, ok, err := translateOversizedFencedDocBlock(ctx, translator, chunkID, block, srcLang, tgtLang, maxBytes); ok {
-		return translated, true, err
-	}
-	parts, ok := splitDocTextByLines(block, maxBytes)
-	if !ok {
-		return "", false, nil
-	}
-	log.Printf("docs-i18n: chunk singleton-split %s parts=%d bytes=%d", chunkID, len(parts), len(block))
+func translatePlannedDocChunkGroups(ctx context.Context, translator docsTranslator, chunkID string, groups [][]string, srcLang, tgtLang string) (string, error) {
 	var out strings.Builder
-	for index, part := range parts {
-		translated, err := translateDocBlockGroup(ctx, translator, fmt.Sprintf("%s.%02d", chunkID, index+1), []string{part}, srcLang, tgtLang)
+	for index, group := range groups {
+		translated, err := translateDocBlockGroup(ctx, translator, fmt.Sprintf("%s.%02d", chunkID, index+1), group, srcLang, tgtLang)
 		if err != nil {
-			return "", true, err
+			return "", err
 		}
 		out.WriteString(translated)
 	}
-	return out.String(), true, nil
+	return out.String(), nil
 }
 
-func translateOversizedFencedDocBlock(ctx context.Context, translator docsTranslator, chunkID, block, srcLang, tgtLang string, maxBytes int) (string, bool, error) {
-	lines := strings.SplitAfter(block, "\n")
-	if len(lines) < 3 {
-		return "", false, nil
+func planDocChunkSplit(blocks []string, maxBytes, promptBudget int) (docChunkSplitPlan, bool) {
+	if len(blocks) == 0 {
+		return docChunkSplitPlan{}, false
 	}
-	opening := lines[0]
-	delimiter := leadingFenceDelimiter(opening)
-	if delimiter == "" {
-		return "", false, nil
+	source := strings.Join(blocks, "")
+	if strings.TrimSpace(source) == "" {
+		return docChunkSplitPlan{}, false
 	}
-	closingIndex := -1
-	for index := len(lines) - 1; index >= 1; index-- {
-		if strings.TrimSpace(lines[index]) == "" {
+	normalizedSource, _ := stripCommonIndent(source)
+	estimatedPromptCost := estimateDocPromptCost(normalizedSource)
+	if len(blocks) > 1 && promptBudget > 0 && estimatedPromptCost > promptBudget {
+		return splitDocChunkBlocksMidpoint(blocks, estimatedPromptCost, promptBudget)
+	}
+	if len(blocks) == 1 {
+		return planSingletonDocChunk(blocks[0], maxBytes, promptBudget)
+	}
+	return docChunkSplitPlan{}, false
+}
+
+func splitDocChunkBlocksMidpoint(blocks []string, estimatedPromptCost, promptBudget int) (docChunkSplitPlan, bool) {
+	if len(blocks) <= 1 {
+		return docChunkSplitPlan{}, false
+	}
+	mid := len(blocks) / 2
+	if mid <= 0 || mid >= len(blocks) {
+		return docChunkSplitPlan{}, false
+	}
+	return docChunkSplitPlan{
+		groups: [][]string{blocks[:mid], blocks[mid:]},
+		reason: fmt.Sprintf("prompt-budget:%d>%d", estimatedPromptCost, promptBudget),
+	}, true
+}
+
+func splitDocChunkBlocksMidpointSimple(blocks []string) (docChunkSplitPlan, bool) {
+	if len(blocks) <= 1 {
+		return docChunkSplitPlan{}, false
+	}
+	mid := len(blocks) / 2
+	if mid <= 0 || mid >= len(blocks) {
+		return docChunkSplitPlan{}, false
+	}
+	return docChunkSplitPlan{
+		groups: [][]string{blocks[:mid], blocks[mid:]},
+		reason: "retry-midpoint",
+	}, true
+}
+
+func planSingletonDocChunk(block string, maxBytes, promptBudget int) (docChunkSplitPlan, bool) {
+	normalizedBlock, _ := stripCommonIndent(block)
+	estimatedPromptCost := estimateDocPromptCost(normalizedBlock)
+	overBytes := maxBytes > 0 && len(block) > maxBytes
+	overPrompt := promptBudget > 0 && estimatedPromptCost > promptBudget
+	if !overBytes && !overPrompt {
+		return docChunkSplitPlan{}, false
+	}
+
+	if sections := splitDocBlockSections(block); len(sections) > 1 {
+		if groups := wrapDocChunkSections(sections); len(groups) > 1 {
+			return docChunkSplitPlan{
+				groups: groups,
+				reason: "singleton-structural",
+			}, true
+		}
+	}
+
+	if groups, ok := splitPureFencedDocSection(block, maxBytes, promptBudget); ok {
+		return docChunkSplitPlan{
+			groups: groups,
+			reason: "singleton-fence",
+		}, true
+	}
+
+	if groups, ok := splitPlainDocSection(block, maxBytes, promptBudget); ok {
+		return docChunkSplitPlan{
+			groups: groups,
+			reason: "singleton-lines",
+		}, true
+	}
+
+	return docChunkSplitPlan{}, false
+}
+
+func wrapDocChunkSections(sections []string) [][]string {
+	groups := make([][]string, 0, len(sections))
+	for _, section := range sections {
+		if strings.TrimSpace(section) == "" {
 			continue
 		}
-		if isClosingFenceLine(lines[index], delimiter) {
-			closingIndex = index
-		}
-		break
+		groups = append(groups, []string{section})
 	}
-	if closingIndex < 1 {
-		return "", false, nil
-	}
-	closing := lines[closingIndex]
-	inner := strings.Join(lines[1:closingIndex], "")
-	trailing := strings.Join(lines[closingIndex+1:], "")
-	parts, ok := splitDocTextByLines(inner, maxBytes-len(opening)-len(closing))
-	if !ok {
-		return "", false, nil
-	}
-	log.Printf("docs-i18n: chunk singleton-fence-split %s parts=%d bytes=%d", chunkID, len(parts), len(block))
-	var innerOut strings.Builder
-	for index, part := range parts {
-		wrapped := opening + part + closing
-		translated, err := translateDocBlockGroup(ctx, translator, fmt.Sprintf("%s.%02d", chunkID, index+1), []string{wrapped}, srcLang, tgtLang)
-		if err != nil {
-			return "", true, err
-		}
-		unwrapped, ok := unwrapTranslatedFencedDocChunk(translated, delimiter)
-		if !ok {
-			return "", true, fmt.Errorf("%s.%02d: fenced chunk lost wrapper", chunkID, index+1)
-		}
-		innerOut.WriteString(unwrapped)
-	}
-	return opening + innerOut.String() + closing + trailing, true, nil
+	return groups
 }
 
-func splitDocTextByLines(text string, maxBytes int) ([]string, bool) {
-	if maxBytes <= 0 {
+func splitDocBlockSections(block string) []string {
+	lines := strings.SplitAfter(block, "\n")
+	if len(lines) == 0 {
+		return nil
+	}
+	sections := make([]string, 0, len(lines))
+	var current strings.Builder
+	fenceDelimiter := ""
+	for _, line := range lines {
+		lineDelimiter := leadingFenceDelimiter(line)
+		if fenceDelimiter == "" && lineDelimiter != "" {
+			if current.Len() > 0 {
+				sections = append(sections, current.String())
+				current.Reset()
+			}
+			current.WriteString(line)
+			fenceDelimiter = lineDelimiter
+			continue
+		}
+
+		current.WriteString(line)
+		if fenceDelimiter != "" {
+			if lineDelimiter != "" && lineDelimiter[0] == fenceDelimiter[0] && len(lineDelimiter) >= len(fenceDelimiter) && isClosingFenceLine(line, fenceDelimiter) {
+				sections = append(sections, current.String())
+				current.Reset()
+				fenceDelimiter = ""
+			}
+			continue
+		}
+
+		if strings.TrimSpace(line) == "" {
+			sections = append(sections, current.String())
+			current.Reset()
+		}
+	}
+	if current.Len() > 0 {
+		sections = append(sections, current.String())
+	}
+	if len(sections) <= 1 {
+		return nil
+	}
+	return sections
+}
+
+func splitPureFencedDocSection(block string, maxBytes, promptBudget int) ([][]string, bool) {
+	lines := strings.SplitAfter(block, "\n")
+	if len(lines) < 2 {
 		return nil, false
+	}
+	openingIndex := firstNonEmptyLineIndex(lines)
+	closingIndex := lastNonEmptyLineIndex(lines)
+	if openingIndex == -1 || closingIndex <= openingIndex {
+		return nil, false
+	}
+	opening := lines[openingIndex]
+	delimiter := leadingFenceDelimiter(opening)
+	if delimiter == "" || !isClosingFenceLine(lines[closingIndex], delimiter) {
+		return nil, false
+	}
+	prefix := strings.Join(lines[:openingIndex], "")
+	suffix := strings.Join(lines[closingIndex+1:], "")
+	if strings.TrimSpace(prefix) != "" || strings.TrimSpace(suffix) != "" {
+		return nil, false
+	}
+	closing := lines[closingIndex]
+	inner := strings.Join(lines[openingIndex+1:closingIndex], "")
+	groups, ok := splitPlainDocSection(inner, maxBytes-len(opening)-len(closing), promptBudget)
+	if !ok {
+		return nil, false
+	}
+	for index, group := range groups {
+		joined := strings.Join(group, "")
+		groups[index] = []string{opening + joined + closing}
+	}
+	return groups, true
+}
+
+func splitPlainDocSection(text string, maxBytes, promptBudget int) ([][]string, bool) {
+	if maxBytes <= 0 {
+		maxBytes = len(text)
+	}
+	if promptBudget <= 0 {
+		promptBudget = defaultDocChunkPromptBudget
 	}
 	lines := strings.SplitAfter(text, "\n")
 	if len(lines) <= 1 {
 		return nil, false
 	}
-	parts := make([]string, 0, len(lines))
+	groups := make([][]string, 0, len(lines))
 	var current strings.Builder
 	currentBytes := 0
+	currentPrompt := 0
 	for _, line := range lines {
-		if len(line) > maxBytes {
+		linePrompt := estimateDocPromptCost(line)
+		if len(line) > maxBytes || linePrompt > promptBudget {
 			return nil, false
 		}
-		if currentBytes > 0 && currentBytes+len(line) > maxBytes {
-			parts = append(parts, current.String())
+		if currentBytes > 0 && (currentBytes+len(line) > maxBytes || currentPrompt+linePrompt > promptBudget) {
+			groups = append(groups, []string{current.String()})
 			current.Reset()
 			currentBytes = 0
+			currentPrompt = 0
 		}
 		current.WriteString(line)
 		currentBytes += len(line)
+		currentPrompt += linePrompt
 	}
 	if current.Len() > 0 {
-		parts = append(parts, current.String())
+		groups = append(groups, []string{current.String()})
 	}
-	if len(parts) <= 1 {
+	if len(groups) <= 1 {
 		return nil, false
 	}
-	return parts, true
+	return groups, true
 }
 
-func unwrapTranslatedFencedDocChunk(text, delimiter string) (string, bool) {
-	lines := strings.SplitAfter(text, "\n")
-	if len(lines) < 2 {
-		return "", false
-	}
-	if leadingFenceDelimiter(lines[0]) == "" {
-		return "", false
-	}
-	closingIndex := -1
-	for index := len(lines) - 1; index >= 1; index-- {
-		if strings.TrimSpace(lines[index]) == "" {
-			continue
+func firstNonEmptyLineIndex(lines []string) int {
+	for index, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			return index
 		}
-		if isClosingFenceLine(lines[index], delimiter) {
-			closingIndex = index
+	}
+	return -1
+}
+
+func lastNonEmptyLineIndex(lines []string) int {
+	for index := len(lines) - 1; index >= 0; index-- {
+		if strings.TrimSpace(lines[index]) != "" {
+			return index
 		}
-		break
 	}
-	if closingIndex < 1 {
-		return "", false
-	}
-	return strings.Join(lines[1:closingIndex], ""), true
+	return -1
 }
 
 func docsI18nDocChunkMaxBytes() int {

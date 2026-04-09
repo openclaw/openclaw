@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -578,6 +579,68 @@ func TestTranslateDocBodyChunkedSplitsOversizedSingletonBlock(t *testing.T) {
 	}
 	if !strings.Contains(translated, "Translated line 01") || !strings.Contains(translated, "Translated line 06") {
 		t.Fatalf("expected translated singleton parts to be reassembled:\n%s", translated)
+	}
+}
+
+func TestTranslateDocBodyChunkedSplitsSingletonBlockWhenPromptBudgetExceeded(t *testing.T) {
+	lineA := "Alpha chunk with { braces }\n"
+	lineB := "Beta chunk with | pipes |\n"
+	body := lineA + lineB + "\n"
+	budget := max(estimateDocPromptCost(lineA), estimateDocPromptCost(lineB)) + 1
+	if estimateDocPromptCost(body) <= budget {
+		t.Fatalf("test setup expected combined singleton prompt cost to exceed budget; cost=%d budget=%d", estimateDocPromptCost(body), budget)
+	}
+
+	t.Setenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_MAX_BYTES", "4096")
+	t.Setenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_PROMPT_BUDGET", strconv.Itoa(budget))
+	translator := &oversizedBlockTranslator{}
+	translated, err := translateDocBodyChunked(context.Background(), translator, "gateway/configuration-reference.md", body, "en", "zh-CN")
+	if err != nil {
+		t.Fatalf("translateDocBodyChunked returned error: %v", err)
+	}
+	if len(translator.rawInputs) < 2 {
+		t.Fatalf("expected prompt-budget singleton split before translation, saw %d input(s)", len(translator.rawInputs))
+	}
+	for _, input := range translator.rawInputs {
+		if estimateDocPromptCost(input) > budget {
+			t.Fatalf("expected split chunk under prompt budget, got cost=%d budget=%d:\n%s", estimateDocPromptCost(input), budget, input)
+		}
+	}
+	if !strings.Contains(translated, "Alpha chunk") || !strings.Contains(translated, "Beta chunk") {
+		t.Fatalf("expected translated singleton parts to be reassembled:\n%s", translated)
+	}
+}
+
+func TestTranslateDocBodyChunkedSplitsOversizedFenceBeforeTrailingProse(t *testing.T) {
+	body := strings.Join([]string{
+		"```md",
+		"Line 01",
+		"Line 02",
+		"Line 03",
+		"Line 04",
+		"```",
+		"Trailing paragraph after the fence.",
+		"",
+	}, "\n")
+
+	t.Setenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_MAX_BYTES", "24")
+	translator := &oversizedBlockTranslator{}
+	translated, err := translateDocBodyChunked(context.Background(), translator, "gateway/configuration-reference.md", body, "en", "zh-CN")
+	if err != nil {
+		t.Fatalf("translateDocBodyChunked returned error: %v", err)
+	}
+	if len(translator.rawInputs) < 3 {
+		t.Fatalf("expected oversized fenced block with trailing prose to split, saw %d input(s)", len(translator.rawInputs))
+	}
+	for _, input := range translator.rawInputs {
+		if strings.Contains(input, "Line 01") || strings.Contains(input, "Line 02") || strings.Contains(input, "Line 03") || strings.Contains(input, "Line 04") {
+			if !strings.Contains(input, "```md") || !strings.Contains(input, "```") {
+				t.Fatalf("expected fenced split input to keep matched fence wrappers:\n%s", input)
+			}
+		}
+	}
+	if !strings.Contains(translated, "Translated line 01") || !strings.Contains(translated, "Trailing paragraph after the fence.") {
+		t.Fatalf("expected fence content and trailing prose to survive split:\n%s", translated)
 	}
 }
 
