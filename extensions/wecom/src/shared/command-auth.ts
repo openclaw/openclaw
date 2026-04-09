@@ -49,7 +49,7 @@ export async function resolveWecomCommandAuthorization(params: {
 }): Promise<WecomCommandAuthResult> {
   const { core, cfg, accountConfig, rawBody, senderUserId } = params;
 
-  const dmPolicy = accountConfig.dmPolicy ?? "pairing";
+  const dmPolicy = accountConfig.dmPolicy ?? "open";
   const configAllowFrom = (accountConfig.allowFrom ?? []).map((v) => String(v));
 
   const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(rawBody, cfg);

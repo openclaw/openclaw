@@ -176,7 +176,7 @@ export function resolveWeComAccountMulti(params: {
   // Resolve Agent sub-configuration
   const agentCfg = merged.agent;
   let agent: ResolvedAgentAccount | undefined;
-  if (agentCfg?.corpId && agentCfg?.corpSecret && agentCfg?.token && agentCfg?.encodingAESKey) {
+  if (agentCfg?.corpId && agentCfg?.corpSecret && agentCfg?.agentId && agentCfg?.token && agentCfg?.encodingAESKey) {
     agent = {
       accountId,
       enabled: baseEnabled && accountEnabled,

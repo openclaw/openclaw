@@ -697,6 +697,16 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
           changed = true;
         }
 
+        // Clear Agent credentials
+        const agentCfg = nextWecom.agent as Record<string, unknown> | undefined;
+        if (agentCfg?.corpId || agentCfg?.corpSecret || agentCfg?.agentId) {
+          delete agentCfg?.corpId;
+          delete agentCfg?.corpSecret;
+          delete agentCfg?.agentId;
+          cleared = true;
+          changed = true;
+        }
+
         if (changed) {
           if (Object.keys(nextWecom).length > 0) {
             nextCfg.channels = { ...nextCfg.channels, [CHANNEL_ID]: nextWecom };
@@ -719,13 +729,24 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
           accountCfg?.botId ||
           accountCfg?.secret ||
           accountCfg?.token ||
-          accountCfg?.encodingAESKey
+          accountCfg?.encodingAESKey ||
+          (accountCfg?.agent as Record<string, unknown> | undefined)?.corpId ||
+          (accountCfg?.agent as Record<string, unknown> | undefined)?.corpSecret ||
+          (accountCfg?.agent as Record<string, unknown> | undefined)?.agentId
         ) {
           const nextAccount = { ...accountCfg };
           delete nextAccount.botId;
           delete nextAccount.secret;
           delete nextAccount.token;
           delete nextAccount.encodingAESKey;
+          // Clear Agent credentials
+          if (nextAccount.agent && typeof nextAccount.agent === "object") {
+            const nextAgent = { ...nextAccount.agent as Record<string, unknown> };
+            delete nextAgent.corpId;
+            delete nextAgent.corpSecret;
+            delete nextAgent.agentId;
+            nextAccount.agent = Object.keys(nextAgent).length > 0 ? nextAgent : undefined;
+          }
           cleared = true;
           changed = true;
 
@@ -757,7 +778,12 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
         cfg: changed ? nextCfg : cfg,
         accountId: resolvedAccountId,
       });
-      const loggedOut = !resolved.botId && !resolved.secret;
+      const loggedOut =
+        !resolved.botId &&
+        !resolved.secret &&
+        !resolved.agent?.configured &&
+        !resolved.token &&
+        !resolved.encodingAESKey;
 
       return { cleared, envToken: false, loggedOut };
     },
