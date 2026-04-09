@@ -79,6 +79,19 @@ describe("resolveProviderDiscoveryFilterForTest", () => {
     ).toBeUndefined();
   });
 
+  it("ignores only the all-valued live var and keeps the other live filter", () => {
+    expect(
+      resolveProviderDiscoveryFilterForTest({
+        env: {
+          OPENCLAW_LIVE_TEST: "1",
+          OPENCLAW_LIVE_PROVIDERS: "all",
+          OPENCLAW_LIVE_GATEWAY_PROVIDERS: "claude-cli",
+          VITEST: "1",
+        } as NodeJS.ProcessEnv,
+      }),
+    ).toEqual(["anthropic"]);
+  });
+
   it("keeps explicit plugin-id filters when no owning provider plugin exists", () => {
     expect(
       resolveProviderDiscoveryFilterForTest({

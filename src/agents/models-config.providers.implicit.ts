@@ -86,16 +86,15 @@ function resolveProviderDiscoveryFilter(params: {
   if (!live) {
     return resolveExplicitProviderDiscoveryFilter(params);
   }
-  const liveProviderValues = [
+  const rawValues = [
     env.OPENCLAW_LIVE_PROVIDERS?.trim(),
     env.OPENCLAW_LIVE_GATEWAY_PROVIDERS?.trim(),
-  ];
-  if (liveProviderValues.some((value) => value === "all")) {
-    return undefined;
-  }
-  const rawValues = liveProviderValues.filter((value): value is string => Boolean(value));
+  ].filter((value): value is string => Boolean(value && value !== "all"));
   if (rawValues.length === 0) {
-    return resolveExplicitProviderDiscoveryFilter(params);
+    return env.OPENCLAW_LIVE_PROVIDERS?.trim() === "all" ||
+      env.OPENCLAW_LIVE_GATEWAY_PROVIDERS?.trim() === "all"
+      ? undefined
+      : resolveExplicitProviderDiscoveryFilter(params);
   }
   const ids = rawValues
     .flatMap((value) => value.split(","))
