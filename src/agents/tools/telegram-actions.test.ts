@@ -588,6 +588,17 @@ describe("readTelegramButtons", () => {
       }),
     ).toThrow(/style must be one of danger, success, primary/i);
   });
+
+  it("accepts callback_data longer than 64 chars (proxy handles shortening)", () => {
+    const longData =
+      "d0 call DONUT_SWAP action:execute inputToken:WBTC outputToken:USDC inputAmount:0.000146 slippage:50";
+    expect(longData.length).toBeGreaterThan(64);
+
+    const result = readTelegramButtons({
+      buttons: [[{ text: "Confirm", callback_data: longData }]],
+    });
+    expect(result).toEqual([[{ text: "Confirm", callback_data: longData }]]);
+  });
 });
 
 describe("handleTelegramAction per-account gating", () => {
