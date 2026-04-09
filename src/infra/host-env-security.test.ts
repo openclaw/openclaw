@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   isDangerousHostEnvOverrideVarName,
+  isDangerousHostInheritedEnvVarName,
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
   sanitizeHostExecEnv,
@@ -256,6 +257,30 @@ describe("isDangerousHostEnvVarName", () => {
   });
 });
 
+describe("isDangerousHostInheritedEnvVarName", () => {
+  it("blocks inherited keys from both policy buckets while preserving explicit inherited allowlist keys", () => {
+    expect(isDangerousHostInheritedEnvVarName("BASH_ENV")).toBe(true);
+    expect(isDangerousHostInheritedEnvVarName("bash_env")).toBe(true);
+    expect(isDangerousHostInheritedEnvVarName("ANSIBLE_CONFIG")).toBe(true);
+    expect(isDangerousHostInheritedEnvVarName("ansible_library")).toBe(true);
+    expect(isDangerousHostInheritedEnvVarName("TF_CLI_CONFIG_FILE")).toBe(true);
+    expect(isDangerousHostInheritedEnvVarName("TF_VAR_admin_cidr")).toBe(true);
+    expect(isDangerousHostInheritedEnvVarName("AWS_CONTAINER_CREDENTIALS_FULL_URI")).toBe(true);
+    expect(isDangerousHostInheritedEnvVarName("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")).toBe(true);
+    expect(isDangerousHostInheritedEnvVarName("KUBECONFIG")).toBe(true);
+    expect(isDangerousHostInheritedEnvVarName("GIT_CONFIG_GLOBAL")).toBe(true);
+    expect(isDangerousHostInheritedEnvVarName("NPM_CONFIG_USERCONFIG")).toBe(true);
+    expect(isDangerousHostInheritedEnvVarName("CARGO_REGISTRIES_CRATES_IO_INDEX")).toBe(true);
+
+    expect(isDangerousHostInheritedEnvVarName("HTTP_PROXY")).toBe(false);
+    expect(isDangerousHostInheritedEnvVarName("https_proxy")).toBe(false);
+    expect(isDangerousHostInheritedEnvVarName("SSL_CERT_FILE")).toBe(false);
+    expect(isDangerousHostInheritedEnvVarName("node_extra_ca_certs")).toBe(false);
+    expect(isDangerousHostInheritedEnvVarName("HOME")).toBe(false);
+    expect(isDangerousHostInheritedEnvVarName("FOO")).toBe(false);
+  });
+});
+
 describe("sanitizeHostExecEnv", () => {
   it("removes dangerous inherited keys while preserving PATH", () => {
     const env = sanitizeHostExecEnv({
@@ -301,14 +326,6 @@ describe("sanitizeHostExecEnv", () => {
     expect(env).toEqual({
       OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
       PATH: "/usr/bin:/bin",
-      AWS_CONFIG_FILE: "/tmp/aws-config",
-      KUBECONFIG: "/tmp/kubeconfig",
-      GOOGLE_APPLICATION_CREDENTIALS: "/tmp/gcp.json",
-      AWS_SHARED_CREDENTIALS_FILE: "/tmp/aws-credentials",
-      AWS_WEB_IDENTITY_TOKEN_FILE: "/tmp/aws-web-token",
-      AZURE_AUTH_LOCATION: "/tmp/azure-auth.json",
-      CARGO_HOME: "/tmp/cargo",
-      HELM_HOME: "/tmp/helm",
       HTTP_PROXY: "http://proxy.example.test:8080",
       HTTPS_PROXY: "http://proxy.example.test:8443",
       SSL_CERT_FILE: "/tmp/evil-cert.pem",
@@ -448,7 +465,7 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.EDITOR).toBeUndefined();
     expect(env.NPM_CONFIG_USERCONFIG).toBeUndefined();
     expect(env.GIT_CONFIG_GLOBAL).toBeUndefined();
-    expect(env.CARGO_REGISTRIES_CRATES_IO_INDEX).toBe("https://trusted.example/crates.io-index");
+    expect(env.CARGO_REGISTRIES_CRATES_IO_INDEX).toBeUndefined();
     expect(env.SHELLOPTS).toBeUndefined();
     expect(env.PS4).toBeUndefined();
     expect(env.CLASSPATH).toBeUndefined();
@@ -459,7 +476,7 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.MFLAGS).toBeUndefined();
     expect(env.PHPRC).toBeUndefined();
     expect(env.XDG_CONFIG_HOME).toBeUndefined();
-    expect(env.YARN_RC_FILENAME).toBe(".trusted-yarnrc.yml");
+    expect(env.YARN_RC_FILENAME).toBeUndefined();
     expect(env.PIP_INDEX_URL).toBeUndefined();
     expect(env.PIP_PYPI_URL).toBeUndefined();
     expect(env.PIP_EXTRA_INDEX_URL).toBeUndefined();
@@ -501,10 +518,11 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.ZDOTDIR).toBe("/tmp/trusted-zdotdir");
   });
 
-  it("drops everywhere-blocked inherited vars and keeps override-only inherited vars", () => {
+  it("drops inherited vars blocked by either policy bucket and keeps explicit inherited allowlist keys", () => {
     const env = sanitizeHostExecEnv({
       baseEnv: {
         PATH: "/usr/bin:/bin",
+        HTTPS_PROXY: "http://trusted-proxy.example.test:8443",
         VIMINIT: ":!touch /tmp/pwned",
         EXINIT: "silent !touch /tmp/pwned",
         LUA_INIT_5_4: "os.execute('touch /tmp/pwned')",
@@ -516,6 +534,7 @@ describe("sanitizeHostExecEnv", () => {
         R_PROFILE_USER: "/tmp/evil-Rprofile",
         ERL_AFLAGS: "-eval 'os:cmd(\"id\")'",
         TF_CLI_CONFIG_FILE: "/tmp/evil-terraformrc",
+        TF_VAR_admin_cidr: "10.0.0.0/24",
         SAFE: "1",
       },
     });
@@ -526,13 +545,15 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.EXINIT).toBeUndefined();
     expect(env.LUA_INIT_5_4).toBeUndefined();
     expect(env.HOSTALIASES).toBeUndefined();
-    expect(env.AWS_CONTAINER_CREDENTIALS_FULL_URI).toBe("http://169.254.170.2/credentials");
-    expect(env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI).toBe("/v2/credentials/abcd");
+    expect(env.HTTPS_PROXY).toBe("http://trusted-proxy.example.test:8443");
+    expect(env.AWS_CONTAINER_CREDENTIALS_FULL_URI).toBeUndefined();
+    expect(env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI).toBeUndefined();
     expect(env.CONFIG_SITE).toBeUndefined();
-    expect(env.ANSIBLE_CONFIG).toBe("/tmp/evil-ansible.cfg");
+    expect(env.ANSIBLE_CONFIG).toBeUndefined();
     expect(env.R_PROFILE_USER).toBeUndefined();
     expect(env.ERL_AFLAGS).toBeUndefined();
-    expect(env.TF_CLI_CONFIG_FILE).toBe("/tmp/evil-terraformrc");
+    expect(env.TF_CLI_CONFIG_FILE).toBeUndefined();
+    expect(env.TF_VAR_admin_cidr).toBeUndefined();
     expect(env.SAFE).toBe("1");
   });
 
@@ -1076,7 +1097,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "R_PROFILE_USER",
       "TF_CLI_CONFIG_FILE",
       "TF_PLUGIN_CACHE_DIR",
-      "TF_VAR_admin_cidr",
+      "TF_VAR_ADMIN_CIDR",
       "VIMINIT",
       "XDG_CONFIG_DIRS",
     ]);

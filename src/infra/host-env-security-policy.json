@@ -235,6 +235,28 @@
     "REDIS_URL",
     "SSH_AUTH_SOCK"
   ],
+  "allowedInheritedOverrideOnlyKeys": [
+    "ALL_PROXY",
+    "CURL_CA_BUNDLE",
+    "DOCKER_CERT_PATH",
+    "DOCKER_HOST",
+    "DOCKER_TLS_VERIFY",
+    "GIT_PAGER",
+    "GRADLE_USER_HOME",
+    "HISTFILE",
+    "HOME",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "MANPAGER",
+    "NODE_EXTRA_CA_CERTS",
+    "NODE_TLS_REJECT_UNAUTHORIZED",
+    "NO_PROXY",
+    "PAGER",
+    "REQUESTS_CA_BUNDLE",
+    "SSL_CERT_DIR",
+    "SSL_CERT_FILE",
+    "ZDOTDIR"
+  ],
   "blockedOverridePrefixes": ["GIT_CONFIG_", "NPM_CONFIG_", "CARGO_REGISTRIES_", "TF_VAR_"],
   "blockedPrefixes": ["DYLD_", "LD_", "BASH_FUNC_"]
 }

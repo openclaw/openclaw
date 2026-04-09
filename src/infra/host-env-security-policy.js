@@ -11,12 +11,25 @@ function sortUniqueUppercase(values) {
 function derivePolicyArrays(policy) {
   const blockedEverywhereKeys = policy.blockedEverywhereKeys ?? [];
   const blockedOverrideOnlyKeys = policy.blockedOverrideOnlyKeys ?? [];
+  const allowedInheritedOverrideOnlyKeys = policy.allowedInheritedOverrideOnlyKeys ?? [];
+  const allowedInheritedOverrideOnlyUpper = new Set(
+    allowedInheritedOverrideOnlyKeys.map((value) => value.toUpperCase()),
+  );
+  const blockedPrefixes = policy.blockedPrefixes ?? [];
+  const blockedOverridePrefixes = policy.blockedOverridePrefixes ?? [];
 
   return {
+    blockedInheritedKeys: sortUniqueUppercase([
+      ...blockedEverywhereKeys,
+      ...blockedOverrideOnlyKeys.filter(
+        (value) => !allowedInheritedOverrideOnlyUpper.has(value.toUpperCase()),
+      ),
+    ]),
+    blockedInheritedPrefixes: sortUniqueUppercase([...blockedPrefixes, ...blockedOverridePrefixes]),
     blockedKeys: sortUniqueUppercase(blockedEverywhereKeys),
     blockedOverrideKeys: sortUniqueUppercase(blockedOverrideOnlyKeys),
-    blockedPrefixes: sortUniqueUppercase(policy.blockedPrefixes ?? []),
-    blockedOverridePrefixes: sortUniqueUppercase(policy.blockedOverridePrefixes ?? []),
+    blockedPrefixes: sortUniqueUppercase(blockedPrefixes),
+    blockedOverridePrefixes: sortUniqueUppercase(blockedOverridePrefixes),
   };
 }
 
@@ -25,6 +38,11 @@ export function loadHostEnvSecurityPolicy(rawPolicy = HOST_ENV_SECURITY_POLICY_J
   return Object.freeze({
     blockedEverywhereKeys: Object.freeze(rawPolicy.blockedEverywhereKeys ?? []),
     blockedOverrideOnlyKeys: Object.freeze(rawPolicy.blockedOverrideOnlyKeys ?? []),
+    allowedInheritedOverrideOnlyKeys: Object.freeze(
+      rawPolicy.allowedInheritedOverrideOnlyKeys ?? [],
+    ),
+    blockedInheritedKeys: derived.blockedInheritedKeys,
+    blockedInheritedPrefixes: derived.blockedInheritedPrefixes,
     blockedPrefixes: derived.blockedPrefixes,
     blockedOverridePrefixes: derived.blockedOverridePrefixes,
     blockedKeys: derived.blockedKeys,
