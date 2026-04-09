@@ -1699,6 +1699,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
               return { backend: "builtin" };
             },
           });
+          api.registerMemoryCapability({
+            promptBuilder: () => ["stale failure capability section"],
+          });
           throw new Error("memory register failed");
         },
       };`,
@@ -1718,6 +1721,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
     });
 
     expect(registry.plugins.find((entry) => entry.id === "failing-memory")?.status).toBe("error");
+    expect(getMemoryCapabilityRegistration()).toBeUndefined();
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([]);
     expect(listMemoryCorpusSupplements()).toEqual([]);
     expect(resolveMemoryFlushPlan({})).toBeNull();
