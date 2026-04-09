@@ -810,7 +810,10 @@ describe("gateway startup reconciliation", () => {
       } as OpenClawConfig;
 
       const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
-      await beforeAgentReply({ cleanedBody: "hello" }, { trigger: "user", workspaceDir: "." });
+      await beforeAgentReply(
+        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+        { trigger: "heartbeat", workspaceDir: "." },
+      );
 
       expect(harness.addCalls).toHaveLength(1);
       expect(harness.addCalls[0]?.schedule).toMatchObject({
@@ -898,7 +901,10 @@ describe("gateway startup reconciliation", () => {
       } as OpenClawConfig;
 
       const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
-      await beforeAgentReply({ cleanedBody: "hello" }, { trigger: "user", workspaceDir: "." });
+      await beforeAgentReply(
+        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+        { trigger: "heartbeat", workspaceDir: "." },
+      );
 
       expect(startupHarness.updateCalls).toHaveLength(0);
       expect(reloadedHarness.updateCalls).toHaveLength(1);
@@ -962,7 +968,10 @@ describe("gateway startup reconciliation", () => {
       expect(harness.jobs).toHaveLength(0);
 
       const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
-      await beforeAgentReply({ cleanedBody: "hello" }, { trigger: "user", workspaceDir: "." });
+      await beforeAgentReply(
+        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+        { trigger: "heartbeat", workspaceDir: "." },
+      );
 
       expect(harness.addCalls).toHaveLength(2);
       expect(harness.addCalls[1]?.schedule).toMatchObject({
@@ -975,7 +984,61 @@ describe("gateway startup reconciliation", () => {
     }
   });
 
-  it("does not reconcile managed cron on every repeated runtime reply", async () => {
+  it("does not reconcile managed cron on non-heartbeat runtime replies", async () => {
+    clearInternalHooks();
+    const logger = createLogger();
+    const harness = createCronHarness();
+    const onMock = vi.fn();
+    const api = {
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "0 2 * * *",
+                  timezone: "UTC",
+                },
+              },
+            },
+          },
+        },
+      },
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      registerHook: (event: string, handler: Parameters<typeof registerInternalHook>[1]) => {
+        registerInternalHook(event, handler);
+      },
+      on: onMock,
+    } as never;
+
+    try {
+      registerShortTermPromotionDreaming(api);
+      await triggerInternalHook(
+        createInternalHookEvent("gateway", "startup", "gateway:startup", {
+          cfg: api.config,
+          deps: { cron: harness.cron },
+        }),
+      );
+
+      expect(harness.listCalls).toBe(1);
+
+      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
+      await beforeAgentReply({ cleanedBody: "hello" }, { trigger: "user", workspaceDir: "." });
+      await beforeAgentReply(
+        { cleanedBody: "hello again" },
+        { trigger: "user", workspaceDir: "." },
+      );
+
+      expect(harness.listCalls).toBe(1);
+    } finally {
+      clearInternalHooks();
+    }
+  });
+
+  it("does not reconcile managed cron on every repeated runtime heartbeat", async () => {
     clearInternalHooks();
     const logger = createLogger();
     const harness = createCronHarness();
@@ -1019,10 +1082,13 @@ describe("gateway startup reconciliation", () => {
       expect(harness.listCalls).toBe(1);
 
       const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
-      await beforeAgentReply({ cleanedBody: "hello" }, { trigger: "user", workspaceDir: "." });
       await beforeAgentReply(
-        { cleanedBody: "hello again" },
-        { trigger: "user", workspaceDir: "." },
+        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+        { trigger: "heartbeat", workspaceDir: "." },
+      );
+      await beforeAgentReply(
+        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+        { trigger: "heartbeat", workspaceDir: "." },
       );
 
       expect(harness.listCalls).toBe(2);
