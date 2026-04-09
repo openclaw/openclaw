@@ -222,9 +222,9 @@ export function installContextEngineLoopHook(params: {
       lastSeenLength = params.getPrePromptMessageCount?.() ?? 0;
     }
 
-    let didCallAfterTurn = false;
+    const hasNewMessages = sourceMessages.length > lastSeenLength;
     try {
-      if (sourceMessages.length > lastSeenLength && typeof contextEngine.afterTurn === "function") {
+      if (hasNewMessages && typeof contextEngine.afterTurn === "function") {
         const prePromptCount = lastSeenLength;
         await contextEngine.afterTurn({
           sessionId,
@@ -234,13 +234,14 @@ export function installContextEngineLoopHook(params: {
           prePromptMessageCount: prePromptCount,
           tokenBudget,
         });
+      }
+      if (hasNewMessages) {
         lastSeenLength = sourceMessages.length;
-        didCallAfterTurn = true;
       }
       // Skip assemble when nothing has changed since the last call AND we
       // already returned an assembled view at least once. The engine's view
-      // cannot have changed without new messages arriving via afterTurn.
-      if (didCallAfterTurn || !hasAssembledBefore) {
+      // cannot have changed without new messages arriving.
+      if (hasNewMessages || !hasAssembledBefore) {
         const assembled = await contextEngine.assemble({
           sessionId,
           sessionKey,

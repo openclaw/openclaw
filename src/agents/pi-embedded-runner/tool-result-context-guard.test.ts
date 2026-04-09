@@ -463,6 +463,32 @@ describe("installContextEngineLoopHook", () => {
     expect(engine.assemble).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps calling assemble on subsequent iterations when engine lacks afterTurn but new messages arrive", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine({ omitAfterTurn: true });
+    installContextEngineLoopHook({
+      agent,
+      contextEngine: engine,
+      sessionId,
+      sessionKey,
+      sessionFile,
+      tokenBudget,
+      modelId,
+    });
+
+    const batch1 = [makeUser("first"), makeToolResult("call_1", "r1")];
+    await callTransform(agent, batch1);
+    expect(engine.assemble).toHaveBeenCalledTimes(1);
+
+    const batch2 = [...batch1, makeUser("second"), makeToolResult("call_2", "r2")];
+    await callTransform(agent, batch2);
+    expect(engine.assemble).toHaveBeenCalledTimes(2);
+
+    const batch3 = [...batch2, makeUser("third"), makeToolResult("call_3", "r3")];
+    await callTransform(agent, batch3);
+    expect(engine.assemble).toHaveBeenCalledTimes(3);
+  });
+
   it("falls through to the source messages when engine.afterTurn throws", async () => {
     const agent = makeGuardableAgent();
     const engine = makeMockEngine({
