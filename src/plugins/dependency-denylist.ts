@@ -10,6 +10,11 @@ export type BlockedManifestDependencyFinding = {
   field: "dependencies" | "name" | "optionalDependencies" | "overrides" | "peerDependencies";
 };
 
+export type BlockedPackageDirectoryFinding = {
+  dependencyName: string;
+  directoryRelativePath: string;
+};
+
 type PackageDependencyMapFields = Partial<
   Record<
     Exclude<BlockedManifestDependencyFinding["field"], "name" | "overrides">,
@@ -34,6 +39,10 @@ type PackageOverrideFields = {
 const BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAME_SET = new Set<string>(
   blockedInstallDependencyPackageNames,
 );
+
+function isBlockedInstallDependencyPackageName(packageName: string): boolean {
+  return BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAME_SET.has(packageName);
+}
 
 function parseNpmAliasTargetPackageName(spec: string): string | undefined {
   const normalized = spec.trim();
@@ -125,7 +134,7 @@ export function findBlockedManifestDependencies(
   manifest: PackageDependencyFields & PackageOverrideFields,
 ): BlockedManifestDependencyFinding[] {
   const findings: BlockedManifestDependencyFinding[] = [];
-  if (manifest.name && BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAME_SET.has(manifest.name)) {
+  if (manifest.name && isBlockedInstallDependencyPackageName(manifest.name)) {
     findings.push({ dependencyName: manifest.name, field: "name" });
   }
   if (isPackageOverrideObject(manifest.overrides)) {
@@ -137,7 +146,7 @@ export function findBlockedManifestDependencies(
       continue;
     }
     for (const dependencyName of Object.keys(dependencyMap).toSorted()) {
-      if (BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAME_SET.has(dependencyName)) {
+      if (isBlockedInstallDependencyPackageName(dependencyName)) {
         findings.push({ dependencyName, field });
         continue;
       }
@@ -146,7 +155,7 @@ export function findBlockedManifestDependencies(
       if (!aliasTargetPackageName) {
         continue;
       }
-      if (!BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAME_SET.has(aliasTargetPackageName)) {
+      if (!isBlockedInstallDependencyPackageName(aliasTargetPackageName)) {
         continue;
       }
       findings.push({
@@ -157,4 +166,48 @@ export function findBlockedManifestDependencies(
     }
   }
   return findings;
+}
+
+export function findBlockedNodeModulesDirectory(params: {
+  directoryRelativePath: string;
+}): BlockedPackageDirectoryFinding | undefined {
+  const segments = params.directoryRelativePath
+    .split(/[\\/]+/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+
+  for (let index = 0; index < segments.length; index += 1) {
+    if (segments[index] !== "node_modules") {
+      continue;
+    }
+    const packageScopeOrName = segments[index + 1];
+    if (!packageScopeOrName) {
+      continue;
+    }
+
+    if (packageScopeOrName.startsWith("@")) {
+      const packageName = segments[index + 2];
+      if (!packageName) {
+        continue;
+      }
+      const scopedPackageId = `${packageScopeOrName}/${packageName}`;
+      if (!isBlockedInstallDependencyPackageName(scopedPackageId)) {
+        continue;
+      }
+      return {
+        dependencyName: scopedPackageId,
+        directoryRelativePath: params.directoryRelativePath,
+      };
+    }
+
+    if (!isBlockedInstallDependencyPackageName(packageScopeOrName)) {
+      continue;
+    }
+    return {
+      dependencyName: packageScopeOrName,
+      directoryRelativePath: params.directoryRelativePath,
+    };
+  }
+
+  return undefined;
 }

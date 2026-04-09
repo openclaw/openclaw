@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
 import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
-import { findBlockedManifestDependencies } from "./dependency-denylist.js";
+import {
+  findBlockedManifestDependencies,
+  findBlockedNodeModulesDirectory,
+} from "./dependency-denylist.js";
 import { getGlobalHookRunner } from "./hook-runner-global.js";
 import { createBeforeInstallHookPayload } from "./install-policy-context.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
@@ -41,6 +44,16 @@ type PackageManifestTraversalLimits = {
   maxDepth: number;
   maxDirectories: number;
   maxManifests: number;
+};
+
+type BlockedPackageDirectoryFinding = {
+  dependencyName: string;
+  directoryRelativePath: string;
+};
+
+type PackageManifestTraversalResult = {
+  blockedDirectoryFinding?: BlockedPackageDirectoryFinding;
+  packageManifestPaths: string[];
 };
 
 type PluginInstallRequestKind =
@@ -114,6 +127,14 @@ function buildBlockedDependencyReason(params: {
   return `${params.targetLabel} blocked: blocked dependencies ${findingSummary} declared in ${manifestLabel}.`;
 }
 
+function buildBlockedDependencyDirectoryReason(params: {
+  dependencyName: string;
+  directoryRelativePath: string;
+  targetLabel: string;
+}) {
+  return `${params.targetLabel} blocked: blocked dependency directory "${params.dependencyName}" declared at ${params.directoryRelativePath}.`;
+}
+
 function buildBuiltinScanFromError(error: unknown): BuiltinInstallScan {
   return {
     status: "error",
@@ -178,7 +199,9 @@ function resolvePackageManifestTraversalLimits(): PackageManifestTraversalLimits
   };
 }
 
-async function collectPackageManifestPaths(rootDir: string): Promise<string[]> {
+async function collectPackageManifestPaths(
+  rootDir: string,
+): Promise<PackageManifestTraversalResult> {
   const limits = resolvePackageManifestTraversalLimits();
   const queue: Array<{ depth: number; dir: string }> = [{ depth: 0, dir: rootDir }];
   const packageManifestPaths: string[] = [];
@@ -229,7 +252,17 @@ async function collectPackageManifestPaths(rootDir: string): Promise<string[]> {
         continue;
       }
       const nextPath = path.join(currentDir, entry.name);
+      const relativeNextPath = path.relative(rootDir, nextPath) || entry.name;
       if (entry.isDirectory()) {
+        const blockedDirectoryFinding = findBlockedNodeModulesDirectory({
+          directoryRelativePath: relativeNextPath,
+        });
+        if (blockedDirectoryFinding) {
+          return {
+            blockedDirectoryFinding,
+            packageManifestPaths,
+          };
+        }
         queue.push({ depth: current.depth + 1, dir: nextPath });
         continue;
       }
@@ -244,7 +277,7 @@ async function collectPackageManifestPaths(rootDir: string): Promise<string[]> {
     }
   }
 
-  return packageManifestPaths;
+  return { packageManifestPaths };
 }
 
 async function scanManifestDependencyDenylist(params: {
@@ -252,7 +285,23 @@ async function scanManifestDependencyDenylist(params: {
   packageDir: string;
   targetLabel: string;
 }): Promise<InstallSecurityScanResult | undefined> {
-  const packageManifestPaths = await collectPackageManifestPaths(params.packageDir);
+  const traversalResult = await collectPackageManifestPaths(params.packageDir);
+  if (traversalResult.blockedDirectoryFinding) {
+    const reason = buildBlockedDependencyDirectoryReason({
+      dependencyName: traversalResult.blockedDirectoryFinding.dependencyName,
+      directoryRelativePath: traversalResult.blockedDirectoryFinding.directoryRelativePath,
+      targetLabel: params.targetLabel,
+    });
+    params.logger.warn?.(`WARNING: ${reason}`);
+    return {
+      blocked: {
+        code: "security_scan_blocked",
+        reason,
+      },
+    };
+  }
+
+  const packageManifestPaths = traversalResult.packageManifestPaths;
   for (const manifestPath of packageManifestPaths) {
     let manifest: PackageManifest;
     try {
