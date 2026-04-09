@@ -248,12 +248,9 @@ describe("isDangerousHostEnvVarName", () => {
       expect(isDangerousHostEnvVarName(key.toLowerCase())).toBe(true);
     }
 
-    expect(isDangerousHostEnvVarName("ANSIBLE_REMOTE_TEMP")).toBe(false);
     expect(isDangerousHostEnvVarName("ANSIBLE_CONFIG")).toBe(false);
     expect(isDangerousHostEnvVarName("ANSIBLE_LIBRARY")).toBe(false);
-    expect(isDangerousHostEnvVarName("R_LIBS_USER")).toBe(false);
     expect(isDangerousHostEnvVarName("TF_CLI_CONFIG_FILE")).toBe(false);
-    expect(isDangerousHostEnvVarName("TF_PLUGIN_CACHE_DIR")).toBe(false);
     expect(isDangerousHostEnvVarName("AWS_CONTAINER_CREDENTIALS_FULL_URI")).toBe(false);
     expect(isDangerousHostEnvVarName("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")).toBe(false);
   });
@@ -550,7 +547,10 @@ describe("sanitizeHostExecEnv", () => {
         AWS_CONTAINER_CREDENTIALS_FULL_URI: "http://attacker/credentials",
         AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: "/attacker-credentials",
         ANSIBLE_CONFIG: "/tmp/override-ansible.cfg",
+        ANSIBLE_REMOTE_TEMP: "/tmp/evil-ansible-remote",
+        R_LIBS_USER: "/tmp/evil-r-libs-user",
         TF_CLI_CONFIG_FILE: "/tmp/override-terraformrc",
+        TF_PLUGIN_CACHE_DIR: "/tmp/evil-tf-plugin-cache",
         CFLAGS: "-I/attacker/include",
         LDFLAGS: "-L/attacker/lib",
         XDG_CONFIG_DIRS: "/tmp/evil-config-dirs",
@@ -569,7 +569,10 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.AWS_CONTAINER_CREDENTIALS_FULL_URI).toBeUndefined();
     expect(env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI).toBeUndefined();
     expect(env.ANSIBLE_CONFIG).toBeUndefined();
+    expect(env.ANSIBLE_REMOTE_TEMP).toBeUndefined();
+    expect(env.R_LIBS_USER).toBeUndefined();
     expect(env.TF_CLI_CONFIG_FILE).toBeUndefined();
+    expect(env.TF_PLUGIN_CACHE_DIR).toBeUndefined();
     expect(env.CFLAGS).toBeUndefined();
     expect(env.LDFLAGS).toBeUndefined();
     expect(env.XDG_CONFIG_DIRS).toBeUndefined();
@@ -793,7 +796,10 @@ describe("isDangerousHostEnvOverrideVarName", () => {
       "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
       "ANSIBLE_CONFIG",
       "ANSIBLE_LIBRARY",
+      "ANSIBLE_REMOTE_TEMP",
+      "R_LIBS_USER",
       "TF_CLI_CONFIG_FILE",
+      "TF_PLUGIN_CACHE_DIR",
       "CFLAGS",
       "LDFLAGS",
       "XDG_CONFIG_DIRS",
@@ -1039,7 +1045,10 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
         LUA_INIT_5_4: "os.execute('touch /tmp/pwned')",
         HOSTALIASES: "/tmp/evil-hostaliases",
         ANSIBLE_CONFIG: "/tmp/evil-ansible.cfg",
+        ANSIBLE_REMOTE_TEMP: "/tmp/evil-ansible-remote",
+        R_LIBS_USER: "/tmp/evil-r-libs-user",
         TF_CLI_CONFIG_FILE: "/tmp/evil-terraformrc",
+        TF_PLUGIN_CACHE_DIR: "/tmp/evil-tf-plugin-cache",
         AWS_CONTAINER_CREDENTIALS_FULL_URI: "http://attacker/credentials",
         AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: "/attacker-credentials",
         GITHUB_TOKEN: "ghp-test",
@@ -1052,14 +1061,17 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
 
     expect(result.rejectedOverrideBlockedKeys).toEqual([
       "ANSIBLE_CONFIG",
+      "ANSIBLE_REMOTE_TEMP",
       "AWS_CONTAINER_CREDENTIALS_FULL_URI",
       "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
       "DATABASE_URL",
       "GITHUB_TOKEN",
       "HOSTALIASES",
       "LUA_INIT_5_4",
+      "R_LIBS_USER",
       "R_PROFILE_USER",
       "TF_CLI_CONFIG_FILE",
+      "TF_PLUGIN_CACHE_DIR",
       "VIMINIT",
       "XDG_CONFIG_DIRS",
     ]);
@@ -1069,7 +1081,10 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.LUA_INIT_5_4).toBeUndefined();
     expect(result.env.HOSTALIASES).toBeUndefined();
     expect(result.env.ANSIBLE_CONFIG).toBeUndefined();
+    expect(result.env.ANSIBLE_REMOTE_TEMP).toBeUndefined();
+    expect(result.env.R_LIBS_USER).toBeUndefined();
     expect(result.env.TF_CLI_CONFIG_FILE).toBeUndefined();
+    expect(result.env.TF_PLUGIN_CACHE_DIR).toBeUndefined();
     expect(result.env.GITHUB_TOKEN).toBeUndefined();
     expect(result.env.DATABASE_URL).toBeUndefined();
     expect(result.env.R_PROFILE_USER).toBeUndefined();
