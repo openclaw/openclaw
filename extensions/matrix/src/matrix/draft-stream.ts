@@ -53,6 +53,10 @@ export function createMatrixDraftStream(params: {
 }): MatrixDraftStream {
   const { roomId, client, cfg, threadId, accountId, log } = params;
   const preview = resolveDraftPreviewOptions(params.mode ?? "partial");
+  // MSC4357 live markers are only useful for "partial" mode where users see
+  // the draft evolve. "quiet" mode uses m.notice for background previews
+  // where a streaming animation would be unexpected.
+  const useLive = params.mode !== "quiet";
 
   let currentEventId: string | undefined;
   let lastSentText = "";
@@ -94,11 +98,11 @@ export function createMatrixDraftStream(params: {
           accountId,
           msgtype: preview.msgtype,
           includeMentions: preview.includeMentions,
-          live: true,
+          live: useLive,
         });
         currentEventId = result.messageId;
         lastSentText = preparedText.trimmedText;
-        log?.(`draft-stream: created message ${currentEventId} (MSC4357 live)`);
+        log?.(`draft-stream: created message ${currentEventId}${useLive ? " (MSC4357 live)" : ""}`);
       } else {
         await editMessageMatrix(roomId, currentEventId, preparedText.trimmedText, {
           client,
@@ -107,7 +111,7 @@ export function createMatrixDraftStream(params: {
           accountId,
           msgtype: preview.msgtype,
           includeMentions: preview.includeMentions,
-          live: true,
+          live: useLive,
         });
         lastSentText = preparedText.trimmedText;
       }
@@ -142,7 +146,7 @@ export function createMatrixDraftStream(params: {
     // Send a final edit without the MSC4357 live marker to signal that
     // the stream is complete. Supporting clients will stop the streaming
     // animation and display the final content.
-    if (currentEventId && lastSentText) {
+    if (useLive && currentEventId && lastSentText) {
       try {
         await editMessageMatrix(roomId, currentEventId, lastSentText, {
           client,
