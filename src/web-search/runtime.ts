@@ -403,6 +403,7 @@ export async function runWebSearch(
       return { provider: candidate.id, result };
     } catch (error) {
       lastError = error;
+      lastErrorResult = undefined; // Clear structured error on hard exception
       if (!allowFallback) {
         throw error;
       }
