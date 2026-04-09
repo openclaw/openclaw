@@ -1266,6 +1266,7 @@ resource "aws_organizations_organizational_unit" "{ou_safe}" {{
 
     # Build SCP blocks
     scp_blocks = ""
+    app_ou_ref = "aws_organizations_organizational_unit.application.id" if "Application" in ous else "aws_organizations_organization.this.roots[0].id"
 
     # Always: deny root
     scp_blocks += f"""
@@ -1692,7 +1693,6 @@ data "aws_availability_zones" "available" {{ state = "available" }}
     # Account Vending
     vending_block = ""
     if enable_vending:
-        app_ou_ref = "aws_organizations_organizational_unit.application.id" if "Application" in ous else "aws_organizations_organization.this.roots[0].id"
         vending_block = f"""
 # ============================================================
 # Account Vending Machine
