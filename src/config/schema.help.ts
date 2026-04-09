@@ -75,6 +75,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Control UI hosting settings including enablement, pathing, and browser-origin/auth hardening behavior. Keep UI exposure minimal and pair with strong auth controls before internet-facing deployments.",
   "gateway.controlUi.enabled":
     "Enables serving the gateway Control UI from the gateway HTTP process when true. Keep enabled for local administration, and disable when an external control surface replaces it.",
+  "gateway.mcpLoopback":
+    "Local MCP loopback server settings used to expose OpenClaw tools to CLI backends over HTTP. Leave unset for ephemeral ports, or set a fixed port when session-bound MCP URLs must stay stable across gateway restarts.",
+  "gateway.mcpLoopback.port":
+    "TCP port for the local MCP loopback server. Use 0 or leave unset for an ephemeral port, or set a fixed loopback port to keep MCP URLs stable across restarts and improve CLI session reuse.",
   "gateway.auth":
     "Authentication policy for gateway HTTP/WebSocket access including mode, credentials, trusted-proxy behavior, and rate limiting. Keep auth enabled for every non-loopback deployment.",
   "gateway.auth.mode":
