@@ -14,7 +14,20 @@ function readRequiredDiscoveryRefs() {
   );
 }
 
-const REQUIRED_DISCOVERY_REFS = readRequiredDiscoveryRefs();
+// Guard against missing qa/scenarios/ scaffold in npm/homebrew installs (not bundled in published package).
+// Falls back to hardcoded defaults when scaffold is absent.
+const FALLBACK_DISCOVERY_REFS = [
+  "repo/qa/scenarios/index.md",
+  "repo/extensions/qa-lab/src/suite.ts",
+  "repo/docs/help/testing.md",
+] as const;
+
+let REQUIRED_DISCOVERY_REFS: readonly string[];
+try {
+  REQUIRED_DISCOVERY_REFS = readRequiredDiscoveryRefs();
+} catch {
+  REQUIRED_DISCOVERY_REFS = FALLBACK_DISCOVERY_REFS;
+}
 
 const REQUIRED_DISCOVERY_REFS_LOWER = REQUIRED_DISCOVERY_REFS.map(normalizeLowercaseStringOrEmpty);
 
