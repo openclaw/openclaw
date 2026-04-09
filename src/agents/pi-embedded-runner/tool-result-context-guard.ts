@@ -185,24 +185,9 @@ function enforceToolResultLimitInPlace(params: {
 }
 
 /**
- * Per-iteration context-engine ingest + assemble hook.
- *
- * Used in place of `installToolResultContextGuard` for sessions whose context
- * engine has claimed `info.ownsCompaction === true`. Wraps `agent.transformContext`
- * so that on every LLM call:
- *
- *   1. Any messages appended since the last call are forwarded to the engine
- *      via `afterTurn`, giving the engine a chance to ingest and trigger its
- *      own compaction policy mid-tool-loop (instead of waiting until the end
- *      of the attempt, which is the only point the runtime would otherwise
- *      finalize a turn).
- *   2. The engine's `assemble()` view is returned to pi-agent so the next LLM
- *      call uses the (possibly compacted) context, while pi-agent's own
- *      `state.messages` array is left untouched (mutating it mid-loop breaks
- *      iteration tracking).
- *
- * The hook is best-effort: any failure inside the engine falls back to the
- * raw source messages so the run still makes progress.
+ * Per-iteration `afterTurn` + `assemble` wrapper for sessions where
+ * the context engine owns compaction. Lets the engine compact inside
+ * a long tool loop instead of only at end of attempt.
  */
 export function installContextEngineLoopHook(params: {
   agent: GuardableAgent;
@@ -225,10 +210,7 @@ export function installContextEngineLoopHook(params: {
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
 
     try {
-      if (
-        sourceMessages.length > lastSeenLength &&
-        typeof contextEngine.afterTurn === "function"
-      ) {
+      if (sourceMessages.length > lastSeenLength && typeof contextEngine.afterTurn === "function") {
         const prePromptCount = lastSeenLength;
         await contextEngine.afterTurn({
           sessionId,
