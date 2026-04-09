@@ -129,7 +129,7 @@ const ProfileUpdateSchema = NostrProfileSchema.extend({
   lud16: lud16FormatSchema,
 });
 
-const ADMIN_SCOPE = "operator.admin";
+const PROFILE_MUTATION_SCOPE = "operator.write";
 
 // ============================================================================
 // Request Helpers
@@ -301,18 +301,18 @@ function enforceLoopbackMutationGuards(
   return true;
 }
 
-function enforceGatewayAdminMutationScope(
+function enforceGatewayMutationScope(
   ctx: NostrProfileHttpContext,
   accountId: string,
   res: ServerResponse,
 ): boolean {
   const runtimeScopes = getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes;
   const scopes = Array.isArray(runtimeScopes) ? runtimeScopes : [];
-  if (scopes.includes(ADMIN_SCOPE)) {
+  if (scopes.includes(PROFILE_MUTATION_SCOPE)) {
     return true;
   }
-  ctx.log?.warn?.(`[${accountId}] Rejected profile mutation missing ${ADMIN_SCOPE}`);
-  sendJson(res, 403, { ok: false, error: `missing scope: ${ADMIN_SCOPE}` });
+  ctx.log?.warn?.(`[${accountId}] Rejected profile mutation missing ${PROFILE_MUTATION_SCOPE}`);
+  sendJson(res, 403, { ok: false, error: `missing scope: ${PROFILE_MUTATION_SCOPE}` });
   return false;
 }
 
@@ -398,7 +398,7 @@ async function handleUpdateProfile(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<true> {
-  if (!enforceGatewayAdminMutationScope(ctx, accountId, res)) {
+  if (!enforceGatewayMutationScope(ctx, accountId, res)) {
     return true;
   }
   if (!enforceLoopbackMutationGuards(ctx, req, res)) {
@@ -504,7 +504,7 @@ async function handleImportProfile(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<true> {
-  if (!enforceGatewayAdminMutationScope(ctx, accountId, res)) {
+  if (!enforceGatewayMutationScope(ctx, accountId, res)) {
     return true;
   }
   if (!enforceLoopbackMutationGuards(ctx, req, res)) {
