@@ -24,6 +24,7 @@ vi.mock("../agents/bootstrap-files.js", () => ({
 vi.mock("../agents/pi-embedded-helpers.js", () => ({
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
+  sanitizeUserFacingText: (text?: string) => text ?? "",
 }));
 
 import { noteBootstrapFileSize } from "./doctor-bootstrap-size.js";
