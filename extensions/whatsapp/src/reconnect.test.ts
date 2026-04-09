@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   computeBackoff,
   DEFAULT_HEARTBEAT_SECONDS,
+  DEFAULT_MESSAGE_TIMEOUT_MS,
   DEFAULT_RECONNECT_POLICY,
   resolveHeartbeatSeconds,
+  resolveMessageTimeoutMs,
   resolveReconnectPolicy,
   sleepWithAbort,
 } from "./reconnect.js";
@@ -40,6 +42,14 @@ describe("web reconnect helpers", () => {
   it("returns heartbeat default when unset", () => {
     expect(resolveHeartbeatSeconds(cfg)).toBe(DEFAULT_HEARTBEAT_SECONDS);
     expect(resolveHeartbeatSeconds(cfg, 5)).toBe(5);
+  });
+
+  it("returns message timeout default when unset", () => {
+    expect(resolveMessageTimeoutMs(cfg)).toBe(DEFAULT_MESSAGE_TIMEOUT_MS);
+    expect(resolveMessageTimeoutMs(cfg, 5_000)).toBe(5_000);
+    expect(resolveMessageTimeoutMs({ web: { messageTimeoutMs: 7_000 } } as OpenClawConfig)).toBe(
+      7_000,
+    );
   });
 
   it("sleepWithAbort rejects on abort", async () => {

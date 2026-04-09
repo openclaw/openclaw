@@ -22,6 +22,7 @@ import {
   computeBackoff,
   newConnectionId,
   resolveHeartbeatSeconds,
+  resolveMessageTimeoutMs,
   resolveReconnectPolicy,
   sleepWithAbort,
 } from "../reconnect.js";
@@ -191,7 +192,7 @@ export async function monitorWebChannel(
 
     // Watchdog to detect stuck message processing (e.g., event emitter died).
     // Tuning overrides are test-oriented; production defaults remain unchanged.
-    const MESSAGE_TIMEOUT_MS = tuning.messageTimeoutMs ?? 30 * 60 * 1000; // 30m default
+    const MESSAGE_TIMEOUT_MS = resolveMessageTimeoutMs(cfg, tuning.messageTimeoutMs);
     const WATCHDOG_CHECK_MS = tuning.watchdogCheckMs ?? 60 * 1000; // 1m default
 
     const onMessage = createWebOnMessageHandler({

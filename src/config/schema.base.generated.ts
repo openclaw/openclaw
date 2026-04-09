@@ -20132,6 +20132,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Heartbeat interval in seconds for web channel connectivity and liveness maintenance. Use shorter intervals for faster detection, or longer intervals to reduce keepalive chatter.",
           },
+          messageTimeoutMs: {
+            type: "integer",
+            exclusiveMinimum: 0,
+            maximum: 9007199254740991,
+            title: "Web Channel Message Timeout (ms)",
+            description:
+              "Maximum allowed idle time in milliseconds since the last inbound message before the web-channel watchdog forces a reconnect. Increase this when long-lived quiet sessions are expected and false-positive reconnects are undesirable.",
+          },
           reconnect: {
             type: "object",
             properties: {
@@ -26044,6 +26052,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "web.heartbeatSeconds": {
       label: "Web Channel Heartbeat Interval (sec)",
       help: "Heartbeat interval in seconds for web channel connectivity and liveness maintenance. Use shorter intervals for faster detection, or longer intervals to reduce keepalive chatter.",
+      tags: ["automation"],
+    },
+    "web.messageTimeoutMs": {
+      label: "Web Channel Message Timeout (ms)",
+      help: "Maximum allowed idle time in milliseconds since the last inbound message before the web-channel watchdog forces a reconnect. Increase this when long-lived quiet sessions are expected and false-positive reconnects are undesirable.",
       tags: ["automation"],
     },
     "web.reconnect": {
