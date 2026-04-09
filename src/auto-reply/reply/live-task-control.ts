@@ -67,6 +67,22 @@ type FlowWaitJson = {
   queuePosition?: number;
 };
 
+export type LiveTaskExplicitControl = {
+  kind: "explicit";
+  action: "continue" | "cancel" | "retry";
+  token: string;
+  confirmed: boolean;
+};
+
+export type LiveTaskControllerIntent =
+  | LiveTaskExplicitControl
+  | { kind: "queue-summary" }
+  | { kind: "blocking-question" }
+  | { kind: "bulk-cancel-queued" }
+  | { kind: "foreground-steer" }
+  | { kind: "ambiguous-control" }
+  | { kind: "create" };
+
 export type LiveTaskBoard = {
   all: TaskFlowRecord[];
   foreground?: TaskFlowRecord;
@@ -686,7 +702,7 @@ export function buildLiveTaskBoardText(params: {
   lines.push(
     "",
     "Legend: handles are short flow ids. States: running, waiting, blocked, lost.",
-    "Control: continue <handle> · cancel <handle> · retry <handle>",
+    'Control: continue <handle> · cancel <handle> · retry <handle> · say "show queues" · say "cancel all queues"',
   );
   return lines.join("\n");
 }
@@ -814,6 +830,9 @@ export function createQueuedLiveTaskFlow(params: {
             queuePosition: getFollowupQueueDepthSafe(params.queueKey) + 1,
           }),
         });
+  if (!flow) {
+    throw new Error("Failed to create a managed live task flow.");
+  }
   applyControllerMetadata(params.followupRun, {
     flowId: flow.flowId,
     waitKind,
@@ -1170,18 +1189,62 @@ export function matchesSteerContinue(text: string): boolean {
   return matchesForegroundSteer(text) && /\b(browser|warm|reply|replies)\b/i.test(text);
 }
 
-export function parseLiveTaskControlInput(
-  text: string,
-): { action: "continue" | "cancel" | "retry"; token: string; confirmed: boolean } | undefined {
+export function parseLiveTaskControlInput(text: string): LiveTaskExplicitControl | undefined {
   const match = text.trim().match(/^(continue|cancel|retry)\s+([A-Za-z0-9-]+)(?:\s+(confirm))?$/i);
   if (!match) {
     return undefined;
   }
   return {
+    kind: "explicit",
     action: match[1].toLowerCase() as "continue" | "cancel" | "retry",
     token: match[2],
     confirmed: match[3]?.toLowerCase() === "confirm",
   };
+}
+
+function matchesQueueSummaryQuestion(text: string): boolean {
+  return /\b((what|show|list).*(queue|queues|queued|task board|queue board|flow board)|what(?:'s| is).*(queued|queue|task board|queue board|flow board))\b/i.test(
+    text,
+  );
+}
+
+function matchesBulkCancelQueues(text: string): boolean {
+  return /\b(cancel|kill|clear|stop)\b.*\b(all|queued|waiting|queue|queues|tasks|flows)\b/i.test(
+    text,
+  );
+}
+
+function matchesQueueControlLanguage(text: string): boolean {
+  return /\b(queue|queues|queued|task board|queue board|flow board|flow lane|clear the lane|cancel all queues?|kill all queues?|stop all queues?)\b/i.test(
+    text,
+  );
+}
+
+export function classifyLiveTaskControllerIntent(params: {
+  text: string;
+  active?: boolean;
+  explicit?: LiveTaskExplicitControl;
+}): LiveTaskControllerIntent {
+  const text = params.text.trim();
+  if (params.explicit) {
+    return params.explicit;
+  }
+  if (matchesQueueSummaryQuestion(text)) {
+    return { kind: "queue-summary" };
+  }
+  if (matchesBlockingQuestion(text)) {
+    return { kind: "blocking-question" };
+  }
+  if (matchesBulkCancelQueues(text)) {
+    return { kind: "bulk-cancel-queued" };
+  }
+  if (matchesForegroundSteer(text) && params.active) {
+    return { kind: "foreground-steer" };
+  }
+  if (matchesQueueControlLanguage(text)) {
+    return { kind: "ambiguous-control" };
+  }
+  return { kind: "create" };
 }
 
 export function buildLiveTaskDisambiguationReply(sessionKey: string): { text: string } | undefined {
@@ -1231,7 +1294,7 @@ export function resolveLiveTaskControllerAction(params: {
   sessionKey: string;
   text: string;
   followupRun: FollowupRun;
-  explicit?: ReturnType<typeof parseLiveTaskControlInput>;
+  intent: LiveTaskControllerIntent;
   active?: boolean;
 }):
   | {
@@ -1241,15 +1304,39 @@ export function resolveLiveTaskControllerAction(params: {
     }
   | undefined {
   const text = params.text.trim();
-  if (params.explicit) {
-    const flow = resolveLiveTaskFlow(params.sessionKey, params.explicit.token);
+  if (params.intent.kind === "explicit") {
+    const flow = resolveLiveTaskFlow(params.sessionKey, params.intent.token);
     return {
-      kind: params.explicit.action === "continue" ? "steer" : params.explicit.action,
-      normalizedAction: `${params.explicit.action}:${params.explicit.token.toLowerCase()}`,
+      kind: params.intent.action === "continue" ? "steer" : params.intent.action,
+      normalizedAction: `${params.intent.action}:${params.intent.token.toLowerCase()}`,
       flowId: flow?.flowId,
     };
   }
-  if (matchesForegroundSteer(text) && params.active) {
+  if (params.intent.kind === "queue-summary") {
+    return {
+      kind: "steer",
+      normalizedAction: "inspect:queue-summary",
+    };
+  }
+  if (params.intent.kind === "blocking-question") {
+    return {
+      kind: "steer",
+      normalizedAction: "inspect:blocking",
+    };
+  }
+  if (params.intent.kind === "bulk-cancel-queued") {
+    return {
+      kind: "cancel",
+      normalizedAction: "cancel:queued",
+    };
+  }
+  if (params.intent.kind === "ambiguous-control") {
+    return {
+      kind: "steer",
+      normalizedAction: "clarify:control",
+    };
+  }
+  if (params.intent.kind === "foreground-steer" && params.active) {
     const foreground = getForegroundFlowForOwner(params.sessionKey);
     if (!foreground) {
       return undefined;
@@ -1270,10 +1357,13 @@ export function resolveLiveTaskControllerAction(params: {
       };
     }
   }
-  return {
-    kind: "create",
-    normalizedAction: "create",
-  };
+  if (params.intent.kind === "create") {
+    return {
+      kind: "create",
+      normalizedAction: "create",
+    };
+  }
+  return undefined;
 }
 
 export function beginLiveTaskControllerAction(params: {
@@ -1398,6 +1488,18 @@ export function buildUnauthorizedLiveTaskReply(): { text: string } {
   };
 }
 
+export function buildLiveTaskControlClarificationReply(sessionKey: string): { text: string } {
+  const boardText = buildLiveTaskBoardText({ sessionKey });
+  if (boardText) {
+    return {
+      text: `${boardText}\n\nI read that as queue control. Next: /tasks · continue <handle> · cancel <handle> · say "cancel all queues"`,
+    };
+  }
+  return {
+    text: 'I read that as queue control, but there are no managed flows right now.\nNext: /tasks · say "draft the next reply batch"',
+  };
+}
+
 export function steerForegroundLiveTask(params: {
   sessionKey: string;
   prompt: string;
@@ -1490,6 +1592,50 @@ export function cancelLiveTaskFlow(params: {
   });
   return {
     text: `Cancelled flow ${handle}.\nNext: /tasks`,
+  };
+}
+
+export function cancelQueuedLiveTaskFlows(params: { sessionKey: string }): {
+  text: string;
+  cancelledFlowIds: string[];
+  preservedForegroundFlowId?: string;
+} {
+  const board = resolveLiveTaskBoard(params.sessionKey);
+  const preservedForegroundFlowId = board.foreground?.flowId;
+  const cancellable = board.all.filter((flow) => {
+    if (!isActiveFlow(flow)) {
+      return false;
+    }
+    if (flow.flowId === preservedForegroundFlowId) {
+      return false;
+    }
+    return flow.status === "queued" || flow.status === "waiting" || flow.status === "blocked";
+  });
+
+  for (const flow of cancellable) {
+    removeFollowupQueueItems(params.sessionKey, (item) => item.controller?.flowId === flow.flowId);
+    settleLiveTaskFlow({
+      flowId: flow.flowId,
+      status: "cancelled",
+    });
+  }
+
+  const summaryParts = [
+    `Cancelled ${cancellable.length} queued, waiting, or blocked flow${cancellable.length === 1 ? "" : "s"}.`,
+  ];
+  if (preservedForegroundFlowId) {
+    summaryParts.push(
+      `Kept foreground flow ${formatLiveTaskHandle({ flowId: preservedForegroundFlowId })} running.`,
+    );
+  } else {
+    summaryParts.push("There was no active foreground flow to preserve.");
+  }
+  summaryParts.push("Next: /tasks");
+
+  return {
+    text: summaryParts.join("\n"),
+    cancelledFlowIds: cancellable.map((flow) => flow.flowId),
+    preservedForegroundFlowId,
   };
 }
 

@@ -9,12 +9,15 @@ import {
   beginLiveTaskControllerAction,
   beginBackgroundLiveTaskFlow,
   buildBackgroundLiveTaskAck,
+  buildLiveTaskControlClarificationReply,
   beginForegroundLiveTaskFlow,
   buildForegroundLiveTaskAck,
   buildLiveTaskBoardText,
   buildBlockingLiveTaskReply,
   buildLiveTaskStatusLine,
+  cancelQueuedLiveTaskFlows,
   cancelLiveTaskFlow,
+  classifyLiveTaskControllerIntent,
   continueLiveTaskFlow,
   createQueuedLiveTaskFlow,
   formatLiveTaskHandle,
@@ -239,6 +242,133 @@ describe("live task control", () => {
     expect(waiting.waitJson).toMatchObject({
       kind: "capacity",
     });
+  });
+
+  it("classifies queue summary questions as controller inspection instead of create", () => {
+    const intent = classifyLiveTaskControllerIntent({
+      text: "What are all the 3 queues?",
+      active: true,
+    });
+
+    expect(intent).toMatchObject({
+      kind: "queue-summary",
+    });
+  });
+
+  it("leaves normal task requests alone even when they mention tasks", () => {
+    const intent = classifyLiveTaskControllerIntent({
+      text: "list 3 tasks for the outreach push",
+      active: true,
+    });
+
+    expect(intent).toMatchObject({
+      kind: "create",
+    });
+  });
+
+  it("bulk-cancels queued and blocked flows while preserving the foreground flow", () => {
+    const foreground = createManagedTaskFlow({
+      ownerKey: "agent:main:main",
+      controllerId: "auto-reply/live-task-control",
+      goal: "reply while the browser is warm",
+      status: "running",
+      currentStep: "Working in the foreground conversation.",
+      stateJson: {
+        controller: {
+          foreground: true,
+          browserLease: true,
+        },
+        request: {
+          prompt: "reply while the browser is warm",
+          summaryLine: "reply while the browser is warm",
+          waitKind: "browser_lease",
+        },
+      },
+    });
+    createRunningTaskRun({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      childSessionKey: "agent:main:subagent:foreground-keeper",
+      parentFlowId: foreground.flowId,
+      runId: "run-live-task-foreground-keeper",
+      task: "keep the foreground flow alive",
+    });
+    const waitingFollowup = createSessionFollowup("review the next lead");
+    const waiting = createQueuedLiveTaskFlow({
+      queueKey: "agent:main:main",
+      followupRun: waitingFollowup,
+    });
+    enqueueFollowupRun(
+      "agent:main:main",
+      waitingFollowup,
+      { mode: "followup" },
+      "prompt",
+      async () => {},
+      false,
+    );
+    const blocked = createManagedTaskFlow({
+      ownerKey: "agent:main:main",
+      controllerId: "auto-reply/live-task-control",
+      goal: "Need approval before sending",
+      status: "blocked",
+      blockedSummary: "Waiting for operator approval.",
+      stateJson: {
+        controller: {
+          foreground: false,
+          browserLease: false,
+        },
+        request: {
+          prompt: "Need approval before sending",
+          summaryLine: "Need approval before sending",
+          waitKind: "capacity",
+        },
+      },
+    });
+
+    const reply = cancelQueuedLiveTaskFlows({
+      sessionKey: "agent:main:main",
+    });
+    const board = resolveLiveTaskBoard("agent:main:main");
+
+    expect(reply.text).toContain("Cancelled 2 queued, waiting, or blocked flows.");
+    expect(reply.text).toContain(
+      `Kept foreground flow ${formatLiveTaskHandle(foreground)} running.`,
+    );
+    expect(reply.cancelledFlowIds).toEqual(
+      expect.arrayContaining([waiting.flowId, blocked.flowId]),
+    );
+    expect(board.foreground?.flowId).toBe(foreground.flowId);
+    expect(board.all.find((flow) => flow.flowId === waiting.flowId)?.status).toBe("cancelled");
+    expect(board.all.find((flow) => flow.flowId === blocked.flowId)?.status).toBe("cancelled");
+  });
+
+  it("returns a queue-control clarification instead of falling through to create", () => {
+    createManagedTaskFlow({
+      ownerKey: "agent:main:main",
+      controllerId: "auto-reply/live-task-control",
+      goal: "Need the queue board",
+      status: "waiting",
+      currentStep: "Waiting for the foreground flow to clear.",
+      stateJson: {
+        controller: {
+          foreground: false,
+          browserLease: false,
+        },
+        request: {
+          prompt: "Need the queue board",
+          summaryLine: "Need the queue board",
+          waitKind: "capacity",
+        },
+      },
+      waitJson: {
+        kind: "capacity",
+        queuePosition: 1,
+      },
+    });
+    const clarification = buildLiveTaskControlClarificationReply("agent:main:main");
+
+    expect(clarification.text).toContain("I read that as queue control");
+    expect(clarification.text).toContain("cancel all queues");
   });
 
   it("marks a stale foreground flow as lost after restart", () => {

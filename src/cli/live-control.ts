@@ -41,6 +41,14 @@ const liveManifestSchema = z.object({
     branchSwitchesBlocked: z.boolean(),
     draftStrategy: z.literal("worktree"),
   }),
+  runtimeState: z
+    .object({
+      sourcePath: z.string().min(1).nullable(),
+      loadedCommit: z.string().min(1).nullable(),
+      loadedAt: z.string().min(1),
+      pid: z.number().int().positive().nullable(),
+    })
+    .optional(),
 });
 
 const liveJournalEntrySchema = z.object({
@@ -86,6 +94,7 @@ export type LiveStatusIssue = {
     | "branch-drift"
     | "dirty-live-checkout"
     | "promoted-commit-drift"
+    | "runtime-commit-drift"
     | "runtime-source-mismatch"
     | "watcher-stale";
   message: string;
@@ -116,6 +125,7 @@ export type LiveSyncBlocker = {
     | "origin-fetch-failed"
     | "origin-main-missing"
     | "promoted-commit-drift"
+    | "runtime-commit-drift"
     | "runtime-source-mismatch"
     | "runtime-source-unverified"
     | "sync-diverged";
@@ -126,10 +136,14 @@ export type LiveStatusSnapshot = {
   manifest: LiveManifest;
   liveGit: GitState;
   runtime: {
+    pid: number | null;
     status: string;
     summary: string;
     sourcePath: string | null;
     matchesLiveCheckout: boolean | null;
+    loadedCommit: string | null;
+    loadedAt: string | null;
+    matchesLiveCommit: boolean | null;
   };
   watcher: LiveWatcherStatus;
   actorLock: LiveActorLock | null;
@@ -146,8 +160,16 @@ export type LiveSyncStatus = {
   safeToApply: boolean;
   blockers: LiveSyncBlocker[];
   runtimeMatchesLive: boolean | null;
+  runtimeLoadedCommit: string | null;
   draftCount: number;
   lockfileChanged: boolean;
+};
+
+type CapturedRuntimeState = {
+  sourcePath: string;
+  loadedCommit: string;
+  loadedAt: string;
+  pid: number | null;
 };
 
 type CommandResult = {
@@ -767,13 +789,18 @@ async function installCheckoutDependencies(
 }
 
 function runtimeSummaryFromStatus(status: DaemonStatus): {
+  pid: number | null;
   status: string;
   summary: string;
   sourcePath: string | null;
   matchesLiveCheckout: boolean | null;
+  loadedCommit: string | null;
+  loadedAt: string | null;
+  matchesLiveCommit: boolean | null;
 } {
   const runtimeStatus = status.service.runtime?.status ?? "unknown";
   return {
+    pid: status.service.runtime?.pid ?? null,
     status: runtimeStatus,
     summary: formatRuntimeStatusWithDetails({
       status: runtimeStatus,
@@ -785,6 +812,45 @@ function runtimeSummaryFromStatus(status: DaemonStatus): {
       status.service.command?.sourcePath?.trim() ||
       null,
     matchesLiveCheckout: null,
+    loadedCommit: null,
+    loadedAt: null,
+    matchesLiveCommit: null,
+  };
+}
+
+async function captureRuntimeState(params: {
+  deps: LiveControlDeps;
+  expectedLiveCheckoutPath: string;
+  loadedAt: string;
+  timeoutMs: number;
+}): Promise<CapturedRuntimeState> {
+  const status = await params.deps.gatherDaemonStatus(params.timeoutMs);
+  const runtimeCheckoutPath = await resolveDaemonCommandCheckoutPath(
+    status.service.command,
+    params.deps,
+  );
+  if (!runtimeCheckoutPath) {
+    throw new Error("Could not resolve the running gateway checkout after restart.");
+  }
+  if (path.resolve(runtimeCheckoutPath) !== path.resolve(params.expectedLiveCheckoutPath)) {
+    throw new Error(
+      `Gateway runtime source ${runtimeCheckoutPath} does not match live checkout ${params.expectedLiveCheckoutPath}.`,
+    );
+  }
+  if (status.service.runtime?.status !== "running") {
+    throw new Error(
+      `Gateway runtime is not running (${status.service.runtime?.status ?? "unknown"}).`,
+    );
+  }
+  if (!status.rpc?.ok) {
+    throw new Error(`Gateway RPC probe failed: ${status.rpc?.error ?? "unknown error"}`);
+  }
+  const runtimeGit = await readGitState(runtimeCheckoutPath, params.deps);
+  return {
+    sourcePath: runtimeCheckoutPath,
+    loadedCommit: runtimeGit.head,
+    loadedAt: params.loadedAt,
+    pid: status.service.runtime?.pid ?? null,
   };
 }
 
@@ -805,10 +871,14 @@ export async function collectLiveStatus(
   const runtime = daemonStatus
     ? runtimeSummaryFromStatus(daemonStatus)
     : {
+        pid: null,
         status: "unknown",
         summary: "unknown",
         sourcePath: null,
         matchesLiveCheckout: null,
+        loadedCommit: null,
+        loadedAt: null,
+        matchesLiveCommit: null,
       };
   const runtimeCheckoutPath = daemonStatus
     ? await resolveDaemonCommandCheckoutPath(daemonStatus.service.command, deps)
@@ -817,6 +887,21 @@ export async function collectLiveStatus(
     runtime.sourcePath = runtimeCheckoutPath;
     runtime.matchesLiveCheckout =
       path.resolve(runtimeCheckoutPath) === path.resolve(manifest.liveCheckoutPath);
+  }
+  const manifestRuntime = manifest.runtimeState;
+  const runtimeStateMatchesProcess =
+    manifestRuntime &&
+    runtime.pid != null &&
+    manifestRuntime.pid != null &&
+    runtime.pid === manifestRuntime.pid &&
+    runtime.sourcePath != null &&
+    manifestRuntime.sourcePath != null &&
+    path.resolve(runtime.sourcePath) === path.resolve(manifestRuntime.sourcePath);
+  if (runtimeStateMatchesProcess) {
+    runtime.loadedCommit = manifestRuntime.loadedCommit ?? null;
+    runtime.loadedAt = manifestRuntime.loadedAt;
+    runtime.matchesLiveCommit =
+      manifestRuntime.loadedCommit != null ? manifestRuntime.loadedCommit === liveGit.head : null;
   }
 
   const issues: LiveStatusIssue[] = [];
@@ -842,6 +927,12 @@ export async function collectLiveStatus(
     issues.push({
       code: "runtime-source-mismatch",
       message: `Gateway runtime source ${runtime.sourcePath} does not match live checkout ${manifest.liveCheckoutPath}.`,
+    });
+  }
+  if (runtime.matchesLiveCheckout === true && runtime.matchesLiveCommit === false) {
+    issues.push({
+      code: "runtime-commit-drift",
+      message: `Gateway runtime loaded commit ${runtime.loadedCommit?.slice(0, 7) ?? "unknown"} does not match live HEAD ${liveGit.head.slice(0, 7)}.`,
     });
   }
   if (watcher.status === "stale") {
@@ -870,7 +961,20 @@ function assertSafeLiveLane(status: LiveStatusSnapshot): void {
       issue.code === "branch-drift" ||
       issue.code === "dirty-live-checkout" ||
       issue.code === "promoted-commit-drift" ||
+      issue.code === "runtime-commit-drift" ||
       issue.code === "runtime-source-mismatch",
+  );
+  if (blocking.length > 0) {
+    throw new Error(blocking.map((issue) => issue.message).join(" "));
+  }
+}
+
+function assertSafeLiveCheckoutForRestart(status: LiveStatusSnapshot): void {
+  const blocking = status.issues.filter(
+    (issue) =>
+      issue.code === "branch-drift" ||
+      issue.code === "dirty-live-checkout" ||
+      issue.code === "promoted-commit-drift",
   );
   if (blocking.length > 0) {
     throw new Error(blocking.map((issue) => issue.message).join(" "));
@@ -899,25 +1003,13 @@ async function smokeCheckRuntime(
   deps: LiveControlDeps,
   timeoutMs: number,
   expectedLiveCheckoutPath: string,
-): Promise<void> {
-  const status = await deps.gatherDaemonStatus(timeoutMs);
-  const runtimeCheckoutPath = await resolveDaemonCommandCheckoutPath(status.service.command, deps);
-  if (
-    runtimeCheckoutPath &&
-    path.resolve(runtimeCheckoutPath) !== path.resolve(expectedLiveCheckoutPath)
-  ) {
-    throw new Error(
-      `Gateway runtime source ${runtimeCheckoutPath} does not match live checkout ${expectedLiveCheckoutPath}.`,
-    );
-  }
-  if (status.service.runtime?.status !== "running") {
-    throw new Error(
-      `Gateway runtime is not running (${status.service.runtime?.status ?? "unknown"}).`,
-    );
-  }
-  if (!status.rpc?.ok) {
-    throw new Error(`Gateway RPC probe failed: ${status.rpc?.error ?? "unknown error"}`);
-  }
+): Promise<CapturedRuntimeState> {
+  return await captureRuntimeState({
+    deps,
+    expectedLiveCheckoutPath,
+    loadedAt: formatIso(deps.now()),
+    timeoutMs,
+  });
 }
 
 async function advanceLiveCheckout(params: {
@@ -927,7 +1019,7 @@ async function advanceLiveCheckout(params: {
   liveCheckoutPath: string;
   smokeTimeoutMs: number;
   targetCommit: string;
-}): Promise<{ currentHead: string; liveChanged: boolean }> {
+}): Promise<{ currentHead: string; liveChanged: boolean; runtimeState: CapturedRuntimeState }> {
   const liveGit = await readGitState(params.liveCheckoutPath, params.deps);
   const currentHead = liveGit.head;
   let liveChanged = false;
@@ -953,8 +1045,12 @@ async function advanceLiveCheckout(params: {
     }
     await params.deps.buildCheckout(params.liveCheckoutPath, params.buildTimeoutMs);
     await params.deps.restartRuntime();
-    await smokeCheckRuntime(params.deps, params.smokeTimeoutMs, params.liveCheckoutPath);
-    return { currentHead, liveChanged };
+    const runtimeState = await smokeCheckRuntime(
+      params.deps,
+      params.smokeTimeoutMs,
+      params.liveCheckoutPath,
+    );
+    return { currentHead, liveChanged, runtimeState };
   } catch (error) {
     let restoredPreviousLiveState = false;
     if (liveChanged) {
@@ -980,13 +1076,17 @@ export async function startLiveRuntime(
   const { stateDir } = await ensureManifest(params);
   return await withActorLock(stateDir, { actor, operation: "start" }, async () => {
     const statusBefore = await collectLiveStatus({ ...params, deps });
-    assertSafeLiveLane(statusBefore);
+    assertSafeLiveCheckoutForRestart(statusBefore);
     await deps.restartRuntime();
-    await smokeCheckRuntime(
+    const runtimeState = await smokeCheckRuntime(
       deps,
       params.smokeTimeoutMs ?? DEFAULT_SMOKE_TIMEOUT_MS,
       statusBefore.manifest.liveCheckoutPath,
     );
+    await updateManifestRuntimeState(stateDir, statusBefore.manifest, {
+      ...runtimeState,
+      now: formatIso(deps.now()),
+    });
     await appendJournalEntry(stateDir, {
       id: `start-${Date.now()}`,
       ts: formatIso(deps.now()),
@@ -994,6 +1094,8 @@ export async function startLiveRuntime(
       type: "runtime_started",
       message: `Restarted live runtime for ${statusBefore.manifest.liveCheckoutPath}`,
       details: {
+        loadedCommit: runtimeState.loadedCommit,
+        pid: runtimeState.pid,
         promotedCommit: statusBefore.manifest.promotedCommit,
       },
     });
@@ -1106,6 +1208,25 @@ async function updateManifestPromotion(
   return next;
 }
 
+async function updateManifestRuntimeState(
+  stateDir: string,
+  manifest: LiveManifest,
+  params: CapturedRuntimeState & { now: string },
+): Promise<LiveManifest> {
+  const next: LiveManifest = {
+    ...manifest,
+    updatedAt: params.now,
+    runtimeState: {
+      sourcePath: params.sourcePath,
+      loadedCommit: params.loadedCommit,
+      loadedAt: params.loadedAt,
+      pid: params.pid,
+    },
+  };
+  await saveManifest(stateDir, next);
+  return next;
+}
+
 export async function promoteLiveSource(params: PromoteParams = {}): Promise<{
   manifest: LiveManifest;
   restoredPreviousLiveState: boolean;
@@ -1132,7 +1253,12 @@ export async function promoteLiveSource(params: PromoteParams = {}): Promise<{
         smokeTimeoutMs,
       });
       const now = formatIso(deps.now());
-      const next = await updateManifestPromotion(stateDir, manifest, {
+      const runtimeState = await smokeCheckRuntime(deps, smokeTimeoutMs, manifest.liveCheckoutPath);
+      const withRuntimeState = await updateManifestRuntimeState(stateDir, manifest, {
+        ...runtimeState,
+        now,
+      });
+      const next = await updateManifestPromotion(stateDir, withRuntimeState, {
         currentCommit: manifest.previousPromotedCommit,
         previousCommit: statusBefore.liveGit.head,
         now,
@@ -1145,6 +1271,8 @@ export async function promoteLiveSource(params: PromoteParams = {}): Promise<{
         message: `Rolled back live checkout to ${manifest.previousPromotedCommit.slice(0, 7)}`,
         details: {
           fromCommit: statusBefore.liveGit.head,
+          loadedCommit: runtimeState.loadedCommit,
+          pid: runtimeState.pid,
           toCommit: manifest.previousPromotedCommit,
         },
       });
@@ -1181,7 +1309,7 @@ export async function promoteLiveSource(params: PromoteParams = {}): Promise<{
 
     const oldLiveHead = liveGit.head;
     try {
-      await advanceLiveCheckout({
+      const advance = await advanceLiveCheckout({
         buildTimeoutMs,
         deps,
         installDeps: false,
@@ -1189,6 +1317,35 @@ export async function promoteLiveSource(params: PromoteParams = {}): Promise<{
         smokeTimeoutMs,
         targetCommit: sourceGit.head,
       });
+      const now = formatIso(deps.now());
+      const withRuntimeState = await updateManifestRuntimeState(stateDir, manifest, {
+        ...advance.runtimeState,
+        now,
+      });
+      const next = await updateManifestPromotion(stateDir, withRuntimeState, {
+        currentCommit: sourceGit.head,
+        previousCommit: oldLiveHead,
+        now,
+      });
+      await appendJournalEntry(stateDir, {
+        id: `promote-${Date.now()}`,
+        ts: now,
+        actor,
+        type: "promoted",
+        message: `Promoted ${sourceGit.head.slice(0, 7)} into live state`,
+        details: {
+          fromCommit: oldLiveHead,
+          loadedCommit: advance.runtimeState.loadedCommit,
+          pid: advance.runtimeState.pid,
+          sourceCommit: sourceGit.head,
+          sourceRoot,
+        },
+      });
+      return {
+        manifest: next,
+        restoredPreviousLiveState: false,
+        sourceRoot,
+      };
     } catch (error) {
       const restoredPreviousLiveState =
         error instanceof LiveAdvanceError ? error.restoredPreviousLiveState : false;
@@ -1208,30 +1365,6 @@ export async function promoteLiveSource(params: PromoteParams = {}): Promise<{
       });
       throw error;
     }
-
-    const now = formatIso(deps.now());
-    const next = await updateManifestPromotion(stateDir, manifest, {
-      currentCommit: sourceGit.head,
-      previousCommit: oldLiveHead,
-      now,
-    });
-    await appendJournalEntry(stateDir, {
-      id: `promote-${Date.now()}`,
-      ts: now,
-      actor,
-      type: "promoted",
-      message: `Promoted ${sourceGit.head.slice(0, 7)} into live state`,
-      details: {
-        fromCommit: oldLiveHead,
-        sourceCommit: sourceGit.head,
-        sourceRoot,
-      },
-    });
-    return {
-      manifest: next,
-      restoredPreviousLiveState: false,
-      sourceRoot,
-    };
   });
 }
 
@@ -1260,6 +1393,7 @@ export async function collectLiveSyncStatus(params: SyncParams = {}): Promise<Li
     if (
       issue.code === "branch-drift" ||
       issue.code === "dirty-live-checkout" ||
+      issue.code === "runtime-commit-drift" ||
       issue.code === "runtime-source-mismatch"
     ) {
       collector.add({ code: issue.code, message: issue.message });
@@ -1294,6 +1428,17 @@ export async function collectLiveSyncStatus(params: SyncParams = {}): Promise<Li
         status.runtime.matchesLiveCheckout === false
           ? `Gateway runtime source ${status.runtime.sourcePath ?? "unknown"} does not match live checkout ${status.manifest.liveCheckoutPath}.`
           : "Cannot verify that the running gateway matches the live checkout. Start the live runtime first.",
+    });
+  } else if (status.runtime.matchesLiveCommit !== true) {
+    collector.add({
+      code:
+        status.runtime.matchesLiveCommit === false
+          ? "runtime-commit-drift"
+          : "runtime-source-unverified",
+      message:
+        status.runtime.matchesLiveCommit === false
+          ? `Gateway runtime loaded commit ${status.runtime.loadedCommit?.slice(0, 7) ?? "unknown"} does not match live HEAD ${status.liveGit.head.slice(0, 7)}. Restart the live runtime first.`
+          : "Cannot verify that the running gateway loaded commit matches live HEAD. Restart the live runtime first.",
     });
   }
 
@@ -1363,7 +1508,7 @@ export async function collectLiveSyncStatus(params: SyncParams = {}): Promise<Li
 
   const promotedCommitDriftCanBeReconciled =
     hasPromotedCommitDrift &&
-    status.runtime.matchesLiveCheckout === true &&
+    status.runtime.matchesLiveCheckout !== false &&
     Boolean(originMainSha) &&
     status.liveGit.head === originMainSha &&
     (counts.ahead ?? 0) === 0 &&
@@ -1388,7 +1533,11 @@ export async function collectLiveSyncStatus(params: SyncParams = {}): Promise<Li
     behindBy: counts.behind,
     safeToApply: blockers.length === 0,
     blockers,
-    runtimeMatchesLive: status.runtime.matchesLiveCheckout,
+    runtimeMatchesLive:
+      status.runtime.matchesLiveCheckout === true
+        ? status.runtime.matchesLiveCommit
+        : status.runtime.matchesLiveCheckout,
+    runtimeLoadedCommit: status.runtime.loadedCommit,
     draftCount: status.drafts.length,
     lockfileChanged,
   };
@@ -1405,9 +1554,6 @@ export async function syncLiveCheckout(params: SyncParams = {}): Promise<{
   const { manifest, stateDir } = await ensureManifest(params);
   return await withActorLock(stateDir, { actor, operation: "sync" }, async () => {
     const statusBefore = await collectLiveSyncStatus({ ...params, deps, fetchOrigin: true });
-    if (statusBefore.blockers.length > 0) {
-      throw new Error(statusBefore.blockers.map((blocker) => blocker.message).join(" "));
-    }
     if (!statusBefore.originMainSha) {
       throw new Error("origin/main is unavailable for live sync.");
     }
@@ -1416,10 +1562,35 @@ export async function syncLiveCheckout(params: SyncParams = {}): Promise<{
       Boolean(manifest.promotedCommit) &&
       manifest.promotedCommit !== statusBefore.liveSha &&
       statusBefore.liveSha === statusBefore.originMainSha;
+    const metadataOnlyRuntimeBlockers = statusBefore.blockers.filter(
+      (blocker) =>
+        blocker.code === "runtime-commit-drift" || blocker.code === "runtime-source-unverified",
+    );
+    const otherBlockers = statusBefore.blockers.filter(
+      (blocker) =>
+        blocker.code !== "runtime-commit-drift" && blocker.code !== "runtime-source-unverified",
+    );
     if ((statusBefore.behindBy ?? 0) === 0) {
       if (canReconcilePromotionOnly) {
         const now = formatIso(deps.now());
-        await updateManifestPromotion(stateDir, manifest, {
+        if (otherBlockers.length > 0) {
+          throw new Error(otherBlockers.map((blocker) => blocker.message).join(" "));
+        }
+        const runtimeState =
+          metadataOnlyRuntimeBlockers.length > 0
+            ? await (async () => {
+                await deps.restartRuntime();
+                return await smokeCheckRuntime(deps, smokeTimeoutMs, manifest.liveCheckoutPath);
+              })()
+            : null;
+        const withRuntimeState =
+          runtimeState == null
+            ? manifest
+            : await updateManifestRuntimeState(stateDir, manifest, {
+                ...runtimeState,
+                now,
+              });
+        await updateManifestPromotion(stateDir, withRuntimeState, {
           currentCommit: statusBefore.liveSha,
           previousCommit: manifest.promotedCommit ?? statusBefore.liveSha,
           now,
@@ -1434,6 +1605,9 @@ export async function syncLiveCheckout(params: SyncParams = {}): Promise<{
             fromCommit: manifest.promotedCommit,
             lockfileChanged: false,
             metadataOnly: true,
+            runtimeRestarted: runtimeState != null,
+            runtimeLoadedCommit: runtimeState?.loadedCommit,
+            runtimePid: runtimeState?.pid,
             toCommit: statusBefore.liveSha,
           },
         });
@@ -1447,6 +1621,9 @@ export async function syncLiveCheckout(params: SyncParams = {}): Promise<{
         status: statusBefore,
       };
     }
+    if (statusBefore.blockers.length > 0) {
+      throw new Error(statusBefore.blockers.map((blocker) => blocker.message).join(" "));
+    }
 
     try {
       const advance = await advanceLiveCheckout({
@@ -1458,7 +1635,11 @@ export async function syncLiveCheckout(params: SyncParams = {}): Promise<{
         targetCommit: statusBefore.originMainSha,
       });
       const now = formatIso(deps.now());
-      await updateManifestPromotion(stateDir, manifest, {
+      const withRuntimeState = await updateManifestRuntimeState(stateDir, manifest, {
+        ...advance.runtimeState,
+        now,
+      });
+      await updateManifestPromotion(stateDir, withRuntimeState, {
         currentCommit: statusBefore.originMainSha,
         previousCommit: advance.currentHead,
         now,
@@ -1472,6 +1653,8 @@ export async function syncLiveCheckout(params: SyncParams = {}): Promise<{
         details: {
           fromCommit: advance.currentHead,
           lockfileChanged: statusBefore.lockfileChanged,
+          runtimeLoadedCommit: advance.runtimeState.loadedCommit,
+          runtimePid: advance.runtimeState.pid,
           toCommit: statusBefore.originMainSha,
         },
       });

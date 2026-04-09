@@ -58,19 +58,21 @@ import {
   buildBackgroundLiveTaskAck,
   beginLiveTaskControllerAction,
   buildForegroundLiveTaskAck,
+  buildLiveTaskControlClarificationReply,
+  buildLiveTaskBoardText,
   buildLiveTaskDisambiguationReply,
   buildLiveTaskHandleStatusReply,
   beginForegroundLiveTaskFlow,
   buildBlockingLiveTaskReply,
   buildDidNotQueueLiveTaskReply,
+  cancelQueuedLiveTaskFlows,
   cancelLiveTaskFlow,
+  classifyLiveTaskControllerIntent,
   completeLiveTaskControllerAction,
   continueLiveTaskFlow,
   createQueuedLiveTaskFlow,
   isAuthorizedLiveTaskOperator,
   isLiveTaskDirectMessage,
-  matchesBlockingQuestion,
-  matchesForegroundSteer,
   maybeAttachLiveTaskAnswer,
   parseLiveTaskControlInput,
   queueLiveTaskFlowForRetry,
@@ -291,6 +293,16 @@ export async function runReplyAgent(params: {
     }
   }
 
+  const liveTaskDm = isLiveTaskDirectMessage(followupRun);
+  const liveTaskInput = followupRun.summaryLine?.trim() || commandBody.trim();
+  const liveTaskControl = liveTaskDm ? parseLiveTaskControlInput(liveTaskInput) : undefined;
+  const liveTaskIntent = liveTaskDm
+    ? classifyLiveTaskControllerIntent({
+        text: liveTaskInput,
+        active: isActive,
+        explicit: liveTaskControl,
+      })
+    : undefined;
   const activeRunQueueAction =
     liveTaskDm && !isHeartbeat
       ? "enqueue-followup"
@@ -312,9 +324,6 @@ export async function runReplyAgent(params: {
     defaultModel,
     agentCfgContextTokens,
   });
-  const liveTaskDm = isLiveTaskDirectMessage(followupRun);
-  const liveTaskInput = followupRun.summaryLine?.trim() || commandBody.trim();
-  const liveTaskControl = liveTaskDm ? parseLiveTaskControlInput(liveTaskInput) : undefined;
   let liveTaskActionKey: string | undefined;
 
   if (liveTaskDm) {
@@ -323,13 +332,15 @@ export async function runReplyAgent(params: {
         return buildUnauthorizedLiveTaskReply();
       }
 
-      const controllerAction = resolveLiveTaskControllerAction({
-        sessionKey: queueKey,
-        text: liveTaskInput,
-        followupRun,
-        explicit: liveTaskControl,
-        active: isActive,
-      });
+      const controllerAction = liveTaskIntent
+        ? resolveLiveTaskControllerAction({
+            sessionKey: queueKey,
+            text: liveTaskInput,
+            followupRun,
+            intent: liveTaskIntent,
+            active: isActive,
+          })
+        : undefined;
       const actionState = controllerAction
         ? beginLiveTaskControllerAction({
             sessionKey: queueKey,
@@ -344,7 +355,20 @@ export async function runReplyAgent(params: {
         return { text: actionState.replayText };
       }
 
-      if (matchesBlockingQuestion(liveTaskInput) && isActive) {
+      if (liveTaskIntent?.kind === "queue-summary") {
+        const reply = {
+          text:
+            buildLiveTaskBoardText({ sessionKey: queueKey }) ??
+            "No managed flows are active right now.\nNext: /tasks",
+        };
+        completeLiveTaskControllerAction({
+          actionKey: liveTaskActionKey,
+          text: reply.text,
+        });
+        return reply;
+      }
+
+      if (liveTaskIntent?.kind === "blocking-question") {
         const reply = buildBlockingLiveTaskReply(queueKey) ?? {
           text: "No managed flow is blocking right now.",
         };
@@ -355,7 +379,28 @@ export async function runReplyAgent(params: {
         return reply;
       }
 
-      if (isActive && matchesForegroundSteer(liveTaskInput) && !liveTaskControl) {
+      if (liveTaskIntent?.kind === "bulk-cancel-queued") {
+        const reply = cancelQueuedLiveTaskFlows({
+          sessionKey: queueKey,
+        });
+        completeLiveTaskControllerAction({
+          actionKey: liveTaskActionKey,
+          flowId: reply.preservedForegroundFlowId,
+          text: reply.text,
+        });
+        return { text: reply.text };
+      }
+
+      if (liveTaskIntent?.kind === "ambiguous-control") {
+        const reply = buildLiveTaskControlClarificationReply(queueKey);
+        completeLiveTaskControllerAction({
+          actionKey: liveTaskActionKey,
+          text: reply.text,
+        });
+        return reply;
+      }
+
+      if (isActive && liveTaskIntent?.kind === "foreground-steer" && !liveTaskControl) {
         const ambiguity = buildLiveTaskDisambiguationReply(queueKey);
         if (ambiguity) {
           completeLiveTaskControllerAction({
@@ -415,7 +460,7 @@ export async function runReplyAgent(params: {
         }
       }
 
-      if (isActive && matchesForegroundSteer(liveTaskInput)) {
+      if (isActive && liveTaskIntent?.kind === "foreground-steer") {
         const steered = steerForegroundLiveTask({
           sessionKey: queueKey,
           prompt: followupRun.prompt,

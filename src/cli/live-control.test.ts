@@ -8,6 +8,7 @@ import {
   createDraftWorktree,
   listLiveJournal,
   promoteLiveSource,
+  startLiveRuntime,
   syncLiveCheckout,
   type LiveControlDeps,
 } from "./live-control.js";
@@ -392,6 +393,11 @@ describe("live-control", () => {
 
   it("reports live sync as safe when live main already matches origin/main", async () => {
     const deps = createDeps();
+    await startLiveRuntime({
+      actor: "codex",
+      checkout: repoDir,
+      deps,
+    });
 
     const status = await collectLiveSyncStatus({
       actor: "codex",
@@ -410,9 +416,25 @@ describe("live-control", () => {
     expect(status.blockers).toHaveLength(0);
   });
 
+  it("requires runtime commit verification before reporting sync as safe", async () => {
+    const deps = createDeps();
+
+    const status = await collectLiveSyncStatus({
+      actor: "codex",
+      checkout: repoDir,
+      deps,
+    });
+
+    expect(status.runtimeMatchesLive).toBeNull();
+    expect(status.safeToApply).toBe(false);
+    expect(status.blockers).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "runtime-source-unverified" })]),
+    );
+  });
+
   it("treats promoted commit drift as reconcilable when live main already matches origin/main", async () => {
     const deps = createDeps();
-    await collectLiveStatus({ actor: "codex", checkout: repoDir, deps });
+    await startLiveRuntime({ actor: "codex", checkout: repoDir, deps });
 
     const manifestPath = path.join(stateDir, "live-control", "manifest.json");
     const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as {
@@ -457,6 +479,11 @@ describe("live-control", () => {
           status: "",
         },
       },
+    });
+    await startLiveRuntime({
+      actor: "codex",
+      checkout: repoDir,
+      deps,
     });
 
     const status = await collectLiveSyncStatus({
@@ -645,6 +672,13 @@ describe("live-control", () => {
       },
       restartRuntime,
     });
+    await startLiveRuntime({
+      actor: "codex",
+      checkout: repoDir,
+      deps,
+    });
+    buildCheckout.mockClear();
+    restartRuntime.mockClear();
 
     const result = await syncLiveCheckout({
       actor: "codex",
@@ -682,7 +716,6 @@ describe("live-control", () => {
       buildCheckout,
       restartRuntime,
     });
-
     await collectLiveStatus({ actor: "codex", checkout: repoDir, deps });
 
     const manifestPath = path.join(stateDir, "live-control", "manifest.json");
@@ -702,7 +735,7 @@ describe("live-control", () => {
     expect(result.status.liveSha).toBe("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     expect(result.status.behindBy).toBe(0);
     expect(buildCheckout).not.toHaveBeenCalled();
-    expect(restartRuntime).not.toHaveBeenCalled();
+    expect(restartRuntime).toHaveBeenCalledTimes(1);
 
     const nextManifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as {
       promotedCommit: string;
@@ -717,6 +750,75 @@ describe("live-control", () => {
       type: "synced",
       message: "Reconciled live promotion metadata at aaaaaaa",
     });
+  });
+
+  it("reconciles promoted commit drift even when the runtime source starts unverified", async () => {
+    const buildCheckout = vi.fn<LiveControlDeps["buildCheckout"]>().mockResolvedValue(undefined);
+    const restartRuntime = vi.fn<LiveControlDeps["restartRuntime"]>().mockResolvedValue(undefined);
+    const gatherDaemonStatus = vi
+      .fn<LiveControlDeps["gatherDaemonStatus"]>()
+      .mockResolvedValueOnce({
+        service: {
+          label: "ai.openclaw.gateway",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          command: {
+            programArguments: [],
+          },
+          runtime: {
+            status: "running",
+            pid: 4242,
+            detail: "healthy",
+          },
+        },
+        rpc: { ok: true },
+        extraServices: [],
+      })
+      .mockResolvedValue({
+        service: {
+          label: "ai.openclaw.gateway",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          command: {
+            programArguments: [],
+            sourcePath: repoDir,
+          },
+          runtime: {
+            status: "running",
+            pid: 4242,
+            detail: "healthy",
+          },
+        },
+        rpc: { ok: true },
+        extraServices: [],
+      });
+    const deps = createDeps({
+      buildCheckout,
+      gatherDaemonStatus,
+      restartRuntime,
+    });
+    await collectLiveStatus({ actor: "codex", checkout: repoDir, deps });
+
+    const manifestPath = path.join(stateDir, "live-control", "manifest.json");
+    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as {
+      promotedCommit: string | null;
+    };
+    manifest.promotedCommit = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+
+    const result = await syncLiveCheckout({
+      actor: "codex",
+      checkout: repoDir,
+      deps,
+    });
+
+    expect(result.applied).toBe(true);
+    expect(result.status.liveSha).toBe("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    expect(result.status.behindBy).toBe(0);
+    expect(buildCheckout).not.toHaveBeenCalled();
+    expect(restartRuntime).toHaveBeenCalledTimes(1);
   });
 
   it("rolls back to the previous promoted commit and records the change", async () => {
@@ -824,6 +926,13 @@ describe("live-control", () => {
       },
       restartRuntime,
     });
+    await startLiveRuntime({
+      actor: "codex",
+      checkout: repoDir,
+      deps,
+    });
+    buildCheckout.mockClear();
+    restartRuntime.mockClear();
 
     await expect(
       syncLiveCheckout({

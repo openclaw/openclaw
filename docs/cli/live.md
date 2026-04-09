@@ -74,7 +74,9 @@ For a fork-backed install, keep the update flow in three separate steps:
 - `draftCount`
 - `lockfileChanged`
 
-When `--apply` is used, OpenClaw fast-forwards to `origin/main`, runs `pnpm install --frozen-lockfile` only when the lockfile changed, rebuilds, restarts, smoke-checks the runtime, and rolls back automatically if that sequence fails.
+When `--apply` is used, OpenClaw fast-forwards to `origin/main`, runs `pnpm install --frozen-lockfile` only when the lockfile changed, rebuilds, restarts, smoke-checks the runtime, records which commit the running runtime loaded, and rolls back automatically if that sequence fails.
+
+`applied: true` means more than "the checkout moved on disk." It means the live checkout, promotion metadata, and running runtime all converged on the same live commit.
 
 ## Latest On Fork Vs Upstream
 

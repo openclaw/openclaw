@@ -6,7 +6,12 @@ import {
 } from "../../tasks/task-flow-registry.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import type { TemplateContext } from "../templating.js";
-import { formatLiveTaskHandle, resolveLiveTaskBoard } from "./live-task-control.js";
+import {
+  beginForegroundLiveTaskFlow,
+  createQueuedLiveTaskFlow,
+  formatLiveTaskHandle,
+  resolveLiveTaskBoard,
+} from "./live-task-control.js";
 import { enqueueFollowupRun, type QueueSettings } from "./queue.js";
 import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
 
@@ -268,5 +273,114 @@ describe("runReplyAgent live task controller", () => {
     expect((result as { text?: string } | undefined)?.text).not.toContain("is now running");
     expect(board.foreground).toBeUndefined();
     expect(enqueueFollowupRunMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers queue summary questions inline instead of creating a new flow", async () => {
+    beginForegroundLiveTaskFlow({
+      queueKey: "agent:main:main",
+      followupRun: createMockFollowupRun({
+        prompt: "reply while the browser is warm",
+        summaryLine: "reply while the browser is warm",
+        originatingChannel: "telegram",
+        originatingChatType: "private",
+        run: {
+          sessionKey: "agent:main:main",
+          messageProvider: "telegram",
+        },
+      }),
+    });
+    const existingCount = resolveLiveTaskBoard("agent:main:main").all.length;
+
+    const { run } = createLiveTaskControllerRun({
+      commandBody: "What are all the 3 queues?",
+      isActive: true,
+      shouldFollowup: false,
+      isRunActive: () => true,
+      queueMode: "collect",
+    });
+    const result = await run();
+    const board = resolveLiveTaskBoard("agent:main:main");
+
+    expect(result).toMatchObject({
+      text: expect.stringContaining("📋 Tasks"),
+    });
+    expect(board.all).toHaveLength(existingCount);
+    expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
+  });
+
+  it("cancels queued work from Telegram without spawning another queued flow", async () => {
+    const foreground = createManagedTaskFlow({
+      ownerKey: "agent:main:main",
+      controllerId: "auto-reply/live-task-control",
+      goal: "Keep replying in the foreground",
+      status: "running",
+      currentStep: "Working in the foreground conversation.",
+      stateJson: {
+        controller: {
+          foreground: true,
+          browserLease: true,
+        },
+        request: {
+          prompt: "Keep replying in the foreground",
+          summaryLine: "Keep replying in the foreground",
+          waitKind: "browser_lease",
+        },
+      },
+    });
+    const waiting = createQueuedLiveTaskFlow({
+      queueKey: "agent:main:main",
+      followupRun: createMockFollowupRun({
+        prompt: "draft the next batch",
+        summaryLine: "draft the next batch",
+        originatingChannel: "telegram",
+        originatingChatType: "private",
+        run: {
+          sessionKey: "agent:main:main",
+          messageProvider: "telegram",
+        },
+      }),
+    });
+    const blocked = createManagedTaskFlow({
+      ownerKey: "agent:main:main",
+      controllerId: "auto-reply/live-task-control",
+      goal: "Need confirmation",
+      status: "blocked",
+      blockedSummary: "Waiting for confirmation.",
+      stateJson: {
+        controller: {
+          foreground: false,
+          browserLease: false,
+        },
+        request: {
+          prompt: "Need confirmation",
+          summaryLine: "Need confirmation",
+          waitKind: "capacity",
+        },
+      },
+    });
+
+    const { run } = createLiveTaskControllerRun({
+      commandBody: "Kill all 3 queues",
+      isActive: true,
+      shouldFollowup: false,
+      isRunActive: () => true,
+      queueMode: "collect",
+    });
+    const result = await run();
+    const board = resolveLiveTaskBoard("agent:main:main");
+
+    expect(result).toMatchObject({
+      text: expect.stringContaining("Kept foreground flow"),
+    });
+    expect((result as { text?: string } | undefined)?.text).toContain(
+      formatLiveTaskHandle(foreground),
+    );
+    expect(board.foreground?.flowId).toBe(foreground.flowId);
+    expect(board.all.find((flow) => flow.flowId === waiting.flowId)?.status).toBe("cancelled");
+    expect(board.all.find((flow) => flow.flowId === blocked.flowId)?.status).toBe("cancelled");
+    expect(
+      board.all.filter((flow) => flow.status === "waiting" || flow.status === "blocked"),
+    ).toHaveLength(0);
+    expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
   });
 });
