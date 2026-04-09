@@ -505,19 +505,26 @@ export function buildGatewayCronService(params: {
           }
         }
 
-        // Ghost-run detection: main-session systemEvent jobs return almost
-        // instantly because executeMainSessionCronJob only enqueues a system
-        // event and returns without waiting for the agent to process it.
-        // If the gateway or agent session is unhealthy the event is silently
-        // dropped, yet the run is recorded as ok.  Warn when durationMs is
-        // suspiciously low so operators can identify silent failures.
+        // Ghost-run detection: main-session systemEvent jobs with
+        // wakeMode "next-heartbeat" return almost instantly because
+        // executeMainSessionCronJob only enqueues a system event and
+        // returns without waiting for the agent to process it.  If the
+        // gateway or agent session is unhealthy the event is silently
+        // dropped, yet the run is recorded as ok.  Warn when durationMs
+        // is suspiciously low so operators can identify silent failures.
+        //
+        // Note: recurring main-session jobs also return fast when the
+        // main lane is busy (requests-in-flight).  We accept this as a
+        // low-frequency false positive — the warning is non-blocking and
+        // the structured fields let operators triage.
         if (
           evt.status === "ok" &&
           typeof evt.durationMs === "number" &&
           evt.durationMs < GHOST_RUN_THRESHOLD_MS &&
           job &&
-          job.sessionTarget !== "none" &&
-          job.payload.kind === "systemEvent"
+          job.sessionTarget === "main" &&
+          job.payload.kind === "systemEvent" &&
+          job.wakeMode === "next-heartbeat"
         ) {
           cronLogger.warn(
             {
@@ -525,6 +532,7 @@ export function buildGatewayCronService(params: {
               durationMs: evt.durationMs,
               sessionTarget: job.sessionTarget,
               payloadKind: job.payload.kind,
+              wakeMode: job.wakeMode,
               ghostRunThresholdMs: GHOST_RUN_THRESHOLD_MS,
             },
             "cron: possible ghost run detected — job completed suspiciously fast; gateway may be unhealthy",
