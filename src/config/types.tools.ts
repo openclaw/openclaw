@@ -1,5 +1,6 @@
 import type { ChatType } from "../channels/chat-type.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
 import type { MemoryQmdIndexPath } from "./types.memory.js";
 import type { ConfiguredProviderRequest } from "./types.provider-request.js";
@@ -138,6 +139,13 @@ export type MediaToolsConfig = {
   models?: MediaUnderstandingModelConfig[];
   /** Max concurrent media understanding runs. */
   concurrency?: number;
+  asyncCompletion?: {
+    /**
+     * Enable direct channel sends for completed async media generation tasks.
+     * Default: false.
+     */
+    directSend?: boolean;
+  };
   image?: MediaUnderstandingConfig;
   audio?: MediaUnderstandingConfig;
   video?: MediaUnderstandingConfig;
@@ -201,7 +209,7 @@ export function parseToolsBySenderTypedKey(
   if (!trimmed) {
     return undefined;
   }
-  const lowered = trimmed.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
   for (const type of TOOLS_BY_SENDER_KEY_TYPES) {
     const prefix = `${type}:`;
     if (!lowered.startsWith(prefix)) {
@@ -277,7 +285,7 @@ export type ExecToolConfig = {
     workspaceOnly?: boolean;
     /**
      * Optional allowlist of model ids that can use apply_patch.
-     * Accepts either raw ids (e.g. "gpt-5.2") or full ids (e.g. "openai/gpt-5.2").
+     * Accepts either raw ids (e.g. "gpt-5.4") or full ids (e.g. "openai/gpt-5.4").
      */
     allowModels?: string[];
   };
@@ -542,6 +550,11 @@ export type ToolsConfig = {
       userAgent?: string;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
+      /** SSRF policy configuration for web_fetch. */
+      ssrfPolicy?: {
+        /** Allow RFC 2544 benchmark range IPs (198.18.0.0/15) for fake-IP proxy compatibility (e.g., Clash TUN mode, Surge). */
+        allowRfc2544BenchmarkRange?: boolean;
+      };
     };
   };
   media?: MediaToolsConfig;
@@ -626,5 +639,10 @@ export type ToolsConfig = {
       alsoAllow?: string[];
       deny?: string[];
     };
+  };
+  /** Experimental tool flags. Default off unless explicitly enabled or runtime auto-enabled. */
+  experimental?: {
+    /** Enable or disable the structured `update_plan` tool. OpenAI-family runs auto-enable it unless this is false. */
+    planTool?: boolean;
   };
 };

@@ -15,6 +15,7 @@ import {
 } from "../../cli/nodes-screen.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 import type { GatewayCallOptions } from "./gateway.js";
@@ -62,7 +63,7 @@ async function executeCameraSnap({
   const node = requireString(params, "node");
   const resolvedNode = await resolveNode(gatewayOpts, node);
   const nodeId = resolvedNode.nodeId;
-  const facingRaw = typeof params.facing === "string" ? params.facing.toLowerCase() : "front";
+  const facingRaw = normalizeLowercaseStringOrEmpty(params.facing) || "front";
   const facings: CameraFacing[] =
     facingRaw === "both"
       ? ["front", "back"]
@@ -107,7 +108,7 @@ async function executeCameraSnap({
       idempotencyKey: crypto.randomUUID(),
     });
     const payload = parseCameraSnapPayload(raw?.payload);
-    const normalizedFormat = payload.format.toLowerCase();
+    const normalizedFormat = normalizeLowercaseStringOrEmpty(payload.format);
     if (normalizedFormat !== "jpg" && normalizedFormat !== "jpeg" && normalizedFormat !== "png") {
       throw new Error(`unsupported camera.snap format: ${payload.format}`);
     }
@@ -210,7 +211,7 @@ async function executePhotosLatest({
 
   for (const [index, photoRaw] of photos.entries()) {
     const photo = parseCameraSnapPayload(photoRaw);
-    const normalizedFormat = photo.format.toLowerCase();
+    const normalizedFormat = normalizeLowercaseStringOrEmpty(photo.format);
     if (normalizedFormat !== "jpg" && normalizedFormat !== "jpeg" && normalizedFormat !== "png") {
       throw new Error(`unsupported photos.latest format: ${photo.format}`);
     }
@@ -272,7 +273,7 @@ async function executeCameraClip({
   const node = requireString(params, "node");
   const resolvedNode = await resolveNode(gatewayOpts, node);
   const nodeId = resolvedNode.nodeId;
-  const facing = typeof params.facing === "string" ? params.facing.toLowerCase() : "front";
+  const facing = normalizeLowercaseStringOrEmpty(params.facing) || "front";
   if (facing !== "front" && facing !== "back") {
     throw new Error("invalid facing (front|back)");
   }

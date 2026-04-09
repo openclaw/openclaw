@@ -1,9 +1,9 @@
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/channel-runtime";
 import { loadConfig, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import { loadSessionStore } from "openclaw/plugin-sdk/config-runtime";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import { buildModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { listSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";

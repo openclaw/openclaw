@@ -9,6 +9,21 @@ import {
   withTempEnv,
 } from "./models-config.e2e-harness.js";
 
+vi.mock("../plugins/provider-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+    "../plugins/provider-runtime.js",
+  );
+  return {
+    ...actual,
+    applyProviderConfigDefaultsWithPlugin: (config: OpenClawConfig) => config,
+    applyProviderNativeStreamingUsageCompatWithPlugin: () => undefined,
+    normalizeProviderConfigWithPlugin: () => undefined,
+    resetProviderRuntimeHookCacheForTest: () => undefined,
+    resolveProviderConfigApiKeyWithPlugin: () => undefined,
+    resolveProviderSyntheticAuthWithPlugin: () => undefined,
+  };
+});
+
 vi.mock("./models-config.providers.js", async () => {
   const actual = await vi.importActual<typeof import("./models-config.providers.js")>(
     "./models-config.providers.js",

@@ -1,6 +1,6 @@
 import type { ReactionTypeEmoji } from "@grammyjs/types";
-import { resolveAckReaction } from "openclaw/plugin-sdk/agent-runtime";
 import {
+  resolveAckReaction,
   shouldAckReaction as shouldAckReactionGate,
   type StatusReactionController,
 } from "openclaw/plugin-sdk/channel-feedback";

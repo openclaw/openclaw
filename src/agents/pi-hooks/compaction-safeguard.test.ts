@@ -6,6 +6,10 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  clearCompactionProviders,
+  registerCompactionProvider,
+} from "../../plugins/compaction-provider.js";
 import * as compactionModule from "../compaction.js";
 import { buildEmbeddedExtensionFactories } from "../pi-embedded-runner/extensions.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
@@ -17,8 +21,8 @@ import {
 } from "./compaction-safeguard-runtime.js";
 import compactionSafeguardExtension, { __testing } from "./compaction-safeguard.js";
 
-vi.mock("../compaction.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof compactionModule>();
+vi.mock("../compaction.js", async () => {
+  const actual = await vi.importActual<typeof compactionModule>("../compaction.js");
   return {
     ...actual,
     summarizeInStages: vi.fn(actual.summarizeInStages),
@@ -59,6 +63,7 @@ beforeEach(() => {
 
 afterEach(() => {
   __testing.setSummarizeInStagesForTest();
+  clearCompactionProviders();
 });
 
 function stubSessionManager(): ExtensionContext["sessionManager"] {
@@ -1632,6 +1637,80 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(summary).toContain("## Pending user asks");
     expect(summary).toContain("## Exact identifiers");
     expect(summary).toContain("legacy summary without headings");
+  });
+
+  it("passes compaction instructions to providers and preserves suffix context", async () => {
+    const providerSummarize = vi.fn().mockResolvedValue("provider summary body");
+    registerCompactionProvider({
+      id: "test-provider",
+      label: "Test Provider",
+      summarize: providerSummarize,
+    });
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      provider: "test-provider",
+      recentTurnsPreserve: 1,
+      identifierPolicy: "custom",
+      identifierInstructions: "Preserve ticket IDs exactly.",
+      customInstructions: "Keep milestone names.",
+    });
+
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "older context", timestamp: 1 },
+          { role: "assistant", content: "older reply", timestamp: 2 } as unknown as AgentMessage,
+          { role: "user", content: "latest ask status", timestamp: 3 },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "latest assistant reply" }],
+            timestamp: 4,
+          } as AgentMessage,
+        ],
+        turnPrefixMessages: [
+          { role: "user", content: "prefix request that was split out", timestamp: 0 },
+        ],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: {
+          read: [],
+          edited: [],
+          written: [],
+        },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: "previous provider summary",
+        isSplitTurn: true,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const { result, getApiKeyAndHeadersMock } = await runCompactionScenario({
+      sessionManager,
+      event,
+      apiKey: null,
+    });
+
+    const compaction = expectCompactionResult(result);
+    expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
+    expect(mockSummarizeInStages).not.toHaveBeenCalled();
+    expect(providerSummarize).toHaveBeenCalledWith(
+      expect.objectContaining({
+        previousSummary: "previous provider summary",
+        customInstructions: expect.stringContaining("Keep milestone names."),
+        summarizationInstructions: {
+          identifierPolicy: "custom",
+          identifierInstructions: "Preserve ticket IDs exactly.",
+        },
+      }),
+    );
+    expect(compaction.summary).toContain("provider summary body");
+    expect(compaction.summary).toContain("**Turn Context (split turn):**");
+    expect(compaction.summary).toContain("prefix request that was split out");
+    expect(compaction.summary).toContain("## Recent turns preserved verbatim");
+    expect(compaction.summary).toContain("latest ask status");
+    expect(compaction.summary).toContain("latest assistant reply");
   });
 });
 

@@ -9,13 +9,13 @@ title: "Logging Overview"
 
 # Logging
 
-OpenClaw logs in two places:
+OpenClaw has two main log surfaces:
 
 - **File logs** (JSON lines) written by the Gateway.
-- **Console output** shown in terminals and the Control UI.
+- **Console output** shown in terminals and the Gateway Debug UI.
 
-This page explains where logs live, how to read them, and how to configure log
-levels and formats.
+The Control UI **Logs** tab tails the gateway file log. This page explains where
+logs live, how to read them, and how to configure log levels and formats.
 
 ## Where logs live
 
@@ -45,6 +45,12 @@ Use the CLI to tail the gateway log file via RPC:
 openclaw logs --follow
 ```
 
+Useful current options:
+
+- `--local-time`: render timestamps in your local timezone
+- `--url <url>` / `--token <token>` / `--timeout <ms>`: standard Gateway RPC flags
+- `--expect-final`: agent-backed RPC final-response wait flag (accepted here via the shared client layer)
+
 Output modes:
 
 - **TTY sessions**: pretty, colorized, structured log lines.
@@ -53,12 +59,20 @@ Output modes:
 - `--plain`: force plain text in TTY sessions.
 - `--no-color`: disable ANSI colors.
 
+When you pass an explicit `--url`, the CLI does not auto-apply config or
+environment credentials; include `--token` yourself if the target Gateway
+requires auth.
+
 In JSON mode, the CLI emits `type`-tagged objects:
 
 - `meta`: stream metadata (file, cursor, size)
 - `log`: parsed log entry
 - `notice`: truncation / rotation hints
 - `raw`: unparsed log line
+
+If the local loopback Gateway asks for pairing, `openclaw logs` falls back to
+the configured local log file automatically. Explicit `--url` targets do not
+use this fallback.
 
 If the Gateway is unreachable, the CLI prints a short hint to run:
 
@@ -96,6 +110,23 @@ Console logs are **TTY-aware** and formatted for readability:
 
 Console formatting is controlled by `logging.consoleStyle`.
 
+### Gateway WebSocket logs
+
+`openclaw gateway` also has WebSocket protocol logging for RPC traffic:
+
+- normal mode: only interesting results (errors, parse errors, slow calls)
+- `--verbose`: all request/response traffic
+- `--ws-log auto|compact|full`: pick the verbose rendering style
+- `--compact`: alias for `--ws-log compact`
+
+Examples:
+
+```bash
+openclaw gateway
+openclaw gateway --verbose --ws-log compact
+openclaw gateway --verbose --ws-log full
+```
+
 ## Configuring logging
 
 All logging configuration lives under `logging` in `~/.openclaw/openclaw.json`.
@@ -120,7 +151,8 @@ All logging configuration lives under `logging` in `~/.openclaw/openclaw.json`.
 
 You can override both via the **`OPENCLAW_LOG_LEVEL`** environment variable (e.g. `OPENCLAW_LOG_LEVEL=debug`). The env var takes precedence over the config file, so you can raise verbosity for a single run without editing `openclaw.json`. You can also pass the global CLI option **`--log-level <level>`** (for example, `openclaw --log-level debug gateway run`), which overrides the environment variable for that command.
 
-`--verbose` only affects console output; it does not change file log levels.
+`--verbose` only affects console output and WS log verbosity; it does not change
+file log levels.
 
 ### Console styles
 

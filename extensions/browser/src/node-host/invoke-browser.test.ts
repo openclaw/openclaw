@@ -26,13 +26,108 @@ const browserConfigMocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("../core-api.js", async () => ({
-  ...(await vi.importActual<object>("../core-api.js")),
-  createBrowserControlContext: controlServiceMocks.createBrowserControlContext,
-  createBrowserRouteDispatcher: dispatcherMocks.createBrowserRouteDispatcher,
-  detectMime: vi.fn(async () => "image/png"),
+vi.mock("openclaw/plugin-sdk/browser-config-runtime", () => ({
   loadConfig: configMocks.loadConfig,
+}));
+
+vi.mock("openclaw/plugin-sdk/browser-node-runtime", () => ({
+  withTimeout: vi.fn(
+    async (
+      run: (signal: AbortSignal | undefined) => Promise<unknown>,
+      timeoutMs?: number,
+      label?: string,
+    ) => {
+      const resolved =
+        typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
+          ? Math.max(1, Math.floor(timeoutMs))
+          : undefined;
+      if (!resolved) {
+        return await run(undefined);
+      }
+      const abortCtrl = new AbortController();
+      const timeoutError = new Error(`${label ?? "request"} timed out`);
+      const timer = setTimeout(() => abortCtrl.abort(timeoutError), resolved);
+      try {
+        return await Promise.race([
+          run(abortCtrl.signal),
+          new Promise<never>((_, reject) => {
+            abortCtrl.signal.addEventListener(
+              "abort",
+              () => reject(abortCtrl.signal.reason ?? timeoutError),
+              { once: true },
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+  ),
+}));
+
+vi.mock("openclaw/plugin-sdk/browser-setup-tools", () => ({
+  detectMime: vi.fn(async () => "image/png"),
+}));
+
+vi.mock("../browser/cdp.helpers.js", () => ({
+  redactCdpUrl: vi.fn((url: string) => {
+    try {
+      const parsed = new URL(url);
+      parsed.username = "";
+      parsed.password = "";
+      const normalized = parsed.toString().replace(/\/$/, "");
+      const token = parsed.searchParams.get("token");
+      if (!token || token.length <= 8) {
+        return normalized;
+      }
+      return normalized.replace(token, `${token.slice(0, 6)}…${token.slice(-4)}`);
+    } catch {
+      return url;
+    }
+  }),
+}));
+
+vi.mock("../browser/config.js", () => ({
   resolveBrowserConfig: browserConfigMocks.resolveBrowserConfig,
+}));
+
+vi.mock("../browser/request-policy.js", () => ({
+  isPersistentBrowserProfileMutation: vi.fn((method: string, path: string) => {
+    if (method === "POST" && (path === "/profiles/create" || path === "/reset-profile")) {
+      return true;
+    }
+    return method === "DELETE" && /^\/profiles\/[^/]+$/.test(path);
+  }),
+  normalizeBrowserRequestPath: vi.fn((path: string) => path),
+  resolveRequestedBrowserProfile: vi.fn(
+    ({
+      query,
+      body,
+      profile,
+    }: {
+      query?: Record<string, unknown>;
+      body?: unknown;
+      profile?: string;
+    }) => {
+      if (query && typeof query.profile === "string" && query.profile.trim()) {
+        return query.profile.trim();
+      }
+      const bodyProfile =
+        body && typeof body === "object" ? (body as { profile?: unknown }).profile : undefined;
+      if (typeof bodyProfile === "string" && bodyProfile.trim()) {
+        return bodyProfile.trim();
+      }
+      return typeof profile === "string" && profile.trim() ? profile.trim() : undefined;
+    },
+  ),
+}));
+
+vi.mock("../browser/routes/dispatcher.js", () => ({
+  createBrowserRouteDispatcher: dispatcherMocks.createBrowserRouteDispatcher,
+}));
+
+vi.mock("../control-service.js", () => ({
+  createBrowserControlContext: controlServiceMocks.createBrowserControlContext,
   startBrowserControlServiceFromConfig: controlServiceMocks.startBrowserControlServiceFromConfig,
 }));
 
@@ -242,9 +337,7 @@ describe("runBrowserProxyCommand", () => {
           timeoutMs: 50,
         }),
       ),
-    ).rejects.toThrow(
-      "INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles when allowProfiles is configured",
-    );
+    ).rejects.toThrow("INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles");
     expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
   });
 
@@ -262,9 +355,7 @@ describe("runBrowserProxyCommand", () => {
           timeoutMs: 50,
         }),
       ),
-    ).rejects.toThrow(
-      "INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles when allowProfiles is configured",
-    );
+    ).rejects.toThrow("INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles");
     expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
   });
 
@@ -283,9 +374,7 @@ describe("runBrowserProxyCommand", () => {
           timeoutMs: 50,
         }),
       ),
-    ).rejects.toThrow(
-      "INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles when allowProfiles is configured",
-    );
+    ).rejects.toThrow("INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles");
     expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
   });
 
@@ -316,27 +405,17 @@ describe("runBrowserProxyCommand", () => {
     );
   });
 
-  it("preserves legacy proxy behavior when allowProfiles is empty", async () => {
-    dispatcherMocks.dispatch.mockResolvedValue({
-      status: 200,
-      body: { ok: true },
-    });
-
-    await runBrowserProxyCommand(
-      JSON.stringify({
-        method: "POST",
-        path: "/profiles/create",
-        body: { name: "poc", cdpUrl: "http://127.0.0.1:9222" },
-        timeoutMs: 50,
-      }),
-    );
-
-    expect(dispatcherMocks.dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "POST",
-        path: "/profiles/create",
-        body: { name: "poc", cdpUrl: "http://127.0.0.1:9222" },
-      }),
-    );
+  it("rejects persistent profile creation when allowProfiles is empty", async () => {
+    await expect(
+      runBrowserProxyCommand(
+        JSON.stringify({
+          method: "POST",
+          path: "/profiles/create",
+          body: { name: "poc", cdpUrl: "http://127.0.0.1:9222" },
+          timeoutMs: 50,
+        }),
+      ),
+    ).rejects.toThrow("INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles");
+    expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
   });
 });

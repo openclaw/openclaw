@@ -12,8 +12,8 @@ type SpawnCall = {
 
 const spawnCalls: SpawnCall[] = [];
 
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
     ...actual,
     spawn: (command: string, args: string[]) => {
@@ -42,8 +42,8 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-vi.mock("./skills.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./skills.js")>();
+vi.mock("./skills.js", async () => {
+  const actual = await vi.importActual<typeof import("./skills.js")>("./skills.js");
   return {
     ...actual,
     syncSkillsToWorkspace: vi.fn(async () => undefined),

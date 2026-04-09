@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 
 const baseParams = {
@@ -160,6 +162,28 @@ describe("buildReplyPayloads media filter integration", () => {
   });
 
   it("suppresses same-target replies when target provider is channel alias", async () => {
+    resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "feishu-plugin",
+          source: "test",
+          plugin: {
+            id: "feishu",
+            meta: {
+              id: "feishu",
+              label: "Feishu",
+              selectionLabel: "Feishu",
+              docsPath: "/channels/feishu",
+              blurb: "test stub",
+              aliases: ["lark"],
+            },
+            capabilities: { chatTypes: ["direct"] },
+            config: { listAccountIds: () => [], resolveAccount: () => ({}) },
+          },
+        },
+      ]),
+    );
     await expectSameTargetRepliesSuppressed({ provider: "lark", to: "ou_abc123" });
   });
 

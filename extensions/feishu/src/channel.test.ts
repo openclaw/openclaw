@@ -1,6 +1,7 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
+import { feishuPlugin } from "./channel.js";
 import { looksLikeFeishuId, normalizeFeishuTarget, resolveReceiveIdType } from "./targets.js";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
@@ -60,10 +61,8 @@ vi.mock("../../../src/channels/plugins/bundled.js", () => ({
   bundledChannelSetupPlugins: [],
 }));
 
-let feishuPlugin: typeof import("./channel.js").feishuPlugin;
-
-function getDescribedActions(cfg: OpenClawConfig): string[] {
-  return [...(feishuPlugin.actions?.describeMessageTool?.({ cfg })?.actions ?? [])];
+function getDescribedActions(cfg: OpenClawConfig, accountId?: string): string[] {
+  return [...(feishuPlugin.actions?.describeMessageTool?.({ cfg, accountId })?.actions ?? [])];
 }
 
 function createLegacyFeishuButtonCard(value: { command?: string; text?: string }) {
@@ -100,10 +99,6 @@ async function expectLegacyFeishuCardPayloadRejected(cfg: OpenClawConfig, card: 
   );
   expect(sendCardFeishuMock).not.toHaveBeenCalled();
 }
-
-beforeAll(async () => {
-  ({ feishuPlugin } = await import("./channel.js"));
-});
 
 describe("feishuPlugin.status.probeAccount", () => {
   it("uses current account credentials for multi-account config", async () => {
@@ -276,6 +271,58 @@ describe("feishuPlugin actions", () => {
       "member-info",
       "channel-info",
       "channel-list",
+    ]);
+  });
+
+  it("honors the selected Feishu account during discovery", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          enabled: true,
+          actions: { reactions: false },
+          accounts: {
+            default: {
+              enabled: true,
+              appId: "cli_main",
+              appSecret: "secret_main",
+              actions: { reactions: false },
+            },
+            work: {
+              enabled: true,
+              appId: "cli_work",
+              appSecret: "secret_work",
+              actions: { reactions: true },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(getDescribedActions(cfg, "default")).toEqual([
+      "send",
+      "read",
+      "edit",
+      "thread-reply",
+      "pin",
+      "list-pins",
+      "unpin",
+      "member-info",
+      "channel-info",
+      "channel-list",
+    ]);
+    expect(getDescribedActions(cfg, "work")).toEqual([
+      "send",
+      "read",
+      "edit",
+      "thread-reply",
+      "pin",
+      "list-pins",
+      "unpin",
+      "member-info",
+      "channel-info",
+      "channel-list",
+      "react",
+      "reactions",
     ]);
   });
 

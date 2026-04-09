@@ -320,6 +320,57 @@ function Invoke-CaptureLogged {
   return ($output | Out-String).Trim()
 }
 
+function Wait-GatewayRpcReady {
+  param(
+    [Parameter(Mandatory = $true)][string]$OpenClawPath,
+    [int]$Attempts = 20,
+    [int]$SleepSeconds = 3
+  )
+
+  for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+    Write-ProgressLog "update.gateway-status.attempt-$attempt"
+    try {
+      Invoke-Logged 'openclaw gateway status' { & $OpenClawPath gateway status --deep --require-rpc }
+      return
+    } catch {
+      if ($attempt -ge $Attempts) {
+        throw
+      }
+      Write-ProgressLog "update.gateway-status.retry-$attempt"
+      Start-Sleep -Seconds $SleepSeconds
+    }
+  }
+}
+
+function Restart-GatewayWithRecovery {
+  param(
+    [Parameter(Mandatory = $true)][string]$OpenClawPath
+  )
+
+  $restartFailed = $false
+  try {
+    Invoke-Logged 'openclaw gateway restart' { & $OpenClawPath gateway restart }
+  } catch {
+    $restartFailed = $true
+    Write-ProgressLog 'update.restart-gateway.soft-fail'
+    ($_ | Out-String) | Tee-Object -FilePath $LogPath -Append | Out-Null
+  }
+
+  Write-ProgressLog 'update.gateway-status'
+  try {
+    Wait-GatewayRpcReady -OpenClawPath $OpenClawPath
+    return
+  } catch {
+    if (-not $restartFailed) {
+      throw
+    }
+    Write-ProgressLog 'update.gateway-start-recover'
+    Invoke-Logged 'openclaw gateway start' { & $OpenClawPath gateway start }
+    Write-ProgressLog 'update.gateway-status-recover'
+    Wait-GatewayRpcReady -OpenClawPath $OpenClawPath
+  }
+}
+
 try {
   $env:PATH = "$env:LOCALAPPDATA\OpenClaw\deps\portable-git\cmd;$env:LOCALAPPDATA\OpenClaw\deps\portable-git\mingw64\bin;$env:LOCALAPPDATA\OpenClaw\deps\portable-git\usr\bin;$env:PATH"
   $tgz = Join-Path $env:TEMP 'openclaw-main-update.tgz'
@@ -341,11 +392,11 @@ try {
   Invoke-Logged 'openclaw models set' { & $openclaw models set $ModelId }
   # Windows can keep the old hashed dist modules alive across in-place global npm upgrades.
   # Restart the gateway/service before verifying status or the next agent turn.
+  # Current login-item restarts can report failure before the background service
+  # is fully observable again, so verify readiness separately and fall back to
+  # an explicit start only if the RPC endpoint never returns.
   Write-ProgressLog 'update.restart-gateway'
-  Invoke-Logged 'openclaw gateway restart' { & $openclaw gateway restart }
-  Start-Sleep -Seconds 5
-  Write-ProgressLog 'update.gateway-status'
-  Invoke-Logged 'openclaw gateway status' { & $openclaw gateway status --deep --require-rpc }
+  Restart-GatewayWithRecovery -OpenClawPath $openclaw
   Write-ProgressLog 'update.agent-turn'
   Invoke-CaptureLogged 'openclaw agent' { & $openclaw agent --agent main --session-id $SessionId --message 'Reply with exact ASCII text OK only.' --json } | Out-Null
   $exitCode = $LASTEXITCODE
@@ -535,6 +586,57 @@ raise SystemExit(completed.returncode)
 PY
 }
 
+resolve_macos_desktop_user() {
+  local user
+  user="$(prlctl exec "$MACOS_VM" /usr/bin/stat -f '%Su' /dev/console 2>/dev/null | tr -d '\r' | tail -n 1 || true)"
+  if [[ "$user" =~ ^[A-Za-z0-9._-]+$ && "$user" != "root" && "$user" != "loginwindow" ]]; then
+    printf '%s\n' "$user"
+    return 0
+  fi
+  prlctl exec "$MACOS_VM" /usr/bin/dscl . -list /Users NFSHomeDirectory 2>/dev/null \
+    | tr -d '\r' \
+    | awk '$2 ~ /^\/Users\// && $1 !~ /^_/ && $1 != "Shared" && $1 != ".localized" { print $1; exit }'
+}
+
+resolve_macos_desktop_home() {
+  local user="$1"
+  local home
+  home="$(
+    prlctl exec "$MACOS_VM" /usr/bin/dscl . -read "/Users/$user" NFSHomeDirectory 2>/dev/null \
+      | tr -d '\r' \
+      | awk '/NFSHomeDirectory:/ { print $2; exit }'
+  )"
+  if [[ -n "$home" ]]; then
+    printf '%s\n' "$home"
+  else
+    printf '/Users/%s\n' "$user"
+  fi
+}
+
+macos_current_user_available() {
+  prlctl exec "$MACOS_VM" --current-user /usr/bin/whoami >/dev/null 2>&1
+}
+
+macos_desktop_user_exec() {
+  if macos_current_user_available; then
+    prlctl exec "$MACOS_VM" --current-user /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" "$@"
+    return
+  fi
+
+  local user home
+  user="$(resolve_macos_desktop_user)"
+  [[ -n "$user" ]] || die "unable to resolve macOS desktop user for sudo fallback"
+  home="$(resolve_macos_desktop_home "$user")"
+  warn "macOS --current-user unavailable; using root sudo fallback for $user"
+  prlctl exec "$MACOS_VM" /usr/bin/sudo -u "$user" /usr/bin/env \
+    "HOME=$home" \
+    "USER=$user" \
+    "LOGNAME=$user" \
+    "PATH=/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin" \
+    "$API_KEY_ENV=$API_KEY_VALUE" \
+    "$@"
+}
+
 guest_powershell_poll() {
   local timeout_s="$1"
   local script="$2"
@@ -683,10 +785,14 @@ PY
 run_macos_update() {
   local tgz_url="$1"
   local head_short="$2"
-  cat <<EOF | prlctl exec "$MACOS_VM" --current-user /usr/bin/tee /tmp/openclaw-main-update.sh >/dev/null
+  cat <<EOF | prlctl exec "$MACOS_VM" /usr/bin/tee /tmp/openclaw-main-update.sh >/dev/null
 set -euo pipefail
 export PATH=/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin
 if [ -z "\${HOME:-}" ]; then export HOME="/Users/\$(id -un)"; fi
+if [ -z "\${$API_KEY_ENV:-}" ]; then
+  echo "$API_KEY_ENV is required in the macOS update environment" >&2
+  exit 1
+fi
 cd "\$HOME"
 curl -fsSL "$tgz_url" -o /tmp/openclaw-main-update.tgz
 /opt/homebrew/bin/npm install -g /tmp/openclaw-main-update.tgz
@@ -700,10 +806,19 @@ case "\$version" in
     ;;
 esac
 /opt/homebrew/bin/openclaw models set "$MODEL_ID"
+# Same-guest npm upgrades can leave launchd holding the old gateway process or
+# module graph briefly; wait for a fresh RPC-ready restart before the agent turn.
+/opt/homebrew/bin/openclaw gateway restart
+for _ in 1 2 3 4 5 6 7 8; do
+  if /opt/homebrew/bin/openclaw gateway status --deep --require-rpc >/dev/null 2>&1; then
+    break
+  fi
+  sleep 2
+done
 /opt/homebrew/bin/openclaw gateway status --deep --require-rpc
-/usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" /opt/homebrew/bin/openclaw agent --agent main --session-id parallels-npm-update-macos-$head_short --message "Reply with exact ASCII text OK only." --json
+/opt/homebrew/bin/openclaw agent --agent main --session-id parallels-npm-update-macos-$head_short --message "Reply with exact ASCII text OK only." --json
 EOF
-  prlctl exec "$MACOS_VM" --current-user /bin/bash /tmp/openclaw-main-update.sh
+  macos_desktop_user_exec /bin/bash /tmp/openclaw-main-update.sh
 }
 
 run_windows_update() {

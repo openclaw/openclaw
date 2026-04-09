@@ -16,7 +16,10 @@ function normalizeScopeList(scopes: readonly string[]): string[] {
 }
 
 function operatorScopeSatisfied(requestedScope: string, granted: Set<string>): boolean {
-  if (granted.has(OPERATOR_ADMIN_SCOPE) && requestedScope.startsWith(OPERATOR_SCOPE_PREFIX)) {
+  if (!requestedScope.startsWith(OPERATOR_SCOPE_PREFIX)) {
+    return false;
+  }
+  if (granted.has(OPERATOR_ADMIN_SCOPE)) {
     return true;
   }
   if (requestedScope === OPERATOR_READ_SCOPE) {
@@ -43,7 +46,8 @@ export function roleScopesAllow(params: {
   }
   const allowedSet = new Set(allowed);
   if (params.role.trim() !== OPERATOR_ROLE) {
-    return requested.every((scope) => allowedSet.has(scope));
+    const prefix = `${params.role.trim()}.`;
+    return requested.every((scope) => scope.startsWith(prefix) && allowedSet.has(scope));
   }
   return requested.every((scope) => operatorScopeSatisfied(scope, allowedSet));
 }

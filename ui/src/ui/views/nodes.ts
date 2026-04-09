@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import type {
   DevicePairingList,
   DeviceTokenSummary,
@@ -7,6 +8,7 @@ import type {
 } from "../controllers/devices.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "../controllers/exec-approvals.ts";
 import { formatRelativeTimestamp, formatList } from "../format.ts";
+import { normalizeOptionalString } from "../string-coerce.ts";
 import { renderExecApprovals, resolveExecApprovalsState } from "./nodes-exec-approvals.ts";
 import { resolveConfigAgents, resolveNodeTargets, type NodeTargetOption } from "./nodes-shared.ts";
 export type NodesProps = {
@@ -58,7 +60,7 @@ export function renderNodes(props: NodesProps) {
           <div class="card-sub">Paired devices and live links.</div>
         </div>
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
-          ${props.loading ? "Loading…" : "Refresh"}
+          ${props.loading ? t("common.loading") : t("common.refresh")}
         </button>
       </div>
       <div class="list" style="margin-top: 16px;">
@@ -82,7 +84,7 @@ function renderDevices(props: NodesProps) {
           <div class="card-sub">Pairing requests + role tokens.</div>
         </div>
         <button class="btn" ?disabled=${props.devicesLoading} @click=${props.onDevicesRefresh}>
-          ${props.devicesLoading ? "Loading…" : "Refresh"}
+          ${props.devicesLoading ? t("common.loading") : t("common.refresh")}
         </button>
       </div>
       ${props.devicesError
@@ -110,9 +112,9 @@ function renderDevices(props: NodesProps) {
 }
 
 function renderPendingDevice(req: PendingDevice, props: NodesProps) {
-  const name = req.displayName?.trim() || req.deviceId;
-  const age = typeof req.ts === "number" ? formatRelativeTimestamp(req.ts) : "n/a";
-  const roleValue = req.role?.trim() || formatList(req.roles);
+  const name = normalizeOptionalString(req.displayName) || req.deviceId;
+  const age = typeof req.ts === "number" ? formatRelativeTimestamp(req.ts) : t("common.na");
+  const roleValue = normalizeOptionalString(req.role) || formatList(req.roles);
   const scopesValue = formatList(req.scopes);
   const repair = req.isRepair ? " · repair" : "";
   const ip = req.remoteIp ? ` · ${req.remoteIp}` : "";
@@ -140,7 +142,7 @@ function renderPendingDevice(req: PendingDevice, props: NodesProps) {
 }
 
 function renderPairedDevice(device: PairedDevice, props: NodesProps) {
-  const name = device.displayName?.trim() || device.deviceId;
+  const name = normalizeOptionalString(device.displayName) || device.deviceId;
   const ip = device.remoteIp ? ` · ${device.remoteIp}` : "";
   const roles = `roles: ${formatList(device.roles)}`;
   const scopes = `scopes: ${formatList(device.scopes)}`;
@@ -251,44 +253,42 @@ function renderBindings(state: BindingState) {
     <section class="card">
       <div class="row" style="justify-content: space-between; align-items: center;">
         <div>
-          <div class="card-title">Exec node binding</div>
-          <div class="card-sub">
-            Pin agents to a specific node when using <span class="mono">exec host=node</span>.
-          </div>
+          <div class="card-title">${t("nodes.binding.execNodeBinding")}</div>
+          <div class="card-sub">${t("nodes.binding.execNodeBindingSubtitle")}</div>
         </div>
         <button
           class="btn"
           ?disabled=${state.disabled || !state.configDirty}
           @click=${state.onSave}
         >
-          ${state.configSaving ? "Saving…" : "Save"}
+          ${state.configSaving ? t("common.saving") : t("common.save")}
         </button>
       </div>
 
       ${state.formMode === "raw"
         ? html`
             <div class="callout warn" style="margin-top: 12px">
-              Switch the Config tab to <strong>Form</strong> mode to edit bindings here.
+              ${t("nodes.binding.formModeHint")}
             </div>
           `
         : nothing}
       ${!state.ready
         ? html`<div class="row" style="margin-top: 12px; gap: 12px;">
-            <div class="muted">Load config to edit bindings.</div>
+            <div class="muted">${t("nodes.binding.loadConfigHint")}</div>
             <button class="btn" ?disabled=${state.configLoading} @click=${state.onLoadConfig}>
-              ${state.configLoading ? "Loading…" : "Load config"}
+              ${state.configLoading ? t("common.loading") : t("common.loadConfig")}
             </button>
           </div>`
         : html`
             <div class="list" style="margin-top: 16px;">
               <div class="list-item">
                 <div class="list-main">
-                  <div class="list-title">Default binding</div>
-                  <div class="list-sub">Used when agents do not override a node binding.</div>
+                  <div class="list-title">${t("nodes.binding.defaultBinding")}</div>
+                  <div class="list-sub">${t("nodes.binding.defaultBindingHint")}</div>
                 </div>
                 <div class="list-meta">
                   <label class="field">
-                    <span>Node</span>
+                    <span>${t("nodes.binding.node")}</span>
                     <select
                       ?disabled=${state.disabled || !supportsBinding}
                       @change=${(event: Event) => {

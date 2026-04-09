@@ -7,6 +7,7 @@ import {
   failTaskRunByRunId,
 } from "../../tasks/task-executor.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
+import { configureTaskRegistryRuntime } from "../../tasks/task-registry.store.js";
 import { buildTasksReply, handleTasksCommand } from "./commands-tasks.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
@@ -24,13 +25,33 @@ async function buildTasksReplyForTest(params: { sessionKey?: string } = {}) {
   });
 }
 
+function configureInMemoryTaskRegistryStoreForTests(): void {
+  configureTaskRegistryRuntime({
+    store: {
+      loadSnapshot: () => ({
+        tasks: new Map(),
+        deliveryStates: new Map(),
+      }),
+      saveSnapshot: () => {},
+      upsertTaskWithDeliveryState: () => {},
+      upsertTask: () => {},
+      deleteTaskWithDeliveryState: () => {},
+      deleteTask: () => {},
+      upsertDeliveryState: () => {},
+      deleteDeliveryState: () => {},
+      close: () => {},
+    },
+  });
+}
+
 describe("buildTasksReply", () => {
   beforeEach(() => {
-    resetTaskRegistryForTests();
+    resetTaskRegistryForTests({ persist: false });
+    configureInMemoryTaskRegistryStoreForTests();
   });
 
   afterEach(() => {
-    resetTaskRegistryForTests();
+    resetTaskRegistryForTests({ persist: false });
   });
 
   it("lists active and recent tasks for the current session", async () => {
@@ -100,6 +121,32 @@ describe("buildTasksReply", () => {
     expect(reply.text).toContain("Needs a login refresh.");
     expect(reply.text).not.toContain("OpenClaw runtime context (internal):");
     expect(reply.text).not.toContain("Internal task completion event");
+  });
+
+  it("sanitizes inline internal runtime fences from visible task titles", async () => {
+    createRunningTaskRun({
+      runtime: "cli",
+      requesterSessionKey: "agent:main:main",
+      childSessionKey: "agent:main:main",
+      runId: "run-tasks-inline-fence",
+      task: [
+        "[Mon 2026-04-06 02:42 GMT+1] <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+        "OpenClaw runtime context (internal):",
+        "This context is runtime-generated, not user-authored. Keep internal details private.",
+      ].join("\n"),
+      progressSummary: "done",
+    });
+    completeTaskRunByRunId({
+      runId: "run-tasks-inline-fence",
+      endedAt: Date.now(),
+      terminalSummary: "Finished.",
+    });
+
+    const reply = await buildTasksReplyForTest();
+
+    expect(reply.text).toContain("[Mon 2026-04-06 02:42 GMT+1]");
+    expect(reply.text).not.toContain("BEGIN_OPENCLAW_INTERNAL_CONTEXT");
+    expect(reply.text).not.toContain("OpenClaw runtime context (internal):");
   });
 
   it("hides stale completed tasks from the task board", async () => {

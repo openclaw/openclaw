@@ -6,6 +6,8 @@
  */
 
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { ReplyPayload } from "../api.js";
 import { createChannelReplyPipeline } from "../api.js";
 import { checkTwitchAccessControl } from "./access-control.js";
@@ -221,7 +223,7 @@ export async function monitorTwitchProvider(
       accountId,
     );
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorMsg = formatErrorMessage(error);
     runtime.error?.(`Failed to connect: ${errorMsg}`);
     throw error;
   }
@@ -232,8 +234,8 @@ export async function monitorTwitchProvider(
     }
 
     // Access control check
-    const botUsername = account.username.toLowerCase();
-    if (message.username.toLowerCase() === botUsername) {
+    const botUsername = normalizeLowercaseStringOrEmpty(account.username);
+    if (normalizeLowercaseStringOrEmpty(message.username) === botUsername) {
       return; // Ignore own messages
     }
 

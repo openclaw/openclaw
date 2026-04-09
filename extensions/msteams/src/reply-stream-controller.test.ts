@@ -63,10 +63,10 @@ describe("createTeamsReplyStreamController", () => {
     const fullText = "a".repeat(4000) + "b".repeat(200);
 
     ctrl.onPartialReply({ text: fullText });
-    streamInstances[0]!.hasContent = false;
-    streamInstances[0]!.isFailed = true;
-    streamInstances[0]!.isFinalized = true;
-    streamInstances[0]!.streamedLength = 4000;
+    streamInstances[0].hasContent = false;
+    streamInstances[0].isFailed = true;
+    streamInstances[0].isFinalized = true;
+    streamInstances[0].streamedLength = 4000;
 
     const result = ctrl.preparePayload({ text: fullText });
     expect(result).toEqual({ text: "b".repeat(200) });
@@ -77,10 +77,10 @@ describe("createTeamsReplyStreamController", () => {
     const fullText = "Failure at first chunk";
 
     ctrl.onPartialReply({ text: fullText });
-    streamInstances[0]!.hasContent = false;
-    streamInstances[0]!.isFailed = true;
-    streamInstances[0]!.isFinalized = true;
-    streamInstances[0]!.streamedLength = 0;
+    streamInstances[0].hasContent = false;
+    streamInstances[0].isFailed = true;
+    streamInstances[0].isFinalized = true;
+    streamInstances[0].streamedLength = 0;
 
     const result = ctrl.preparePayload({ text: fullText });
     expect(result).toEqual({ text: fullText });

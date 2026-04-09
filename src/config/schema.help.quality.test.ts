@@ -233,9 +233,6 @@ const TARGET_KEYS = [
   "hooks.gmail.tailscale.mode",
   "hooks.gmail.thinking",
   "hooks.internal",
-  "hooks.internal.handlers",
-  "hooks.internal.handlers[].event",
-  "hooks.internal.handlers[].module",
   "hooks.internal.load.extraDirs",
   "messages",
   "messages.messagePrefix",
@@ -315,10 +312,6 @@ const TARGET_KEYS = [
   "canvasHost.port",
   "canvasHost.liveReload",
   "talk",
-  "talk.voiceId",
-  "talk.voiceAliases",
-  "talk.modelId",
-  "talk.outputFormat",
   "talk.interruptOnSpeech",
   "talk.silenceTimeoutMs",
   "meta",
@@ -373,18 +366,12 @@ const TARGET_KEYS = [
   "models.providers.*.api",
   "models.providers.*.headers",
   "models.providers.*.models",
-  "models.bedrockDiscovery",
-  "models.bedrockDiscovery.enabled",
-  "models.bedrockDiscovery.region",
-  "models.bedrockDiscovery.providerFilter",
-  "models.bedrockDiscovery.refreshInterval",
-  "models.bedrockDiscovery.defaultContextWindow",
-  "models.bedrockDiscovery.defaultMaxTokens",
   "agents",
   "agents.defaults",
   "agents.list",
   "agents.defaults.compaction",
   "agents.defaults.compaction.mode",
+  "agents.defaults.compaction.provider",
   "agents.defaults.compaction.reserveTokens",
   "agents.defaults.compaction.keepRecentTokens",
   "agents.defaults.compaction.reserveTokensFloor",
@@ -536,7 +523,6 @@ const FINAL_BACKLOG_TARGET_KEYS = [
   "browser.snapshotDefaults",
   "browser.snapshotDefaults.mode",
   "browser.ssrfPolicy",
-  "browser.ssrfPolicy.allowPrivateNetwork",
   "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork",
   "browser.ssrfPolicy.allowedHostnames",
   "browser.ssrfPolicy.hostnameAllowlist",
@@ -554,7 +540,6 @@ const FINAL_BACKLOG_TARGET_KEYS = [
   "gateway.remote.token",
   "skills.load.watch",
   "skills.load.watchDebounceMs",
-  "talk.apiKey",
   "ui.assistant.avatar",
   "ui.assistant.name",
   "ui.seamColor",
@@ -784,10 +769,6 @@ describe("config help copy quality", () => {
     const modelsMode = FIELD_HELP["models.mode"];
     expect(modelsMode.includes("SecretRef-managed")).toBe(true);
     expect(modelsMode.includes("preserve")).toBe(true);
-
-    const bedrockRefresh = FIELD_HELP["models.bedrockDiscovery.refreshInterval"];
-    expect(/refresh|seconds|interval/i.test(bedrockRefresh)).toBe(true);
-    expect(/cost|noise|api/i.test(bedrockRefresh)).toBe(true);
 
     const authCooldowns = FIELD_HELP["auth.cooldowns"];
     expect(/cooldown|backoff|retry/i.test(authCooldowns)).toBe(true);

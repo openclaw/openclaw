@@ -111,12 +111,37 @@ export async function fetchWithTimeoutGuarded(
   });
 }
 
+type GuardedPostRequestOptions = NonNullable<Parameters<typeof fetchWithTimeoutGuarded>[4]>;
+
+function resolveGuardedPostRequestOptions(params: {
+  pinDns?: boolean;
+  allowPrivateNetwork?: boolean;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+  auditContext?: string;
+}): GuardedPostRequestOptions | undefined {
+  if (
+    !params.allowPrivateNetwork &&
+    !params.dispatcherPolicy &&
+    params.pinDns === undefined &&
+    !params.auditContext
+  ) {
+    return undefined;
+  }
+  return {
+    ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+    ...(params.pinDns !== undefined ? { pinDns: params.pinDns } : {}),
+    ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
+    ...(params.auditContext ? { auditContext: params.auditContext } : {}),
+  };
+}
+
 export async function postTranscriptionRequest(params: {
   url: string;
   headers: Headers;
   body: BodyInit;
   timeoutMs?: number;
   fetchFn: typeof fetch;
+  pinDns?: boolean;
   allowPrivateNetwork?: boolean;
   dispatcherPolicy?: PinnedDispatcherPolicy;
   auditContext?: string;
@@ -130,13 +155,7 @@ export async function postTranscriptionRequest(params: {
     },
     params.timeoutMs,
     params.fetchFn,
-    params.allowPrivateNetwork || params.dispatcherPolicy
-      ? {
-          ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
-          ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
-          ...(params.auditContext ? { auditContext: params.auditContext } : {}),
-        }
-      : undefined,
+    resolveGuardedPostRequestOptions(params),
   );
 }
 
@@ -146,6 +165,7 @@ export async function postJsonRequest(params: {
   body: unknown;
   timeoutMs?: number;
   fetchFn: typeof fetch;
+  pinDns?: boolean;
   allowPrivateNetwork?: boolean;
   dispatcherPolicy?: PinnedDispatcherPolicy;
   auditContext?: string;
@@ -159,13 +179,7 @@ export async function postJsonRequest(params: {
     },
     params.timeoutMs,
     params.fetchFn,
-    params.allowPrivateNetwork || params.dispatcherPolicy
-      ? {
-          ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
-          ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
-          ...(params.auditContext ? { auditContext: params.auditContext } : {}),
-        }
-      : undefined,
+    resolveGuardedPostRequestOptions(params),
   );
 }
 

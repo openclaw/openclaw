@@ -7,7 +7,6 @@ import ai.openclaw.app.gateway.GatewayClientInfo
 import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayTlsParams
-import ai.openclaw.app.gateway.isLoopbackGatewayHost
 import ai.openclaw.app.gateway.isPrivateLanGatewayHost
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.VoiceWakeMode

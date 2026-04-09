@@ -112,8 +112,14 @@ These parameters apply to the native Perplexity Search API path.
 | `max_tokens`          | Total content budget (default: 25000, max: 1000000)  |
 | `max_tokens_per_page` | Per-page token limit (default: 2048)                 |
 
-For the legacy Sonar/OpenRouter compatibility path, only `query` and `freshness` are supported.
-Search API-only filters such as `country`, `language`, `date_after`, `date_before`, `domain_filter`, `max_tokens`, and `max_tokens_per_page` return explicit errors.
+For the legacy Sonar/OpenRouter compatibility path:
+
+- `query`, `count`, and `freshness` are accepted
+- `count` is compatibility-only there; the response is still one synthesized
+  answer with citations rather than an N-result list
+- Search API-only filters such as `country`, `language`, `date_after`,
+  `date_before`, `domain_filter`, `max_tokens`, and `max_tokens_per_page`
+  return explicit errors
 
 **Examples:**
 
@@ -168,6 +174,7 @@ await web_search({
 
 - Perplexity Search API returns structured web search results (`title`, `url`, `snippet`)
 - OpenRouter or explicit `plugins.entries.perplexity.config.webSearch.baseUrl` / `model` switches Perplexity back to Sonar chat completions for compatibility
+- Sonar/OpenRouter compatibility returns one synthesized answer with citations, not structured result rows
 - Results are cached for 15 minutes by default (configurable via `cacheTtlMinutes`)
 
 See [Web tools](/tools/web) for the full web_search configuration.

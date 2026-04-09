@@ -1,9 +1,9 @@
-import { resolveAgentIdFromSessionKey } from "../../../../src/routing/session-key.js";
 import {
-  resolveChatModelOverride,
+  normalizeChatModelOverrideValue,
   resolvePreferredServerChatModelValue,
 } from "../chat-model-ref.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
+import { resolveAgentIdFromSessionKey } from "../session-key.ts";
 import type {
   AgentsListResult,
   ChatModelOverride,
@@ -227,7 +227,7 @@ function resolveEffectiveToolsModelKey(
     return defaultModel;
   }
   if (cachedOverride) {
-    return resolveChatModelOverride(cachedOverride, catalog).value;
+    return normalizeChatModelOverrideValue(cachedOverride, catalog);
   }
   const activeRow = state.sessionsResult?.sessions?.find((row) => row.key === resolvedSessionKey);
   if (activeRow?.model) {

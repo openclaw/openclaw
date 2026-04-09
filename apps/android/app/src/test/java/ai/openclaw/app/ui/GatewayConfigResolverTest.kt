@@ -290,6 +290,22 @@ class GatewayConfigResolverTest {
   }
 
   @Test
+  fun parseGatewayEndpointResultAcceptsLanCleartextGateway() {
+    val parsed = parseGatewayEndpointResult("ws://192.168.1.20:18789")
+
+    assertEquals(
+      GatewayEndpointConfig(
+        host = "192.168.1.20",
+        port = 18789,
+        tls = false,
+        displayUrl = "http://192.168.1.20:18789",
+      ),
+      parsed.config,
+    )
+    assertNull(parsed.error)
+  }
+
+  @Test
   fun decodeGatewaySetupCodeParsesBootstrapToken() {
     val setupCode =
       encodeSetupCode("""{"url":"wss://gateway.example:18789","bootstrapToken":"bootstrap-1"}""")
@@ -446,6 +462,42 @@ class GatewayConfigResolverTest {
     assertEquals("192.168.31.100", resolved?.host)
     assertEquals(18789, resolved?.port)
     assertEquals(false, resolved?.tls)
+  }
+
+  @Test
+  fun composeGatewayManualUrlDefaultsPortTo443WhenTlsAndPortBlank() {
+    val url = composeGatewayManualUrl("mydevice.tail1234.ts.net", "", tls = true)
+
+    assertEquals("https://mydevice.tail1234.ts.net:443", url)
+  }
+
+  @Test
+  fun composeGatewayManualUrlRejectsBlankPortWhenTlsIsOff() {
+    val url = composeGatewayManualUrl("127.0.0.1", "", tls = false)
+
+    assertNull(url)
+  }
+
+  @Test
+  fun resolveGatewayConnectConfigManualAcceptsTailscaleHostWithoutPort() {
+    val resolved =
+      resolveGatewayConnectConfig(
+        useSetupCode = false,
+        setupCode = "",
+        savedManualHost = "",
+        savedManualPort = "",
+        savedManualTls = true,
+        manualHostInput = "mydevice.tail1234.ts.net",
+        manualPortInput = "",
+        manualTlsInput = true,
+        fallbackBootstrapToken = "",
+        fallbackToken = "",
+        fallbackPassword = "",
+      )
+
+    assertEquals("mydevice.tail1234.ts.net", resolved?.host)
+    assertEquals(443, resolved?.port)
+    assertEquals(true, resolved?.tls)
   }
 
   private fun encodeSetupCode(payloadJson: String): String {

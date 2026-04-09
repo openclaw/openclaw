@@ -29,6 +29,7 @@ import {
   type PluginStatusReport,
 } from "../../plugins/status.js";
 import { setPluginEnabledInConfig } from "../../plugins/toggle-config.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
@@ -128,12 +129,14 @@ function formatPluginsList(report: PluginStatusReport): string {
 }
 
 function findPlugin(report: PluginStatusReport, rawName: string): PluginRecord | undefined {
-  const target = rawName.trim().toLowerCase();
+  const target = normalizeOptionalLowercaseString(rawName);
   if (!target) {
     return undefined;
   }
   return report.plugins.find(
-    (plugin) => plugin.id.toLowerCase() === target || plugin.name.toLowerCase() === target,
+    (plugin) =>
+      normalizeOptionalLowercaseString(plugin.id) === target ||
+      normalizeOptionalLowercaseString(plugin.name) === target,
   );
 }
 
@@ -305,6 +308,24 @@ async function loadPluginCommandState(
   };
 }
 
+async function loadPluginCommandConfig(): Promise<
+  { ok: true; path: string; config: OpenClawConfig } | { ok: false; path: string; error: string }
+> {
+  const snapshot = await readConfigFileSnapshot();
+  if (!snapshot.valid) {
+    return {
+      ok: false,
+      path: snapshot.path,
+      error: "Config file is invalid; fix it before using /plugins.",
+    };
+  }
+  return {
+    ok: true,
+    path: snapshot.path,
+    config: structuredClone(snapshot.resolved),
+  };
+}
+
 export const handlePluginsCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -338,6 +359,41 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     };
   }
 
+  const missingAdminScope = requireGatewayClientScopeForInternalChannel(params, {
+    label: "/plugins write",
+    allowedScopes: ["operator.admin"],
+    missingText: "❌ /plugins install|enable|disable requires operator.admin for gateway clients.",
+  });
+  if (missingAdminScope) {
+    return missingAdminScope;
+  }
+
+  if (pluginsCommand.action === "install") {
+    const loadedConfig = await loadPluginCommandConfig();
+    if (!loadedConfig.ok) {
+      return {
+        shouldContinue: false,
+        reply: { text: `⚠️ ${loadedConfig.error}` },
+      };
+    }
+    const installed = await installPluginFromPluginsCommand({
+      raw: pluginsCommand.spec,
+      config: loadedConfig.config,
+    });
+    if (!installed.ok) {
+      return {
+        shouldContinue: false,
+        reply: { text: `⚠️ ${installed.error}` },
+      };
+    }
+    return {
+      shouldContinue: false,
+      reply: {
+        text: `🔌 Installed plugin "${installed.pluginId}". Restart the gateway to load plugins.`,
+      },
+    };
+  }
+
   const loaded = await loadPluginCommandState(params.workspaceDir, {
     loadModules: pluginsCommand.action !== "list",
   });
@@ -362,7 +418,7 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
         reply: { text: formatPluginsList(loaded.report) },
       };
     }
-    if (pluginsCommand.name.toLowerCase() === "all") {
+    if (normalizeOptionalLowercaseString(pluginsCommand.name) === "all") {
       return {
         shouldContinue: false,
         reply: {
@@ -389,34 +445,6 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
           compatibilityWarnings: payload.compatibilityWarnings,
           install: payload.install,
         }),
-      },
-    };
-  }
-
-  const missingAdminScope = requireGatewayClientScopeForInternalChannel(params, {
-    label: "/plugins write",
-    allowedScopes: ["operator.admin"],
-    missingText: "❌ /plugins install|enable|disable requires operator.admin for gateway clients.",
-  });
-  if (missingAdminScope) {
-    return missingAdminScope;
-  }
-
-  if (pluginsCommand.action === "install") {
-    const installed = await installPluginFromPluginsCommand({
-      raw: pluginsCommand.spec,
-      config: structuredClone(loaded.config),
-    });
-    if (!installed.ok) {
-      return {
-        shouldContinue: false,
-        reply: { text: `⚠️ ${installed.error}` },
-      };
-    }
-    return {
-      shouldContinue: false,
-      reply: {
-        text: `🔌 Installed plugin "${installed.pluginId}". Restart the gateway to load plugins.`,
       },
     };
   }

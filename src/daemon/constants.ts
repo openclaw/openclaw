@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+
 // Default service labels (canonical + legacy compatibility)
 export const GATEWAY_LAUNCH_AGENT_LABEL = "ai.openclaw.gateway";
 export const GATEWAY_SYSTEMD_SERVICE_NAME = "openclaw-gateway";
@@ -16,7 +18,7 @@ export const LEGACY_GATEWAY_WINDOWS_TASK_NAMES: string[] = [];
 
 export function normalizeGatewayProfile(profile?: string): string | null {
   const trimmed = profile?.trim();
-  if (!trimmed || trimmed.toLowerCase() === "default") {
+  if (!trimmed || normalizeLowercaseStringOrEmpty(trimmed) === "default") {
     return null;
   }
   return trimmed;

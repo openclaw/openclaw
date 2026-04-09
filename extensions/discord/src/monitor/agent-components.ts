@@ -23,32 +23,29 @@ import {
   formatInboundEnvelope,
   resolveEnvelopeFormatOptions,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/channel-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
-import { type PluginInteractiveDiscordHandlerContext } from "openclaw/plugin-sdk/plugin-runtime";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { createNonExitingRuntime, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { logDebug, logError } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
+import { createDiscordRestClient } from "../client.js";
 import {
   parseDiscordComponentCustomIdForCarbon,
   parseDiscordModalCustomIdForCarbon,
 } from "../component-custom-id.js";
 import { resolveDiscordComponentEntry, resolveDiscordModalEntry } from "../components-registry.js";
-import type { DiscordComponentEntry, DiscordModalEntry } from "../components.js";
+import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
+import {
+  dispatchDiscordPluginInteractiveHandler,
+  type DiscordInteractiveHandlerContext,
+} from "../interactive-dispatch.js";
 import { editDiscordComponentMessage } from "../send.components.js";
 import {
   AGENT_BUTTON_KEY,
   AGENT_SELECT_KEY,
   ackComponentInteraction,
-  buildAgentButtonCustomId,
-  buildAgentSelectCustomId,
   type AgentComponentContext,
   type AgentComponentInteraction,
   type AgentComponentMessageInteraction,
@@ -62,35 +59,35 @@ import {
   parseDiscordModalId,
   resolveAgentComponentRoute,
   resolveComponentCommandAuthorized,
-  type ComponentInteractionContext,
   resolveDiscordChannelContext,
-  type DiscordChannelContext,
   resolveDiscordInteractionId,
   resolveInteractionContextWithDmAuth,
   resolveInteractionCustomId,
   resolveModalFieldValues,
   resolvePinnedMainDmOwnerFromAllowlist,
-  type DiscordUser,
+  type ComponentInteractionContext,
+  type DiscordChannelContext,
 } from "./agent-components-helpers.js";
 import {
-  type DiscordGuildEntryResolved,
+  enqueueSystemEvent,
+  readSessionUpdatedAt,
+  resolveStorePath,
+} from "./agent-components.deps.runtime.js";
+import {
   normalizeDiscordAllowList,
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
 } from "./allow-list.js";
 import { formatDiscordUserTag } from "./format.js";
 import {
-  buildDiscordInboundAccessContext,
   buildDiscordGroupSystemPrompt,
+  buildDiscordInboundAccessContext,
 } from "./inbound-context.js";
 import { buildDirectLabel, buildGuildLabel } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
 
-let conversationRuntimePromise:
-  | Promise<typeof import("openclaw/plugin-sdk/conversation-runtime")>
-  | undefined;
+let conversationRuntimePromise: Promise<typeof import("./agent-components.runtime.js")> | undefined;
 let componentsRuntimePromise: Promise<typeof import("../components.js")> | undefined;
-let pluginRuntimePromise: Promise<typeof import("openclaw/plugin-sdk/plugin-runtime")> | undefined;
 let replyRuntimePromise: Promise<typeof import("openclaw/plugin-sdk/reply-runtime")> | undefined;
 let replyPipelineRuntimePromise:
   | Promise<typeof import("openclaw/plugin-sdk/channel-reply-pipeline")>
@@ -98,7 +95,7 @@ let replyPipelineRuntimePromise:
 let typingRuntimePromise: Promise<typeof import("./typing.js")> | undefined;
 
 async function loadConversationRuntime() {
-  conversationRuntimePromise ??= import("openclaw/plugin-sdk/conversation-runtime");
+  conversationRuntimePromise ??= import("./agent-components.runtime.js");
   return await conversationRuntimePromise;
 }
 
@@ -107,16 +104,10 @@ async function loadComponentsRuntime() {
   return await componentsRuntimePromise;
 }
 
-async function loadPluginRuntime() {
-  pluginRuntimePromise ??= import("openclaw/plugin-sdk/plugin-runtime");
-  return await pluginRuntimePromise;
-}
-
-async function loadReplyRuntime() {
+async function _loadReplyRuntime() {
   replyRuntimePromise ??= import("openclaw/plugin-sdk/reply-runtime");
   return await replyRuntimePromise;
 }
-
 async function loadReplyPipelineRuntime() {
   replyPipelineRuntimePromise ??= import("openclaw/plugin-sdk/channel-reply-pipeline");
   return await replyPipelineRuntimePromise;
@@ -165,6 +156,16 @@ function resolveDiscordComponentChatType(interactionCtx: ComponentInteractionCon
   return "channel";
 }
 
+export function resolveDiscordComponentOriginatingTo(
+  interactionCtx: Pick<ComponentInteractionContext, "isDirectMessage" | "userId" | "channelId">,
+) {
+  return resolveDiscordConversationIdentity({
+    isDirectMessage: interactionCtx.isDirectMessage,
+    userId: interactionCtx.userId,
+    channelId: interactionCtx.channelId,
+  });
+}
+
 async function dispatchPluginDiscordInteractiveEvent(params: {
   ctx: AgentComponentContext;
   interaction: AgentComponentInteraction;
@@ -202,7 +203,7 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
     }
     await params.interaction.update(payload);
   };
-  const respond: PluginInteractiveDiscordHandlerContext["respond"] = {
+  const respond: DiscordInteractiveHandlerContext["respond"] = {
     acknowledge: async () => {
       if (responded) {
         return;
@@ -225,7 +226,9 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
         ephemeral,
       });
     },
-    editMessage: async (input) => {
+    editMessage: async (
+      input: Parameters<DiscordInteractiveHandlerContext["respond"]["editMessage"]>[0],
+    ) => {
       const { text, components } = input;
       responded = true;
       await updateOriginalMessage({
@@ -288,9 +291,7 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
     }
     return "handled";
   }
-  const { dispatchPluginInteractiveHandler } = await loadPluginRuntime();
-  const dispatched = await dispatchPluginInteractiveHandler({
-    channel: "discord",
+  const dispatched = await dispatchDiscordPluginInteractiveHandler({
     data: params.data,
     interactionId: resolveDiscordInteractionId(params.interaction),
     ctx: {
@@ -436,11 +437,9 @@ async function dispatchDiscordComponentEvent(params: {
     resolveTextChunkLimit,
     recordInboundSession,
   } = await (async () => {
-    const replyRuntime = await loadReplyRuntime();
     const conversationRuntime = await loadConversationRuntime();
     return {
-      ...replyRuntime,
-      recordInboundSession: conversationRuntime.recordInboundSession,
+      ...conversationRuntime,
     };
   })();
 
@@ -476,7 +475,8 @@ async function dispatchDiscordComponentEvent(params: {
     MessageSid: interaction.rawData.id,
     Timestamp: timestamp,
     OriginatingChannel: "discord" as const,
-    OriginatingTo: `channel:${interactionCtx.channelId}`,
+    OriginatingTo:
+      resolveDiscordComponentOriginatingTo(interactionCtx) ?? `channel:${interactionCtx.channelId}`,
   });
 
   await recordInboundSession({
@@ -487,7 +487,8 @@ async function dispatchDiscordComponentEvent(params: {
       ? {
           sessionKey: route.mainSessionKey,
           channel: "discord",
-          to: `user:${interactionCtx.userId}`,
+          to:
+            resolveDiscordComponentOriginatingTo(interactionCtx) ?? `user:${interactionCtx.userId}`,
           accountId,
           mainDmOwnerPin: pinnedMainDmOwner
             ? {
@@ -525,6 +526,11 @@ async function dispatchDiscordComponentEvent(params: {
     fallbackLimit: 2000,
   });
   const token = ctx.token ?? "";
+  const feedbackRest = createDiscordRestClient({
+    cfg: ctx.cfg,
+    token,
+    accountId,
+  }).rest;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(ctx.cfg, agentId);
   const replyToMode =
     ctx.discordConfig?.replyToMode ?? ctx.cfg.channels?.discord?.replyToMode ?? "off";
@@ -567,7 +573,7 @@ async function dispatchDiscordComponentEvent(params: {
       onReplyStart: async () => {
         try {
           const { sendTyping } = await loadTypingRuntime();
-          await sendTyping({ client: interaction.client, channelId: typingChannelId });
+          await sendTyping({ rest: feedbackRest, channelId: typingChannelId });
         } catch (err) {
           logVerbose(`discord: typing failed for component reply: ${String(err)}`);
         }

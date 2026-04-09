@@ -1,6 +1,28 @@
-import { expect, vi } from "vitest";
+import { expect, vi, type Mock } from "vitest";
 
-export function createDiscordOutboundHoisted() {
+type UnknownMock = Mock<(...args: unknown[]) => unknown>;
+type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
+
+type DiscordOutboundHoisted = {
+  sendMessageDiscordMock: AsyncUnknownMock;
+  sendDiscordComponentMessageMock: AsyncUnknownMock;
+  sendPollDiscordMock: AsyncUnknownMock;
+  sendWebhookMessageDiscordMock: AsyncUnknownMock;
+  getThreadBindingManagerMock: UnknownMock;
+};
+
+type DiscordSendModule = typeof import("./send.js");
+type DiscordSendComponentsModule = typeof import("./send.components.js");
+type DiscordThreadBindingsModule = typeof import("./monitor/thread-bindings.js");
+
+function invokeMock<TArgs extends unknown[], TResult>(
+  mock: (...args: unknown[]) => unknown,
+  ...args: TArgs
+): TResult {
+  return mock(...args) as TResult;
+}
+
+export function createDiscordOutboundHoisted(): DiscordOutboundHoisted {
   const sendMessageDiscordMock = vi.fn();
   const sendDiscordComponentMessageMock = vi.fn();
   const sendPollDiscordMock = vi.fn();
@@ -15,52 +37,70 @@ export function createDiscordOutboundHoisted() {
   };
 }
 
-type DiscordSendModule = typeof import("./send.js");
-type DiscordSendComponentsModule = typeof import("./send.components.js");
-type DiscordThreadBindingsModule = typeof import("./monitor/thread-bindings.js");
-
 export const DEFAULT_DISCORD_SEND_RESULT = {
   channel: "discord",
   messageId: "msg-1",
   channelId: "ch-1",
 } as const;
 
-type DiscordOutboundHoisted = ReturnType<typeof createDiscordOutboundHoisted>;
-
 export async function createDiscordSendModuleMock(
   hoisted: DiscordOutboundHoisted,
-  importOriginal: () => Promise<DiscordSendModule>,
-) {
-  const actual = await importOriginal();
+  loadActual: () => Promise<DiscordSendModule>,
+): Promise<DiscordSendModule> {
+  const actual = await loadActual();
   return {
     ...actual,
-    sendMessageDiscord: (...args: unknown[]) => hoisted.sendMessageDiscordMock(...args),
-    sendPollDiscord: (...args: unknown[]) => hoisted.sendPollDiscordMock(...args),
-    sendWebhookMessageDiscord: (...args: unknown[]) =>
-      hoisted.sendWebhookMessageDiscordMock(...args),
+    sendMessageDiscord: (...args: Parameters<DiscordSendModule["sendMessageDiscord"]>) =>
+      invokeMock<
+        Parameters<DiscordSendModule["sendMessageDiscord"]>,
+        ReturnType<DiscordSendModule["sendMessageDiscord"]>
+      >(hoisted.sendMessageDiscordMock, ...args),
+    sendPollDiscord: (...args: Parameters<DiscordSendModule["sendPollDiscord"]>) =>
+      invokeMock<
+        Parameters<DiscordSendModule["sendPollDiscord"]>,
+        ReturnType<DiscordSendModule["sendPollDiscord"]>
+      >(hoisted.sendPollDiscordMock, ...args),
+    sendWebhookMessageDiscord: (
+      ...args: Parameters<DiscordSendModule["sendWebhookMessageDiscord"]>
+    ) =>
+      invokeMock<
+        Parameters<DiscordSendModule["sendWebhookMessageDiscord"]>,
+        ReturnType<DiscordSendModule["sendWebhookMessageDiscord"]>
+      >(hoisted.sendWebhookMessageDiscordMock, ...args),
   };
 }
 
 export async function createDiscordSendComponentsModuleMock(
   hoisted: DiscordOutboundHoisted,
-  importOriginal: () => Promise<DiscordSendComponentsModule>,
-) {
-  const actual = await importOriginal();
+  loadActual: () => Promise<DiscordSendComponentsModule>,
+): Promise<DiscordSendComponentsModule> {
+  const actual = await loadActual();
   return {
     ...actual,
-    sendDiscordComponentMessage: (...args: unknown[]) =>
-      hoisted.sendDiscordComponentMessageMock(...args),
+    sendDiscordComponentMessage: (
+      ...args: Parameters<DiscordSendComponentsModule["sendDiscordComponentMessage"]>
+    ) =>
+      invokeMock<
+        Parameters<DiscordSendComponentsModule["sendDiscordComponentMessage"]>,
+        ReturnType<DiscordSendComponentsModule["sendDiscordComponentMessage"]>
+      >(hoisted.sendDiscordComponentMessageMock, ...args),
   };
 }
 
 export async function createDiscordThreadBindingsModuleMock(
   hoisted: DiscordOutboundHoisted,
-  importOriginal: () => Promise<DiscordThreadBindingsModule>,
-) {
-  const actual = await importOriginal();
+  loadActual: () => Promise<DiscordThreadBindingsModule>,
+): Promise<DiscordThreadBindingsModule> {
+  const actual = await loadActual();
   return {
     ...actual,
-    getThreadBindingManager: (...args: unknown[]) => hoisted.getThreadBindingManagerMock(...args),
+    getThreadBindingManager: (
+      ...args: Parameters<DiscordThreadBindingsModule["getThreadBindingManager"]>
+    ) =>
+      invokeMock<
+        Parameters<DiscordThreadBindingsModule["getThreadBindingManager"]>,
+        ReturnType<DiscordThreadBindingsModule["getThreadBindingManager"]>
+      >(hoisted.getThreadBindingManagerMock, ...args),
   };
 }
 

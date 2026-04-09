@@ -1,6 +1,8 @@
 package ai.openclaw.app
 
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.DeviceAuthStore
+import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
@@ -21,17 +23,86 @@ import java.util.UUID
 @Config(sdk = [34])
 class GatewayBootstrapAuthTest {
   @Test
-  fun connectsOperatorSessionWhenBootstrapAuthExists() {
-    assertTrue(shouldConnectOperatorSession(token = "", bootstrapToken = "bootstrap-1", password = "", storedOperatorToken = ""))
-    assertTrue(shouldConnectOperatorSession(token = null, bootstrapToken = "bootstrap-1", password = null, storedOperatorToken = null))
+  fun connectsOperatorSessionWhenOnlyBootstrapAuthExists() {
+    assertTrue(
+      shouldConnectOperatorSession(
+        NodeRuntime.GatewayConnectAuth(token = "", bootstrapToken = "bootstrap-1", password = ""),
+        storedOperatorToken = "",
+      ),
+    )
+    assertTrue(
+      shouldConnectOperatorSession(
+        NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null),
+        storedOperatorToken = null,
+      ),
+    )
   }
 
   @Test
-  fun skipsOperatorSessionOnlyWhenNoSharedBootstrapOrStoredAuthExists() {
-    assertTrue(shouldConnectOperatorSession(token = "shared-token", bootstrapToken = "bootstrap-1", password = null, storedOperatorToken = null))
-    assertTrue(shouldConnectOperatorSession(token = null, bootstrapToken = "bootstrap-1", password = "shared-password", storedOperatorToken = null))
-    assertTrue(shouldConnectOperatorSession(token = null, bootstrapToken = null, password = null, storedOperatorToken = "stored-token"))
-    assertFalse(shouldConnectOperatorSession(token = null, bootstrapToken = "", password = null, storedOperatorToken = null))
+  fun connectsOperatorSessionWhenSharedPasswordOrStoredAuthExists() {
+    assertTrue(
+      shouldConnectOperatorSession(
+        NodeRuntime.GatewayConnectAuth(token = "shared-token", bootstrapToken = "bootstrap-1", password = null),
+        storedOperatorToken = null,
+      ),
+    )
+    assertTrue(
+      shouldConnectOperatorSession(
+        NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = "shared-password"),
+        storedOperatorToken = null,
+      ),
+    )
+    assertTrue(
+      shouldConnectOperatorSession(
+        NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null),
+        storedOperatorToken = "stored-token",
+      ),
+    )
+    assertFalse(
+      shouldConnectOperatorSession(
+        NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "", password = null),
+        storedOperatorToken = null,
+      ),
+    )
+  }
+
+  @Test
+  fun resolveOperatorSessionConnectAuthUsesStoredTokenPathAfterBootstrapHandoff() {
+    val resolved =
+      resolveOperatorSessionConnectAuth(
+        auth = NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null),
+        storedOperatorToken = "stored-token",
+      )
+
+    assertEquals(NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = null, password = null), resolved)
+  }
+
+  @Test
+  fun resolveOperatorSessionConnectAuthUsesBootstrapWhenNoStoredOperatorTokenExists() {
+    val resolved =
+      resolveOperatorSessionConnectAuth(
+        auth = NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null),
+        storedOperatorToken = null,
+      )
+
+    assertEquals(
+      NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null),
+      resolved,
+    )
+  }
+
+  @Test
+  fun resolveOperatorSessionConnectAuthPrefersExplicitSharedAuth() {
+    val resolved =
+      resolveOperatorSessionConnectAuth(
+        auth = NodeRuntime.GatewayConnectAuth(token = "shared-token", bootstrapToken = "bootstrap-1", password = "shared-password"),
+        storedOperatorToken = "stored-token",
+      )
+
+    assertEquals(
+      NodeRuntime.GatewayConnectAuth(token = "shared-token", bootstrapToken = null, password = null),
+      resolved,
+    )
   }
 
   @Test
@@ -121,6 +192,33 @@ class GatewayBootstrapAuthTest {
       waitForStatusText(runtime),
     )
     assertNull(runtime.pendingGatewayTrust.value)
+  }
+
+  @Test
+  fun resetGatewaySetupAuth_clearsStoredGatewayAndDeviceTokens() {
+    val app = RuntimeEnvironment.getApplication()
+    val securePrefs =
+      app.getSharedPreferences(
+        "openclaw.node.secure.test.${UUID.randomUUID()}",
+        android.content.Context.MODE_PRIVATE,
+      )
+    val prefs = SecurePrefs(app, securePrefsOverride = securePrefs)
+    val runtime = NodeRuntime(app, prefs)
+    val deviceId = DeviceIdentityStore(app).loadOrCreate().deviceId
+    val authStore = DeviceAuthStore(prefs)
+    prefs.setGatewayToken("stale-shared-token")
+    prefs.setGatewayBootstrapToken("stale-bootstrap-token")
+    prefs.setGatewayPassword("stale-password")
+    authStore.saveToken(deviceId, "node", "stale-node-token")
+    authStore.saveToken(deviceId, "operator", "stale-operator-token")
+
+    runtime.resetGatewaySetupAuth()
+
+    assertNull(prefs.loadGatewayToken())
+    assertNull(prefs.loadGatewayBootstrapToken())
+    assertNull(prefs.loadGatewayPassword())
+    assertNull(authStore.loadToken(deviceId, "node"))
+    assertNull(authStore.loadToken(deviceId, "operator"))
   }
 
   private fun waitForGatewayTrustPrompt(runtime: NodeRuntime): NodeRuntime.GatewayTrustPrompt {

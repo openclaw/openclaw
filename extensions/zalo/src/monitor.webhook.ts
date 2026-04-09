@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { safeEqualSecret } from "openclaw/plugin-sdk/browser-support";
+import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
 import type { ResolvedZaloAccount } from "./accounts.js";
 import type { ZaloFetch, ZaloUpdate } from "./api.js";
 import type { ZaloRuntimeEnv } from "./monitor.js";
@@ -82,7 +82,14 @@ function buildReplayEventCacheKey(
 ): string {
   const chatId = update.message?.chat?.id ?? "";
   const senderId = update.message?.from?.id ?? "";
-  return JSON.stringify([target.path, target.account.accountId, update.event_name, chatId, senderId, messageId]);
+  return JSON.stringify([
+    target.path,
+    target.account.accountId,
+    update.event_name,
+    chatId,
+    senderId,
+    messageId,
+  ]);
 }
 
 function isReplayEvent(target: ZaloWebhookTarget, update: ZaloUpdate, nowMs: number): boolean {

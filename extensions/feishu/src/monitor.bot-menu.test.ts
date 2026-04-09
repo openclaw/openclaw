@@ -8,7 +8,9 @@ const createEventDispatcherMock = vi.hoisted(() => vi.fn());
 const monitorWebSocketMock = vi.hoisted(() => vi.fn(async () => {}));
 const monitorWebhookMock = vi.hoisted(() => vi.fn(async () => {}));
 const handleFeishuMessageMock = vi.hoisted(() => vi.fn(async () => {}));
+const parseFeishuMessageEventMock = vi.hoisted(() => vi.fn());
 const sendCardFeishuMock = vi.hoisted(() => vi.fn(async () => ({ messageId: "m1", chatId: "c1" })));
+const getMessageFeishuMock = vi.hoisted(() => vi.fn());
 const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ stop: vi.fn() })));
 
 let handlers: Record<string, (data: unknown) => Promise<void>> = {};
@@ -41,19 +43,17 @@ vi.mock("./monitor.transport.js", () => ({
   monitorWebhook: monitorWebhookMock,
 }));
 
-vi.mock("./bot.js", async () => {
-  const actual = await vi.importActual<typeof import("./bot.js")>("./bot.js");
+vi.mock("./bot.js", () => {
   return {
-    ...actual,
     handleFeishuMessage: handleFeishuMessageMock,
+    parseFeishuMessageEvent: parseFeishuMessageEventMock,
   };
 });
 
-vi.mock("./send.js", async () => {
-  const actual = await vi.importActual<typeof import("./send.js")>("./send.js");
+vi.mock("./send.js", () => {
   return {
-    ...actual,
     sendCardFeishu: sendCardFeishuMock,
+    getMessageFeishu: getMessageFeishuMock,
   };
 });
 
@@ -143,6 +143,9 @@ describe("Feishu bot menu handler", () => {
       expect.objectContaining({
         to: "user:ou_user1",
         card: expect.objectContaining({
+          config: expect.objectContaining({
+            width_mode: "fill",
+          }),
           header: expect.objectContaining({
             title: expect.objectContaining({ content: "Quick actions" }),
           }),
@@ -212,5 +215,20 @@ describe("Feishu bot menu handler", () => {
         }),
       );
     });
+    const firstSendArg = (sendCardFeishuMock.mock.calls as unknown[][]).at(0)?.[0] as
+      | {
+          card?: {
+            config?: {
+              width_mode?: string;
+              wide_screen_mode?: boolean;
+              enable_forward?: boolean;
+            };
+          };
+        }
+      | undefined;
+    const sentCard = firstSendArg?.card;
+    expect(sentCard).toBeDefined();
+    expect(sentCard?.config?.wide_screen_mode).toBeUndefined();
+    expect(sentCard?.config?.enable_forward).toBeUndefined();
   });
 });

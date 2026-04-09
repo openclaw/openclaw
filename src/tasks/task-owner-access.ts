@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   findTaskByRunId,
   getTaskById,
@@ -7,15 +8,10 @@ import {
 import type { TaskRecord } from "./task-registry.types.js";
 import { buildTaskStatusSnapshot } from "./task-status.js";
 
-function normalizeOwnerKey(ownerKey?: string): string | undefined {
-  const trimmed = ownerKey?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 function canOwnerAccessTask(task: TaskRecord, callerOwnerKey: string): boolean {
   return (
     task.scopeKind === "session" &&
-    normalizeOwnerKey(task.ownerKey) === normalizeOwnerKey(callerOwnerKey)
+    normalizeOptionalString(task.ownerKey) === normalizeOptionalString(callerOwnerKey)
   );
 }
 

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 
 type GatewayCall = {
   method?: string;
@@ -45,15 +46,6 @@ function createGatewayCallModuleMock() {
   };
 }
 
-function createSessionsModuleMock() {
-  return {
-    loadSessionStore: vi.fn(() => sessionStore),
-    resolveAgentIdFromSessionKey: () => "main",
-    resolveStorePath: () => "/tmp/sessions-main.json",
-    resolveMainSessionKey: () => "agent:main:main",
-  };
-}
-
 function createSubagentDepthModuleMock() {
   return {
     getSubagentDepthFromSessionStore: (sessionKey?: string) => requesterDepthResolver(sessionKey),
@@ -79,60 +71,125 @@ function createTimeoutHistoryWithNoReply() {
 }
 
 vi.mock("../gateway/call.js", createGatewayCallModuleMock);
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: () => configOverride,
-    resolveGatewayPort: () => 18789,
-  };
-});
-vi.mock("../config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/sessions.js")>();
-  return {
-    ...actual,
-    ...createSessionsModuleMock(),
-  };
-});
 vi.mock("./subagent-depth.js", createSubagentDepthModuleMock);
-vi.mock("./pi-embedded.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./pi-embedded.js")>();
-  return {
-    ...actual,
+vi.mock("./subagent-announce-delivery.runtime.js", () =>
+  createSubagentAnnounceDeliveryRuntimeMock({
+    callGateway: async (request: unknown) => {
+      const typed = request as GatewayCall;
+      gatewayCalls.push(typed);
+      if (typed.method === "chat.history") {
+        return { messages: chatHistoryMessages };
+      }
+      return await callGatewayImpl(typed);
+    },
+    loadConfig: () => configOverride,
+    loadSessionStore: () => sessionStore,
+    resolveAgentIdFromSessionKey: () => "main",
+    resolveMainSessionKey: () => "agent:main:main",
+    resolveStorePath: () => "/tmp/sessions-main.json",
     isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
-    queueEmbeddedPiMessage: (_sessionId: string, _text: string) => false,
-    waitForEmbeddedPiRunEnd: (sessionId: string, timeoutMs?: number) =>
-      waitForEmbeddedPiRunEndMock(sessionId, timeoutMs),
-  };
-});
-vi.mock("./subagent-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./subagent-registry.js")>();
-  return {
-    ...actual,
-    countActiveDescendantRuns: () => 0,
-    countPendingDescendantRuns: () => pendingDescendantRuns,
-    countPendingDescendantRunsExcludingRun: () => 0,
-    listSubagentRunsForRequester: () => [],
-    isSubagentSessionRunActive: () => subagentSessionRunActive,
-    shouldIgnorePostCompletionAnnounceForSession: () => shouldIgnorePostCompletion,
-    replaceSubagentRunAfterSteer: () => true,
-    resolveRequesterForChildSession: () => fallbackRequesterResolution,
-  };
-});
-vi.mock("./subagent-registry-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./subagent-registry-runtime.js")>();
-  return {
-    ...actual,
-    countActiveDescendantRuns: () => 0,
-    countPendingDescendantRuns: () => pendingDescendantRuns,
-    countPendingDescendantRunsExcludingRun: () => 0,
-    listSubagentRunsForRequester: () => [],
-    isSubagentSessionRunActive: () => subagentSessionRunActive,
-    shouldIgnorePostCompletionAnnounceForSession: () => shouldIgnorePostCompletion,
-    replaceSubagentRunAfterSteer: () => true,
-    resolveRequesterForChildSession: () => fallbackRequesterResolution,
-  };
-});
+    queueEmbeddedPiMessage: () => false,
+  }),
+);
+vi.mock("./subagent-announce-delivery.js", () => ({
+  deliverSubagentAnnouncement: async (params: {
+    targetRequesterSessionKey: string;
+    triggerMessage: string;
+    requesterIsSubagent?: boolean;
+    requesterOrigin?: { channel?: string; to?: string; accountId?: string; threadId?: string };
+    requesterSessionOrigin?: { provider?: string; channel?: string };
+    bestEffortDeliver?: boolean;
+    directIdempotencyKey?: string;
+    internalEvents?: unknown;
+  }) => {
+    const buildRequest = () => ({
+      method: "agent",
+      expectFinal: true,
+      timeoutMs,
+      params: {
+        sessionKey: params.targetRequesterSessionKey,
+        message: params.triggerMessage,
+        deliver: !params.requesterIsSubagent,
+        bestEffortDeliver: params.bestEffortDeliver,
+        internalEvents: params.internalEvents,
+        ...(params.requesterIsSubagent
+          ? {}
+          : {
+              channel: params.requesterOrigin?.channel,
+              to: params.requesterOrigin?.to,
+              accountId: params.requesterOrigin?.accountId,
+              threadId: params.requesterOrigin?.threadId,
+            }),
+      },
+    });
+    const timeoutMs =
+      typeof configOverride.agents?.defaults?.subagents?.announceTimeoutMs === "number" &&
+      Number.isFinite(configOverride.agents.defaults.subagents.announceTimeoutMs)
+        ? Math.min(
+            Math.max(1, Math.floor(configOverride.agents.defaults.subagents.announceTimeoutMs)),
+            2_147_000_000,
+          )
+        : 120_000;
+    const retryDelaysMs =
+      process.env.OPENCLAW_TEST_FAST === "1" ? [8, 16, 32] : [5_000, 10_000, 20_000];
+    let retryIndex = 0;
+    for (;;) {
+      const request = buildRequest();
+      gatewayCalls.push(request);
+      try {
+        await callGatewayImpl(request);
+        return { delivered: true, path: "direct" };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const delayMs = retryDelaysMs[retryIndex];
+        if (!/gateway timeout/i.test(message) || delayMs == null) {
+          return { delivered: false, path: "direct", error: message };
+        }
+        retryIndex += 1;
+      }
+    }
+  },
+  loadRequesterSessionEntry: (sessionKey: string) => ({
+    cfg: configOverride,
+    canonicalKey: sessionKey,
+    entry: sessionStore[sessionKey],
+  }),
+  loadSessionEntryByKey: (sessionKey: string) => sessionStore[sessionKey],
+  resolveAnnounceOrigin: (entry: { origin?: unknown } | undefined, requesterOrigin?: unknown) =>
+    requesterOrigin ?? entry?.origin,
+  resolveSubagentCompletionOrigin: async (params: { requesterOrigin?: unknown }) =>
+    params.requesterOrigin,
+  resolveSubagentAnnounceTimeoutMs: (cfg: typeof configOverride) => {
+    const configured = cfg.agents?.defaults?.subagents?.announceTimeoutMs;
+    if (typeof configured !== "number" || !Number.isFinite(configured)) {
+      return 120_000;
+    }
+    return Math.min(Math.max(1, Math.floor(configured)), 2_147_000_000);
+  },
+  runAnnounceDeliveryWithRetry: async <T>(params: { run: () => Promise<T> }) => await params.run(),
+}));
+vi.mock("./subagent-announce.runtime.js", () => ({
+  callGateway: createGatewayCallModuleMock().callGateway,
+  loadConfig: () => configOverride,
+  loadSessionStore: vi.fn(() => sessionStore),
+  resolveAgentIdFromSessionKey: () => "main",
+  resolveStorePath: () => "/tmp/sessions-main.json",
+  resolveMainSessionKey: () => "agent:main:main",
+  isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
+  queueEmbeddedPiMessage: (_sessionId: string, _text: string) => false,
+  waitForEmbeddedPiRunEnd: (sessionId: string, timeoutMs?: number) =>
+    waitForEmbeddedPiRunEndMock(sessionId, timeoutMs),
+}));
+vi.mock("./subagent-announce.registry.runtime.js", () => ({
+  countActiveDescendantRuns: () => 0,
+  countPendingDescendantRuns: () => pendingDescendantRuns,
+  countPendingDescendantRunsExcludingRun: () => 0,
+  listSubagentRunsForRequester: () => [],
+  isSubagentSessionRunActive: () => subagentSessionRunActive,
+  shouldIgnorePostCompletionAnnounceForSession: () => shouldIgnorePostCompletion,
+  replaceSubagentRunAfterSteer: () => true,
+  resolveRequesterForChildSession: () => fallbackRequesterResolution,
+}));
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
 type AnnounceFlowParams = Parameters<
   typeof import("./subagent-announce.js").runSubagentAnnounceFlow
@@ -221,27 +278,27 @@ describe("subagent announce timeout config", () => {
     fallbackRequesterResolution = null;
   });
 
-  it("uses 90s timeout by default for direct announce agent call", async () => {
+  it("uses 120s timeout by default for direct announce agent call", async () => {
     await runAnnounceFlowForTest("run-default-timeout");
 
     const directAgentCall = findGatewayCall(
       (call) => call.method === "agent" && call.expectFinal === true,
     );
-    expect(directAgentCall?.timeoutMs).toBe(90_000);
+    expect(directAgentCall?.timeoutMs).toBe(120_000);
   });
 
   it("honors configured announce timeout for direct announce agent call", async () => {
-    setConfiguredAnnounceTimeout(90_000);
+    setConfiguredAnnounceTimeout(120_000);
     await runAnnounceFlowForTest("run-config-timeout-agent");
 
     const directAgentCall = findGatewayCall(
       (call) => call.method === "agent" && call.expectFinal === true,
     );
-    expect(directAgentCall?.timeoutMs).toBe(90_000);
+    expect(directAgentCall?.timeoutMs).toBe(120_000);
   });
 
   it("honors configured announce timeout for completion direct agent call", async () => {
-    setConfiguredAnnounceTimeout(90_000);
+    setConfiguredAnnounceTimeout(120_000);
     await runAnnounceFlowForTest("run-config-timeout-send", {
       requesterOrigin: {
         channel: "discord",
@@ -253,7 +310,7 @@ describe("subagent announce timeout config", () => {
     const completionDirectAgentCall = findGatewayCall(
       (call) => call.method === "agent" && call.expectFinal === true,
     );
-    expect(completionDirectAgentCall?.timeoutMs).toBe(90_000);
+    expect(completionDirectAgentCall?.timeoutMs).toBe(120_000);
   });
 
   it("retries gateway timeout for externally delivered completion announces before giving up", async () => {
@@ -263,7 +320,7 @@ describe("subagent announce timeout config", () => {
         if (request.method === "chat.history") {
           return { messages: [] };
         }
-        throw new Error("gateway timeout after 90000ms");
+        throw new Error("gateway timeout after 120000ms");
       };
 
       const announcePromise = runAnnounceFlowForTest("run-completion-timeout-retry", {
