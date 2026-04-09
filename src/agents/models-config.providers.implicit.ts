@@ -70,6 +70,7 @@ function resolveProviderDiscoveryFilter(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
+  explicitProviders?: Record<string, ProviderConfig> | null;
 }): string[] | undefined {
   const { config, workspaceDir, env } = params;
   const testRaw = env.OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS?.trim();
@@ -90,7 +91,7 @@ function resolveProviderDiscoveryFilter(params: {
     env.OPENCLAW_LIVE_GATEWAY_PROVIDERS?.trim(),
   ].filter((value): value is string => Boolean(value && value !== "all"));
   if (rawValues.length === 0) {
-    return undefined;
+    return resolveExplicitProviderDiscoveryFilter(params);
   }
   const ids = rawValues
     .flatMap((value) => value.split(","))
@@ -121,10 +122,49 @@ function resolveProviderDiscoveryFilter(params: {
     : undefined;
 }
 
+function resolveExplicitProviderDiscoveryFilter(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  explicitProviders?: Record<string, ProviderConfig> | null;
+}): string[] | undefined {
+  // When users already pin provider configs explicitly, keep implicit discovery
+  // scoped to those providers' owning plugins instead of scanning the full
+  // provider registry during models.json generation.
+  const explicitProviderIds = [...new Set(Object.keys(params.explicitProviders ?? {}))]
+    .map((providerId) => providerId.trim())
+    .filter(Boolean);
+  if (explicitProviderIds.length === 0) {
+    return undefined;
+  }
+
+  const pluginIds = new Set<string>();
+  for (const providerId of explicitProviderIds) {
+    const owners =
+      resolveOwningPluginIdsForProvider({
+        provider: providerId,
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      }) ?? [];
+    if (owners.length === 0) {
+      return undefined;
+    }
+    for (const owner of owners) {
+      pluginIds.add(owner);
+    }
+  }
+
+  return pluginIds.size > 0
+    ? [...pluginIds].toSorted((left, right) => left.localeCompare(right))
+    : undefined;
+}
+
 export function resolveProviderDiscoveryFilterForTest(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
+  explicitProviders?: Record<string, ProviderConfig> | null;
 }): string[] | undefined {
   return resolveProviderDiscoveryFilter(params);
 }
@@ -363,6 +403,7 @@ export async function resolveImplicitProviders(
       config: params.config,
       workspaceDir: params.workspaceDir,
       env,
+      explicitProviders: params.explicitProviders,
     }),
   });
 

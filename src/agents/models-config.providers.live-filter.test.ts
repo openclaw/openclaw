@@ -2,6 +2,40 @@ import { describe, expect, it } from "vitest";
 import { resolveProviderDiscoveryFilterForTest } from "./models-config.providers.implicit.js";
 
 describe("resolveProviderDiscoveryFilterForTest", () => {
+  it("scopes discovery to explicit providers when no live filter is set", () => {
+    expect(
+      resolveProviderDiscoveryFilterForTest({
+        explicitProviders: {
+          "openai-codex": {
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            models: [],
+          },
+        },
+        env: {
+          VITEST: "1",
+        } as NodeJS.ProcessEnv,
+      }),
+    ).toEqual(["openai"]);
+  });
+
+  it("keeps broad discovery when an explicit provider has no owning plugin", () => {
+    expect(
+      resolveProviderDiscoveryFilterForTest({
+        explicitProviders: {
+          "custom-openai": {
+            api: "openai-responses",
+            baseUrl: "https://example.invalid/v1",
+            models: [],
+          },
+        },
+        env: {
+          VITEST: "1",
+        } as NodeJS.ProcessEnv,
+      }),
+    ).toBeUndefined();
+  });
+
   it("maps live provider backend ids to owning plugin ids", () => {
     expect(
       resolveProviderDiscoveryFilterForTest({
