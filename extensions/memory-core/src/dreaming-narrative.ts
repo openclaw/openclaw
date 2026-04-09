@@ -6,7 +6,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 type SubagentSurface = {
   run: (params: {
-    idempotencyKey?: string;
+    idempotencyKey: string;
     sessionKey: string;
     message: string;
     extraSystemPrompt?: string;
