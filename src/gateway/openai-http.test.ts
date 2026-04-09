@@ -916,10 +916,18 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       .map((choice) => (choice.delta as Record<string, unknown> | undefined)?.content)
       .filter((v): v is string => typeof v === "string")
       .join("");
-    // All content must be present -- the replace event must not cause data loss.
+    // All content must be present and the replace event must not duplicate the
+    // common prefix that was already streamed.  The sequence is:
+    //   chunk 1: delta "<"  (partial tag remnant)
+    //   chunk 2: replace fullText "Title\nSubtitle\nBody" (tag stripped)
+    //   chunk 3: delta " more"  (normal append)
+    // The replace should emit only "Title\nSubtitle\nBody" (dropping the stale "<")
+    // and the final append adds " more".
     expect(allContent).toContain("Title");
     expect(allContent).toContain("Subtitle");
     expect(allContent).toContain("Body more");
+    // Ensure no duplication: "Title" should appear exactly once
+    expect(allContent.split("Title").length - 1).toBe(1);
   });
 
   it("treats shared-secret bearer callers as owner operators", async () => {
