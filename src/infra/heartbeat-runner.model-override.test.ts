@@ -243,6 +243,46 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     });
   });
 
+  it("keeps a single trailing :heartbeat in the forced session key when it is not a duplicate isolated suffix", async () => {
+    await withHeartbeatFixture(async ({ tmpDir, storePath, replySpy, seedSession }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "whatsapp",
+              isolatedSession: true,
+            },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const mainKey = resolveMainSessionKey(cfg);
+      const customKeyWithHeartbeatSegment = `${mainKey}:customlane:heartbeat`;
+      await seedSession(customKeyWithHeartbeatSegment, {
+        lastChannel: "whatsapp",
+        lastTo: "+1555",
+      });
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+      await runHeartbeatOnce({
+        cfg,
+        sessionKey: customKeyWithHeartbeatSegment,
+        reason: "cron:test",
+        deps: {
+          getReplyFromConfig: replySpy,
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
+      });
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      expect(replySpy.mock.calls[0]?.[0]?.SessionKey).toBe(customKeyWithHeartbeatSegment);
+    });
+  });
+
   it("uses main session key when isolatedSession is not set", async () => {
     await withHeartbeatFixture(async ({ tmpDir, storePath, replySpy, seedSession }) => {
       const cfg: OpenClawConfig = {

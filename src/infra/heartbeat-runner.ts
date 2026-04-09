@@ -184,13 +184,26 @@ function resolveHeartbeatAckMaxChars(cfg: OpenClawConfig, heartbeat?: HeartbeatC
 
 const HEARTBEAT_ISOLATED_SESSION_SUFFIX = ":heartbeat";
 
-/** Strip trailing isolated-heartbeat suffixes so targeted wakes never nest `…:heartbeat:heartbeat`. */
-function stripHeartbeatIsolatedSessionSuffixes(sessionKey: string): string {
+/**
+ * Collapse only *repeated* isolated suffixes (`…:heartbeat:heartbeat` → `…:heartbeat`).
+ * Does not strip a single trailing `:heartbeat`, so keys like `agent:main:foo:heartbeat`
+ * stay intact for preflight and lane checks (#62869).
+ */
+function collapseRedundantIsolatedHeartbeatSuffixes(sessionKey: string): string {
   let key = sessionKey;
-  while (key.endsWith(HEARTBEAT_ISOLATED_SESSION_SUFFIX)) {
+  const doubleSuffix = HEARTBEAT_ISOLATED_SESSION_SUFFIX + HEARTBEAT_ISOLATED_SESSION_SUFFIX;
+  while (key.endsWith(doubleSuffix)) {
     key = key.slice(0, -HEARTBEAT_ISOLATED_SESSION_SUFFIX.length);
   }
   return key;
+}
+
+/** Resolve the store key for an isolated heartbeat run without nesting `…:heartbeat:heartbeat`. */
+function resolveIsolatedHeartbeatRunSessionKey(sessionKey: string): string {
+  const collapsed = collapseRedundantIsolatedHeartbeatSuffixes(sessionKey);
+  return collapsed.endsWith(HEARTBEAT_ISOLATED_SESSION_SUFFIX)
+    ? collapsed
+    : `${collapsed}${HEARTBEAT_ISOLATED_SESSION_SUFFIX}`;
 }
 
 function resolveHeartbeatSession(
@@ -630,24 +643,17 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: "requests-in-flight" };
   }
 
-  // Targeted wakes may pass a key that already ends with `:heartbeat` (or nested
-  // suffixes). When isolatedSession is on, normalize before preflight so
-  // peekSystemEventEntries, the session-lane busy check, and the isolated store
-  // key all use the same base session key (#62869).
-  const trimmedForcedSessionKey = opts.sessionKey?.trim();
-  const forcedSessionKeyForPreflight =
-    heartbeat?.isolatedSession === true
-      ? trimmedForcedSessionKey
-        ? stripHeartbeatIsolatedSessionSuffixes(trimmedForcedSessionKey)
-        : undefined
-      : opts.sessionKey;
+  // Preflight must use the same forced session key the run will use for pending-event
+  // inspection and session-lane busy checks. Isolated runs append (or reuse) `…:heartbeat`
+  // later via resolveIsolatedHeartbeatRunSessionKey — do not strip `:heartbeat` here, or
+  // legitimate keys like `agent:main:foo:heartbeat` would preflight under the wrong lane.
 
   // Preflight centralizes trigger classification, event inspection, and HEARTBEAT.md gating.
   const preflight = await resolveHeartbeatPreflight({
     cfg,
     agentId,
     heartbeat,
-    forcedSessionKey: forcedSessionKeyForPreflight,
+    forcedSessionKey: opts.sessionKey,
     reason: opts.reason,
   });
   if (preflight.skipReason) {
@@ -660,10 +666,17 @@ export async function runHeartbeatOnce(opts: {
   }
   const { entry, sessionKey, storePath, suppressOriginatingContext } = preflight.session;
 
+  const useIsolatedSession = heartbeat?.isolatedSession === true;
+  // Busy check must use the same lane as the eventual run. Isolated heartbeats
+  // execute on `…:heartbeat` (or an existing trailing `:heartbeat`), not the base key.
+  const sessionKeyForLane = useIsolatedSession
+    ? resolveIsolatedHeartbeatRunSessionKey(sessionKey)
+    : sessionKey;
+
   // Check the resolved session lane — if it is busy, skip to avoid interrupting
   // an active streaming turn.  The wake-layer retry (heartbeat-wake.ts) will
   // re-schedule this wake automatically.  See #14396 (closed without merge).
-  const sessionLaneKey = resolveEmbeddedSessionLane(sessionKey);
+  const sessionLaneKey = resolveEmbeddedSessionLane(sessionKeyForLane);
   const sessionLaneSize = (opts.deps?.getQueueSize ?? getQueueSize)(sessionLaneKey);
   if (sessionLaneSize > 0) {
     emitHeartbeatEvent({
@@ -681,15 +694,15 @@ export async function runHeartbeatOnce(opts: {
   // a new session ID (empty transcript) each run, avoiding the cost of
   // sending the full conversation history (~100K tokens) to the LLM.
   // Delivery routing still uses the main session entry (lastChannel, lastTo).
-  const useIsolatedSession = heartbeat?.isolatedSession === true;
   const delivery = resolveHeartbeatDeliveryTarget({
     cfg,
     entry,
     heartbeat,
     // Isolated runs avoid base-session turnSource routing so delivery does not
     // stick to stale channels while base-session event context remains queued.
-    // Pending system events are still resolved during preflight on the normalized
-    // store session key (same key used for the session-lane busy check).
+    // Pending system events are resolved during preflight on the resolved store
+    // session key; the session-lane busy check uses sessionKeyForLane (isolated
+    // run target when isolatedSession is on).
     turnSource: useIsolatedSession ? undefined : preflight.turnSourceDeliveryContext,
   });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
@@ -740,7 +753,7 @@ export async function runHeartbeatOnce(opts: {
 
   let runSessionKey = sessionKey;
   if (useIsolatedSession) {
-    const isolatedKey = `${sessionKey}:heartbeat`;
+    const isolatedKey = resolveIsolatedHeartbeatRunSessionKey(sessionKey);
     const cronSession = resolveCronSession({
       cfg,
       sessionKey: isolatedKey,
