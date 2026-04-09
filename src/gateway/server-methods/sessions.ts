@@ -33,6 +33,7 @@ import {
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
+import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -64,7 +65,6 @@ import {
   listSessionCompactionCheckpoints,
 } from "../session-compaction-checkpoints.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
-import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import {
   archiveFileOnDisk,
   listSessionsFromStore,
@@ -1320,7 +1320,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       reason: "patch",
     });
   },
-  "sessions.reset": async ({ params, respond, context }) => {
+  "sessions.reset": async ({ params, respond }) => {
     if (!assertValidParams(params, validateSessionsResetParams, "sessions.reset", respond)) {
       return;
     }
@@ -1342,16 +1342,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     respond(true, { ok: true, key: result.key, entry: result.entry }, undefined);
-    emitSessionsChanged(context, {
-      sessionKey: result.key,
-      reason,
-    });
     emitSessionLifecycleEvent({
       sessionKey: result.key,
       reason,
     });
   },
-  "sessions.delete": async ({ params, respond, client, isWebchatConnect, context }) => {
+  "sessions.delete": async ({ params, respond, client, isWebchatConnect }) => {
     if (!assertValidParams(params, validateSessionsDeleteParams, "sessions.delete", respond)) {
       return;
     }
@@ -1439,10 +1435,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     respond(true, { ok: true, key: target.canonicalKey, deleted, archived }, undefined);
     if (deleted) {
-      emitSessionsChanged(context, {
-        sessionKey: target.canonicalKey,
-        reason: "delete",
-      });
       emitSessionLifecycleEvent({
         sessionKey: target.canonicalKey,
         reason: "deleted",

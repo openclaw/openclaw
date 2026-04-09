@@ -57,7 +57,7 @@ async function withOperatorSessionSubscriber<T>(
 ) {
   const ws = await harness.openWs();
   try {
-    await connectOk(ws, { scopes: ["operator.read"] });
+    await connectOk(ws, { scopes: ["operator.read", "operator.admin"] });
     await rpcReq(ws, "sessions.subscribe");
     return await run(ws);
   } finally {
