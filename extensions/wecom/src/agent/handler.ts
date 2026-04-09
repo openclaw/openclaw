@@ -533,11 +533,15 @@ async function processAgentMessage(params: {
     body: finalContent,
   });
 
+  const accountConfig = (config.channels?.[CHANNEL_ID] ?? {}) as Record<string, unknown>;
+  type DmPolicyType = "pairing" | "allowlist" | "open" | "disabled" | undefined;
   const authz = await resolveWecomCommandAuthorization({
     core,
     cfg: config,
-    // Agent 门禁应读取 channels.wecom.agent.dm（即 agent.config.dm），而不是 channels.wecom.dm（不存在）
-    accountConfig: agent.config,
+    accountConfig: {
+      dmPolicy: (accountConfig.dmPolicy as DmPolicyType) ?? (agent.config as Record<string, unknown>).dmPolicy as DmPolicyType,
+      allowFrom: (accountConfig.allowFrom as Array<string | number> | undefined) ?? (agent.config as Record<string, unknown>).allowFrom as Array<string | number> | undefined,
+    },
     rawBody: finalContent,
     senderUserId: fromUser,
   });

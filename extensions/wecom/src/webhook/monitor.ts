@@ -743,6 +743,10 @@ export async function startAgentForStream(params: {
     target.runtime.log?.(
       `[webhook] sender ${userid} not allowed by dmPolicy=${authz.dmPolicy}, skipping`,
     );
+    streamStore.updateStream(streamId, (s) => {
+      s.finished = true;
+      s.content = "";
+    });
     streamStore.onStreamFinished(streamId);
     return;
   }
@@ -970,7 +974,16 @@ export async function startAgentForStream(params: {
               try {
                 const fs = await import("node:fs/promises");
                 const pathModule = await import("node:path");
-                const buf = await fs.readFile(p);
+                const resolved = pathModule.resolve(p);
+                const roots = target.account.config.mediaLocalRoots ?? [];
+                if (roots.length > 0 && !roots.some((r) => {
+                  const root = pathModule.resolve(r);
+                  return resolved === root || resolved.startsWith(root + pathModule.sep);
+                })) {
+                  target.runtime.error?.(`[webhook] local-path: path ${p} outside allowed media roots, skipping`);
+                  continue;
+                }
+                const buf = await fs.readFile(resolved);
                 const ext = pathModule.extname(p).slice(1).toLowerCase();
                 const imageExts: Record<string, string> = {
                   jpg: "image/jpeg",
@@ -1084,9 +1097,17 @@ export async function startAgentForStream(params: {
             } else {
               const fs = await import("node:fs/promises");
               const pathMod = await import("node:path");
-              buf = await fs.readFile(mPath);
-              filename = pathMod.basename(mPath);
-              const ext = pathMod.extname(mPath).slice(1).toLowerCase();
+              const resolved = pathMod.resolve(mPath);
+              const roots = target.account.config.mediaLocalRoots ?? [];
+              if (roots.length > 0 && !roots.some((r) => {
+                const root = pathMod.resolve(r);
+                return resolved === root || resolved.startsWith(root + pathMod.sep);
+              })) {
+                throw new Error(`Path "${mPath}" outside allowed media roots`);
+              }
+              buf = await fs.readFile(resolved);
+              filename = pathMod.basename(resolved);
+              const ext = pathMod.extname(resolved).slice(1).toLowerCase();
               contentType = MIME_BY_EXT[ext] ?? "application/octet-stream";
             }
 
@@ -1479,7 +1500,16 @@ async function agentDmMedia(params: {
       inferredContentType || res.headers.get("content-type") || "application/octet-stream";
   } else {
     const fs = await import("node:fs/promises");
-    buffer = await fs.readFile(mediaUrlOrPath);
+    const pathMod = await import("node:path");
+    const resolved = pathMod.resolve(mediaUrlOrPath);
+    const roots = target.account.config.mediaLocalRoots ?? [];
+    if (roots.length > 0 && !roots.some((r) => {
+      const root = pathMod.resolve(r);
+      return resolved === root || resolved.startsWith(root + pathMod.sep);
+    })) {
+      throw new Error(`Path "${mediaUrlOrPath}" outside allowed media roots`);
+    }
+    buffer = await fs.readFile(resolved);
   }
 
   let mediaType: "image" | "voice" | "video" | "file" = "file";

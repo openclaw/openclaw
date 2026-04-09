@@ -95,7 +95,7 @@ export function buildWecomUnauthorizedCommandPrompt(params: {
   const user = params.senderUserId || "unknown";
   const policy = params.dmPolicy;
   const scopeLabel = params.scope === "bot" ? "Bot（智能机器人）" : "Agent（自建应用）";
-  const dmPrefix = params.scope === "bot" ? "channels.wecom.bot" : "channels.wecom.agent";
+  const dmPrefix = "channels.wecom";
   const allowCmd = (value: string) => `openclaw config set ${dmPrefix}.allowFrom '${value}'`;
   const policyCmd = (value: string) => `openclaw config set ${dmPrefix}.dmPolicy "${value}"`;
 
