@@ -16,14 +16,14 @@ describe("Dockerfile", () => {
   it("uses full bookworm for build stages and slim bookworm for runtime", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     expect(dockerfile).toContain(
-      'ARG OPENCLAW_NODE_BOOKWORM_IMAGE="node:24-bookworm@sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b"',
+      'ARG OPENCLAW_NODE_TRIXIE_IMAGE="node:24-trixie@sha256:e4ceb04a1f1dd4823a1ab6ef8d2182c09d6299b507c70f20bd0eb9921a78354d"',
     );
     expect(dockerfile).toContain(
-      'ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="node:24-bookworm-slim@sha256:e8e2e91b1378f83c5b2dd15f0247f34110e2fe895f6ca7719dbb780f929368eb"',
+      'ARG OPENCLAW_NODE_TRIXIE_SLIM_IMAGE="node:24-trixie-slim@sha256:9707cd4542f400df5078df04f9652a272429112f15202d22b5b8bdd148df494f"',
     );
-    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS ext-deps");
-    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build");
-    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime");
+    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_TRIXIE_IMAGE} AS ext-deps");
+    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_TRIXIE_IMAGE} AS build");
+    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_TRIXIE_SLIM_IMAGE} AS base-runtime");
     expect(dockerfile).toContain("FROM base-runtime");
     expect(dockerfile).toContain("current multi-arch manifest list entries");
     expect(dockerfile).not.toContain("current amd64 entry");
@@ -112,5 +112,45 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain(
       'corepack prepare "$(node -p "require(\'./package.json\').packageManager")" --activate',
     );
+  });
+
+  it("base image ARG digest pairs are internally consistent", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+
+    const imageDigest = dockerfile.match(
+      /ARG OPENCLAW_NODE_TRIXIE_IMAGE="[^@]+@(sha256:[a-f0-9]{64})"/,
+    )?.[1];
+    const standaloneDigest = dockerfile.match(
+      /ARG OPENCLAW_NODE_TRIXIE_DIGEST="(sha256:[a-f0-9]{64})"/,
+    )?.[1];
+    const slimImageDigest = dockerfile.match(
+      /ARG OPENCLAW_NODE_TRIXIE_SLIM_IMAGE="[^@]+@(sha256:[a-f0-9]{64})"/,
+    )?.[1];
+    const slimStandaloneDigest = dockerfile.match(
+      /ARG OPENCLAW_NODE_TRIXIE_SLIM_DIGEST="(sha256:[a-f0-9]{64})"/,
+    )?.[1];
+
+    expect(imageDigest).toBeDefined();
+    expect(imageDigest).toBe(standaloneDigest);
+    expect(slimImageDigest).toBeDefined();
+    expect(slimImageDigest).toBe(slimStandaloneDigest);
+  });
+
+  it("smoke and e2e Dockerfiles use the same trixie-slim digest as the main Dockerfile", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    const slimDigest = dockerfile.match(
+      /ARG OPENCLAW_NODE_TRIXIE_SLIM_IMAGE="[^@]+@(sha256:[a-f0-9]{64})"/,
+    )?.[1];
+    expect(slimDigest).toBeDefined();
+
+    const smokeFiles = [
+      join(repoRoot, "scripts/docker/cleanup-smoke/Dockerfile"),
+      join(repoRoot, "scripts/docker/install-sh-e2e/Dockerfile"),
+      join(repoRoot, "scripts/docker/install-sh-smoke/Dockerfile"),
+    ];
+    for (const file of smokeFiles) {
+      const content = await readFile(file, "utf8");
+      expect(content, `${file} digest mismatch`).toContain(`node:24-trixie-slim@${slimDigest}`);
+    }
   });
 });
