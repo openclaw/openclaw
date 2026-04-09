@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import {
   DEFAULT_PROVIDER,
@@ -15,6 +14,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/config-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_AGENT_ID = "main";
@@ -1210,7 +1210,7 @@ async function runRecallSubagent(params: {
     : `agent:${params.agentId}:${subagentSuffix}`;
   const tempDir = params.config.persistTranscripts
     ? undefined
-    : await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-active-memory-"));
+    : await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-active-memory-"));
   const persistedDir = params.config.persistTranscripts
     ? resolveSafeTranscriptDir(
         resolvePersistentTranscriptBaseDir(params.api, params.agentId),
