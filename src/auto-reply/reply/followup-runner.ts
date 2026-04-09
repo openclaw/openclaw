@@ -292,15 +292,14 @@ export function createFollowupRunner(params: {
       const providerUsed =
         runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? queued.run.provider;
       const contextTokensUsed =
-        agentCfgContextTokens ??
         resolveContextTokensForModel({
           cfg: queued.run.config,
           provider: providerUsed,
           model: modelUsed,
+          contextTokensOverride: agentCfgContextTokens,
+          fallbackContextTokens: sessionEntry?.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
           allowAsyncLoad: false,
-        }) ??
-        sessionEntry?.contextTokens ??
-        DEFAULT_CONTEXT_TOKENS;
+        }) ?? DEFAULT_CONTEXT_TOKENS;
 
       if (storePath && sessionKey) {
         await persistRunSessionUsage({

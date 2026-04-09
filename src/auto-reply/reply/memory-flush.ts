@@ -10,8 +10,6 @@ export function resolveMemoryFlushContextWindowTokens(params: {
   cfg?: OpenClawConfig;
   provider?: string;
 }): number {
-  // Match agent-runner / followup-runner / directive persist: agent `contextTokens`
-  // overrides provider/model resolution when set (via resolveContextTokensForModel).
   return (
     resolveContextTokensForModel({
       cfg: params.cfg,

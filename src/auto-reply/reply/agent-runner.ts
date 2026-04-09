@@ -501,15 +501,14 @@ export async function runReplyAgent(params: {
       ? runResult.meta?.agentMeta?.cliSessionBinding
       : undefined;
     const contextTokensUsed =
-      agentCfgContextTokens ??
       resolveContextTokensForModel({
         cfg,
         provider: providerUsed,
         model: modelUsed,
+        contextTokensOverride: agentCfgContextTokens,
+        fallbackContextTokens: activeSessionEntry?.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
         allowAsyncLoad: false,
-      }) ??
-      activeSessionEntry?.contextTokens ??
-      DEFAULT_CONTEXT_TOKENS;
+      }) ?? DEFAULT_CONTEXT_TOKENS;
 
     await persistRunSessionUsage({
       storePath,
