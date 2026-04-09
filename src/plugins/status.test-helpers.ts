@@ -39,15 +39,27 @@ export function createPluginRecord(
     source: overrides.source ?? `/tmp/${id}/index.ts`,
     origin: overrides.origin ?? "workspace",
     enabled: overrides.enabled ?? true,
+    explicitlyEnabled: overrides.explicitlyEnabled ?? overrides.enabled ?? true,
+    activated: overrides.activated ?? overrides.enabled ?? true,
+    activationSource:
+      overrides.activationSource ?? ((overrides.enabled ?? true) ? "explicit" : "disabled"),
+    activationReason: overrides.activationReason,
     status: overrides.status ?? "loaded",
     toolNames: [],
     hookNames: [],
     channelIds: [],
+    cliBackendIds: [],
     providerIds: [],
     speechProviderIds: [],
+    realtimeTranscriptionProviderIds: [],
+    realtimeVoiceProviderIds: [],
     mediaUnderstandingProviderIds: [],
     imageGenerationProviderIds: [],
+    videoGenerationProviderIds: [],
+    musicGenerationProviderIds: [],
+    webFetchProviderIds: [],
     webSearchProviderIds: [],
+    memoryEmbeddingProviderIds: [],
     gatewayMethods: [],
     cliCommands: [],
     services: [],
@@ -100,7 +112,7 @@ export function createCustomHook(params: {
 export function createPluginLoadResult(
   overrides: Partial<PluginLoadResult> & Pick<PluginLoadResult, "plugins"> = { plugins: [] },
 ): PluginLoadResult {
-  const { plugins, ...rest } = overrides;
+  const { plugins, realtimeTranscriptionProviders, realtimeVoiceProviders, ...rest } = overrides;
   return {
     plugins,
     diagnostics: [],
@@ -110,7 +122,11 @@ export function createPluginLoadResult(
     speechProviders: [],
     mediaUnderstandingProviders: [],
     imageGenerationProviders: [],
+    videoGenerationProviders: [],
+    musicGenerationProviders: [],
+    webFetchProviders: [],
     webSearchProviders: [],
+    memoryEmbeddingProviders: [],
     tools: [],
     hooks: [],
     typedHooks: [],
@@ -121,6 +137,8 @@ export function createPluginLoadResult(
     commands: [],
     conversationBindingResolvedHandlers: [],
     ...rest,
+    realtimeTranscriptionProviders: realtimeTranscriptionProviders ?? [],
+    realtimeVoiceProviders: realtimeVoiceProviders ?? [],
   };
 }
 

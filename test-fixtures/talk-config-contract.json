@@ -7,33 +7,37 @@
       "expectedSelection": {
         "provider": "elevenlabs",
         "normalizedPayload": true,
-        "voiceId": "voice-resolved",
-        "apiKey": "resolved-key"
+        "voiceId": "voice-normalized",
+        "apiKey": "xxxxx"
       },
       "talk": {
         "resolved": {
           "provider": "elevenlabs",
           "config": {
             "voiceId": "voice-resolved",
-            "apiKey": "resolved-key"
+            "apiKey": "xxxxx"
           }
         },
         "provider": "elevenlabs",
         "providers": {
           "elevenlabs": {
             "voiceId": "voice-normalized",
-            "apiKey": "normalized-key"
+            "apiKey": "xxxxx"
           }
         },
         "voiceId": "voice-legacy",
-        "apiKey": "legacy-key"
+        "apiKey": "xxxxx"
       }
     },
     {
       "id": "normalized_missing_resolved",
       "defaultProvider": "elevenlabs",
-      "payloadValid": false,
-      "expectedSelection": null,
+      "payloadValid": true,
+      "expectedSelection": {
+        "provider": "elevenlabs",
+        "normalizedPayload": true,
+        "voiceId": "voice-normalized"
+      },
       "talk": {
         "provider": "elevenlabs",
         "providers": {

@@ -8,6 +8,10 @@ import android.content.Context
 import android.content.Intent
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import ai.openclaw.app.NotificationBurstLimiter
+import ai.openclaw.app.SecurePrefs
+import ai.openclaw.app.allowsPackage
+import ai.openclaw.app.isWithinQuietHours
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -126,6 +130,9 @@ private object DeviceNotificationStore {
 }
 
 class DeviceNotificationListenerService : NotificationListenerService() {
+  private val securePrefs by lazy { SecurePrefs(applicationContext) }
+  private val forwardingLimiter = NotificationBurstLimiter()
+
   override fun onListenerConnected() {
     super.onListenerConnected()
     activeService = this
@@ -152,24 +159,12 @@ class DeviceNotificationListenerService : NotificationListenerService() {
     super.onNotificationPosted(sbn)
     val entry = sbn?.toEntry() ?: return
     DeviceNotificationStore.upsert(entry)
+    rememberRecentPackage(entry.packageName)
     if (entry.packageName == packageName) {
       return
     }
-    emitNotificationsChanged(
-      buildJsonObject {
-        put("change", JsonPrimitive("posted"))
-        put("key", JsonPrimitive(entry.key))
-        put("packageName", JsonPrimitive(entry.packageName))
-        put("postTimeMs", JsonPrimitive(entry.postTimeMs))
-        put("isOngoing", JsonPrimitive(entry.isOngoing))
-        put("isClearable", JsonPrimitive(entry.isClearable))
-        entry.title?.let { put("title", JsonPrimitive(it)) }
-        entry.text?.let { put("text", JsonPrimitive(it)) }
-        entry.subText?.let { put("subText", JsonPrimitive(it)) }
-        entry.category?.let { put("category", JsonPrimitive(it)) }
-        entry.channelId?.let { put("channelId", JsonPrimitive(it)) }
-      }.toString(),
-    )
+    val payload = notificationChangedPayload(entry) ?: return
+    emitNotificationsChanged(payload)
   }
 
   override fun onNotificationRemoved(sbn: StatusBarNotification?) {
@@ -180,19 +175,77 @@ class DeviceNotificationListenerService : NotificationListenerService() {
       return
     }
     DeviceNotificationStore.remove(key)
+    rememberRecentPackage(removed.packageName)
     if (removed.packageName == packageName) {
       return
     }
-    emitNotificationsChanged(
-      buildJsonObject {
-        put("change", JsonPrimitive("removed"))
-        put("key", JsonPrimitive(key))
-        val packageName = removed.packageName.trim()
-        if (packageName.isNotEmpty()) {
-          put("packageName", JsonPrimitive(packageName))
-        }
-      }.toString(),
+    val packageName = removed.packageName.trim()
+    val payload =
+      notificationChangedPayload(
+        entry = null,
+        change = "removed",
+        key = key,
+        packageName = packageName,
+        postTimeMs = removed.postTime,
+        isOngoing = removed.isOngoing,
+        isClearable = removed.isClearable,
+      ) ?: return
+    emitNotificationsChanged(payload)
+  }
+
+  private fun notificationChangedPayload(entry: DeviceNotificationEntry): String? {
+    return notificationChangedPayload(
+      entry = entry,
+      change = "posted",
+      key = entry.key,
+      packageName = entry.packageName,
+      postTimeMs = entry.postTimeMs,
+      isOngoing = entry.isOngoing,
+      isClearable = entry.isClearable,
     )
+  }
+
+  private fun notificationChangedPayload(
+    entry: DeviceNotificationEntry?,
+    change: String,
+    key: String,
+    packageName: String,
+    postTimeMs: Long,
+    isOngoing: Boolean,
+    isClearable: Boolean,
+  ): String? {
+    val normalizedPackage = packageName.trim()
+    if (normalizedPackage.isEmpty()) {
+      return null
+    }
+    val policy = securePrefs.getNotificationForwardingPolicy(appPackageName = this.packageName)
+    if (!policy.enabled) {
+      return null
+    }
+    if (!policy.allowsPackage(normalizedPackage)) {
+      return null
+    }
+    val nowEpochMs = System.currentTimeMillis()
+    if (policy.isWithinQuietHours(nowEpochMs = nowEpochMs)) {
+      return null
+    }
+    if (!forwardingLimiter.allow(nowEpochMs, policy.maxEventsPerMinute)) {
+      return null
+    }
+    return buildJsonObject {
+      put("change", JsonPrimitive(change))
+      put("key", JsonPrimitive(key))
+      put("packageName", JsonPrimitive(normalizedPackage))
+      put("postTimeMs", JsonPrimitive(postTimeMs))
+      put("isOngoing", JsonPrimitive(isOngoing))
+      put("isClearable", JsonPrimitive(isClearable))
+      policy.sessionKey?.let { put("sessionKey", JsonPrimitive(it)) }
+      entry?.title?.let { put("title", JsonPrimitive(it)) }
+      entry?.text?.let { put("text", JsonPrimitive(it)) }
+      entry?.subText?.let { put("subText", JsonPrimitive(it)) }
+      entry?.category?.let { put("category", JsonPrimitive(it)) }
+      entry?.channelId?.let { put("channelId", JsonPrimitive(it)) }
+    }.toString()
   }
 
   private fun refreshActiveNotifications() {
@@ -228,6 +281,9 @@ class DeviceNotificationListenerService : NotificationListenerService() {
   }
 
   companion object {
+    private const val recentPackagesPref = "notifications.forwarding.recentPackages"
+    private const val legacyRecentPackagesPref = "notifications.recentPackages"
+    private const val recentPackagesLimit = 64
     @Volatile private var activeService: DeviceNotificationListenerService? = null
     @Volatile private var nodeEventSink: ((event: String, payloadJson: String?) -> Unit)? = null
 
@@ -237,6 +293,31 @@ class DeviceNotificationListenerService : NotificationListenerService() {
 
     fun setNodeEventSink(sink: ((event: String, payloadJson: String?) -> Unit)?) {
       nodeEventSink = sink
+    }
+
+    private fun recentPackagesPrefs(context: Context) =
+      context.applicationContext.getSharedPreferences("openclaw.secure", Context.MODE_PRIVATE)
+
+    private fun migrateLegacyRecentPackagesIfNeeded(context: Context) {
+      val prefs = recentPackagesPrefs(context)
+      val hasNew = prefs.contains(recentPackagesPref)
+      val legacy = prefs.getString(legacyRecentPackagesPref, null)?.trim().orEmpty()
+      if (!hasNew && legacy.isNotEmpty()) {
+        prefs.edit().putString(recentPackagesPref, legacy).remove(legacyRecentPackagesPref).apply()
+      } else if (hasNew && prefs.contains(legacyRecentPackagesPref)) {
+        prefs.edit().remove(legacyRecentPackagesPref).apply()
+      }
+    }
+
+    fun recentPackages(context: Context): List<String> {
+      migrateLegacyRecentPackagesIfNeeded(context)
+      val prefs = recentPackagesPrefs(context)
+      val stored = prefs.getString(recentPackagesPref, null).orEmpty()
+      return stored
+        .split(',')
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .distinct()
     }
 
     fun isAccessEnabled(context: Context): Boolean {
@@ -275,6 +356,21 @@ class DeviceNotificationListenerService : NotificationListenerService() {
       runCatching {
         nodeEventSink?.invoke(NOTIFICATIONS_CHANGED_EVENT, payloadJson)
       }
+    }
+
+    private fun rememberRecentPackage(packageName: String?) {
+      val service = activeService ?: return
+      val normalized = packageName?.trim().orEmpty()
+      if (normalized.isEmpty() || normalized == service.packageName) return
+      migrateLegacyRecentPackagesIfNeeded(service.applicationContext)
+      val prefs = recentPackagesPrefs(service.applicationContext)
+      val existing = prefs.getString(recentPackagesPref, null).orEmpty()
+        .split(',')
+        .map { it.trim() }
+        .filter { it.isNotEmpty() && it != normalized }
+        .take(recentPackagesLimit - 1)
+      val updated = listOf(normalized) + existing
+      prefs.edit().putString(recentPackagesPref, updated.joinToString(",")).apply()
     }
   }
 

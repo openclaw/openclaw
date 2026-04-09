@@ -6,6 +6,7 @@ import {
 } from "../../cron/run-log.js";
 import type { CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   ErrorCodes,
   errorShape,
@@ -93,10 +94,23 @@ export const cronHandlers: GatewayRequestHandlers = {
       typeof (params as { sessionKey?: unknown } | null)?.sessionKey === "string"
         ? (params as { sessionKey: string }).sessionKey
         : undefined;
-    const normalized =
-      normalizeCronJobCreate(params, {
-        sessionContext: { sessionKey },
-      }) ?? params;
+    let normalized: unknown;
+    try {
+      normalized =
+        normalizeCronJobCreate(params, {
+          sessionContext: { sessionKey },
+        }) ?? params;
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid cron.add params: ${formatErrorMessage(err)}`,
+        ),
+      );
+      return;
+    }
     if (!validateCronAddParams(normalized)) {
       respond(
         false,
@@ -123,7 +137,20 @@ export const cronHandlers: GatewayRequestHandlers = {
     respond(true, job, undefined);
   },
   "cron.update": async ({ params, respond, context }) => {
-    const normalizedPatch = normalizeCronJobPatch((params as { patch?: unknown } | null)?.patch);
+    let normalizedPatch: ReturnType<typeof normalizeCronJobPatch>;
+    try {
+      normalizedPatch = normalizeCronJobPatch((params as { patch?: unknown } | null)?.patch);
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid cron.update params: ${formatErrorMessage(err)}`,
+        ),
+      );
+      return;
+    }
     const candidate =
       normalizedPatch && typeof params === "object" && params !== null
         ? { ...params, patch: normalizedPatch }
@@ -219,7 +246,17 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const result = await context.cron.enqueueRun(jobId, p.mode ?? "force");
+    let result: Awaited<ReturnType<typeof context.cron.enqueueRun>>;
+    try {
+      result = await context.cron.enqueueRun(jobId, p.mode ?? "force");
+    } catch (error) {
+      const message = formatErrorMessage(error);
+      if (message === "invalid cron sessionTarget session id") {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
+        return;
+      }
+      throw error;
+    }
     respond(true, result, undefined);
   },
   "cron.runs": async ({ params, respond, context }) => {

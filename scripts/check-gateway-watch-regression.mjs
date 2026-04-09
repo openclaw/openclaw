@@ -2,9 +2,12 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { writeBuildStamp } from "./build-stamp.mjs";
+import { resolveBuildRequirement } from "./run-node.mjs";
 
 const DEFAULTS = {
   outputDir: path.join(process.cwd(), ".local", "gateway-watch-regression"),
@@ -16,6 +19,17 @@ const DEFAULTS = {
   distRuntimeByteGrowthMax: 2 * 1024 * 1024,
   keepLogs: true,
   skipBuild: false,
+};
+
+const WATCH_GATEWAY_SKIP_ENV = {
+  OPENCLAW_DISABLE_BONJOUR: "1",
+  OPENCLAW_SKIP_ACPX_RUNTIME: "1",
+  OPENCLAW_SKIP_ACPX_RUNTIME_PROBE: "1",
+  OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+  OPENCLAW_SKIP_CANVAS_HOST: "1",
+  OPENCLAW_SKIP_CHANNELS: "1",
+  OPENCLAW_SKIP_CRON: "1",
+  OPENCLAW_SKIP_GMAIL_WATCHER: "1",
 };
 
 function parseArgs(argv) {
@@ -64,6 +78,10 @@ function parseArgs(argv) {
 
 function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
+}
+
+function removePathIfExists(targetPath) {
+  fs.rmSync(targetPath, { recursive: true, force: true });
 }
 
 function normalizePath(filePath) {
@@ -211,15 +229,40 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function buildTimedWatchCommand(pidFilePath, timeFilePath, isolatedHomeDir) {
+async function allocateLoopbackPort() {
+  return await new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        server.close(() => reject(new Error("Failed to allocate watch regression port")));
+        return;
+      }
+      const { port } = address;
+      server.close((closeErr) => {
+        if (closeErr) {
+          reject(closeErr);
+          return;
+        }
+        resolve(port);
+      });
+    });
+  });
+}
+
+function buildTimedWatchCommand(pidFilePath, timeFilePath, isolatedHomeDir, port) {
   const shellSource = [
     'echo "$$" > "$OPENCLAW_WATCH_PID_FILE"',
-    "exec node scripts/watch-node.mjs gateway --force --allow-unconfigured",
+    'mkdir -p "$OPENCLAW_HOME/.openclaw"',
+    `printf '%s\n' '{"gateway":{"controlUi":{"enabled":false}}}' > "$OPENCLAW_HOME/.openclaw/openclaw.json"`,
+    `exec node scripts/watch-node.mjs gateway --force --allow-unconfigured --port ${String(port)} --token watch-regression-token`,
   ].join("\n");
   const env = {
     OPENCLAW_WATCH_PID_FILE: pidFilePath,
     HOME: isolatedHomeDir,
     OPENCLAW_HOME: isolatedHomeDir,
+    ...WATCH_GATEWAY_SKIP_ENV,
   };
 
   if (process.platform === "darwin") {
@@ -273,7 +316,17 @@ async function runTimedWatch(options, outputDir) {
   fs.writeFileSync(path.join(outputDir, "watch.home.txt"), `${isolatedHomeDir}\n`, "utf8");
   const stdoutPath = path.join(outputDir, "watch.stdout.log");
   const stderrPath = path.join(outputDir, "watch.stderr.log");
-  const { command, args, env } = buildTimedWatchCommand(pidFilePath, timeFilePath, isolatedHomeDir);
+  for (const stalePath of [pidFilePath, timeFilePath, stdoutPath, stderrPath]) {
+    removePathIfExists(stalePath);
+  }
+  const port = await allocateLoopbackPort();
+  fs.writeFileSync(path.join(outputDir, "watch.port.txt"), `${String(port)}\n`, "utf8");
+  const { command, args, env } = buildTimedWatchCommand(
+    pidFilePath,
+    timeFilePath,
+    isolatedHomeDir,
+    port,
+  );
   const child = spawn(command, args, {
     cwd: process.cwd(),
     env: { ...process.env, ...env },
@@ -370,11 +423,68 @@ function fail(message) {
   console.error(`FAIL: ${message}`);
 }
 
+function warn(message) {
+  console.error(`WARN: ${message}`);
+}
+
+function detectWatchBuildReason(stdout, stderr) {
+  const combined = `${stdout}\n${stderr}`;
+  const match = combined.match(/Building TypeScript \(dist is stale: ([a-z_]+)/);
+  return match?.[1] ?? null;
+}
+
+function buildRunNodeDeps(env) {
+  const cwd = process.cwd();
+  return {
+    cwd,
+    env,
+    fs,
+    spawnSync,
+    distRoot: path.join(cwd, "dist"),
+    distEntry: path.join(cwd, "dist", "/entry.js"),
+    buildStampPath: path.join(cwd, "dist", ".buildstamp"),
+    sourceRoots: ["src", "extensions"].map((sourceRoot) => ({
+      name: sourceRoot,
+      path: path.join(cwd, sourceRoot),
+    })),
+    configFiles: ["tsconfig.json", "package.json", "tsdown.config.ts"].map((filePath) =>
+      path.join(cwd, filePath),
+    ),
+  };
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   ensureDir(options.outputDir);
   if (!options.skipBuild) {
     runCheckedCommand("pnpm", ["build"]);
+    // The watch harness must start from a completed-build baseline. Refresh
+    // the build stamp after the full build pipeline finishes so run-node does
+    // not spuriously rebuild inside the bounded watch window.
+    writeBuildStamp({ cwd: process.cwd() });
+  }
+
+  const preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps(process.env));
+  if (
+    preflightBuildRequirement.shouldBuild &&
+    preflightBuildRequirement.reason === "dirty_watched_tree"
+  ) {
+    const summary = {
+      windowMs: options.windowMs,
+      invalidated: true,
+      invalidationReason: preflightBuildRequirement.reason,
+      invalidationMessage:
+        "gateway-watch-regression cannot run on a dirty watched tree because run-node will intentionally rebuild during the watch window.",
+    };
+    fs.writeFileSync(
+      path.join(options.outputDir, "summary.json"),
+      `${JSON.stringify(summary, null, 2)}\n`,
+    );
+    console.log(JSON.stringify(summary, null, 2));
+    fail(
+      "gateway-watch-regression invalid local run: dirty watched source tree would force a rebuild inside the watch window",
+    );
+    process.exit(1);
   }
 
   const preDir = path.join(options.outputDir, "pre");
@@ -397,14 +507,17 @@ async function main() {
   const watchTriggeredBuild =
     fs
       .readFileSync(watchResult.stderrPath, "utf8")
-      .includes("Building TypeScript (dist is stale).") ||
-    fs
-      .readFileSync(watchResult.stdoutPath, "utf8")
-      .includes("Building TypeScript (dist is stale).");
+      .includes("Building TypeScript (dist is stale") ||
+    fs.readFileSync(watchResult.stdoutPath, "utf8").includes("Building TypeScript (dist is stale");
+  const watchBuildReason = detectWatchBuildReason(
+    fs.readFileSync(watchResult.stdoutPath, "utf8"),
+    fs.readFileSync(watchResult.stderrPath, "utf8"),
+  );
 
   const summary = {
     windowMs: options.windowMs,
     watchTriggeredBuild,
+    watchBuildReason,
     cpuMs,
     cpuWarnMs: options.cpuWarnMs,
     cpuFailMs: options.cpuFailMs,
@@ -426,6 +539,12 @@ async function main() {
   console.log(JSON.stringify(summary, null, 2));
 
   const failures = [];
+  const warnings = [];
+  if (watchTriggeredBuild && watchBuildReason === "dirty_watched_tree") {
+    failures.push(
+      "gateway:watch invalid local run: dirty watched source tree forced a rebuild during the watch window",
+    );
+  }
   if (distRuntimeFileGrowth > options.distRuntimeFileGrowthMax) {
     failures.push(
       `dist-runtime file growth ${distRuntimeFileGrowth} exceeded max ${options.distRuntimeFileGrowthMax}`,
@@ -443,18 +562,24 @@ async function main() {
       `LOUD ALARM: gateway:watch used ${cpuMs}ms CPU in ${options.windowMs}ms window, above loud-alarm threshold ${options.cpuFailMs}ms`,
     );
   } else if (cpuMs > options.cpuWarnMs) {
-    failures.push(
+    warnings.push(
       `gateway:watch used ${cpuMs}ms CPU in ${options.windowMs}ms window, above target ${options.cpuWarnMs}ms`,
     );
+  }
+
+  for (const message of warnings) {
+    warn(message);
   }
 
   if (failures.length > 0) {
     for (const message of failures) {
       fail(message);
     }
-    fail(
-      "Possible duplicate dist-runtime graph regression: this can reintroduce split runtime personalities where plugins and core observe different global state, including Telegram missing /voice, /phone, or /pair.",
-    );
+    if (!failures.every((message) => message.includes("dirty watched source tree"))) {
+      fail(
+        "Possible duplicate dist-runtime graph regression: this can reintroduce split runtime personalities where plugins and core observe different global state, including Telegram missing /voice, /phone, or /pair.",
+      );
+    }
     process.exit(1);
   }
 

@@ -5,6 +5,7 @@ import {
   normalizeChatModelOverrideValue,
   resolvePreferredServerChatModelValue,
 } from "./chat-model-ref.ts";
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 import type { ModelCatalogEntry } from "./types.ts";
 
 type ChatModelSelectStateInput = Pick<
@@ -66,7 +67,7 @@ function buildChatModelOptions(
     if (!trimmed) {
       return;
     }
-    const key = trimmed.toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(trimmed);
     if (seen.has(key)) {
       return;
     }

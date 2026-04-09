@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { normalizeProviderId } from "../agents/model-selection.js";
+import { normalizeProviderId } from "../agents/provider-id.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
 
@@ -32,6 +32,13 @@ export function resolveUsageProviderId(provider?: string | null): UsageProviderI
     return undefined;
   }
   const normalized = normalizeProviderId(provider);
+  if (
+    normalized === "minimax-portal" ||
+    normalized === "minimax-cn" ||
+    normalized === "minimax-portal-cn"
+  ) {
+    return "minimax";
+  }
   return usageProviders.includes(normalized as UsageProviderId)
     ? (normalized as UsageProviderId)
     : undefined;

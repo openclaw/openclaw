@@ -1,5 +1,6 @@
+import type { Agent } from "node:https";
 import * as Lark from "@larksuiteoapi/node-sdk";
-import { HttpsProxyAgent } from "https-proxy-agent";
+import { resolveAmbientNodeProxyAgent } from "openclaw/plugin-sdk/extension-shared";
 import type { FeishuConfig, FeishuDomain, ResolvedFeishuAccount } from "./types.js";
 
 type FeishuClientSdk = Pick<
@@ -24,21 +25,19 @@ const defaultFeishuClientSdk: FeishuClientSdk = {
 };
 
 let feishuClientSdk: FeishuClientSdk = defaultFeishuClientSdk;
-let httpsProxyAgentCtor: typeof HttpsProxyAgent = HttpsProxyAgent;
 
 /** Default HTTP timeout for Feishu API requests (30 seconds). */
 export const FEISHU_HTTP_TIMEOUT_MS = 30_000;
 export const FEISHU_HTTP_TIMEOUT_MAX_MS = 300_000;
 export const FEISHU_HTTP_TIMEOUT_ENV_VAR = "OPENCLAW_FEISHU_HTTP_TIMEOUT_MS";
 
-function getWsProxyAgent(): HttpsProxyAgent<string> | undefined {
-  const proxyUrl =
-    process.env.https_proxy ||
-    process.env.HTTPS_PROXY ||
-    process.env.http_proxy ||
-    process.env.HTTP_PROXY;
-  if (!proxyUrl) return undefined;
-  return new httpsProxyAgentCtor(proxyUrl);
+type FeishuHttpInstanceLike = Pick<
+  typeof feishuClientSdk.defaultHttpInstance,
+  "request" | "get" | "post" | "put" | "patch" | "delete" | "head" | "options"
+>;
+
+async function getWsProxyAgent(): Promise<Agent | undefined> {
+  return resolveAmbientNodeProxyAgent<Agent>();
 }
 
 // Multi-account client cache
@@ -66,8 +65,7 @@ function resolveDomain(domain: FeishuDomain | undefined): Lark.Domain | string {
  * (e.g. when the Feishu API is slow, causing per-chat queue deadlocks).
  */
 function createTimeoutHttpInstance(defaultTimeoutMs: number): Lark.HttpInstance {
-  const base: Lark.HttpInstance =
-    feishuClientSdk.defaultHttpInstance as unknown as Lark.HttpInstance;
+  const base: FeishuHttpInstanceLike = feishuClientSdk.defaultHttpInstance;
 
   function injectTimeout<D>(opts?: Lark.HttpRequestOptions<D>): Lark.HttpRequestOptions<D> {
     return { timeout: defaultTimeoutMs, ...opts } as Lark.HttpRequestOptions<D>;
@@ -175,14 +173,14 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
  * Create a Feishu WebSocket client for an account.
  * Note: WSClient is not cached since each call creates a new connection.
  */
-export function createFeishuWSClient(account: ResolvedFeishuAccount): Lark.WSClient {
+export async function createFeishuWSClient(account: ResolvedFeishuAccount): Promise<Lark.WSClient> {
   const { accountId, appId, appSecret, domain } = account;
 
   if (!appId || !appSecret) {
     throw new Error(`Feishu credentials not configured for account "${accountId}"`);
   }
 
-  const agent = getWsProxyAgent();
+  const agent = await getWsProxyAgent();
   return new feishuClientSdk.WSClient({
     appId,
     appSecret,
@@ -222,10 +220,8 @@ export function clearClientCache(accountId?: string): void {
 
 export function setFeishuClientRuntimeForTest(overrides?: {
   sdk?: Partial<FeishuClientSdk>;
-  HttpsProxyAgent?: typeof HttpsProxyAgent;
 }): void {
   feishuClientSdk = overrides?.sdk
     ? { ...defaultFeishuClientSdk, ...overrides.sdk }
     : defaultFeishuClientSdk;
-  httpsProxyAgentCtor = overrides?.HttpsProxyAgent ?? HttpsProxyAgent;
 }

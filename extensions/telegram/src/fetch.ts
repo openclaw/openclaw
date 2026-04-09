@@ -1,12 +1,14 @@
 import * as dns from "node:dns";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createPinnedLookup,
   hasEnvHttpProxyConfigured,
   resolveFetch,
   type PinnedDispatcherPolicy,
-} from "openclaw/plugin-sdk/infra-runtime";
+} from "openclaw/plugin-sdk/fetch-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
 import {
   resolveTelegramAutoSelectFamilyDecision,
@@ -159,7 +161,7 @@ function shouldBypassEnvProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env
   if (noProxyValue === "*") {
     return true;
   }
-  const targetHostname = TELEGRAM_API_HOSTNAME.toLowerCase();
+  const targetHostname = normalizeLowercaseStringOrEmpty(TELEGRAM_API_HOSTNAME);
   const targetPort = 443;
   const noProxyEntries = noProxyValue.split(/[,\s]/);
   for (let i = 0; i < noProxyEntries.length; i++) {
@@ -168,7 +170,9 @@ function shouldBypassEnvProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env
       continue;
     }
     const parsed = entry.match(/^(.+):(\d+)$/);
-    const entryHostname = (parsed ? parsed[1] : entry).replace(/^\*?\./, "").toLowerCase();
+    const entryHostname = normalizeLowercaseStringOrEmpty(
+      (parsed ? parsed[1] : entry).replace(/^\*?\./, ""),
+    );
     const entryPort = parsed ? Number.parseInt(parsed[2], 10) : 0;
     if (entryPort && entryPort !== targetPort) {
       continue;
@@ -206,11 +210,13 @@ function resolveTelegramDispatcherPolicy(params: {
         ? {
             mode: "explicit-proxy",
             proxyUrl: explicitProxyUrl,
+            allowPrivateProxy: true,
             proxyTls: { ...connect },
           }
         : {
             mode: "explicit-proxy",
             proxyUrl: explicitProxyUrl,
+            allowPrivateProxy: true,
           },
       mode: "explicit-proxy",
     };
@@ -268,7 +274,7 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
         effectivePolicy: policy,
       };
     } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
+      const reason = formatErrorMessage(err);
       throw new Error(`explicit proxy dispatcher init failed: ${reason}`, { cause: err });
     }
   }
@@ -291,9 +297,7 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
       };
     } catch (err) {
       log.warn(
-        `env proxy dispatcher init failed; falling back to direct dispatcher: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
+        `env proxy dispatcher init failed; falling back to direct dispatcher: ${formatErrorMessage(err)}`,
       );
       const directPolicy: PinnedDispatcherPolicy = {
         mode: "direct",
@@ -348,11 +352,11 @@ function logResolverNetworkDecisions(params: {
     const sourceLabel = params.autoSelectDecision.source
       ? ` (${params.autoSelectDecision.source})`
       : "";
-    log.info(`autoSelectFamily=${params.autoSelectDecision.value}${sourceLabel}`);
+    log.debug(`autoSelectFamily=${params.autoSelectDecision.value}${sourceLabel}`);
   }
   if (params.dnsDecision.value !== null) {
     const sourceLabel = params.dnsDecision.source ? ` (${params.dnsDecision.source})` : "";
-    log.info(`dnsResultOrder=${params.dnsDecision.value}${sourceLabel}`);
+    log.debug(`dnsResultOrder=${params.dnsDecision.value}${sourceLabel}`);
   }
 }
 
@@ -398,7 +402,9 @@ function formatErrorCodes(err: unknown): string {
 function shouldUseTelegramTransportFallback(err: unknown): boolean {
   const ctx: TelegramTransportFallbackContext = {
     message:
-      err && typeof err === "object" && "message" in err ? String(err.message).toLowerCase() : "",
+      err && typeof err === "object" && "message" in err
+        ? normalizeLowercaseStringOrEmpty(String(err.message))
+        : "",
     codes: collectErrorCodes(err),
   };
   for (const rule of TELEGRAM_TRANSPORT_FALLBACK_RULES) {

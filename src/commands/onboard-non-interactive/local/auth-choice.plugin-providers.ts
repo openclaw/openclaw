@@ -8,6 +8,7 @@ import { resolveDefaultAgentWorkspaceDir } from "../../../agents/workspace.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { enablePluginInConfig } from "../../../plugins/enable.js";
 import { resolvePreferredProviderForAuthChoice } from "../../../plugins/provider-auth-choice-preference.js";
+import { resolveManifestProviderAuthChoice } from "../../../plugins/provider-auth-choices.js";
 import type {
   ProviderAuthOptionBag,
   ProviderNonInteractiveApiKeyCredentialParams,
@@ -27,31 +28,6 @@ const loadAuthChoicePluginProvidersRuntime = createLazyRuntimeSurface(
   loadPluginProviderRuntime,
   ({ authChoicePluginProvidersRuntime }) => authChoicePluginProvidersRuntime,
 );
-
-function buildIsolatedProviderResolutionConfig(
-  cfg: OpenClawConfig,
-  providerId: string | undefined,
-): OpenClawConfig {
-  if (!providerId) {
-    return cfg;
-  }
-  const allow = new Set(cfg.plugins?.allow ?? []);
-  allow.add(providerId);
-  return {
-    ...cfg,
-    plugins: {
-      ...cfg.plugins,
-      allow: Array.from(allow),
-      entries: {
-        ...cfg.plugins?.entries,
-        [providerId]: {
-          ...cfg.plugins?.entries?.[providerId],
-          enabled: true,
-        },
-      },
-    },
-  };
-}
 
 export async function applyNonInteractivePluginProviderChoice(params: {
   nextConfig: OpenClawConfig;
@@ -81,31 +57,61 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       choice: params.authChoice,
       config: params.nextConfig,
       workspaceDir,
+      includeUntrustedWorkspacePlugins: false,
     }));
-  const resolutionConfig = buildIsolatedProviderResolutionConfig(
-    params.nextConfig,
-    preferredProviderId,
-  );
   const { resolveOwningPluginIdsForProvider, resolveProviderPluginChoice, resolvePluginProviders } =
     await loadAuthChoicePluginProvidersRuntime();
   const owningPluginIds = preferredProviderId
     ? resolveOwningPluginIdsForProvider({
         provider: preferredProviderId,
-        config: resolutionConfig,
+        config: params.nextConfig,
         workspaceDir,
       })
     : undefined;
   const providerChoice = resolveProviderPluginChoice({
     providers: resolvePluginProviders({
-      config: resolutionConfig,
+      config: params.nextConfig,
       workspaceDir,
       onlyPluginIds: owningPluginIds,
-      bundledProviderAllowlistCompat: true,
-      bundledProviderVitestCompat: true,
+      mode: "setup",
+      includeUntrustedWorkspacePlugins: false,
     }),
     choice: params.authChoice,
   });
   if (!providerChoice) {
+    if (prefixedProviderId) {
+      params.runtime.error(
+        [
+          `Auth choice "${params.authChoice}" was not matched to a trusted provider plugin.`,
+          "If this provider comes from a workspace plugin, trust/allow it first and retry.",
+        ].join("\n"),
+      );
+      params.runtime.exit(1);
+      return null;
+    }
+    // Keep mismatch diagnostics metadata-only so untrusted workspace plugins are not loaded.
+    const trustedManifestMatch = resolveManifestProviderAuthChoice(params.authChoice, {
+      config: params.nextConfig,
+      workspaceDir,
+      includeUntrustedWorkspacePlugins: false,
+    });
+    const untrustedOnlyManifestMatch =
+      !trustedManifestMatch &&
+      resolveManifestProviderAuthChoice(params.authChoice, {
+        config: params.nextConfig,
+        workspaceDir,
+        includeUntrustedWorkspacePlugins: true,
+      });
+    if (untrustedOnlyManifestMatch) {
+      params.runtime.error(
+        [
+          `Auth choice "${params.authChoice}" matched a provider plugin that is not trusted or enabled for setup.`,
+          "If this provider comes from a workspace plugin, trust/allow it first and retry.",
+        ].join("\n"),
+      );
+      params.runtime.exit(1);
+      return null;
+    }
     return undefined;
   }
 

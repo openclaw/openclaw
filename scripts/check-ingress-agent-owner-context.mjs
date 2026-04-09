@@ -2,6 +2,7 @@
 
 import path from "node:path";
 import ts from "typescript";
+import { bundledPluginFile } from "./lib/bundled-plugin-paths.mjs";
 import { runCallsiteGuard } from "./lib/callsite-guard.mjs";
 import {
   collectCallExpressionLines,
@@ -9,9 +10,9 @@ import {
   unwrapExpression,
 } from "./lib/ts-guard-utils.mjs";
 
-const sourceRoots = ["src/gateway", "extensions/discord/src/voice"];
+const sourceRoots = ["src/gateway", bundledPluginFile("discord", "src/voice")];
 const enforcedFiles = new Set([
-  "extensions/discord/src/voice/manager.ts",
+  bundledPluginFile("discord", "src/voice/manager.ts"),
   "src/gateway/openai-http.ts",
   "src/gateway/openresponses-http.ts",
   "src/gateway/server-methods/agent.ts",

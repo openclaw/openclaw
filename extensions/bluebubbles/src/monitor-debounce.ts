@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { NormalizedWebhookMessage } from "./monitor-normalize.js";
 import type { BlueBubblesCoreRuntime, WebhookTarget } from "./monitor-shared.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -10,6 +11,23 @@ type BlueBubblesDebounceEntry = {
   message: NormalizedWebhookMessage;
   target: WebhookTarget;
 };
+
+function normalizeDebounceMessageText(text: unknown): string {
+  return typeof text === "string" ? text : "";
+}
+
+function sanitizeDebounceEntry(entry: BlueBubblesDebounceEntry): BlueBubblesDebounceEntry {
+  if (typeof entry.message.text === "string") {
+    return entry;
+  }
+  return {
+    ...entry,
+    message: {
+      ...entry.message,
+      text: "",
+    },
+  };
+}
 
 export type BlueBubblesDebouncer = {
   enqueue: (item: BlueBubblesDebounceEntry) => Promise<void>;
@@ -48,12 +66,12 @@ function combineDebounceEntries(entries: BlueBubblesDebounceEntry[]): Normalized
   const textParts: string[] = [];
 
   for (const entry of entries) {
-    const text = entry.message.text.trim();
+    const text = normalizeDebounceMessageText(entry.message.text).trim();
     if (!text) {
       continue;
     }
     // Skip duplicate text (URL might be in both text message and balloon)
-    const normalizedText = text.toLowerCase();
+    const normalizedText = normalizeLowercaseStringOrEmpty(text);
     if (seenTexts.has(normalizedText)) {
       continue;
     }
@@ -120,7 +138,7 @@ export function createBlueBubblesDebounceRegistry(params: {
       }
 
       const { account, config, runtime, core } = target;
-      const debouncer = core.channel.debounce.createInboundDebouncer<BlueBubblesDebounceEntry>({
+      const baseDebouncer = core.channel.debounce.createInboundDebouncer<BlueBubblesDebounceEntry>({
         debounceMs: resolveBlueBubblesDebounceMs(config, core),
         buildKey: (entry) => {
           const msg = entry.message;
@@ -133,7 +151,7 @@ export function createBlueBubblesDebounceRegistry(params: {
           const balloonBundleId = msg.balloonBundleId?.trim();
           const associatedMessageGuid = msg.associatedMessageGuid?.trim();
           if (balloonBundleId && associatedMessageGuid) {
-            return `bluebubbles:${account.accountId}:balloon:${associatedMessageGuid}`;
+            return `bluebubbles:${account.accountId}:msg:${associatedMessageGuid}`;
           }
 
           const messageId = msg.messageId?.trim();
@@ -194,6 +212,13 @@ export function createBlueBubblesDebounceRegistry(params: {
           );
         },
       });
+
+      const debouncer: BlueBubblesDebouncer = {
+        enqueue: async (item) => {
+          await baseDebouncer.enqueue(sanitizeDebounceEntry(item));
+        },
+        flushKey: (key) => baseDebouncer.flushKey(key),
+      };
 
       targetDebouncers.set(target, debouncer);
       return debouncer;

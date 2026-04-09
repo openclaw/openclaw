@@ -1,29 +1,33 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ResolvedBlueBubblesAccount } from "./accounts.js";
+import { fetchBlueBubblesHistory } from "./history.js";
+import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
+import type { NormalizedWebhookMessage } from "./monitor-normalize.js";
+import { resetBlueBubblesSelfChatCache } from "./monitor-self-chat-cache.js";
+import { resolveBlueBubblesMessageId } from "./monitor.js";
+import {
+  createMockAccount,
+  createMockRequest,
+  createNewMessagePayloadForTest,
+  createTimestampedMessageReactionPayloadForTest,
+  createTimestampedNewMessagePayloadForTest,
+  dispatchWebhookPayloadForTest,
+  dispatchWebhookRequestForTest,
+  setupWebhookTargetForTest,
+  setupWebhookTargetsForTest,
+  trackWebhookRegistrationForTest,
+} from "./monitor.webhook.test-helpers.js";
+import {
+  resetBlueBubblesParticipantContactNameCacheForTest,
+  setBlueBubblesParticipantContactDepsForTest,
+} from "./participant-contact-names.js";
+import type { OpenClawConfig, PluginRuntime } from "./runtime-api.js";
 import {
   createBlueBubblesMonitorTestRuntime,
   EMPTY_DISPATCH_RESULT,
   resetBlueBubblesMonitorTestState,
   type DispatchReplyParams,
-} from "../../../test/helpers/extensions/bluebubbles-monitor.js";
-import type { ResolvedBlueBubblesAccount } from "./accounts.js";
-import { fetchBlueBubblesHistory } from "./history.js";
-import { resetBlueBubblesSelfChatCache } from "./monitor-self-chat-cache.js";
-import { handleBlueBubblesWebhookRequest, resolveBlueBubblesMessageId } from "./monitor.js";
-import {
-  createMockAccount,
-  createNewMessagePayloadForTest,
-  createMockRequest,
-  createTimestampedNewMessagePayloadForTest,
-  createTimestampedMessageReactionPayloadForTest,
-  dispatchWebhookRequestForTest,
-  dispatchWebhookPayloadForTest,
-  flushAsync,
-  setupWebhookTargetForTest,
-  setupWebhookTargetsForTest,
-  trackWebhookRegistrationForTest,
-} from "./monitor.webhook.test-helpers.js";
-import type { OpenClawConfig, PluginRuntime } from "./runtime-api.js";
+} from "./test-support/monitor-test-support.js";
 
 // Mock dependencies
 vi.mock("./send.js", () => ({
@@ -60,14 +64,18 @@ const mockEnqueueSystemEvent = vi.fn();
 const mockBuildPairingReply = vi.fn(() => "Pairing code: TESTCODE");
 const mockReadAllowFromStore = vi.fn().mockResolvedValue([]);
 const mockUpsertPairingRequest = vi.fn().mockResolvedValue({ code: "TESTCODE", created: true });
-const mockResolveAgentRoute = vi.fn(() => ({
+const DEFAULT_RESOLVED_AGENT_ROUTE: ReturnType<
+  PluginRuntime["channel"]["routing"]["resolveAgentRoute"]
+> = {
   agentId: "main",
   channel: "bluebubbles",
   accountId: "default",
   sessionKey: "agent:main:bluebubbles:dm:+15551234567",
   mainSessionKey: "agent:main:main",
+  lastRoutePolicy: "main",
   matchedBy: "default",
-}));
+};
+const mockResolveAgentRoute = vi.fn(() => DEFAULT_RESOLVED_AGENT_ROUTE);
 const mockBuildMentionRegexes = vi.fn(() => [/\bbert\b/i]);
 const mockMatchesMentionPatterns = vi.fn((text: string, regexes: RegExp[]) =>
   regexes.some((r) => r.test(text)),
@@ -81,7 +89,10 @@ const mockMatchesMentionWithExplicit = vi.fn(
   },
 );
 const mockResolveRequireMention = vi.fn(() => false);
-const mockResolveGroupPolicy = vi.fn(() => "open" as const);
+const mockResolveGroupPolicy = vi.fn(() => ({
+  allowlistEnabled: false,
+  allowed: true,
+}));
 const mockDispatchReplyWithBufferedBlockDispatcher = vi.fn(
   async (_params: DispatchReplyParams) => EMPTY_DISPATCH_RESULT,
 );
@@ -104,6 +115,7 @@ const mockChunkTextWithMode = vi.fn((text: string) => (text ? [text] : []));
 const mockChunkMarkdownTextWithMode = vi.fn((text: string) => (text ? [text] : []));
 const mockResolveChunkMode = vi.fn(() => "length" as const);
 const mockFetchBlueBubblesHistory = vi.mocked(fetchBlueBubblesHistory);
+const mockFetch = vi.fn();
 
 function createMockRuntime(): PluginRuntime {
   return createBlueBubblesMonitorTestRuntime({
@@ -142,6 +154,74 @@ function getFirstDispatchCall(): DispatchReplyParams {
   return callArgs;
 }
 
+function installTimingAwareInboundDebouncer(core: PluginRuntime) {
+  // Use a timing-aware debouncer test double that respects debounceMs/buildKey/shouldDebounce.
+  core.channel.debounce.createInboundDebouncer = vi.fn((params: any) => {
+    type Item = any;
+    const buckets = new Map<
+      string,
+      { items: Item[]; timer: ReturnType<typeof setTimeout> | null }
+    >();
+
+    const flush = async (key: string) => {
+      const bucket = buckets.get(key);
+      if (!bucket) {
+        return;
+      }
+      if (bucket.timer) {
+        clearTimeout(bucket.timer);
+        bucket.timer = null;
+      }
+      const items = bucket.items;
+      bucket.items = [];
+      if (items.length > 0) {
+        try {
+          await params.onFlush(items);
+        } catch (err) {
+          params.onError?.(err);
+          throw err;
+        }
+      }
+    };
+
+    return {
+      enqueue: async (item: Item) => {
+        if (params.shouldDebounce && !params.shouldDebounce(item)) {
+          await params.onFlush([item]);
+          return;
+        }
+
+        const key = params.buildKey(item);
+        const existing = buckets.get(key);
+        const bucket = existing ?? { items: [], timer: null };
+        bucket.items.push(item);
+        if (bucket.timer) {
+          clearTimeout(bucket.timer);
+        }
+        bucket.timer = setTimeout(async () => {
+          await flush(key);
+        }, params.debounceMs);
+        buckets.set(key, bucket);
+      },
+      flushKey: vi.fn(async (key: string) => {
+        await flush(key);
+      }),
+    };
+  }) as unknown as PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
+}
+
+function createDebounceTestMessage(
+  overrides: Partial<NormalizedWebhookMessage> = {},
+): NormalizedWebhookMessage {
+  return {
+    text: "hello",
+    senderId: "+15551234567",
+    senderIdExplicit: true,
+    isGroup: false,
+    ...overrides,
+  };
+}
+
 describe("BlueBubbles webhook monitor", () => {
   let unregister: () => void;
 
@@ -176,6 +256,12 @@ describe("BlueBubbles webhook monitor", () => {
   }
 
   beforeEach(() => {
+    vi.stubGlobal("fetch", mockFetch);
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: [] }),
+    });
     resetBlueBubblesMonitorTestState({
       createRuntime: createMockRuntime,
       fetchHistoryMock: mockFetchBlueBubblesHistory,
@@ -185,13 +271,19 @@ describe("BlueBubbles webhook monitor", () => {
       hasControlCommandMock: mockHasControlCommand,
       resolveCommandAuthorizedFromAuthorizersMock: mockResolveCommandAuthorizedFromAuthorizers,
       buildMentionRegexesMock: mockBuildMentionRegexes,
-      extraReset: resetBlueBubblesSelfChatCache,
+      extraReset: () => {
+        resetBlueBubblesSelfChatCache();
+        resetBlueBubblesParticipantContactNameCacheForTest();
+        setBlueBubblesParticipantContactDepsForTest();
+      },
     });
   });
 
   afterEach(() => {
     unregister?.();
+    setBlueBubblesParticipantContactDepsForTest();
     vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
 
   describe("DM pairing behavior vs allowFrom", () => {
@@ -489,6 +581,147 @@ describe("BlueBubbles webhook monitor", () => {
       expect(callArgs.ctx.GroupSubject).toBe("Family");
       expect(callArgs.ctx.GroupMembers).toBe("Alice (+15551234567), Bob (+15557654321)");
     });
+
+    it("does not enrich group participants when the config flag is disabled", async () => {
+      const resolvePhoneNames = vi.fn(async () => new Map([["5551234567", "Alice Contact"]]));
+      setupWebhookTarget({
+        account: createMockAccount({
+          enrichGroupParticipantsFromContacts: false,
+        }),
+      });
+      setBlueBubblesParticipantContactDepsForTest({
+        platform: "darwin",
+        resolvePhoneNames,
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "hello bert",
+        isGroup: true,
+        chatGuid: "iMessage;+;chat123456",
+        chatName: "Family",
+        participants: [{ address: "+15551234567" }],
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      expect(resolvePhoneNames).not.toHaveBeenCalled();
+      expect(getFirstDispatchCall().ctx.GroupMembers).toBe("+15551234567");
+    });
+
+    it("enriches unnamed phone participants from local contacts after gating passes", async () => {
+      const resolvePhoneNames = vi.fn(
+        async (phoneKeys: string[]) =>
+          new Map(
+            phoneKeys.map((phoneKey) => [
+              phoneKey,
+              phoneKey === "5551234567" ? "Alice Contact" : "Bob Contact",
+            ]),
+          ),
+      );
+      setupWebhookTarget({
+        account: createMockAccount({
+          enrichGroupParticipantsFromContacts: true,
+        }),
+      });
+      setBlueBubblesParticipantContactDepsForTest({
+        platform: "darwin",
+        resolvePhoneNames,
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "hello bert",
+        isGroup: true,
+        chatGuid: "iMessage;+;chat123456",
+        chatName: "Family",
+        participants: [{ address: "+15551234567" }, { address: "+15557654321" }],
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      expect(resolvePhoneNames).toHaveBeenCalledTimes(1);
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.GroupMembers).toBe(
+        "Alice Contact (+15551234567), Bob Contact (+15557654321)",
+      );
+    });
+
+    it("fetches missing group participants from the BlueBubbles API before contact enrichment", async () => {
+      const resolvePhoneNames = vi.fn(
+        async (phoneKeys: string[]) =>
+          new Map(
+            phoneKeys.map((phoneKey) => [
+              phoneKey,
+              phoneKey === "5551234567" ? "Alice Contact" : "Bob Contact",
+            ]),
+          ),
+      );
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            data: [
+              {
+                guid: "iMessage;+;chat123456",
+                participants: [{ address: "+15551234567" }, { address: "+15557654321" }],
+              },
+            ],
+          }),
+      });
+      setupWebhookTarget({
+        account: createMockAccount({
+          enrichGroupParticipantsFromContacts: true,
+        }),
+      });
+      setBlueBubblesParticipantContactDepsForTest({
+        platform: "darwin",
+        resolvePhoneNames,
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "hello bert",
+        isGroup: true,
+        chatGuid: "iMessage;+;chat123456",
+        chatName: "Family",
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining("/api/v1/chat/query"),
+        expect.objectContaining({ method: "POST" }),
+      );
+      expect(resolvePhoneNames).toHaveBeenCalledTimes(1);
+      expect(getFirstDispatchCall().ctx.GroupMembers).toBe(
+        "Alice Contact (+15551234567), Bob Contact (+15557654321)",
+      );
+    });
+
+    it("does not read local contacts before mention gating allows the message", async () => {
+      const resolvePhoneNames = vi.fn(async () => new Map([["5551234567", "Alice Contact"]]));
+      setupWebhookTarget({
+        account: createMockAccount({
+          enrichGroupParticipantsFromContacts: true,
+        }),
+      });
+      setBlueBubblesParticipantContactDepsForTest({
+        platform: "darwin",
+        resolvePhoneNames,
+      });
+      mockResolveRequireMention.mockReturnValueOnce(true);
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "hello group",
+        isGroup: true,
+        chatGuid: "iMessage;+;chat123456",
+        chatName: "Family",
+        participants: [{ address: "+15551234567" }],
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      expect(resolvePhoneNames).not.toHaveBeenCalled();
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    });
   });
 
   describe("group sender identity in envelope", () => {
@@ -566,64 +799,9 @@ describe("BlueBubbles webhook monitor", () => {
       vi.useFakeTimers();
       try {
         const core = createMockRuntime();
+        installTimingAwareInboundDebouncer(core);
 
-        // Use a timing-aware debouncer test double that respects debounceMs/buildKey/shouldDebounce.
-        // oxlint-disable-next-line typescript/no-explicit-any
-        core.channel.debounce.createInboundDebouncer = vi.fn((params: any) => {
-          // oxlint-disable-next-line typescript/no-explicit-any
-          type Item = any;
-          const buckets = new Map<
-            string,
-            { items: Item[]; timer: ReturnType<typeof setTimeout> | null }
-          >();
-
-          const flush = async (key: string) => {
-            const bucket = buckets.get(key);
-            if (!bucket) {
-              return;
-            }
-            if (bucket.timer) {
-              clearTimeout(bucket.timer);
-              bucket.timer = null;
-            }
-            const items = bucket.items;
-            bucket.items = [];
-            if (items.length > 0) {
-              try {
-                await params.onFlush(items);
-              } catch (err) {
-                params.onError?.(err);
-                throw err;
-              }
-            }
-          };
-
-          return {
-            enqueue: async (item: Item) => {
-              if (params.shouldDebounce && !params.shouldDebounce(item)) {
-                await params.onFlush([item]);
-                return;
-              }
-
-              const key = params.buildKey(item);
-              const existing = buckets.get(key);
-              const bucket = existing ?? { items: [], timer: null };
-              bucket.items.push(item);
-              if (bucket.timer) {
-                clearTimeout(bucket.timer);
-              }
-              bucket.timer = setTimeout(async () => {
-                await flush(key);
-              }, params.debounceMs);
-              buckets.set(key, bucket);
-            },
-            flushKey: vi.fn(async (key: string) => {
-              await flush(key);
-            }),
-          };
-        }) as unknown as PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
-
-        const registration = trackWebhookRegistrationForTest(
+        const _registration = trackWebhookRegistrationForTest(
           setupWebhookTargetForTest({
             createCore: createMockRuntime,
             core,
@@ -674,6 +852,123 @@ describe("BlueBubbles webhook monitor", () => {
         vi.useRealTimers();
       }
     });
+
+    it("coalesces URL text with URL balloon webhook events by associatedMessageGuid", async () => {
+      vi.useFakeTimers();
+      try {
+        const core = createMockRuntime();
+        installTimingAwareInboundDebouncer(core);
+        const processMessage = vi.fn().mockResolvedValue(undefined);
+        const registry = createBlueBubblesDebounceRegistry({ processMessage });
+        const account = createMockAccount();
+        const target = {
+          account,
+          config: {},
+          runtime: { log: vi.fn(), error: vi.fn() },
+          core,
+          path: "/bluebubbles-webhook",
+        };
+        const debouncer = registry.getOrCreateDebouncer(target);
+
+        const messageId = "url-msg-1";
+        const chatGuid = "iMessage;-;+15551234567";
+        const url = "https://github.com/bitfocus/companion/issues/4047";
+
+        await debouncer.enqueue({
+          message: createDebounceTestMessage({
+            chatGuid,
+            text: url,
+            messageId,
+          }),
+          target,
+        });
+
+        await vi.advanceTimersByTimeAsync(300);
+
+        await debouncer.enqueue({
+          message: createDebounceTestMessage({
+            chatGuid,
+            text: url,
+            messageId: "url-balloon-1",
+            balloonBundleId: "com.apple.messages.URLBalloonProvider",
+            associatedMessageGuid: messageId,
+          }),
+          target,
+        });
+
+        expect(processMessage).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(600);
+
+        expect(processMessage).toHaveBeenCalledTimes(1);
+        expect(processMessage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            text: url,
+            messageId,
+            balloonBundleId: undefined,
+          }),
+          target,
+        );
+        expect(target.runtime.error).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("skips null-text entries during flush and still delivers the valid message", async () => {
+      vi.useFakeTimers();
+      try {
+        const core = createMockRuntime();
+        installTimingAwareInboundDebouncer(core);
+
+        const processMessage = vi.fn().mockResolvedValue(undefined);
+        const registry = createBlueBubblesDebounceRegistry({ processMessage });
+        const account = createMockAccount();
+        const target = {
+          account,
+          config: {},
+          runtime: { log: vi.fn(), error: vi.fn() },
+          core,
+          path: "/bluebubbles-webhook",
+        };
+        const debouncer = registry.getOrCreateDebouncer(target);
+
+        await debouncer.enqueue({
+          message: {
+            ...createDebounceTestMessage({
+              messageId: "msg-null",
+              chatGuid: "iMessage;-;+15551234567",
+            }),
+            text: null,
+          } as unknown as NormalizedWebhookMessage,
+          target,
+        });
+
+        await vi.advanceTimersByTimeAsync(300);
+
+        await debouncer.enqueue({
+          message: createDebounceTestMessage({
+            text: "hello from valid entry",
+            messageId: "msg-null",
+            chatGuid: "iMessage;-;+15551234567",
+          }),
+          target,
+        });
+
+        await vi.advanceTimersByTimeAsync(600);
+
+        expect(processMessage).toHaveBeenCalledTimes(1);
+        expect(processMessage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            text: "hello from valid entry",
+          }),
+          target,
+        );
+        expect(target.runtime.error).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe("reply metadata", () => {
@@ -699,6 +994,79 @@ describe("BlueBubbles webhook monitor", () => {
       expect(callArgs.ctx.ReplyToBody).toBe("original message");
       expect(callArgs.ctx.ReplyToSender).toBe("+15550000000");
       // Body uses inline [[reply_to:N]] tag format
+      expect(callArgs.ctx.Body).toContain("[[reply_to:msg-0]]");
+    });
+
+    it("drops group reply context from non-allowlisted senders in allowlist mode", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["+15551234567"],
+        }),
+        config: {
+          channels: {
+            bluebubbles: {
+              contextVisibility: "allowlist",
+            },
+          },
+        } as OpenClawConfig,
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "replying now",
+        isGroup: true,
+        chatGuid: "iMessage;+;chat-reply-visibility",
+        replyTo: {
+          guid: "msg-0",
+          text: "blocked context",
+          handle: { address: "+15550000000", displayName: "Alice" },
+        },
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.ReplyToId).toBeUndefined();
+      expect(callArgs.ctx.ReplyToIdFull).toBeUndefined();
+      expect(callArgs.ctx.ReplyToBody).toBeUndefined();
+      expect(callArgs.ctx.ReplyToSender).toBeUndefined();
+      expect(callArgs.ctx.Body).not.toContain("[[reply_to:");
+    });
+
+    it("keeps group reply context in allowlist_quote mode", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["+15551234567"],
+        }),
+        config: {
+          channels: {
+            bluebubbles: {
+              contextVisibility: "allowlist_quote",
+            },
+          },
+        } as OpenClawConfig,
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "replying now",
+        isGroup: true,
+        chatGuid: "iMessage;+;chat-reply-visibility",
+        replyTo: {
+          guid: "msg-0",
+          text: "quoted context",
+          handle: { address: "+15550000000", displayName: "Alice" },
+        },
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.ReplyToId).toBe("msg-0");
+      expect(callArgs.ctx.ReplyToBody).toBe("quoted context");
+      expect(callArgs.ctx.ReplyToSender).toBe("+15550000000");
       expect(callArgs.ctx.Body).toContain("[[reply_to:msg-0]]");
     });
 
@@ -1060,7 +1428,7 @@ describe("BlueBubbles webhook monitor", () => {
       expect(mockEnqueueSystemEvent).toHaveBeenCalledWith(
         'Assistant sent "replying now" [message_id:2]',
         expect.objectContaining({
-          sessionKey: "agent:main:bluebubbles:dm:+15551234567",
+          sessionKey: "agent:main:main",
         }),
       );
     });
@@ -1100,7 +1468,7 @@ describe("BlueBubbles webhook monitor", () => {
       expect(mockEnqueueSystemEvent).toHaveBeenCalledWith(
         'Assistant sent "replying now" [message_id:2]',
         expect.objectContaining({
-          sessionKey: "agent:main:bluebubbles:dm:+15551234567",
+          sessionKey: "agent:main:main",
         }),
       );
     });
@@ -1139,7 +1507,7 @@ describe("BlueBubbles webhook monitor", () => {
       expect(mockEnqueueSystemEvent).toHaveBeenCalledWith(
         'Assistant sent "replying now" [message_id:2]',
         expect.objectContaining({
-          sessionKey: "agent:main:bluebubbles:dm:+15551234567",
+          sessionKey: "agent:main:main",
         }),
       );
     });
@@ -1160,6 +1528,28 @@ describe("BlueBubbles webhook monitor", () => {
       expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
     });
 
+    it("skips group reactions when requireMention=true", async () => {
+      mockEnqueueSystemEvent.mockClear();
+      mockResolveRequireMention.mockReturnValue(true);
+
+      setupWebhookTarget({
+        account: createMockAccount({
+          groupPolicy: "open",
+        }),
+      });
+
+      const payload = createTimestampedMessageReactionPayloadForTest({
+        isGroup: true,
+        chatGuid: "iMessage;+;chat123456",
+        associatedMessageType: 2000,
+        handle: { address: "+15559999999" },
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
+    });
+
     it("enqueues system event for reaction added", async () => {
       mockEnqueueSystemEvent.mockClear();
 
@@ -1167,6 +1557,31 @@ describe("BlueBubbles webhook monitor", () => {
 
       const payload = createTimestampedMessageReactionPayloadForTest({
         associatedMessageType: 2000, // Heart reaction added
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      expect(mockEnqueueSystemEvent).toHaveBeenCalledWith(
+        expect.stringContaining("reacted with ❤️ [[reply_to:"),
+        expect.any(Object),
+      );
+    });
+
+    it("enqueues group reactions when requireMention=false", async () => {
+      mockEnqueueSystemEvent.mockClear();
+      mockResolveRequireMention.mockReturnValue(false);
+
+      setupWebhookTarget({
+        account: createMockAccount({
+          groupPolicy: "open",
+        }),
+      });
+
+      const payload = createTimestampedMessageReactionPayloadForTest({
+        isGroup: true,
+        chatGuid: "iMessage;+;chat123456",
+        associatedMessageType: 2000,
+        handle: { address: "+15559999999" },
       });
 
       await dispatchWebhookPayload(payload);

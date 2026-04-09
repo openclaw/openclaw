@@ -1,8 +1,4 @@
-import { listAgentIds, resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { resolveEffectiveToolInventory } from "../../agents/tools-effective-inventory.js";
-import { resolveReplyToMode } from "../../auto-reply/reply/reply-threading.js";
-import { loadConfig } from "../../config/config.js";
-import { deliveryContextFromSession } from "../../utils/delivery-context.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   ErrorCodes,
@@ -10,7 +6,16 @@ import {
   formatValidationErrors,
   validateToolsEffectiveParams,
 } from "../protocol/index.js";
-import { loadSessionEntry, resolveSessionModelRef } from "../session-utils.js";
+import {
+  deliveryContextFromSession,
+  listAgentIds,
+  loadConfig,
+  loadSessionEntry,
+  resolveEffectiveToolInventory,
+  resolveReplyToMode,
+  resolveSessionAgentId,
+  resolveSessionModelRef,
+} from "./tools-effective.runtime.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 function resolveRequestedAgentIdOrRespondError(params: {
@@ -19,7 +24,7 @@ function resolveRequestedAgentIdOrRespondError(params: {
   respond: RespondFn;
 }) {
   const knownAgents = listAgentIds(params.cfg);
-  const requestedAgentId = typeof params.rawAgentId === "string" ? params.rawAgentId.trim() : "";
+  const requestedAgentId = normalizeOptionalString(params.rawAgentId) ?? "";
   if (!requestedAgentId) {
     return undefined;
   }
@@ -86,7 +91,9 @@ function resolveTrustedToolsEffectiveContext(params: {
         ? String(delivery.threadId)
         : loaded.entry.lastThreadId != null
           ? String(loaded.entry.lastThreadId)
-          : undefined,
+          : loaded.entry.origin?.threadId != null
+            ? String(loaded.entry.origin.threadId)
+            : undefined,
     groupId: loaded.entry.groupId,
     groupChannel: loaded.entry.groupChannel,
     groupSpace: loaded.entry.space,

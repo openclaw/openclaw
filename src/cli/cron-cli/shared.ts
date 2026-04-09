@@ -9,12 +9,18 @@ import {
   parseOffsetlessIsoDateTimeInTimeZone,
 } from "../../infra/format-time/parse-offsetless-zoned-datetime.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
 
-export const getCronChannelOptions = () =>
-  ["last", ...listChannelPlugins().map((plugin) => plugin.id)].join("|");
+export const getCronChannelOptions = () => {
+  // Keep help truthful even before the plugin registry is bootstrapped.
+  const pluginIds = listChannelPlugins()
+    .map((plugin) => plugin.id)
+    .filter(Boolean);
+  return pluginIds.length > 0 ? ["last", ...pluginIds].join("|") : "last|<channel-id>";
+};
 
 export function printCronJson(value: unknown) {
   defaultRuntime.writeJson(value);
@@ -62,7 +68,7 @@ export function parseDurationMs(input: string): number | null {
   if (!Number.isFinite(n) || n <= 0) {
     return null;
   }
-  const unit = (match[2] ?? "").toLowerCase();
+  const unit = normalizeLowercaseStringOrEmpty(match[2] ?? "");
   const factor =
     unit === "ms"
       ? 1

@@ -5,13 +5,15 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import {
   getModelRefStatus,
+  isCliProvider,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
 } from "../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
-import { resolveModelAsync } from "../agents/pi-embedded-runner/model.js";
+import { resolveModel } from "../agents/pi-embedded-runner/model.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { cleanStaleLockFiles } from "../agents/session-write-lock.js";
+import { scheduleSubagentOrphanRecovery } from "../agents/subagent-registry.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { loadConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
@@ -26,7 +28,6 @@ import { loadInternalHooks } from "../hooks/loader.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
-import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import {
   scheduleRestartSentinelWake,
   shouldWakeFromRestartSentinel,
@@ -48,14 +49,20 @@ async function prewarmConfiguredPrimaryModel(params: {
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
+  if (isCliProvider(provider, params.cfg)) {
+    return;
+  }
   const agentDir = resolveOpenClawAgentDir();
   try {
     await ensureOpenClawModelsJson(params.cfg, agentDir);
-    const resolved = await resolveModelAsync(provider, model, agentDir, params.cfg, {
-      retryTransientProviderRuntimeMiss: true,
+    const resolved = resolveModel(provider, model, agentDir, params.cfg, {
+      skipProviderRuntimeHooks: true,
     });
     if (!resolved.model) {
-      throw new Error(resolved.error ?? `Unknown model: ${provider}/${model}`);
+      throw new Error(
+        resolved.error ??
+          `Unknown model: ${provider}/${model} (startup warmup only checks static model resolution)`,
+      );
     }
   } catch (err) {
     params.log.warn(`startup model warmup failed for ${provider}/${model}: ${String(err)}`);
@@ -75,7 +82,6 @@ export async function startGatewaySidecars(params: {
     error: (msg: string) => void;
   };
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
-  logBrowser: { error: (msg: string) => void };
 }) {
   try {
     const stateDir = resolveStateDir(process.env);
@@ -90,14 +96,6 @@ export async function startGatewaySidecars(params: {
     }
   } catch (err) {
     params.log.warn(`session lock cleanup failed on startup: ${String(err)}`);
-  }
-
-  // Start OpenClaw browser control server (unless disabled via config).
-  let browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> = null;
-  try {
-    browserControl = await startBrowserControlServerIfEnabled();
-  } catch (err) {
-    params.logBrowser.error(`server failed to start: ${String(err)}`);
   }
 
   // Start Gmail watcher if configured (hooks.gmail.account).
@@ -174,7 +172,7 @@ export async function startGatewaySidecars(params: {
     );
   }
 
-  if (params.cfg.hooks?.internal?.enabled) {
+  if (params.cfg.hooks?.internal?.enabled !== false) {
     setTimeout(() => {
       const hookEvent = createInternalHookEvent("gateway", "startup", "gateway:startup", {
         cfg: params.cfg,
@@ -222,7 +220,11 @@ export async function startGatewaySidecars(params: {
     }, 750);
   }
 
-  return { browserControl, pluginServices };
+  // Same-process SIGUSR1 restarts keep subagent registry memory alive, so
+  // schedule recovery on every startup cycle instead of only cold restore.
+  scheduleSubagentOrphanRecovery();
+
+  return { pluginServices };
 }
 
 export const __testing = {

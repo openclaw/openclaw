@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   __testing,
   clearPluginCommands,
@@ -19,8 +19,175 @@ async function importCommandsModule(cacheBust: string): Promise<CommandsModule> 
   return (await import(`${commandsModuleUrl}?t=${cacheBust}`)) as CommandsModule;
 }
 
+function createVoiceCommand(overrides: Partial<Parameters<typeof registerPluginCommand>[1]> = {}) {
+  return {
+    name: "voice",
+    description: "Voice command",
+    handler: async () => ({ text: "ok" }),
+    ...overrides,
+  };
+}
+
+function registerVoiceCommandForTest(
+  overrides: Partial<Parameters<typeof registerPluginCommand>[1]> = {},
+) {
+  return registerPluginCommand("demo-plugin", createVoiceCommand(overrides));
+}
+
+function resolveBindingConversationFromCommand(
+  params: Parameters<typeof __testing.resolveBindingConversationFromCommand>[0],
+) {
+  return __testing.resolveBindingConversationFromCommand(params);
+}
+
+function expectCommandMatch(
+  commandBody: string,
+  params: { name: string; pluginId: string; args: string },
+) {
+  expect(matchPluginCommand(commandBody)).toMatchObject({
+    command: expect.objectContaining({
+      name: params.name,
+      pluginId: params.pluginId,
+    }),
+    args: params.args,
+  });
+}
+
+function expectProviderCommandSpecs(
+  provider: Parameters<typeof getPluginCommandSpecs>[0],
+  expectedNames: readonly string[],
+) {
+  expect(getPluginCommandSpecs(provider)).toEqual(
+    expectedNames.map((name) => ({
+      name,
+      description: "Demo command",
+      acceptsArgs: false,
+    })),
+  );
+}
+
+function expectProviderCommandSpecCases(
+  cases: ReadonlyArray<{
+    provider: Parameters<typeof getPluginCommandSpecs>[0];
+    expectedNames: readonly string[];
+  }>,
+) {
+  cases.forEach(({ provider, expectedNames }) => {
+    expectProviderCommandSpecs(provider, expectedNames);
+  });
+}
+
+function expectUnsupportedBindingApiResult(result: { text?: string }) {
+  expect(result.text).toBe(
+    JSON.stringify({
+      requested: {
+        status: "error",
+        message: "This command cannot bind the current conversation.",
+      },
+      current: null,
+      detached: { removed: false },
+    }),
+  );
+}
+
+function expectBindingConversationCase(
+  params: Parameters<typeof resolveBindingConversationFromCommand>[0],
+  expected: ReturnType<typeof resolveBindingConversationFromCommand>,
+) {
+  expect(resolveBindingConversationFromCommand(params)).toEqual(expected);
+}
+
 beforeEach(() => {
-  setActivePluginRegistry(createTestRegistry([]));
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "telegram",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+          commands: {
+            nativeCommandsAutoEnabled: true,
+          },
+          bindings: {
+            selfParentConversationByDefault: true,
+            resolveCommandConversation: ({
+              threadId,
+              originatingTo,
+              commandTo,
+              fallbackTo,
+            }: {
+              threadId?: string;
+              originatingTo?: string;
+              commandTo?: string;
+              fallbackTo?: string;
+            }) => {
+              const rawTarget = [commandTo, originatingTo, fallbackTo].find(Boolean)?.trim();
+              if (!rawTarget || rawTarget.startsWith("slash:")) {
+                return null;
+              }
+              const normalized = rawTarget.replace(/^telegram:/i, "");
+              const topicMatch = /^(.*?):topic:(\d+)$/i.exec(normalized);
+              if (topicMatch?.[1]) {
+                return {
+                  conversationId: `${topicMatch[1]}:topic:${threadId ?? topicMatch[2]}`,
+                  parentConversationId: topicMatch[1],
+                };
+              }
+              return { conversationId: normalized };
+            },
+          },
+        },
+      },
+      {
+        pluginId: "discord",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "discord", label: "Discord" }),
+          commands: {
+            nativeCommandsAutoEnabled: true,
+          },
+          bindings: {
+            resolveCommandConversation: ({
+              threadId,
+              threadParentId,
+              originatingTo,
+              commandTo,
+              fallbackTo,
+            }: {
+              threadId?: string;
+              threadParentId?: string;
+              originatingTo?: string;
+              commandTo?: string;
+              fallbackTo?: string;
+            }) => {
+              const rawTarget = [originatingTo, commandTo, fallbackTo].find(Boolean)?.trim();
+              if (!rawTarget || rawTarget.startsWith("slash:")) {
+                return null;
+              }
+              const normalized = rawTarget.replace(/^discord:/i, "");
+              if (/^\d+$/.test(normalized)) {
+                return { conversationId: `user:${normalized}` };
+              }
+              if (threadId) {
+                const baseConversationId =
+                  originatingTo?.trim()?.replace(/^discord:/i, "") ||
+                  commandTo?.trim()?.replace(/^discord:/i, "") ||
+                  fallbackTo?.trim()?.replace(/^discord:/i, "");
+                return {
+                  conversationId: baseConversationId || threadId,
+                  ...(threadParentId ? { parentConversationId: threadParentId } : {}),
+                };
+              }
+              if (normalized.startsWith("channel:") || normalized.startsWith("user:")) {
+                return { conversationId: normalized };
+              }
+              return null;
+            },
+          },
+        },
+      },
+    ]),
+  );
 });
 
 afterEach(() => {
@@ -28,30 +195,34 @@ afterEach(() => {
 });
 
 describe("registerPluginCommand", () => {
-  it("rejects malformed runtime command shapes", () => {
-    const invalidName = registerPluginCommand(
-      "demo-plugin",
-      // Runtime plugin payloads are untyped; guard at boundary.
-      {
+  it.each([
+    {
+      name: "rejects invalid command names",
+      command: {
+        // Runtime plugin payloads are untyped; guard at boundary.
         name: undefined as unknown as string,
         description: "Demo",
         handler: async () => ({ text: "ok" }),
       },
-    );
-    expect(invalidName).toEqual({
-      ok: false,
-      error: "Command name must be a string",
-    });
-
-    const invalidDescription = registerPluginCommand("demo-plugin", {
-      name: "demo",
-      description: undefined as unknown as string,
-      handler: async () => ({ text: "ok" }),
-    });
-    expect(invalidDescription).toEqual({
-      ok: false,
-      error: "Command description must be a string",
-    });
+      expected: {
+        ok: false,
+        error: "Command name must be a string",
+      },
+    },
+    {
+      name: "rejects invalid command descriptions",
+      command: {
+        name: "demo",
+        description: undefined as unknown as string,
+        handler: async () => ({ text: "ok" }),
+      },
+      expected: {
+        ok: false,
+        error: "Command description must be a string",
+      },
+    },
+  ] as const)("$name", ({ command, expected }) => {
+    expect(registerPluginCommand("demo-plugin", command)).toEqual(expected);
   });
 
   it("normalizes command metadata for downstream consumers", () => {
@@ -78,39 +249,47 @@ describe("registerPluginCommand", () => {
   });
 
   it("supports provider-specific native command aliases", () => {
-    const result = registerPluginCommand("demo-plugin", {
-      name: "voice",
+    const result = registerVoiceCommandForTest({
       nativeNames: {
         default: "talkvoice",
         discord: "discordvoice",
       },
       description: "Demo command",
-      handler: async () => ({ text: "ok" }),
     });
 
     expect(result).toEqual({ ok: true });
-    expect(getPluginCommandSpecs()).toEqual([
-      {
-        name: "talkvoice",
-        description: "Demo command",
-        acceptsArgs: false,
-      },
+    expectProviderCommandSpecCases([
+      { provider: undefined, expectedNames: ["talkvoice"] },
+      { provider: "discord", expectedNames: ["discordvoice"] },
+      { provider: "telegram", expectedNames: ["talkvoice"] },
+      { provider: "slack", expectedNames: [] },
     ]);
-    expect(getPluginCommandSpecs("discord")).toEqual([
-      {
-        name: "discordvoice",
-        description: "Demo command",
-        acceptsArgs: false,
-      },
-    ]);
-    expect(getPluginCommandSpecs("telegram")).toEqual([
-      {
-        name: "talkvoice",
-        description: "Demo command",
-        acceptsArgs: false,
-      },
-    ]);
-    expect(getPluginCommandSpecs("slack")).toEqual([]);
+  });
+
+  it("accepts native progress metadata on plugin commands", () => {
+    const result = registerVoiceCommandForTest({
+      nativeProgressMessages: { telegram: "Running voice command..." },
+      description: "Demo command",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(matchPluginCommand("/voice")).toMatchObject({
+      command: expect.objectContaining({
+        nativeProgressMessages: { telegram: "Running voice command..." },
+      }),
+    });
+  });
+
+  it("rejects empty native progress metadata", () => {
+    const result = registerVoiceCommandForTest({
+      nativeProgressMessages: { telegram: "   " },
+      description: "Demo command",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: 'Native progress message "telegram" cannot be empty',
+    });
   });
 
   it("shares plugin commands across duplicate module instances", async () => {
@@ -120,14 +299,14 @@ describe("registerPluginCommand", () => {
     first.clearPluginCommands();
 
     expect(
-      first.registerPluginCommand("demo-plugin", {
-        name: "voice",
-        nativeNames: {
-          telegram: "voice",
-        },
-        description: "Voice command",
-        handler: async () => ({ text: "ok" }),
-      }),
+      first.registerPluginCommand(
+        "demo-plugin",
+        createVoiceCommand({
+          nativeNames: {
+            telegram: "voice",
+          },
+        }),
+      ),
     ).toEqual({ ok: true });
 
     expect(second.getPluginCommandSpecs("telegram")).toEqual([
@@ -147,127 +326,127 @@ describe("registerPluginCommand", () => {
     second.clearPluginCommands();
   });
 
-  it("matches provider-specific native aliases back to the canonical command", () => {
-    const result = registerPluginCommand("demo-plugin", {
-      name: "voice",
-      nativeNames: {
-        default: "talkvoice",
-        discord: "discordvoice",
-      },
-      description: "Demo command",
-      acceptsArgs: true,
-      handler: async () => ({ text: "ok" }),
-    });
-
-    expect(result).toEqual({ ok: true });
-    expect(matchPluginCommand("/talkvoice now")).toMatchObject({
-      command: expect.objectContaining({ name: "voice", pluginId: "demo-plugin" }),
-      args: "now",
-    });
-    expect(matchPluginCommand("/discordvoice now")).toMatchObject({
-      command: expect.objectContaining({ name: "voice", pluginId: "demo-plugin" }),
-      args: "now",
-    });
-  });
-
-  it("rejects provider aliases that collide with another registered command", () => {
-    expect(
-      registerPluginCommand("demo-plugin", {
-        name: "voice",
+  it.each(["/talkvoice now", "/discordvoice now"] as const)(
+    "matches provider-specific native alias %s back to the canonical command",
+    (commandBody) => {
+      const result = registerVoiceCommandForTest({
         nativeNames: {
-          telegram: "pair_device",
+          default: "talkvoice",
+          discord: "discordvoice",
         },
-        description: "Voice command",
-        handler: async () => ({ text: "ok" }),
-      }),
-    ).toEqual({ ok: true });
+        description: "Demo command",
+        acceptsArgs: true,
+      });
 
-    expect(
-      registerPluginCommand("other-plugin", {
+      expect(result).toEqual({ ok: true });
+      expectCommandMatch(commandBody, {
+        name: "voice",
+        pluginId: "demo-plugin",
+        args: "now",
+      });
+    },
+  );
+
+  it.each([
+    {
+      name: "rejects provider aliases that collide with another registered command",
+      setup: () =>
+        registerPluginCommand(
+          "demo-plugin",
+          createVoiceCommand({
+            nativeNames: {
+              telegram: "pair_device",
+            },
+          }),
+        ),
+      candidate: {
         name: "pair",
         nativeNames: {
           telegram: "pair_device",
         },
         description: "Pair command",
         handler: async () => ({ text: "ok" }),
-      }),
-    ).toEqual({
-      ok: false,
-      error: 'Command "pair_device" already registered by plugin "demo-plugin"',
-    });
-  });
-
-  it("rejects reserved provider aliases", () => {
-    expect(
-      registerPluginCommand("demo-plugin", {
-        name: "voice",
+      },
+      expected: {
+        ok: false,
+        error: 'Command "pair_device" already registered by plugin "demo-plugin"',
+      },
+    },
+    {
+      name: "rejects reserved provider aliases",
+      candidate: createVoiceCommand({
         nativeNames: {
           telegram: "help",
         },
-        description: "Voice command",
-        handler: async () => ({ text: "ok" }),
       }),
-    ).toEqual({
-      ok: false,
-      error:
-        'Native command alias "telegram" invalid: Command name "help" is reserved by a built-in command',
-    });
+      expected: {
+        ok: false,
+        error:
+          'Native command alias "telegram" invalid: Command name "help" is reserved by a built-in command',
+      },
+    },
+  ] as const)("$name", ({ setup, candidate, expected }) => {
+    setup?.();
+    expect(registerPluginCommand("other-plugin", candidate)).toEqual(expected);
   });
 
-  it("resolves Discord DM command bindings with the user target prefix intact", () => {
-    expect(
-      __testing.resolveBindingConversationFromCommand({
+  it.each([
+    {
+      name: "resolves Discord DM command bindings with the user target prefix intact",
+      params: {
         channel: "discord",
         from: "discord:1177378744822943744",
         to: "slash:1177378744822943744",
         accountId: "default",
-      }),
-    ).toEqual({
-      channel: "discord",
-      accountId: "default",
-      conversationId: "user:1177378744822943744",
-    });
-  });
-
-  it("resolves Discord guild command bindings with the channel target prefix intact", () => {
-    expect(
-      __testing.resolveBindingConversationFromCommand({
+      },
+      expected: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "user:1177378744822943744",
+      },
+    },
+    {
+      name: "resolves Discord guild command bindings with the channel target prefix intact",
+      params: {
         channel: "discord",
         from: "discord:channel:1480554272859881494",
         accountId: "default",
-      }),
-    ).toEqual({
-      channel: "discord",
-      accountId: "default",
-      conversationId: "channel:1480554272859881494",
-    });
-  });
-
-  it("resolves Telegram topic command bindings without a Telegram registry entry", () => {
-    expect(
-      __testing.resolveBindingConversationFromCommand({
-        channel: "telegram",
-        from: "telegram:group:-100123",
-        to: "telegram:group:-100123:topic:77",
+      },
+      expected: {
+        channel: "discord",
         accountId: "default",
-      }),
-    ).toEqual({
-      channel: "telegram",
-      accountId: "default",
-      conversationId: "-100123",
-      threadId: 77,
-    });
-  });
-
-  it("does not resolve binding conversations for unsupported command channels", () => {
-    expect(
-      __testing.resolveBindingConversationFromCommand({
+        conversationId: "channel:1480554272859881494",
+      },
+    },
+    {
+      name: "resolves Discord thread command bindings with parent channel context intact",
+      params: {
+        channel: "discord",
+        from: "discord:channel:1480554272859881494",
+        accountId: "default",
+        messageThreadId: "thread-42",
+        threadParentId: "channel-parent-7",
+      },
+      expected: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:1480554272859881494",
+        parentConversationId: "channel-parent-7",
+        threadId: "thread-42",
+      },
+    },
+    {
+      name: "does not resolve binding conversations for unsupported command channels",
+      params: {
         channel: "slack",
         from: "slack:U123",
         to: "C456",
         accountId: "default",
-      }),
-    ).toBeNull();
+      },
+      expected: null,
+    },
+  ] as const)("$name", ({ params, expected }) => {
+    expectBindingConversationCase(params, expected);
   });
 
   it("does not expose binding APIs to plugin commands on unsupported channels", async () => {
@@ -319,15 +498,114 @@ describe("registerPluginCommand", () => {
       accountId: "default",
     });
 
-    expect(result.text).toBe(
-      JSON.stringify({
-        requested: {
-          status: "error",
-          message: "This command cannot bind the current conversation.",
+    expectUnsupportedBindingApiResult(result);
+  });
+
+  it("passes host session identity through to the plugin command context", async () => {
+    let receivedCtx:
+      | {
+          sessionKey?: string;
+          sessionId?: string;
+        }
+      | undefined;
+    const handler = async (ctx: { sessionKey?: string; sessionId?: string }) => {
+      receivedCtx = ctx;
+      return { text: "ok" };
+    };
+
+    const result = await executePluginCommand({
+      command: {
+        name: "sessioncheck",
+        description: "Demo command",
+        acceptsArgs: false,
+        handler,
+        pluginId: "demo-plugin",
+      },
+      channel: "whatsapp",
+      senderId: "U123",
+      isAuthorizedSender: true,
+      sessionKey: "agent:main:whatsapp:direct:123",
+      sessionId: "session-123",
+      commandBody: "/sessioncheck",
+      config: {} as never,
+    });
+
+    expect(result).toEqual({ text: "ok" });
+    expect(receivedCtx).toMatchObject({
+      sessionKey: "agent:main:whatsapp:direct:123",
+      sessionId: "session-123",
+    });
+  });
+
+  it("passes the effective default account to plugin command handlers when accountId is omitted", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "line",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "line",
+              label: "LINE",
+              config: {
+                listAccountIds: () => ["default", "work"],
+                defaultAccountId: () => "work",
+                resolveAccount: (_cfg, accountId) => ({ accountId: accountId ?? "work" }),
+              },
+            }),
+            bindings: {
+              resolveCommandConversation: ({
+                originatingTo,
+                commandTo,
+                fallbackTo,
+              }: {
+                originatingTo?: string;
+                commandTo?: string;
+                fallbackTo?: string;
+              }) => {
+                const rawTarget = [originatingTo, commandTo, fallbackTo].find(Boolean)?.trim();
+                if (!rawTarget) {
+                  return null;
+                }
+                return {
+                  conversationId: rawTarget.replace(/^line:/i, "").replace(/^user:/i, ""),
+                };
+              },
+            },
+          },
         },
-        current: null,
-        detached: { removed: false },
-      }),
+      ]),
     );
+
+    let receivedCtx:
+      | {
+          accountId?: string;
+        }
+      | undefined;
+    const handler = async (ctx: { accountId?: string }) => {
+      receivedCtx = ctx;
+      return { text: "ok" };
+    };
+
+    const result = await executePluginCommand({
+      command: {
+        name: "accountcheck",
+        description: "Demo command",
+        acceptsArgs: false,
+        handler,
+        pluginId: "demo-plugin",
+      },
+      channel: "line",
+      senderId: "U123",
+      isAuthorizedSender: true,
+      commandBody: "/accountcheck",
+      config: {} as never,
+      from: "line:user:U1234567890abcdef1234567890abcdef",
+    });
+
+    expect(result).toEqual({ text: "ok" });
+    expect(receivedCtx).toMatchObject({
+      accountId: "work",
+    });
   });
 });

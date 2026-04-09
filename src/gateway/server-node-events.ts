@@ -1,23 +1,38 @@
 import { randomUUID } from "node:crypto";
-import { normalizeChannelId } from "../channels/plugins/index.js";
-import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
-import { agentCommandFromIngress } from "../commands/agent.js";
-import { loadConfig } from "../config/config.js";
-import { updateSessionStore } from "../config/sessions.js";
-import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
-import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
-import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
-import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
-import { resolveOutboundTarget } from "../infra/outbound/targets.js";
-import { registerApnsRegistration } from "../infra/push-apns.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
-import { normalizeMainKey, scopedHeartbeatWakeOptions } from "../routing/session-key.js";
-import { defaultRuntime } from "../runtime.js";
-import { parseMessageWithAttachments } from "./chat-attachments.js";
-import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
-import { loadSessionEntry, migrateAndPruneGatewaySessionStoreKey } from "./session-utils.js";
-import { formatForLog } from "./ws-log.js";
+import {
+  agentCommandFromIngress,
+  buildOutboundSessionContext,
+  createOutboundSendDeps,
+  defaultRuntime,
+  deleteMediaBuffer,
+  deliverOutboundPayloads,
+  enqueueSystemEvent,
+  formatForLog,
+  loadConfig,
+  loadOrCreateDeviceIdentity,
+  loadSessionEntry,
+  migrateAndPruneGatewaySessionStoreKey,
+  normalizeChannelId,
+  normalizeMainKey,
+  normalizeRpcAttachmentsToChatAttachments,
+  parseMessageWithAttachments,
+  registerApnsRegistration,
+  requestHeartbeatNow,
+  resolveGatewayModelSupportsImages,
+  resolveOutboundTarget,
+  resolveSessionAgentId,
+  resolveSessionModelRef,
+  sanitizeInboundSystemTags,
+  scopedHeartbeatWakeOptions,
+  updateSessionStore,
+} from "./server-node-events.runtime.js";
 
 const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
 const MAX_NOTIFICATION_EVENT_TEXT_CHARS = 120;
@@ -26,28 +41,20 @@ const MAX_RECENT_VOICE_TRANSCRIPTS = 200;
 
 const recentVoiceTranscripts = new Map<string, { fingerprint: string; ts: number }>();
 
-function normalizeNonEmptyString(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
-
 function normalizeFiniteInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : null;
 }
 
 function resolveVoiceTranscriptFingerprint(obj: Record<string, unknown>, text: string): string {
   const eventId =
-    normalizeNonEmptyString(obj.eventId) ??
-    normalizeNonEmptyString(obj.providerEventId) ??
-    normalizeNonEmptyString(obj.transcriptId);
+    normalizeOptionalString(obj.eventId) ??
+    normalizeOptionalString(obj.providerEventId) ??
+    normalizeOptionalString(obj.transcriptId);
   if (eventId) {
     return `event:${eventId}`;
   }
 
-  const callId = normalizeNonEmptyString(obj.providerCallId) ?? normalizeNonEmptyString(obj.callId);
+  const callId = normalizeOptionalString(obj.providerCallId) ?? normalizeOptionalString(obj.callId);
   const sequence = normalizeFiniteInteger(obj.sequence) ?? normalizeFiniteInteger(obj.seq);
   if (callId && sequence !== null) {
     return `call-seq:${callId}:${sequence}`;
@@ -154,6 +161,7 @@ async function touchSessionStore(params: {
       store,
     });
     store[primaryKey] = {
+      ...store[primaryKey],
       sessionId: params.sessionId,
       updatedAt: params.now,
       thinkingLevel: params.entry?.thinkingLevel,
@@ -164,6 +172,8 @@ async function touchSessionStore(params: {
       sendPolicy: params.entry?.sendPolicy,
       lastChannel: params.entry?.lastChannel,
       lastTo: params.entry?.lastTo,
+      lastAccountId: params.entry?.lastAccountId,
+      lastThreadId: params.entry?.lastThreadId,
     };
   });
 }
@@ -202,7 +212,7 @@ function parseSessionKeyFromPayloadJSON(payloadJSON: string): string | null {
     return null;
   }
   const obj = payload as Record<string, unknown>;
-  const sessionKey = typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : "";
+  const sessionKey = normalizeOptionalString(obj.sessionKey) ?? "";
   return sessionKey.length > 0 ? sessionKey : null;
 }
 
@@ -260,14 +270,14 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!obj) {
         return;
       }
-      const text = typeof obj.text === "string" ? obj.text.trim() : "";
+      const text = normalizeOptionalString(obj.text) ?? "";
       if (!text) {
         return;
       }
       if (text.length > 20_000) {
         return;
       }
-      const sessionKeyRaw = typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : "";
+      const sessionKeyRaw = normalizeOptionalString(obj.sessionKey) ?? "";
       const cfg = loadConfig();
       const rawMainKey = normalizeMainKey(cfg.session?.mainKey);
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : rawMainKey;
@@ -343,49 +353,84 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         timeoutSeconds?: number | null;
         key?: string | null;
       };
+
       let link: AgentDeepLink | null = null;
       try {
         link = JSON.parse(evt.payloadJSON) as AgentDeepLink;
       } catch {
         return;
       }
-      let message = (link?.message ?? "").trim();
-      const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(
-        link?.attachments ?? undefined,
-      );
-      let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
-      if (normalizedAttachments.length > 0) {
-        try {
-          const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
-            maxBytes: 5_000_000,
-            log: ctx.logGateway,
-          });
-          message = parsed.message.trim();
-          images = parsed.images;
-        } catch {
-          return;
-        }
-      }
-      if (!message) {
-        return;
-      }
-      if (message.length > 20_000) {
-        return;
-      }
-
-      const channelRaw = typeof link?.channel === "string" ? link.channel.trim() : "";
-      let channel = normalizeChannelId(channelRaw) ?? undefined;
-      let to = typeof link?.to === "string" && link.to.trim() ? link.to.trim() : undefined;
-      const deliverRequested = Boolean(link?.deliver);
-      const wantsReceipt = Boolean(link?.receipt);
-      const receiptTextRaw = typeof link?.receiptText === "string" ? link.receiptText.trim() : "";
-      const receiptText =
-        receiptTextRaw || "Just received your iOS share + request, working on it.";
 
       const sessionKeyRaw = (link?.sessionKey ?? "").trim();
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
       const cfg = loadConfig();
       const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
+
+      let message = (link?.message ?? "").trim();
+      const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(
+        link?.attachments ?? undefined,
+      );
+      let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+      let imageOrder: PromptImageOrderEntry[] = [];
+      if (!message && normalizedAttachments.length === 0) {
+        return;
+      }
+      if (message.length > 20_000) {
+        return;
+      }
+      if (normalizedAttachments.length > 0) {
+        const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
+        const modelRef = resolveSessionModelRef(cfg, entry, sessionAgentId);
+        const supportsImages = await resolveGatewayModelSupportsImages({
+          loadGatewayModelCatalog: ctx.loadGatewayModelCatalog,
+          provider: modelRef.provider,
+          model: modelRef.model,
+        });
+        try {
+          const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
+            maxBytes: 5_000_000,
+            log: ctx.logGateway,
+            supportsImages,
+          });
+          message = parsed.message.trim();
+          images = parsed.images;
+          imageOrder = parsed.imageOrder;
+          if (message.length > 20_000) {
+            ctx.logGateway.warn(
+              `agent.request message exceeds limit after attachment parsing (length=${message.length})`,
+            );
+            if (parsed.offloadedRefs && parsed.offloadedRefs.length > 0) {
+              for (const ref of parsed.offloadedRefs) {
+                try {
+                  await deleteMediaBuffer(ref.id);
+                } catch (cleanupErr) {
+                  ctx.logGateway.warn(
+                    `Failed to cleanup orphaned media ${ref.id}: ${formatErrorMessage(cleanupErr)}`,
+                  );
+                }
+              }
+            }
+            return;
+          }
+        } catch (err) {
+          ctx.logGateway.warn(`agent.request attachment parse failed: ${formatErrorMessage(err)}`);
+          return;
+        }
+      }
+
+      if (!message && images.length === 0) {
+        return;
+      }
+
+      const channelRaw = normalizeOptionalString(link?.channel) ?? "";
+      let channel = normalizeChannelId(channelRaw) ?? undefined;
+      let to = normalizeOptionalString(link?.to);
+      const deliverRequested = Boolean(link?.deliver);
+      const wantsReceipt = Boolean(link?.receipt);
+      const receiptText =
+        normalizeOptionalString(link?.receiptText) ||
+        "Just received your iOS share + request, working on it.";
+
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
       await touchSessionStore({ cfg, sessionKey, storePath, canonicalKey, entry, sessionId, now });
@@ -395,7 +440,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
           typeof entry?.lastChannel === "string"
             ? normalizeChannelId(entry.lastChannel)
             : undefined;
-        const entryTo = typeof entry?.lastTo === "string" ? entry.lastTo.trim() : "";
+        const entryTo = normalizeOptionalString(entry?.lastTo) ?? "";
         if (!channel && entryChannel) {
           channel = entryChannel;
         }
@@ -434,6 +479,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
           runId: sessionId,
           message,
           images,
+          imageOrder,
           sessionId,
           sessionKey: canonicalKey,
           thinking: link?.thinking ?? undefined,
@@ -458,19 +504,27 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!obj) {
         return;
       }
-      const change = normalizeNonEmptyString(obj.change)?.toLowerCase();
+      const change = normalizeOptionalString(obj.change)
+        ? normalizeLowercaseStringOrEmpty(obj.change)
+        : undefined;
       if (change !== "posted" && change !== "removed") {
         return;
       }
-      const key = normalizeNonEmptyString(obj.key);
-      if (!key) {
+      const keyRaw = normalizeOptionalString(obj.key);
+      if (!keyRaw) {
         return;
       }
-      const sessionKeyRaw = normalizeNonEmptyString(obj.sessionKey) ?? `node-${nodeId}`;
+      const key = sanitizeInboundSystemTags(keyRaw);
+      const sessionKeyRaw = normalizeOptionalString(obj.sessionKey) ?? `node-${nodeId}`;
       const { canonicalKey: sessionKey } = loadSessionEntry(sessionKeyRaw);
-      const packageName = normalizeNonEmptyString(obj.packageName);
-      const title = compactNotificationEventText(normalizeNonEmptyString(obj.title) ?? "");
-      const text = compactNotificationEventText(normalizeNonEmptyString(obj.text) ?? "");
+      const packageNameRaw = normalizeOptionalString(obj.packageName);
+      const packageName = packageNameRaw ? sanitizeInboundSystemTags(packageNameRaw) : null;
+      const title = compactNotificationEventText(
+        sanitizeInboundSystemTags(normalizeOptionalString(obj.title) ?? ""),
+      );
+      const text = compactNotificationEventText(
+        sanitizeInboundSystemTags(normalizeOptionalString(obj.text) ?? ""),
+      );
 
       let summary = `Notification ${change} (node=${nodeId} key=${key}`;
       if (packageName) {
@@ -486,7 +540,8 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
 
       const queued = enqueueSystemEvent(summary, {
         sessionKey,
-        contextKey: `notification:${key}`,
+        contextKey: `notification:${keyRaw}`,
+        trusted: false,
       });
       if (queued) {
         requestHeartbeatNow({ reason: "notifications-event", sessionKey });
@@ -522,11 +577,11 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!obj) {
         return;
       }
-      const sessionKey =
-        typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : `node-${nodeId}`;
-      if (!sessionKey) {
+      const sessionKeyRaw = normalizeOptionalString(obj.sessionKey) ?? `node-${nodeId}`;
+      if (!sessionKeyRaw) {
         return;
       }
+      const { canonicalKey: sessionKey } = loadSessionEntry(sessionKeyRaw);
 
       // Respect tools.exec.notifyOnExit setting (default: true)
       // When false, skip system event notifications for node exec events.
@@ -539,15 +594,15 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         return;
       }
 
-      const runId = typeof obj.runId === "string" ? obj.runId.trim() : "";
-      const command = typeof obj.command === "string" ? obj.command.trim() : "";
+      const runId = normalizeOptionalString(obj.runId) ?? "";
+      const command = sanitizeInboundSystemTags(normalizeOptionalString(obj.command) ?? "");
       const exitCode =
         typeof obj.exitCode === "number" && Number.isFinite(obj.exitCode)
           ? obj.exitCode
           : undefined;
       const timedOut = obj.timedOut === true;
-      const output = typeof obj.output === "string" ? obj.output.trim() : "";
-      const reason = typeof obj.reason === "string" ? obj.reason.trim() : "";
+      const output = sanitizeInboundSystemTags(normalizeOptionalString(obj.output) ?? "");
+      const reason = sanitizeInboundSystemTags(normalizeOptionalString(obj.reason) ?? "");
 
       let text = "";
       if (evt.event === "exec.started") {
@@ -573,7 +628,11 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         }
       }
 
-      enqueueSystemEvent(text, { sessionKey, contextKey: runId ? `exec:${runId}` : "exec" });
+      enqueueSystemEvent(text, {
+        sessionKey,
+        contextKey: runId ? `exec:${runId}` : "exec",
+        trusted: false,
+      });
       // Scope wakes only for canonical agent sessions. Synthetic node-* fallback
       // keys should keep legacy unscoped behavior so enabled non-main heartbeat
       // agents still run when no explicit agent session is provided.
@@ -585,14 +644,12 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!obj) {
         return;
       }
-      const transport =
-        typeof obj.transport === "string" ? obj.transport.trim().toLowerCase() : "direct";
+      const transport = normalizeLowercaseStringOrEmpty(obj.transport) || "direct";
       const topic = typeof obj.topic === "string" ? obj.topic : "";
       const environment = obj.environment;
       try {
         if (transport === "relay") {
-          const gatewayDeviceId =
-            typeof obj.gatewayDeviceId === "string" ? obj.gatewayDeviceId.trim() : "";
+          const gatewayDeviceId = normalizeOptionalString(obj.gatewayDeviceId) ?? "";
           const currentGatewayDeviceId = loadOrCreateDeviceIdentity().deviceId;
           if (!gatewayDeviceId || gatewayDeviceId !== currentGatewayDeviceId) {
             ctx.logGateway.warn(

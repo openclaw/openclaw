@@ -1,9 +1,13 @@
 import type { OpenClawConfig } from "../../config/types.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import type { DirectoryConfigParams } from "./directory-types.js";
 import type { ChannelDirectoryEntry } from "./types.js";
 
 function resolveDirectoryQuery(query?: string | null): string {
-  return query?.trim().toLowerCase() || "";
+  return normalizeLowercaseStringOrEmpty(query);
 }
 
 function resolveDirectoryLimit(limit?: number | null): number | undefined {
@@ -16,7 +20,7 @@ export function applyDirectoryQueryAndLimit(
 ): string[] {
   const q = resolveDirectoryQuery(params.query);
   const limit = resolveDirectoryLimit(params.limit);
-  const filtered = ids.filter((id) => (q ? id.toLowerCase().includes(q) : true));
+  const filtered = ids.filter((id) => (q ? normalizeLowercaseStringOrEmpty(id).includes(q) : true));
   return typeof limit === "number" ? filtered.slice(0, limit) : filtered;
 }
 
@@ -29,11 +33,11 @@ function normalizeDirectoryIds(params: {
   normalizeId?: (entry: string) => string | null | undefined;
 }): string[] {
   return params.rawIds
-    .map((entry) => entry.trim())
+    .map((entry) => normalizeOptionalString(entry) ?? "")
     .filter((entry) => Boolean(entry) && entry !== "*")
     .map((entry) => {
       const normalized = params.normalizeId ? params.normalizeId(entry) : entry;
-      return typeof normalized === "string" ? normalized.trim() : "";
+      return normalizeOptionalString(normalized) ?? "";
     })
     .filter(Boolean);
 }
@@ -69,12 +73,12 @@ export function collectNormalizedDirectoryIds(params: {
   const ids = new Set<string>();
   for (const source of params.sources) {
     for (const value of source) {
-      const raw = String(value).trim();
+      const raw = normalizeOptionalString(value) ?? "";
       if (!raw || raw === "*") {
         continue;
       }
       const normalized = params.normalizeId(raw);
-      const trimmed = typeof normalized === "string" ? normalized.trim() : "";
+      const trimmed = normalizeOptionalString(normalized) ?? "";
       if (trimmed) {
         ids.add(trimmed);
       }
@@ -121,6 +125,22 @@ export function listInspectedDirectoryEntriesFromSources<InspectedAccount>(
   });
 }
 
+export function createInspectedDirectoryEntriesLister<InspectedAccount>(params: {
+  kind: "user" | "group";
+  inspectAccount: (
+    cfg: OpenClawConfig,
+    accountId?: string | null,
+  ) => InspectedAccount | null | undefined;
+  resolveSources: (account: InspectedAccount) => Iterable<unknown>[];
+  normalizeId: (entry: string) => string | null | undefined;
+}) {
+  return async (configParams: DirectoryConfigParams): Promise<ChannelDirectoryEntry[]> =>
+    listInspectedDirectoryEntriesFromSources({
+      ...configParams,
+      ...params,
+    });
+}
+
 export function listResolvedDirectoryEntriesFromSources<ResolvedAccount>(
   params: DirectoryConfigParams & {
     kind: "user" | "group";
@@ -137,6 +157,19 @@ export function listResolvedDirectoryEntriesFromSources<ResolvedAccount>(
     limit: params.limit,
     normalizeId: params.normalizeId,
   });
+}
+
+export function createResolvedDirectoryEntriesLister<ResolvedAccount>(params: {
+  kind: "user" | "group";
+  resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => ResolvedAccount;
+  resolveSources: (account: ResolvedAccount) => Iterable<unknown>[];
+  normalizeId: (entry: string) => string | null | undefined;
+}) {
+  return async (configParams: DirectoryConfigParams): Promise<ChannelDirectoryEntry[]> =>
+    listResolvedDirectoryEntriesFromSources({
+      ...configParams,
+      ...params,
+    });
 }
 
 export function listDirectoryUserEntriesFromAllowFrom(params: {

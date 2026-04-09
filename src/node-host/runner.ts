@@ -1,4 +1,3 @@
-import { resolveBrowserConfig } from "../browser/config.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import { GatewayClient } from "../gateway/client.js";
 import { resolveGatewayConnectionAuth } from "../gateway/connection-auth.js";
@@ -6,21 +5,21 @@ import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
 import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
-import {
-  NODE_BROWSER_PROXY_COMMAND,
-  NODE_EXEC_APPROVALS_COMMANDS,
-  NODE_SYSTEM_RUN_COMMANDS,
-} from "../infra/node-commands.js";
+import { NODE_EXEC_APPROVALS_COMMANDS, NODE_SYSTEM_RUN_COMMANDS } from "../infra/node-commands.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
 import {
   coerceNodeInvokePayload,
-  handleInvoke,
   type SkillBinsProvider,
   buildNodeInvokeResultParams,
+  handleInvoke,
 } from "./invoke.js";
+import {
+  ensureNodeHostPluginRegistry,
+  listRegisteredNodeHostCapsAndCommands,
+} from "./plugin-node-host.js";
 
 export { buildNodeInvokeResultParams };
 
@@ -34,6 +33,10 @@ type NodeHostRunOptions = {
 };
 
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
+function writeStderrLine(message: string): void {
+  process.stderr.write(`${message}\n`);
+}
 
 function resolveExecutablePathFromEnv(bin: string, pathEnv: string): string | null {
   if (bin.includes("/") || bin.includes("\\")) {
@@ -160,9 +163,8 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   await saveNodeHostConfig(config);
 
   const cfg = loadConfig();
-  const resolvedBrowser = resolveBrowserConfig(cfg.browser, cfg);
-  const browserProxyEnabled =
-    cfg.nodeHost?.browserProxy?.enabled !== false && resolvedBrowser.enabled;
+  await ensureNodeHostPluginRegistry({ config: cfg, env: process.env });
+  const pluginNodeHost = listRegisteredNodeHostCapsAndCommands();
   const { token, password } = await resolveNodeHostGatewayCredentials({
     config: cfg,
     env: process.env,
@@ -186,11 +188,11 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     mode: GATEWAY_CLIENT_MODES.NODE,
     role: "node",
     scopes: [],
-    caps: ["system", ...(browserProxyEnabled ? ["browser"] : [])],
+    caps: ["system", ...pluginNodeHost.caps],
     commands: [
       ...NODE_SYSTEM_RUN_COMMANDS,
       ...NODE_EXEC_APPROVALS_COMMANDS,
-      ...(browserProxyEnabled ? [NODE_BROWSER_PROXY_COMMAND] : []),
+      ...pluginNodeHost.commands,
     ],
     pathEnv,
     permissions: undefined,
@@ -208,12 +210,10 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     },
     onConnectError: (err) => {
       // keep retrying (handled by GatewayClient)
-      // eslint-disable-next-line no-console
-      console.error(`node host gateway connect failed: ${err.message}`);
+      writeStderrLine(`node host gateway connect failed: ${err.message}`);
     },
     onClose: (code, reason) => {
-      // eslint-disable-next-line no-console
-      console.error(`node host gateway closed (${code}): ${reason}`);
+      writeStderrLine(`node host gateway closed (${code}): ${reason}`);
     },
   });
 

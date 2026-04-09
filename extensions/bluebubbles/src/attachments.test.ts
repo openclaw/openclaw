@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { downloadBlueBubblesAttachment, sendBlueBubblesAttachment } from "./attachments.js";
 import "./test-mocks.js";
+import { downloadBlueBubblesAttachment, sendBlueBubblesAttachment } from "./attachments.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import type { PluginRuntime } from "./runtime-api.js";
 import { setBlueBubblesRuntime } from "./runtime.js";
@@ -278,7 +278,9 @@ describe("downloadBlueBubblesAttachment", () => {
           bluebubbles: {
             serverUrl: "http://localhost:1234",
             password: "test",
-            allowPrivateNetwork: true,
+            network: {
+              dangerouslyAllowPrivateNetwork: true,
+            },
           },
         },
       },
@@ -288,30 +290,89 @@ describe("downloadBlueBubblesAttachment", () => {
     expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowPrivateNetwork: true });
   });
 
-  it("auto-allowlists serverUrl hostname when allowPrivateNetwork is not set", async () => {
+  it("auto-enables private-network fetches for loopback serverUrl when allowPrivateNetwork is not set", async () => {
     mockSuccessfulAttachmentDownload();
 
     const attachment: BlueBubblesAttachment = { guid: "att-no-ssrf" };
     await downloadBlueBubblesAttachment(attachment, {
       serverUrl: "http://localhost:1234",
       password: "test",
+      cfg: { channels: { bluebubbles: {} } },
     });
 
     const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
-    expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowedHostnames: ["localhost"] });
+    expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowPrivateNetwork: true });
   });
 
-  it("auto-allowlists private IP serverUrl hostname when allowPrivateNetwork is not set", async () => {
+  it("auto-enables private-network fetches for private IP serverUrl when allowPrivateNetwork is not set", async () => {
     mockSuccessfulAttachmentDownload();
 
     const attachment: BlueBubblesAttachment = { guid: "att-private-ip" };
     await downloadBlueBubblesAttachment(attachment, {
       serverUrl: "http://192.168.1.5:1234",
       password: "test",
+      cfg: { channels: { bluebubbles: {} } },
     });
 
     const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
-    expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowedHostnames: ["192.168.1.5"] });
+    expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowPrivateNetwork: true });
+  });
+
+  it("respects an explicit private-network opt-out for loopback serverUrl", async () => {
+    mockSuccessfulAttachmentDownload();
+
+    const attachment: BlueBubblesAttachment = { guid: "att-opt-out" };
+    await downloadBlueBubblesAttachment(attachment, {
+      serverUrl: "http://localhost:1234",
+      password: "test",
+      cfg: {
+        channels: {
+          bluebubbles: {
+            network: {
+              dangerouslyAllowPrivateNetwork: false,
+            },
+          },
+        },
+      },
+    });
+
+    const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(fetchMediaArgs.ssrfPolicy).toBeUndefined();
+  });
+
+  it("allowlists public serverUrl hostname when allowPrivateNetwork is not set", async () => {
+    mockSuccessfulAttachmentDownload();
+
+    const attachment: BlueBubblesAttachment = { guid: "att-public-host" };
+    await downloadBlueBubblesAttachment(attachment, {
+      serverUrl: "https://bluebubbles.example.com:1234",
+      password: "test",
+    });
+
+    const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowedHostnames: ["bluebubbles.example.com"] });
+  });
+
+  it("keeps public serverUrl hostname pinning when private-network access is explicitly disabled", async () => {
+    mockSuccessfulAttachmentDownload();
+
+    const attachment: BlueBubblesAttachment = { guid: "att-public-host-opt-out" };
+    await downloadBlueBubblesAttachment(attachment, {
+      serverUrl: "https://bluebubbles.example.com:1234",
+      password: "test",
+      cfg: {
+        channels: {
+          bluebubbles: {
+            network: {
+              dangerouslyAllowPrivateNetwork: false,
+            },
+          },
+        },
+      },
+    });
+
+    const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowedHostnames: ["bluebubbles.example.com"] });
   });
 });
 

@@ -9,6 +9,12 @@ import { withFileLock as withPathLock } from "../infra/file-lock.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "../plugin-sdk/json-store.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeNullableString,
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "../shared/string-coerce.js";
 
 const PAIRING_CODE_LENGTH = 8;
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -61,7 +67,7 @@ function resolveCredentialsDir(env: NodeJS.ProcessEnv = process.env): string {
 
 /** Sanitize channel ID for use in filenames (prevent path traversal). */
 function safeChannelKey(channel: PairingChannel): string {
-  const raw = String(channel).trim().toLowerCase();
+  const raw = normalizeLowercaseStringOrEmpty(String(channel));
   if (!raw) {
     throw new Error("invalid pairing channel");
   }
@@ -77,7 +83,7 @@ function resolvePairingPath(channel: PairingChannel, env: NodeJS.ProcessEnv = pr
 }
 
 function safeAccountKey(accountId: string): string {
-  const raw = String(accountId).trim().toLowerCase();
+  const raw = normalizeLowercaseStringOrEmpty(String(accountId));
   if (!raw) {
     throw new Error("invalid pairing account id");
   }
@@ -94,7 +100,7 @@ function resolveAllowFromPath(
   accountId?: string,
 ): string {
   const base = safeChannelKey(channel);
-  const normalizedAccountId = typeof accountId === "string" ? accountId.trim() : "";
+  const normalizedAccountId = normalizeOptionalString(accountId) ?? "";
   if (!normalizedAccountId) {
     return path.join(resolveCredentialsDir(env), `${base}-allowFrom.json`);
   }
@@ -193,12 +199,44 @@ function resolveLastSeenAt(entry: PairingRequest): number {
   return parseTimestamp(entry.lastSeenAt) ?? parseTimestamp(entry.createdAt) ?? 0;
 }
 
-function pruneExcessRequests(reqs: PairingRequest[], maxPending: number) {
+function resolvePairingRequestAccountId(entry: PairingRequest): string {
+  return normalizePairingAccountId(String(entry.meta?.accountId ?? "")) || DEFAULT_ACCOUNT_ID;
+}
+
+function pruneExcessRequestsByAccount(reqs: PairingRequest[], maxPending: number) {
   if (maxPending <= 0 || reqs.length <= maxPending) {
     return { requests: reqs, removed: false };
   }
-  const sorted = reqs.slice().toSorted((a, b) => resolveLastSeenAt(a) - resolveLastSeenAt(b));
-  return { requests: sorted.slice(-maxPending), removed: true };
+  const grouped = new Map<string, number[]>();
+  for (const [index, entry] of reqs.entries()) {
+    const accountId = resolvePairingRequestAccountId(entry);
+    const current = grouped.get(accountId);
+    if (current) {
+      current.push(index);
+      continue;
+    }
+    grouped.set(accountId, [index]);
+  }
+
+  const droppedIndexes = new Set<number>();
+  for (const indexes of grouped.values()) {
+    if (indexes.length <= maxPending) {
+      continue;
+    }
+    const sortedIndexes = indexes
+      .slice()
+      .toSorted((left, right) => resolveLastSeenAt(reqs[left]) - resolveLastSeenAt(reqs[right]));
+    for (const index of sortedIndexes.slice(0, sortedIndexes.length - maxPending)) {
+      droppedIndexes.add(index);
+    }
+  }
+  if (droppedIndexes.size === 0) {
+    return { requests: reqs, removed: false };
+  }
+  return {
+    requests: reqs.filter((_, index) => !droppedIndexes.has(index)),
+    removed: true,
+  };
 }
 
 function randomCode(): string {
@@ -222,18 +260,14 @@ function generateUniqueCode(existing: Set<string>): string {
 }
 
 function normalizePairingAccountId(accountId?: string): string {
-  return accountId?.trim().toLowerCase() || "";
+  return normalizeLowercaseStringOrEmpty(accountId);
 }
 
 function requestMatchesAccountId(entry: PairingRequest, normalizedAccountId: string): boolean {
   if (!normalizedAccountId) {
     return true;
   }
-  return (
-    String(entry.meta?.accountId ?? "")
-      .trim()
-      .toLowerCase() === normalizedAccountId
-  );
+  return resolvePairingRequestAccountId(entry) === normalizedAccountId;
 }
 
 function shouldIncludeLegacyAllowFromEntries(normalizedAccountId: string): boolean {
@@ -247,7 +281,7 @@ function resolveAllowFromAccountId(accountId?: string): string {
 }
 
 function normalizeId(value: string | number): string {
-  return String(value).trim();
+  return normalizeStringifiedOptionalString(value) ?? "";
 }
 
 function normalizeAllowEntry(channel: PairingChannel, entry: string): string {
@@ -260,7 +294,7 @@ function normalizeAllowEntry(channel: PairingChannel, entry: string): string {
   }
   const adapter = getPairingAdapter(channel);
   const normalized = adapter?.normalizeAllowEntry ? adapter.normalizeAllowEntry(trimmed) : trimmed;
-  return String(normalized).trim();
+  return normalizeOptionalString(normalized) ?? "";
 }
 
 function normalizeAllowFromList(channel: PairingChannel, store: AllowFromStore): string[] {
@@ -278,7 +312,7 @@ function dedupePreserveOrder(entries: string[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const entry of entries) {
-    const normalized = String(entry).trim();
+    const normalized = normalizeOptionalString(entry) ?? "";
     if (!normalized || seen.has(normalized)) {
       continue;
     }
@@ -666,7 +700,7 @@ export async function listChannelPairingRequests(
     async () => {
       const { requests: prunedExpired, removed: expiredRemoved } =
         await readPrunedPairingRequests(filePath);
-      const { requests: pruned, removed: cappedRemoved } = pruneExcessRequests(
+      const { requests: pruned, removed: cappedRemoved } = pruneExcessRequestsByAccount(
         prunedExpired,
         PAIRING_PENDING_MAX,
       );
@@ -717,7 +751,7 @@ export async function upsertChannelPairingRequest(params: {
         params.meta && typeof params.meta === "object"
           ? Object.fromEntries(
               Object.entries(params.meta)
-                .map(([k, v]) => [k, String(v ?? "").trim()] as const)
+                .map(([k, v]) => [k, normalizeOptionalString(v) ?? ""] as const)
                 .filter(([_, v]) => Boolean(v)),
             )
           : undefined;
@@ -737,17 +771,12 @@ export async function upsertChannelPairingRequest(params: {
         return requestMatchesAccountId(r, normalizedMatchingAccountId);
       });
       const existingCodes = new Set(
-        reqs.map((req) =>
-          String(req.code ?? "")
-            .trim()
-            .toUpperCase(),
-        ),
+        reqs.map((req) => (normalizeOptionalString(req.code) ?? "").toUpperCase()),
       );
 
       if (existingIdx >= 0) {
         const existing = reqs[existingIdx];
-        const existingCode =
-          existing && typeof existing.code === "string" ? existing.code.trim() : "";
+        const existingCode = normalizeOptionalString(existing?.code) ?? "";
         const code = existingCode || generateUniqueCode(existingCodes);
         const next: PairingRequest = {
           id,
@@ -757,7 +786,7 @@ export async function upsertChannelPairingRequest(params: {
           meta: meta ?? existing?.meta,
         };
         reqs[existingIdx] = next;
-        const { requests: capped } = pruneExcessRequests(reqs, PAIRING_PENDING_MAX);
+        const { requests: capped } = pruneExcessRequestsByAccount(reqs, PAIRING_PENDING_MAX);
         await writeJsonFile(filePath, {
           version: 1,
           requests: capped,
@@ -765,12 +794,15 @@ export async function upsertChannelPairingRequest(params: {
         return { code, created: false };
       }
 
-      const { requests: capped, removed: cappedRemoved } = pruneExcessRequests(
+      const { requests: capped, removed: cappedRemoved } = pruneExcessRequestsByAccount(
         reqs,
         PAIRING_PENDING_MAX,
       );
       reqs = capped;
-      if (PAIRING_PENDING_MAX > 0 && reqs.length >= PAIRING_PENDING_MAX) {
+      const accountRequestCount = reqs.filter((r) =>
+        requestMatchesAccountId(r, normalizedMatchingAccountId),
+      ).length;
+      if (PAIRING_PENDING_MAX > 0 && accountRequestCount >= PAIRING_PENDING_MAX) {
         if (expiredRemoved || cappedRemoved) {
           await writeJsonFile(filePath, {
             version: 1,
@@ -803,7 +835,7 @@ export async function approveChannelPairingCode(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<{ id: string; entry?: PairingRequest } | null> {
   const env = params.env ?? process.env;
-  const code = params.code.trim().toUpperCase();
+  const code = (normalizeNullableString(params.code) ?? "").toUpperCase();
   if (!code) {
     return null;
   }
@@ -839,11 +871,11 @@ export async function approveChannelPairingCode(params: {
         version: 1,
         requests: pruned,
       } satisfies PairingStore);
-      const entryAccountId = String(entry.meta?.accountId ?? "").trim() || undefined;
+      const entryAccountId = normalizeOptionalString(String(entry.meta?.accountId ?? ""));
       await addChannelAllowFromStoreEntry({
         channel: params.channel,
         entry: entry.id,
-        accountId: params.accountId?.trim() || entryAccountId,
+        accountId: normalizeOptionalString(params.accountId) ?? entryAccountId,
         env,
       });
       return { id: entry.id, entry };

@@ -51,8 +51,8 @@ describe("doctor open-policy allowFrom repair", () => {
     expect(result.changes).toEqual([
       '- channels.matrix.dm.allowFrom: set to ["*"] (required by dmPolicy="open")',
     ]);
-    expect(result.config.channels?.matrix?.dm?.allowFrom).toEqual(["*"]);
     expect(result.config.channels?.matrix?.allowFrom).toBeUndefined();
+    expect(result.config.channels?.matrix?.dm?.allowFrom).toEqual(["*"]);
   });
 
   it("appends wildcard to discord nested dm allowFrom when top-level is absent", () => {
@@ -68,8 +68,10 @@ describe("doctor open-policy allowFrom repair", () => {
     });
 
     expect(result.changes).toEqual([
+      '- channels.discord.dmPolicy: set to "open" (migrated from channels.discord.dm.policy)',
       '- channels.discord.dm.allowFrom: added "*" (required by dmPolicy="open")',
     ]);
+    expect(result.config.channels?.discord?.allowFrom).toBeUndefined();
     expect(result.config.channels?.discord?.dm?.allowFrom).toEqual(["123", "*"]);
   });
 

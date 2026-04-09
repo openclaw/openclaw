@@ -1,4 +1,5 @@
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
+import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { applyQueueRuntimeSettings } from "../../../utils/queue-helpers.js";
 import type { FollowupRun, QueueDropPolicy, QueueMode, QueueSettings } from "./types.js";
 
@@ -91,26 +92,56 @@ export function refreshQueuedFollowupSession(params: {
   previousSessionId?: string;
   nextSessionId?: string;
   nextSessionFile?: string;
+  nextProvider?: string;
+  nextModel?: string;
+  nextAuthProfileId?: string;
+  nextAuthProfileIdSource?: "auto" | "user";
 }): void {
   const cleaned = params.key.trim();
-  if (!cleaned || !params.previousSessionId || !params.nextSessionId) {
-    return;
-  }
-  if (params.previousSessionId === params.nextSessionId) {
+  if (!cleaned) {
     return;
   }
   const queue = getExistingFollowupQueue(cleaned);
   if (!queue) {
     return;
   }
+  const shouldRewriteSession =
+    Boolean(params.previousSessionId) &&
+    Boolean(params.nextSessionId) &&
+    params.previousSessionId !== params.nextSessionId;
+  const shouldRewriteSelection =
+    typeof params.nextProvider === "string" ||
+    typeof params.nextModel === "string" ||
+    Object.hasOwn(params, "nextAuthProfileId") ||
+    Object.hasOwn(params, "nextAuthProfileIdSource");
+  if (!shouldRewriteSession && !shouldRewriteSelection) {
+    return;
+  }
 
   const rewriteRun = (run?: FollowupRun["run"]) => {
-    if (!run || run.sessionId !== params.previousSessionId) {
+    if (!run) {
       return;
     }
-    run.sessionId = params.nextSessionId!;
-    if (params.nextSessionFile?.trim()) {
-      run.sessionFile = params.nextSessionFile;
+    if (shouldRewriteSession && run.sessionId === params.previousSessionId) {
+      run.sessionId = params.nextSessionId!;
+      const nextSessionFile = normalizeOptionalString(params.nextSessionFile);
+      if (nextSessionFile) {
+        run.sessionFile = nextSessionFile;
+      }
+    }
+    if (shouldRewriteSelection) {
+      if (typeof params.nextProvider === "string") {
+        run.provider = params.nextProvider;
+      }
+      if (typeof params.nextModel === "string") {
+        run.model = params.nextModel;
+      }
+      if (Object.hasOwn(params, "nextAuthProfileId")) {
+        run.authProfileId = normalizeOptionalString(params.nextAuthProfileId);
+      }
+      if (Object.hasOwn(params, "nextAuthProfileIdSource")) {
+        run.authProfileIdSource = run.authProfileId ? params.nextAuthProfileIdSource : undefined;
+      }
     }
   };
 

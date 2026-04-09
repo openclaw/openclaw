@@ -5,9 +5,10 @@
  * They support dependency injection via the `deps` parameter for testability.
  */
 
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { getClientManager as getRegistryClientManager } from "./client-manager-registry.js";
-import { DEFAULT_ACCOUNT_ID, resolveTwitchAccountContext } from "./config.js";
+import { resolveTwitchAccountContext } from "./config.js";
 import { stripMarkdownForTwitch } from "./utils/markdown.js";
 import { generateMessageId, normalizeTwitchChannel } from "./utils/twitch.js";
 
@@ -51,16 +52,21 @@ export async function sendMessageTwitchInternal(
   channel: string,
   text: string,
   cfg: OpenClawConfig,
-  accountId: string = DEFAULT_ACCOUNT_ID,
+  accountId?: string,
   stripMarkdown: boolean = true,
   logger: Console = console,
 ): Promise<SendMessageResult> {
-  const { account, configured, availableAccountIds } = resolveTwitchAccountContext(cfg, accountId);
+  const {
+    account,
+    configured,
+    availableAccountIds,
+    accountId: resolvedAccountId,
+  } = resolveTwitchAccountContext(cfg, accountId);
   if (!account) {
     return {
       ok: false,
       messageId: generateMessageId(),
-      error: `Account not found: ${accountId}. Available accounts: ${availableAccountIds.join(", ") || "none"}`,
+      error: `Account not found: ${accountId ?? "(default)"}. Available accounts: ${availableAccountIds.join(", ") || "none"}`,
     };
   }
 
@@ -69,7 +75,7 @@ export async function sendMessageTwitchInternal(
       ok: false,
       messageId: generateMessageId(),
       error:
-        `Account ${accountId} is not properly configured. ` +
+        `Account ${resolvedAccountId} is not properly configured. ` +
         "Required: username, clientId, and token (config or env for default account).",
     };
   }
@@ -91,12 +97,12 @@ export async function sendMessageTwitchInternal(
     };
   }
 
-  const clientManager = getRegistryClientManager(accountId);
+  const clientManager = getRegistryClientManager(resolvedAccountId);
   if (!clientManager) {
     return {
       ok: false,
       messageId: generateMessageId(),
-      error: `Client manager not found for account: ${accountId}. Please start the Twitch gateway first.`,
+      error: `Client manager not found for account: ${resolvedAccountId}. Please start the Twitch gateway first.`,
     };
   }
 
@@ -106,7 +112,7 @@ export async function sendMessageTwitchInternal(
       normalizeTwitchChannel(normalizedChannel),
       cleanedText,
       cfg,
-      accountId,
+      resolvedAccountId,
     );
 
     if (!result.ok) {
@@ -122,7 +128,7 @@ export async function sendMessageTwitchInternal(
       messageId: result.messageId ?? generateMessageId(),
     };
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorMsg = formatErrorMessage(error);
     logger.error(`Failed to send message: ${errorMsg}`);
     return {
       ok: false,

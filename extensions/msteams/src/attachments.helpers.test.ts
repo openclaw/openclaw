@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
 import type { PluginRuntime } from "../runtime-api.js";
 import {
   buildMSTeamsAttachmentPlaceholder,
@@ -8,7 +7,7 @@ import {
 } from "./attachments.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 
-const GRAPH_HOST = "graph.microsoft.com";
+const _GRAPH_HOST = "graph.microsoft.com";
 const SHAREPOINT_HOST = "contoso.sharepoint.com";
 const TEST_HOST = "x";
 const createUrlForHost = (host: string, pathSegment: string) => `https://${host}/${pathSegment}`;
@@ -30,7 +29,13 @@ type AttachmentPlaceholderInput = Parameters<typeof buildMSTeamsAttachmentPlaceh
 type GraphMessageUrlParams = Parameters<typeof buildMSTeamsGraphMessageUrls>[0];
 type MSTeamsMediaPayload = ReturnType<typeof buildMSTeamsMediaPayload>;
 
-const runtimeStub: PluginRuntime = createPluginRuntimeMock();
+const runtimeStub = {
+  channel: {
+    text: {
+      chunkText: (text: string) => (text ? [text] : []),
+    },
+  },
+} as unknown as PluginRuntime;
 const MEDIA_PLACEHOLDER_IMAGE = "<media:image>";
 const MEDIA_PLACEHOLDER_DOCUMENT = "<media:document>";
 const formatImagePlaceholder = (count: number) =>
@@ -177,6 +182,22 @@ describe("msteams attachment helpers", () => {
   describe("buildMSTeamsAttachmentPlaceholder", () => {
     it.each(ATTACHMENT_PLACEHOLDER_CASES)("$label", ({ attachments, expected }) => {
       expect(buildMSTeamsAttachmentPlaceholder(attachments)).toBe(expected);
+    });
+
+    it("respects inline image limits when counting placeholder images", () => {
+      const attachments = [
+        {
+          contentType: "text/html",
+          content: `<img src="data:image/png;base64,${"A".repeat(16)}" />`,
+        },
+      ];
+
+      expect(
+        buildMSTeamsAttachmentPlaceholder(attachments, {
+          maxInlineBytes: 4,
+          maxInlineTotalBytes: 4,
+        }),
+      ).toBe("<media:document>");
     });
   });
 

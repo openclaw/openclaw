@@ -8,7 +8,10 @@ type ToolFactoryLike = (ctx: ToolContextLike) => AnyAgentTool | AnyAgentTool[] |
 
 export type ToolLike = {
   name: string;
-  execute: (toolCallId: string, params: unknown) => Promise<unknown> | unknown;
+  execute: (
+    toolCallId: string,
+    params: unknown,
+  ) => Promise<{ details: Record<string, unknown> }> | { details: Record<string, unknown> };
 };
 
 type RegisteredTool = {
@@ -17,7 +20,9 @@ type RegisteredTool = {
 };
 
 function toToolList(value: AnyAgentTool | AnyAgentTool[] | null | undefined): AnyAgentTool[] {
-  if (!value) return [];
+  if (!value) {
+    return [];
+  }
   return Array.isArray(value) ? value : [value];
 }
 

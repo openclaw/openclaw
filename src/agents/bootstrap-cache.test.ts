@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 vi.mock("./workspace.js", () => ({
@@ -22,11 +22,13 @@ describe("getOrLoadBootstrapFiles", () => {
 
   const mockLoad = () => vi.mocked(workspaceModule.loadWorkspaceBootstrapFiles);
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ clearAllBootstrapSnapshots, getOrLoadBootstrapFiles } =
       await import("./bootstrap-cache.js"));
     workspaceModule = await import("./workspace.js");
+  });
+
+  beforeEach(() => {
     clearAllBootstrapSnapshots();
     mockLoad().mockResolvedValue(files);
   });
@@ -75,11 +77,13 @@ describe("clearBootstrapSnapshot", () => {
 
   const mockLoad = () => vi.mocked(workspaceModule.loadWorkspaceBootstrapFiles);
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ clearAllBootstrapSnapshots, clearBootstrapSnapshot, getOrLoadBootstrapFiles } =
       await import("./bootstrap-cache.js"));
     workspaceModule = await import("./workspace.js");
+  });
+
+  beforeEach(() => {
     clearAllBootstrapSnapshots();
     mockLoad().mockResolvedValue([makeFile("AGENTS.md", "content")]);
   });

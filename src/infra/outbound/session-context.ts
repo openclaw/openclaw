@@ -1,5 +1,6 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 export type OutboundSessionContext = {
   /** Canonical session key used for internal hook dispatch. */
@@ -7,14 +8,6 @@ export type OutboundSessionContext = {
   /** Active agent id used for workspace-scoped media roots. */
   agentId?: string;
 };
-
-function normalizeOptionalString(value?: string | null): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
 
 export function buildOutboundSessionContext(params: {
   cfg: OpenClawConfig;

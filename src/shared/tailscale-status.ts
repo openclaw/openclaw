@@ -1,3 +1,6 @@
+import { z } from "zod";
+import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
+
 export type TailscaleStatusCommandResult = {
   code: number | null;
   stdout: string;
@@ -13,30 +16,31 @@ const TAILSCALE_STATUS_COMMAND_CANDIDATES = [
   "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
 ];
 
-function parsePossiblyNoisyJsonObject(raw: string): Record<string, unknown> {
+const TailscaleStatusSchema = z.object({
+  Self: z
+    .object({
+      DNSName: z.string().optional(),
+      TailscaleIPs: z.array(z.string()).optional(),
+    })
+    .optional(),
+});
+
+function parsePossiblyNoisyStatus(raw: string): z.infer<typeof TailscaleStatusSchema> | null {
   const start = raw.indexOf("{");
   const end = raw.lastIndexOf("}");
   if (start === -1 || end <= start) {
-    return {};
+    return null;
   }
-  try {
-    return JSON.parse(raw.slice(start, end + 1)) as Record<string, unknown>;
-  } catch {
-    return {};
-  }
+  return safeParseJsonWithSchema(TailscaleStatusSchema, raw.slice(start, end + 1));
 }
 
 function extractTailnetHostFromStatusJson(raw: string): string | null {
-  const parsed = parsePossiblyNoisyJsonObject(raw);
-  const self =
-    typeof parsed.Self === "object" && parsed.Self !== null
-      ? (parsed.Self as Record<string, unknown>)
-      : undefined;
-  const dns = typeof self?.DNSName === "string" ? self.DNSName : undefined;
+  const parsed = parsePossiblyNoisyStatus(raw);
+  const dns = parsed?.Self?.DNSName;
   if (dns && dns.length > 0) {
     return dns.replace(/\.$/, "");
   }
-  const ips = Array.isArray(self?.TailscaleIPs) ? (self.TailscaleIPs as string[]) : [];
+  const ips = parsed?.Self?.TailscaleIPs ?? [];
   return ips.length > 0 ? (ips[0] ?? null) : null;
 }
 

@@ -1,5 +1,5 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 import { handleSlackAction, slackActionRuntime } from "./action-runtime.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 
@@ -242,6 +242,30 @@ describe("handleSlackAction", () => {
     );
   });
 
+  it("forwards resolved botToken to action functions instead of relying on config re-read", async () => {
+    downloadSlackFile.mockResolvedValueOnce(null);
+    await handleSlackAction({ action: "downloadFile", fileId: "F123" }, slackConfig());
+    const opts = downloadSlackFile.mock.calls[0]?.[1] as { token?: string } | undefined;
+    expect(opts?.token).toBe("tok");
+  });
+
+  it("keeps resolved userToken for downloadFile reads when configured", async () => {
+    downloadSlackFile.mockResolvedValueOnce(null);
+    await handleSlackAction(
+      { action: "downloadFile", fileId: "F123" },
+      slackConfig({
+        accounts: {
+          default: {
+            botToken: "xoxb-bot",
+            userToken: "xoxp-user",
+          },
+        },
+      }),
+    );
+    const opts = downloadSlackFile.mock.calls[0]?.[1] as { token?: string } | undefined;
+    expect(opts?.token).toBe("xoxp-user");
+  });
+
   it.each([
     {
       name: "JSON blocks",
@@ -304,6 +328,28 @@ describe("handleSlackAction", () => {
         slackConfig(),
       ),
     ).rejects.toThrow(/requires content, blocks, or mediaUrl/i);
+  });
+
+  it("routes uploadFile through sendSlackMessage with upload metadata", async () => {
+    await handleSlackAction(
+      {
+        action: "uploadFile",
+        to: "user:U123",
+        filePath: "/tmp/report.png",
+        initialComment: "fresh report",
+        filename: "report-final.png",
+        title: "Report Final",
+        threadTs: "111.222",
+      },
+      slackConfig(),
+    );
+
+    expect(sendSlackMessage).toHaveBeenCalledWith("user:U123", "fresh report", {
+      mediaUrl: "/tmp/report.png",
+      threadTs: "111.222",
+      uploadFileName: "report-final.png",
+      uploadTitle: "Report Final",
+    });
   });
 
   it("rejects blocks combined with mediaUrl", async () => {

@@ -16,11 +16,11 @@ import {
 } from "../infra/restart.js";
 import { setCommandLaneConcurrency, getTotalQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
+import { getInspectableTaskRegistrySummary } from "../tasks/task-registry.maintenance.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { ChannelKind } from "./config-reload-plan.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
 import { resolveHooksConfig } from "./hooks.js";
-import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js";
 import type { HookClientIpConfig } from "./server-http.js";
 import { resolveHookClientIpConfig } from "./server/hooks.js";
@@ -30,7 +30,6 @@ type GatewayHotReloadState = {
   hookClientIpConfig: HookClientIpConfig;
   heartbeatRunner: HeartbeatRunner;
   cronState: GatewayCronState;
-  browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> | null;
   channelHealthMonitor: ChannelHealthMonitor | null;
 };
 
@@ -46,7 +45,6 @@ export function createGatewayReloadHandlers(params: {
     warn: (msg: string) => void;
     error: (msg: string) => void;
   };
-  logBrowser: { error: (msg: string) => void };
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   logCron: { error: (msg: string) => void };
   logReload: { info: (msg: string) => void; warn: (msg: string) => void };
@@ -89,17 +87,6 @@ export function createGatewayReloadHandlers(params: {
       void nextState.cronState.cron
         .start()
         .catch((err) => params.logCron.error(`failed to start: ${String(err)}`));
-    }
-
-    if (plan.restartBrowserControl) {
-      if (state.browserControl) {
-        await state.browserControl.stop().catch(() => {});
-      }
-      try {
-        nextState.browserControl = await startBrowserControlServerIfEnabled();
-      } catch (err) {
-        params.logBrowser.error(`server failed to start: ${String(err)}`);
-      }
     }
 
     if (plan.restartHealthMonitor) {
@@ -166,7 +153,7 @@ export function createGatewayReloadHandlers(params: {
   const requestGatewayRestart = (
     plan: GatewayReloadPlan,
     nextConfig: ReturnType<typeof loadConfig>,
-  ) => {
+  ): boolean => {
     setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
     const reasons = plan.restartReasons.length
       ? plan.restartReasons.join(", ")
@@ -174,18 +161,20 @@ export function createGatewayReloadHandlers(params: {
 
     if (process.listenerCount("SIGUSR1") === 0) {
       params.logReload.warn("no SIGUSR1 listener found; restart skipped");
-      return;
+      return false;
     }
 
     const getActiveCounts = () => {
       const queueSize = getTotalQueueSize();
       const pendingReplies = getTotalPendingReplies();
       const embeddedRuns = getActiveEmbeddedRunCount();
+      const activeTasks = getInspectableTaskRegistrySummary().active;
       return {
         queueSize,
         pendingReplies,
         embeddedRuns,
-        totalActive: queueSize + pendingReplies + embeddedRuns,
+        activeTasks,
+        totalActive: queueSize + pendingReplies + embeddedRuns + activeTasks,
       };
     };
     const formatActiveDetails = (counts: ReturnType<typeof getActiveCounts>) => {
@@ -199,6 +188,9 @@ export function createGatewayReloadHandlers(params: {
       if (counts.embeddedRuns > 0) {
         details.push(`${counts.embeddedRuns} embedded run(s)`);
       }
+      if (counts.activeTasks > 0) {
+        details.push(`${counts.activeTasks} task run(s)`);
+      }
       return details;
     };
     const active = getActiveCounts();
@@ -209,7 +201,7 @@ export function createGatewayReloadHandlers(params: {
         params.logReload.info(
           `config change requires gateway restart (${reasons}) — already waiting for operations to complete`,
         );
-        return;
+        return true;
       }
       restartPending = true;
       const initialDetails = formatActiveDetails(active);
@@ -240,6 +232,7 @@ export function createGatewayReloadHandlers(params: {
           },
         },
       });
+      return true;
     } else {
       // No active operations or pending replies, restart immediately
       params.logReload.warn(`config change requires gateway restart (${reasons})`);
@@ -247,6 +240,7 @@ export function createGatewayReloadHandlers(params: {
       if (!emitted) {
         params.logReload.info("gateway restart already scheduled; skipping duplicate signal");
       }
+      return true;
     }
   };
 
