@@ -140,7 +140,10 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   const state = getAgentEventState();
   const existing = state.runContextById.get(runId);
   if (!existing) {
-    state.runContextById.set(runId, { ...context, registeredAt: context.registeredAt ?? Date.now() });
+    state.runContextById.set(runId, {
+      ...context,
+      registeredAt: context.registeredAt ?? Date.now(),
+    });
     return;
   }
   if (context.sessionKey && existing.sessionKey !== context.sessionKey) {
@@ -171,6 +174,7 @@ export function clearAgentRunContext(runId: string) {
  * Guards against orphaned entries when lifecycle "end"/"error" events are missed.
  */
 export function sweepStaleRunContexts(maxAgeMs = 30 * 60 * 1000): number {
+  const state = getAgentEventState();
   const now = Date.now();
   let swept = 0;
   for (const [runId, ctx] of state.runContextById.entries()) {
