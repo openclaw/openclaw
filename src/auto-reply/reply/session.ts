@@ -518,7 +518,16 @@ export async function initSessionState(params: {
   // System events (heartbeat, cron-event, exec-event) must not advance updatedAt.
   // Advancing updatedAt would make evaluateSessionFreshness always see the session as fresh,
   // preventing daily resets from ever firing. See: https://github.com/openclaw/openclaw/issues/63732
-  const sessionUpdatedAt = isSystemEvent && baseEntry?.updatedAt != null ? baseEntry.updatedAt : Date.now();
+  // Guard: validate the persisted value is a finite number before reusing it.
+  // Session entries are loaded from unvalidated JSON; a corrupted or non-numeric updatedAt
+  // would make freshness comparisons (< dailyResetAt) always false, bypassing all resets.
+  const persistedUpdatedAt = baseEntry?.updatedAt;
+  const safePersistedUpdatedAt =
+    typeof persistedUpdatedAt === "number" && Number.isFinite(persistedUpdatedAt)
+      ? persistedUpdatedAt
+      : undefined;
+  const sessionUpdatedAt =
+    isSystemEvent && safePersistedUpdatedAt != null ? safePersistedUpdatedAt : Date.now();
   sessionEntry = {
     ...baseEntry,
     sessionId,
