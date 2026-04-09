@@ -152,6 +152,91 @@ describe("amazon-bedrock provider plugin", () => {
     });
   });
 
+  describe("application inference profile model name resolution", () => {
+    /** Identity streamFn for prompt-cache pass-through detection. */
+    const passThroughFn = (_model: unknown, _context: unknown, options: unknown) => options;
+
+    it("enables prompt caching for inference profile when model name contains claude", async () => {
+      const arn =
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/7g9cumu1wd7v";
+      const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+      const result = provider.wrapStreamFn?.({
+        provider: "amazon-bedrock",
+        modelId: arn,
+        config: {
+          models: {
+            providers: {
+              "amazon-bedrock": {
+                models: [{ id: arn, name: "Claude Sonnet 4.6 via Inference Profile" }],
+              },
+            },
+          },
+        },
+        streamFn: passThroughFn,
+      } as never);
+      // Should NOT be wrapped with noCacheWrapper (i.e., returns original streamFn)
+      expect(result).toBe(passThroughFn);
+    });
+
+    it("disables prompt caching for inference profile with random ID and no model name", async () => {
+      const arn =
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/7g9cumu1wd7v";
+      const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+      const result = provider.wrapStreamFn?.({
+        provider: "amazon-bedrock",
+        modelId: arn,
+        streamFn: passThroughFn,
+      } as never);
+      // Should be wrapped with noCacheWrapper (different from original streamFn)
+      expect(result).not.toBe(passThroughFn);
+    });
+
+    it("disables prompt caching for inference profile when model name does not contain claude", async () => {
+      const arn =
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/7g9cumu1wd7v";
+      const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+      const result = provider.wrapStreamFn?.({
+        provider: "amazon-bedrock",
+        modelId: arn,
+        config: {
+          models: {
+            providers: {
+              "amazon-bedrock": {
+                models: [{ id: arn, name: "My Custom Nova Model" }],
+              },
+            },
+          },
+        },
+        streamFn: passThroughFn,
+      } as never);
+      // Should be wrapped with noCacheWrapper
+      expect(result).not.toBe(passThroughFn);
+    });
+
+    it("enables prompt caching for inference profile via provider alias", async () => {
+      const arn =
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123random";
+      const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+      const result = provider.wrapStreamFn?.({
+        provider: "amazon-bedrock",
+        modelId: arn,
+        config: {
+          models: {
+            providers: {
+              // Use the "bedrock" alias instead of canonical "amazon-bedrock"
+              bedrock: {
+                models: [{ id: arn, name: "Claude Opus 4.6 via Profile" }],
+              },
+            },
+          },
+        },
+        streamFn: passThroughFn,
+      } as never);
+      // Should recognize Claude via alias provider key
+      expect(result).toBe(passThroughFn);
+    });
+  });
+
   describe("guardrail config schema", () => {
     it("defines discovery and guardrail objects with the expected shape", () => {
       const pluginJson = JSON.parse(

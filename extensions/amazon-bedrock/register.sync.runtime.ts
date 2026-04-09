@@ -35,9 +35,17 @@ type AmazonBedrockPluginConfig = {
 };
 
 function createGuardrailWrapStreamFn(
-  innerWrapStreamFn: (ctx: { modelId: string; streamFn?: StreamFn }) => StreamFn | null | undefined,
+  innerWrapStreamFn: (ctx: {
+    modelId: string;
+    config?: Record<string, unknown>;
+    streamFn?: StreamFn;
+  }) => StreamFn | null | undefined,
   guardrailConfig: GuardrailConfig,
-): (ctx: { modelId: string; streamFn?: StreamFn }) => StreamFn | null | undefined {
+): (ctx: {
+  modelId: string;
+  config?: Record<string, unknown>;
+  streamFn?: StreamFn;
+}) => StreamFn | null | undefined {
   return (ctx) => {
     const inner = innerWrapStreamFn(ctx);
     if (!inner) {
@@ -80,8 +88,50 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
   const pluginConfig = (api.pluginConfig ?? {}) as AmazonBedrockPluginConfig;
   const guardrail = pluginConfig.guardrail;
 
-  const baseWrapStreamFn = ({ modelId, streamFn }: { modelId: string; streamFn?: StreamFn }) =>
-    isAnthropicBedrockModel(modelId) ? streamFn : createBedrockNoCacheWrapper(streamFn);
+  /** Look up the display name for a model ID from the provider config. */
+  function resolveModelName(
+    modelId: string,
+    providers: Record<string, unknown> | undefined,
+  ): string | undefined {
+    if (!providers) {
+      return undefined;
+    }
+    // Check canonical key first, then aliases
+    const keys = [
+      providerId,
+      ...Object.keys(providers).filter(
+        (k) => k !== providerId && normalizeProviderId(k) === providerId,
+      ),
+    ];
+    for (const key of keys) {
+      const models = (providers[key] as { models?: Array<{ id: string; name?: string }> })?.models;
+      if (models) {
+        const match = models.find((m) => m.id === modelId);
+        if (match?.name) {
+          return match.name;
+        }
+      }
+    }
+    return undefined;
+  }
+
+  const baseWrapStreamFn = ({
+    modelId,
+    config,
+    streamFn,
+  }: {
+    modelId: string;
+    config?: Record<string, unknown>;
+    streamFn?: StreamFn;
+  }) => {
+    const modelName = resolveModelName(
+      modelId,
+      (config as { models?: { providers?: Record<string, unknown> } })?.models?.providers,
+    );
+    return isAnthropicBedrockModel(modelId, modelName)
+      ? streamFn
+      : createBedrockNoCacheWrapper(streamFn);
+  };
 
   const cacheWrapStreamFn =
     guardrail?.guardrailIdentifier && guardrail?.guardrailVersion
@@ -158,7 +208,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     ...anthropicByModelReplayHooks,
     wrapStreamFn: ({ modelId, config, model, streamFn }) => {
       // Apply cache + guardrail wrapping.
-      const wrapped = cacheWrapStreamFn({ modelId, streamFn });
+      const wrapped = cacheWrapStreamFn({ modelId, config, streamFn });
       const region = resolveBedrockRegion(config) ?? extractRegionFromBaseUrl(model?.baseUrl);
 
       if (!region) {

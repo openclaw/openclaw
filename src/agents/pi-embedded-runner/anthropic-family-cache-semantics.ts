@@ -15,7 +15,7 @@ export function isAnthropicModelRef(modelId: string): boolean {
 /** Matches Application Inference Profile ARNs across all AWS partitions with Bedrock. */
 const BEDROCK_APP_INFERENCE_PROFILE_ARN_RE = /^arn:aws(-cn|-us-gov)?:bedrock:/;
 
-export function isAnthropicBedrockModel(modelId: string): boolean {
+export function isAnthropicBedrockModel(modelId: string, modelName?: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
 
   // Direct Anthropic Claude model IDs and regional inference profiles
@@ -39,7 +39,14 @@ export function isAnthropicBedrockModel(modelId: string): boolean {
     normalized.includes(":application-inference-profile/")
   ) {
     const profileId = normalized.split(":application-inference-profile/")[1] ?? "";
-    return profileId.includes("claude");
+    if (profileId.includes("claude")) {
+      return true;
+    }
+    // Fall back to configured model name (e.g., "Claude Sonnet 4.6 via Inference Profile")
+    if (modelName) {
+      return normalizeLowercaseStringOrEmpty(modelName).includes("claude");
+    }
+    return false;
   }
 
   return false;
