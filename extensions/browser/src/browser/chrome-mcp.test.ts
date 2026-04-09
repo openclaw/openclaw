@@ -341,6 +341,28 @@ describe("chrome MCP page parsing", () => {
     expect(tabs).toHaveLength(1);
   });
 
+  it("does not dispatch a click when the signal is already aborted", async () => {
+    const session = createFakeSession();
+    const callTool = vi.fn(async (_call: ToolCall) => {
+      throw new Error("callTool should not run");
+    });
+    session.client.callTool = callTool as typeof session.client.callTool;
+    setChromeMcpSessionFactoryForTest(async () => session);
+    const ctrl = new AbortController();
+    ctrl.abort(new Error("aborted before click"));
+
+    await expect(
+      clickChromeMcpElement({
+        profileName: "chrome-live",
+        targetId: "1",
+        uid: "btn-1",
+        signal: ctrl.signal,
+      }),
+    ).rejects.toThrow(/aborted before click/i);
+
+    expect(callTool).not.toHaveBeenCalled();
+  });
+
   it("creates a fresh session when userDataDir changes for the same profile", async () => {
     const createdSessions: ChromeMcpSession[] = [];
     const closeMocks: Array<ReturnType<typeof vi.fn>> = [];
