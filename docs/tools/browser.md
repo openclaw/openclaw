@@ -742,7 +742,7 @@ Notes:
 - `click`/`type`/etc require a `ref` from `snapshot` (either numeric `12` or role ref `e12`).
   CSS selectors are intentionally not supported for actions.
 - For interactive automation, prefer role snapshots (`--interactive`, refs like `e12`). They are the most reliable path for `click`/`type`/`hover` across dynamic pages and recent OpenClaw builds.
-- Treat plain accessibility-tree refs (`ax...` from `snapshotFormat=aria`) as inspection-oriented. They can be useful for reading the tree, but if interaction is flaky, re-snapshot in interactive mode and use a fresh role ref instead.
+- Treat `snapshotFormat=aria` snapshots as inspection-oriented. They return no interactive refs; if you need to interact, use `snapshotFormat=ai` (numeric refs) or an interactive role snapshot (`e12` refs) instead.
 
 ## Snapshots and refs
 
