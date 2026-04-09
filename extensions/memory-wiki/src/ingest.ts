@@ -56,13 +56,25 @@ export async function ingestMemoryWikiSource(params: {
   const created = !(await pathExists(pagePath));
   const timestamp = new Date(params.nowMs ?? Date.now()).toISOString();
 
+  // Build Obsidian wikilink from input path: strip vault root prefix, strip .md
+  const vaultRoot = params.config.vault.path;
+  let wikilinkRelative = sourcePath;
+  if (sourcePath.startsWith(vaultRoot)) {
+    wikilinkRelative = sourcePath.slice(vaultRoot.length);
+  }
+  if (wikilinkRelative.endsWith(".md")) {
+    wikilinkRelative = wikilinkRelative.slice(0, -3);
+  }
+  const wikilinkFilename = path.basename(wikilinkRelative);
+  const sourceWikilink = `[[${wikilinkRelative}|${wikilinkFilename}]]`;
+
   const markdown = renderWikiMarkdown({
     frontmatter: {
       pageType: "source",
       id: pageId,
       title,
       sourceType: "local-file",
-      sourcePath,
+      sourcePath: sourceWikilink,
       ingestedAt: timestamp,
       updatedAt: timestamp,
       status: "active",
@@ -72,7 +84,7 @@ export async function ingestMemoryWikiSource(params: {
       "",
       "## Source",
       `- Type: \`local-file\``,
-      `- Path: \`${sourcePath}\``,
+      `- Path: ${sourceWikilink}`,
       `- Bytes: ${buffer.byteLength}`,
       `- Updated: ${timestamp}`,
       "",
