@@ -515,6 +515,28 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     expect(plan.environment.OPENCLAW_SERVICE_MARKER).toBeUndefined();
   });
 
+  it("drops non-absolute and temp PATH entries from an existing service env", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_PORT: "3000",
+        PATH: "/managed/bin:/usr/bin",
+        TMPDIR: "/tmp",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+      existingEnvironment: {
+        PATH: ".:/tmp/evil:/custom/go/bin:/usr/bin",
+      },
+    });
+
+    expect(plan.environment.PATH).toBe("/managed/bin:/usr/bin:/custom/go/bin");
+  });
+
   it("drops keys that were previously tracked as managed service env", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {

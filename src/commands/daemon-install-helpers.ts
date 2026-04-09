@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import {
   loadAuthProfileStoreForSecretsRuntime,
@@ -74,15 +75,32 @@ function collectAuthProfileServiceEnvVars(params: {
 function mergeServicePath(
   nextPath: string | undefined,
   existingPath: string | undefined,
+  tmpDir: string | undefined,
 ): string | undefined {
   const segments: string[] = [];
   const seen = new Set<string>();
-  const addPath = (value: string | undefined) => {
+  const normalizedTmpDirs = [tmpDir, os.tmpdir()]
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value))
+    .map((value) => path.resolve(value));
+  const shouldPreservePathSegment = (segment: string) => {
+    if (!path.isAbsolute(segment)) {
+      return false;
+    }
+    const resolved = path.resolve(segment);
+    return !normalizedTmpDirs.some(
+      (tmpRoot) => resolved === tmpRoot || resolved.startsWith(`${tmpRoot}${path.sep}`),
+    );
+  };
+  const addPath = (value: string | undefined, options?: { preserve?: boolean }) => {
     if (typeof value !== "string" || value.trim().length === 0) {
       return;
     }
     for (const segment of value.split(path.delimiter)) {
       const trimmed = segment.trim();
+      if (options?.preserve && !shouldPreservePathSegment(trimmed)) {
+        continue;
+      }
       if (!trimmed || seen.has(trimmed)) {
         continue;
       }
@@ -91,7 +109,7 @@ function mergeServicePath(
     }
   };
   addPath(nextPath);
-  addPath(existingPath);
+  addPath(existingPath, { preserve: true });
   return segments.length > 0 ? segments.join(path.delimiter) : undefined;
 }
 
@@ -195,6 +213,7 @@ function buildGatewayInstallEnvironment(params: {
   const mergedPath = mergeServicePath(
     params.serviceEnvironment.PATH,
     params.existingEnvironment?.PATH,
+    params.serviceEnvironment.TMPDIR,
   );
   if (mergedPath) {
     environment.PATH = mergedPath;
