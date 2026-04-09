@@ -126,11 +126,10 @@ export function applySettingsFromUrl(host: SettingsHost) {
   // for compatibility with older deep links.
   const queryToken = params.get("token");
   const hashToken = hashParams.get("token");
-  const tokenRaw = hashToken ?? queryToken;
+  const hasTokenParam = hashToken != null || queryToken != null;
   const passwordRaw = params.get("password") ?? hashParams.get("password");
-  const sessionParam = params.get("session") ?? hashParams.get("session");
-  const token = normalizeOptionalString(tokenRaw);
-  const session = normalizeOptionalString(sessionParam);
+  const token = normalizeOptionalString(hashToken ?? queryToken);
+  const session = normalizeOptionalString(params.get("session") ?? hashParams.get("session"));
   const shouldResetSessionForToken = Boolean(token && !session && !gatewayUrlChanged);
   let shouldCleanUrl = false;
 
@@ -139,7 +138,7 @@ export function applySettingsFromUrl(host: SettingsHost) {
     shouldCleanUrl = true;
   }
 
-  if (tokenRaw != null) {
+  if (hasTokenParam) {
     if (queryToken != null) {
       warnQueryToken = true;
       console.warn(
