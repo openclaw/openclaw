@@ -51,17 +51,19 @@ static void on_mutation_done(const GatewayRpcResponse *response, gpointer user_d
 
 /* ── Action handlers ─────────────────────────────────────────────── */
 
-static void on_probe(GtkButton *btn, gpointer user_data) {
+static void on_refresh_all_channels(GtkButton *btn, gpointer user_data) {
     (void)user_data;
+
     gtk_widget_set_sensitive(GTK_WIDGET(btn), FALSE);
-    if (channels_status_label)
-        gtk_label_set_text(GTK_LABEL(channels_status_label), "Probing\u2026");
+    if (channels_status_label) {
+        gtk_label_set_text(GTK_LABEL(channels_status_label), "Refreshing all channels…");
+    }
 
     g_autofree gchar *req = mutation_channels_status(TRUE, on_mutation_done, NULL);
     if (!req) {
         gtk_widget_set_sensitive(GTK_WIDGET(btn), TRUE);
         if (channels_status_label)
-            gtk_label_set_text(GTK_LABEL(channels_status_label), "Failed to send request");
+            gtk_label_set_text(GTK_LABEL(channels_status_label), "Failed to send refresh request");
     }
 }
 
@@ -559,6 +561,7 @@ static void on_logout(GtkButton *btn, gpointer user_data) {
     (void)user_data;
     const gchar *channel_id = (const gchar *)g_object_get_data(G_OBJECT(btn), "channel-id");
     const gchar *label = (const gchar *)g_object_get_data(G_OBJECT(btn), "channel-label");
+    const gchar *account_id = (const gchar *)g_object_get_data(G_OBJECT(btn), "account-id");
     if (!channel_id) return;
 
     g_autofree gchar *body = g_strdup_printf(
@@ -573,6 +576,9 @@ static void on_logout(GtkButton *btn, gpointer user_data) {
     adw_alert_dialog_set_close_response(dialog, "cancel");
 
     g_object_set_data_full(G_OBJECT(dialog), "channel-id", g_strdup(channel_id), g_free);
+    if (account_id && account_id[0] != '\0') {
+        g_object_set_data_full(G_OBJECT(dialog), "account-id", g_strdup(account_id), g_free);
+    }
 
     GtkWidget *toplevel = GTK_WIDGET(gtk_widget_get_root(GTK_WIDGET(btn)));
     adw_alert_dialog_choose(dialog, toplevel, NULL, on_logout_dialog_response, NULL);
@@ -618,6 +624,11 @@ static void build_channel_card(GatewayChannel *ch) {
         gtk_widget_add_css_class(acct, "dim-label");
         gtk_box_append(GTK_BOX(hdr), acct);
     }
+
+    GtkWidget *status_chip = gtk_label_new(ch->connected ? "connected" : "disconnected");
+    gtk_widget_add_css_class(status_chip, "status-chip");
+    gtk_widget_add_css_class(status_chip, ch->connected ? "chip-ok" : "chip-error");
+    gtk_box_append(GTK_BOX(hdr), status_chip);
 
     gtk_box_append(GTK_BOX(card), hdr);
 
@@ -681,6 +692,13 @@ static void build_channel_card(GatewayChannel *ch) {
     g_signal_connect(btn_config, "clicked", G_CALLBACK(on_edit_config), NULL);
     gtk_box_append(GTK_BOX(actions), btn_config);
 
+    /* Refresh All (row-level affordance that maps to a global probe/refresh) */
+    GtkWidget *btn_probe = gtk_button_new_with_label("Refresh All");
+    gtk_widget_add_css_class(btn_probe, "flat");
+    gtk_widget_set_tooltip_text(btn_probe, "Refreshes connection status for all channels");
+    g_signal_connect(btn_probe, "clicked", G_CALLBACK(on_refresh_all_channels), NULL);
+    gtk_box_append(GTK_BOX(actions), btn_probe);
+
     /* Web Login (WhatsApp QR) */
     if (g_strcmp0(ch->channel_id, "whatsapp") == 0 && !ch->connected) {
         GtkWidget *btn_link = gtk_button_new_with_label("Link Device");
@@ -699,6 +717,10 @@ static void build_channel_card(GatewayChannel *ch) {
             g_strdup(ch->channel_id), g_free);
         g_object_set_data_full(G_OBJECT(btn_logout), "channel-label",
             g_strdup(ch_label), g_free);
+        if (ch->default_account_id) {
+            g_object_set_data_full(G_OBJECT(btn_logout), "account-id",
+                g_strdup(ch->default_account_id), g_free);
+        }
         g_signal_connect(btn_logout, "clicked", G_CALLBACK(on_logout), NULL);
         gtk_box_append(GTK_BOX(actions), btn_logout);
     }
@@ -837,7 +859,7 @@ static GtkWidget* channels_build(void) {
     GtkWidget *btn_probe = gtk_button_new_with_label("Probe All Channels");
     gtk_widget_add_css_class(btn_probe, "flat");
     gtk_widget_set_halign(btn_probe, GTK_ALIGN_START);
-    g_signal_connect(btn_probe, "clicked", G_CALLBACK(on_probe), NULL);
+    g_signal_connect(btn_probe, "clicked", G_CALLBACK(on_refresh_all_channels), NULL);
     gtk_box_append(GTK_BOX(page), btn_probe);
 
     GtkWidget *sep = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);

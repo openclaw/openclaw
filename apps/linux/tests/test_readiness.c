@@ -331,6 +331,72 @@ static void test_presenter_null_output(void) {
     readiness_evaluate(STATE_RUNNING, NULL, NULL, NULL);
 }
 
+static void test_onboarding_progress_service_inactive(void) {
+    HealthState hs = {0};
+    SystemdState sys = {0};
+    OnboardingStageProgress progress = {0};
+
+    hs.config_valid = TRUE;
+    hs.http_ok = FALSE;
+    hs.ws_connected = FALSE;
+    hs.rpc_ok = FALSE;
+    hs.auth_ok = FALSE;
+
+    sys.installed = TRUE;
+    sys.active = FALSE;
+
+    readiness_build_onboarding_progress(STATE_STOPPED, &hs, &sys, &progress);
+
+    g_assert_cmpint(progress.configuration, ==, ONBOARDING_STAGE_COMPLETE);
+    g_assert_cmpint(progress.service_gateway, ==, ONBOARDING_STAGE_IN_PROGRESS);
+    g_assert_cmpint(progress.connection, ==, ONBOARDING_STAGE_PENDING);
+    g_assert_false(progress.operational_ready);
+}
+
+static void test_onboarding_progress_connecting_service_active(void) {
+    HealthState hs = {0};
+    SystemdState sys = {0};
+    OnboardingStageProgress progress = {0};
+
+    hs.config_valid = TRUE;
+    hs.http_ok = TRUE;
+    hs.ws_connected = FALSE;
+    hs.rpc_ok = FALSE;
+    hs.auth_ok = FALSE;
+
+    sys.installed = TRUE;
+    sys.active = TRUE;
+
+    readiness_build_onboarding_progress(STATE_DEGRADED, &hs, &sys, &progress);
+
+    g_assert_cmpint(progress.configuration, ==, ONBOARDING_STAGE_COMPLETE);
+    g_assert_cmpint(progress.service_gateway, ==, ONBOARDING_STAGE_COMPLETE);
+    g_assert_cmpint(progress.connection, ==, ONBOARDING_STAGE_IN_PROGRESS);
+    g_assert_false(progress.operational_ready);
+}
+
+static void test_onboarding_progress_operational_ready_only_when_running(void) {
+    HealthState hs = {0};
+    SystemdState sys = {0};
+    OnboardingStageProgress progress = {0};
+
+    hs.config_valid = TRUE;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+
+    sys.installed = TRUE;
+    sys.active = TRUE;
+
+    readiness_build_onboarding_progress(STATE_RUNNING, &hs, &sys, &progress);
+
+    g_assert_cmpint(progress.configuration, ==, ONBOARDING_STAGE_COMPLETE);
+    g_assert_cmpint(progress.service_gateway, ==, ONBOARDING_STAGE_COMPLETE);
+    g_assert_cmpint(progress.connection, ==, ONBOARDING_STAGE_COMPLETE);
+    g_assert_true(progress.operational_ready);
+}
+
 /* ── Registration ── */
 
 int main(int argc, char **argv) {
@@ -363,6 +429,11 @@ int main(int argc, char **argv) {
 
     /* Guard */
     g_test_add_func("/readiness/null_output", test_presenter_null_output);
+
+    /* Onboarding stage mapping */
+    g_test_add_func("/readiness/onboarding_progress/service_inactive", test_onboarding_progress_service_inactive);
+    g_test_add_func("/readiness/onboarding_progress/connecting_service_active", test_onboarding_progress_connecting_service_active);
+    g_test_add_func("/readiness/onboarding_progress/operational_ready_running", test_onboarding_progress_operational_ready_only_when_running);
 
     return g_test_run();
 }

@@ -8,6 +8,7 @@
 
 #include <adwaita.h>
 
+#include "app_window.h"
 #include "gateway_mutations.h"
 #include "gateway_rpc.h"
 #include "json_access.h"
@@ -18,11 +19,26 @@ static GtkWidget *control_status_label = NULL;
 static GtkWidget *control_summary_label = NULL;
 static GtkWidget *control_nodes_box = NULL;
 static GtkWidget *control_details_label = NULL;
+static GtkWidget *control_gateway_health_label = NULL;
+static GtkWidget *control_service_label = NULL;
+static GtkWidget *control_version_label = NULL;
+static GtkWidget *control_agents_count_label = NULL;
+static GtkWidget *control_sessions_count_label = NULL;
 static GtkWidget *control_cron_job_entry = NULL;
 static GtkWidget *control_abort_session_entry = NULL;
 
-static gboolean control_fetch_in_flight = FALSE;
+static gboolean control_nodes_fetch_in_flight = FALSE;
+static gboolean control_agents_fetch_in_flight = FALSE;
+static gboolean control_sessions_fetch_in_flight = FALSE;
 static gint64 control_last_fetch_us = 0;
+
+static void control_request_snapshot(void);
+
+static void control_set_count_label(GtkWidget *label, const gchar *prefix, gint count) {
+    if (!label) return;
+    g_autofree gchar *text = g_strdup_printf("%s%d", prefix, count);
+    gtk_label_set_text(GTK_LABEL(label), text);
+}
 
 static void control_set_summary_from_state(void) {
     if (!control_summary_label) return;
@@ -43,6 +59,28 @@ static void control_set_summary_from_state(void) {
                                                 mode_presentation.label ? mode_presentation.label : "Runtime unknown",
                                                 ws ? "connected" : "disconnected");
     gtk_label_set_text(GTK_LABEL(control_summary_label), summary);
+
+    if (control_gateway_health_label) {
+        const gchar *gateway_health = "Gateway: Connecting";
+        if (sys && !sys->active) {
+            gateway_health = "Gateway: Service inactive";
+        } else if (health && health->http_ok && health->ws_connected && health->rpc_ok && health->auth_ok) {
+            gateway_health = "Gateway: Connected";
+        } else if (health && health->http_ok) {
+            gateway_health = "Gateway: Degraded";
+        }
+        gtk_label_set_text(GTK_LABEL(control_gateway_health_label), gateway_health);
+    }
+
+    if (control_service_label) {
+        gtk_label_set_text(GTK_LABEL(control_service_label),
+                           (sys && sys->active) ? "Service: Active" : "Service: Inactive");
+    }
+
+    if (control_version_label) {
+        gtk_label_set_text(GTK_LABEL(control_version_label),
+                           (health && health->gateway_version) ? health->gateway_version : "—");
+    }
 
     if (control_details_label) {
         g_autofree gchar *details = g_strdup_printf("State: %s | Setup: %s | Model config: %s",
@@ -65,22 +103,68 @@ static void on_control_mutation_done(const GatewayRpcResponse *response, gpointe
     section_mark_stale(&control_last_fetch_us);
 }
 
-static void on_probe_channels_clicked(GtkButton *button, gpointer user_data) {
-    (void)button;
-    (void)user_data;
-    g_autofree gchar *rid = mutation_channels_status(TRUE, on_control_mutation_done, NULL);
-    if (!rid && control_status_label) {
-        gtk_label_set_text(GTK_LABEL(control_status_label), "Probe request failed");
+static void control_maybe_finish_refresh(void) {
+    if (control_nodes_fetch_in_flight || control_agents_fetch_in_flight || control_sessions_fetch_in_flight) {
+        return;
+    }
+    section_mark_fresh(&control_last_fetch_us);
+    if (control_status_label) {
+        gtk_label_set_text(GTK_LABEL(control_status_label), "Snapshot refreshed");
     }
 }
 
-static void on_refresh_config_clicked(GtkButton *button, gpointer user_data) {
+static void on_refresh_snapshot_clicked(GtkButton *button, gpointer user_data) {
     (void)button;
     (void)user_data;
-    g_autofree gchar *rid = mutation_config_get(NULL, on_control_mutation_done, NULL);
-    if (!rid && control_status_label) {
-        gtk_label_set_text(GTK_LABEL(control_status_label), "Config refresh request failed");
+
+    app_window_refresh_snapshot();
+    section_mark_stale(&control_last_fetch_us);
+    if (control_status_label) {
+        gtk_label_set_text(GTK_LABEL(control_status_label), "Refreshing snapshot…");
     }
+    control_request_snapshot();
+}
+
+static void on_control_agents_response(const GatewayRpcResponse *response, gpointer user_data) {
+    (void)user_data;
+    control_agents_fetch_in_flight = FALSE;
+
+    gint count = 0;
+    if (response && response->ok && response->payload && JSON_NODE_HOLDS_OBJECT(response->payload)) {
+        JsonObject *obj = json_node_get_object(response->payload);
+        JsonNode *agents_node = json_object_get_member(obj, "agents");
+        if (agents_node && JSON_NODE_HOLDS_ARRAY(agents_node)) {
+            count = (gint)json_array_get_length(json_node_get_array(agents_node));
+        }
+    }
+
+    control_set_count_label(control_agents_count_label, "", count);
+    control_maybe_finish_refresh();
+}
+
+static void on_control_sessions_response(const GatewayRpcResponse *response, gpointer user_data) {
+    (void)user_data;
+    control_sessions_fetch_in_flight = FALSE;
+
+    gint count = 0;
+    if (response && response->ok && response->payload && JSON_NODE_HOLDS_OBJECT(response->payload)) {
+        JsonObject *obj = json_node_get_object(response->payload);
+        JsonNode *count_node = json_object_get_member(obj, "count");
+        if (count_node && JSON_NODE_HOLDS_VALUE(count_node)) {
+            if (json_node_get_value_type(count_node) == G_TYPE_INT64 ||
+                json_node_get_value_type(count_node) == G_TYPE_INT) {
+                count = (gint)json_node_get_int(count_node);
+            }
+        } else {
+            JsonNode *sessions_node = json_object_get_member(obj, "sessions");
+            if (sessions_node && JSON_NODE_HOLDS_ARRAY(sessions_node)) {
+                count = (gint)json_array_get_length(json_node_get_array(sessions_node));
+            }
+        }
+    }
+
+    control_set_count_label(control_sessions_count_label, "", count);
+    control_maybe_finish_refresh();
 }
 
 static void on_run_cron_clicked(GtkButton *button, gpointer user_data) {
@@ -136,7 +220,7 @@ static void on_abort_session_clicked(GtkButton *button, gpointer user_data) {
 
 static void on_control_nodes_response(const GatewayRpcResponse *response, gpointer user_data) {
     (void)user_data;
-    control_fetch_in_flight = FALSE;
+    control_nodes_fetch_in_flight = FALSE;
 
     if (!control_status_label) return;
 
@@ -144,7 +228,8 @@ static void on_control_nodes_response(const GatewayRpcResponse *response, gpoint
     control_set_summary_from_state();
 
     if (!response->ok || !response->payload || !JSON_NODE_HOLDS_OBJECT(response->payload)) {
-        gtk_label_set_text(GTK_LABEL(control_status_label), "Failed to load nodes");
+        gtk_label_set_text(GTK_LABEL(control_status_label), "Failed to load node snapshot");
+        control_maybe_finish_refresh();
         return;
     }
 
@@ -189,8 +274,43 @@ static void on_control_nodes_response(const GatewayRpcResponse *response, gpoint
         }
     }
 
-    section_mark_fresh(&control_last_fetch_us);
-    gtk_label_set_text(GTK_LABEL(control_status_label), "Control room updated");
+    control_maybe_finish_refresh();
+}
+
+static void control_request_snapshot(void) {
+    if (!gateway_rpc_is_ready()) {
+        if (control_status_label) {
+            gtk_label_set_text(GTK_LABEL(control_status_label), "Gateway not connected");
+        }
+        return;
+    }
+
+    if (!control_nodes_fetch_in_flight) {
+        control_nodes_fetch_in_flight = TRUE;
+        g_autofree gchar *rid_nodes = gateway_rpc_request("node.list", NULL, 0,
+                                                          on_control_nodes_response, NULL);
+        if (!rid_nodes) {
+            control_nodes_fetch_in_flight = FALSE;
+        }
+    }
+
+    if (!control_agents_fetch_in_flight) {
+        control_agents_fetch_in_flight = TRUE;
+        g_autofree gchar *rid_agents = gateway_rpc_request("agents.list", NULL, 0,
+                                                           on_control_agents_response, NULL);
+        if (!rid_agents) {
+            control_agents_fetch_in_flight = FALSE;
+        }
+    }
+
+    if (!control_sessions_fetch_in_flight) {
+        control_sessions_fetch_in_flight = TRUE;
+        g_autofree gchar *rid_sessions = gateway_rpc_request("sessions.list", NULL, 0,
+                                                             on_control_sessions_response, NULL);
+        if (!rid_sessions) {
+            control_sessions_fetch_in_flight = FALSE;
+        }
+    }
 }
 
 static GtkWidget* control_build(void) {
@@ -223,28 +343,41 @@ static GtkWidget* control_build(void) {
     gtk_label_set_xalign(GTK_LABEL(control_details_label), 0.0);
     gtk_box_append(GTK_BOX(page), control_details_label);
 
-    GtkWidget *actions = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-    GtkWidget *probe_btn = gtk_button_new_with_label("Probe Channels");
-    GtkWidget *cfg_btn = gtk_button_new_with_label("Refresh Config Snapshot");
+    GtkWidget *runtime_group = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    gtk_widget_set_margin_top(runtime_group, 8);
+    gtk_box_append(GTK_BOX(runtime_group), section_info_row("Gateway", 120, &control_gateway_health_label));
+    gtk_box_append(GTK_BOX(runtime_group), section_info_row("Service", 120, &control_service_label));
+    gtk_box_append(GTK_BOX(runtime_group), section_info_row("Server Version", 120, &control_version_label));
+    gtk_box_append(GTK_BOX(runtime_group), section_info_row("Agents", 120, &control_agents_count_label));
+    gtk_box_append(GTK_BOX(runtime_group), section_info_row("Sessions", 120, &control_sessions_count_label));
+    gtk_box_append(GTK_BOX(page), runtime_group);
+
+    GtkWidget *refresh_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget *refresh_btn = gtk_button_new_with_label("Refresh Snapshot");
+    gtk_widget_add_css_class(refresh_btn, "suggested-action");
+    g_signal_connect(refresh_btn, "clicked", G_CALLBACK(on_refresh_snapshot_clicked), NULL);
+    gtk_box_append(GTK_BOX(refresh_row), refresh_btn);
+    gtk_box_append(GTK_BOX(page), refresh_row);
+
+    GtkWidget *cron_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     GtkWidget *cron_btn = gtk_button_new_with_label("Run Cron Job");
-    GtkWidget *abort_btn = gtk_button_new_with_label("Abort Active Chat Session");
     control_cron_job_entry = gtk_entry_new();
     gtk_entry_set_placeholder_text(GTK_ENTRY(control_cron_job_entry), "cron job id (for cron.run)");
     gtk_widget_set_size_request(control_cron_job_entry, 220, -1);
+    g_signal_connect(cron_btn, "clicked", G_CALLBACK(on_run_cron_clicked), NULL);
+    gtk_box_append(GTK_BOX(cron_row), control_cron_job_entry);
+    gtk_box_append(GTK_BOX(cron_row), cron_btn);
+    gtk_box_append(GTK_BOX(page), cron_row);
+
+    GtkWidget *abort_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget *abort_btn = gtk_button_new_with_label("Abort Active Chat Session");
     control_abort_session_entry = gtk_entry_new();
     gtk_entry_set_placeholder_text(GTK_ENTRY(control_abort_session_entry), "session key (for chat.abort)");
     gtk_widget_set_hexpand(control_abort_session_entry, TRUE);
-    g_signal_connect(probe_btn, "clicked", G_CALLBACK(on_probe_channels_clicked), NULL);
-    g_signal_connect(cfg_btn, "clicked", G_CALLBACK(on_refresh_config_clicked), NULL);
-    g_signal_connect(cron_btn, "clicked", G_CALLBACK(on_run_cron_clicked), NULL);
     g_signal_connect(abort_btn, "clicked", G_CALLBACK(on_abort_session_clicked), NULL);
-    gtk_box_append(GTK_BOX(actions), probe_btn);
-    gtk_box_append(GTK_BOX(actions), cfg_btn);
-    gtk_box_append(GTK_BOX(actions), control_cron_job_entry);
-    gtk_box_append(GTK_BOX(actions), cron_btn);
-    gtk_box_append(GTK_BOX(actions), control_abort_session_entry);
-    gtk_box_append(GTK_BOX(actions), abort_btn);
-    gtk_box_append(GTK_BOX(page), actions);
+    gtk_box_append(GTK_BOX(abort_row), control_abort_session_entry);
+    gtk_box_append(GTK_BOX(abort_row), abort_btn);
+    gtk_box_append(GTK_BOX(page), abort_row);
 
     GtkWidget *nodes_title = gtk_label_new("Remote Instances");
     gtk_widget_add_css_class(nodes_title, "heading");
@@ -260,7 +393,7 @@ static GtkWidget* control_build(void) {
 }
 
 static void control_refresh(void) {
-    if (!control_status_label || control_fetch_in_flight) return;
+    if (!control_status_label) return;
     control_set_summary_from_state();
     if (!gateway_rpc_is_ready()) {
         gtk_label_set_text(GTK_LABEL(control_status_label), "Gateway not connected");
@@ -268,23 +401,25 @@ static void control_refresh(void) {
     }
     if (!section_is_stale(&control_last_fetch_us)) return;
 
-    control_fetch_in_flight = TRUE;
-    g_autofree gchar *rid = gateway_rpc_request("node.list", NULL, 0,
-                                                on_control_nodes_response, NULL);
-    if (!rid) {
-        control_fetch_in_flight = FALSE;
-        gtk_label_set_text(GTK_LABEL(control_status_label), "Failed to request node.list");
-    }
+    gtk_label_set_text(GTK_LABEL(control_status_label), "Refreshing snapshot…");
+    control_request_snapshot();
 }
 
 static void control_destroy(void) {
     control_status_label = NULL;
     control_summary_label = NULL;
     control_details_label = NULL;
+    control_gateway_health_label = NULL;
+    control_service_label = NULL;
+    control_version_label = NULL;
+    control_agents_count_label = NULL;
+    control_sessions_count_label = NULL;
     control_cron_job_entry = NULL;
     control_abort_session_entry = NULL;
     control_nodes_box = NULL;
-    control_fetch_in_flight = FALSE;
+    control_nodes_fetch_in_flight = FALSE;
+    control_agents_fetch_in_flight = FALSE;
+    control_sessions_fetch_in_flight = FALSE;
     control_last_fetch_us = 0;
 }
 

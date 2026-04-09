@@ -6,6 +6,9 @@ void notify_on_transition(AppState old_state, AppState new_state) {
     (void)old_state;
     (void)new_state;
 }
+void notify_on_gateway_connection_transition(gboolean connected) {
+    (void)connected;
+}
 void tray_update_from_state(AppState state) {
     (void)state;
 }
@@ -299,6 +302,37 @@ static void test_repeated_running_stopped_transitions(void) {
     sys.active = FALSE;
     state_update_systemd(&sys);
     g_assert_cmpint(state_get_current(), ==, STATE_STOPPED);
+}
+
+static void test_connection_transition_guard_first_observation_no_emit(void) {
+    GatewayConnectionTransitionTracker tracker = {0};
+    gboolean out_connected = FALSE;
+
+    gboolean emit = state_connection_transition_step(&tracker, FALSE, &out_connected);
+    g_assert_false(emit);
+    g_assert_true(tracker.initialized);
+    g_assert_false(tracker.connected);
+}
+
+static void test_connection_transition_guard_emits_only_on_edges(void) {
+    GatewayConnectionTransitionTracker tracker = {0};
+    gboolean out_connected = FALSE;
+
+    g_assert_false(state_connection_transition_step(&tracker, FALSE, &out_connected));
+    g_assert_false(state_connection_transition_step(&tracker, FALSE, &out_connected));
+
+    g_assert_true(state_connection_transition_step(&tracker, TRUE, &out_connected));
+    g_assert_true(out_connected);
+
+    g_assert_false(state_connection_transition_step(&tracker, TRUE, &out_connected));
+
+    g_assert_true(state_connection_transition_step(&tracker, FALSE, &out_connected));
+    g_assert_false(out_connected);
+}
+
+static void test_connection_transition_guard_null_tracker_safe(void) {
+    gboolean out_connected = FALSE;
+    g_assert_false(state_connection_transition_step(NULL, TRUE, &out_connected));
 }
 
 static void test_transition_into_systemd_unavailable(void) {
@@ -689,6 +723,11 @@ int main(int argc, char **argv) {
     g_test_add_func("/state/health_zero_timestamp_preserves_systemd_running", test_health_zero_timestamp_preserves_systemd_running);
     g_test_add_func("/state/activation_boundary_health_persists_through_stop", test_activation_boundary_health_persists_through_stop);
     g_test_add_func("/state/systemd_stop_does_not_regress_native_connected", test_systemd_stop_does_not_regress_native_connected);
+
+    /* Connection transition guard tests */
+    g_test_add_func("/state/connection_transition/first_observation_no_emit", test_connection_transition_guard_first_observation_no_emit);
+    g_test_add_func("/state/connection_transition/edge_only", test_connection_transition_guard_emits_only_on_edges);
+    g_test_add_func("/state/connection_transition/null_tracker_safe", test_connection_transition_guard_null_tracker_safe);
 
     /* Readiness decision table tests */
     g_test_add_func("/state/readiness/needs_setup", test_readiness_needs_setup);

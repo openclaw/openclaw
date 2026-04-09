@@ -74,6 +74,10 @@ static GtkWidget *onboard_indicator = NULL;
 typedef struct {
     AppState state;
     OnboardingRoute route;
+    OnboardingStageState stage_configuration;
+    OnboardingStageState stage_service_gateway;
+    OnboardingStageState stage_connection;
+    gboolean operational_ready;
     gboolean config_valid;
     gboolean setup_detected;
     gboolean sys_installed;
@@ -148,6 +152,67 @@ static void on_close_clicked(GtkButton *btn, gpointer data) {
     }
 }
 
+static const char* stage_icon(OnboardingStageState state) {
+    switch (state) {
+        case ONBOARDING_STAGE_COMPLETE: return "\u2705";
+        case ONBOARDING_STAGE_IN_PROGRESS: return "\u23F3";
+        case ONBOARDING_STAGE_PENDING:
+        default: return "\u25CB";
+    }
+}
+
+static const char* stage_detail_for_config(OnboardingStageState state) {
+    switch (state) {
+        case ONBOARDING_STAGE_COMPLETE: return "Configuration validated";
+        case ONBOARDING_STAGE_IN_PROGRESS: return "Resolving configuration issues";
+        case ONBOARDING_STAGE_PENDING:
+        default: return "Configuration not ready yet";
+    }
+}
+
+static const char* stage_detail_for_service(OnboardingStageState state) {
+    switch (state) {
+        case ONBOARDING_STAGE_COMPLETE: return "Service installed and active";
+        case ONBOARDING_STAGE_IN_PROGRESS: return "Service install or activation in progress";
+        case ONBOARDING_STAGE_PENDING:
+        default: return "Service setup pending";
+    }
+}
+
+static const char* stage_detail_for_connection(OnboardingStageState state) {
+    switch (state) {
+        case ONBOARDING_STAGE_COMPLETE: return "Gateway connection established";
+        case ONBOARDING_STAGE_IN_PROGRESS: return "Waiting for stable connection";
+        case ONBOARDING_STAGE_PENDING:
+        default: return "Connection not attempted yet";
+    }
+}
+
+static GtkWidget* build_stage_row(const char *label, OnboardingStageState state, const char *detail) {
+    GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_margin_top(row, 2);
+
+    GtkWidget *icon = gtk_label_new(stage_icon(state));
+    gtk_box_append(GTK_BOX(row), icon);
+
+    GtkWidget *text_col = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+    gtk_widget_set_hexpand(text_col, TRUE);
+
+    GtkWidget *title = gtk_label_new(label);
+    gtk_widget_add_css_class(title, "heading");
+    gtk_label_set_xalign(GTK_LABEL(title), 0.0);
+    gtk_box_append(GTK_BOX(text_col), title);
+
+    GtkWidget *detail_lbl = gtk_label_new(detail);
+    gtk_widget_add_css_class(detail_lbl, "dim-label");
+    gtk_label_set_xalign(GTK_LABEL(detail_lbl), 0.0);
+    gtk_label_set_wrap(GTK_LABEL(detail_lbl), TRUE);
+    gtk_box_append(GTK_BOX(text_col), detail_lbl);
+
+    gtk_box_append(GTK_BOX(row), text_col);
+    return row;
+}
+
 /* ── Page builders ── */
 
 static GtkWidget* build_welcome_page(GtkWidget *carousel) {
@@ -215,6 +280,9 @@ static GtkWidget* build_gateway_page(GtkWidget *carousel) {
     ReadinessInfo ri;
     readiness_evaluate(current, health, sys, &ri);
 
+    OnboardingStageProgress progress;
+    readiness_build_onboarding_progress(current, health, sys, &progress);
+
     /* State-aware guidance text */
     GtkWidget *explanation = gtk_label_new(NULL);
     if (current == STATE_NEEDS_SETUP) {
@@ -233,6 +301,28 @@ static GtkWidget* build_gateway_page(GtkWidget *carousel) {
     gtk_label_set_wrap(GTK_LABEL(explanation), TRUE);
     gtk_label_set_xalign(GTK_LABEL(explanation), 0.0);
     gtk_box_append(GTK_BOX(page), explanation);
+
+    GtkWidget *stage_heading = gtk_label_new("Setup progress");
+    gtk_widget_add_css_class(stage_heading, "heading");
+    gtk_label_set_xalign(GTK_LABEL(stage_heading), 0.0);
+    gtk_widget_set_margin_top(stage_heading, 12);
+    gtk_box_append(GTK_BOX(page), stage_heading);
+
+    GtkWidget *stages = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    gtk_widget_set_margin_top(stages, 4);
+    gtk_box_append(GTK_BOX(stages),
+                   build_stage_row("Configuration",
+                                   progress.configuration,
+                                   stage_detail_for_config(progress.configuration)));
+    gtk_box_append(GTK_BOX(stages),
+                   build_stage_row("Service / Gateway",
+                                   progress.service_gateway,
+                                   stage_detail_for_service(progress.service_gateway)));
+    gtk_box_append(GTK_BOX(stages),
+                   build_stage_row("Connection",
+                                   progress.connection,
+                                   stage_detail_for_connection(progress.connection)));
+    gtk_box_append(GTK_BOX(page), stages);
 
     if (ri.next_action) {
         GtkWidget *action_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
@@ -527,9 +617,28 @@ void onboarding_refresh(void) {
     ReadinessInfo ri;
     readiness_evaluate(current, health, sys, &ri);
 
+    OnboardingStageProgress progress;
+    readiness_build_onboarding_progress(current, health, sys, &progress);
+
+    if (progress.operational_ready) {
+        write_seen_version(ONBOARDING_CURRENT_VERSION);
+        if (onboard_window) {
+            gtk_window_destroy(GTK_WINDOW(onboard_window));
+        }
+        app_window_show();
+        g_free(profile);
+        g_free(state_dir);
+        g_free(config_path);
+        return;
+    }
+
     OnboardingRenderSnapshot new_snap = {
         .state = current,
         .route = route,
+        .stage_configuration = progress.configuration,
+        .stage_service_gateway = progress.service_gateway,
+        .stage_connection = progress.connection,
+        .operational_ready = progress.operational_ready,
         .config_valid = health->config_valid,
         .setup_detected = health->setup_detected,
         .sys_installed = sys->installed,
@@ -546,6 +655,10 @@ void onboarding_refresh(void) {
     if (onboard_has_render_snapshot &&
         onboard_last_snapshot.state == new_snap.state &&
         onboard_last_snapshot.route == new_snap.route &&
+        onboard_last_snapshot.stage_configuration == new_snap.stage_configuration &&
+        onboard_last_snapshot.stage_service_gateway == new_snap.stage_service_gateway &&
+        onboard_last_snapshot.stage_connection == new_snap.stage_connection &&
+        onboard_last_snapshot.operational_ready == new_snap.operational_ready &&
         onboard_last_snapshot.config_valid == new_snap.config_valid &&
         onboard_last_snapshot.setup_detected == new_snap.setup_detected &&
         onboard_last_snapshot.sys_installed == new_snap.sys_installed &&

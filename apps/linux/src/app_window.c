@@ -26,6 +26,7 @@
 #include "onboarding.h"
 #include "gateway_rpc.h"
 #include "gateway_data.h"
+#include "gateway_mutations.h"
 #include "section_channels.h"
 #include "section_skills.h"
 #include "section_sessions.h"
@@ -73,10 +74,16 @@ static const SectionMeta section_meta[SECTION_COUNT] = {
 static GtkWidget *main_window = NULL;
 static GtkWidget *content_stack = NULL;
 static GtkWidget *sidebar_list = NULL;
+static GtkWidget *shell_gateway_status_label = NULL;
+static GtkWidget *shell_gateway_status_dot = NULL;
+static GtkWidget *shell_service_status_label = NULL;
+static GtkWidget *shell_service_status_dot = NULL;
 static guint refresh_timer_id = 0;
 static AppSection active_section = SECTION_DASHBOARD;
 static gboolean last_rpc_ready = FALSE;
 static AppState last_app_state = STATE_NEEDS_SETUP;
+static gboolean shell_seen_gateway_connected = FALSE;
+static gboolean app_css_installed = FALSE;
 
 /* Section content widgets that need updating */
 static GtkWidget *section_pages[SECTION_COUNT] = {0};
@@ -100,6 +107,8 @@ static void refresh_config_content(void);
 static void refresh_diagnostics_content(void);
 static void refresh_environment_content(void);
 static void refresh_debug_content(void);
+static void refresh_shell_status_footer(void);
+static void ensure_app_css_loaded(void);
 static void on_sidebar_row_activated(GtkListBox *box, GtkListBoxRow *row, gpointer user_data);
 static void on_window_destroy(GtkWindow *window, gpointer user_data);
 
@@ -126,10 +135,13 @@ static GtkWidget* build_sidebar_row(AppSection section) {
 }
 
 static GtkWidget* build_sidebar(void) {
+    GtkWidget *sidebar_shell = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+
     GtkWidget *scrolled = gtk_scrolled_window_new();
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scrolled),
                                    GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
     gtk_widget_set_size_request(scrolled, 200, -1);
+    gtk_widget_set_vexpand(scrolled, TRUE);
 
     sidebar_list = gtk_list_box_new();
     gtk_list_box_set_selection_mode(GTK_LIST_BOX(sidebar_list), GTK_SELECTION_SINGLE);
@@ -144,7 +156,128 @@ static GtkWidget* build_sidebar(void) {
                      G_CALLBACK(on_sidebar_row_activated), NULL);
 
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), sidebar_list);
-    return scrolled;
+    gtk_box_append(GTK_BOX(sidebar_shell), scrolled);
+
+    GtkWidget *footer_sep = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+    gtk_box_append(GTK_BOX(sidebar_shell), footer_sep);
+
+    GtkWidget *footer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    gtk_widget_set_margin_start(footer, 10);
+    gtk_widget_set_margin_end(footer, 10);
+    gtk_widget_set_margin_top(footer, 8);
+    gtk_widget_set_margin_bottom(footer, 8);
+
+    GtkWidget *gateway_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    shell_gateway_status_dot = gtk_label_new("●");
+    gtk_widget_add_css_class(shell_gateway_status_dot, "status-dot");
+    gtk_box_append(GTK_BOX(gateway_row), shell_gateway_status_dot);
+    shell_gateway_status_label = gtk_label_new("Gateway: Connecting");
+    gtk_label_set_xalign(GTK_LABEL(shell_gateway_status_label), 0.0);
+    gtk_widget_set_hexpand(shell_gateway_status_label, TRUE);
+    gtk_box_append(GTK_BOX(gateway_row), shell_gateway_status_label);
+    gtk_box_append(GTK_BOX(footer), gateway_row);
+
+    GtkWidget *service_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    shell_service_status_dot = gtk_label_new("●");
+    gtk_widget_add_css_class(shell_service_status_dot, "status-dot");
+    gtk_box_append(GTK_BOX(service_row), shell_service_status_dot);
+    shell_service_status_label = gtk_label_new("Service: Inactive");
+    gtk_label_set_xalign(GTK_LABEL(shell_service_status_label), 0.0);
+    gtk_widget_set_hexpand(shell_service_status_label, TRUE);
+    gtk_box_append(GTK_BOX(service_row), shell_service_status_label);
+    gtk_box_append(GTK_BOX(footer), service_row);
+
+    gtk_box_append(GTK_BOX(sidebar_shell), footer);
+    return sidebar_shell;
+}
+
+static void clear_status_dot_classes(GtkWidget *dot) {
+    if (!dot) return;
+    gtk_widget_remove_css_class(dot, "connected");
+    gtk_widget_remove_css_class(dot, "disconnected");
+    gtk_widget_remove_css_class(dot, "connecting");
+    gtk_widget_remove_css_class(dot, "service-inactive");
+}
+
+static void refresh_shell_status_footer(void) {
+    if (!shell_gateway_status_label || !shell_gateway_status_dot ||
+        !shell_service_status_label || !shell_service_status_dot) {
+        return;
+    }
+
+    SystemdState *sys = state_get_systemd();
+    HealthState *health = state_get_health();
+
+    gboolean service_active = (sys && sys->active);
+    gboolean gateway_connected = (health && health->http_ok && health->ws_connected);
+    if (gateway_connected) {
+        shell_seen_gateway_connected = TRUE;
+    }
+
+    const char *gateway_label = "Gateway: Connecting";
+
+    clear_status_dot_classes(shell_gateway_status_dot);
+    clear_status_dot_classes(shell_service_status_dot);
+
+    if (!service_active) {
+        gateway_label = "Gateway: Service inactive";
+        gtk_widget_add_css_class(shell_gateway_status_dot, "service-inactive");
+    } else if (gateway_connected) {
+        gateway_label = "Gateway: Connected";
+        gtk_widget_add_css_class(shell_gateway_status_dot, "connected");
+    } else if (shell_seen_gateway_connected) {
+        gateway_label = "Gateway: Disconnected";
+        gtk_widget_add_css_class(shell_gateway_status_dot, "disconnected");
+    } else {
+        gateway_label = "Gateway: Connecting";
+        gtk_widget_add_css_class(shell_gateway_status_dot, "connecting");
+    }
+
+    gtk_label_set_text(GTK_LABEL(shell_gateway_status_label), gateway_label);
+
+    if (service_active) {
+        gtk_widget_add_css_class(shell_service_status_dot, "connected");
+        gtk_label_set_text(GTK_LABEL(shell_service_status_label), "Service: Active");
+    } else {
+        gtk_widget_add_css_class(shell_service_status_dot, "service-inactive");
+        gtk_label_set_text(GTK_LABEL(shell_service_status_label), "Service: Inactive");
+    }
+}
+
+static void ensure_app_css_loaded(void) {
+    if (app_css_installed) return;
+
+    const char *css =
+        ".status-dot {"
+        "  font-size: 12px;"
+        "  font-weight: 700;"
+        "}"
+        ".status-dot.connected { color: #33d17a; }"
+        ".status-dot.disconnected { color: #e01b24; }"
+        ".status-dot.service-inactive { color: #77767b; }"
+        ".status-dot.connecting {"
+        "  color: #e5a50a;"
+        "  animation: openclaw-pulse 1.1s ease-in-out infinite;"
+        "}"
+        "@keyframes openclaw-pulse {"
+        "  0% { opacity: 0.35; }"
+        "  50% { opacity: 1; }"
+        "  100% { opacity: 0.35; }"
+        "}";
+
+    GtkCssProvider *provider = gtk_css_provider_new();
+    gtk_css_provider_load_from_string(provider, css);
+
+    GdkDisplay *display = gdk_display_get_default();
+    if (display) {
+        gtk_style_context_add_provider_for_display(
+            display,
+            GTK_STYLE_PROVIDER(provider),
+            GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+        app_css_installed = TRUE;
+    }
+
+    g_object_unref(provider);
 }
 
 /* ── Content stack ── */
@@ -891,8 +1024,21 @@ static GtkWidget *cfg_modified_label = NULL;
 static GtkWidget *cfg_warning_label = NULL;
 static GtkWidget *cfg_issues_label = NULL;
 static GtkWidget *cfg_json_view = NULL;
+static GtkWidget *cfg_validation_label = NULL;
 static GtkWidget *cfg_copy_btn = NULL;
+static GtkWidget *cfg_reload_btn = NULL;
+static GtkWidget *cfg_save_btn = NULL;
 static guint cfg_copy_reset_id = 0;
+static gboolean cfg_programmatic_change = FALSE;
+static gboolean cfg_editor_dirty = FALSE;
+static gboolean cfg_editor_valid = TRUE;
+static gboolean cfg_request_in_flight = FALSE;
+static gboolean cfg_initial_load_requested = FALSE;
+static gchar *cfg_baseline_text = NULL;
+static gchar *cfg_baseline_hash = NULL;
+
+static gchar* cfg_editor_get_text(void);
+static void cfg_request_reload(void);
 
 static void on_cfg_open_file(GtkButton *b, gpointer d) {
     (void)b; (void)d;
@@ -923,10 +1069,8 @@ static gboolean reset_cfg_copy_label(gpointer data) {
 
 static void on_cfg_copy_json(GtkButton *b, gpointer d) {
     (void)b; (void)d;
-    GatewayConfig *cfg = gateway_client_get_config();
-    if (!cfg || !cfg->config_path) return;
-    g_autofree gchar *contents = NULL;
-    if (!g_file_get_contents(cfg->config_path, &contents, NULL, NULL)) return;
+    g_autofree gchar *contents = cfg_editor_get_text();
+    if (!contents) return;
 
     GdkClipboard *cb = gdk_display_get_clipboard(gdk_display_get_default());
     gdk_clipboard_set_text(cb, contents);
@@ -949,6 +1093,167 @@ static gchar* cfg_get_modified_text(const char *path) {
 
     g_autoptr(GDateTime) local = g_date_time_to_local(dt);
     return g_date_time_format(local, "%Y-%m-%d %H:%M:%S");
+}
+
+static gchar* cfg_editor_get_text(void) {
+    if (!cfg_json_view) return g_strdup("");
+    GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(cfg_json_view));
+    GtkTextIter start;
+    GtkTextIter end;
+    gtk_text_buffer_get_bounds(buf, &start, &end);
+    return gtk_text_buffer_get_text(buf, &start, &end, FALSE);
+}
+
+static void cfg_refresh_buttons(void) {
+    if (cfg_reload_btn) {
+        gtk_widget_set_sensitive(cfg_reload_btn, !cfg_request_in_flight);
+    }
+    if (cfg_save_btn) {
+        gtk_widget_set_sensitive(cfg_save_btn,
+            !cfg_request_in_flight && cfg_editor_dirty && cfg_editor_valid);
+    }
+}
+
+static gboolean cfg_validate_and_track(const gchar *text) {
+    g_autoptr(JsonParser) parser = json_parser_new();
+    g_autoptr(GError) err = NULL;
+    gboolean valid = json_parser_load_from_data(parser, text ? text : "", -1, &err);
+
+    if (valid) {
+        JsonNode *root = json_parser_get_root(parser);
+        valid = (root && JSON_NODE_HOLDS_OBJECT(root));
+        if (!valid && cfg_validation_label) {
+            gtk_label_set_text(GTK_LABEL(cfg_validation_label), "Validation: root value must be a JSON object");
+        }
+    } else if (cfg_validation_label) {
+        g_autofree gchar *msg = g_strdup_printf("Validation: %s",
+            err && err->message ? err->message : "invalid JSON");
+        gtk_label_set_text(GTK_LABEL(cfg_validation_label), msg);
+    }
+
+    if (valid && cfg_validation_label) {
+        gtk_label_set_text(GTK_LABEL(cfg_validation_label), "Validation: JSON is valid");
+    }
+
+    cfg_editor_valid = valid;
+    cfg_editor_dirty = (g_strcmp0(text ? text : "", cfg_baseline_text ? cfg_baseline_text : "") != 0);
+    cfg_refresh_buttons();
+    return valid;
+}
+
+static void on_cfg_buffer_changed(GtkTextBuffer *buffer, gpointer user_data) {
+    (void)buffer;
+    (void)user_data;
+    if (cfg_programmatic_change) return;
+    g_autofree gchar *text = cfg_editor_get_text();
+    cfg_validate_and_track(text);
+}
+
+static void on_cfg_get_done(const GatewayRpcResponse *response, gpointer user_data) {
+    (void)user_data;
+    cfg_request_in_flight = FALSE;
+
+    if (!response || !response->ok) {
+        if (cfg_validation_label) {
+            g_autofree gchar *msg = g_strdup_printf("Load failed: %s",
+                response && response->error_msg ? response->error_msg : "unknown error");
+            gtk_label_set_text(GTK_LABEL(cfg_validation_label), msg);
+        }
+        cfg_refresh_buttons();
+        return;
+    }
+
+    GatewayConfigSnapshot *snapshot = gateway_data_parse_config_get(response->payload);
+    if (!snapshot || !snapshot->config) {
+        if (cfg_validation_label) {
+            gtk_label_set_text(GTK_LABEL(cfg_validation_label), "Load failed: invalid config response");
+        }
+        gateway_config_snapshot_free(snapshot);
+        cfg_refresh_buttons();
+        return;
+    }
+
+    JsonNode *node = json_node_new(JSON_NODE_OBJECT);
+    json_node_set_object(node, snapshot->config);
+    g_autofree gchar *pretty = json_to_string(node, TRUE);
+    json_node_unref(node);
+
+    g_free(cfg_baseline_text);
+    cfg_baseline_text = g_strdup(pretty ? pretty : "{}");
+    g_free(cfg_baseline_hash);
+    cfg_baseline_hash = g_strdup(snapshot->hash);
+
+    if (cfg_json_view) {
+        GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(cfg_json_view));
+        cfg_programmatic_change = TRUE;
+        gtk_text_buffer_set_text(buf, cfg_baseline_text, -1);
+        cfg_programmatic_change = FALSE;
+    }
+
+    cfg_editor_dirty = FALSE;
+    cfg_validate_and_track(cfg_baseline_text);
+    cfg_refresh_buttons();
+    gateway_config_snapshot_free(snapshot);
+}
+
+static void cfg_request_reload(void) {
+    if (cfg_request_in_flight) return;
+    cfg_request_in_flight = TRUE;
+    cfg_refresh_buttons();
+    g_autofree gchar *rid = mutation_config_get(NULL, on_cfg_get_done, NULL);
+    if (!rid) {
+        cfg_request_in_flight = FALSE;
+        if (cfg_validation_label) {
+            gtk_label_set_text(GTK_LABEL(cfg_validation_label), "Failed to request config.get");
+        }
+        cfg_refresh_buttons();
+    }
+}
+
+static void on_cfg_reload(GtkButton *b, gpointer d) {
+    (void)b;
+    (void)d;
+    cfg_request_reload();
+}
+
+static void on_cfg_save_done(const GatewayRpcResponse *response, gpointer user_data) {
+    (void)user_data;
+    cfg_request_in_flight = FALSE;
+    if (!response || !response->ok) {
+        if (cfg_validation_label) {
+            g_autofree gchar *msg = g_strdup_printf("Save failed: %s",
+                response && response->error_msg ? response->error_msg : "unknown error");
+            gtk_label_set_text(GTK_LABEL(cfg_validation_label), msg);
+        }
+        cfg_refresh_buttons();
+        return;
+    }
+
+    if (cfg_validation_label) {
+        gtk_label_set_text(GTK_LABEL(cfg_validation_label), "Save successful. Reloading baseline…");
+    }
+    cfg_request_reload();
+}
+
+static void on_cfg_save(GtkButton *b, gpointer d) {
+    (void)b;
+    (void)d;
+    if (cfg_request_in_flight) return;
+
+    g_autofree gchar *text = cfg_editor_get_text();
+    if (!cfg_validate_and_track(text)) return;
+    if (!cfg_editor_dirty) return;
+
+    cfg_request_in_flight = TRUE;
+    cfg_refresh_buttons();
+    g_autofree gchar *rid = mutation_config_set(text, cfg_baseline_hash, on_cfg_save_done, NULL);
+    if (!rid) {
+        cfg_request_in_flight = FALSE;
+        if (cfg_validation_label) {
+            gtk_label_set_text(GTK_LABEL(cfg_validation_label), "Failed to request config.set");
+        }
+        cfg_refresh_buttons();
+    }
 }
 
 static GtkWidget* build_config_section(void) {
@@ -1030,11 +1335,12 @@ static GtkWidget* build_config_section(void) {
 
     GtkTextBuffer *json_buf = gtk_text_buffer_new(NULL);
     cfg_json_view = gtk_text_view_new_with_buffer(json_buf);
-    gtk_text_view_set_editable(GTK_TEXT_VIEW(cfg_json_view), FALSE);
-    gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(cfg_json_view), FALSE);
+    gtk_text_view_set_editable(GTK_TEXT_VIEW(cfg_json_view), TRUE);
+    gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(cfg_json_view), TRUE);
     gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(cfg_json_view), GTK_WRAP_WORD_CHAR);
     gtk_text_view_set_monospace(GTK_TEXT_VIEW(cfg_json_view), TRUE);
     gtk_widget_set_vexpand(cfg_json_view, TRUE);
+    g_signal_connect(json_buf, "changed", G_CALLBACK(on_cfg_buffer_changed), NULL);
 
     GtkWidget *json_scrolled = gtk_scrolled_window_new();
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(json_scrolled), cfg_json_view);
@@ -1042,15 +1348,32 @@ static GtkWidget* build_config_section(void) {
     gtk_scrolled_window_set_min_content_height(GTK_SCROLLED_WINDOW(json_scrolled), 200);
     gtk_box_append(GTK_BOX(page), json_scrolled);
 
-    /* 6. Copy action */
+    cfg_validation_label = gtk_label_new("Validation: loading config…");
+    gtk_widget_add_css_class(cfg_validation_label, "dim-label");
+    gtk_label_set_xalign(GTK_LABEL(cfg_validation_label), 0.0);
+    gtk_widget_set_margin_top(cfg_validation_label, 6);
+    gtk_box_append(GTK_BOX(page), cfg_validation_label);
+
+    /* 6. Reload / save / copy actions */
     GtkWidget *copy_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_widget_set_margin_top(copy_row, 6);
+
+    cfg_reload_btn = gtk_button_new_with_label("Reload");
+    g_signal_connect(cfg_reload_btn, "clicked", G_CALLBACK(on_cfg_reload), NULL);
+    gtk_box_append(GTK_BOX(copy_row), cfg_reload_btn);
+
+    cfg_save_btn = gtk_button_new_with_label("Save");
+    gtk_widget_add_css_class(cfg_save_btn, "suggested-action");
+    g_signal_connect(cfg_save_btn, "clicked", G_CALLBACK(on_cfg_save), NULL);
+    gtk_box_append(GTK_BOX(copy_row), cfg_save_btn);
 
     cfg_copy_btn = gtk_button_new_with_label("Copy Config JSON");
     g_signal_connect(cfg_copy_btn, "clicked", G_CALLBACK(on_cfg_copy_json), NULL);
     gtk_box_append(GTK_BOX(copy_row), cfg_copy_btn);
 
     gtk_box_append(GTK_BOX(page), copy_row);
+
+    cfg_refresh_buttons();
 
     return page;
 }
@@ -1092,14 +1415,12 @@ static void refresh_config_content(void) {
     g_autofree gchar *mod_label = g_strdup_printf("Last modified: %s", mod_text);
     gtk_label_set_text(GTK_LABEL(cfg_modified_label), mod_label);
 
-    /* 5. Raw JSON */
-    if (cfg_json_view && path) {
-        g_autofree gchar *contents = NULL;
-        if (g_file_get_contents(path, &contents, NULL, NULL)) {
-            GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(cfg_json_view));
-            gtk_text_buffer_set_text(buf, contents, -1);
-        }
+    if (!cfg_initial_load_requested && gateway_rpc_is_ready()) {
+        cfg_initial_load_requested = TRUE;
+        cfg_request_reload();
     }
+
+    cfg_refresh_buttons();
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -1539,6 +1860,7 @@ static gboolean on_refresh_tick(gpointer user_data) {
         refresh_environment_content();
         section_instances_refresh_local();
         refresh_debug_content();
+        refresh_shell_status_footer();
         /* RPC-backed sections refresh on activation + TTL, not every tick */
         refresh_active_rpc_section(active_section);
         
@@ -1562,6 +1884,11 @@ static void on_window_destroy(GtkWindow *window, gpointer user_data) {
     main_window = NULL;
     content_stack = NULL;
     sidebar_list = NULL;
+    shell_gateway_status_label = NULL;
+    shell_gateway_status_dot = NULL;
+    shell_service_status_label = NULL;
+    shell_service_status_dot = NULL;
+    shell_seen_gateway_connected = FALSE;
 
     dash_headline_label = NULL;
     dash_runtime_label = NULL;
@@ -1608,11 +1935,21 @@ static void on_window_destroy(GtkWindow *window, gpointer user_data) {
     cfg_warning_label = NULL;
     cfg_issues_label = NULL;
     cfg_json_view = NULL;
+    cfg_validation_label = NULL;
     if (cfg_copy_reset_id > 0) {
         g_source_remove(cfg_copy_reset_id);
         cfg_copy_reset_id = 0;
     }
     cfg_copy_btn = NULL;
+    cfg_reload_btn = NULL;
+    cfg_save_btn = NULL;
+    cfg_programmatic_change = FALSE;
+    cfg_editor_dirty = FALSE;
+    cfg_editor_valid = TRUE;
+    cfg_request_in_flight = FALSE;
+    cfg_initial_load_requested = FALSE;
+    g_clear_pointer(&cfg_baseline_text, g_free);
+    g_clear_pointer(&cfg_baseline_hash, g_free);
 
     if (diag_copy_reset_id > 0) {
         g_source_remove(diag_copy_reset_id);
@@ -1650,6 +1987,8 @@ void app_window_show(void) {
 
     GApplication *app = g_application_get_default();
     if (!app) return;
+
+    ensure_app_css_loaded();
 
     main_window = adw_application_window_new(GTK_APPLICATION(app));
     gtk_window_set_title(GTK_WINDOW(main_window), "OpenClaw");
@@ -1696,6 +2035,7 @@ void app_window_show(void) {
     refresh_environment_content();
     section_instances_refresh_local();
     refresh_debug_content();
+    refresh_shell_status_footer();
     last_rpc_ready = gateway_rpc_is_ready();
     last_app_state = state_get_current();
     /* RPC-backed sections will fetch on first sidebar activation */
@@ -1719,6 +2059,21 @@ void app_window_navigate_to(AppSection section) {
             gtk_list_box_select_row(GTK_LIST_BOX(sidebar_list), row);
         }
     }
+    refresh_active_rpc_section(active_section);
+}
+
+void app_window_refresh_snapshot(void) {
+    invalidate_all_rpc_sections();
+
+    refresh_dashboard_content();
+    refresh_general_content();
+    refresh_config_content();
+    refresh_diagnostics_content();
+    refresh_environment_content();
+    section_instances_refresh_local();
+    refresh_debug_content();
+    refresh_shell_status_footer();
+
     refresh_active_rpc_section(active_section);
 }
 

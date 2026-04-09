@@ -21,6 +21,9 @@ void notify_on_transition(AppState old_state, AppState new_state) {
     (void)old_state;
     (void)new_state;
 }
+void notify_on_gateway_connection_transition(gboolean connected) {
+    (void)connected;
+}
 void tray_update_from_state(AppState state) {
     (void)state;
 }

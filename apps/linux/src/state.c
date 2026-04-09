@@ -30,6 +30,7 @@ static HealthState current_health_state = {0};
 static guint64 current_health_generation = 0;
 static gboolean initial_hydration_done = FALSE;
 static gboolean initial_refresh_fired = FALSE;
+static GatewayConnectionTransitionTracker connection_transition_tracker = {0};
 
 /* Defined in runtime_mode.c — internal to the state module */
 extern RuntimeMode runtime_mode_compute(const SystemdState *sys, const HealthState *health);
@@ -45,6 +46,25 @@ static gboolean config_requires_onboarding(const HealthState *health) {
         return FALSE;
     }
     return !health->has_wizard_onboard_marker;
+}
+
+gboolean state_connection_transition_step(GatewayConnectionTransitionTracker *tracker,
+                                          gboolean connected_now,
+                                          gboolean *out_connected_now) {
+    if (!tracker) return FALSE;
+    if (!tracker->initialized) {
+        tracker->initialized = TRUE;
+        tracker->connected = connected_now;
+        return FALSE;
+    }
+    if (tracker->connected == connected_now) {
+        return FALSE;
+    }
+    tracker->connected = connected_now;
+    if (out_connected_now) {
+        *out_connected_now = connected_now;
+    }
+    return TRUE;
 }
 
 static AppState compute_state(void) {
@@ -151,6 +171,8 @@ void state_init(void) {
     current_runtime_mode = RUNTIME_NONE;
     initial_hydration_done = FALSE;
     initial_refresh_fired = FALSE;
+    connection_transition_tracker.initialized = FALSE;
+    connection_transition_tracker.connected = FALSE;
 
     g_free(current_sys_state.active_state);
     g_free(current_sys_state.sub_state);
@@ -195,6 +217,17 @@ static void trigger_updates(AppState new_state) {
             OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "trigger_updates post-notify");
         }
     }
+
+    if (initial_hydration_done) {
+        gboolean connected_now = (current_health_state.http_ok && current_health_state.ws_connected);
+        gboolean edge_connected = FALSE;
+        if (state_connection_transition_step(&connection_transition_tracker,
+                                             connected_now,
+                                             &edge_connected)) {
+            notify_on_gateway_connection_transition(edge_connected);
+        }
+    }
+
     OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "trigger_updates pre-tray state=%s",
               state_enum_to_string(current_state));
     tray_update_from_state(current_state);

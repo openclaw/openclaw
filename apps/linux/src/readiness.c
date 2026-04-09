@@ -130,3 +130,48 @@ void readiness_evaluate(AppState state, const HealthState *health,
         break;
     }
 }
+
+void readiness_build_onboarding_progress(AppState state,
+                                         const HealthState *health,
+                                         const SystemdState *sys,
+                                         OnboardingStageProgress *out) {
+    if (!out) return;
+
+    out->configuration = ONBOARDING_STAGE_PENDING;
+    out->service_gateway = ONBOARDING_STAGE_PENDING;
+    out->connection = ONBOARDING_STAGE_PENDING;
+    out->operational_ready = (state == STATE_RUNNING || state == STATE_RUNNING_WITH_WARNING);
+
+    gboolean config_complete = (health && health->config_valid);
+    gboolean service_installed = (sys && sys->installed);
+    gboolean service_active = (sys && sys->active);
+    gboolean connection_complete = (health && health->http_ok && health->ws_connected &&
+                                    health->rpc_ok && health->auth_ok);
+
+    if (config_complete) {
+        out->configuration = ONBOARDING_STAGE_COMPLETE;
+    } else if (state == STATE_CONFIG_INVALID || state == STATE_NEEDS_ONBOARDING ||
+               state == STATE_NEEDS_GATEWAY_INSTALL || state == STATE_STARTING ||
+               state == STATE_DEGRADED || state == STATE_RUNNING ||
+               state == STATE_RUNNING_WITH_WARNING) {
+        out->configuration = ONBOARDING_STAGE_IN_PROGRESS;
+    }
+
+    if (!config_complete) {
+        out->service_gateway = ONBOARDING_STAGE_PENDING;
+    } else if (service_installed && service_active) {
+        out->service_gateway = ONBOARDING_STAGE_COMPLETE;
+    } else if (service_installed) {
+        out->service_gateway = ONBOARDING_STAGE_IN_PROGRESS;
+    } else {
+        out->service_gateway = ONBOARDING_STAGE_PENDING;
+    }
+
+    if (!(service_installed && service_active)) {
+        out->connection = ONBOARDING_STAGE_PENDING;
+    } else if (connection_complete) {
+        out->connection = ONBOARDING_STAGE_COMPLETE;
+    } else {
+        out->connection = ONBOARDING_STAGE_IN_PROGRESS;
+    }
+}
