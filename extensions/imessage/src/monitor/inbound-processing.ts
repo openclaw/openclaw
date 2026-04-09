@@ -170,6 +170,7 @@ export function resolveIMessageInboundDecision(params: {
   const chatId = params.message.chat_id ?? undefined;
   const chatGuid = params.message.chat_guid ?? undefined;
   const chatIdentifier = params.message.chat_identifier ?? undefined;
+  const destinationCallerId = params.message.destination_caller_id ?? undefined;
   const createdAt = params.message.created_at ? Date.parse(params.message.created_at) : undefined;
   const messageText = params.messageText.trim();
   const bodyText = params.bodyText.trim();
@@ -203,14 +204,23 @@ export function resolveIMessageInboundDecision(params: {
     text: bodyText,
     createdAt,
   };
-  // Self-chat detection: in self-chat, sender == chat_identifier (both are the
-  // user's own handle). When is_from_me=true in self-chat, the message could be
-  // either: (a) a real user message typed by the user, or (b) an agent reply
-  // echo reflected back by iMessage. We must distinguish them.
+  const chatIdentifierNormalized = normalizeIMessageHandle(chatIdentifier ?? "") || undefined;
+  const destinationCallerIdNormalized =
+    normalizeIMessageHandle(destinationCallerId ?? "") || undefined;
+  const chatParticipantHandles = new Set(
+    (params.message.participants ?? [])
+      .map((participant) => normalizeIMessageHandle(participant))
+      .filter((participant): participant is string => participant.length > 0),
+  );
+  const matchesSelfChatDestination =
+    destinationCallerIdNormalized == null ||
+    destinationCallerIdNormalized === senderNormalized ||
+    chatParticipantHandles.has(destinationCallerIdNormalized);
   const isSelfChat =
     !isGroup &&
-    chatIdentifier != null &&
-    normalizeIMessageHandle(sender) === normalizeIMessageHandle(chatIdentifier);
+    chatIdentifierNormalized != null &&
+    senderNormalized === chatIdentifierNormalized &&
+    matchesSelfChatDestination;
   // Track whether we already processed the is_from_me=true self-chat path.
   // When true, the selfChatCache.has() check below must be skipped — we just
   // called remember() and would immediately match our own entry.
