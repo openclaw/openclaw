@@ -314,40 +314,6 @@ func sortedKeys(counts map[string]int) []string {
 	return keys
 }
 
-func applyComponentLine(stack []string, line string) []string {
-	matches := docsComponentTagRE.FindAllStringSubmatch(line, -1)
-	if len(matches) == 0 {
-		return stack
-	}
-	next := append([]string{}, stack...)
-	for _, match := range matches {
-		if len(match) < 3 {
-			continue
-		}
-		fullToken := match[0]
-		tagName := match[2]
-		if strings.HasSuffix(fullToken, "/>") {
-			continue
-		}
-		if match[1] == "/" {
-			next = popComponent(next, tagName)
-			continue
-		}
-		next = append(next, tagName)
-	}
-	return next
-}
-
-func popComponent(stack []string, tagName string) []string {
-	for index := len(stack) - 1; index >= 0; index-- {
-		if stack[index] != tagName {
-			continue
-		}
-		return append(stack[:index], stack[index+1:]...)
-	}
-	return stack
-}
-
 func togglesFence(line string) bool {
 	return docsFenceRE.MatchString(line)
 }

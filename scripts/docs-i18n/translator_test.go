@@ -167,6 +167,19 @@ func TestResolveDocsPiCommandUsesOverrideEnv(t *testing.T) {
 	}
 }
 
+func TestDocsPiModelRefUsesProviderPrefixWhenProviderFlagIsOmitted(t *testing.T) {
+	t.Setenv(envDocsI18nProvider, "openai")
+	t.Setenv(envDocsI18nModel, "gpt-5.4")
+	t.Setenv(envDocsPiOmitProvider, "1")
+
+	if got := docsPiProviderArg(); got != "" {
+		t.Fatalf("expected empty provider arg when omit-provider is enabled, got %q", got)
+	}
+	if got := docsPiModelRef(); got != "openai/gpt-5.4" {
+		t.Fatalf("expected provider-qualified model ref, got %q", got)
+	}
+}
+
 func TestShouldMaterializePiRuntimeForPiMonoWrapper(t *testing.T) {
 	t.Parallel()
 

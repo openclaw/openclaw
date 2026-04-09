@@ -83,6 +83,9 @@ func docsPiProviderArg() string {
 	if provider == "" {
 		return ""
 	}
+	if docsPiOmitProvider() {
+		return ""
+	}
 	if strings.Contains(docsPiModel(), "/") {
 		return ""
 	}
