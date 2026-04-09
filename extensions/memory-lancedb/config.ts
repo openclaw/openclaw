@@ -14,6 +14,14 @@ export type MemoryConfig = {
   autoCapture?: boolean;
   autoRecall?: boolean;
   captureMaxChars?: number;
+  /**
+   * Dreaming config is passed through opaquely to the shared dreaming resolver
+   * (`resolveMemoryDreamingConfig`), which reads it from whichever plugin owns
+   * `plugins.slots.memory`. Keeping it as `unknown` here avoids duplicating the
+   * full `MemoryDreamingConfig` type and ensures forward-compatibility as the
+   * dreaming schema evolves in `src/memory-host-sdk/dreaming.ts`.
+   */
+  dreaming?: unknown;
 };
 
 export const MEMORY_CATEGORIES = ["preference", "fact", "decision", "entity", "other"] as const;
@@ -97,7 +105,7 @@ export const memoryConfigSchema = {
     const cfg = value as Record<string, unknown>;
     assertAllowedKeys(
       cfg,
-      ["embedding", "dbPath", "autoCapture", "autoRecall", "captureMaxChars"],
+      ["embedding", "dbPath", "autoCapture", "autoRecall", "captureMaxChars", "dreaming"],
       "memory config",
     );
 
@@ -131,6 +139,7 @@ export const memoryConfigSchema = {
       autoCapture: cfg.autoCapture === true,
       autoRecall: cfg.autoRecall !== false,
       captureMaxChars: captureMaxChars ?? DEFAULT_CAPTURE_MAX_CHARS,
+      dreaming: cfg.dreaming,
     };
   },
   uiHints: {
@@ -175,6 +184,11 @@ export const memoryConfigSchema = {
       help: "Maximum message length eligible for auto-capture",
       advanced: true,
       placeholder: String(DEFAULT_CAPTURE_MAX_CHARS),
+    },
+    dreaming: {
+      label: "Dreaming",
+      help: "Memory dreaming config (consolidation, phases). See memory-core dreaming docs.",
+      advanced: true,
     },
   },
 };
