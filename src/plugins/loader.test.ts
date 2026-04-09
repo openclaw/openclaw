@@ -33,8 +33,11 @@ import {
 } from "./memory-embedding-providers.js";
 import {
   buildMemoryPromptSection,
+  clearMemoryPluginState,
+  getMemoryCapabilityRegistration,
   getMemoryRuntime,
   listMemoryCorpusSupplements,
+  registerMemoryCapability,
   registerMemoryCorpusSupplement,
   registerMemoryFlushPlanResolver,
   registerMemoryPromptSupplement,
@@ -1506,6 +1509,14 @@ module.exports = { id: "throws-after-import", register() {} };`,
 
   it("does not replace active memory plugin registries during non-activating loads", () => {
     useNoBundledPlugins();
+    registerMemoryCapability("active-memory", {
+      promptBuilder: () => ["active capability section"],
+      publicArtifacts: {
+        async listArtifacts() {
+          return [];
+        },
+      },
+    });
     registerMemoryEmbeddingProvider({
       id: "active",
       create: async () => ({ provider: null }),
@@ -1540,6 +1551,14 @@ module.exports = { id: "throws-after-import", register() {} };`,
         id: "snapshot-memory",
         kind: "memory",
         register(api) {
+          api.registerMemoryCapability({
+            promptBuilder: () => ["snapshot capability section"],
+            publicArtifacts: {
+              async listArtifacts() {
+                return [];
+              },
+            },
+          });
           api.registerMemoryEmbeddingProvider({
             id: "snapshot",
             create: async () => ({ provider: null }),
@@ -1581,13 +1600,68 @@ module.exports = { id: "throws-after-import", register() {} };`,
 
     expect(scoped.plugins.find((entry) => entry.id === "snapshot-memory")?.status).toBe("loaded");
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([
-      "active memory section",
+      "active capability section",
       "active wiki supplement",
     ]);
+    expect(getMemoryCapabilityRegistration()).toMatchObject({
+      pluginId: "active-memory",
+    });
     expect(listMemoryCorpusSupplements()).toHaveLength(1);
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/active.md");
     expect(getMemoryRuntime()).toBe(activeRuntime);
     expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["active"]);
+  });
+
+  it("restores cached memory capability registrations when serving registry state from cache", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "cached-memory",
+      filename: "cached-memory.cjs",
+      body: `module.exports = {
+        id: "cached-memory",
+        kind: "memory",
+        register(api) {
+          api.registerMemoryCapability({
+            promptBuilder: () => ["cached capability section"],
+            publicArtifacts: {
+              async listArtifacts() {
+                return [];
+              },
+            },
+          });
+        },
+      };`,
+    });
+
+    const options = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["cached-memory"],
+          slots: { memory: "cached-memory" },
+        },
+      },
+    } satisfies Parameters<typeof loadOpenClawPlugins>[0];
+
+    loadOpenClawPlugins(options);
+    expect(getMemoryCapabilityRegistration()).toMatchObject({
+      pluginId: "cached-memory",
+    });
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([
+      "cached capability section",
+    ]);
+
+    clearMemoryPluginState();
+    expect(getMemoryCapabilityRegistration()).toBeUndefined();
+
+    loadOpenClawPlugins(options);
+    expect(getMemoryCapabilityRegistration()).toMatchObject({
+      pluginId: "cached-memory",
+    });
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([
+      "cached capability section",
+    ]);
   });
 
   it("clears newly-registered memory plugin registries when plugin register fails", () => {
