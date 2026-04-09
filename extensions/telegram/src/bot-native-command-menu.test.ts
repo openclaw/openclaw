@@ -374,15 +374,16 @@ describe("bot-native-command-menu", () => {
       botIdentity: "bot-ratelimit",
     });
 
-    // Advance past the 5-second retry_after delay.
-    await vi.runAllTimersAsync();
-    vi.useRealTimers();
+    await vi.waitFor(() => expect(setMyCommands).toHaveBeenCalledTimes(1));
+    // Advance past the 5-second retry_after delay after the retry timer is actually scheduled.
+    await vi.runOnlyPendingTimersAsync();
 
     await vi.waitFor(() => expect(setMyCommands).toHaveBeenCalledTimes(2));
     expect(runtimeLog).toHaveBeenCalledWith(
       expect.stringContaining("rate-limited (retry after 5s)"),
     );
     expect(runtimeError).not.toHaveBeenCalled();
+    vi.useRealTimers();
   });
 
   it("gives up setMyCommands after exhausting 429 rate-limit retries", async () => {
