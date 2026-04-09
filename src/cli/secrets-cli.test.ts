@@ -202,6 +202,7 @@ describe("secrets CLI", () => {
       filesScanned: [],
       summary: {
         plaintextCount: 1,
+        migrationRecommendedCount: 0,
         unresolvedRefCount: 0,
         shadowedRefCount: 0,
         legacyResidueCount: 0,
@@ -233,6 +234,7 @@ describe("secrets CLI", () => {
       filesScanned: [],
       summary: {
         plaintextCount: 0,
+        migrationRecommendedCount: 0,
         unresolvedRefCount: 0,
         shadowedRefCount: 0,
         legacyResidueCount: 0,

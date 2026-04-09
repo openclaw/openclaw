@@ -7,6 +7,7 @@ import {
 } from "../agents/model-auth-markers.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { resolveStateDir, type OpenClawConfig } from "../config/config.js";
+import { resolveConfigIncludes } from "../config/includes.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -40,6 +41,7 @@ import { discoverConfigSecretTargets } from "./target-registry.js";
 
 export type SecretsAuditCode =
   | "PLAINTEXT_FOUND"
+  | "MIGRATION_RECOMMENDED"
   | "REF_UNRESOLVED"
   | "REF_SHADOWED"
   | "LEGACY_RESIDUE";
@@ -69,6 +71,7 @@ export type SecretsAuditReport = {
   filesScanned: string[];
   summary: {
     plaintextCount: number;
+    migrationRecommendedCount: number;
     unresolvedRefCount: number;
     shadowedRefCount: number;
     legacyResidueCount: number;
@@ -207,12 +210,26 @@ function collectEnvPlaintext(params: { envPath: string; collector: AuditCollecto
   }
 }
 
+function tryResolveAuthoredConfig(parsed: unknown, configPath: string): OpenClawConfig | undefined {
+  try {
+    return resolveConfigIncludes(parsed, configPath) as OpenClawConfig;
+  } catch {
+    return undefined;
+  }
+}
+
 function collectConfigSecrets(params: {
   config: OpenClawConfig;
+  authoredConfig?: OpenClawConfig;
   configPath: string;
   collector: AuditCollector;
 }): void {
   const defaults = params.config.secrets?.defaults;
+  const authoredTargetsByPath = new Map(
+    (params.authoredConfig ? discoverConfigSecretTargets(params.authoredConfig) : []).map(
+      (target) => [target.path, target],
+    ),
+  );
   for (const target of discoverConfigSecretTargets(params.config)) {
     if (!target.entry.includeInAudit) {
       continue;
@@ -247,6 +264,25 @@ function collectConfigSecrets(params: {
       continue;
     }
     if (!hasPlaintext) {
+      continue;
+    }
+    const authoredTarget = authoredTargetsByPath.get(target.path);
+    const authoredRef = authoredTarget
+      ? resolveSecretInputRef({
+          value: authoredTarget.value,
+          refValue: authoredTarget.refValue,
+          defaults,
+        })
+      : null;
+    if (authoredRef?.inlineRef) {
+      addFinding(params.collector, {
+        code: "MIGRATION_RECOMMENDED",
+        severity: "warn",
+        file: params.configPath,
+        jsonPath: target.path,
+        message: `${target.path} uses exact \${${authoredRef.inlineRef.id}} interpolation. Prefer a SecretRef such as { source: "env", provider: "${authoredRef.inlineRef.provider}", id: "${authoredRef.inlineRef.id}" }.`,
+        provider: target.providerId,
+      });
       continue;
     }
     addFinding(params.collector, {
@@ -631,6 +667,8 @@ function collectShadowingFindings(collector: AuditCollector): void {
 function summarizeFindings(findings: SecretsAuditFinding[]): SecretsAuditReport["summary"] {
   return {
     plaintextCount: findings.filter((entry) => entry.code === "PLAINTEXT_FOUND").length,
+    migrationRecommendedCount: findings.filter((entry) => entry.code === "MIGRATION_RECOMMENDED")
+      .length,
     unresolvedRefCount: findings.filter((entry) => entry.code === "REF_UNRESOLVED").length,
     shadowedRefCount: findings.filter((entry) => entry.code === "REF_SHADOWED").length,
     legacyResidueCount: findings.filter((entry) => entry.code === "LEGACY_RESIDUE").length,
@@ -670,6 +708,7 @@ export async function runSecretsAudit(
   if (snapshot.valid) {
     collectConfigSecrets({
       config,
+      authoredConfig: tryResolveAuthoredConfig(snapshot.parsed, snapshot.path),
       configPath,
       collector,
     });

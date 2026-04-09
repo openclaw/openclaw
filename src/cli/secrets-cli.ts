@@ -100,7 +100,7 @@ export function registerSecretsCli(program: Command) {
           defaultRuntime.writeJson(report);
         } else {
           defaultRuntime.log(
-            `Secrets audit: ${report.status}. plaintext=${report.summary.plaintextCount}, unresolved=${report.summary.unresolvedRefCount}, shadowed=${report.summary.shadowedRefCount}, legacy=${report.summary.legacyResidueCount}.`,
+            `Secrets audit: ${report.status}. plaintext=${report.summary.plaintextCount}, migration=${report.summary.migrationRecommendedCount}, unresolved=${report.summary.unresolvedRefCount}, shadowed=${report.summary.shadowedRefCount}, legacy=${report.summary.legacyResidueCount}.`,
           );
           if (report.findings.length > 0) {
             for (const finding of report.findings.slice(0, 20)) {

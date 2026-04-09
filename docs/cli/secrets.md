@@ -70,6 +70,7 @@ Options:
 Scan OpenClaw state for:
 
 - plaintext secret storage
+- migration guidance for `${ENV_VAR}` values on [SecretRef-capable config fields](/reference/secretref-credential-surface)
 - unresolved refs
 - precedence drift (`auth-profiles.json` credentials shadowing `openclaw.json` refs)
 - generated `agents/*/agent/models.json` residues (provider `apiKey` values and sensitive provider headers)
@@ -95,9 +96,10 @@ Report shape highlights:
 
 - `status`: `clean | findings | unresolved`
 - `resolution`: `refsChecked`, `skippedExecRefs`, `resolvabilityComplete`
-- `summary`: `plaintextCount`, `unresolvedRefCount`, `shadowedRefCount`, `legacyResidueCount`
+- `summary`: `plaintextCount`, `migrationRecommendedCount`, `unresolvedRefCount`, `shadowedRefCount`, `legacyResidueCount`
 - finding codes:
   - `PLAINTEXT_FOUND`
+  - `MIGRATION_RECOMMENDED`
   - `REF_UNRESOLVED`
   - `REF_SHADOWED`
   - `LEGACY_RESIDUE`
