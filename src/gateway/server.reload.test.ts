@@ -20,15 +20,6 @@ import {
   withGatewayServer,
 } from "./test-helpers.js";
 
-const VAULT_EXEC_COMMAND = process.platform === "win32" ? process.execPath : "/usr/bin/env";
-function buildVaultExecArgs(args: string[] = []): string[] | undefined {
-  if (process.platform === "win32") {
-    return args.length > 0 ? args : undefined;
-  }
-  // Use a stable, secure wrapper executable on CI; /opt/hostedtoolcache node can be group-writable.
-  return ["node", ...args];
-}
-
 const hoisted = vi.hoisted(() => {
   const cronInstances: Array<{
     start: ReturnType<typeof vi.fn>;
@@ -326,6 +317,13 @@ describe("gateway hot reload", () => {
     await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
   }
 
+  const testNodeExecProvider = {
+    source: "exec" as const,
+    command: process.execPath,
+    // CI-hosted Node binaries can be group-writable; these cases cover reload semantics.
+    allowInsecurePath: true,
+  };
+
   async function writeTalkProviderApiKeyEnvRefConfig(refId = "TALK_API_KEY_REF") {
     await writeConfigFile({
       talk: {
@@ -348,11 +346,7 @@ describe("gateway hot reload", () => {
       },
       secrets: {
         providers: {
-          vault: {
-            source: "exec",
-            command: VAULT_EXEC_COMMAND,
-            args: buildVaultExecArgs(),
-          },
+          vault: testNodeExecProvider,
         },
       },
     });
@@ -373,10 +367,9 @@ describe("gateway hot reload", () => {
       secrets: {
         providers: {
           vault: {
-            source: "exec",
-            command: VAULT_EXEC_COMMAND,
+            ...testNodeExecProvider,
             allowSymlinkCommand: true,
-            args: buildVaultExecArgs([params.resolverScriptPath, params.modePath, params.tokenValue]),
+            args: [params.resolverScriptPath, params.modePath, params.tokenValue],
           },
         },
       },
@@ -1050,10 +1043,9 @@ process.stdin.on("end", () => {
       secrets: {
         providers: {
           vault: {
-            source: "exec",
-            command: VAULT_EXEC_COMMAND,
+            ...testNodeExecProvider,
             allowSymlinkCommand: true,
-            args: buildVaultExecArgs([resolverScriptPath, tokenPath]),
+            args: [resolverScriptPath, tokenPath],
           },
         },
       },
