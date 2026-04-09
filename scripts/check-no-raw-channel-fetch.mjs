@@ -17,7 +17,7 @@ const allowedRawFetchCallsites = new Set([
   bundledPluginCallsite("bluebubbles", "src/test-harness.ts", 128),
   bundledPluginCallsite("bluebubbles", "src/types.ts", 181),
   bundledPluginCallsite("browser", "src/browser/cdp.helpers.ts", 235),
-  bundledPluginCallsite("browser", "src/browser/client-fetch.ts", 217),
+  bundledPluginCallsite("browser", "src/browser/client-fetch.ts", 192),
   bundledPluginCallsite("browser", "src/browser/test-fetch.ts", 24),
   bundledPluginCallsite("browser", "src/browser/test-fetch.ts", 27),
   bundledPluginCallsite("chutes", "models.ts", 535),
