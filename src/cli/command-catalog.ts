@@ -36,6 +36,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["directory"], policy: { loadPlugins: "always" } },
   { commandPath: ["agents"], policy: { loadPlugins: "always" } },
   { commandPath: ["configure"], policy: { loadPlugins: "always" } },
+  { commandPath: ["memory"], policy: { loadPlugins: "always" } },
   {
     commandPath: ["status"],
     policy: {
