@@ -286,6 +286,7 @@ const ConfiguredProviderRequestSchema = z
     auth: ConfiguredProviderRequestAuthSchema,
     proxy: ConfiguredProviderRequestProxySchema,
     tls: ConfiguredProviderRequestTlsSchema,
+    allowPrivateNetwork: z.boolean().optional(),
   })
   .strict()
   .optional();

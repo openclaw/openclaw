@@ -57,6 +57,7 @@ export type ProviderRequestTransportOverrides = {
   auth?: ProviderRequestAuthOverride;
   proxy?: ProviderRequestProxyOverride;
   tls?: ProviderRequestTlsOverride;
+  allowPrivateNetwork?: boolean;
 };
 
 export type ResolvedProviderRequestAuthConfig =
@@ -286,8 +287,10 @@ export function sanitizeConfiguredProviderRequest(
   }
 
   const tls = sanitizeTls(request.tls, "request.tls");
+  const rawAllow = (request as { allowPrivateNetwork?: unknown }).allowPrivateNetwork;
+  const allowPrivateNetwork = rawAllow === true ? true : rawAllow === false ? false : undefined;
 
-  if (!headers && !auth && !proxy && !tls) {
+  if (!headers && !auth && !proxy && !tls && allowPrivateNetwork === undefined) {
     return undefined;
   }
   return {
@@ -295,6 +298,7 @@ export function sanitizeConfiguredProviderRequest(
     ...(auth ? { auth } : {}),
     ...(proxy ? { proxy } : {}),
     ...(tls ? { tls } : {}),
+    ...(allowPrivateNetwork !== undefined ? { allowPrivateNetwork } : {}),
   };
 }
 
@@ -325,6 +329,9 @@ export function mergeProviderRequestOverrides(
       ...(current.auth ? { auth: current.auth } : {}),
       ...(current.proxy ? { proxy: current.proxy } : {}),
       ...(current.tls ? { tls: current.tls } : {}),
+      ...(current.allowPrivateNetwork !== undefined
+        ? { allowPrivateNetwork: current.allowPrivateNetwork }
+        : {}),
     };
   }
   return merged;

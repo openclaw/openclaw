@@ -467,6 +467,7 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
         },
         precedence: "defaults-win",
         request: this.request,
+        allowPrivateNetwork: this.request?.allowPrivateNetwork === true,
       });
       const socket = this.socketFactory(this.wsUrl, {
         headers: requestConfig.headers,

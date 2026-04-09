@@ -332,6 +332,24 @@ describe("provider request config", () => {
     });
   });
 
+  it("preserves request.allowPrivateNetwork for operator-trusted LAN/overlay model bases", () => {
+    expect(sanitizeConfiguredModelProviderRequest({ allowPrivateNetwork: true })).toEqual({
+      allowPrivateNetwork: true,
+    });
+    expect(sanitizeConfiguredModelProviderRequest({ allowPrivateNetwork: false })).toEqual({
+      allowPrivateNetwork: false,
+    });
+  });
+
+  it("merges allowPrivateNetwork with later override winning", () => {
+    expect(
+      mergeProviderRequestOverrides({ allowPrivateNetwork: true }, { allowPrivateNetwork: false }),
+    ).toEqual({ allowPrivateNetwork: false });
+    expect(
+      mergeProviderRequestOverrides({ allowPrivateNetwork: false }, { allowPrivateNetwork: true }),
+    ).toEqual({ allowPrivateNetwork: true });
+  });
+
   it("merges configured request overrides with later entries winning", () => {
     expect(
       mergeProviderRequestOverrides(
