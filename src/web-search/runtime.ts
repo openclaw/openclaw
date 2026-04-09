@@ -358,8 +358,11 @@ export async function runWebSearch(
         ].filter((p): p is PluginWebSearchProviderEntry => p != null)
       : candidates;
 
+  // Enable fallback only when at least one fallback resolves to a usable provider
+  const hasUsableFallback =
+    hasExplicitProvider && configuredFallbacks.length > 0 && !providerIdExplicitlyProvided;
   const allowFallback =
-    !hasExplicitProvider || (configuredFallbacks.length > 0 && !providerIdExplicitlyProvided);
+    !hasExplicitProvider || (hasUsableFallback && effectiveCandidates.length > 1);
   let sawUnavailableProvider = false;
 
   for (const candidate of effectiveCandidates) {
