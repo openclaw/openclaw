@@ -9,6 +9,7 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
+import { normalizePluginId } from "../plugins/config-state.js";
 import { hasConfiguredWebSearchCredential } from "../plugins/web-search-credential-presence.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 import { pickSandboxToolPolicy } from "./audit-tool-policy.js";
@@ -180,11 +181,15 @@ function isWebResearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): bool
     return false;
   }
   const deny = cfg.plugins?.deny;
-  if (Array.isArray(deny) && deny.includes("you")) {
+  if (Array.isArray(deny) && deny.some((id) => normalizePluginId(id) === "you")) {
     return false;
   }
   const allow = cfg.plugins?.allow;
-  if (Array.isArray(allow) && allow.length > 0 && !allow.includes("you")) {
+  if (
+    Array.isArray(allow) &&
+    allow.length > 0 &&
+    !allow.some((id) => normalizePluginId(id) === "you")
+  ) {
     return false;
   }
   const normalizedPlugins = cfg.plugins?.entries;
