@@ -274,9 +274,7 @@ export async function loadSessionTimeSeries(state: UsageState, sessionKey: strin
   state.usageTimeSeries = null;
   try {
     const res = await state.client.request("sessions.usage.timeseries", { key: sessionKey });
-    if (res) {
-      state.usageTimeSeries = res as SessionUsageTimeSeries;
-    }
+    state.usageTimeSeries = res ? (res as SessionUsageTimeSeries) : null;
   } catch {
     // Silently fail - time series is optional.
   } finally {
@@ -291,14 +289,12 @@ export async function loadSessionLogs(state: UsageState, sessionKey: string) {
   state.usageSessionLogsLoading = true;
   state.usageSessionLogs = null;
   try {
-    const res = await state.client.request("sessions.usage.logs", {
+    const payload = (await state.client.request("sessions.usage.logs", {
       key: sessionKey,
       limit: 1000,
-    });
-    const logs = (res as { logs?: unknown } | null)?.logs;
-    if (Array.isArray(logs)) {
-      state.usageSessionLogs = logs as SessionLogEntry[];
-    }
+    })) as { logs?: unknown } | null;
+    const logs = payload?.logs;
+    state.usageSessionLogs = Array.isArray(logs) ? (logs as SessionLogEntry[]) : null;
   } catch {
     // Silently fail - logs are optional.
   } finally {

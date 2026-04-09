@@ -116,7 +116,6 @@ export async function loadLogs(state: LogsState, opts?: { reset?: boolean; quiet
     const payload = res as {
       file?: string;
       cursor?: number;
-      size?: number;
       lines?: unknown;
       truncated?: boolean;
       reset?: boolean;
