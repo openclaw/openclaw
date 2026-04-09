@@ -773,8 +773,8 @@ export const ToolsMediaSchema = z
     models: z.array(MediaUnderstandingModelSchema).optional(),
     concurrency: z.number().int().positive().optional(),
     asyncCompletion: z.object({
-     directSend: z.boolean().optional(),
-    }).optional(),
+      directSend: z.boolean().optional(),
+    }).strict().optional(),
     image: ToolsMediaUnderstandingSchema.optional(),
     audio: ToolsMediaUnderstandingSchema.optional(),
     video: ToolsMediaUnderstandingSchema.optional(),
