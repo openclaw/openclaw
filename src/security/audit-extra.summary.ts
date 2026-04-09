@@ -176,6 +176,9 @@ function isBrowserEnabled(cfg: OpenClawConfig): boolean {
 
 function isWebResearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
   // web_research/web_contents are provided by the You.com plugin; check plugin enable state first
+  if (cfg.plugins?.enabled === false) {
+    return false;
+  }
   const normalizedPlugins = cfg.plugins?.entries;
   const youPlugin = normalizedPlugins?.you;
   if (!youPlugin || youPlugin.enabled === false) {
