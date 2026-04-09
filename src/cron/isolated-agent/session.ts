@@ -9,6 +9,25 @@ import {
 import { loadSessionStore } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 
+/**
+ * Returns true when the persisted deliveryContext appears to have been written by a
+ * system event (heartbeat / cron-event) rather than a real user interaction.
+ * A heartbeat run uses the literal string "heartbeat" as the delivery `to` target,
+ * and if that value is written into the shared session store it poisons the routing
+ * state for subsequent isolated cron announce deliveries.
+ * See: https://github.com/openclaw/openclaw/issues/63733
+ */
+function isSystemDeliveryContext(
+  ctx: { to?: string | null } | null | undefined,
+): boolean {
+  if (!ctx || typeof ctx !== "object") {
+    return false;
+  }
+  const to = typeof ctx.to === "string" ? ctx.to.trim() : "";
+  // The heartbeat delivery target is the literal string "heartbeat" (no prefix).
+  return to === "heartbeat" || to === "cron-event" || to === "exec-event";
+}
+
 export function resolveCronSession(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -77,13 +96,17 @@ export function resolveCronSession(params: {
     // replies instead of channel top-level messages.
     // deliveryContext must also be cleared because normalizeSessionEntryDelivery
     // repopulates lastThreadId from deliveryContext.threadId on store writes.
-    ...(isNewSession && {
+    // When the persisted delivery context appears to have been written by a system
+    // event (e.g. a heartbeat run wrote {to: "heartbeat"} into the session store
+    // that this isolated cron job shares), clear it unconditionally to prevent
+    // poisoned routing. See: https://github.com/openclaw/openclaw/issues/63733
+    ...(isNewSession || isSystemDeliveryContext(entry?.deliveryContext) ? {
       lastChannel: undefined,
       lastTo: undefined,
       lastAccountId: undefined,
       lastThreadId: undefined,
       deliveryContext: undefined,
-    }),
+    } : {}),
   };
   return { storePath, store, sessionEntry, systemSent, isNewSession };
 }

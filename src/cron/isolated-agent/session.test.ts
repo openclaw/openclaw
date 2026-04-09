@@ -255,6 +255,33 @@ describe("resolveCronSession", () => {
       });
     });
 
+    it("clears poisoned deliveryContext written by a heartbeat run (regression #63733)", () => {
+      // A heartbeat run on the same session key can write {to: "heartbeat"} into the
+      // session store. When a subsequent isolated cron job reuses that session, it must
+      // not inherit the poisoned delivery context — doing so causes announce deliveries to
+      // fail with "Unknown Channel".
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id-poisoned",
+          updatedAt: NOW_MS - 1000,
+          systemSent: true,
+          lastChannel: "discord" as never,
+          lastTo: "heartbeat",
+          deliveryContext: {
+            to: "heartbeat",
+          },
+        },
+        fresh: true,
+      });
+
+      // Session should be reused (it is fresh)
+      expect(result.isNewSession).toBe(false);
+      // But the poisoned delivery context must be wiped
+      expect(result.sessionEntry.lastChannel).toBeUndefined();
+      expect(result.sessionEntry.lastTo).toBeUndefined();
+      expect(result.sessionEntry.deliveryContext).toBeUndefined();
+    });
+
     it("creates new sessionId when entry exists but has no sessionId", () => {
       const result = resolveWithStoredEntry({
         entry: {
