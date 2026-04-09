@@ -549,6 +549,7 @@ public final class OpenClawChatViewModel {
         self.pendingToolCallsById = [:]
         self.streamingAssistantText = nil
         let resetsSession = Self.isSessionResetCommand(messageText)
+        let preSendMessages = resetsSession ? self.messages : []
         if resetsSession {
             self.replaceMessagesOnRunRefresh.insert(runId)
         }
@@ -622,6 +623,9 @@ public final class OpenClawChatViewModel {
         } catch {
             self.clearPendingRun(runId)
             self.replaceMessagesOnRunRefresh.remove(runId)
+            if resetsSession {
+                self.messages = preSendMessages
+            }
             self.errorText = error.localizedDescription
             chatUILogger.error("chat.send failed \(error.localizedDescription, privacy: .public)")
         }

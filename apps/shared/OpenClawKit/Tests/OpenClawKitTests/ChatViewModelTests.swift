@@ -83,6 +83,7 @@ private func makeViewModel(
     historyResponses: [OpenClawChatHistoryPayload],
     sessionsResponses: [OpenClawChatSessionsListResponse] = [],
     modelResponses: [[OpenClawChatModelChoice]] = [],
+    sendMessageHook: (@Sendable (String) async throws -> Void)? = nil,
     resetSessionHook: (@Sendable (String) async throws -> Void)? = nil,
     compactSessionHook: (@Sendable (String) async throws -> Void)? = nil,
     setSessionModelHook: (@Sendable (String?) async throws -> Void)? = nil,
@@ -95,6 +96,7 @@ private func makeViewModel(
         historyResponses: historyResponses,
         sessionsResponses: sessionsResponses,
         modelResponses: modelResponses,
+        sendMessageHook: sendMessageHook,
         resetSessionHook: resetSessionHook,
         compactSessionHook: compactSessionHook,
         setSessionModelHook: setSessionModelHook,
@@ -253,6 +255,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     private let historyResponses: [OpenClawChatHistoryPayload]
     private let sessionsResponses: [OpenClawChatSessionsListResponse]
     private let modelResponses: [[OpenClawChatModelChoice]]
+    private let sendMessageHook: (@Sendable (String) async throws -> Void)?
     private let resetSessionHook: (@Sendable (String) async throws -> Void)?
     private let compactSessionHook: (@Sendable (String) async throws -> Void)?
     private let setSessionModelHook: (@Sendable (String?) async throws -> Void)?
@@ -265,6 +268,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         historyResponses: [OpenClawChatHistoryPayload],
         sessionsResponses: [OpenClawChatSessionsListResponse] = [],
         modelResponses: [[OpenClawChatModelChoice]] = [],
+        sendMessageHook: (@Sendable (String) async throws -> Void)? = nil,
         resetSessionHook: (@Sendable (String) async throws -> Void)? = nil,
         compactSessionHook: (@Sendable (String) async throws -> Void)? = nil,
         setSessionModelHook: (@Sendable (String?) async throws -> Void)? = nil,
@@ -273,6 +277,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.historyResponses = historyResponses
         self.sessionsResponses = sessionsResponses
         self.modelResponses = modelResponses
+        self.sendMessageHook = sendMessageHook
         self.resetSessionHook = resetSessionHook
         self.compactSessionHook = compactSessionHook
         self.setSessionModelHook = setSessionModelHook
@@ -313,6 +318,9 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         await self.state.sentMessagesAppend(message)
         await self.state.sentRunIdsAppend(idempotencyKey)
         await self.state.sentThinkingLevelsAppend(thinking)
+        if let sendMessageHook = self.sendMessageHook {
+            try await sendMessageHook(message)
+        }
         return OpenClawChatSendResponse(runId: idempotencyKey, status: "ok")
     }
 
@@ -1005,6 +1013,43 @@ extension TestChatTransportState {
 
         try await waitUntil("stale messages cleared") {
             await MainActor.run { vm.messages.isEmpty }
+        }
+    }
+
+    @Test func slashResetSendFailureRestoresExistingHistory() async throws {
+        struct SendFailure: Error, LocalizedError {
+            var errorDescription: String? { "reset send failed" }
+        }
+
+        let before = historyPayload(
+            messages: [
+                chatTextMessage(role: "assistant", text: "old context", timestamp: 1),
+            ])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [before],
+            sendMessageHook: { message in
+                if message == "/reset" {
+                    throw SendFailure()
+                }
+            })
+        try await loadAndWaitBootstrap(vm: vm)
+        try await waitUntil("initial history loaded") {
+            await MainActor.run { vm.messages.first?.content.first?.text == "old context" }
+        }
+
+        await MainActor.run {
+            vm.input = "/reset"
+            vm.send()
+        }
+        try await waitUntil("slash reset forwarded despite failure") {
+            await transport.sentMessages() == ["/reset"]
+        }
+        try await waitUntil("reset failure restores history") {
+            await MainActor.run {
+                vm.errorText == "reset send failed" &&
+                    vm.messages.count == 1 &&
+                    vm.messages.first?.content.first?.text == "old context"
+            }
         }
     }
 
