@@ -18,11 +18,15 @@ const NEMOCLAW_HELP_TEXT = [
 const NEMOCLAW_RUN_HELP_TEXT = [
   "NemoClaw run tasks",
   "Run launches a safe read-only check.",
+  "- /nemoclaw run help",
   "- /nemoclaw run health",
   "- /nemoclaw run digest",
   "- /nemoclaw run recent",
   "- /nemoclaw run failures",
+  "- /nemoclaw run job <id>",
   "- /nemoclaw run gpu",
+  "- /nemoclaw run status",
+  "- /nemoclaw run summary",
 ].join("\n");
 
 function normalizeArgs(value: string | undefined): string {
@@ -170,6 +174,34 @@ async function formatRunHealth(config: OpenClawConfig | undefined): Promise<stri
   ].join("\n");
 }
 
+async function formatRunStatus(config: OpenClawConfig | undefined): Promise<string> {
+  const gpuStatus = await getNemoClawGpuStatus(resolveSenseWorkerConfig(config));
+  const recentRefs = await getRecentSenseJobRefs(3);
+  let recentSummary = "no recent jobs";
+  if (recentRefs.length) {
+    let failed = 0;
+    for (const ref of recentRefs) {
+      const result = await getSenseJobStatus(ref.jobId, resolveSenseWorkerConfig(config));
+      if (isFailedJob(result.body)) {
+        failed += 1;
+      }
+    }
+    recentSummary = `${recentRefs.length} jobs, ${failed} failed`;
+  }
+  return [
+    "NemoClaw status",
+    `- runner: ${gpuStatus.runner}`,
+    `- gpu: ${gpuStatus.gpu}`,
+    `- recent: ${recentSummary}`,
+  ].join("\n");
+}
+
+async function formatRunSummary(config: OpenClawConfig | undefined): Promise<string> {
+  const digest = await handleNemoClawCommand("digest", config);
+  const failures = await handleNemoClawCommand("failures", config);
+  return ["NemoClaw summary", digest.text, "---", failures.text].join("\n");
+}
+
 export async function handleNemoClawCommand(
   args: string | undefined,
   config?: OpenClawConfig,
@@ -218,6 +250,9 @@ export async function handleNemoClawCommand(
     if (!task) {
       return { text: NEMOCLAW_RUN_HELP_TEXT };
     }
+    if (task === "help") {
+      return { text: NEMOCLAW_RUN_HELP_TEXT };
+    }
     if (task === "health") {
       return { text: await formatRunHealth(config) };
     }
@@ -230,8 +265,24 @@ export async function handleNemoClawCommand(
     if (task === "failures") {
       return await handleNemoClawCommand("failures", config);
     }
+    if (task === "job") {
+      return { text: "Usage: /nemoclaw run job <id>" };
+    }
+    if (task.startsWith("job ")) {
+      const jobId = args?.trim().slice("run job ".length).trim() || "";
+      if (!jobId) {
+        return { text: "Usage: /nemoclaw run job <id>" };
+      }
+      return await handleNemoClawCommand(`job ${jobId}`, config);
+    }
     if (task === "gpu") {
       return await handleNemoClawCommand("gpu", config);
+    }
+    if (task === "status") {
+      return { text: await formatRunStatus(config) };
+    }
+    if (task === "summary") {
+      return { text: await formatRunSummary(config) };
     }
     return { text: NEMOCLAW_RUN_HELP_TEXT };
   }

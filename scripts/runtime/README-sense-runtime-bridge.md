@@ -1097,6 +1097,17 @@ plane; it simply aliases a safe subset of the existing status commands (`health`
 `recent`, `failures`, and `gpu`) so Slack can evolve from a pure notification surface into a
 lightweight operator task surface without allowing write or destructive actions.
 
+The current minimal read-only run set also includes:
+
+- `run help`
+  - explicit launcher help
+- `run job <id>`
+  - per-job lookup through the existing job source
+- `run status`
+  - thin status summary over existing `gpu` + `recent`
+- `run summary`
+  - thin summary view over existing `digest` + `failures`
+
 The runtime entrypoint now also emits a lightweight feedback layer for the next turn:
 
 - `feedback_summary`
