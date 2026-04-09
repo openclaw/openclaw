@@ -206,7 +206,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
           choiceLabel: "OpenAI API key",
           groupId: "openai",
           groupLabel: "OpenAI",
-          groupHint: "Codex OAuth + API key",
+          groupHint: "API key here, or use separate OpenAI Codex (ChatGPT OAuth)",
         },
       }),
     ],
