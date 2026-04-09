@@ -30,7 +30,7 @@ Ingests new emails from all configured accounts. On first run (empty database), 
 python3 {baseDir}/scripts/triage.py pending
 ```
 
-Prints all pending high-priority emails as JSON. Each entry includes `id`, `subject`, `sender`, `summary`, and `status`.
+Prints all pending high-priority emails as JSON (priority >= High, i.e. High/Urgent/Critical). Each entry includes `id`, `subject`, `sender`, `summary`, and `status`. Numeric priorities are also supported (>= 3).
 
 ### Dismiss an email
 
