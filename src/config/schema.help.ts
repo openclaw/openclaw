@@ -70,7 +70,7 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.timeoutMs":
     "Default timeout in milliseconds for ordinary gateway control-plane RPC calls when callers do not pass an explicit timeout. Use this to replace scattered fixed 10 second budgets with one shared gateway default.",
   "gateway.finalResponseTimeoutMs":
-    "Default timeout in milliseconds for gateway calls that wait for a final response after an accepted acknowledgement. Set this higher than gateway.timeoutMs when accepted-then-final flows need extra time but should still remain bounded.",
+    "Default timeout in milliseconds for gateway calls that wait for a final response after an accepted acknowledgement. If unset, OpenClaw uses the larger of gateway.timeoutMs and 90000 ms, so raising gateway.timeoutMs can also raise the effective final-response default.",
   "gateway.sessionSettleTimeoutMs":
     "Default timeout in milliseconds for control-plane settle waits such as embedded session shutdown or interruption cleanup. Use this to keep settle behavior explicit without adding per-call knobs.",
   "gateway.mode":
