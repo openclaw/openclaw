@@ -424,6 +424,8 @@ export function redactConfigSnapshot(
       raw: null,
       parsed: null,
       resolved: {},
+      sourceConfig: redactConfigObject(snapshot.sourceConfig, uiHints),
+      runtimeConfig: redactConfigObject(snapshot.runtimeConfig, uiHints),
     };
   }
   // else: snapshot.config must be valid and populated, as that is what

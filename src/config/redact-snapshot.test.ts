@@ -680,6 +680,32 @@ describe("redactConfigSnapshot", () => {
     expect(result.resolved).toEqual({});
   });
 
+  it("redacts sourceConfig and runtimeConfig for invalid snapshots", () => {
+    const snapshot: ConfigFileSnapshot = {
+      path: "/test",
+      exists: true,
+      raw: '{ "gateway": { "auth": { "token": "leaky-secret" } } }',
+      parsed: { gateway: { auth: { token: "leaky-secret" } } },
+      sourceConfig: {
+        gateway: { auth: { token: "leaky-secret" } },
+      } as ConfigFileSnapshot["sourceConfig"],
+      resolved: {
+        gateway: { auth: { token: "leaky-secret" } },
+      } as ConfigFileSnapshot["resolved"],
+      valid: false,
+      runtimeConfig: {
+        gateway: { auth: { token: "leaky-secret" } },
+      } as ConfigFileSnapshot["runtimeConfig"],
+      config: {} as ConfigFileSnapshot["config"],
+      issues: [{ path: "", message: "invalid config" }],
+      warnings: [],
+      legacyIssues: [],
+    };
+    const result = redactConfigSnapshot(snapshot);
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain("leaky-secret");
+  });
+
   it("handles deeply nested tokens in accounts", () => {
     const snapshot = makeSnapshot({
       channels: {
