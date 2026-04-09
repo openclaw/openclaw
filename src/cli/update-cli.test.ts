@@ -1358,6 +1358,28 @@ describe("update-cli", () => {
     ).toBe(shouldRunPackageUpdate);
   });
 
+  it("does not treat unresolved latest tag lookups as downgrade risk", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    setTty(false);
+    readPackageVersion.mockResolvedValue("2026.3.23");
+    mockPackageInstallStatus(tempDir);
+    vi.mocked(fetchNpmTagVersion).mockResolvedValue({
+      tag: "latest",
+      version: null,
+      error: "HTTP 404",
+    });
+
+    await updateCommand({ tag: "latest" });
+
+    expect(
+      vi
+        .mocked(defaultRuntime.error)
+        .mock.calls.some((call) => String(call[0]).includes("Downgrade confirmation required.")),
+    ).toBe(false);
+    expect(vi.mocked(defaultRuntime.exit).mock.calls.some((call) => call[0] === 1)).toBe(false);
+    expectPackageInstallSpec("openclaw@latest");
+  });
+
   it("updateWizardCommand offers dev checkout and forwards selections", async () => {
     const tempDir = createCaseDir("openclaw-update-wizard");
     await withEnvAsync({ OPENCLAW_GIT_DIR: tempDir }, async () => {

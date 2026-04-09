@@ -829,7 +829,8 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       canResolveRegistryVersionForPackageTarget(tag) &&
       !fallbackToLatest &&
       currentVersion != null &&
-      (targetVersion == null || (cmp != null && cmp > 0));
+      cmp != null &&
+      cmp > 0;
     packageInstallSpec = resolveGlobalInstallSpec({
       packageName: DEFAULT_PACKAGE_NAME,
       tag,
