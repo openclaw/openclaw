@@ -35,7 +35,14 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
   beforeAll(loadModule);
 
   beforeEach(() => {
-    mocks.assertSandboxPath.mockClear();
+    mocks.assertSandboxPath.mockReset();
+    mocks.assertSandboxPath.mockImplementation(async ({ filePath }: { filePath: string }) => ({
+      resolved:
+        filePath.startsWith("file://") || path.isAbsolute(filePath)
+          ? filePath
+          : path.resolve(root, filePath),
+      relative: "",
+    }));
   });
 
   it("maps container workspace paths to host workspace root", async () => {
