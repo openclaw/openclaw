@@ -442,11 +442,12 @@ export function renderApp(state: AppViewState) {
     })();
   };
   const basePath = normalizeBasePath(state.basePath ?? "");
-  const resolvedAgentId =
+  const resolveSelectedAgentId = () =>
     state.agentsSelectedId ??
     state.agentsList?.defaultId ??
     state.agentsList?.agents?.[0]?.id ??
     null;
+  const resolvedAgentId = resolveSelectedAgentId();
   const activeSessionAgentId = resolveAgentIdFromSessionKey(state.sessionKey);
   const toolsPanelUsesActiveSession = Boolean(
     resolvedAgentId && activeSessionAgentId && resolvedAgentId === activeSessionAgentId,
@@ -1369,12 +1370,7 @@ export function renderApp(state: AppViewState) {
                   if (agentIds.length > 0) {
                     void loadAgentIdentities(state, agentIds);
                   }
-                  const refreshedAgentId =
-                    state.agentsSelectedId ??
-                    state.agentsList?.defaultId ??
-                    state.agentsList?.agents?.[0]?.id ??
-                    null;
-                  loadAgentPanelDataForSelectedAgent(refreshedAgentId);
+                  loadAgentPanelDataForSelectedAgent(resolveSelectedAgentId());
                   refreshAgentsPanelSupplementalData(state.agentsPanel);
                 },
                 onSelectAgent: (agentId) => {
