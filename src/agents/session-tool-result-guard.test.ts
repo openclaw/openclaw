@@ -503,6 +503,68 @@ describe("installSessionToolResultGuard", () => {
     expect(messages[3]?.__openclaw?.transient).not.toBe(true);
   });
 
+  it("drains replay metadata even when flush runs with empty pending state", () => {
+    const sm = SessionManager.inMemory();
+    const guard = installSessionToolResultGuard(sm, {
+      sessionKey: "agent:main:main",
+      beforeMessageWriteHook: ({ message }) => {
+        if ((message as { role?: unknown }).role !== "assistant") {
+          return undefined;
+        }
+        const content = (message as { content?: unknown }).content;
+        const hasToolCall =
+          Array.isArray(content) &&
+          content.some(
+            (block) =>
+              !!block &&
+              typeof block === "object" &&
+              ((block as { type?: unknown }).type === "toolCall" ||
+                (block as { type?: unknown }).type === "toolUse"),
+          );
+        return hasToolCall ? { block: true } : undefined;
+      },
+    });
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+      }),
+    );
+    recordPendingToolResultReplayMetadata({
+      sessionKey: "agent:main:main",
+      toolCallId: "call_1",
+      toolName: "exec",
+      args: { command: "openclaw status" },
+    });
+
+    // Pending tool-call state is empty because assistant toolCall persistence was blocked,
+    // but replay metadata should still be drained for the session.
+    guard.flushPendingToolResults();
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+      }),
+    );
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "exec",
+        content: [{ type: "text", text: "fresh output" }],
+        isError: false,
+        timestamp: Date.now(),
+      }),
+    );
+
+    const messages = expectPersistedRoles(sm, ["toolResult"]) as Array<
+      AgentMessage & { __openclaw?: Record<string, unknown> }
+    >;
+    expect(messages[0]?.__openclaw?.transient).not.toBe(true);
+  });
+
   it("preserves ordering with multiple tool calls and partial results", () => {
     const sm = SessionManager.inMemory();
     const guard = installSessionToolResultGuard(sm);

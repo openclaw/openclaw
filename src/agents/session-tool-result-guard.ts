@@ -21,6 +21,7 @@ import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-
 import {
   applyToolResultReplayMetadata,
   consumePendingToolResultReplayMetadata,
+  drainPendingToolResultReplayMetadataForSession,
   resolveToolResultReplaySessionKey,
   stampPersistedToolResultReplayMetadata,
 } from "./tool-result-replay-metadata.js";
@@ -156,6 +157,7 @@ export function installSessionToolResultGuard(
 
   const flushPendingToolResults = () => {
     if (pendingState.size() === 0) {
+      drainPendingToolResultReplayMetadataForSession({ sessionKey: replaySessionKey });
       return;
     }
     for (const [id, name] of pendingState.entries()) {

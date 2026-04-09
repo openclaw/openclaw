@@ -177,6 +177,26 @@ export function consumePendingToolResultReplayMetadata(params: {
   return meta;
 }
 
+export function drainPendingToolResultReplayMetadataForSession(params: {
+  sessionKey?: string;
+  sessionId?: string;
+}): number {
+  const sessionKey = resolveToolResultReplaySessionKey(params);
+  if (!sessionKey) {
+    return 0;
+  }
+  const prefix = `${sessionKey}:`;
+  let drained = 0;
+  for (const key of pendingToolResultReplayMeta.keys()) {
+    if (!key.startsWith(prefix)) {
+      continue;
+    }
+    pendingToolResultReplayMeta.delete(key);
+    drained += 1;
+  }
+  return drained;
+}
+
 export function applyToolResultReplayMetadata(
   message: AgentMessage,
   meta: ToolResultReplayPolicyMeta | null,
