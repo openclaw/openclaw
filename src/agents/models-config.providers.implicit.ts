@@ -86,10 +86,14 @@ function resolveProviderDiscoveryFilter(params: {
   if (!live) {
     return resolveExplicitProviderDiscoveryFilter(params);
   }
-  const rawValues = [
+  const liveProviderValues = [
     env.OPENCLAW_LIVE_PROVIDERS?.trim(),
     env.OPENCLAW_LIVE_GATEWAY_PROVIDERS?.trim(),
-  ].filter((value): value is string => Boolean(value && value !== "all"));
+  ];
+  if (liveProviderValues.some((value) => value === "all")) {
+    return undefined;
+  }
+  const rawValues = liveProviderValues.filter((value): value is string => Boolean(value));
   if (rawValues.length === 0) {
     return resolveExplicitProviderDiscoveryFilter(params);
   }

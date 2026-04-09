@@ -60,6 +60,25 @@ describe("resolveProviderDiscoveryFilterForTest", () => {
     ).toEqual(["anthropic"]);
   });
 
+  it("keeps broad discovery when live providers is set to all", () => {
+    expect(
+      resolveProviderDiscoveryFilterForTest({
+        explicitProviders: {
+          "openai-codex": {
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            models: [],
+          },
+        },
+        env: {
+          OPENCLAW_LIVE_TEST: "1",
+          OPENCLAW_LIVE_PROVIDERS: "all",
+          VITEST: "1",
+        } as NodeJS.ProcessEnv,
+      }),
+    ).toBeUndefined();
+  });
+
   it("keeps explicit plugin-id filters when no owning provider plugin exists", () => {
     expect(
       resolveProviderDiscoveryFilterForTest({
