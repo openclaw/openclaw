@@ -246,7 +246,8 @@ enum HostEnvSecurityPolicy {
     static let blockedOverridePrefixes: [String] = [
         "CARGO_REGISTRIES_",
         "GIT_CONFIG_",
-        "NPM_CONFIG_"
+        "NPM_CONFIG_",
+        "TF_VAR_"
     ]
 
     static let blockedPrefixes: [String] = [

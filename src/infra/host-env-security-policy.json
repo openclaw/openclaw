@@ -235,6 +235,6 @@
     "REDIS_URL",
     "SSH_AUTH_SOCK"
   ],
-  "blockedOverridePrefixes": ["GIT_CONFIG_", "NPM_CONFIG_", "CARGO_REGISTRIES_"],
+  "blockedOverridePrefixes": ["GIT_CONFIG_", "NPM_CONFIG_", "CARGO_REGISTRIES_", "TF_VAR_"],
   "blockedPrefixes": ["DYLD_", "LD_", "BASH_FUNC_"]
 }

@@ -554,6 +554,7 @@ describe("sanitizeHostExecEnv", () => {
         CFLAGS: "-I/attacker/include",
         LDFLAGS: "-L/attacker/lib",
         XDG_CONFIG_DIRS: "/tmp/evil-config-dirs",
+        TF_VAR_admin_cidr: "10.0.0.0/24",
         GITHUB_TOKEN: "ghp-test",
         DATABASE_URL: "postgres://attacker",
         NPM_TOKEN: "npm-test",
@@ -576,6 +577,7 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.CFLAGS).toBeUndefined();
     expect(env.LDFLAGS).toBeUndefined();
     expect(env.XDG_CONFIG_DIRS).toBeUndefined();
+    expect(env.TF_VAR_admin_cidr).toBeUndefined();
     expect(env.GITHUB_TOKEN).toBeUndefined();
     expect(env.DATABASE_URL).toBeUndefined();
     expect(env.NPM_TOKEN).toBeUndefined();
@@ -771,6 +773,7 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("cargo_build_rustc_wrapper")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("CARGO_HOME")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("cargo_home")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("TF_VAR_admin_cidr")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("CORECLR_PROFILER_PATH")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("coreclr_profiler_path")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("XDG_CONFIG_HOME")).toBe(true);
@@ -1055,6 +1058,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
         DATABASE_URL: "postgres://attacker",
         R_PROFILE_USER: "/tmp/evil-Rprofile",
         XDG_CONFIG_DIRS: "/tmp/evil-config-dirs",
+        TF_VAR_admin_cidr: "10.0.0.0/24",
         SAFE_KEY: "ok",
       },
     });
@@ -1072,6 +1076,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "R_PROFILE_USER",
       "TF_CLI_CONFIG_FILE",
       "TF_PLUGIN_CACHE_DIR",
+      "TF_VAR_admin_cidr",
       "VIMINIT",
       "XDG_CONFIG_DIRS",
     ]);
@@ -1089,6 +1094,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.DATABASE_URL).toBeUndefined();
     expect(result.env.R_PROFILE_USER).toBeUndefined();
     expect(result.env.XDG_CONFIG_DIRS).toBeUndefined();
+    expect(result.env.TF_VAR_admin_cidr).toBeUndefined();
   });
 
   it("allows Windows-style override names while still rejecting invalid keys", () => {
