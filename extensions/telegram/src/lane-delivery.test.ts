@@ -551,6 +551,63 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.sendPayload).not.toHaveBeenCalled();
   });
 
+  it("does not finalize the active preview when the final payload cannot be edited", async () => {
+    const harness = createHarness({
+      answerMessageId: 1003,
+      answerHasStreamedMessage: true,
+      answerLastPartialText: "Attempt C partial",
+    });
+    harness.archivedAnswerPreviews.push({
+      messageId: 1001,
+      textSnapshot: "Attempt A partial",
+      deleteIfUnused: true,
+    });
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "Attempt C final",
+      payload: { text: "Attempt C final", mediaUrl: "file:///tmp/example.png" },
+      infoKind: "final",
+    });
+
+    expect(result.kind).toBe("sent");
+    expect(harness.editPreview).not.toHaveBeenCalled();
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Attempt C final",
+        mediaUrl: "file:///tmp/example.png",
+      }),
+    );
+  });
+
+  it("preserves boundary previews while deleting stale superseded previews", async () => {
+    const harness = createHarness({
+      answerMessageId: 1003,
+      answerHasStreamedMessage: true,
+      answerLastPartialText: "Attempt C partial",
+    });
+    harness.archivedAnswerPreviews.push(
+      {
+        messageId: 1001,
+        textSnapshot: "Earlier finalized segment",
+        deleteIfUnused: false,
+      },
+      {
+        messageId: 1002,
+        textSnapshot: "Attempt B partial",
+        deleteIfUnused: true,
+      },
+    );
+
+    const result = await deliverFinalAnswer(harness, "Attempt C final");
+
+    expect(expectPreviewFinalized(result)).toEqual({
+      content: "Attempt C final",
+      messageId: 1003,
+    });
+    expect(harness.deletePreviewMessage.mock.calls).toEqual([[1002]]);
+  });
+
   it("falls back on 4xx client rejection with error_code during final", async () => {
     const harness = createHarness({ answerMessageId: 999 });
     const err = Object.assign(new Error("403: Forbidden"), { error_code: 403 });

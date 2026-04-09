@@ -248,8 +248,14 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     );
   };
 
-  const deleteArchivedPreviewBatch = async (previews: ArchivedPreview[]) => {
+  const deleteArchivedPreviewBatch = async (previews: ArchivedPreview[], finalText?: string) => {
     for (const preview of previews) {
+      if (
+        preview.deleteIfUnused === false &&
+        scorePreviewAffinity(preview.textSnapshot, finalText ?? "") === 0
+      ) {
+        continue;
+      }
       try {
         await params.deletePreviewMessage(preview.messageId);
       } catch (err) {
@@ -260,7 +266,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     }
   };
 
-  const consumeArchivedPreviewBatch = async (previews: ArchivedPreview[]) => {
+  const consumeArchivedPreviewBatch = async (previews: ArchivedPreview[], finalText: string) => {
     if (previews.length === 0) {
       return;
     }
@@ -270,7 +276,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       params.archivedAnswerPreviews.length,
       ...params.archivedAnswerPreviews.filter((preview) => !staleIds.has(preview.messageId)),
     );
-    await deleteArchivedPreviewBatch(previews);
+    await deleteArchivedPreviewBatch(previews, finalText);
   };
 
   const resolveAnswerPreviewSelection = (
@@ -533,6 +539,9 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
   }: ConsumeArchivedAnswerPreviewParams): Promise<LaneDeliveryResult | undefined> => {
     const selection = resolveAnswerPreviewSelection(lane, text);
     if (selection?.source === "active") {
+      if (!canEditViaPreview) {
+        return undefined;
+      }
       const finalized = await tryUpdatePreviewForLane({
         lane,
         laneName: "answer",
@@ -544,7 +553,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       });
       if (finalized === "edited") {
         markActivePreviewComplete("answer");
-        await consumeArchivedPreviewBatch(selection.staleArchivedPreviews);
+        await consumeArchivedPreviewBatch(selection.staleArchivedPreviews, text);
         const messageId = lane.stream?.messageId();
         return result("preview-finalized", {
           content: text,
@@ -553,7 +562,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       }
       if (finalized === "regressive-skipped") {
         markActivePreviewComplete("answer");
-        await consumeArchivedPreviewBatch(selection.staleArchivedPreviews);
+        await consumeArchivedPreviewBatch(selection.staleArchivedPreviews, text);
         const messageId = lane.stream?.messageId();
         return result("preview-finalized", {
           content: getLanePreviewText(lane),
@@ -562,13 +571,13 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       }
       if (finalized === "retained") {
         params.retainPreviewOnCleanupByLane.answer = true;
-        await consumeArchivedPreviewBatch(selection.staleArchivedPreviews);
+        await consumeArchivedPreviewBatch(selection.staleArchivedPreviews, text);
         return result("preview-retained");
       }
       if (finalized === "fallback") {
         await params.stopDraftLane(lane);
         const delivered = await params.sendPayload(params.applyTextToPayload(payload, text));
-        await consumeArchivedPreviewBatch(selection.staleArchivedPreviews);
+        await consumeArchivedPreviewBatch(selection.staleArchivedPreviews, text);
         return delivered ? result("sent") : result("skipped");
       }
       return undefined;
@@ -582,7 +591,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     }
     const consumeArchivedSelection = async () => {
       params.archivedAnswerPreviews.splice(0, selection.archivedIndex + 1);
-      await deleteArchivedPreviewBatch(selection.staleArchivedPreviews);
+      await deleteArchivedPreviewBatch(selection.staleArchivedPreviews, text);
     };
     if (canEditViaPreview) {
       const finalized = await tryUpdatePreviewForLane({
