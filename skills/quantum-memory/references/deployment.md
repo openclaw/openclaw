@@ -49,7 +49,7 @@ for msg in langchain_memory.chat_memory.messages:
 
 ## Production Tips
 
-- **Shared server**: One instance serves all agents. Shared knowledge graph means Agent A's memories help Agent B.
+- **Shared server**: One instance serves all agents within the same trust boundary. ⚠️ **Single-user/team only** — all agents share one knowledge graph. For multi-tenant deployments, run separate instances or namespace by user ID to prevent cross-user memory access.
 - **Model choice**: `gte-large` on GPU servers, `MiniLM` on laptops/CI.
 - **Batch import**: Use `/store-batch` for bulk migration — 10x faster.
 - **Persistence**: Graph saves to disk automatically. Restarts preserve all memories.

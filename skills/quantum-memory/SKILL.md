@@ -1,6 +1,6 @@
 ---
 name: quantum-memory
-description: Quantum-optimized memory retrieval for AI agents. Use when building agent memory systems, replacing Mem0/LangChain memory, or needing relationship-aware recall that finds connected memory clusters instead of individual matches. Triggers on memory system setup, agent memory upgrade, knowledge graph memory, QAOA optimization, recall quality improvement, short-term memory with recency boost. Installs via pip (quantum-memory-graph). #1 R@5 on LongMemEval (ICLR 2025) to our knowledge.
+description: Quantum-optimized memory retrieval for AI agents. Use when building agent memory systems, replacing Mem0/LangChain memory, or needing relationship-aware recall that finds connected memory clusters instead of individual matches. Triggers on memory system setup, agent memory upgrade, knowledge graph memory, QAOA optimization, recall quality improvement, short-term memory with recency boost. Installs via pip (quantum-memory-graph). Benchmarked on LongMemEval (ICLR 2025).
 ---
 
 # Quantum Memory Graph
