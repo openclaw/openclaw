@@ -156,21 +156,16 @@ async function listContactsDatabases(deps: ResolvedParticipantContactNameDeps): 
   return databases;
 }
 
-function buildSqlitePhoneKeyList(phoneKeys: string[]): string {
-  return uniqueNormalizedPhoneLookupKeys(phoneKeys)
-    .map((phoneKey) => `'${phoneKey}'`)
-    .join(", ");
-}
-
 async function queryContactsDatabase(
   dbPath: string,
   phoneKeys: string[],
   deps: ResolvedParticipantContactNameDeps,
 ): Promise<Array<{ phoneKey: string; name: string }>> {
-  const sqlitePhoneKeyList = buildSqlitePhoneKeyList(phoneKeys);
-  if (!sqlitePhoneKeyList) {
+  const uniqueKeys = uniqueNormalizedPhoneLookupKeys(phoneKeys);
+  if (uniqueKeys.length === 0) {
     return [];
   }
+  const placeholders = uniqueKeys.map((_, i) => `?${i + 1}`).join(", ");
   const sql = `
 SELECT digits, name
 FROM (
@@ -187,18 +182,21 @@ FROM (
   JOIN ZABCDPHONENUMBER p ON p.ZOWNER = r.Z_PK
   WHERE p.ZFULLNUMBER IS NOT NULL
 )
-WHERE digits IN (${sqlitePhoneKeyList})
+WHERE digits IN (${placeholders})
   AND name != '';
 `;
   const options: ExecFileOptionsWithStringEncoding = {
     encoding: "utf8",
     maxBuffer: SQLITE_MAX_BUFFER,
   };
-  const { stdout } = await deps.execFileAsync(
-    "sqlite3",
-    ["-separator", "\t", dbPath, sql],
-    options,
-  );
+  const args = ["-separator", "\t"];
+  uniqueKeys.forEach((key, index) => {
+    const escapedKey = key.replace(/'/g, "''");
+    args.push("-cmd", `.parameter set ?${index + 1} '${escapedKey}'`);
+  });
+  args.push(dbPath, sql);
+
+  const { stdout } = await deps.execFileAsync("sqlite3", args, options);
   const rows: Array<{ phoneKey: string; name: string }> = [];
   for (const line of stdout.split(/\r?\n/)) {
     const trimmed = line.trim();
