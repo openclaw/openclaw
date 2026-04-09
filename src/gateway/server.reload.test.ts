@@ -20,6 +20,15 @@ import {
   withGatewayServer,
 } from "./test-helpers.js";
 
+const VAULT_EXEC_COMMAND = process.platform === "win32" ? process.execPath : "/usr/bin/env";
+function buildVaultExecArgs(args: string[] = []): string[] | undefined {
+  if (process.platform === "win32") {
+    return args.length > 0 ? args : undefined;
+  }
+  // Use a stable, secure wrapper executable on CI; /opt/hostedtoolcache node can be group-writable.
+  return ["node", ...args];
+}
+
 const hoisted = vi.hoisted(() => {
   const cronInstances: Array<{
     start: ReturnType<typeof vi.fn>;
@@ -341,7 +350,8 @@ describe("gateway hot reload", () => {
         providers: {
           vault: {
             source: "exec",
-            command: process.execPath,
+            command: VAULT_EXEC_COMMAND,
+            args: buildVaultExecArgs(),
           },
         },
       },
@@ -364,9 +374,9 @@ describe("gateway hot reload", () => {
         providers: {
           vault: {
             source: "exec",
-            command: process.execPath,
+            command: VAULT_EXEC_COMMAND,
             allowSymlinkCommand: true,
-            args: [params.resolverScriptPath, params.modePath, params.tokenValue],
+            args: buildVaultExecArgs([params.resolverScriptPath, params.modePath, params.tokenValue]),
           },
         },
       },
@@ -1041,9 +1051,9 @@ process.stdin.on("end", () => {
         providers: {
           vault: {
             source: "exec",
-            command: process.execPath,
+            command: VAULT_EXEC_COMMAND,
             allowSymlinkCommand: true,
-            args: [resolverScriptPath, tokenPath],
+            args: buildVaultExecArgs([resolverScriptPath, tokenPath]),
           },
         },
       },

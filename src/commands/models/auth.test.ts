@@ -75,6 +75,11 @@ vi.mock("../onboard-helpers.js", () => ({
   openUrl: mocks.openUrl,
 }));
 
+vi.mock("../oauth-env.js", () => ({
+  // CI runners often have no DISPLAY; force local semantics for deterministic tests.
+  isRemoteEnvironment: () => false,
+}));
+
 const { modelsAuthLoginCommand, modelsAuthPasteTokenCommand, modelsAuthSetupTokenCommand } =
   await import("./auth.js");
 
