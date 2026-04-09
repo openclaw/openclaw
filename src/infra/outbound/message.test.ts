@@ -111,6 +111,34 @@ describe("sendMessage", () => {
     );
   });
 
+  it("uses requester session/account for outbound delivery policy context", async () => {
+    await sendMessage({
+      cfg: {},
+      channel: "telegram",
+      to: "123456",
+      content: "hi",
+      requesterSessionKey: "agent:main:whatsapp:group:ops",
+      requesterAccountId: "work",
+      requesterSenderId: "attacker",
+      mirror: {
+        sessionKey: "agent:main:telegram:dm:123456",
+      },
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({
+          key: "agent:main:whatsapp:group:ops",
+          requesterAccountId: "work",
+          requesterSenderId: "attacker",
+        }),
+        mirror: expect.objectContaining({
+          sessionKey: "agent:main:telegram:dm:123456",
+        }),
+      }),
+    );
+  });
+
   it("propagates the send idempotency key into mirrored transcript delivery", async () => {
     await sendMessage({
       cfg: {},

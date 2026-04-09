@@ -7,6 +7,8 @@ export type OutboundSessionContext = {
   key?: string;
   /** Active agent id used for workspace-scoped media roots. */
   agentId?: string;
+  /** Originating account id used for requester-scoped group policy resolution. */
+  requesterAccountId?: string;
   /** Originating sender id used for sender-scoped outbound media policy. */
   requesterSenderId?: string;
   /** Originating sender display name for name-keyed sender policy matching. */
@@ -21,6 +23,7 @@ export function buildOutboundSessionContext(params: {
   cfg: OpenClawConfig;
   sessionKey?: string | null;
   agentId?: string | null;
+  requesterAccountId?: string | null;
   requesterSenderId?: string | null;
   requesterSenderName?: string | null;
   requesterSenderUsername?: string | null;
@@ -28,6 +31,7 @@ export function buildOutboundSessionContext(params: {
 }): OutboundSessionContext | undefined {
   const key = normalizeOptionalString(params.sessionKey);
   const explicitAgentId = normalizeOptionalString(params.agentId);
+  const requesterAccountId = normalizeOptionalString(params.requesterAccountId);
   const requesterSenderId = normalizeOptionalString(params.requesterSenderId);
   const requesterSenderName = normalizeOptionalString(params.requesterSenderName);
   const requesterSenderUsername = normalizeOptionalString(params.requesterSenderUsername);
@@ -39,6 +43,7 @@ export function buildOutboundSessionContext(params: {
   if (
     !key &&
     !agentId &&
+    !requesterAccountId &&
     !requesterSenderId &&
     !requesterSenderName &&
     !requesterSenderUsername &&
@@ -49,6 +54,7 @@ export function buildOutboundSessionContext(params: {
   return {
     ...(key ? { key } : {}),
     ...(agentId ? { agentId } : {}),
+    ...(requesterAccountId ? { requesterAccountId } : {}),
     ...(requesterSenderId ? { requesterSenderId } : {}),
     ...(requesterSenderName ? { requesterSenderName } : {}),
     ...(requesterSenderUsername ? { requesterSenderUsername } : {}),

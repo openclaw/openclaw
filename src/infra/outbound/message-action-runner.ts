@@ -78,6 +78,7 @@ export type RunMessageActionParams = {
   action: ChannelMessageActionName;
   params: Record<string, unknown>;
   defaultAccountId?: string;
+  requesterAccountId?: string | null;
   requesterSenderId?: string | null;
   sessionId?: string;
   toolContext?: ChannelThreadingToolContext;
@@ -543,6 +544,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       params,
       agentId,
       sessionKey: input.sessionKey,
+      requesterAccountId: input.requesterAccountId ?? undefined,
       requesterSenderId: input.requesterSenderId ?? undefined,
       mediaAccess: ctx.mediaAccess,
       accountId: accountId ?? undefined,
@@ -779,7 +781,7 @@ export async function runMessageAction(
     mediaSources: collectActionMediaSourceHints(params),
     sessionKey: input.sessionKey,
     messageProvider: input.sessionKey ? undefined : channel,
-    accountId,
+    accountId: input.sessionKey ? input.requesterAccountId : accountId,
     requesterSenderId: input.requesterSenderId,
   });
   const mediaPolicy = resolveAttachmentMediaPolicy({

@@ -21,6 +21,7 @@ const resolveAgentScopedOutboundMediaAccessMock = vi.hoisted(() =>
       cfg: unknown;
       agentId?: string;
       mediaSources?: readonly string[];
+      accountId?: string;
       requesterSenderId?: string;
     }) => {
       localRoots: string[];
@@ -214,6 +215,40 @@ describe("executeSendAction", () => {
     );
   });
 
+  it("forwards requester session context to sendMessage on core outbound path", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(null);
+    mocks.sendMessage.mockResolvedValue({
+      channel: "demo-outbound",
+      to: "channel:123",
+      via: "direct",
+      mediaUrl: null,
+    });
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "demo-outbound",
+        params: {},
+        sessionKey: "agent:main:whatsapp:group:ops",
+        requesterAccountId: "source-account",
+        requesterSenderId: "attacker",
+        accountId: "destination-account",
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+    });
+
+    expect(mocks.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterSessionKey: "agent:main:whatsapp:group:ops",
+        requesterAccountId: "source-account",
+        requesterSenderId: "attacker",
+        accountId: "destination-account",
+      }),
+    );
+  });
+
   it("forwards requesterSenderId into outbound media access resolution", async () => {
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
 
@@ -257,6 +292,32 @@ describe("executeSendAction", () => {
       expect.objectContaining({
         sessionKey: "agent:main:whatsapp:group:ops",
         messageProvider: undefined,
+      }),
+    );
+  });
+
+  it("uses requester account for media policy when session context is present", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "demo-outbound",
+        params: { media: "/tmp/host.png" },
+        sessionKey: "agent:main:whatsapp:group:ops",
+        requesterAccountId: "source-account",
+        requesterSenderId: "attacker",
+        accountId: "destination-account",
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+    });
+
+    expect(mocks.resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:whatsapp:group:ops",
+        accountId: "source-account",
       }),
     );
   });

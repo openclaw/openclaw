@@ -87,6 +87,17 @@ describe("buildOutboundSessionContext", () => {
     });
   });
 
+  it("preserves a trimmed requester account id when provided", () => {
+    expect(
+      buildOutboundSessionContext({
+        cfg: {} as never,
+        requesterAccountId: "  work  ",
+      }),
+    ).toEqual({
+      requesterAccountId: "work",
+    });
+  });
+
   it("preserves trimmed non-id sender fields for e164/username/name policy matching", () => {
     expect(
       buildOutboundSessionContext({

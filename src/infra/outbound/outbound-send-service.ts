@@ -29,6 +29,7 @@ export type OutboundSendContext = {
   /** Active agent id for per-agent outbound media root scoping. */
   agentId?: string;
   sessionKey?: string;
+  requesterAccountId?: string;
   requesterSenderId?: string;
   mediaAccess?: OutboundMediaAccess;
   mediaReadFile?: OutboundMediaReadFile;
@@ -73,7 +74,8 @@ async function tryHandleWithPluginAction(params: {
     mediaSources: collectActionMediaSources(params.ctx.params),
     sessionKey: params.ctx.sessionKey,
     messageProvider: params.ctx.sessionKey ? undefined : params.ctx.channel,
-    accountId: params.ctx.accountId ?? undefined,
+    accountId:
+      (params.ctx.sessionKey ? params.ctx.requesterAccountId : params.ctx.accountId) ?? undefined,
     requesterSenderId: params.ctx.requesterSenderId,
     mediaAccess: params.ctx.mediaAccess,
     mediaReadFile: params.ctx.mediaReadFile,
@@ -151,6 +153,8 @@ export async function executeSendAction(params: {
     to: params.to,
     content: params.message,
     agentId: params.ctx.agentId,
+    requesterSessionKey: params.ctx.sessionKey,
+    requesterAccountId: params.ctx.requesterAccountId,
     requesterSenderId: params.ctx.requesterSenderId,
     mediaUrl: params.mediaUrl || undefined,
     mediaUrls: params.mediaUrls,
