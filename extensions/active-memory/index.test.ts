@@ -97,6 +97,7 @@ describe("active-memory plugin", () => {
       agents: ["main"],
       logging: true,
     };
+    api.config = {};
     hoisted.sessionStore["agent:main:main"] = {
       sessionId: "s-main",
       updatedAt: 0,
@@ -367,6 +368,27 @@ describe("active-memory plugin", () => {
         agentId: "main",
         trigger: "user",
         sessionKey: "agent:main:main",
+        messageProvider: "telegram",
+        channelId: "telegram",
+      },
+    );
+
+    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      prependSystemContext: expect.stringContaining("plugin-provided supplemental context"),
+      appendSystemContext: expect.stringContaining("<active_memory_plugin>"),
+    });
+  });
+
+  it("treats non-default main session keys as direct chats", async () => {
+    api.config = { session: { mainKey: "home" } };
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:home",
         messageProvider: "telegram",
         channelId: "telegram",
       },
@@ -949,6 +971,33 @@ describe("active-memory plugin", () => {
         lines: expect.arrayContaining([expect.stringContaining("🧩 Active Memory: ok")]),
       },
     ]);
+  });
+
+  it("uses the resolved canonical session key for non-webchat chat-type checks", async () => {
+    hoisted.sessionStore["agent:main:telegram:direct:12345"] = {
+      sessionId: "session-a",
+      updatedAt: 25,
+    };
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order? session id only telegram", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionId: "session-a",
+        messageProvider: "telegram",
+        channelId: "telegram",
+      },
+    );
+
+    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.sessionKey).toMatch(
+      /^agent:main:telegram:direct:12345:active-memory:[a-f0-9]{12}$/,
+    );
+    expect(result).toEqual({
+      prependSystemContext: expect.stringContaining("plugin-provided supplemental context"),
+      appendSystemContext: expect.stringContaining("<active_memory_plugin>"),
+    });
   });
 
   it("clears stale status on skipped non-interactive turns even when agentId is missing", async () => {

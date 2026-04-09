@@ -705,6 +705,7 @@ function resolveChatType(ctx: {
   sessionKey?: string;
   messageProvider?: string;
   channelId?: string;
+  mainKey?: string;
 }): ActiveMemoryChatType | undefined {
   const sessionKey = ctx.sessionKey?.trim().toLowerCase();
   if (sessionKey) {
@@ -717,7 +718,13 @@ function resolveChatType(ctx: {
     if (sessionKey.includes(":direct:") || sessionKey.includes(":dm:")) {
       return "direct";
     }
-    if (/^agent:[^:]+:main$/.test(sessionKey)) {
+    const mainKey = ctx.mainKey?.trim().toLowerCase() || "main";
+    const agentSessionParts = sessionKey.split(":");
+    if (
+      agentSessionParts.length === 3 &&
+      agentSessionParts[0] === "agent" &&
+      (agentSessionParts[2] === mainKey || agentSessionParts[2] === "main")
+    ) {
       const provider = (ctx.messageProvider ?? "").trim().toLowerCase();
       const channelId = (ctx.channelId ?? "").trim();
       if (provider && provider !== "webchat" && channelId) {
@@ -738,6 +745,7 @@ function isAllowedChatType(
     sessionKey?: string;
     messageProvider?: string;
     channelId?: string;
+    mainKey?: string;
   },
 ): boolean {
   const chatType = resolveChatType(ctx);
@@ -1494,7 +1502,13 @@ export default definePluginEntry({
         });
         return;
       }
-      if (!isAllowedChatType(config, ctx)) {
+      if (
+        !isAllowedChatType(config, {
+          ...ctx,
+          sessionKey: resolvedSessionKey ?? ctx.sessionKey,
+          mainKey: api.config.session?.mainKey,
+        })
+      ) {
         await persistPluginStatusLines({
           api,
           agentId: effectiveAgentId,
