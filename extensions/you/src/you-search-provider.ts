@@ -22,7 +22,6 @@ function optionalStringEnum<const T extends readonly string[]>(
   );
 }
 
-const FRESHNESS_VALUES = ["day", "week", "month", "year"] as const;
 const SAFESEARCH_VALUES = ["off", "moderate", "strict"] as const;
 
 const GenericYouSearchSchema = Type.Object({
@@ -34,9 +33,12 @@ const GenericYouSearchSchema = Type.Object({
       maximum: 100,
     }),
   ),
-  freshness: optionalStringEnum(FRESHNESS_VALUES, {
-    description: 'Filter by recency: "day", "week", "month", or "year".',
-  }),
+  freshness: Type.Optional(
+    Type.String({
+      description:
+        'Filter by recency: "day", "week", "month", "year", or a date range in the format "YYYY-MM-DDtoYYYY-MM-DD".',
+    }),
+  ),
   country: Type.Optional(
     Type.String({
       description: "Two-letter country code (e.g. US, GB, DE) to bias results.",
