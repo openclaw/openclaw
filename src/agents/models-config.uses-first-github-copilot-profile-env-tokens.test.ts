@@ -76,6 +76,54 @@ describe("models-config", () => {
     ).toBe("https://copilot.local");
   });
 
+  it("passes explicit provider config to implicit discovery so plugins can skip duplicates", async () => {
+    const resolveImplicitProviders = vi.fn<ResolveImplicitProvidersForModelsJson>(
+      async ({ explicitProviders }) => {
+        expect(explicitProviders.vllm?.baseUrl).toBe("http://127.0.0.1:8000/v1");
+        return {};
+      },
+    );
+
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: {
+          models: {
+            providers: {
+              vllm: {
+                baseUrl: "http://127.0.0.1:8000/v1",
+                api: "openai-completions",
+                models: [],
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-agent",
+        env: { VLLM_API_KEY: "test-vllm-key" } as NodeJS.ProcessEnv,
+        existingRaw: "",
+        existingParsed: null,
+      },
+      { resolveImplicitProviders },
+    );
+
+    expect(resolveImplicitProviders).toHaveBeenCalledOnce();
+    expect(plan).toEqual({
+      action: "write",
+      contents: `${JSON.stringify(
+        {
+          providers: {
+            vllm: {
+              baseUrl: "http://127.0.0.1:8000/v1",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    });
+  });
+
   it("uses tokenRef env var when github-copilot profile omits plaintext token", () => {
     const auth = createProviderAuthResolver(
       {

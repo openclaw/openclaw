@@ -11,6 +11,7 @@ import {
 } from "../plugins/provider-discovery.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
+import { OLLAMA_LOCAL_AUTH_MARKER } from "./model-auth-markers.js";
 import { resolveImplicitProviders } from "./models-config.providers.js";
 import type { ProviderConfig } from "./models-config.providers.js";
 
@@ -348,6 +349,43 @@ describe("Ollama provider", () => {
       expect(provider?.baseUrl).toBe("http://remote-ollama:11434");
       expect(provider?.api).toBe("ollama");
       expect(provider?.apiKey).toBe("config-ollama-key");
+    });
+  });
+
+  it("should use synthetic local auth for configured remote providers without apiKey", async () => {
+    await withoutAmbientOllamaEnv(async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+
+      const provider = await runOllamaCatalog({
+        config: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "http://remote-ollama:11434/v1",
+                models: [
+                  {
+                    id: "gpt-oss:20b",
+                    name: "GPT-OSS 20B",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 8192,
+                    maxTokens: 81920,
+                  },
+                ],
+              },
+            },
+          },
+        },
+        env: { VITEST: "", NODE_ENV: "development" },
+      });
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(provider?.baseUrl).toBe("http://remote-ollama:11434");
+      expect(provider?.api).toBe("ollama");
+      expect(provider?.apiKey).toBe(OLLAMA_LOCAL_AUTH_MARKER);
+      expect(provider?.models).toHaveLength(1);
     });
   });
 

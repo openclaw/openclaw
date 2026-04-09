@@ -162,9 +162,63 @@ jobs:
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: |
           set -euo pipefail
-          PACK_JSON="$(npm pack --json)"
-          echo "$PACK_JSON"
-          PACK_PATH="$(printf '%s\n' "$PACK_JSON" | node -e 'const chunks=[]; process.stdin.on("data", (chunk) => chunks.push(chunk)); process.stdin.on("end", () => { const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")); const first = Array.isArray(parsed) ? parsed[0] : null; if (!first || typeof first.filename !== "string" || !first.filename) { process.exit(1); } process.stdout.write(first.filename); });')"
+          PACK_OUTPUT="$RUNNER_TEMP/npm-pack-output.txt"
+          npm pack --json 2>&1 | tee "$PACK_OUTPUT"
+          PACK_PATH="$(node - "$PACK_OUTPUT" <<'NODE'
+          const fs = require("node:fs");
+          const input = fs.readFileSync(process.argv[2], "utf8");
+
+          function arrayEndFrom(start) {
+            let depth = 0;
+            let inString = false;
+            let escape = false;
+            for (let i = start; i < input.length; i += 1) {
+              const char = input[i];
+              if (inString) {
+                if (escape) {
+                  escape = false;
+                } else if (char === "\\") {
+                  escape = true;
+                } else if (char === "\"") {
+                  inString = false;
+                }
+                continue;
+              }
+              if (char === "\"") {
+                inString = true;
+              } else if (char === "[") {
+                depth += 1;
+              } else if (char === "]") {
+                depth -= 1;
+                if (depth === 0) {
+                  return i + 1;
+                }
+              }
+            }
+            return -1;
+          }
+
+          for (let start = input.indexOf("["); start !== -1; start = input.indexOf("[", start + 1)) {
+            const end = arrayEndFrom(start);
+            if (end === -1) {
+              continue;
+            }
+            try {
+              const parsed = JSON.parse(input.slice(start, end));
+              const first = Array.isArray(parsed) ? parsed[0] : null;
+              if (first && typeof first.filename === "string" && first.filename) {
+                process.stdout.write(first.filename);
+                process.exit(0);
+              }
+            } catch {
+              // Keep scanning; npm lifecycle output can legally precede the JSON.
+            }
+          }
+
+          console.error("Could not find npm pack --json output with a filename.");
+          process.exit(1);
+          NODE
+          )"
           if [[ -z "$PACK_PATH" || ! -f "$PACK_PATH" ]]; then
             echo "npm pack did not produce a tarball file." >&2
             exit 1

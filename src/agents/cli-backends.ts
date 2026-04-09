@@ -169,7 +169,6 @@ export function resolveCliBackendConfig(
   cfg?: OpenClawConfig,
 ): ResolvedCliBackend | null {
   const normalized = normalizeBackendKey(provider);
-  const fallbackPolicy = resolveFallbackCliBackendPolicy(normalized);
   const configured = cfg?.agents?.defaults?.cliBackends ?? {};
   const override = pickBackendConfig(configured, normalized);
   const registered = resolveRegisteredBackend(normalized);
@@ -192,6 +191,7 @@ export function resolveCliBackendConfig(
     };
   }
 
+  const fallbackPolicy = resolveFallbackCliBackendPolicy(normalized);
   if (!override) {
     if (!fallbackPolicy?.baseConfig) {
       return null;
