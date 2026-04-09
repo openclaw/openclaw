@@ -724,6 +724,16 @@ export function renderApp(state: AppViewState) {
       void refreshVisibleToolsEffectiveForCurrentSession(state);
     }
   };
+  const resetAgentFilesState = (clearLoading = false) => {
+    state.agentFilesList = null;
+    state.agentFilesError = null;
+    state.agentFileActive = null;
+    state.agentFileContents = {};
+    state.agentFileDrafts = {};
+    if (clearLoading) {
+      state.agentFilesLoading = false;
+    }
+  };
 
   return html`
     ${renderCommandPalette({
@@ -1369,12 +1379,7 @@ export function renderApp(state: AppViewState) {
                     return;
                   }
                   state.agentsSelectedId = agentId;
-                  state.agentFilesList = null;
-                  state.agentFilesError = null;
-                  state.agentFilesLoading = false;
-                  state.agentFileActive = null;
-                  state.agentFileContents = {};
-                  state.agentFileDrafts = {};
+                  resetAgentFilesState(true);
                   state.agentSkillsReport = null;
                   state.agentSkillsError = null;
                   state.agentSkillsAgentId = null;
@@ -1392,11 +1397,7 @@ export function renderApp(state: AppViewState) {
                     resolvedAgentId &&
                     state.agentFilesList?.agentId !== resolvedAgentId
                   ) {
-                    state.agentFilesList = null;
-                    state.agentFilesError = null;
-                    state.agentFileActive = null;
-                    state.agentFileContents = {};
-                    state.agentFileDrafts = {};
+                    resetAgentFilesState();
                     void loadAgentFiles(state, resolvedAgentId);
                   }
                   if (panel === "skills" && resolvedAgentId) {
