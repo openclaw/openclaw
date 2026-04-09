@@ -6890,6 +6890,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           exclusiveMinimum: 0,
                           maximum: 9007199254740991,
                         },
+                        unknownToolCriticalThreshold: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
                         detectors: {
                           type: "object",
                           properties: {
@@ -6900,6 +6905,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               type: "boolean",
                             },
                             pingPong: {
+                              type: "boolean",
+                            },
+                            unknownTool: {
                               type: "boolean",
                             },
                           },
@@ -16759,6 +16767,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 title: "Tool-loop Global Circuit Breaker Threshold",
                 description: "Global no-progress breaker threshold (default: 30).",
               },
+              unknownToolCriticalThreshold: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
               detectors: {
                 type: "object",
                 properties: {
@@ -16778,6 +16791,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     type: "boolean",
                     title: "Tool-loop Ping-Pong Detection",
                     description: "Enable ping-pong loop detection (default: true).",
+                  },
+                  unknownTool: {
+                    type: "boolean",
                   },
                 },
                 additionalProperties: false,
