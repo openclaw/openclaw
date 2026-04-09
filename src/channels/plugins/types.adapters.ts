@@ -98,6 +98,18 @@ export type ChannelSetupAdapter = {
     accountId: string;
     input: ChannelSetupInput;
   }) => string | null;
+  validateCompleteInput?: (params: {
+    cfg: OpenClawConfig;
+    candidateCfg: OpenClawConfig;
+    accountId: string;
+    input: ChannelSetupInput;
+  }) => string | null;
+  validateInputAsync?: (params: {
+    cfg: OpenClawConfig;
+    candidateCfg: OpenClawConfig;
+    accountId: string;
+    input: ChannelSetupInput;
+  }) => Promise<string | null>;
   singleAccountKeysToMove?: readonly string[];
   namedAccountPromotionKeys?: readonly string[];
   resolveSingleAccountPromotionTarget?: (params: {

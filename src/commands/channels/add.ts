@@ -23,6 +23,8 @@ import { channelLabel, requireValidConfigFileSnapshot, shouldUseWizard } from ".
 export type ChannelsAddOptions = {
   channel?: string;
   account?: string;
+  communityId?: string;
+  communityAccessToken?: string;
   initialSyncLimit?: number | string;
   groupChannels?: string;
   dmAllowlist?: string;
@@ -283,6 +285,8 @@ export async function channelsAddCommand(
   const input: ChannelSetupInput = {
     name: opts.name,
     token: opts.token,
+    communityId: opts.communityId,
+    communityAccessToken: opts.communityAccessToken,
     privateKey: opts.privateKey,
     tokenFile: opts.tokenFile,
     botToken: opts.botToken,
@@ -315,12 +319,19 @@ export async function channelsAddCommand(
     dmAllowlist,
     autoDiscoverChannels: opts.autoDiscoverChannels,
   };
-  const accountId =
-    plugin.setup.resolveAccountId?.({
-      cfg: nextConfig,
-      accountId: opts.account,
-      input,
-    }) ?? normalizeAccountId(opts.account);
+  let accountId: string;
+  try {
+    accountId =
+      plugin.setup.resolveAccountId?.({
+        cfg: nextConfig,
+        accountId: opts.account,
+        input,
+      }) ?? normalizeAccountId(opts.account);
+  } catch (error) {
+    runtime.error(error instanceof Error ? error.message : String(error));
+    runtime.exit(1);
+    return;
+  }
 
   const validationError = plugin.setup.validateInput?.({
     cfg: nextConfig,
@@ -334,21 +345,44 @@ export async function channelsAddCommand(
   }
 
   const prevConfig = nextConfig;
-
-  if (accountId !== DEFAULT_ACCOUNT_ID) {
-    nextConfig = moveSingleAccountChannelSectionToDefaultAccount({
-      cfg: nextConfig,
-      channelKey: channel,
-    });
-  }
-
-  nextConfig = applyChannelAccountConfig({
-    cfg: nextConfig,
+  const candidateBaseConfig =
+    accountId !== DEFAULT_ACCOUNT_ID
+      ? moveSingleAccountChannelSectionToDefaultAccount({
+          cfg: nextConfig,
+          channelKey: channel,
+        })
+      : nextConfig;
+  const candidateConfig = applyChannelAccountConfig({
+    cfg: candidateBaseConfig,
     channel,
     accountId,
     input,
     plugin,
   });
+  const completeValidationError = plugin.setup.validateCompleteInput?.({
+    cfg: prevConfig,
+    candidateCfg: candidateConfig,
+    accountId,
+    input,
+  });
+  if (completeValidationError) {
+    runtime.error(completeValidationError);
+    runtime.exit(1);
+    return;
+  }
+  const asyncValidationError = await plugin.setup.validateInputAsync?.({
+    cfg: prevConfig,
+    candidateCfg: candidateConfig,
+    accountId,
+    input,
+  });
+  if (asyncValidationError) {
+    runtime.error(asyncValidationError);
+    runtime.exit(1);
+    return;
+  }
+
+  nextConfig = candidateConfig;
   await plugin.lifecycle?.onAccountConfigChanged?.({
     prevCfg: prevConfig,
     nextCfg: nextConfig,
