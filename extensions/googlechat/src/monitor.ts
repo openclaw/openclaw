@@ -372,6 +372,10 @@ function extractMentionInfo(annotations: GoogleChatAnnotation[], botUser?: strin
  * 3. Agent name (`agents.list[].name`)
  * 4. "OpenClaw" as generic fallback
  */
+function sanitizeTypingDisplayName(name: string): string {
+  return name.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
+}
+
 function resolveBotDisplayName(params: {
   accountName?: string;
   agentId: string;
@@ -379,15 +383,15 @@ function resolveBotDisplayName(params: {
 }): string {
   const { accountName, agentId, config } = params;
   if (accountName?.trim()) {
-    return accountName.trim();
+    return sanitizeTypingDisplayName(accountName);
   }
   const agent = config.agents?.list?.find((a) => a.id === agentId);
   const identityName = agent?.identity?.name?.trim();
   if (identityName) {
-    return identityName;
+    return sanitizeTypingDisplayName(identityName);
   }
   if (agent?.name?.trim()) {
-    return agent.name.trim();
+    return sanitizeTypingDisplayName(agent.name);
   }
   return "OpenClaw";
 }
