@@ -972,6 +972,42 @@ extension TestChatTransportState {
         #expect(await transport.compactSessionKeys().isEmpty)
     }
 
+    @Test func slashResetRefreshDoesNotReinsertStaleMessages() async throws {
+        let before = historyPayload(
+            messages: [
+                chatTextMessage(role: "assistant", text: "old context", timestamp: 1),
+            ])
+        let after = historyPayload(messages: [])
+
+        let (transport, vm) = await makeViewModel(historyResponses: [before, after])
+        try await loadAndWaitBootstrap(vm: vm)
+        try await waitUntil("initial history loaded") {
+            await MainActor.run { vm.messages.first?.content.first?.text == "old context" }
+        }
+
+        await MainActor.run {
+            vm.input = "/reset"
+            vm.send()
+        }
+        try await waitUntil("slash reset forwarded") {
+            await transport.sentMessages() == ["/reset"]
+        }
+
+        let runId = try #require(await transport.lastSentRunId())
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: runId,
+                    sessionKey: "main",
+                    state: "final",
+                    message: nil,
+                    errorMessage: nil)))
+
+        try await waitUntil("stale messages cleared") {
+            await MainActor.run { vm.messages.isEmpty }
+        }
+    }
+
     @Test func bootstrapsModelSelectionFromSessionAndDefaults() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let history = historyPayload()

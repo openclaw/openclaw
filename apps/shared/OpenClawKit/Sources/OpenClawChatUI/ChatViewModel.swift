@@ -49,6 +49,7 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored
     private nonisolated(unsafe) var pendingRunTimeoutTasks: [String: Task<Void, Never>] = [:]
     private let pendingRunTimeoutMs: UInt64 = 120_000
+    private var replaceMessagesOnRunRefresh = Set<String>()
     // Session switches can overlap in-flight picker patches, so stale completions
     // must compare against the latest request and latest desired value for that session.
     private var nextModelSelectionRequestID: UInt64 = 0
@@ -60,9 +61,6 @@ public final class OpenClawChatViewModel {
     private var nextThinkingSelectionRequestID: UInt64 = 0
     private var latestThinkingSelectionRequestIDsBySession: [String: UInt64] = [:]
     private var latestThinkingLevelsBySession: [String: String] = [:]
-    private var isCompacting = false
-    private var lastCompactAt: Date?
-    private let compactCooldown: TimeInterval = 60
 
     private var pendingToolCallsById: [String: OpenClawChatPendingToolCall] = [:] {
         didSet {
@@ -467,6 +465,18 @@ public final class OpenClawChatViewModel {
         return "\(message.role)|\(timestamp)|\(text)"
     }
 
+    private static func isSessionResetCommand(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("/") else { return false }
+        guard let command = trimmed.split(whereSeparator: \.isWhitespace).first else { return false }
+        switch command.lowercased() {
+        case "/new", "/reset":
+            return true
+        default:
+            return false
+        }
+    }
+
     private func performSend() async {
         guard !self.isSending else { return }
         let trimmed = self.input.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -488,27 +498,34 @@ public final class OpenClawChatViewModel {
         self.armPendingRunTimeout(runId: runId)
         self.pendingToolCallsById = [:]
         self.streamingAssistantText = nil
+        let resetsSession = Self.isSessionResetCommand(messageText)
+        if resetsSession {
+            self.replaceMessagesOnRunRefresh.insert(runId)
+            self.messages = []
+        }
 
         // Optimistically append user message to UI.
-        var userContent: [OpenClawChatMessageContent] = [
-            OpenClawChatMessageContent(
-                type: "text",
-                text: messageText,
-                thinking: nil,
-                thinkingSignature: nil,
-                mimeType: nil,
-                fileName: nil,
-                content: nil,
-                id: nil,
-                name: nil,
-                arguments: nil),
-        ]
+        var userContent: [OpenClawChatMessageContent] = []
         let encodedAttachments = self.attachments.map { att -> OpenClawChatAttachmentPayload in
             OpenClawChatAttachmentPayload(
                 type: att.type,
                 mimeType: att.mimeType,
                 fileName: att.fileName,
                 content: att.data.base64EncodedString())
+        }
+        if !resetsSession {
+            userContent.append(
+                OpenClawChatMessageContent(
+                    type: "text",
+                    text: messageText,
+                    thinking: nil,
+                    thinkingSignature: nil,
+                    mimeType: nil,
+                    fileName: nil,
+                    content: nil,
+                    id: nil,
+                    name: nil,
+                    arguments: nil))
         }
         for att in encodedAttachments {
             userContent.append(
@@ -524,12 +541,14 @@ public final class OpenClawChatViewModel {
                     name: nil,
                     arguments: nil))
         }
-        self.messages.append(
-            OpenClawChatMessage(
-                id: UUID(),
-                role: "user",
-                content: userContent,
-                timestamp: Date().timeIntervalSince1970 * 1000))
+        if !userContent.isEmpty {
+            self.messages.append(
+                OpenClawChatMessage(
+                    id: UUID(),
+                    role: "user",
+                    content: userContent,
+                    timestamp: Date().timeIntervalSince1970 * 1000))
+        }
 
         // Clear input immediately for responsive UX (before network await)
         self.input = ""
@@ -545,11 +564,15 @@ public final class OpenClawChatViewModel {
                 attachments: encodedAttachments)
             if response.runId != runId {
                 self.clearPendingRun(runId)
+                if self.replaceMessagesOnRunRefresh.remove(runId) != nil {
+                    self.replaceMessagesOnRunRefresh.insert(response.runId)
+                }
                 self.pendingRuns.insert(response.runId)
                 self.armPendingRunTimeout(runId: response.runId)
             }
         } catch {
             self.clearPendingRun(runId)
+            self.replaceMessagesOnRunRefresh.remove(runId)
             self.errorText = error.localizedDescription
             chatUILogger.error("chat.send failed \(error.localizedDescription, privacy: .public)")
         }
@@ -922,6 +945,7 @@ public final class OpenClawChatViewModel {
             if chat.state == "error" {
                 self.errorText = chat.errorMessage ?? "Chat failed"
             }
+            let replaceMessages = chat.runId.map { self.replaceMessagesOnRunRefresh.remove($0) != nil } ?? false
             if let runId = chat.runId {
                 self.clearPendingRun(runId)
             } else if self.pendingRuns.count <= 1 {
@@ -929,7 +953,7 @@ public final class OpenClawChatViewModel {
             }
             self.pendingToolCallsById = [:]
             self.streamingAssistantText = nil
-            Task { await self.refreshHistoryAfterRun() }
+            Task { await self.refreshHistoryAfterRun(replaceMessages: replaceMessages) }
         default:
             break
         }
@@ -980,12 +1004,13 @@ public final class OpenClawChatViewModel {
         }
     }
 
-    private func refreshHistoryAfterRun() async {
+    private func refreshHistoryAfterRun(replaceMessages: Bool = false) async {
         do {
             let payload = try await self.transport.requestHistory(sessionKey: self.sessionKey)
-            self.messages = Self.reconcileRunRefreshMessages(
-                previous: self.messages,
-                incoming: Self.decodeMessages(payload.messages ?? []))
+            let incoming = Self.decodeMessages(payload.messages ?? [])
+            self.messages = replaceMessages
+                ? Self.reconcileMessageIDs(previous: self.messages, incoming: incoming)
+                : Self.reconcileRunRefreshMessages(previous: self.messages, incoming: incoming)
             self.sessionId = payload.sessionId
             if !self.prefersExplicitThinkingLevel,
                let level = Self.normalizedThinkingLevel(payload.thinkingLevel)
