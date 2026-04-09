@@ -14,4 +14,4 @@ export {
   type LookupFn,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-export { SsrFBlockedError } from "openclaw/plugin-sdk/browser-security-runtime";
+export { SsrfBlockedError } from "openclaw/plugin-sdk/browser-security-runtime";

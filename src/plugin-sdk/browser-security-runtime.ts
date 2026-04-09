@@ -7,7 +7,7 @@ export {
 } from "../infra/fs-safe.js";
 export { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
 export {
-  SsrFBlockedError,
+  SsrfBlockedError,
   isBlockedHostnameOrIp,
   isPrivateNetworkAllowedByPolicy,
   resolvePinnedHostnameWithPolicy,

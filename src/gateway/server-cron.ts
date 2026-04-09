@@ -29,7 +29,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { SsrfBlockedError } from "../infra/net/ssrf.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
@@ -119,7 +119,7 @@ async function postCronWebhook(params: {
     });
     await result.release();
   } catch (err) {
-    if (err instanceof SsrFBlockedError) {
+    if (err instanceof SsrfBlockedError) {
       params.logger.warn(
         {
           ...params.logContext,

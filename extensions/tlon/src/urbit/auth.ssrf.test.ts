@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LookupFn } from "../../api.js";
-import { SsrFBlockedError } from "../../api.js";
+import { SsrfBlockedError } from "../../api.js";
 import { authenticate } from "./auth.js";
 
 describe("tlon urbit auth ssrf", () => {
@@ -17,7 +17,7 @@ describe("tlon urbit auth ssrf", () => {
     vi.stubGlobal("fetch", mockFetch);
 
     await expect(authenticate("http://127.0.0.1:8080", "code")).rejects.toBeInstanceOf(
-      SsrFBlockedError,
+      SsrfBlockedError,
     );
     expect(mockFetch).not.toHaveBeenCalled();
   });

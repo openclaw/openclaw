@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
-import { SsrFBlockedError, type LookupFn } from "../../infra/net/ssrf.js";
+import { SsrfBlockedError, type LookupFn } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import type { RuntimeWebFetchMetadata } from "../../secrets/runtime-web-tools.types.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
@@ -413,7 +413,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       );
     }
   } catch (error) {
-    if (error instanceof SsrFBlockedError) {
+    if (error instanceof SsrfBlockedError) {
       throw error;
     }
     const payload = await maybeFetchProviderWebFetchPayload({

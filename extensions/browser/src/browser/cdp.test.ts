@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { SsrfBlockedError } from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
 import { isWebSocketUrl } from "./cdp.helpers.js";
 import { createTargetViaCdp, evaluateJavaScript, normalizeCdpWsUrl, snapshotAria } from "./cdp.js";
@@ -162,7 +162,7 @@ describe("cdp", () => {
           cdpUrl: "ws://127.0.0.1:9222",
           url: "http://127.0.0.1:8080",
         }),
-      ).rejects.toBeInstanceOf(SsrFBlockedError);
+      ).rejects.toBeInstanceOf(SsrfBlockedError);
       // SSRF check happens before any connection attempt
       expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
@@ -178,7 +178,7 @@ describe("cdp", () => {
           cdpUrl: "http://127.0.0.1:9222",
           url: "http://127.0.0.1:8080",
         }),
-      ).rejects.toBeInstanceOf(SsrFBlockedError);
+      ).rejects.toBeInstanceOf(SsrfBlockedError);
       expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
       fetchSpy.mockRestore();
@@ -241,7 +241,7 @@ describe("cdp", () => {
           allowedHostnames: ["127.0.0.1"],
         },
       }),
-    ).rejects.toBeInstanceOf(SsrFBlockedError);
+    ).rejects.toBeInstanceOf(SsrfBlockedError);
   });
 
   it("blocks the initial /json/version fetch when the cdpUrl host is outside strict SSRF policy", async () => {
@@ -254,7 +254,7 @@ describe("cdp", () => {
           allowedHostnames: ["127.0.0.1"],
         },
       }),
-    ).rejects.toBeInstanceOf(SsrFBlockedError);
+    ).rejects.toBeInstanceOf(SsrfBlockedError);
   });
 
   it("blocks direct websocket cdp urls outside strict SSRF policy", async () => {
@@ -267,7 +267,7 @@ describe("cdp", () => {
           allowedHostnames: ["127.0.0.1"],
         },
       }),
-    ).rejects.toBeInstanceOf(SsrFBlockedError);
+    ).rejects.toBeInstanceOf(SsrfBlockedError);
   });
 
   it("evaluates javascript via CDP", async () => {

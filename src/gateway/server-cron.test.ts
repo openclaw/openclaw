@@ -3,7 +3,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { SsrfBlockedError } from "../infra/net/ssrf.js";
 import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 
 const {
@@ -131,7 +131,7 @@ describe("buildGatewayCronService", () => {
     const cfg = createCronConfig("server-cron-ssrf");
     loadConfigMock.mockReturnValue(cfg);
     fetchWithSsrFGuardMock.mockRejectedValue(
-      new SsrFBlockedError("Blocked: resolves to private/internal/special-use IP address"),
+      new SsrfBlockedError("Blocked: resolves to private/internal/special-use IP address"),
     );
 
     const state = buildGatewayCronService({

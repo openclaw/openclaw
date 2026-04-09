@@ -14,7 +14,7 @@ import {
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
   type PinnedDispatcherPolicy,
-  SsrFBlockedError,
+  SsrfBlockedError,
   type SsrFPolicy,
 } from "./ssrf.js";
 import {
@@ -388,7 +388,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         release: async () => release(dispatcher),
       };
     } catch (err) {
-      if (err instanceof SsrFBlockedError) {
+      if (err instanceof SsrfBlockedError) {
         const context = params.auditContext ?? "url-fetch";
         logWarn(
           `security: blocked URL fetch (${context}) target=${parsedUrl.origin}${parsedUrl.pathname} reason=${err.message}`,

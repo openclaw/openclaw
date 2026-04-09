@@ -1,4 +1,4 @@
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { SsrfBlockedError } from "../infra/net/ssrf.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 
 export class BrowserError extends Error {
@@ -75,7 +75,7 @@ export function toBrowserErrorResponse(err: unknown): {
   if (err instanceof Error && err.name === "BlockedBrowserTargetError") {
     return { status: 409, message: err.message };
   }
-  if (err instanceof SsrFBlockedError) {
+  if (err instanceof SsrfBlockedError) {
     return { status: 400, message: err.message };
   }
   if (

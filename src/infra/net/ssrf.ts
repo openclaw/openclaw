@@ -27,12 +27,15 @@ type LookupCallback = (
 
 type LookupResult = LookupAddress | LookupAddress[];
 
-export class SsrFBlockedError extends Error {
+export class SsrfBlockedError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "SsrFBlockedError";
+    this.name = "SsrfBlockedError";
   }
 }
+
+/** @deprecated Use {@link SsrfBlockedError} instead. */
+export const SsrFBlockedError = SsrfBlockedError;
 
 export type LookupFn = typeof dnsLookup;
 
@@ -187,7 +190,7 @@ const BLOCKED_RESOLVED_IP_MESSAGE = "Blocked: resolves to private/internal/speci
 
 function assertAllowedHostOrIpOrThrow(hostnameOrIp: string, policy?: SsrFPolicy): void {
   if (isBlockedHostnameOrIp(hostnameOrIp, policy)) {
-    throw new SsrFBlockedError(BLOCKED_HOST_OR_IP_MESSAGE);
+    throw new SsrfBlockedError(BLOCKED_HOST_OR_IP_MESSAGE);
   }
 }
 
@@ -198,7 +201,7 @@ function assertAllowedResolvedAddressesOrThrow(
   for (const entry of results) {
     // Reuse the exact same host/IP classifier as the pre-DNS check to avoid drift.
     if (isBlockedHostnameOrIp(entry.address, policy)) {
-      throw new SsrFBlockedError(BLOCKED_RESOLVED_IP_MESSAGE);
+      throw new SsrfBlockedError(BLOCKED_RESOLVED_IP_MESSAGE);
     }
   }
 }
@@ -332,7 +335,7 @@ export async function resolvePinnedHostnameWithPolicy(
   const skipPrivateNetworkChecks = shouldSkipPrivateNetworkChecks(normalized, params.policy);
 
   if (!matchesHostnameAllowlist(normalized, hostnameAllowlist)) {
-    throw new SsrFBlockedError(`Blocked hostname (not in allowlist): ${hostname}`);
+    throw new SsrfBlockedError(`Blocked hostname (not in allowlist): ${hostname}`);
   }
 
   if (!skipPrivateNetworkChecks) {

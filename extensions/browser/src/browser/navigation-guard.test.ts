@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SsrFBlockedError, type LookupFn } from "../infra/net/ssrf.js";
+import { SsrfBlockedError, type LookupFn } from "../infra/net/ssrf.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationRedirectChainAllowed,
@@ -38,7 +38,7 @@ describe("browser navigation guard", () => {
       assertBrowserNavigationAllowed({
         url: "http://127.0.0.1:8080",
       }),
-    ).rejects.toBeInstanceOf(SsrFBlockedError);
+    ).rejects.toBeInstanceOf(SsrfBlockedError);
   });
 
   it("allows about:blank", async () => {
@@ -102,7 +102,7 @@ describe("browser navigation guard", () => {
         url: "https://example.com",
         lookupFn,
       }),
-    ).rejects.toBeInstanceOf(SsrFBlockedError);
+    ).rejects.toBeInstanceOf(SsrfBlockedError);
   });
 
   it("allows hostnames that resolve to public addresses", async () => {
@@ -154,7 +154,7 @@ describe("browser navigation guard", () => {
         url: "http://private.test",
         lookupFn,
       }),
-    ).rejects.toBeInstanceOf(SsrFBlockedError);
+    ).rejects.toBeInstanceOf(SsrfBlockedError);
   });
 
   it("ignores non-network browser-internal final URLs", async () => {
@@ -188,7 +188,7 @@ describe("browser navigation guard", () => {
             : publicLookup(hostname, { all: true }),
         ) as unknown as LookupFn,
       }),
-    ).rejects.toBeInstanceOf(SsrFBlockedError);
+    ).rejects.toBeInstanceOf(SsrfBlockedError);
   });
 
   it("allows redirect chains when every hop is public", async () => {
