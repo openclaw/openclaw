@@ -90,16 +90,135 @@ export function resolveExecDenylist(entries?: readonly string[] | null): string[
   return builtins;
 }
 
-const SHELL_WRAPPERS = new Set(["bash", "sh", "zsh", "dash", "ksh", "fish"]);
+const SHELL_WRAPPERS = new Set([
+  "bash",
+  "sh",
+  "zsh",
+  "dash",
+  "ksh",
+  "fish",
+  "cmd",
+  "cmd.exe",
+  "powershell",
+  "powershell.exe",
+  "pwsh",
+  "pwsh.exe",
+]);
+
+const PREFIX_COMMANDS = new Set([
+  "sudo",
+  "env",
+  "nice",
+  "nohup",
+  "time",
+  "strace",
+  "ltrace",
+  "ionice",
+  "chrt",
+  "taskset",
+  "numactl",
+]);
+
+const ENV_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
+function resolveBasename(value: string): string {
+  return value.replace(/^.*[\\/]/, "");
+}
+
+function consumeEnvPrefix(argv: readonly string[], start: number): number {
+  let idx = start;
+  while (idx < argv.length) {
+    const token = argv[idx] ?? "";
+    const normalized = token.toLowerCase();
+    if (normalized === "env") {
+      idx += 1;
+      continue;
+    }
+    if (ENV_ASSIGNMENT_RE.test(token)) {
+      idx += 1;
+      continue;
+    }
+    break;
+  }
+  return idx;
+}
+
+function consumeFlagPrefix(argv: readonly string[], start: number, command: string): number {
+  let idx = start;
+  while (idx < argv.length) {
+    const token = argv[idx] ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (token === "--") {
+      idx += 1;
+      break;
+    }
+    if (!token.startsWith("-")) {
+      break;
+    }
+    if (command === "nice" && (token === "-n" || token === "--adjustment")) {
+      idx += 2;
+      continue;
+    }
+    idx += 1;
+  }
+  return idx;
+}
+
+function resolvePrefixedCommandCandidate(argv: readonly string[]): string | null {
+  if (argv.length < 2) {
+    return null;
+  }
+
+  let idx = 0;
+  let changed = false;
+  while (idx < argv.length) {
+    const prefix = resolveBasename(argv[idx] ?? "").toLowerCase();
+    if (!PREFIX_COMMANDS.has(prefix)) {
+      break;
+    }
+    changed = true;
+    if (prefix === "env") {
+      idx = consumeEnvPrefix(argv, idx);
+      continue;
+    }
+    idx += 1;
+    idx = consumeFlagPrefix(argv, idx, prefix);
+  }
+
+  if (!changed || idx >= argv.length) {
+    return null;
+  }
+  return normalizeCommandText(argv.slice(idx).join(" "));
+}
 
 function extractInlineShellPayload(segment: ExecCommandSegment): string | null {
   const argv = segment.argv;
-  if (argv.length < 3) {
+  if (argv.length < 2) {
     return null;
   }
-  const exe = (argv[0] ?? "").replace(/^.*\//, "").toLowerCase();
+  const exe = resolveBasename(argv[0] ?? "").toLowerCase();
   if (!SHELL_WRAPPERS.has(exe)) {
     return null;
+  }
+  if (exe === "cmd" || exe === "cmd.exe") {
+    const cmdFlagIdx = argv.findIndex((value) => /^\/c$/i.test(value ?? ""));
+    if (cmdFlagIdx === -1 || cmdFlagIdx + 1 >= argv.length) {
+      return null;
+    }
+    return argv.slice(cmdFlagIdx + 1).join(" ");
+  }
+  if (exe === "powershell" || exe === "powershell.exe" || exe === "pwsh" || exe === "pwsh.exe") {
+    const commandFlagIdx = argv.findIndex((value) => {
+      const normalized = (value ?? "").toLowerCase();
+      return normalized === "-c" || normalized === "-command" || normalized === "-encodedcommand";
+    });
+    if (commandFlagIdx === -1 || commandFlagIdx + 1 >= argv.length) {
+      return null;
+    }
+    return argv.slice(commandFlagIdx + 1).join(" ");
   }
   const flagIdx = argv.indexOf("-c");
   if (flagIdx === -1 || flagIdx + 1 >= argv.length) {
@@ -129,9 +248,13 @@ function resolveSegmentCandidates(segment: ExecCommandSegment): string[] {
       candidates.add(normalized);
     }
   }
+  const prefixedCandidate = resolvePrefixedCommandCandidate(argv);
+  if (prefixedCandidate) {
+    candidates.add(prefixedCandidate);
+  }
   // Add basename-only candidate for absolute executable paths (e.g. /bin/rm -> rm)
-  if (execution?.rawExecutable && execution.rawExecutable.includes("/")) {
-    const basename = execution.rawExecutable.replace(/^.*\//, "");
+  if (execution?.rawExecutable && /[\\/]/.test(execution.rawExecutable)) {
+    const basename = resolveBasename(execution.rawExecutable);
     if (basename && argv.length > 1) {
       const basenameCmd = normalizeCommandText([basename, ...argv.slice(1)].join(" "));
       candidates.add(basenameCmd);

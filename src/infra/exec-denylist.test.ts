@@ -125,4 +125,76 @@ describe("exec denylist", () => {
       pattern: "rm -rf /",
     });
   });
+
+  it("matches windows-style executable path via basename", () => {
+    const analysis = analyzeArgvCommand({ argv: ["C:\\Windows\\System32\\rm", "-rf", "/"] });
+    const result = matchesExecDenylist({
+      analysis,
+      commandText: "C:\\Windows\\System32\\rm -rf /",
+    });
+    expect(result).toEqual({
+      denied: true,
+      pattern: "rm -rf /",
+    });
+  });
+
+  it("denies dangerous command prefixed with sudo", () => {
+    const analysis = analyzeShellCommand({ command: "sudo rm -rf /" });
+    const result = matchesExecDenylist({
+      analysis,
+      commandText: "sudo rm -rf /",
+    });
+    expect(result).toEqual({
+      denied: true,
+      pattern: "rm -rf /",
+    });
+  });
+
+  it("denies dangerous command prefixed with env assignments", () => {
+    const analysis = analyzeShellCommand({ command: "env FOO=bar rm -rf /" });
+    const result = matchesExecDenylist({
+      analysis,
+      commandText: "env FOO=bar rm -rf /",
+    });
+    expect(result).toEqual({
+      denied: true,
+      pattern: "rm -rf /",
+    });
+  });
+
+  it("denies dangerous command prefixed with nice flags", () => {
+    const analysis = analyzeShellCommand({ command: "nice -n 10 dd of=/dev/sda" });
+    const result = matchesExecDenylist({
+      analysis,
+      commandText: "nice -n 10 dd of=/dev/sda",
+    });
+    expect(result).toEqual({
+      denied: true,
+      pattern: "dd of=/dev/*",
+    });
+  });
+
+  it("catches cmd /c wrapper payload", () => {
+    const analysis = analyzeShellCommand({ command: "cmd /c rm -rf /" });
+    const result = matchesExecDenylist({
+      analysis,
+      commandText: "cmd /c rm -rf /",
+    });
+    expect(result).toEqual({
+      denied: true,
+      pattern: "rm -rf /",
+    });
+  });
+
+  it("catches powershell -c wrapper payload", () => {
+    const analysis = analyzeShellCommand({ command: "powershell -c 'mkfs.ext4 /dev/sda'" });
+    const result = matchesExecDenylist({
+      analysis,
+      commandText: "powershell -c 'mkfs.ext4 /dev/sda'",
+    });
+    expect(result).toEqual({
+      denied: true,
+      pattern: "mkfs.*",
+    });
+  });
 });
