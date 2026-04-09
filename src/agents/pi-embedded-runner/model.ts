@@ -336,6 +336,7 @@ function applyConfiguredProviderOverrides(params: {
       maxTokens: configuredModel?.maxTokens ?? discoveredModel.maxTokens,
       headers: requestConfig.headers,
       compat: configuredModel?.compat ?? discoveredModel.compat,
+      ...(providerConfig.promptCache ? { promptCacheSupported: true } : {}),
     },
     providerRequest,
   );

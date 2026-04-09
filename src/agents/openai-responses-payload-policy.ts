@@ -7,6 +7,7 @@ type OpenAIResponsesPayloadModel = {
   provider?: unknown;
   contextWindow?: unknown;
   compat?: { supportsStore?: boolean };
+  promptCacheSupported?: boolean;
 };
 
 type OpenAIResponsesPayloadPolicyOptions = {
@@ -98,6 +99,7 @@ export function resolveOpenAIResponsesPayloadPolicy(
     api: readStringValue(model.api),
     baseUrl: readStringValue(model.baseUrl),
     compat: model.compat,
+    promptCacheSupported: model.promptCacheSupported,
     capability: "llm",
     transport: "stream",
   }).capabilities;

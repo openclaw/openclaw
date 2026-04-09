@@ -750,9 +750,11 @@ export function buildOpenAIResponsesParams(
     { supportsDeveloperRole },
   );
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
-  const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
-    storeMode: "disable",
-  });
+  const promptCacheSupported = (model as Record<string, unknown>).promptCacheSupported === true;
+  const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(
+    { ...model, promptCacheSupported },
+    { storeMode: "disable" },
+  );
   const params: OpenAIResponsesRequestParams = {
     model: model.id,
     input: messages,

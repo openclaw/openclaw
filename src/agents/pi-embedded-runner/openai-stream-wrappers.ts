@@ -185,12 +185,16 @@ export function createOpenAIResponsesContextManagementWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    const policy = resolveOpenAIResponsesPayloadPolicy(model, {
-      extraParams,
-      enablePromptCacheStripping: true,
-      enableServerCompaction: true,
-      storeMode: "provider-policy",
-    });
+    const promptCacheSupported = (model as Record<string, unknown>).promptCacheSupported === true;
+    const policy = resolveOpenAIResponsesPayloadPolicy(
+      { ...model, promptCacheSupported },
+      {
+        extraParams,
+        enablePromptCacheStripping: true,
+        enableServerCompaction: true,
+        storeMode: "provider-policy",
+      },
+    );
     if (
       policy.explicitStore === undefined &&
       !policy.useServerCompaction &&
