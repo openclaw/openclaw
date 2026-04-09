@@ -211,6 +211,15 @@ function resolveContainedSkillPath(params: {
   if (isPathInside(params.rootRealPath, candidateRealPath)) {
     return candidateRealPath;
   }
+  if (isPathInside(params.rootDir, path.resolve(params.candidatePath))) {
+    skillsLogger.warn("Skill path resolves outside root via symlink; using original path.", {
+      source: params.source,
+      rootDir: params.rootDir,
+      path: path.resolve(params.candidatePath),
+      realPath: candidateRealPath,
+    });
+    return path.resolve(params.candidatePath);
+  }
   warnEscapedSkillPath({
     source: params.source,
     rootDir: params.rootDir,
