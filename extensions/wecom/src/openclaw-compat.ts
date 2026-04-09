@@ -56,8 +56,7 @@ interface SdkExports {
 }
 
 const _sdkReady: Promise<SdkExports> = import("openclaw/plugin-sdk/core")
-  // oxlint-disable-next-line typescript/no-explicit-any -- dynamic SDK import with unknown shape
-  .then((sdk: any) => {
+  .then((sdk: Record<string, unknown>) => {
     const exports: SdkExports = {};
     if (typeof sdk.loadOutboundMediaFromUrl === "function") {
       exports.loadOutboundMediaFromUrl = sdk.loadOutboundMediaFromUrl;
@@ -82,8 +81,7 @@ const _sdkReady: Promise<SdkExports> = import("openclaw/plugin-sdk/core")
 let _cachedAddWildcardAllowFrom: ((allowFrom: string[]) => string[]) | undefined;
 
 const _setupSdkReady: Promise<void> = import("openclaw/plugin-sdk/setup")
-  // oxlint-disable-next-line typescript/no-explicit-any -- dynamic SDK import with unknown shape
-  .then((sdk: any) => {
+  .then((sdk: Record<string, unknown>) => {
     if (typeof sdk.addWildcardAllowFrom === "function") {
       _cachedAddWildcardAllowFrom = sdk.addWildcardAllowFrom;
     }
@@ -640,11 +638,12 @@ const _sdkPolicyReady: Promise<{
   try {
     // 尝试从主 SDK 包导入
     const sdk = await import("openclaw/plugin-sdk/channel-policy");
-    // oxlint-disable-next-line typescript/no-explicit-any -- dynamic SDK import with unknown shape
-    if (typeof (sdk as any).buildAccountScopedDmSecurityPolicy === "function") {
+    const sdkRec = sdk as Record<string, unknown>;
+    if (typeof sdkRec.buildAccountScopedDmSecurityPolicy === "function") {
       return {
-        // oxlint-disable-next-line typescript/no-explicit-any -- dynamic SDK import with unknown shape
-        buildAccountScopedDmSecurityPolicy: (sdk as any).buildAccountScopedDmSecurityPolicy,
+        buildAccountScopedDmSecurityPolicy: sdkRec.buildAccountScopedDmSecurityPolicy as (
+          params: BuildAccountScopedDmSecurityPolicyParams,
+        ) => ChannelSecurityDmPolicyCompat,
       };
     }
     return {};

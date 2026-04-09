@@ -144,34 +144,6 @@ describe("production lint suppressions", () => {
 
     expect(anySuppressions).toEqual([
       {
-        file: "extensions/wecom/index.ts",
-        rule: "typescript/no-explicit-any",
-      },
-      {
-        file: "extensions/wecom/src/channel.ts",
-        rule: "typescript/no-explicit-any",
-      },
-      {
-        file: "extensions/wecom/src/channel.ts",
-        rule: "typescript/no-explicit-any",
-      },
-      {
-        file: "extensions/wecom/src/openclaw-compat.ts",
-        rule: "typescript/no-explicit-any",
-      },
-      {
-        file: "extensions/wecom/src/openclaw-compat.ts",
-        rule: "typescript/no-explicit-any",
-      },
-      {
-        file: "extensions/wecom/src/openclaw-compat.ts",
-        rule: "typescript/no-explicit-any",
-      },
-      {
-        file: "extensions/wecom/src/openclaw-compat.ts",
-        rule: "typescript/no-explicit-any",
-      },
-      {
         file: "src/agents/tools/common.ts",
         rule: "typescript/no-explicit-any",
       },

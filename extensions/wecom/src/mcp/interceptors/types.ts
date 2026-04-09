@@ -66,6 +66,5 @@ export interface CallInterceptor {
    * Multiple interceptors' afterCall execute sequentially in pipeline fashion;
    * the return value of the previous becomes the input of the next.
    */
-  // oxlint-disable-next-line typescript/no-redundant-type-constituents -- intentional explicit union member
-  afterCall?(ctx: CallContext, result: unknown): Promise<unknown> | unknown;
+  afterCall?(ctx: CallContext, result: unknown): unknown;
 }

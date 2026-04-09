@@ -145,8 +145,7 @@ export async function sendWeComReplyNonBlocking(params: {
   runtime: RuntimeEnv;
   streamId: string;
   finish?: boolean;
-  // oxlint-disable-next-line typescript/no-redundant-type-constituents -- intentional explicit union member
-}): Promise<string | "skipped"> {
+}): Promise<string> {
   const { wsClient, frame, text, runtime: _runtime, streamId, finish = false } = params;
 
   if (!text) {

@@ -590,8 +590,7 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
           config: ctx.cfg,
           runtime: ctx.runtime,
           abortSignal: ctx.abortSignal,
-          // oxlint-disable-next-line typescript/no-explicit-any
-          setStatus: ctx.setStatus as any,
+          setStatus: ctx.setStatus as unknown as (next: Record<string, unknown>) => void,
         });
       } else if (connectionMode === "webhook") {
         // ── Webhook mode ──────────────────────────────────────────────
@@ -609,8 +608,7 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
           config: ctx.cfg,
           runtime: ctx.runtime,
           abortSignal: ctx.abortSignal,
-          // oxlint-disable-next-line typescript/no-explicit-any -- SDK type signatures vary across versions
-          setStatus: ctx.setStatus as any,
+          setStatus: ctx.setStatus as unknown as (next: Record<string, unknown>) => void,
           log: ctx.log,
           accountId: ctx.accountId,
         };

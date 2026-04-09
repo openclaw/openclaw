@@ -41,8 +41,7 @@ export default defineBundledChannelEntry({
       specifier: "./src/mcp/index.js",
       exportName: "createWeComMcpTool",
     });
-    // oxlint-disable-next-line typescript/no-explicit-any -- SDK registerTool expects a specific tool shape
-    api.registerTool(createWeComMcpTool() as any, { name: "wecom_mcp" });
+    api.registerTool(createWeComMcpTool() as unknown as Parameters<typeof api.registerTool>[0], { name: "wecom_mcp" });
 
     const createWecomAgentWebhookHandler = loadBundledEntryExportSync<
       typeof import("./src/agent/webhook.js").createWecomAgentWebhookHandler

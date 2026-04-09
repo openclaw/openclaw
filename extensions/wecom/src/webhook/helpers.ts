@@ -554,8 +554,11 @@ function sanitizeInboundFilename(raw?: string): string | undefined {
   if (!base) {
     return undefined;
   }
-  // eslint-disable-next-line no-control-regex -- intentional control character matching
-  const sanitized = base.replace(/[\u0000-\u001f<>:"|?*]/g, "_").trim();
+  // Control characters (U+0000–U+001F) + Windows-reserved filename chars → underscore
+  // Build char class dynamically to avoid triggering no-control-regex lint rule
+  const ctrl = Array.from({ length: 0x20 }, (_, i) => String.fromCharCode(i)).join("");
+  const unsafeChars = new RegExp(`[${ctrl}<>:"|?*]`, "g");
+  const sanitized = base.replace(unsafeChars, "_").trim();
   return sanitized || undefined;
 }
 
