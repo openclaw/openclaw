@@ -17,20 +17,32 @@ conceptual overviews, see:
 - [Builtin Engine](/concepts/memory-builtin) -- default SQLite backend
 - [QMD Engine](/concepts/memory-qmd) -- local-first sidecar
 - [Memory Search](/concepts/memory-search) -- search pipeline and tuning
+- [Active Memory](/concepts/active-memory) -- enabling the memory sub-agent for interactive sessions
 
 All memory search settings live under `agents.defaults.memorySearch` in
 `openclaw.json` unless noted otherwise.
+
+If you are looking for the **active memory** feature toggle and sub-agent config,
+that lives under `plugins.entries.active-memory` instead of `memorySearch`.
+
+Active memory uses a two-gate model:
+
+1. the plugin must be enabled and target the current agent id
+2. the request must be an eligible interactive persistent chat session
+
+See [Active Memory](/concepts/active-memory) for the activation model,
+plugin-owned config, transcript persistence, and safe rollout pattern.
 
 ---
 
 ## Provider selection
 
-| Key        | Type      | Default          | Description                                                                      |
-| ---------- | --------- | ---------------- | -------------------------------------------------------------------------------- |
-| `provider` | `string`  | auto-detected    | Embedding adapter ID: `openai`, `gemini`, `voyage`, `mistral`, `ollama`, `local` |
-| `model`    | `string`  | provider default | Embedding model name                                                             |
-| `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                       |
-| `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                  |
+| Key        | Type      | Default          | Description                                                                                 |
+| ---------- | --------- | ---------------- | ------------------------------------------------------------------------------------------- |
+| `provider` | `string`  | auto-detected    | Embedding adapter ID: `openai`, `gemini`, `voyage`, `mistral`, `bedrock`, `ollama`, `local` |
+| `model`    | `string`  | provider default | Embedding model name                                                                        |
+| `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                                  |
+| `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                             |
 
 ### Auto-detection order
 
@@ -41,13 +53,14 @@ When `provider` is not set, OpenClaw selects the first available:
 3. `gemini` -- if a Gemini key can be resolved.
 4. `voyage` -- if a Voyage key can be resolved.
 5. `mistral` -- if a Mistral key can be resolved.
+6. `bedrock` -- if the AWS SDK credential chain resolves (instance role, access keys, profile, SSO, web identity, or shared config).
 
 `ollama` is supported but not auto-detected (set it explicitly).
 
 ### API key resolution
 
-Remote embeddings require an API key. OpenClaw resolves from:
-auth profiles, `models.providers.*.apiKey`, or environment variables.
+Remote embeddings require an API key. Bedrock uses the AWS SDK default
+credential chain instead (instance roles, SSO, access keys).
 
 | Provider | Env var                        | Config key                        |
 | -------- | ------------------------------ | --------------------------------- |
@@ -55,6 +68,7 @@ auth profiles, `models.providers.*.apiKey`, or environment variables.
 | Gemini   | `GEMINI_API_KEY`               | `models.providers.google.apiKey`  |
 | Voyage   | `VOYAGE_API_KEY`               | `models.providers.voyage.apiKey`  |
 | Mistral  | `MISTRAL_API_KEY`              | `models.providers.mistral.apiKey` |
+| Bedrock  | AWS credential chain           | No API key needed                 |
 | Ollama   | `OLLAMA_API_KEY` (placeholder) | --                                |
 
 Codex OAuth covers chat/completions only and does not satisfy embedding
@@ -101,6 +115,84 @@ For custom OpenAI-compatible endpoints or overriding provider defaults:
 <Warning>
 Changing model or `outputDimensionality` triggers an automatic full reindex.
 </Warning>
+
+---
+
+## Bedrock embedding config
+
+Bedrock uses the AWS SDK default credential chain -- no API keys needed.
+If OpenClaw runs on EC2 with a Bedrock-enabled instance role, just set the
+provider and model:
+
+```json5
+{
+  agents: {
+    defaults: {
+      memorySearch: {
+        provider: "bedrock",
+        model: "amazon.titan-embed-text-v2:0",
+      },
+    },
+  },
+}
+```
+
+| Key                    | Type     | Default                        | Description                     |
+| ---------------------- | -------- | ------------------------------ | ------------------------------- |
+| `model`                | `string` | `amazon.titan-embed-text-v2:0` | Any Bedrock embedding model ID  |
+| `outputDimensionality` | `number` | model default                  | For Titan V2: 256, 512, or 1024 |
+
+### Supported models
+
+The following models are supported (with family detection and dimension
+defaults):
+
+| Model ID                                   | Provider   | Default Dims | Configurable Dims    |
+| ------------------------------------------ | ---------- | ------------ | -------------------- |
+| `amazon.titan-embed-text-v2:0`             | Amazon     | 1024         | 256, 512, 1024       |
+| `amazon.titan-embed-text-v1`               | Amazon     | 1536         | --                   |
+| `amazon.titan-embed-g1-text-02`            | Amazon     | 1536         | --                   |
+| `amazon.titan-embed-image-v1`              | Amazon     | 1024         | --                   |
+| `amazon.nova-2-multimodal-embeddings-v1:0` | Amazon     | 1024         | 256, 384, 1024, 3072 |
+| `cohere.embed-english-v3`                  | Cohere     | 1024         | --                   |
+| `cohere.embed-multilingual-v3`             | Cohere     | 1024         | --                   |
+| `cohere.embed-v4:0`                        | Cohere     | 1536         | 256-1536             |
+| `twelvelabs.marengo-embed-3-0-v1:0`        | TwelveLabs | 512          | --                   |
+| `twelvelabs.marengo-embed-2-7-v1:0`        | TwelveLabs | 1024         | --                   |
+
+Throughput-suffixed variants (e.g., `amazon.titan-embed-text-v1:2:8k`) inherit
+the base model's configuration.
+
+### Authentication
+
+Bedrock auth uses the standard AWS SDK credential resolution order:
+
+1. Environment variables (`AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`)
+2. SSO token cache
+3. Web identity token credentials
+4. Shared credentials and config files
+5. ECS or EC2 metadata credentials
+
+Region is resolved from `AWS_REGION`, `AWS_DEFAULT_REGION`, the
+`amazon-bedrock` provider `baseUrl`, or defaults to `us-east-1`.
+
+### IAM permissions
+
+The IAM role or user needs:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": "bedrock:InvokeModel",
+  "Resource": "*"
+}
+```
+
+For least-privilege, scope `InvokeModel` to the specific model:
+
+```
+arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v2:0
+```
 
 ---
 
@@ -297,6 +389,15 @@ Set `memory.backend = "qmd"` to enable. All QMD settings live under
 | `sessions.retentionDays` | `number`  | --       | Transcript retention                         |
 | `sessions.exportDir`     | `string`  | --       | Export directory                             |
 
+OpenClaw prefers the current QMD collection and MCP query shapes, but keeps
+older QMD releases working by falling back to legacy `--mask` collection flags
+and older MCP tool names when needed.
+
+QMD model overrides stay on the QMD side, not OpenClaw config. If you need to
+override QMD's models globally, set environment variables such as
+`QMD_EMBED_MODEL`, `QMD_RERANK_MODEL`, and `QMD_GENERATE_MODEL` in the gateway
+runtime environment.
+
 ### Update schedule
 
 | Key                       | Type      | Default | Description                           |
@@ -376,90 +477,19 @@ Default is DM-only. `match.keyPrefix` matches the normalized session key;
 ## Dreaming (experimental)
 
 Dreaming is configured under `plugins.entries.memory-core.config.dreaming`,
-not under `agents.defaults.memorySearch`. Dreaming uses three cooperative
-phases (light, deep, REM), each with its own schedule and config. For
-conceptual details and chat commands, see [Dreaming](/concepts/dreaming).
+not under `agents.defaults.memorySearch`.
 
-### Global settings
+Dreaming runs as one scheduled sweep and uses internal light/deep/REM phases as
+an implementation detail.
 
-| Key                       | Type      | Default    | Description                                      |
-| ------------------------- | --------- | ---------- | ------------------------------------------------ |
-| `enabled`                 | `boolean` | `true`     | Master switch for all phases                     |
-| `timezone`                | `string`  | unset      | Timezone for schedule evaluation and daily notes |
-| `verboseLogging`          | `boolean` | `false`    | Emit detailed per-run dreaming logs              |
-| `storage.mode`            | `string`  | `"inline"` | `inline`, `separate`, or `both`                  |
-| `storage.separateReports` | `boolean` | `false`    | Write separate report files per phase            |
+For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 
-### Light phase (`phases.light`)
+### User settings
 
-Scans recent traces, dedupes, and stages candidates into the daily note.
-Does **not** write to `MEMORY.md`.
-
-| Key                | Type       | Default                         | Description                 |
-| ------------------ | ---------- | ------------------------------- | --------------------------- |
-| `enabled`          | `boolean`  | `true`                          | Enable light phase          |
-| `cron`             | `string`   | `0 */6 * * *`                   | Schedule (every 6 hours)    |
-| `lookbackDays`     | `number`   | `2`                             | Days of traces to scan      |
-| `limit`            | `number`   | `100`                           | Max candidates to stage     |
-| `dedupeSimilarity` | `number`   | `0.9`                           | Jaccard threshold for dedup |
-| `sources`          | `string[]` | `["daily","sessions","recall"]` | Data sources                |
-
-### Deep phase (`phases.deep`)
-
-Promotes qualified candidates into `MEMORY.md`. The **only** phase that
-writes durable facts. Also owns recovery when memory is thin.
-
-| Key                   | Type       | Default                                         | Description                          |
-| --------------------- | ---------- | ----------------------------------------------- | ------------------------------------ |
-| `enabled`             | `boolean`  | `true`                                          | Enable deep phase                    |
-| `cron`                | `string`   | `0 3 * * *`                                     | Schedule (daily at 3 AM)             |
-| `limit`               | `number`   | `10`                                            | Max candidates to promote per cycle  |
-| `minScore`            | `number`   | `0.8`                                           | Minimum weighted score for promotion |
-| `minRecallCount`      | `number`   | `3`                                             | Minimum recall count threshold       |
-| `minUniqueQueries`    | `number`   | `3`                                             | Minimum distinct query count         |
-| `recencyHalfLifeDays` | `number`   | `14`                                            | Days for recency score to halve      |
-| `maxAgeDays`          | `number`   | `30`                                            | Max daily-note age for promotion     |
-| `sources`             | `string[]` | `["daily","memory","sessions","logs","recall"]` | Data sources                         |
-
-#### Deep recovery (`phases.deep.recovery`)
-
-| Key                      | Type      | Default | Description                                |
-| ------------------------ | --------- | ------- | ------------------------------------------ |
-| `enabled`                | `boolean` | `true`  | Enable automatic recovery                  |
-| `triggerBelowHealth`     | `number`  | `0.35`  | Health score threshold to trigger recovery |
-| `lookbackDays`           | `number`  | `30`    | How far back to look for recovery material |
-| `maxRecoveredCandidates` | `number`  | `20`    | Max candidates to recover per run          |
-| `minRecoveryConfidence`  | `number`  | `0.9`   | Minimum confidence for recovery candidates |
-| `autoWriteMinConfidence` | `number`  | `0.97`  | Auto-write threshold (skip manual review)  |
-
-### REM phase (`phases.rem`)
-
-Writes themes, reflections, and pattern notes into the daily note.
-Does **not** write to `MEMORY.md`.
-
-| Key                  | Type       | Default                     | Description                        |
-| -------------------- | ---------- | --------------------------- | ---------------------------------- |
-| `enabled`            | `boolean`  | `true`                      | Enable REM phase                   |
-| `cron`               | `string`   | `0 5 * * 0`                 | Schedule (weekly, Sunday 5 AM)     |
-| `lookbackDays`       | `number`   | `7`                         | Days of material to reflect on     |
-| `limit`              | `number`   | `10`                        | Max patterns or themes to write    |
-| `minPatternStrength` | `number`   | `0.75`                      | Minimum tag co-occurrence strength |
-| `sources`            | `string[]` | `["memory","daily","deep"]` | Data sources for reflection        |
-
-### Execution overrides
-
-Each phase accepts an `execution` block. There is also a global
-`execution.defaults` block that phases inherit from.
-
-| Key               | Type     | Default      | Description                    |
-| ----------------- | -------- | ------------ | ------------------------------ |
-| `speed`           | `string` | `"balanced"` | `fast`, `balanced`, or `slow`  |
-| `thinking`        | `string` | `"medium"`   | `low`, `medium`, or `high`     |
-| `budget`          | `string` | `"medium"`   | `cheap`, `medium`, `expensive` |
-| `model`           | `string` | unset        | Override model for this phase  |
-| `maxOutputTokens` | `number` | unset        | Cap output tokens              |
-| `temperature`     | `number` | unset        | Sampling temperature (0-2)     |
-| `timeoutMs`       | `number` | unset        | Phase timeout in milliseconds  |
+| Key         | Type      | Default     | Description                                       |
+| ----------- | --------- | ----------- | ------------------------------------------------- |
+| `enabled`   | `boolean` | `false`     | Enable or disable dreaming entirely               |
+| `frequency` | `string`  | `0 3 * * *` | Optional cron cadence for the full dreaming sweep |
 
 ### Example
 
@@ -471,12 +501,7 @@ Each phase accepts an `execution` block. There is also a global
         config: {
           dreaming: {
             enabled: true,
-            timezone: "America/New_York",
-            phases: {
-              light: { cron: "0 */4 * * *", lookbackDays: 3 },
-              deep: { minScore: 0.85, recencyHalfLifeDays: 21 },
-              rem: { lookbackDays: 14 },
-            },
+            frequency: "0 3 * * *",
           },
         },
       },
@@ -484,3 +509,9 @@ Each phase accepts an `execution` block. There is also a global
   },
 }
 ```
+
+Notes:
+
+- Dreaming writes machine state to `memory/.dreams/`.
+- Dreaming writes human-readable narrative output to `DREAMS.md` (or existing `dreams.md`).
+- The light/deep/REM phase policy and thresholds are internal behavior, not user-facing config.

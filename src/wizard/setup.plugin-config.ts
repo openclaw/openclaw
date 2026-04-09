@@ -311,15 +311,22 @@ export async function setupPluginConfig(params: {
 
   const selected = await params.prompter.multiselect({
     message: "Configure plugins (select to set up now, or skip)",
-    options: unconfigured.map((p) => ({
-      value: p.id,
-      label: p.name,
-      hint: `${Object.keys(p.uiHints).length} field${Object.keys(p.uiHints).length === 1 ? "" : "s"}`,
-    })),
+    options: [
+      {
+        value: "__skip__",
+        label: "Skip for now",
+        hint: "Continue without configuring plugins",
+      },
+      ...unconfigured.map((p) => ({
+        value: p.id,
+        label: p.name,
+        hint: `${Object.keys(p.uiHints).length} field${Object.keys(p.uiHints).length === 1 ? "" : "s"}`,
+      })),
+    ],
   });
 
   let config = params.config;
-  for (const pluginId of selected) {
+  for (const pluginId of selected.filter((value) => value !== "__skip__")) {
     const plugin = unconfigured.find((p) => p.id === pluginId);
     if (!plugin) {
       continue;

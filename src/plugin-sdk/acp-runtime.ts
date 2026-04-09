@@ -7,6 +7,7 @@ import type {
   PluginHookReplyDispatchEvent,
   PluginHookReplyDispatchResult,
 } from "../plugins/types.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export { getAcpSessionManager };
 export { AcpRuntimeError, isAcpRuntimeError } from "../acp/runtime/errors.js";
@@ -42,9 +43,17 @@ function loadDispatchAcpRuntime() {
 }
 
 function hasExplicitCommandCandidate(ctx: PluginHookReplyDispatchEvent["ctx"]): boolean {
-  return [ctx.CommandBody, ctx.BodyForCommands].some(
-    (value) => typeof value === "string" && value.trim().length > 0,
-  );
+  const commandBody = normalizeOptionalString(ctx.CommandBody);
+  if (commandBody) {
+    return true;
+  }
+
+  const normalized = normalizeOptionalString(ctx.BodyForCommands);
+  if (!normalized) {
+    return false;
+  }
+
+  return normalized.startsWith("!") || normalized.startsWith("/");
 }
 
 export async function tryDispatchAcpReplyHook(

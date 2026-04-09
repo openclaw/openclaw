@@ -10,7 +10,8 @@ import {
 } from "./channel-api.js";
 import { getLineRuntime } from "./runtime.js";
 
-const loadLineChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
+const loadLineProbeRuntime = createLazyRuntimeModule(() => import("./probe.runtime.js"));
+const loadLineMonitorRuntime = createLazyRuntimeModule(() => import("./monitor.runtime.js"));
 
 export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>["gateway"]> = {
   startAccount: async (ctx) => {
@@ -30,7 +31,7 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
 
     let lineBotLabel = "";
     try {
-      const probe = await (await loadLineChannelRuntime()).probeLineBot(token, 2500);
+      const probe = await (await loadLineProbeRuntime()).probeLineBot(token, 2500);
       const displayName = probe.ok ? probe.bot?.displayName?.trim() : null;
       if (displayName) {
         lineBotLabel = ` (${displayName})`;
@@ -45,7 +46,7 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
 
     const monitorLineProvider =
       getLineRuntime().channel.line?.monitorLineProvider ??
-      (await loadLineChannelRuntime()).monitorLineProvider;
+      (await loadLineMonitorRuntime()).monitorLineProvider;
 
     return await monitorLineProvider({
       channelAccessToken: token,

@@ -1,19 +1,16 @@
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import {
   applyTlonSetupConfig,
   createTlonSetupWizardBase,
   resolveTlonSetupConfigured,
   resolveTlonSetupStatusLines,
-  type TlonSetupInput,
-  tlonSetupAdapter,
 } from "./setup-core.js";
 import { normalizeShip } from "./targets.js";
-import { listTlonAccountIds, resolveTlonAccount, type TlonResolvedAccount } from "./types.js";
+import { resolveTlonAccount, type TlonResolvedAccount } from "./types.js";
 import { isBlockedUrbitHostname, validateUrbitBaseUrl } from "./urbit/base-url.js";
 
-const channel = "tlon" as const;
+const _channel = "tlon" as const;
 
-function isConfigured(account: TlonResolvedAccount): boolean {
+function _isConfigured(account: TlonResolvedAccount): boolean {
   return Boolean(account.ship && account.url && account.code);
 }
 

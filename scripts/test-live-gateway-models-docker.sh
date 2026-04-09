@@ -101,20 +101,11 @@ cleanup() {
   rm -rf "$tmp_dir"
 }
 trap cleanup EXIT
-tar -C /src \
-  --exclude=.git \
-  --exclude=node_modules \
-  --exclude=dist \
-  --exclude=ui/dist \
-  --exclude=ui/node_modules \
-  -cf - . | tar -C "$tmp_dir" -xf -
-ln -s /app/node_modules "$tmp_dir/node_modules"
-ln -s /app/dist "$tmp_dir/dist"
-if [ -d /app/dist-runtime/extensions ]; then
-  export OPENCLAW_BUNDLED_PLUGINS_DIR=/app/dist-runtime/extensions
-elif [ -d /app/dist/extensions ]; then
-  export OPENCLAW_BUNDLED_PLUGINS_DIR=/app/dist/extensions
-fi
+source /src/scripts/lib/live-docker-stage.sh
+openclaw_live_stage_source_tree "$tmp_dir"
+openclaw_live_link_runtime_tree "$tmp_dir"
+openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
+openclaw_live_prepare_staged_config
 cd "$tmp_dir"
 pnpm test:live:gateway-profiles
 EOF
@@ -131,6 +122,7 @@ docker run --rm -t \
   -e HOME=/home/node \
   -e NODE_OPTIONS=--disable-warning=ExperimentalWarning \
   -e OPENCLAW_SKIP_CHANNELS=1 \
+  -e OPENCLAW_SUPPRESS_NOTES=1 \
   -e OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED="$AUTH_DIRS_CSV" \
   -e OPENCLAW_DOCKER_AUTH_FILES_RESOLVED="$AUTH_FILES_CSV" \
   -e OPENCLAW_LIVE_TEST=1 \

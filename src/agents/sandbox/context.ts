@@ -9,6 +9,7 @@ import {
 import { DEFAULT_BROWSER_EVALUATE_ENABLED } from "../../plugin-sdk/browser-profiles.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveUserPath } from "../../utils.js";
+import { canExecRequestNode } from "../exec-defaults.js";
 import { syncSkillsToWorkspace } from "../skills.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../workspace.js";
 import { requireSandboxBackendFactory } from "./backend.js";
@@ -58,7 +59,15 @@ async function ensureSandboxWorkspaceLayout(params: {
           targetWorkspaceDir: sandboxWorkspaceDir,
           config: params.config,
           agentId: params.agentId,
-          eligibility: { remote: getRemoteSkillEligibility() },
+          eligibility: {
+            remote: getRemoteSkillEligibility({
+              advertiseExecNode: canExecRequestNode({
+                cfg: params.config,
+                sessionKey: rawSessionKey,
+                agentId: params.agentId,
+              }),
+            }),
+          },
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : JSON.stringify(error);

@@ -277,6 +277,51 @@ function createRuntimeWebSearchProvider(params: {
   };
 }
 
+function createBraveRuntimeWebSearchProvider() {
+  return createRuntimeWebSearchProvider({
+    pluginId: "brave",
+    pluginName: "Brave",
+    id: "brave",
+    label: "Brave Search",
+    hint: "Brave runtime provider",
+    envVar: "BRAVE_API_KEY",
+    signupUrl: "https://example.com/brave",
+    credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
+  });
+}
+
+function createActiveBraveRegistryFixture(params?: {
+  includeResolutionWorkspaceDir?: boolean;
+  activeWorkspaceDir?: string;
+}) {
+  const env = createWebSearchEnv();
+  const rawConfig = createBraveAllowConfig();
+  const { config, activationSourceConfig, autoEnabledReasons } =
+    webSearchProvidersSharedModule.resolveBundledWebSearchResolutionConfig({
+      config: rawConfig,
+      bundledAllowlistCompat: true,
+      ...(params?.includeResolutionWorkspaceDir
+        ? { workspaceDir: DEFAULT_WEB_SEARCH_WORKSPACE }
+        : {}),
+      env,
+    });
+  const { cacheKey } = loaderModule.__testing.resolvePluginLoadCacheContext({
+    config,
+    activationSourceConfig,
+    autoEnabledReasons,
+    workspaceDir: DEFAULT_WEB_SEARCH_WORKSPACE,
+    env,
+    onlyPluginIds: ["brave"],
+    cache: false,
+    activate: false,
+  });
+  const registry = createEmptyPluginRegistry();
+  registry.webSearchProviders.push(createBraveRuntimeWebSearchProvider());
+  setActivePluginRegistry(registry, cacheKey, "default", params?.activeWorkspaceDir);
+
+  return { env, rawConfig };
+}
+
 function expectRuntimeProviderResolution(
   providers: ReturnType<WebSearchProvidersRuntimeModule["resolveRuntimeWebSearchProviders"]>,
   expected: readonly string[],
@@ -436,38 +481,7 @@ describe("resolvePluginWebSearchProviders", () => {
   });
 
   it("reuses a compatible active registry for snapshot resolution when config is provided", () => {
-    const env = createWebSearchEnv();
-    const rawConfig = createBraveAllowConfig();
-    const { config, activationSourceConfig, autoEnabledReasons } =
-      webSearchProvidersSharedModule.resolveBundledWebSearchResolutionConfig({
-        config: rawConfig,
-        bundledAllowlistCompat: true,
-        env,
-      });
-    const { cacheKey } = loaderModule.__testing.resolvePluginLoadCacheContext({
-      config,
-      activationSourceConfig,
-      autoEnabledReasons,
-      workspaceDir: DEFAULT_WEB_SEARCH_WORKSPACE,
-      env,
-      onlyPluginIds: ["brave"],
-      cache: false,
-      activate: false,
-    });
-    const registry = createEmptyPluginRegistry();
-    registry.webSearchProviders.push(
-      createRuntimeWebSearchProvider({
-        pluginId: "brave",
-        pluginName: "Brave",
-        id: "brave",
-        label: "Brave Search",
-        hint: "Brave runtime provider",
-        envVar: "BRAVE_API_KEY",
-        signupUrl: "https://example.com/brave",
-        credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
-      }),
-    );
-    setActivePluginRegistry(registry, cacheKey);
+    const { env, rawConfig } = createActiveBraveRegistryFixture();
 
     const providers = resolvePluginWebSearchProviders({
       config: rawConfig,
@@ -481,39 +495,10 @@ describe("resolvePluginWebSearchProviders", () => {
   });
 
   it("inherits workspaceDir from the active registry for compatible web-search snapshot reuse", () => {
-    const env = createWebSearchEnv();
-    const rawConfig = createBraveAllowConfig();
-    const { config, activationSourceConfig, autoEnabledReasons } =
-      webSearchProvidersSharedModule.resolveBundledWebSearchResolutionConfig({
-        config: rawConfig,
-        bundledAllowlistCompat: true,
-        workspaceDir: DEFAULT_WEB_SEARCH_WORKSPACE,
-        env,
-      });
-    const { cacheKey } = loaderModule.__testing.resolvePluginLoadCacheContext({
-      config,
-      activationSourceConfig,
-      autoEnabledReasons,
-      workspaceDir: DEFAULT_WEB_SEARCH_WORKSPACE,
-      env,
-      onlyPluginIds: ["brave"],
-      cache: false,
-      activate: false,
+    const { env, rawConfig } = createActiveBraveRegistryFixture({
+      includeResolutionWorkspaceDir: true,
+      activeWorkspaceDir: DEFAULT_WEB_SEARCH_WORKSPACE,
     });
-    const registry = createEmptyPluginRegistry();
-    registry.webSearchProviders.push(
-      createRuntimeWebSearchProvider({
-        pluginId: "brave",
-        pluginName: "Brave",
-        id: "brave",
-        label: "Brave Search",
-        hint: "Brave runtime provider",
-        envVar: "BRAVE_API_KEY",
-        signupUrl: "https://example.com/brave",
-        credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
-      }),
-    );
-    setActivePluginRegistry(registry, cacheKey, "default", DEFAULT_WEB_SEARCH_WORKSPACE);
 
     const providers = resolvePluginWebSearchProviders({
       config: rawConfig,
@@ -546,27 +531,30 @@ describe("resolvePluginWebSearchProviders", () => {
     expectLoaderCallCount(2);
   });
 
-  it.each([
-    {
-      name: "invalidates the snapshot cache when config contents change in place",
-      mutate: (config: { plugins?: Record<string, unknown> }, _env: NodeJS.ProcessEnv) => {
-        config.plugins = { allow: ["perplexity"] };
-      },
-    },
-    {
-      name: "invalidates the snapshot cache when env contents change in place",
-      mutate: (_config: { plugins?: Record<string, unknown> }, env: NodeJS.ProcessEnv) => {
-        env.OPENCLAW_HOME = "/tmp/openclaw-home-b";
-      },
-    },
-  ] as const)("$name", ({ mutate }) => {
+  it("retains the snapshot cache when config contents change in place", () => {
     const config = createBraveAllowConfig();
     const env = createWebSearchEnv({ OPENCLAW_HOME: "/tmp/openclaw-home-a" });
 
     expectSnapshotLoaderCalls({
       config,
       env,
-      mutate: () => mutate(config, env),
+      mutate: () => {
+        config.plugins = { allow: ["perplexity"] };
+      },
+      expectedLoaderCalls: 1,
+    });
+  });
+
+  it("invalidates the snapshot cache when env contents change in place", () => {
+    const config = createBraveAllowConfig();
+    const env = createWebSearchEnv({ OPENCLAW_HOME: "/tmp/openclaw-home-a" });
+
+    expectSnapshotLoaderCalls({
+      config,
+      env,
+      mutate: () => {
+        env.OPENCLAW_HOME = "/tmp/openclaw-home-b";
+      },
       expectedLoaderCalls: 2,
     });
   });
@@ -673,38 +661,7 @@ describe("resolvePluginWebSearchProviders", () => {
     {
       name: "reuses a compatible active registry for runtime resolution when config is provided",
       setupRegistry: () => {
-        const env = createWebSearchEnv();
-        const rawConfig = createBraveAllowConfig();
-        const { config, activationSourceConfig, autoEnabledReasons } =
-          webSearchProvidersSharedModule.resolveBundledWebSearchResolutionConfig({
-            config: rawConfig,
-            bundledAllowlistCompat: true,
-            env,
-          });
-        const { cacheKey } = loaderModule.__testing.resolvePluginLoadCacheContext({
-          config,
-          activationSourceConfig,
-          autoEnabledReasons,
-          workspaceDir: DEFAULT_WEB_SEARCH_WORKSPACE,
-          env,
-          onlyPluginIds: ["brave"],
-          cache: false,
-          activate: false,
-        });
-        const registry = createEmptyPluginRegistry();
-        registry.webSearchProviders.push(
-          createRuntimeWebSearchProvider({
-            pluginId: "brave",
-            pluginName: "Brave",
-            id: "brave",
-            label: "Brave Search",
-            hint: "Brave runtime provider",
-            envVar: "BRAVE_API_KEY",
-            signupUrl: "https://example.com/brave",
-            credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
-          }),
-        );
-        setActivePluginRegistry(registry, cacheKey);
+        const { env, rawConfig } = createActiveBraveRegistryFixture();
         return {
           config: rawConfig,
           bundledAllowlistCompat: true,

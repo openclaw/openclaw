@@ -25,7 +25,7 @@ vi.mock("./short-term-promotion.js", () => ({
 }));
 
 function asOpenClawConfig(config: Partial<OpenClawConfig>): OpenClawConfig {
-  return config as OpenClawConfig;
+  return config;
 }
 
 function createSearchTool(config: OpenClawConfig) {
@@ -116,14 +116,14 @@ describe("memory_search recall tracking", () => {
 
     let timeout: NodeJS.Timeout | undefined;
     try {
-      const result = (await Promise.race([
+      const result = await Promise.race([
         tool.execute("call_recall_non_blocking", { query: "glacier" }),
         new Promise<never>((_, reject) => {
           timeout = setTimeout(() => {
             reject(new Error("memory_search waited on recall persistence"));
           }, 200);
         }),
-      ])) as Awaited<ReturnType<typeof tool.execute>>;
+      ]);
 
       const details = result.details as { results: Array<{ path: string }> };
       expect(details.results).toHaveLength(1);

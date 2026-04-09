@@ -5,6 +5,7 @@ export {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_ENABLED,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
+  DEFAULT_UPLOAD_DIR,
   resolveBrowserConfig,
   resolveProfile,
   type ResolvedBrowserConfig,

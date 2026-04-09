@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { WebhookRequestBody } from "@line/bot-sdk";
+import type { webhook } from "@line/bot-sdk";
 import { danger, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   isRequestBodyLimitError,
@@ -27,7 +27,7 @@ type ReadBodyFn = (req: IncomingMessage, maxBytes: number, timeoutMs?: number) =
 
 export function createLineNodeWebhookHandler(params: {
   channelSecret: string;
-  bot: { handleWebhook: (body: WebhookRequestBody) => Promise<void> };
+  bot: { handleWebhook: (body: webhook.CallbackRequest) => Promise<void> };
   runtime: RuntimeEnv;
   readBody?: ReadBodyFn;
   maxBodyBytes?: number;

@@ -10,7 +10,7 @@ let lineCardCommandPromise: Promise<RegisteredLineCardCommand> | null = null;
 async function loadLineCardCommand(api: OpenClawPluginApi): Promise<RegisteredLineCardCommand> {
   lineCardCommandPromise ??= (async () => {
     let registered: RegisteredLineCardCommand | null = null;
-    const { registerLineCardCommand } = await import("./api.js");
+    const { registerLineCardCommand } = await import("./src/card-command.js");
     registerLineCardCommand({
       ...api,
       registerCommand(command: RegisteredLineCardCommand) {

@@ -1,12 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  setByteplusApiKey,
-  setCloudflareAiGatewayConfig,
-  setMoonshotApiKey,
-  setOpencodeZenApiKey,
-  setOpenaiApiKey,
-  setVolcengineApiKey,
-} from "../plugins/provider-auth-storage.js";
+import { upsertApiKeyProfile } from "../plugins/provider-auth-helpers.js";
 import {
   createAuthTestLifecycle,
   readAuthProfilesForAgent,
@@ -80,7 +73,7 @@ describe("onboard auth credentials secret refs", () => {
       envValue: "sk-moonshot-env",
       profileId: "moonshot:default",
       apply: async () => {
-        await setMoonshotApiKey("sk-moonshot-env");
+        upsertApiKeyProfile({ provider: "moonshot", input: "sk-moonshot-env" });
       },
       expected: {
         key: "sk-moonshot-env",
@@ -96,7 +89,12 @@ describe("onboard auth credentials secret refs", () => {
       envValue: "sk-moonshot-env",
       profileId: "moonshot:default",
       apply: async (agentDir) => {
-        await setMoonshotApiKey("sk-moonshot-env", agentDir, { secretInputMode: "ref" }); // pragma: allowlist secret
+        upsertApiKeyProfile({
+          provider: "moonshot",
+          input: "sk-moonshot-env",
+          agentDir,
+          options: { secretInputMode: "ref" }, // pragma: allowlist secret
+        });
       },
       expected: {
         keyRef: { source: "env", provider: "default", id: "MOONSHOT_API_KEY" },
@@ -110,7 +108,7 @@ describe("onboard auth credentials secret refs", () => {
       prefix: "openclaw-onboard-auth-credentials-inline-ref-",
       profileId: "moonshot:default",
       apply: async () => {
-        await setMoonshotApiKey("${MOONSHOT_API_KEY}");
+        upsertApiKeyProfile({ provider: "moonshot", input: "${MOONSHOT_API_KEY}" });
       },
       expected: {
         keyRef: { source: "env", provider: "default", id: "MOONSHOT_API_KEY" },
@@ -126,7 +124,7 @@ describe("onboard auth credentials secret refs", () => {
       envValue: "sk-moonshot-other",
       profileId: "moonshot:default",
       apply: async () => {
-        await setMoonshotApiKey("sk-moonshot-plaintext");
+        upsertApiKeyProfile({ provider: "moonshot", input: "sk-moonshot-plaintext" });
       },
       expected: {
         key: "sk-moonshot-plaintext",
@@ -140,8 +138,15 @@ describe("onboard auth credentials secret refs", () => {
     lifecycle.setStateDir(env.stateDir);
     process.env.CLOUDFLARE_AI_GATEWAY_API_KEY = "cf-secret"; // pragma: allowlist secret
 
-    await setCloudflareAiGatewayConfig("account-1", "gateway-1", "cf-secret", env.agentDir, {
-      secretInputMode: "ref", // pragma: allowlist secret
+    upsertApiKeyProfile({
+      provider: "cloudflare-ai-gateway",
+      input: "cf-secret",
+      agentDir: env.agentDir,
+      options: { secretInputMode: "ref" }, // pragma: allowlist secret
+      metadata: {
+        accountId: "account-1",
+        gatewayId: "gateway-1",
+      },
     });
 
     const parsed = await readAuthProfilesForAgent<{
@@ -161,7 +166,7 @@ describe("onboard auth credentials secret refs", () => {
       envValue: "sk-openai-env",
       profileId: "openai:default",
       apply: async () => {
-        await setOpenaiApiKey("sk-openai-env");
+        upsertApiKeyProfile({ provider: "openai", input: "sk-openai-env" });
       },
       expected: {
         key: "sk-openai-env",
@@ -177,7 +182,12 @@ describe("onboard auth credentials secret refs", () => {
       envValue: "sk-openai-env",
       profileId: "openai:default",
       apply: async (agentDir) => {
-        await setOpenaiApiKey("sk-openai-env", agentDir, { secretInputMode: "ref" }); // pragma: allowlist secret
+        upsertApiKeyProfile({
+          provider: "openai",
+          input: "sk-openai-env",
+          agentDir,
+          options: { secretInputMode: "ref" }, // pragma: allowlist secret
+        });
       },
       expected: {
         keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
@@ -192,8 +202,18 @@ describe("onboard auth credentials secret refs", () => {
     process.env.VOLCANO_ENGINE_API_KEY = "volcengine-secret"; // pragma: allowlist secret
     process.env.BYTEPLUS_API_KEY = "byteplus-secret"; // pragma: allowlist secret
 
-    await setVolcengineApiKey("volcengine-secret", env.agentDir, { secretInputMode: "ref" }); // pragma: allowlist secret
-    await setByteplusApiKey("byteplus-secret", env.agentDir, { secretInputMode: "ref" }); // pragma: allowlist secret
+    upsertApiKeyProfile({
+      provider: "volcengine",
+      input: "volcengine-secret",
+      agentDir: env.agentDir,
+      options: { secretInputMode: "ref" }, // pragma: allowlist secret
+    });
+    upsertApiKeyProfile({
+      provider: "byteplus",
+      input: "byteplus-secret",
+      agentDir: env.agentDir,
+      options: { secretInputMode: "ref" }, // pragma: allowlist secret
+    });
 
     const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, { key?: string; keyRef?: unknown }>;
@@ -215,9 +235,14 @@ describe("onboard auth credentials secret refs", () => {
     lifecycle.setStateDir(env.stateDir);
     process.env.OPENCODE_API_KEY = "sk-opencode-env"; // pragma: allowlist secret
 
-    await setOpencodeZenApiKey("sk-opencode-env", env.agentDir, {
-      secretInputMode: "ref", // pragma: allowlist secret
-    });
+    for (const provider of ["opencode", "opencode-go"] as const) {
+      upsertApiKeyProfile({
+        provider,
+        input: "sk-opencode-env",
+        agentDir: env.agentDir,
+        options: { secretInputMode: "ref" }, // pragma: allowlist secret
+      });
+    }
 
     const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, { key?: string; keyRef?: unknown }>;

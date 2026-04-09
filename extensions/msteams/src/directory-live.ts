@@ -1,8 +1,7 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { ChannelDirectoryEntry } from "../runtime-api.js";
 import { searchGraphUsers } from "./graph-users.js";
 import {
-  type GraphChannel,
-  type GraphGroup,
   listChannelsForTeam,
   listTeamsByName,
   normalizeQuery,
@@ -88,7 +87,11 @@ export async function listMSTeamsDirectoryGroupsLive(params: {
       if (!name) {
         continue;
       }
-      if (!name.toLowerCase().includes(channelQuery.toLowerCase())) {
+      if (
+        !normalizeLowercaseStringOrEmpty(name).includes(
+          normalizeLowercaseStringOrEmpty(channelQuery),
+        )
+      ) {
         continue;
       }
       results.push({

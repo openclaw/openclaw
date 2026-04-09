@@ -22,7 +22,7 @@ const BROWSER_FIXTURE_ENTRY = `module.exports = {
     properties: {},
   },
   register(api) {
-    api.registerTool(() => ({
+    api.registerTool((ctx) => ({
       name: "browser",
       label: "browser",
       description: "browser fixture tool",
@@ -33,7 +33,9 @@ const BROWSER_FIXTURE_ENTRY = `module.exports = {
       async execute() {
         return {
           content: [{ type: "text", text: "ok" }],
-          details: {},
+          details: {
+            workspaceOnly: ctx.fsPolicy?.workspaceOnly ?? null,
+          },
         };
       },
     }));

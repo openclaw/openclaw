@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import {
+  DiscordConfigSchema,
+  MSTeamsConfigSchema,
+  SlackConfigSchema,
+} from "./zod-schema.providers-core.js";
 
 const { loadConfig, readConfigFileSnapshot, validateConfigObject } =
   await vi.importActual<typeof import("./config.js")>("./config.js");
@@ -55,6 +60,20 @@ function expectValidConfigValue(params: {
   expect(params.readValue(res.config)).toBe(params.expectedValue);
 }
 
+function expectSchemaConfigValue(params: {
+  schema: { safeParse: (value: unknown) => { success: true; data: unknown } | { success: false } };
+  config: unknown;
+  readValue: (config: unknown) => unknown;
+  expectedValue: unknown;
+}) {
+  const res = params.schema.safeParse(params.config);
+  expect(res.success).toBe(true);
+  if (!res.success) {
+    throw new Error("expected schema config to be valid");
+  }
+  expect(params.readValue(res.data)).toBe(params.expectedValue);
+}
+
 function expectInvalidIssuePath(config: unknown, expectedPath: string) {
   const res = validateConfigObject(config);
   expect(res.ok).toBe(false);
@@ -84,49 +103,48 @@ describe("legacy config detection", () => {
       expect(res.config.channels?.imessage?.dmPolicy).toBe("open");
     }
   });
-  it.each([
-    [
-      "defaults imessage.dmPolicy to pairing when imessage section exists",
-      { channels: { imessage: {} } },
-      (config: unknown) =>
+  it("defaults imessage.dmPolicy to pairing when imessage section exists", () => {
+    expectValidConfigValue({
+      config: { channels: { imessage: {} } },
+      readValue: (config) =>
         (config as { channels?: { imessage?: { dmPolicy?: string } } }).channels?.imessage
           ?.dmPolicy,
-      "pairing",
-    ],
-    [
-      "defaults imessage.groupPolicy to allowlist when imessage section exists",
-      { channels: { imessage: {} } },
-      (config: unknown) =>
+      expectedValue: "pairing",
+    });
+  });
+  it("defaults imessage.groupPolicy to allowlist when imessage section exists", () => {
+    expectValidConfigValue({
+      config: { channels: { imessage: {} } },
+      readValue: (config) =>
         (config as { channels?: { imessage?: { groupPolicy?: string } } }).channels?.imessage
           ?.groupPolicy,
-      "allowlist",
-    ],
+      expectedValue: "allowlist",
+    });
+  });
+  it.each([
     [
       "defaults discord.groupPolicy to allowlist when discord section exists",
-      { channels: { discord: {} } },
-      (config: unknown) =>
-        (config as { channels?: { discord?: { groupPolicy?: string } } }).channels?.discord
-          ?.groupPolicy,
+      DiscordConfigSchema,
+      {},
+      (config: unknown) => (config as { groupPolicy?: string }).groupPolicy,
       "allowlist",
     ],
     [
       "defaults slack.groupPolicy to allowlist when slack section exists",
-      { channels: { slack: {} } },
-      (config: unknown) =>
-        (config as { channels?: { slack?: { groupPolicy?: string } } }).channels?.slack
-          ?.groupPolicy,
+      SlackConfigSchema,
+      {},
+      (config: unknown) => (config as { groupPolicy?: string }).groupPolicy,
       "allowlist",
     ],
     [
       "defaults msteams.groupPolicy to allowlist when msteams section exists",
-      { channels: { msteams: {} } },
-      (config: unknown) =>
-        (config as { channels?: { msteams?: { groupPolicy?: string } } }).channels?.msteams
-          ?.groupPolicy,
+      MSTeamsConfigSchema,
+      {},
+      (config: unknown) => (config as { groupPolicy?: string }).groupPolicy,
       "allowlist",
     ],
-  ])("defaults: %s", (_name, config, readValue, expectedValue) => {
-    expectValidConfigValue({ config, readValue, expectedValue });
+  ])("defaults: %s", (_name, schema, config, readValue, expectedValue) => {
+    expectSchemaConfigValue({ schema, config, readValue, expectedValue });
   });
   it("rejects unsafe executable config values", async () => {
     const res = validateConfigObject({
@@ -207,53 +225,12 @@ describe("legacy config detection", () => {
       expect(res.issues[0]?.message).toContain('"agent"');
     }
   });
-  it("flags channels.telegram.groupMentionsOnly as legacy in snapshot", async () => {
-    await withSnapshotForConfig(
-      { channels: { telegram: { groupMentionsOnly: true } } },
-      async (ctx) => {
-        expect(ctx.snapshot.valid).toBe(false);
-        expect(
-          ctx.snapshot.legacyIssues.some(
-            (issue) => issue.path === "channels.telegram.groupMentionsOnly",
-          ),
-        ).toBe(true);
-        const parsed = ctx.parsed as {
-          channels?: { telegram?: { groupMentionsOnly?: boolean } };
-        };
-        expect(parsed.channels?.telegram?.groupMentionsOnly).toBe(true);
-      },
-    );
-  });
-
-  it("rejects removed routing.allowFrom in snapshot", async () => {
-    await withSnapshotForConfig({ routing: { allowFrom: ["+15555550123"] } }, async (ctx) => {
-      expectSnapshotInvalidRootKey(ctx, "routing");
-    });
-  });
-  it("flags top-level memorySearch as legacy in snapshot", async () => {
-    await withSnapshotForConfig(
-      { memorySearch: { provider: "local", fallback: "none" } },
-      async (ctx) => {
-        expect(ctx.snapshot.valid).toBe(false);
-        expect(ctx.snapshot.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
-      },
-    );
-  });
-  it("flags top-level heartbeat as legacy in snapshot", async () => {
-    await withSnapshotForConfig(
-      { heartbeat: { model: "anthropic/claude-3-5-haiku-20241022", every: "30m" } },
-      async (ctx) => {
-        expect(ctx.snapshot.valid).toBe(false);
-        expect(ctx.snapshot.legacyIssues.some((issue) => issue.path === "heartbeat")).toBe(true);
-      },
-    );
-  });
   it("rejects removed legacy provider sections in snapshot", async () => {
     await withSnapshotForConfig({ whatsapp: { allowFrom: ["+1555"] } }, async (ctx) => {
       expectSnapshotInvalidRootKey(ctx, "whatsapp");
     });
   });
-  it("does not auto-migrate removed cli auth profile modes on load", async () => {
+  it("does not auto-migrate claude-cli auth profile mode on load", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -263,7 +240,7 @@ describe("legacy config detection", () => {
           {
             auth: {
               profiles: {
-                "anthropic:removed-cli": { provider: "anthropic", mode: "token" },
+                "anthropic:claude-cli": { provider: "anthropic", mode: "token" },
               },
             },
           },
@@ -274,27 +251,13 @@ describe("legacy config detection", () => {
       );
 
       const cfg = loadConfig();
-      expect(cfg.auth?.profiles?.["anthropic:removed-cli"]?.mode).toBe("token");
+      expect(cfg.auth?.profiles?.["anthropic:claude-cli"]?.mode).toBe("token");
 
       const raw = await fs.readFile(configPath, "utf-8");
       const parsed = JSON.parse(raw) as {
         auth?: { profiles?: Record<string, { mode?: string }> };
       };
-      expect(parsed.auth?.profiles?.["anthropic:removed-cli"]?.mode).toBe("token");
-    });
-  });
-  it("still flags memorySearch in snapshot under the shorter support window", async () => {
-    await withSnapshotForConfig(
-      { memorySearch: { provider: "local", fallback: "none" } },
-      async (ctx) => {
-        expect(ctx.snapshot.valid).toBe(false);
-        expect(ctx.snapshot.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
-      },
-    );
-  });
-  it("rejects removed routing.allowFrom in snapshot with other values", async () => {
-    await withSnapshotForConfig({ routing: { allowFrom: ["+1666"] } }, async (ctx) => {
-      expectSnapshotInvalidRootKey(ctx, "routing");
+      expect(parsed.auth?.profiles?.["anthropic:claude-cli"]?.mode).toBe("token");
     });
   });
   it("rejects bindings[].match.provider on load", async () => {

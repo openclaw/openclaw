@@ -90,4 +90,48 @@ describe("browser server-context ensureBrowserAvailable", () => {
     expect(launchOpenClawChrome).not.toHaveBeenCalled();
     expect(stopOpenClawChrome).not.toHaveBeenCalled();
   });
+
+  it("retries remote CDP websocket reachability once before failing", async () => {
+    const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady } =
+      setupEnsureBrowserAvailableHarness();
+    const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
+
+    const state = makeBrowserServerState();
+    state.resolved.profiles.openclaw = {
+      cdpUrl: "ws://browserless:3001",
+      color: "#00AA00",
+    };
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const profile = ctx.forProfile("openclaw");
+    const expectedRemoteHttpTimeoutMs = state.resolved.remoteCdpTimeoutMs;
+    const expectedRemoteWsTimeoutMs = state.resolved.remoteCdpHandshakeTimeoutMs;
+
+    isChromeReachable.mockResolvedValueOnce(true);
+    isChromeCdpReady.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+    await expect(profile.ensureBrowserAvailable()).resolves.toBeUndefined();
+
+    expect(isChromeReachable).toHaveBeenCalledTimes(1);
+    expect(isChromeCdpReady).toHaveBeenCalledTimes(2);
+    expect(isChromeCdpReady).toHaveBeenNthCalledWith(
+      1,
+      "ws://browserless:3001",
+      expectedRemoteHttpTimeoutMs,
+      expectedRemoteWsTimeoutMs,
+      {
+        allowPrivateNetwork: true,
+      },
+    );
+    expect(isChromeCdpReady).toHaveBeenNthCalledWith(
+      2,
+      "ws://browserless:3001",
+      expectedRemoteHttpTimeoutMs,
+      expectedRemoteWsTimeoutMs,
+      {
+        allowPrivateNetwork: true,
+      },
+    );
+    expect(launchOpenClawChrome).not.toHaveBeenCalled();
+    expect(stopOpenClawChrome).not.toHaveBeenCalled();
+  });
 });

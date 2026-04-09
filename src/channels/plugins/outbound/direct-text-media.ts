@@ -57,8 +57,8 @@ export function createScopedChannelMediaMaxBytesResolver(channel: string) {
       cfg: params.cfg,
       accountId: params.accountId,
       resolveChannelLimitMb: ({ cfg, accountId }) =>
-        cfg.channels?.[channel]?.accounts?.[accountId]?.mediaMaxMb ??
-        cfg.channels?.[channel]?.mediaMaxMb,
+        (cfg.channels?.[channel]?.accounts?.[accountId] as { mediaMaxMb?: number } | undefined)
+          ?.mediaMaxMb ?? cfg.channels?.[channel]?.mediaMaxMb,
     });
 }
 

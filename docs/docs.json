@@ -77,6 +77,10 @@
       "destination": "/plugins/building-plugins#registering-agent-tools"
     },
     {
+      "source": "/cli/capability",
+      "destination": "/cli/infer"
+    },
+    {
       "source": "/tools/capability-cookbook",
       "destination": "/plugins/architecture"
     },
@@ -123,14 +127,6 @@
     {
       "source": "/context",
       "destination": "/concepts/context"
-    },
-    {
-      "source": "/zh-CN",
-      "destination": "/zh-CN/index"
-    },
-    {
-      "source": "/zh-CN/",
-      "destination": "/zh-CN/index"
     },
     {
       "source": "/compaction",
@@ -1116,6 +1112,7 @@
                   "tools/plugin",
                   "plugins/community",
                   "plugins/bundles",
+                  "plugins/webhooks",
                   "plugins/voice-call",
                   {
                     "group": "Building Plugins",
@@ -1165,6 +1162,7 @@
               {
                 "group": "Tools",
                 "pages": [
+                  "tools/media-overview",
                   "tools/apply-patch",
                   {
                     "group": "Web Browser",
@@ -1200,12 +1198,14 @@
                   "tools/exec",
                   "tools/exec-approvals",
                   "tools/image-generation",
+                  "tools/music-generation",
                   "tools/llm-task",
                   "tools/lobster",
                   "tools/loop-detection",
                   "tools/pdf",
                   "tools/reactions",
-                  "tools/thinking"
+                  "tools/thinking",
+                  "tools/video-generation"
                 ]
               },
               {
@@ -1233,14 +1233,18 @@
               {
                 "group": "Providers",
                 "pages": [
+                  "providers/alibaba",
                   "providers/anthropic",
+                  "providers/arcee",
                   "providers/bedrock",
                   "providers/bedrock-mantle",
                   "providers/chutes",
+                  "providers/comfy",
                   "providers/claude-max-api-proxy",
                   "providers/cloudflare-ai-gateway",
                   "providers/deepgram",
                   "providers/deepseek",
+                  "providers/fal",
                   "providers/github-copilot",
                   "providers/glm",
                   "providers/google",
@@ -1259,14 +1263,15 @@
                   "providers/openrouter",
                   "providers/perplexity-provider",
                   "providers/qianfan",
-                  "providers/qwen_modelstudio",
                   "providers/qwen",
+                  "providers/runway",
                   "providers/sglang",
                   "providers/stepfun",
                   "providers/synthetic",
                   "providers/together",
                   "providers/venice",
                   "providers/vercel-ai-gateway",
+                  "providers/vydra",
                   "providers/vllm",
                   "providers/volcengine",
                   "providers/xai",
@@ -1360,6 +1365,7 @@
                       "gateway/openai-http-api",
                       "gateway/openresponses-http-api",
                       "gateway/tools-invoke-http-api",
+                      "gateway/cli-backends",
                       "gateway/local-models"
                     ]
                   },

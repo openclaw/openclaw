@@ -169,6 +169,7 @@ vi.mock("../plugins/manifest-registry.js", () => {
           contracts: {
             webSearchProviders: ["brave"],
           },
+          cliBackends: [],
           skills: [],
           hooks: [],
           rootDir: "/tmp/plugins/brave",
@@ -194,6 +195,7 @@ vi.mock("../plugins/manifest-registry.js", () => {
           contracts: {
             webSearchProviders: [id],
           },
+          cliBackends: [],
           skills: [],
           hooks: [],
           rootDir: `/tmp/plugins/${id}`,
@@ -387,7 +389,7 @@ describe("web search provider config", () => {
     expect(res.ok).toBe(false);
   });
 
-  it("rejects legacy scoped provider config for bundled providers until doctor repairs it", () => {
+  it("detects legacy scoped provider config for bundled providers", () => {
     const res = validateConfigObjectWithPlugins({
       tools: {
         web: {

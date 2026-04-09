@@ -1,7 +1,14 @@
 import { listConfiguredBindings } from "../../config/bindings.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { getActivePluginChannelRegistryVersion } from "../../plugins/runtime.js";
+import {
+  getActivePluginChannelRegistryVersion,
+  requireActivePluginChannelRegistry,
+} from "../../plugins/runtime.js";
 import { pickFirstExistingAgentId } from "../../routing/resolve-route.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { resolveChannelConfiguredBindingProvider } from "./binding-provider.js";
 import type { CompiledConfiguredBinding, ConfiguredBindingChannel } from "./binding-types.js";
 import { resolveConfiguredBindingConsumer } from "./configured-binding-consumers.js";
@@ -19,6 +26,7 @@ export type CompiledConfiguredBindingRegistry = {
 };
 
 type CachedCompiledConfiguredBindingRegistry = {
+  registryRef: object | null;
   registryVersion: number;
   registry: CompiledConfiguredBindingRegistry;
 };
@@ -29,7 +37,7 @@ const compiledRegistryCache = new WeakMap<
 >();
 
 function resolveLoadedChannelPlugin(channel: string) {
-  const normalized = channel.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(channel);
   if (!normalized) {
     return undefined;
   }
@@ -40,7 +48,7 @@ function resolveConfiguredBindingAdapter(channel: string): {
   channel: ConfiguredBindingChannel;
   provider: ChannelConfiguredBindingProvider;
 } | null {
-  const normalized = channel.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(channel);
   if (!normalized) {
     return null;
   }
@@ -63,8 +71,7 @@ function resolveConfiguredBindingAdapter(channel: string): {
 function resolveBindingConversationId(binding: {
   match?: { peer?: { id?: string } };
 }): string | null {
-  const id = binding.match?.peer?.id?.trim();
-  return id ? id : null;
+  return normalizeOptionalString(binding.match?.peer?.id) ?? null;
 }
 
 function compileConfiguredBindingTarget(params: {
@@ -104,7 +111,7 @@ function compileConfiguredBindingRule(params: {
   }
   return {
     channel: params.channel,
-    accountPattern: params.binding.match.accountId?.trim() || undefined,
+    accountPattern: normalizeOptionalString(params.binding.match.accountId),
     binding: params.binding,
     bindingConversationId: params.bindingConversationId,
     target: params.target,
@@ -173,9 +180,10 @@ function compileConfiguredBindingRegistry(params: {
 export function resolveCompiledBindingRegistry(
   cfg: OpenClawConfig,
 ): CompiledConfiguredBindingRegistry {
+  const activeRegistry = requireActivePluginChannelRegistry();
   const registryVersion = getActivePluginChannelRegistryVersion();
   const cached = compiledRegistryCache.get(cfg);
-  if (cached?.registryVersion === registryVersion) {
+  if (cached?.registryVersion === registryVersion && cached.registryRef === activeRegistry) {
     return cached.registry;
   }
 
@@ -183,6 +191,7 @@ export function resolveCompiledBindingRegistry(
     cfg,
   });
   compiledRegistryCache.set(cfg, {
+    registryRef: activeRegistry,
     registryVersion,
     registry,
   });
@@ -192,8 +201,10 @@ export function resolveCompiledBindingRegistry(
 export function primeCompiledBindingRegistry(
   cfg: OpenClawConfig,
 ): CompiledConfiguredBindingRegistry {
+  const activeRegistry = requireActivePluginChannelRegistry();
   const registry = compileConfiguredBindingRegistry({ cfg });
   compiledRegistryCache.set(cfg, {
+    registryRef: activeRegistry,
     registryVersion: getActivePluginChannelRegistryVersion(),
     registry,
   });

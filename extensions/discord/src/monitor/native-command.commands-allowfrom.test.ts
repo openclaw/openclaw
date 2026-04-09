@@ -75,9 +75,7 @@ function createDispatchSpy() {
       tool: 0,
     },
   } as never);
-  nativeCommandTesting.setDispatchReplyWithDispatcher(
-    dispatcherModule.dispatchReplyWithDispatcher as typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithDispatcher,
-  );
+  nativeCommandTesting.setDispatchReplyWithDispatcher(dispatcherModule.dispatchReplyWithDispatcher);
   return dispatchSpy;
 }
 
@@ -97,25 +95,26 @@ async function runGuildSlashCommand(params?: {
 }
 
 function expectNotUnauthorizedReply(interaction: MockCommandInteraction) {
-  expect(interaction.reply).not.toHaveBeenCalledWith(
+  expect(interaction.followUp).not.toHaveBeenCalledWith(
     expect.objectContaining({ content: "You are not authorized to use this command." }),
   );
 }
 
 function expectUnauthorizedReply(interaction: MockCommandInteraction) {
-  expect(interaction.reply).toHaveBeenCalledWith(
+  expect(interaction.followUp).toHaveBeenCalledWith(
     expect.objectContaining({
       content: "You are not authorized to use this command.",
       ephemeral: true,
     }),
   );
+  expect(interaction.reply).not.toHaveBeenCalled();
 }
 
 describe("Discord native slash commands with commands.allowFrom", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     nativeCommandTesting.setDispatchReplyWithDispatcher(
-      dispatcherModule.dispatchReplyWithDispatcher as typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithDispatcher,
+      dispatcherModule.dispatchReplyWithDispatcher,
     );
   });
 
@@ -151,6 +150,49 @@ describe("Discord native slash commands with commands.allowFrom", () => {
     });
     expect(dispatchSpy).toHaveBeenCalledTimes(1);
     expectNotUnauthorizedReply(interaction);
+  });
+
+  it("authorizes guild slash commands from an allowlisted channel when commands.allowFrom is not configured", async () => {
+    const { dispatchSpy, interaction } = await runGuildSlashCommand({
+      mutateConfig: (cfg) => {
+        cfg.commands = {
+          ...cfg.commands,
+          allowFrom: undefined,
+        };
+      },
+    });
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expectNotUnauthorizedReply(interaction);
+  });
+
+  it("rejects guild slash commands outside the Discord allowlist when commands.useAccessGroups is false and commands.allowFrom is not configured", async () => {
+    const { dispatchSpy, interaction } = await runGuildSlashCommand({
+      mutateConfig: (cfg) => {
+        cfg.commands = {
+          ...cfg.commands,
+          useAccessGroups: false,
+          allowFrom: undefined,
+        };
+        cfg.channels = {
+          ...cfg.channels,
+          discord: {
+            ...cfg.channels?.discord,
+            guilds: {
+              "000000000000000000": {
+                channels: {
+                  "111111111111111111": {
+                    enabled: true,
+                    requireMention: false,
+                  },
+                },
+              },
+            },
+          },
+        };
+      },
+    });
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expectUnauthorizedReply(interaction);
   });
 
   it("rejects guild slash commands when commands.allowFrom.discord does not match the sender", async () => {
@@ -232,14 +274,15 @@ describe("Discord native slash commands with commands.allowFrom", () => {
       },
     });
 
-    const dispatchCall = vi.mocked(dispatcherModule.dispatchReplyWithDispatcher).mock
-      .calls[0]?.[0] as
+    const dispatchCall:
       | Parameters<typeof dispatcherModule.dispatchReplyWithDispatcher>[0]
-      | undefined;
+      | undefined = vi.mocked(dispatcherModule.dispatchReplyWithDispatcher).mock.calls[0]?.[0];
     await dispatchCall?.dispatcherOptions.deliver({ text: longReply }, { kind: "final" });
 
-    expect(interaction.reply).toHaveBeenCalledWith(expect.objectContaining({ content: longReply }));
-    expect(interaction.followUp).not.toHaveBeenCalled();
+    expect(interaction.followUp).toHaveBeenCalledWith(
+      expect.objectContaining({ content: longReply }),
+    );
+    expect(interaction.reply).not.toHaveBeenCalled();
   });
 
   it("swallows expired slash interactions before dispatch when defer returns Unknown interaction", async () => {

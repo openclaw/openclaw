@@ -1,5 +1,9 @@
-import { listBootstrapChannelPlugins } from "../../channels/plugins/bootstrap-registry.js";
+import { getBootstrapChannelPlugin } from "../../channels/plugins/bootstrap-registry.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 
 export type MessageActionTargetMode = "to" | "channelId" | "none";
 
@@ -87,18 +91,14 @@ function listActionTargetAliasSpecs(
   if (coreSpec) {
     specs.push(coreSpec);
   }
-  const normalizedChannel = channel?.trim().toLowerCase();
+  const normalizedChannel = normalizeOptionalLowercaseString(channel);
   if (!normalizedChannel) {
     return specs;
   }
-  for (const plugin of listBootstrapChannelPlugins()) {
-    if (plugin.id !== normalizedChannel) {
-      continue;
-    }
-    const channelSpec = plugin.actions?.messageActionTargetAliases?.[action];
-    if (channelSpec) {
-      specs.push(channelSpec);
-    }
+  const plugin = getBootstrapChannelPlugin(normalizedChannel);
+  const channelSpec = plugin?.actions?.messageActionTargetAliases?.[action];
+  if (channelSpec) {
+    specs.push(channelSpec);
   }
   return specs;
 }
@@ -112,11 +112,11 @@ export function actionHasTarget(
   params: Record<string, unknown>,
   options?: { channel?: string },
 ): boolean {
-  const to = typeof params.to === "string" ? params.to.trim() : "";
+  const to = normalizeOptionalString(params.to) ?? "";
   if (to) {
     return true;
   }
-  const channelId = typeof params.channelId === "string" ? params.channelId.trim() : "";
+  const channelId = normalizeOptionalString(params.channelId) ?? "";
   if (channelId) {
     return true;
   }
@@ -128,7 +128,7 @@ export function actionHasTarget(
     spec.aliases.some((alias) => {
       const value = params[alias];
       if (typeof value === "string") {
-        return value.trim().length > 0;
+        return Boolean(normalizeOptionalString(value));
       }
       if (typeof value === "number") {
         return Number.isFinite(value);

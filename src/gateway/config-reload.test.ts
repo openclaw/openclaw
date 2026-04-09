@@ -123,6 +123,14 @@ describe("buildGatewayReloadPlan", () => {
     { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
     { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
   ]);
+  registry.reloads = [
+    {
+      pluginId: "browser",
+      pluginName: "Browser",
+      registration: { restartPrefixes: ["browser"] },
+      source: "test",
+    },
+  ];
 
   beforeEach(() => {
     setActivePluginRegistry(registry);

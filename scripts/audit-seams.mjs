@@ -583,6 +583,7 @@ function describeCronSeamKinds(relativePath, source) {
 
   const seamKinds = [];
   const importsAgentRunner = hasAnyImportSource(source, [
+    "../../agents/cli-runner.js",
     "../../agents/pi-embedded.js",
     "../../agents/model-fallback.js",
     "../../agents/subagent-registry.js",
@@ -624,7 +625,9 @@ function describeCronSeamKinds(relativePath, source) {
 
   if (
     importsAgentRunner &&
-    /\brunEmbeddedPiAgent\b|\brunWithModelFallback\b|\bregisterAgentRunContext\b/.test(source)
+    /\brunCliAgent\b|\brunEmbeddedPiAgent\b|\brunWithModelFallback\b|\bregisterAgentRunContext\b/.test(
+      source,
+    )
   ) {
     seamKinds.push("cron-agent-handoff");
   }

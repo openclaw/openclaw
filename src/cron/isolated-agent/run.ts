@@ -4,7 +4,7 @@ import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
-import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
+import type { CronJob, CronRunTelemetry } from "../types.js";
 import {
   dispatchCronDelivery,
   matchesMessagingToolDeliveryTarget,
@@ -34,6 +34,7 @@ import {
   detectSuspiciousPatterns,
   ensureAgentWorkspace,
   hasNonzeroUsage,
+  isCliProvider,
   isExternalHookSession,
   loadModelCatalog,
   logWarn,
@@ -53,6 +54,7 @@ import {
   setSessionRuntimeModel,
   supportsXHighThinking,
 } from "./run.runtime.js";
+import type { RunCronAgentTurnResult } from "./run.types.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 import { resolveCronSession } from "./session.js";
 import { resolveCronSkillsSnapshot } from "./skills-snapshot.js";
@@ -70,24 +72,7 @@ function resolveNonNegativeNumber(value: number | undefined): number | undefined
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
-export type RunCronAgentTurnResult = {
-  /** Last non-empty agent text output (not truncated). */
-  outputText?: string;
-  /**
-   * `true` when the isolated runner already handled the run's user-visible
-   * delivery outcome. Cron-owned callers use this for cron delivery or
-   * explicit suppression; shared callers may also use it for a matching
-   * message-tool send that already reached the target.
-   */
-  delivered?: boolean;
-  /**
-   * `true` when cron attempted announce/direct delivery for this run.
-   * This is tracked separately from `delivered` because some announce paths
-   * cannot guarantee a final delivery ack synchronously.
-   */
-  deliveryAttempted?: boolean;
-} & CronRunOutcome &
-  CronRunTelemetry;
+export type { RunCronAgentTurnResult } from "./run.types.js";
 
 type ResolvedCronDeliveryTarget = Awaited<ReturnType<typeof resolveDeliveryTarget>>;
 
@@ -169,6 +154,10 @@ function appendCronDeliveryInstruction(params: {
 
 function resolvePositiveContextTokens(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+async function loadCliRunnerRuntime() {
+  return await import("../../agents/cli-runner.runtime.js");
 }
 
 async function loadUsageFormatRuntime() {
@@ -420,7 +409,6 @@ async function prepareCronRunContext(params: {
   } catch (err) {
     logWarn(`[cron:${input.job.id}] Failed to persist pre-run session entry: ${String(err)}`);
   }
-
   const authProfileId = await resolveSessionAuthProfileOverride({
     cfg: cfgWithAgentDefaults,
     provider,
@@ -429,7 +417,7 @@ async function prepareCronRunContext(params: {
     sessionStore: cronSession.store,
     sessionKey: agentSessionKey,
     storePath: cronSession.storePath,
-    isNewSession: cronSession.isNewSession,
+    isNewSession: cronSession.isNewSession && input.job.sessionTarget !== "isolated",
   });
   const liveSelection: CronLiveSelection = {
     provider,
@@ -503,6 +491,13 @@ async function finalizeCronRun(params: {
     model: modelUsed,
   });
   prepared.cronSession.sessionEntry.contextTokens = contextTokens;
+  if (isCliProvider(providerUsed, prepared.cfgWithAgentDefaults)) {
+    const cliSessionId = finalRunResult.meta?.agentMeta?.sessionId?.trim();
+    if (cliSessionId) {
+      const { setCliSessionId } = await loadCliRunnerRuntime();
+      setCliSessionId(prepared.cronSession.sessionEntry, providerUsed, cliSessionId);
+    }
+  }
   if (hasNonzeroUsage(usage)) {
     const { estimateUsageCost, resolveModelCostConfig } = await loadUsageFormatRuntime();
     const input = usage.input ?? 0;

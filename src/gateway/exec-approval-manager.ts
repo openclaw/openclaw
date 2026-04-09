@@ -3,6 +3,7 @@ import type {
   ExecApprovalDecision,
   ExecApprovalRequestPayload as InfraExecApprovalRequestPayload,
 } from "../infra/exec-approvals.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 // Grace period to keep resolved entries for late awaitDecision calls
 const RESOLVED_ENTRY_GRACE_MS = 15_000;
@@ -151,6 +152,12 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     return entry?.record ?? null;
   }
 
+  listPendingRecords(): ExecApprovalRecord<TPayload>[] {
+    return Array.from(this.pending.values())
+      .map((entry) => entry.record)
+      .filter((record) => record.resolvedAtMs === undefined);
+  }
+
   consumeAllowOnce(recordId: string): boolean {
     const entry = this.pending.get(recordId);
     if (!entry) {
@@ -188,13 +195,13 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
         : { kind: "none" };
     }
 
-    const lowerPrefix = normalized.toLowerCase();
+    const lowerPrefix = normalizeLowercaseStringOrEmpty(normalized);
     const matches: string[] = [];
     for (const [id, entry] of this.pending.entries()) {
       if (entry.record.resolvedAtMs !== undefined) {
         continue;
       }
-      if (id.toLowerCase().startsWith(lowerPrefix)) {
+      if (normalizeLowercaseStringOrEmpty(id).startsWith(lowerPrefix)) {
         matches.push(id);
       }
     }

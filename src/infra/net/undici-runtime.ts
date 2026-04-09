@@ -9,6 +9,19 @@ export type UndiciRuntimeDeps = {
   fetch: typeof import("undici").fetch;
 };
 
+type UndiciAgentOptions = ConstructorParameters<UndiciRuntimeDeps["Agent"]>[0];
+type UndiciEnvHttpProxyAgentOptions = ConstructorParameters<
+  UndiciRuntimeDeps["EnvHttpProxyAgent"]
+>[0];
+type UndiciProxyAgentOptions = ConstructorParameters<UndiciRuntimeDeps["ProxyAgent"]>[0];
+
+// Guarded fetch dispatchers intentionally stay on HTTP/1.1. Undici 8 enables
+// HTTP/2 ALPN by default, but our guarded paths rely on dispatcher overrides
+// that have not been reliable on the HTTP/2 path yet.
+const HTTP1_ONLY_DISPATCHER_OPTIONS = Object.freeze({
+  allowH2: false as const,
+});
+
 function isUndiciRuntimeDeps(value: unknown): value is UndiciRuntimeDeps {
   return (
     typeof value === "object" &&
@@ -34,4 +47,40 @@ export function loadUndiciRuntimeDeps(): UndiciRuntimeDeps {
     ProxyAgent: undici.ProxyAgent,
     fetch: undici.fetch,
   };
+}
+
+function withHttp1OnlyDispatcherOptions<T extends object | undefined>(
+  options?: T,
+): (T extends object ? T : Record<never, never>) & { allowH2: false } {
+  if (!options) {
+    return { ...HTTP1_ONLY_DISPATCHER_OPTIONS } as (T extends object ? T : Record<never, never>) & {
+      allowH2: false;
+    };
+  }
+  return {
+    ...options,
+    ...HTTP1_ONLY_DISPATCHER_OPTIONS,
+  } as (T extends object ? T : Record<never, never>) & { allowH2: false };
+}
+
+export function createHttp1Agent(options?: UndiciAgentOptions): import("undici").Agent {
+  const { Agent } = loadUndiciRuntimeDeps();
+  return new Agent(withHttp1OnlyDispatcherOptions(options));
+}
+
+export function createHttp1EnvHttpProxyAgent(
+  options?: UndiciEnvHttpProxyAgentOptions,
+): import("undici").EnvHttpProxyAgent {
+  const { EnvHttpProxyAgent } = loadUndiciRuntimeDeps();
+  return new EnvHttpProxyAgent(withHttp1OnlyDispatcherOptions(options));
+}
+
+export function createHttp1ProxyAgent(
+  options: UndiciProxyAgentOptions,
+): import("undici").ProxyAgent {
+  const { ProxyAgent } = loadUndiciRuntimeDeps();
+  if (typeof options === "string" || options instanceof URL) {
+    return new ProxyAgent(withHttp1OnlyDispatcherOptions({ uri: options.toString() }));
+  }
+  return new ProxyAgent(withHttp1OnlyDispatcherOptions(options));
 }

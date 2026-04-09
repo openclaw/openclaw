@@ -295,7 +295,9 @@ describe("mattermost websocket monitor", () => {
       onPosted: async () => {},
       webSocketFactory: () => socket,
       getBotUpdateAt: async () => {
-        if (shouldThrow) throw new Error("network error");
+        if (shouldThrow) {
+          throw new Error("network error");
+        }
         return 1000;
       },
       healthCheckIntervalMs: 100,

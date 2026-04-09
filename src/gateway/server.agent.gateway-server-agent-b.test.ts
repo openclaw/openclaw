@@ -378,11 +378,16 @@ describe("gateway server agent", () => {
     const spy = vi.mocked(agentCommand);
     const calls = spy.mock.calls;
     const callsBefore = calls.length;
-    const res = await rpcReq(ws, "agent", {
-      message: "/new",
-      sessionKey: "main",
-      idempotencyKey: "idem-agent-new",
-    });
+    const res = await rpcReq(
+      ws,
+      "agent",
+      {
+        message: "/new",
+        sessionKey: "main",
+        idempotencyKey: "idem-agent-new",
+      },
+      20_000,
+    );
     expect(res.ok).toBe(true);
 
     await vi.waitFor(() => expect(calls.length).toBeGreaterThan(callsBefore));

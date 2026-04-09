@@ -503,7 +503,7 @@ if (sandboxRoot) {
 
 - Refusal magic string scrubbing
 - Turn validation for consecutive roles
-- Claude Code parameter compatibility
+- Strict upstream Pi tool parameter validation
 
 ### Google/Gemini
 

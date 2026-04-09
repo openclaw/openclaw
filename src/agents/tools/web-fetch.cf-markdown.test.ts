@@ -1,16 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { LookupFn } from "../../infra/net/ssrf.js";
 import * as logger from "../../logger.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
-import {
-  createBaseWebFetchToolConfig,
-  installWebFetchSsrfHarness,
-  makeFetchHeaders,
-} from "./web-fetch.test-harness.js";
+import { createBaseWebFetchToolConfig, makeFetchHeaders } from "./web-fetch.test-harness.js";
 import "./web-fetch.test-mocks.js";
 import { createWebFetchTool } from "./web-tools.js";
 
-const baseToolConfig = createBaseWebFetchToolConfig();
-installWebFetchSsrfHarness();
+const lookupMock = vi.fn();
+const baseToolConfig = createBaseWebFetchToolConfig({
+  lookupFn: lookupMock as unknown as LookupFn,
+});
 
 function markdownResponse(body: string, extraHeaders: Record<string, string> = {}): Response {
   return {
@@ -34,6 +33,21 @@ function htmlResponse(body: string): Response {
 }
 
 describe("web_fetch Cloudflare Markdown for Agents", () => {
+  const priorFetch = global.fetch;
+
+  beforeEach(() => {
+    lookupMock.mockImplementation(async (hostname: string) => {
+      void hostname;
+      return [{ address: "93.184.216.34", family: 4 }];
+    });
+  });
+
+  afterEach(() => {
+    global.fetch = priorFetch;
+    lookupMock.mockReset();
+    vi.restoreAllMocks();
+  });
+
   it("sends Accept header preferring text/markdown", async () => {
     const fetchSpy = vi.fn().mockResolvedValue(markdownResponse("# Test Page\n\nHello world."));
     global.fetch = withFetchPreconnect(fetchSpy);

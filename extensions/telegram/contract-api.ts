@@ -11,10 +11,12 @@ export {
 } from "./src/command-config.js";
 export { parseTelegramTopicConversation } from "./src/topic-conversation.js";
 export { singleAccountKeysToMove } from "./src/setup-contract.js";
+export { mergeTelegramAccountConfig } from "./src/accounts.js";
 export {
   buildCommandsPaginationKeyboard,
   buildTelegramModelsProviderChannelData,
 } from "./src/command-ui.js";
+export { createTelegramThreadBindingManager } from "./src/thread-bindings.js";
 export type {
   TelegramInteractiveHandlerContext,
   TelegramInteractiveHandlerRegistration,

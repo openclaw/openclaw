@@ -38,6 +38,8 @@ export const EventType = {
   RoomMessage: "m.room.message",
 } as const;
 
+export const MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY = "com.openclaw.finalized_preview" as const;
+
 export type MatrixDirectAccountData = Record<string, string[]>;
 
 export type MatrixReplyRelation = {
@@ -110,9 +112,13 @@ export type MatrixMediaMsgType =
   | typeof MsgType.Video
   | typeof MsgType.File;
 
+export type MatrixTextMsgType = typeof MsgType.Text | typeof MsgType.Notice;
+
 export type MediaKind = "image" | "audio" | "video" | "document" | "unknown";
 
 export type MatrixFormattedContent = MessageEventContent & {
   format?: string;
   formatted_body?: string;
 };
+
+export type MatrixExtraContentFields = Record<string, unknown>;

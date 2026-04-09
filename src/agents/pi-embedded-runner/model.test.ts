@@ -103,208 +103,6 @@ function resolveModelAsyncForTest(
   });
 }
 
-describe("buildInlineProviderModels", () => {
-  it("attaches provider ids to inline models", () => {
-    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
-      " alpha ": { baseUrl: "http://alpha.local", models: [makeModel("alpha-model")] },
-      beta: { baseUrl: "http://beta.local", models: [makeModel("beta-model")] },
-    };
-
-    const result = buildInlineProviderModels(providers);
-
-    expect(result).toEqual([
-      {
-        ...makeModel("alpha-model"),
-        provider: "alpha",
-        baseUrl: "http://alpha.local",
-        api: undefined,
-      },
-      {
-        ...makeModel("beta-model"),
-        provider: "beta",
-        baseUrl: "http://beta.local",
-        api: undefined,
-      },
-    ]);
-  });
-
-  it("inherits baseUrl from provider when model does not specify it", () => {
-    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
-      custom: {
-        baseUrl: "http://localhost:8000",
-        models: [makeModel("custom-model")],
-      },
-    };
-
-    const result = buildInlineProviderModels(providers);
-
-    expect(result).toHaveLength(1);
-    expect(result[0].baseUrl).toBe("http://localhost:8000");
-  });
-
-  it("inherits api from provider when model does not specify it", () => {
-    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
-      custom: {
-        baseUrl: "http://localhost:8000",
-        api: "anthropic-messages",
-        models: [makeModel("custom-model")],
-      },
-    };
-
-    const result = buildInlineProviderModels(providers);
-
-    expect(result).toHaveLength(1);
-    expect(result[0].api).toBe("anthropic-messages");
-  });
-
-  it("model-level api takes precedence over provider-level api", () => {
-    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
-      custom: {
-        baseUrl: "http://localhost:8000",
-        api: "openai-responses",
-        models: [{ ...makeModel("custom-model"), api: "anthropic-messages" as const }],
-      },
-    };
-
-    const result = buildInlineProviderModels(providers);
-
-    expect(result).toHaveLength(1);
-    expect(result[0].api).toBe("anthropic-messages");
-  });
-
-  it("inherits both baseUrl and api from provider config", () => {
-    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
-      custom: {
-        baseUrl: "http://localhost:10000",
-        api: "anthropic-messages",
-        models: [makeModel("claude-opus-4.5")],
-      },
-    };
-
-    const result = buildInlineProviderModels(providers);
-
-    expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
-      provider: "custom",
-      baseUrl: "http://localhost:10000",
-      api: "anthropic-messages",
-      name: "claude-opus-4.5",
-    });
-  });
-
-  it("normalizes bare Google API hosts for custom Google Generative AI providers", () => {
-    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
-      "google-paid ": {
-        baseUrl: "https://generativelanguage.googleapis.com",
-        api: "google-generative-ai",
-        models: [makeModel("gemini-2.5-pro")],
-      },
-    };
-
-    const result = buildInlineProviderModels(providers);
-
-    expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
-      provider: "google-paid",
-      api: "google-generative-ai",
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-    });
-  });
-
-  it("merges provider-level headers into inline models", () => {
-    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
-      proxy: {
-        baseUrl: "https://proxy.example.com",
-        api: "anthropic-messages",
-        headers: { "User-Agent": "custom-agent/1.0" },
-        models: [makeModel("claude-sonnet-4-6")],
-      },
-    };
-
-    const result = buildInlineProviderModels(providers);
-
-    expect(result).toHaveLength(1);
-    expect(result[0].headers).toEqual({ "User-Agent": "custom-agent/1.0" });
-  });
-
-  it("merges provider request headers into inline models", () => {
-    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
-      proxy: {
-        baseUrl: "https://proxy.example.com/v1",
-        api: "openai-completions",
-        request: {
-          headers: {
-            "X-Tenant": "acme",
-          },
-        },
-        models: [makeModel("proxy-model")],
-      },
-    };
-
-    const result = buildInlineProviderModels(providers);
-
-    expect(result).toHaveLength(1);
-    expect(result[0].headers).toEqual({ "X-Tenant": "acme" });
-  });
-
-  it("keeps inline provider transport overrides once the llm transport adapter is available", () => {
-    const result = buildInlineProviderModels({
-      proxy: {
-        baseUrl: "https://proxy.example.com/v1",
-        api: "openai-completions",
-        request: {
-          proxy: {
-            mode: "explicit-proxy",
-            url: "http://proxy.internal:8443",
-          },
-        },
-        models: [makeModel("proxy-model")],
-      },
-    } as unknown as Parameters<typeof buildInlineProviderModels>[0]);
-
-    expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
-      provider: "proxy",
-      api: "openai-completions",
-      baseUrl: "https://proxy.example.com/v1",
-    });
-  });
-
-  it("omits headers when neither provider nor model specifies them", () => {
-    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
-      plain: {
-        baseUrl: "http://localhost:8000",
-        models: [makeModel("some-model")],
-      },
-    };
-
-    const result = buildInlineProviderModels(providers);
-
-    expect(result).toHaveLength(1);
-    expect(result[0].headers).toBeUndefined();
-  });
-
-  it("drops SecretRef marker headers in inline provider models", () => {
-    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
-      custom: {
-        headers: {
-          Authorization: "secretref-env:OPENAI_HEADER_TOKEN",
-          "X-Managed": "secretref-managed",
-          "X-Static": "tenant-a",
-        },
-        models: [makeModel("custom-model")],
-      },
-    };
-
-    const result = buildInlineProviderModels(providers);
-
-    expect(result).toHaveLength(1);
-    expect(result[0].headers).toEqual({
-      "X-Static": "tenant-a",
-    });
-  });
-});
-
 describe("resolveModel", () => {
   it("defaults model input to text when discovery omits input", () => {
     mockDiscoveredModel(discoverModels, {
@@ -1068,6 +866,156 @@ describe("resolveModel", () => {
       id: "gpt-5.3-codex-spark",
       api: "openai-codex-responses",
       baseUrl: "https://chatgpt.com/backend-api",
+    });
+  });
+
+  it("prefers runtime-resolved openai-codex gpt-5.4 metadata when it has a larger context window", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      templateModel: {
+        ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+        name: "GPT-5.4",
+        contextWindow: 128_000,
+        contextTokens: 32_000,
+        input: ["text"],
+      },
+    });
+
+    const result = resolveModelForTest("openai-codex", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      contextWindow: 1_050_000,
+      contextTokens: 272_000,
+    });
+  });
+
+  it("prefers runtime-resolved openai-codex gpt-5.4 metadata during async resolution too", async () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      templateModel: {
+        ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+        name: "GPT-5.4",
+        contextWindow: 128_000,
+        contextTokens: 32_000,
+      },
+    });
+
+    const result = await resolveModelAsyncForTest("openai-codex", "gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      contextWindow: 1_050_000,
+      contextTokens: 272_000,
+    });
+  });
+
+  it("passes configured workspaceDir to runtime preference hooks", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      templateModel: {
+        ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+        name: "GPT-5.4",
+        contextWindow: 128_000,
+        contextTokens: 32_000,
+      },
+    });
+
+    const shouldPreferRuntimeResolvedModel = vi.fn(
+      (params: { workspaceDir?: string; context: { agentDir?: string } }) =>
+        params.workspaceDir === "/tmp/workspace" && params.context.agentDir === "/tmp/agent-state",
+    );
+    const runProviderDynamicModel = vi.fn(
+      (params: { workspaceDir?: string; context: { provider: string; modelId: string } }) =>
+        params.workspaceDir === "/tmp/workspace" &&
+        params.context.provider === "openai-codex" &&
+        params.context.modelId === "gpt-5.4"
+          ? ({
+              ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+              name: "GPT-5.4",
+            } as ReturnType<typeof buildOpenAICodexForwardCompatExpectation>)
+          : undefined,
+    );
+    const runtimeHooks = {
+      ...createRuntimeHooks(),
+      shouldPreferProviderRuntimeResolvedModel: shouldPreferRuntimeResolvedModel,
+      runProviderDynamicModel,
+    };
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: "/tmp/workspace",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("openai-codex", "gpt-5.4", "/tmp/agent-state", cfg, {
+      authStorage: { mocked: true } as never,
+      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent-state"),
+      runtimeHooks,
+    });
+
+    expect(shouldPreferRuntimeResolvedModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai-codex",
+        workspaceDir: "/tmp/workspace",
+        context: expect.objectContaining({
+          agentDir: "/tmp/agent-state",
+          workspaceDir: "/tmp/workspace",
+        }),
+      }),
+    );
+    expect(runProviderDynamicModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai-codex",
+        workspaceDir: "/tmp/workspace",
+        context: expect.objectContaining({
+          agentDir: "/tmp/agent-state",
+          modelId: "gpt-5.4",
+          provider: "openai-codex",
+        }),
+      }),
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      contextWindow: 1_050_000,
+      contextTokens: 272_000,
+    });
+  });
+
+  it("keeps exact discovered metadata for other openai-codex models", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai-codex",
+      modelId: "gpt-5.4-mini",
+      templateModel: {
+        ...buildOpenAICodexForwardCompatExpectation("gpt-5.4-mini"),
+        name: "GPT-5.4 Mini",
+        contextWindow: 64_000,
+        input: ["text"],
+      },
+    });
+
+    const result = resolveModelForTest("openai-codex", "gpt-5.4-mini", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4-mini",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      contextWindow: 64_000,
+      input: ["text"],
     });
   });
 

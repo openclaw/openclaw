@@ -17,14 +17,17 @@ third-party models (GPT-OSS, Qwen, Kimi, GLM, and similar) through a standard
 
 - Provider: `amazon-bedrock-mantle`
 - API: `openai-completions` (OpenAI-compatible)
-- Auth: bearer token via `AWS_BEARER_TOKEN_BEDROCK`
+- Auth: explicit `AWS_BEARER_TOKEN_BEDROCK` or IAM credential-chain bearer-token generation
 - Region: `AWS_REGION` or `AWS_DEFAULT_REGION` (default: `us-east-1`)
 
 ## Automatic model discovery
 
-When `AWS_BEARER_TOKEN_BEDROCK` is set, OpenClaw automatically discovers
-available Mantle models by querying the region's `/v1/models` endpoint.
-Discovery results are cached for 1 hour.
+When `AWS_BEARER_TOKEN_BEDROCK` is set, OpenClaw uses it directly. Otherwise,
+OpenClaw attempts to generate a Mantle bearer token from the AWS default
+credential chain, including shared credentials/config profiles, SSO, web
+identity, and instance or task roles. It then discovers available Mantle
+models by querying the region's `/v1/models` endpoint. Discovery results are
+cached for 1 hour, and IAM-derived bearer tokens are refreshed hourly.
 
 Supported regions: `us-east-1`, `us-east-2`, `us-west-2`, `ap-northeast-1`,
 `ap-south-1`, `ap-southeast-3`, `eu-central-1`, `eu-west-1`, `eu-west-2`,
@@ -32,11 +35,21 @@ Supported regions: `us-east-1`, `us-east-2`, `us-west-2`, `ap-northeast-1`,
 
 ## Onboarding
 
-1. Set the bearer token on the **gateway host**:
+1. Choose one auth path on the **gateway host**:
+
+Explicit bearer token:
 
 ```bash
 export AWS_BEARER_TOKEN_BEDROCK="..."
 # Optional (defaults to us-east-1):
+export AWS_REGION="us-west-2"
+```
+
+IAM credentials:
+
+```bash
+# Any AWS SDK-compatible auth source works here, for example:
+export AWS_PROFILE="default"
 export AWS_REGION="us-west-2"
 ```
 
@@ -81,8 +94,8 @@ If you prefer explicit config instead of auto-discovery:
 
 ## Notes
 
-- Mantle requires a bearer token today. Plain IAM credentials (instance roles,
-  SSO, access keys) are not sufficient without a token.
+- OpenClaw can mint the Mantle bearer token for you from AWS SDK-compatible
+  IAM credentials when `AWS_BEARER_TOKEN_BEDROCK` is not set.
 - The bearer token is the same `AWS_BEARER_TOKEN_BEDROCK` used by the standard
   [Amazon Bedrock](/providers/bedrock) provider.
 - Reasoning support is inferred from model IDs containing patterns like

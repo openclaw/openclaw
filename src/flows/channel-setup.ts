@@ -1,5 +1,4 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { listChannelPluginCatalogEntries } from "../channels/plugins/catalog.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import {
   getChannelSetupPlugin,
@@ -8,12 +7,16 @@ import {
 import type { ChannelSetupPlugin } from "../channels/plugins/setup-wizard-types.js";
 import { listChatChannels } from "../channels/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveChannelSetupEntries } from "../commands/channel-setup/discovery.js";
+import {
+  resolveChannelSetupEntries,
+  shouldShowChannelInSetup,
+} from "../commands/channel-setup/discovery.js";
 import {
   ensureChannelSetupPluginInstalled,
   loadChannelSetupPluginRegistrySnapshotForChannel,
 } from "../commands/channel-setup/plugin-install.js";
 import { resolveChannelSetupWizardAdapterForPlugin } from "../commands/channel-setup/registry.js";
+import { listTrustedChannelPluginCatalogEntries } from "../commands/channel-setup/trusted-catalog.js";
 import type {
   ChannelSetupConfiguredResult,
   ChannelSetupResult,
@@ -23,6 +26,7 @@ import type {
 import type { ChannelChoice } from "../commands/onboard-types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -65,7 +69,7 @@ export async function runCollectedChannelOnboardingPostWriteHooks(params: {
     try {
       await hook.run({ cfg: params.cfg, runtime: params.runtime });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err);
       params.runtime.error(
         `Channel ${hook.channel} post-setup warning for "${hook.accountId}": ${message}`,
       );
@@ -98,10 +102,14 @@ export async function setupChannels(
   const listVisibleInstalledPlugins = (): ChannelSetupPlugin[] => {
     const merged = new Map<string, ChannelSetupPlugin>();
     for (const plugin of listChannelSetupPlugins()) {
-      merged.set(plugin.id, plugin);
+      if (shouldShowChannelInSetup(plugin.meta)) {
+        merged.set(plugin.id, plugin);
+      }
     }
     for (const plugin of scopedPluginsById.values()) {
-      merged.set(plugin.id, plugin);
+      if (shouldShowChannelInSetup(plugin.meta)) {
+        merged.set(plugin.id, plugin);
+      }
     }
     return Array.from(merged.values());
   };
@@ -139,7 +147,9 @@ export async function setupChannels(
   const preloadConfiguredExternalPlugins = () => {
     // Keep setup memory bounded by snapshot-loading only configured external plugins.
     const workspaceDir = resolveWorkspaceDir();
-    for (const entry of listChannelPluginCatalogEntries({ workspaceDir })) {
+    // Security: keep trusted workspace overrides eligible during setup while
+    // falling back from untrusted workspace shadows to the non-workspace entry.
+    for (const entry of listTrustedChannelPluginCatalogEntries({ cfg: next, workspaceDir })) {
       const channel = entry.id as ChannelChoice;
       if (getVisibleChannelPlugin(channel)) {
         continue;
@@ -181,11 +191,13 @@ export async function setupChannels(
     return cfg;
   }
 
-  const corePrimer = listChatChannels().map((meta) => ({
-    id: meta.id,
-    label: meta.label,
-    blurb: meta.blurb,
-  }));
+  const corePrimer = listChatChannels()
+    .filter((meta) => shouldShowChannelInSetup(meta))
+    .map((meta) => ({
+      id: meta.id,
+      label: meta.label,
+      blurb: meta.blurb,
+    }));
   const coreIds = new Set(corePrimer.map((entry) => entry.id));
   const primerChannels = [
     ...corePrimer,

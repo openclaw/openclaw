@@ -11,12 +11,7 @@ import {
   trimLeadingEnv,
   unwrapShellWrapper,
 } from "./tool-display-exec-shell.js";
-
-type ArgsRecord = Record<string, unknown>;
-
-function asRecord(args: unknown): ArgsRecord | undefined {
-  return args && typeof args === "object" ? (args as ArgsRecord) : undefined;
-}
+import { asRecord } from "./tool-display-record.js";
 
 function summarizeKnownExec(words: string[]): string {
   if (words.length === 0) {

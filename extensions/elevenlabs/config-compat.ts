@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isRecord } from "openclaw/plugin-sdk/text-runtime";
 
 const ELEVENLABS_API_KEY_ENV = "ELEVENLABS_API_KEY";
 const PROFILE_CANDIDATES = [".profile", ".zprofile", ".zshrc", ".bashrc"] as const;
@@ -21,10 +22,6 @@ type ElevenLabsApiKeyDeps = {
 };
 
 export const ELEVENLABS_TALK_PROVIDER_ID = "elevenlabs";
-
-function isRecord(value: unknown): value is JsonRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function getRecord(value: unknown): JsonRecord | null {
   return isRecord(value) ? value : null;

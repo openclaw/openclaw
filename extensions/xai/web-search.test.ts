@@ -2,11 +2,10 @@ import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runt
 import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { withEnv } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it, vi } from "vitest";
-import { capturePluginRegistration } from "../../src/plugins/captured-registration.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
-import xaiPlugin from "./index.js";
 import { resolveXaiCatalogEntry } from "./model-definitions.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
+import { resolveFallbackXaiAuth } from "./src/tool-auth-shared.js";
 import { __testing, createXaiWebSearchProvider } from "./web-search.js";
 
 const {
@@ -188,84 +187,63 @@ describe("xai web search config resolution", () => {
   });
 
   it("reuses the plugin web search api key for provider auth fallback", () => {
-    const captured = capturePluginRegistration(xaiPlugin);
-    const provider = captured.providers[0];
     expect(
-      provider?.resolveSyntheticAuth?.({
-        config: {
-          plugins: {
-            entries: {
-              xai: {
-                config: {
-                  webSearch: {
-                    apiKey: "xai-provider-fallback", // pragma: allowlist secret
-                  },
+      resolveFallbackXaiAuth({
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-provider-fallback", // pragma: allowlist secret
                 },
               },
             },
           },
         },
-        provider: "xai",
-        providerConfig: undefined,
-      }),
+      } as never),
     ).toEqual({
       apiKey: "xai-provider-fallback",
       source: "plugins.entries.xai.config.webSearch.apiKey",
-      mode: "api-key",
     });
   });
 
   it("reuses the legacy grok web search api key for provider auth fallback", () => {
-    const captured = capturePluginRegistration(xaiPlugin);
-    const provider = captured.providers[0];
     expect(
-      provider?.resolveSyntheticAuth?.({
-        config: {
-          tools: {
-            web: {
-              search: {
-                grok: {
-                  apiKey: "xai-legacy-fallback", // pragma: allowlist secret
-                },
+      resolveFallbackXaiAuth({
+        tools: {
+          web: {
+            search: {
+              grok: {
+                apiKey: "xai-legacy-fallback", // pragma: allowlist secret
               },
             },
           },
         },
-        provider: "xai",
-        providerConfig: undefined,
-      }),
+      } as never),
     ).toEqual({
       apiKey: "xai-legacy-fallback",
       source: "tools.web.search.grok.apiKey",
-      mode: "api-key",
     });
   });
 
   it("returns a managed marker for SecretRef-backed plugin auth fallback", () => {
-    const captured = capturePluginRegistration(xaiPlugin);
-    const provider = captured.providers[0];
     expect(
-      provider?.resolveSyntheticAuth?.({
-        config: {
-          plugins: {
-            entries: {
-              xai: {
-                config: {
-                  webSearch: {
-                    apiKey: { source: "file", provider: "vault", id: "/xai/api-key" },
-                  },
+      resolveFallbackXaiAuth({
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: { source: "file", provider: "vault", id: "/xai/api-key" },
                 },
               },
             },
           },
         },
-        provider: "xai",
-        providerConfig: undefined,
-      }),
+      } as never),
     ).toEqual({
       apiKey: NON_ENV_SECRETREF_MARKER,
       source: "plugins.entries.xai.config.webSearch.apiKey",
-      mode: "api-key",
     });
   });
 

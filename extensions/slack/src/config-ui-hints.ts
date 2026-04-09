@@ -77,9 +77,25 @@ export const slackChannelConfigUiHints = {
     label: "Slack Streaming Mode",
     help: 'Unified Slack stream preview mode: "off" | "partial" | "block" | "progress". Legacy boolean/streamMode keys are auto-mapped.',
   },
-  nativeStreaming: {
+  "streaming.mode": {
+    label: "Slack Streaming Mode",
+    help: 'Canonical Slack preview mode: "off" | "partial" | "block" | "progress".',
+  },
+  "streaming.chunkMode": {
+    label: "Slack Chunk Mode",
+    help: 'Chunking mode for outbound Slack text delivery: "length" (default) or "newline".',
+  },
+  "streaming.block.enabled": {
+    label: "Slack Block Streaming Enabled",
+    help: 'Enable chunked block-style Slack preview delivery when channels.slack.streaming.mode="block".',
+  },
+  "streaming.block.coalesce": {
+    label: "Slack Block Streaming Coalesce",
+    help: "Merge streamed Slack block replies before final delivery.",
+  },
+  "streaming.nativeTransport": {
     label: "Slack Native Streaming",
-    help: "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming is partial (default: true).",
+    help: "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming.mode is partial (default: true). Requires a reply thread target; top-level DMs stay on the non-thread fallback path.",
   },
   "thread.historyScope": {
     label: "Slack Thread History Scope",
@@ -92,5 +108,9 @@ export const slackChannelConfigUiHints = {
   "thread.initialHistoryLimit": {
     label: "Slack Thread Initial History Limit",
     help: "Maximum number of existing Slack thread messages to fetch when starting a new thread session (default: 20, set to 0 to disable).",
+  },
+  "thread.requireExplicitMention": {
+    label: "Slack Thread Require Explicit Mention",
+    help: "If true, require an explicit @mention even inside threads where the bot has participated. Suppresses implicit thread mention behavior so the bot only responds to explicit @bot mentions in threads (default: false).",
   },
 } satisfies Record<string, ChannelConfigUiHint>;

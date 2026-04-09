@@ -9,6 +9,7 @@ import {
   sendSingleTextMessageMatrix,
   sendTypingMatrix,
 } from "./send.js";
+import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "./send/types.js";
 
 const loadOutboundMediaFromUrlMock = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.fn().mockResolvedValue({
@@ -602,6 +603,39 @@ describe("sendSingleTextMessageMatrix", () => {
 
     expect(sendMessage).not.toHaveBeenCalled();
   });
+
+  it("supports quiet draft preview sends without mention metadata", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendSingleTextMessageMatrix("room:!room:example", "@room hi @alice:example.org", {
+      client,
+      msgtype: "m.notice",
+      includeMentions: false,
+    });
+
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      msgtype: "m.notice",
+      body: "@room hi @alice:example.org",
+    });
+    expect(sendMessage.mock.calls[0]?.[1]).not.toHaveProperty("m.mentions");
+    expect(
+      (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string }).formatted_body,
+    ).not.toContain("matrix.to");
+  });
+
+  it("merges extra content fields into single-event sends", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendSingleTextMessageMatrix("room:!room:example", "done", {
+      client,
+      extraContent: { [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true },
+    });
+
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      body: "done",
+      [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true,
+    });
+  });
 });
 
 describe("editMessageMatrix mentions", () => {
@@ -674,6 +708,57 @@ describe("editMessageMatrix mentions", () => {
       "m.mentions": { user_ids: ["@alice:example.org"] },
       "m.new_content": {
         "m.mentions": { user_ids: ["@alice:example.org"] },
+      },
+    });
+  });
+
+  it("supports quiet draft preview edits without mention metadata", async () => {
+    const { client, sendMessage, getEvent } = makeClient();
+    getEvent.mockResolvedValue({
+      content: {
+        body: "@room hi @alice:example.org",
+        "m.mentions": { room: true, user_ids: ["@alice:example.org"] },
+      },
+    });
+
+    await editMessageMatrix("room:!room:example", "$original", "@room hi @alice:example.org", {
+      client,
+      msgtype: "m.notice",
+      includeMentions: false,
+    });
+
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      msgtype: "m.notice",
+      "m.new_content": {
+        msgtype: "m.notice",
+      },
+    });
+    expect(sendMessage.mock.calls[0]?.[1]).not.toHaveProperty("m.mentions");
+    expect(sendMessage.mock.calls[0]?.[1]?.["m.new_content"]).not.toHaveProperty("m.mentions");
+    expect(
+      (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string }).formatted_body,
+    ).not.toContain("matrix.to");
+    expect(
+      (
+        sendMessage.mock.calls[0]?.[1] as {
+          "m.new_content"?: { formatted_body?: string };
+        }
+      )["m.new_content"]?.formatted_body,
+    ).not.toContain("matrix.to");
+  });
+
+  it("merges extra content fields into edit payloads and m.new_content", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await editMessageMatrix("room:!room:example", "$original", "done", {
+      client,
+      extraContent: { [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true },
+    });
+
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true,
+      "m.new_content": {
+        [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true,
       },
     });
   });

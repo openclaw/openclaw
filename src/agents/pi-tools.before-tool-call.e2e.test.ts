@@ -53,7 +53,6 @@ describe("before_tool_call loop detection behavior", () => {
       hasHooks: vi.fn(),
       runBeforeToolCall: vi.fn(),
     };
-    // oxlint-disable-next-line typescript/no-explicit-any
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
     hookRunner.hasHooks.mockReturnValue(false);
   });
@@ -180,7 +179,6 @@ describe("before_tool_call loop detection behavior", () => {
       content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
       details: { status: "running", aggregated: "steady" },
     });
-    // oxlint-disable-next-line typescript/no-explicit-any
     const tool = wrapToolWithBeforeToolCallHook({ name: "process", execute } as any, {
       ...disabledLoopDetectionContext,
     });
@@ -349,7 +347,6 @@ describe("before_tool_call requireApproval handling", () => {
       hasHooks: vi.fn().mockReturnValue(true),
       runBeforeToolCall: vi.fn(),
     };
-    // oxlint-disable-next-line typescript/no-explicit-any
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
     // Keep the global singleton aligned as a fallback in case another setup path
     // preloads hook-runner-global before this test's module reset/mocks take effect.

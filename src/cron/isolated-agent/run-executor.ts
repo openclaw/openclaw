@@ -8,6 +8,8 @@ import {
   countActiveDescendantRuns,
   listDescendantRunsForRequester,
   LiveSessionModelSwitchError,
+  getCliSessionId,
+  isCliProvider,
   logWarn,
   normalizeVerboseLevel,
   registerAgentRunContext,
@@ -15,6 +17,7 @@ import {
   resolveFastModeState,
   resolveNestedAgentLane,
   resolveSessionTranscriptPath,
+  runCliAgent,
   runEmbeddedPiAgent,
   runWithModelFallback,
 } from "./run-execution.runtime.js";
@@ -28,7 +31,7 @@ import { syncCronSessionLiveSelection } from "./run-session-state.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 type AgentTurnPayload = Extract<CronJob["payload"], { kind: "agentTurn" }> | null;
-type CronPromptRunResult = Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+type CronPromptRunResult = Awaited<ReturnType<typeof runCliAgent>>;
 
 export type CronExecutionResult = {
   runResult: CronPromptRunResult;
@@ -95,6 +98,32 @@ export function createCronPromptExecutor(params: {
         }
         const bootstrapPromptWarningSignature =
           bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
+        if (isCliProvider(providerOverride, params.cfgWithAgentDefaults)) {
+          const cliSessionId = params.cronSession.isNewSession
+            ? undefined
+            : getCliSessionId(params.cronSession.sessionEntry, providerOverride);
+          const result = await runCliAgent({
+            sessionId: params.cronSession.sessionEntry.sessionId,
+            sessionKey: params.agentSessionKey,
+            agentId: params.agentId,
+            sessionFile,
+            workspaceDir: params.workspaceDir,
+            config: params.cfgWithAgentDefaults,
+            prompt: promptText,
+            provider: providerOverride,
+            model: modelOverride,
+            thinkLevel: params.thinkLevel,
+            timeoutMs: params.timeoutMs,
+            runId: params.cronSession.sessionEntry.sessionId,
+            cliSessionId,
+            bootstrapPromptWarningSignaturesSeen,
+            bootstrapPromptWarningSignature,
+          });
+          bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+            result.meta?.systemPromptReport,
+          );
+          return result;
+        }
         const result = await runEmbeddedPiAgent({
           sessionId: params.cronSession.sessionEntry.sessionId,
           sessionKey: params.agentSessionKey,

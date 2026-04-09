@@ -305,6 +305,20 @@
   justify-content: flex-end;
 }
 
+/* Embedded audio (e.g. gateway-injected TTS from slash commands) */
+.chat-message-audio {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+  max-width: min(420px, 100%);
+}
+
+.chat-message-audio-el {
+  width: 100%;
+  min-height: 36px;
+}
+
 /* Compose input row - horizontal layout */
 .chat-compose__row {
   display: flex;

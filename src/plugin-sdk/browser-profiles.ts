@@ -1,20 +1,19 @@
 import path from "node:path";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { parseBrowserHttpUrl } from "./browser-cdp.js";
+import type { BrowserConfig, BrowserProfileConfig, OpenClawConfig } from "../config/config.js";
+import { resolveGatewayPort } from "../config/config.js";
 import {
+  DEFAULT_BROWSER_CDP_PORT_RANGE_START,
   DEFAULT_BROWSER_CONTROL_PORT,
   deriveDefaultBrowserCdpPortRange,
   deriveDefaultBrowserControlPort,
-  isLoopbackHost,
-  resolveGatewayPort,
-  resolveUserPath,
-} from "./browser-config-support.js";
-import type {
-  BrowserConfig,
-  BrowserProfileConfig,
-  OpenClawConfig,
-  SsrFPolicy,
-} from "./browser-support.js";
+} from "../config/port-defaults.js";
+import { isLoopbackHost } from "../gateway/net.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeOptionalTrimmedStringList } from "../shared/string-normalization.js";
+import { resolveUserPath } from "../utils.js";
+import { parseBrowserHttpUrl } from "./browser-cdp.js";
 
 export const DEFAULT_OPENCLAW_BROWSER_ENABLED = true;
 export const DEFAULT_BROWSER_EVALUATE_ENABLED = true;
@@ -22,10 +21,7 @@ export const DEFAULT_OPENCLAW_BROWSER_COLOR = "#FF4500";
 export const DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME = "openclaw";
 export const DEFAULT_BROWSER_DEFAULT_PROFILE_NAME = "openclaw";
 export const DEFAULT_AI_SNAPSHOT_MAX_CHARS = 80_000;
-
-const DEFAULT_BROWSER_CDP_PORT_RANGE_START = 18800;
-const DEFAULT_FALLBACK_BROWSER_TMP_DIR = "/tmp/openclaw";
-const DEFAULT_UPLOADS_DIR_NAME = "uploads";
+export const DEFAULT_UPLOAD_DIR = path.join(resolvePreferredOpenClawTmpDir(), "uploads");
 
 export type ResolvedBrowserConfig = {
   enabled: boolean;
@@ -61,28 +57,6 @@ export type ResolvedBrowserProfile = {
   attachOnly: boolean;
 };
 
-function canUseNodeFs(): boolean {
-  const getBuiltinModule = (
-    process as NodeJS.Process & {
-      getBuiltinModule?: (id: string) => unknown;
-    }
-  ).getBuiltinModule;
-  if (typeof getBuiltinModule !== "function") {
-    return false;
-  }
-  try {
-    return getBuiltinModule("fs") !== undefined;
-  } catch {
-    return false;
-  }
-}
-
-const DEFAULT_BROWSER_TMP_DIR = canUseNodeFs()
-  ? resolvePreferredOpenClawTmpDir()
-  : DEFAULT_FALLBACK_BROWSER_TMP_DIR;
-
-export const DEFAULT_UPLOAD_DIR = path.join(DEFAULT_BROWSER_TMP_DIR, DEFAULT_UPLOADS_DIR_NAME);
-
 function normalizeHexColor(raw: string | undefined): string {
   const value = (raw ?? "").trim();
   if (!value) {
@@ -109,10 +83,10 @@ function resolveCdpPortRangeStart(
     typeof rawStart === "number" && Number.isFinite(rawStart)
       ? Math.floor(rawStart)
       : fallbackStart;
-  if (start < 1 || start > 65535) {
+  if (start < 1 || start > 65_535) {
     throw new Error(`browser.cdpPortRangeStart must be between 1 and 65535, got: ${start}`);
   }
-  const maxStart = 65535 - rangeSpan;
+  const maxStart = 65_535 - rangeSpan;
   if (start > maxStart) {
     throw new Error(
       `browser.cdpPortRangeStart (${start}) is too high for a ${rangeSpan + 1}-port range; max is ${maxStart}.`,
@@ -121,24 +95,14 @@ function resolveCdpPortRangeStart(
   return start;
 }
 
-function normalizeStringList(raw: string[] | undefined): string[] | undefined {
-  if (!Array.isArray(raw) || raw.length === 0) {
-    return undefined;
-  }
-  const values = raw
-    .map((value) => value.trim())
-    .filter((value): value is string => value.length > 0);
-  return values.length > 0 ? values : undefined;
-}
-
 function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | undefined {
   const rawPolicy = cfg?.ssrfPolicy as
     | (BrowserConfig["ssrfPolicy"] & { allowPrivateNetwork?: boolean })
     | undefined;
   const allowPrivateNetwork = rawPolicy?.allowPrivateNetwork;
   const dangerouslyAllowPrivateNetwork = rawPolicy?.dangerouslyAllowPrivateNetwork;
-  const allowedHostnames = normalizeStringList(rawPolicy?.allowedHostnames);
-  const hostnameAllowlist = normalizeStringList(rawPolicy?.hostnameAllowlist);
+  const allowedHostnames = normalizeOptionalTrimmedStringList(rawPolicy?.allowedHostnames);
+  const hostnameAllowlist = normalizeOptionalTrimmedStringList(rawPolicy?.hostnameAllowlist);
   const hasExplicitPrivateSetting =
     allowPrivateNetwork !== undefined || dangerouslyAllowPrivateNetwork !== undefined;
   const resolvedAllowPrivateNetwork =
@@ -231,7 +195,7 @@ export function resolveBrowserConfig(
     cdpInfo = parseBrowserHttpUrl(rawCdpUrl, "browser.cdpUrl");
   } else {
     const derivedPort = controlPort + 1;
-    if (derivedPort > 65535) {
+    if (derivedPort > 65_535) {
       throw new Error(
         `Derived CDP port (${derivedPort}) is too high; check gateway port configuration.`,
       );
@@ -247,8 +211,8 @@ export function resolveBrowserConfig(
   const headless = cfg?.headless === true;
   const noSandbox = cfg?.noSandbox === true;
   const attachOnly = cfg?.attachOnly === true;
-  const executablePath = cfg?.executablePath?.trim() || undefined;
-  const defaultProfileFromConfig = cfg?.defaultProfile?.trim() || undefined;
+  const executablePath = normalizeOptionalString(cfg?.executablePath);
+  const defaultProfileFromConfig = normalizeOptionalString(cfg?.defaultProfile);
 
   const legacyCdpPort = rawCdpUrl ? cdpInfo.port : undefined;
   const isWsUrl = cdpInfo.parsed.protocol === "ws:" || cdpInfo.parsed.protocol === "wss:";

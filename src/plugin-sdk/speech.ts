@@ -1,4 +1,5 @@
 import { rmSync } from "node:fs";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 // Public speech helpers for bundled or third-party plugins.
 //
@@ -34,6 +35,8 @@ export {
 } from "../tts/provider-registry.js";
 export { normalizeTtsAutoMode, TTS_AUTO_MODES } from "../tts/tts-auto-mode.js";
 export {
+  asBoolean,
+  asFiniteNumber,
   asObject,
   readResponseTextLimited,
   trimToUndefined,
@@ -53,7 +56,7 @@ export function normalizeLanguageCode(code?: string): string | undefined {
   if (!trimmed) {
     return undefined;
   }
-  const normalized = trimmed.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(trimmed);
   if (!/^[a-z]{2}$/.test(normalized)) {
     throw new Error("languageCode must be a 2-letter ISO 639-1 code (e.g. en, de, fr)");
   }
@@ -65,7 +68,7 @@ export function normalizeApplyTextNormalization(mode?: string): "auto" | "on" | 
   if (!trimmed) {
     return undefined;
   }
-  const normalized = trimmed.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(trimmed);
   if (normalized === "auto" || normalized === "on" || normalized === "off") {
     return normalized;
   }

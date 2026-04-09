@@ -3,33 +3,60 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { registerContextEngineForOwner } from "../context-engine/registry.js";
 import type { OperatorScope } from "../gateway/method-scopes.js";
-import type {
-  GatewayRequestHandler,
-  GatewayRequestHandlers,
-} from "../gateway/server-methods/types.js";
+import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { registerInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
+import {
+  NODE_EXEC_APPROVALS_COMMANDS,
+  NODE_SYSTEM_NOTIFY_COMMAND,
+  NODE_SYSTEM_RUN_COMMANDS,
+} from "../infra/node-commands.js";
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { buildPluginApi } from "./api-builder.js";
 import { registerPluginCommand, validatePluginCommandDefinition } from "./command-registration.js";
-import type { PluginActivationSource } from "./config-state.js";
+import {
+  getRegisteredCompactionProvider,
+  registerCompactionProvider,
+} from "./compaction-provider.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import { registerPluginInteractiveHandler } from "./interactive-registry.js";
-import type { PluginManifestContracts } from "./manifest.js";
 import {
   getRegisteredMemoryEmbeddingProvider,
-  type MemoryEmbeddingProviderAdapter,
   registerMemoryEmbeddingProvider,
 } from "./memory-embedding-providers.js";
 import {
+  registerMemoryCapability,
+  registerMemoryCorpusSupplement,
   registerMemoryFlushPlanResolver,
+  registerMemoryPromptSupplement,
   registerMemoryPromptSection,
   registerMemoryRuntime,
 } from "./memory-state.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import type {
+  PluginCliBackendRegistration,
+  PluginCliRegistration,
+  PluginCommandRegistration,
+  PluginConversationBindingResolvedHandlerRegistration,
+  PluginHookRegistration,
+  PluginHttpRouteRegistration,
+  PluginMemoryEmbeddingProviderRegistration,
+  PluginNodeHostCommandRegistration,
+  PluginProviderRegistration,
+  PluginRecord,
+  PluginRegistry,
+  PluginRegistryParams,
+  PluginReloadRegistration,
+  PluginSecurityAuditCollectorRegistration,
+  PluginServiceRegistration,
+} from "./registry-types.js";
 import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { defaultSlotIdForKey, hasKind } from "./slots.js";
@@ -39,95 +66,38 @@ import {
   stripPromptMutationFieldsFromLegacyHookResult,
 } from "./types.js";
 import type {
+  CliBackendPlugin,
   ImageGenerationProviderPlugin,
-  RealtimeTranscriptionProviderPlugin,
+  MusicGenerationProviderPlugin,
   OpenClawPluginApi,
   OpenClawPluginChannelRegistration,
   OpenClawPluginCliCommandDescriptor,
   OpenClawPluginCliRegistrar,
   OpenClawPluginCommandDefinition,
   PluginConversationBindingResolvedEvent,
-  OpenClawPluginHttpRouteAuth,
-  OpenClawPluginHttpRouteMatch,
-  OpenClawPluginHttpRouteHandler,
   OpenClawPluginHttpRouteParams,
   OpenClawPluginHookOptions,
+  OpenClawPluginNodeHostCommand,
+  OpenClawPluginReloadRegistration,
+  OpenClawPluginSecurityAuditCollector,
   MediaUnderstandingProviderPlugin,
-  ProviderPlugin,
-  RealtimeVoiceProviderPlugin,
   OpenClawPluginService,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
-  PluginConfigUiHint,
   PluginDiagnostic,
-  PluginBundleFormat,
-  PluginFormat,
-  PluginLogger,
-  PluginOrigin,
-  PluginKind,
-  PluginRegistrationMode,
-  PluginHookName,
   PluginHookHandlerMap,
+  PluginHookName,
   PluginHookRegistration as TypedPluginHookRegistration,
+  PluginLogger,
+  PluginRegistrationMode,
+  ProviderPlugin,
+  RealtimeTranscriptionProviderPlugin,
+  RealtimeVoiceProviderPlugin,
   SpeechProviderPlugin,
   VideoGenerationProviderPlugin,
   WebFetchProviderPlugin,
   WebSearchProviderPlugin,
 } from "./types.js";
-
-export type PluginToolRegistration = {
-  pluginId: string;
-  pluginName?: string;
-  factory: OpenClawPluginToolFactory;
-  names: string[];
-  optional: boolean;
-  source: string;
-  rootDir?: string;
-};
-
-export type PluginCliRegistration = {
-  pluginId: string;
-  pluginName?: string;
-  register: OpenClawPluginCliRegistrar;
-  commands: string[];
-  descriptors: OpenClawPluginCliCommandDescriptor[];
-  source: string;
-  rootDir?: string;
-};
-
-export type PluginHttpRouteRegistration = {
-  pluginId?: string;
-  path: string;
-  handler: OpenClawPluginHttpRouteHandler;
-  auth: OpenClawPluginHttpRouteAuth;
-  match: OpenClawPluginHttpRouteMatch;
-  source?: string;
-};
-
-export type PluginChannelRegistration = {
-  pluginId: string;
-  pluginName?: string;
-  plugin: ChannelPlugin;
-  source: string;
-  rootDir?: string;
-};
-
-export type PluginChannelSetupRegistration = {
-  pluginId: string;
-  pluginName?: string;
-  plugin: ChannelPlugin;
-  source: string;
-  enabled: boolean;
-  rootDir?: string;
-};
-
-export type PluginProviderRegistration = {
-  pluginId: string;
-  pluginName?: string;
-  provider: ProviderPlugin;
-  source: string;
-  rootDir?: string;
-};
 
 type PluginOwnedProviderRegistration<T extends { id: string }> = {
   pluginId: string;
@@ -137,142 +107,35 @@ type PluginOwnedProviderRegistration<T extends { id: string }> = {
   rootDir?: string;
 };
 
-export type PluginSpeechProviderRegistration =
-  PluginOwnedProviderRegistration<SpeechProviderPlugin>;
-export type PluginRealtimeTranscriptionProviderRegistration =
-  PluginOwnedProviderRegistration<RealtimeTranscriptionProviderPlugin>;
-export type PluginRealtimeVoiceProviderRegistration =
-  PluginOwnedProviderRegistration<RealtimeVoiceProviderPlugin>;
-export type PluginMediaUnderstandingProviderRegistration =
-  PluginOwnedProviderRegistration<MediaUnderstandingProviderPlugin>;
-export type PluginImageGenerationProviderRegistration =
-  PluginOwnedProviderRegistration<ImageGenerationProviderPlugin>;
-export type PluginVideoGenerationProviderRegistration =
-  PluginOwnedProviderRegistration<VideoGenerationProviderPlugin>;
-export type PluginWebFetchProviderRegistration =
-  PluginOwnedProviderRegistration<WebFetchProviderPlugin>;
-export type PluginWebSearchProviderRegistration =
-  PluginOwnedProviderRegistration<WebSearchProviderPlugin>;
-export type PluginMemoryEmbeddingProviderRegistration =
-  PluginOwnedProviderRegistration<MemoryEmbeddingProviderAdapter>;
-
-export type PluginHookRegistration = {
-  pluginId: string;
-  entry: HookEntry;
-  events: string[];
-  source: string;
-  rootDir?: string;
-};
-
-export type PluginServiceRegistration = {
-  pluginId: string;
-  pluginName?: string;
-  service: OpenClawPluginService;
-  source: string;
-  rootDir?: string;
-};
-
-export type PluginCommandRegistration = {
-  pluginId: string;
-  pluginName?: string;
-  command: OpenClawPluginCommandDefinition;
-  source: string;
-  rootDir?: string;
-};
-
-export type PluginConversationBindingResolvedHandlerRegistration = {
-  pluginId: string;
-  pluginName?: string;
-  pluginRoot?: string;
-  handler: (event: PluginConversationBindingResolvedEvent) => void | Promise<void>;
-  source: string;
-  rootDir?: string;
-};
-
-export type PluginRecord = {
-  id: string;
-  name: string;
-  version?: string;
-  description?: string;
-  format?: PluginFormat;
-  bundleFormat?: PluginBundleFormat;
-  bundleCapabilities?: string[];
-  kind?: PluginKind | PluginKind[];
-  source: string;
-  rootDir?: string;
-  origin: PluginOrigin;
-  workspaceDir?: string;
-  enabled: boolean;
-  explicitlyEnabled?: boolean;
-  activated?: boolean;
-  imported?: boolean;
-  activationSource?: PluginActivationSource;
-  activationReason?: string;
-  status: "loaded" | "disabled" | "error";
-  error?: string;
-  failedAt?: Date;
-  failurePhase?: "validation" | "load" | "register";
-  toolNames: string[];
-  hookNames: string[];
-  channelIds: string[];
-  providerIds: string[];
-  speechProviderIds: string[];
-  realtimeTranscriptionProviderIds: string[];
-  realtimeVoiceProviderIds: string[];
-  mediaUnderstandingProviderIds: string[];
-  imageGenerationProviderIds: string[];
-  videoGenerationProviderIds: string[];
-  webFetchProviderIds: string[];
-  webSearchProviderIds: string[];
-  memoryEmbeddingProviderIds: string[];
-  gatewayMethods: string[];
-  cliCommands: string[];
-  services: string[];
-  commands: string[];
-  httpRoutes: number;
-  hookCount: number;
-  configSchema: boolean;
-  configUiHints?: Record<string, PluginConfigUiHint>;
-  configJsonSchema?: Record<string, unknown>;
-  contracts?: PluginManifestContracts;
-  memorySlotSelected?: boolean;
-};
-
-export type PluginRegistry = {
-  plugins: PluginRecord[];
-  tools: PluginToolRegistration[];
-  hooks: PluginHookRegistration[];
-  typedHooks: TypedPluginHookRegistration[];
-  channels: PluginChannelRegistration[];
-  channelSetups: PluginChannelSetupRegistration[];
-  providers: PluginProviderRegistration[];
-  speechProviders: PluginSpeechProviderRegistration[];
-  realtimeTranscriptionProviders: PluginRealtimeTranscriptionProviderRegistration[];
-  realtimeVoiceProviders: PluginRealtimeVoiceProviderRegistration[];
-  mediaUnderstandingProviders: PluginMediaUnderstandingProviderRegistration[];
-  imageGenerationProviders: PluginImageGenerationProviderRegistration[];
-  videoGenerationProviders: PluginVideoGenerationProviderRegistration[];
-  webFetchProviders: PluginWebFetchProviderRegistration[];
-  webSearchProviders: PluginWebSearchProviderRegistration[];
-  memoryEmbeddingProviders: PluginMemoryEmbeddingProviderRegistration[];
-  gatewayHandlers: GatewayRequestHandlers;
-  gatewayMethodScopes?: Partial<Record<string, OperatorScope>>;
-  httpRoutes: PluginHttpRouteRegistration[];
-  cliRegistrars: PluginCliRegistration[];
-  services: PluginServiceRegistration[];
-  commands: PluginCommandRegistration[];
-  conversationBindingResolvedHandlers: PluginConversationBindingResolvedHandlerRegistration[];
-  diagnostics: PluginDiagnostic[];
-};
-
-export type PluginRegistryParams = {
-  logger: PluginLogger;
-  coreGatewayHandlers?: GatewayRequestHandlers;
-  runtime: PluginRuntime;
-  // When false, keep registration local to the returned registry and avoid mutating
-  // process-global command/hook state during non-activating snapshot loads.
-  activateGlobalSideEffects?: boolean;
-};
+export type {
+  PluginChannelRegistration,
+  PluginChannelSetupRegistration,
+  PluginCliBackendRegistration,
+  PluginCliRegistration,
+  PluginCommandRegistration,
+  PluginConversationBindingResolvedHandlerRegistration,
+  PluginHookRegistration,
+  PluginHttpRouteRegistration,
+  PluginMemoryEmbeddingProviderRegistration,
+  PluginNodeHostCommandRegistration,
+  PluginProviderRegistration,
+  PluginRecord,
+  PluginRegistry,
+  PluginRegistryParams,
+  PluginReloadRegistration,
+  PluginSecurityAuditCollectorRegistration,
+  PluginServiceRegistration,
+  PluginToolRegistration,
+  PluginSpeechProviderRegistration,
+  PluginRealtimeTranscriptionProviderRegistration,
+  PluginRealtimeVoiceProviderRegistration,
+  PluginMediaUnderstandingProviderRegistration,
+  PluginImageGenerationProviderRegistration,
+  PluginVideoGenerationProviderRegistration,
+  PluginMusicGenerationProviderRegistration,
+  PluginWebFetchProviderRegistration,
+  PluginWebSearchProviderRegistration,
+} from "./registry-types.js";
 
 type PluginTypedHookPolicy = {
   allowPromptInjection?: boolean;
@@ -453,8 +316,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   };
 
   const describeHttpRouteOwner = (entry: PluginHttpRouteRegistration): string => {
-    const plugin = entry.pluginId?.trim() || "unknown-plugin";
-    const source = entry.source?.trim() || "unknown-source";
+    const plugin = normalizeOptionalString(entry.pluginId) || "unknown-plugin";
+    const source = normalizeOptionalString(entry.source) || "unknown-source";
     return `${plugin} (${source})`;
   };
 
@@ -552,7 +415,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         ? (registration as OpenClawPluginChannelRegistration)
         : { plugin: registration as ChannelPlugin };
     const plugin = normalized.plugin;
-    const id = typeof plugin?.id === "string" ? plugin.id.trim() : String(plugin?.id ?? "").trim();
+    const id =
+      normalizeOptionalString(plugin?.id) ?? normalizeStringifiedOptionalString(plugin?.id) ?? "";
     if (!id) {
       pushDiagnostic({
         level: "error",
@@ -632,6 +496,40 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       source: record.source,
       rootDir: record.rootDir,
     });
+  };
+
+  const registerCliBackend = (record: PluginRecord, backend: CliBackendPlugin) => {
+    const id = backend.id.trim();
+    if (!id) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "cli backend registration missing id",
+      });
+      return;
+    }
+    const existing = (registry.cliBackends ?? []).find((entry) => entry.backend.id === id);
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `cli backend already registered: ${id} (${existing.pluginId})`,
+      });
+      return;
+    }
+    (registry.cliBackends ??= []).push({
+      pluginId: record.id,
+      pluginName: record.name,
+      backend: {
+        ...backend,
+        id,
+      },
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+    record.cliBackendIds.push(id);
   };
 
   const registerUniqueProviderLike = <
@@ -752,6 +650,19 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerMusicGenerationProvider = (
+    record: PluginRecord,
+    provider: MusicGenerationProviderPlugin,
+  ) => {
+    registerUniqueProviderLike({
+      record,
+      provider,
+      kindLabel: "music-generation provider",
+      registrations: registry.musicGenerationProviders,
+      ownedIds: record.musicGenerationProviderIds,
+    });
+  };
+
   const registerWebFetchProvider = (record: PluginRecord, provider: WebFetchProviderPlugin) => {
     registerUniqueProviderLike({
       record,
@@ -819,6 +730,104 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       register: registrar,
       commands,
       descriptors,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
+  const reservedNodeHostCommands = new Set<string>([
+    ...NODE_SYSTEM_RUN_COMMANDS,
+    ...NODE_EXEC_APPROVALS_COMMANDS,
+    NODE_SYSTEM_NOTIFY_COMMAND,
+  ]);
+
+  const registerReload = (record: PluginRecord, registration: OpenClawPluginReloadRegistration) => {
+    const normalize = (values?: string[]) =>
+      (values ?? []).map((value) => value.trim()).filter(Boolean);
+    const normalized: OpenClawPluginReloadRegistration = {
+      restartPrefixes: normalize(registration.restartPrefixes),
+      hotPrefixes: normalize(registration.hotPrefixes),
+      noopPrefixes: normalize(registration.noopPrefixes),
+    };
+    if (
+      (normalized.restartPrefixes?.length ?? 0) === 0 &&
+      (normalized.hotPrefixes?.length ?? 0) === 0 &&
+      (normalized.noopPrefixes?.length ?? 0) === 0
+    ) {
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: "reload registration missing prefixes",
+      });
+      return;
+    }
+    registry.reloads ??= [];
+    registry.reloads.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      registration: normalized,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
+  const registerNodeHostCommand = (
+    record: PluginRecord,
+    nodeCommand: OpenClawPluginNodeHostCommand,
+  ) => {
+    const command = nodeCommand.command.trim();
+    if (!command) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "node host command registration missing command",
+      });
+      return;
+    }
+    if (reservedNodeHostCommands.has(command)) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `node host command reserved by core: ${command}`,
+      });
+      return;
+    }
+    registry.nodeHostCommands ??= [];
+    const existing = registry.nodeHostCommands.find((entry) => entry.command.command === command);
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `node host command already registered: ${command} (${existing.pluginId})`,
+      });
+      return;
+    }
+    registry.nodeHostCommands.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      command: {
+        ...nodeCommand,
+        command,
+        cap: normalizeOptionalString(nodeCommand.cap),
+      },
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
+  const registerSecurityAuditCollector = (
+    record: PluginRecord,
+    collector: OpenClawPluginSecurityAuditCollector,
+  ) => {
+    registry.securityAuditCollectors ??= [];
+    registry.securityAuditCollectors.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      collector,
       source: record.source,
       rootDir: record.rootDir,
     });
@@ -1046,11 +1055,18 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 registerImageGenerationProvider(record, provider),
               registerVideoGenerationProvider: (provider) =>
                 registerVideoGenerationProvider(record, provider),
+              registerMusicGenerationProvider: (provider) =>
+                registerMusicGenerationProvider(record, provider),
               registerWebFetchProvider: (provider) => registerWebFetchProvider(record, provider),
               registerWebSearchProvider: (provider) => registerWebSearchProvider(record, provider),
               registerGatewayMethod: (method, handler, opts) =>
                 registerGatewayMethod(record, method, handler, opts),
               registerService: (service) => registerService(record, service),
+              registerCliBackend: (backend) => registerCliBackend(record, backend),
+              registerReload: (registration) => registerReload(record, registration),
+              registerNodeHostCommand: (command) => registerNodeHostCommand(record, command),
+              registerSecurityAuditCollector: (collector) =>
+                registerSecurityAuditCollector(record, collector),
               registerInteractiveHandler: (registration) => {
                 const result = registerPluginInteractiveHandler(record.id, registration, {
                   pluginName: record.name,
@@ -1090,6 +1106,50 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                 }
               },
+              registerCompactionProvider: (
+                provider: Parameters<OpenClawPluginApi["registerCompactionProvider"]>[0],
+              ) => {
+                const existing = getRegisteredCompactionProvider(provider.id);
+                if (existing) {
+                  const ownerDetail = existing.ownerPluginId
+                    ? ` (owner: ${existing.ownerPluginId})`
+                    : "";
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: `compaction provider already registered: ${provider.id}${ownerDetail}`,
+                  });
+                  return;
+                }
+                registerCompactionProvider(provider, { ownerPluginId: record.id });
+              },
+              registerMemoryCapability: (capability) => {
+                if (!hasKind(record.kind, "memory")) {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: "only memory plugins can register a memory capability",
+                  });
+                  return;
+                }
+                if (
+                  Array.isArray(record.kind) &&
+                  record.kind.length > 1 &&
+                  !record.memorySlotSelected
+                ) {
+                  pushDiagnostic({
+                    level: "warn",
+                    pluginId: record.id,
+                    source: record.source,
+                    message:
+                      "dual-kind plugin not selected for memory slot; skipping memory capability registration",
+                  });
+                  return;
+                }
+                registerMemoryCapability(record.id, capability);
+              },
               registerMemoryPromptSection: (builder) => {
                 if (!hasKind(record.kind, "memory")) {
                   pushDiagnostic({
@@ -1115,6 +1175,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   return;
                 }
                 registerMemoryPromptSection(builder);
+              },
+              registerMemoryPromptSupplement: (builder) => {
+                registerMemoryPromptSupplement(record.id, builder);
+              },
+              registerMemoryCorpusSupplement: (supplement) => {
+                registerMemoryCorpusSupplement(record.id, supplement);
               },
               registerMemoryFlushPlan: (resolver) => {
                 if (!hasKind(record.kind, "memory")) {
@@ -1238,15 +1304,20 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerTool,
     registerChannel,
     registerProvider,
+    registerCliBackend,
     registerSpeechProvider,
     registerRealtimeTranscriptionProvider,
     registerRealtimeVoiceProvider,
     registerMediaUnderstandingProvider,
     registerImageGenerationProvider,
     registerVideoGenerationProvider,
+    registerMusicGenerationProvider,
     registerWebSearchProvider,
     registerGatewayMethod,
     registerCli,
+    registerReload,
+    registerNodeHostCommand,
+    registerSecurityAuditCollector,
     registerService,
     registerCommand,
     registerHook,

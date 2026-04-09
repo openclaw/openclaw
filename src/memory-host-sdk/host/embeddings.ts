@@ -1,16 +1,15 @@
 import fsSync from "node:fs";
 import type { Llama, LlamaEmbeddingContext, LlamaModel } from "node-llama-cpp";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { SecretInput } from "../../config/types.secrets.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
-import type { EmbeddingInput } from "./embedding-inputs.js";
 import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
 import {
-  createGeminiEmbeddingProvider,
-  type GeminiEmbeddingClient,
-  type GeminiTaskType,
-} from "./embeddings-gemini.js";
+  createBedrockEmbeddingProvider,
+  hasAwsCredentials,
+  type BedrockEmbeddingClient,
+} from "./embeddings-bedrock.js";
+import { createGeminiEmbeddingProvider, type GeminiEmbeddingClient } from "./embeddings-gemini.js";
 import {
   createMistralEmbeddingProvider,
   type MistralEmbeddingClient,
@@ -18,6 +17,14 @@ import {
 import { createOllamaEmbeddingProvider, type OllamaEmbeddingClient } from "./embeddings-ollama.js";
 import { createOpenAiEmbeddingProvider, type OpenAiEmbeddingClient } from "./embeddings-openai.js";
 import { createVoyageEmbeddingProvider, type VoyageEmbeddingClient } from "./embeddings-voyage.js";
+import type {
+  EmbeddingProvider,
+  EmbeddingProviderFallback,
+  EmbeddingProviderId,
+  EmbeddingProviderOptions,
+  EmbeddingProviderRequest,
+  GeminiTaskType,
+} from "./embeddings.types.js";
 import { importNodeLlamaCpp } from "./node-llama.js";
 
 export type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
@@ -25,23 +32,20 @@ export type { MistralEmbeddingClient } from "./embeddings-mistral.js";
 export type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
 export type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
 export type { OllamaEmbeddingClient } from "./embeddings-ollama.js";
-
-export type EmbeddingProvider = {
-  id: string;
-  model: string;
-  maxInputTokens?: number;
-  embedQuery: (text: string) => Promise<number[]>;
-  embedBatch: (texts: string[]) => Promise<number[][]>;
-  embedBatchInputs?: (inputs: EmbeddingInput[]) => Promise<number[][]>;
-};
-
-export type EmbeddingProviderId = "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
-export type EmbeddingProviderRequest = EmbeddingProviderId | "auto";
-export type EmbeddingProviderFallback = EmbeddingProviderId | "none";
+export type { BedrockEmbeddingClient } from "./embeddings-bedrock.js";
+export type {
+  EmbeddingProvider,
+  EmbeddingProviderFallback,
+  EmbeddingProviderId,
+  EmbeddingProviderOptions,
+  EmbeddingProviderRequest,
+  GeminiTaskType,
+} from "./embeddings.types.js";
 
 // Remote providers considered for auto-selection when provider === "auto".
 // Ollama is intentionally excluded here so that "auto" mode does not
 // implicitly assume a local Ollama instance is available.
+// Bedrock is included when AWS credentials are detected.
 const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage", "mistral"] as const;
 
 export type EmbeddingProviderResult = {
@@ -55,27 +59,7 @@ export type EmbeddingProviderResult = {
   voyage?: VoyageEmbeddingClient;
   mistral?: MistralEmbeddingClient;
   ollama?: OllamaEmbeddingClient;
-};
-
-export type EmbeddingProviderOptions = {
-  config: OpenClawConfig;
-  agentDir?: string;
-  provider: EmbeddingProviderRequest;
-  remote?: {
-    baseUrl?: string;
-    apiKey?: SecretInput;
-    headers?: Record<string, string>;
-  };
-  model: string;
-  fallback: EmbeddingProviderFallback;
-  local?: {
-    modelPath?: string;
-    modelCacheDir?: string;
-  };
-  /** Gemini embedding-2: output vector dimensions (768, 1536, or 3072). */
-  outputDimensionality?: number;
-  /** Gemini: override the default task type sent with embedding requests. */
-  taskType?: GeminiTaskType;
+  bedrock?: BedrockEmbeddingClient;
 };
 
 export const DEFAULT_LOCAL_MODEL =
@@ -105,8 +89,8 @@ function isMissingApiKeyError(err: unknown): boolean {
 export async function createLocalEmbeddingProvider(
   options: EmbeddingProviderOptions,
 ): Promise<EmbeddingProvider> {
-  const modelPath = options.local?.modelPath?.trim() || DEFAULT_LOCAL_MODEL;
-  const modelCacheDir = options.local?.modelCacheDir?.trim();
+  const modelPath = normalizeOptionalString(options.local?.modelPath) || DEFAULT_LOCAL_MODEL;
+  const modelCacheDir = normalizeOptionalString(options.local?.modelCacheDir);
 
   // Lazy-load node-llama-cpp to keep startup light unless local is enabled.
   const { getLlama, resolveModelFile, LlamaLogLevel } = await importNodeLlamaCpp();
@@ -192,6 +176,10 @@ export async function createEmbeddingProvider(
       const { provider, client } = await createMistralEmbeddingProvider(options);
       return { provider, mistral: client };
     }
+    if (id === "bedrock") {
+      const { provider, client } = await createBedrockEmbeddingProvider(options);
+      return { provider, bedrock: client };
+    }
     const { provider, client } = await createOpenAiEmbeddingProvider(options);
     return { provider, openAi: client };
   };
@@ -226,6 +214,23 @@ export async function createEmbeddingProvider(
         const wrapped = new Error(message) as Error & { cause?: unknown };
         wrapped.cause = err;
         throw wrapped;
+      }
+    }
+
+    // Try bedrock if AWS credentials are available
+    if (await hasAwsCredentials()) {
+      try {
+        const result = await createProvider("bedrock");
+        return { ...result, requestedProvider };
+      } catch (err) {
+        const message = formatPrimaryError(err, "bedrock");
+        if (isMissingApiKeyError(err)) {
+          missingKeyErrors.push(message);
+        } else {
+          const wrapped = new Error(message) as Error & { cause?: unknown };
+          wrapped.cause = err;
+          throw wrapped;
+        }
       }
     }
 

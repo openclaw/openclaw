@@ -8,6 +8,7 @@ import {
   isToolResultContentType,
   resolveToolBlockArgs,
 } from "../../../../src/chat/tool-content.js";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type { NormalizedMessage, MessageContentItem } from "../types/chat-types.ts";
 
 /**
@@ -74,7 +75,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
  * Normalize role for grouping purposes.
  */
 export function normalizeRoleForGrouping(role: string): string {
-  const lower = role.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(role);
   // Preserve original casing when it's already a core role.
   if (role === "user" || role === "User") {
     return role;
@@ -102,6 +103,6 @@ export function normalizeRoleForGrouping(role: string): string {
  */
 export function isToolResultMessage(message: unknown): boolean {
   const m = message as Record<string, unknown>;
-  const role = typeof m.role === "string" ? m.role.toLowerCase() : "";
+  const role = normalizeLowercaseStringOrEmpty(m.role);
   return role === "toolresult" || role === "tool_result";
 }

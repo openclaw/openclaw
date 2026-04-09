@@ -668,7 +668,10 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       try {
         mockReadWindowsListeningPids.mockReturnValue([stalePid]);
         mockReadWindowsProcessArgs.mockReturnValue(["openclaw", "gateway"]);
-        mockReadWindowsProcessArgsResult.mockReturnValue({ ok: true, args: ["openclaw", "gateway"] });
+        mockReadWindowsProcessArgsResult.mockReturnValue({
+          ok: true,
+          args: ["openclaw", "gateway"],
+        });
         mockSpawnSync.mockReturnValue({
           error: null,
           status: 0,
@@ -775,7 +778,10 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       try {
         mockReadWindowsListeningPids.mockReturnValue([stalePid]);
         mockReadWindowsProcessArgs.mockReturnValue(["openclaw", "gateway"]);
-        mockReadWindowsProcessArgsResult.mockReturnValue({ ok: true, args: ["openclaw", "gateway"] });
+        mockReadWindowsProcessArgsResult.mockReturnValue({
+          ok: true,
+          args: ["openclaw", "gateway"],
+        });
         mockReadWindowsListeningPidsResult.mockReturnValue({ ok: true, pids: [stalePid] });
         mockSpawnSync.mockReturnValue({
           error: null,
@@ -810,7 +816,10 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       try {
         mockReadWindowsListeningPidsResult.mockReturnValue({ ok: true, pids: [stalePid] });
         mockReadWindowsProcessArgs.mockReturnValue(["openclaw", "gateway"]);
-        mockReadWindowsProcessArgsResult.mockReturnValue({ ok: true, args: ["openclaw", "gateway"] });
+        mockReadWindowsProcessArgsResult.mockReturnValue({
+          ok: true,
+          args: ["openclaw", "gateway"],
+        });
         mockSpawnSync
           .mockReturnValueOnce({
             error: null,

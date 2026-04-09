@@ -15,11 +15,13 @@ import { clearSessionStoreCaches } from "../src/config/sessions/store-cache.js";
 import { drainSessionStoreLockQueuesForTest } from "../src/config/sessions/store-lock-state.js";
 import { drainFileLockStateForTest, resetFileLockStateForTest } from "../src/infra/file-lock.js";
 import type { OutboundSendDeps } from "../src/infra/outbound/deliver.js";
+import { clearPluginDiscoveryCache } from "../src/plugins/discovery.js";
+import { clearPluginManifestRegistryCache } from "../src/plugins/manifest-registry.js";
 import type { PluginRegistry } from "../src/plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
 import { installSharedTestSetup } from "./setup.shared.js";
 
-const testEnv = installSharedTestSetup();
+installSharedTestSetup();
 
 const WORKER_RUNTIME_STATE = Symbol.for("openclaw.testSetupRuntimeState");
 type WorkerRuntimeState = {
@@ -81,9 +83,14 @@ function createTestRegistryForSetup(
     videoGenerationProviders: [],
     webFetchProviders: [],
     webSearchProviders: [],
+    memoryEmbeddingProviders: [],
     gatewayHandlers: {},
+    gatewayMethodScopes: {},
     httpRoutes: [],
     cliRegistrars: [],
+    reloads: [],
+    nodeHostCommands: [],
+    securityAuditCollectors: [],
     services: [],
     commands: [],
     conversationBindingResolvedHandlers: [],
@@ -327,6 +334,8 @@ afterEach(async () => {
   resetContextWindowCacheForTest();
   resetModelsJsonReadyCacheForTest();
   resetSessionWriteLockStateForTest();
+  clearPluginDiscoveryCache();
+  clearPluginManifestRegistryCache();
   installDefaultPluginRegistry();
 });
 
@@ -334,5 +343,6 @@ afterAll(async () => {
   clearSessionStoreCaches();
   await drainFileLockStateForTest();
   await drainSessionWriteLockStateForTest();
-  testEnv.cleanup();
+  clearPluginDiscoveryCache();
+  clearPluginManifestRegistryCache();
 });

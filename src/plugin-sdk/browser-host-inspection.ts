@@ -2,9 +2,13 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 
 export type BrowserExecutable = {
-  kind: "chrome" | "chromium" | "edge" | "canary";
+  kind: "brave" | "canary" | "chromium" | "chrome" | "custom" | "edge";
   path: string;
 };
 
@@ -30,7 +34,7 @@ function execText(
       encoding: "utf8",
       maxBuffer,
     });
-    return String(output ?? "").trim() || null;
+    return normalizeOptionalString(output) ?? null;
   } catch {
     return null;
   }
@@ -39,7 +43,7 @@ function execText(
 function findFirstChromeExecutable(candidates: string[]): BrowserExecutable | null {
   for (const candidate of candidates) {
     if (exists(candidate)) {
-      const normalizedPath = candidate.toLowerCase();
+      const normalizedPath = normalizeLowercaseStringOrEmpty(candidate);
       return {
         kind:
           normalizedPath.includes("beta") ||
@@ -52,6 +56,7 @@ function findFirstChromeExecutable(candidates: string[]): BrowserExecutable | nu
       };
     }
   }
+
   return null;
 }
 

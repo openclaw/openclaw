@@ -4,7 +4,7 @@ import { resolvePluginSetupProvider } from "../plugins/setup-registry.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { resolveProviderEnvApiKeyCandidates } from "./model-auth-env-vars.js";
 import { GCP_VERTEX_CREDENTIALS_MARKER } from "./model-auth-markers.js";
-import { normalizeProviderIdForAuth } from "./provider-id.js";
+import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
 export type EnvApiKeyResult = {
   apiKey: string;
@@ -15,7 +15,8 @@ export function resolveEnvApiKey(
   provider: string,
   env: NodeJS.ProcessEnv = process.env,
 ): EnvApiKeyResult | null {
-  const normalized = normalizeProviderIdForAuth(provider);
+  const normalized = resolveProviderIdForAuth(provider, { env });
+  const candidateMap = resolveProviderEnvApiKeyCandidates({ env });
   const applied = new Set(getShellEnvAppliedKeys());
   const pick = (envVar: string): EnvApiKeyResult | null => {
     const value = normalizeOptionalSecretInput(env[envVar]);
@@ -26,14 +27,15 @@ export function resolveEnvApiKey(
     return { apiKey: value, source };
   };
 
-  const candidates = resolveProviderEnvApiKeyCandidates()[normalized];
-  if (candidates) {
+  const candidates = Object.hasOwn(candidateMap, normalized) ? candidateMap[normalized] : undefined;
+  if (Array.isArray(candidates)) {
     for (const envVar of candidates) {
       const resolved = pick(envVar);
       if (resolved) {
         return resolved;
       }
     }
+    return null;
   }
 
   if (normalized === "google-vertex") {

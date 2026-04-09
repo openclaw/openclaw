@@ -6,8 +6,12 @@ export default defineBundledChannelEntry({
   description: "Telegram channel plugin",
   importMetaUrl: import.meta.url,
   plugin: {
-    specifier: "./api.js",
+    specifier: "./channel-plugin-api.js",
     exportName: "telegramPlugin",
+  },
+  secrets: {
+    specifier: "./secret-contract-api.js",
+    exportName: "channelSecrets",
   },
   runtime: {
     specifier: "./runtime-api.js",

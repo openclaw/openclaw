@@ -1,3 +1,4 @@
+import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
 import { describe, expect, it, vi } from "vitest";
 import { createNonExitingTypedRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import {
@@ -5,19 +6,44 @@ import {
   createPluginSetupWizardStatus,
   createTestWizardPrompter,
   runSetupWizardConfigure,
-  runSetupWizardFinalize,
   type WizardPrompter,
 } from "../../../test/helpers/plugins/setup-wizard.js";
+import {
+  listFeishuAccountIds,
+  resolveDefaultFeishuAccountId,
+  resolveFeishuAccount,
+} from "./accounts.js";
+import { feishuSetupAdapter } from "./setup-core.js";
+import { feishuSetupWizard } from "./setup-surface.js";
 
 vi.mock("./probe.js", () => ({
   probeFeishu: vi.fn(async () => ({ ok: false, error: "mocked" })),
 }));
 
-import { feishuPlugin } from "./channel.js";
-
 const baseStatusContext = {
   accountOverrides: {},
 };
+
+const feishuSetupPlugin = {
+  id: "feishu",
+  meta: {
+    id: "feishu",
+    label: "Feishu",
+    selectionLabel: "Feishu/Lark (飞书)",
+    docsPath: "/channels/feishu",
+    blurb: "飞书/Lark enterprise messaging.",
+  },
+  capabilities: {
+    chatTypes: ["direct", "group"] as Array<"direct" | "group">,
+  },
+  config: {
+    listAccountIds: (cfg: unknown) => listFeishuAccountIds(cfg as never),
+    defaultAccountId: (cfg: unknown) => resolveDefaultFeishuAccountId(cfg as never),
+    resolveAccount: adaptScopedAccountAccessor(resolveFeishuAccount),
+  },
+  setup: feishuSetupAdapter,
+  setupWizard: feishuSetupWizard,
+} as const;
 
 async function withEnvVars(values: Record<string, string | undefined>, run: () => Promise<void>) {
   const previous = new Map<string, string | undefined>();
@@ -57,14 +83,14 @@ async function getStatusWithEnvRefs(params: { appIdKey: string; appSecretKey: st
   });
 }
 
-const feishuConfigure = createPluginSetupWizardConfigure(feishuPlugin);
-const feishuGetStatus = createPluginSetupWizardStatus(feishuPlugin);
+const feishuConfigure = createPluginSetupWizardConfigure(feishuSetupPlugin);
+const feishuGetStatus = createPluginSetupWizardStatus(feishuSetupPlugin);
 type FeishuConfigureRuntime = Parameters<typeof feishuConfigure>[0]["runtime"];
 
 describe("feishu setup wizard", () => {
   it("setup adapter preserves a selected named account id", () => {
     expect(
-      feishuPlugin.setup?.resolveAccountId?.({
+      feishuSetupPlugin.setup?.resolveAccountId?.({
         cfg: {} as never,
         accountId: "work",
         input: {},
@@ -74,7 +100,7 @@ describe("feishu setup wizard", () => {
 
   it("setup adapter uses configured defaultAccount when accountId is omitted", () => {
     expect(
-      feishuPlugin.setup?.resolveAccountId?.({
+      feishuSetupPlugin.setup?.resolveAccountId?.({
         cfg: {
           channels: {
             feishu: {
@@ -209,7 +235,7 @@ describe("feishu setup wizard", () => {
       note: vi.fn(async () => {}),
     });
 
-    const setupWizard = feishuPlugin.setupWizard;
+    const setupWizard = feishuSetupPlugin.setupWizard;
     if (!setupWizard || !("finalize" in setupWizard) || !setupWizard.finalize) {
       throw new Error("feishu setupWizard.finalize unavailable");
     }
@@ -347,7 +373,6 @@ describe("feishu setup wizard status", () => {
   });
 
   it("uses configured defaultAccount for omitted DM policy account context", async () => {
-    const { feishuSetupWizard } = await import("./setup-surface.js");
     const cfg = {
       channels: {
         feishu: {
@@ -372,11 +397,17 @@ describe("feishu setup wizard status", () => {
     });
 
     const next = feishuSetupWizard.dmPolicy?.setPolicy?.(cfg as never, "open");
+    const workAccount = next?.channels?.feishu?.accounts?.work as
+      | {
+          dmPolicy?: string;
+          allowFrom?: string[];
+        }
+      | undefined;
 
     expect(next?.channels?.feishu?.dmPolicy).toBeUndefined();
     expect(next?.channels?.feishu?.allowFrom).toEqual(["ou_root"]);
-    expect(next?.channels?.feishu?.accounts?.work?.dmPolicy).toBe("open");
-    expect(next?.channels?.feishu?.accounts?.work?.allowFrom).toEqual(["ou_work", "*"]);
+    expect(workAccount?.dmPolicy).toBe("open");
+    expect(workAccount?.allowFrom).toEqual(["ou_work", "*"]);
   });
 
   it("treats env SecretRef appId as not configured when env var is missing", async () => {

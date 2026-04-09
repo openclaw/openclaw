@@ -1,6 +1,5 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { clearBundledPluginMetadataCache } from "../plugins/bundled-plugin-metadata.js";
 import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 
@@ -25,7 +24,6 @@ describe("gateway startup channel maintenance wiring", () => {
     const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.resolve(process.cwd(), "extensions");
     process.env.OPENCLAW_SKIP_CHANNELS = "0";
-    clearBundledPluginMetadataCache();
     clearPluginDiscoveryCache();
     clearPluginManifestRegistryCache();
     runChannelPluginStartupMaintenanceMock.mockClear();
@@ -70,7 +68,6 @@ describe("gateway startup channel maintenance wiring", () => {
       } else {
         process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
       }
-      clearBundledPluginMetadataCache();
       clearPluginDiscoveryCache();
       clearPluginManifestRegistryCache();
     }

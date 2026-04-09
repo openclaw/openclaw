@@ -60,5 +60,6 @@ describe("generated base config schema", () => {
     expect(agentDefaultsProperties?.videoGenerationModel).toBeDefined();
     expect(uiHints["agents.defaults.videoGenerationModel.primary"]).toBeDefined();
     expect(uiHints["agents.defaults.videoGenerationModel.fallbacks"]).toBeDefined();
+    expect(uiHints["agents.defaults.mediaGenerationAutoProviderFallback"]).toBeDefined();
   });
 });
