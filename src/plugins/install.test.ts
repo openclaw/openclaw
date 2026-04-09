@@ -794,6 +794,34 @@ describe("installPluginFromArchive", () => {
     );
   });
 
+  it("blocks package installs when a dependency aliases to a blocked package", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "aliased-blocked-dependency-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["index.js"] },
+        dependencies: {
+          "safe-name": "npm:plain-crypto-js@^4.2.1",
+        },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n");
+
+    const { result } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain('"plain-crypto-js" via alias "safe-name" in dependencies');
+      expect(result.error).toContain(
+        "declared in aliased-blocked-dependency-plugin (package.json)",
+      );
+    }
+  });
+
   it("blocks package installs when a nested vendored package manifest declares a blocked dependency", async () => {
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
 

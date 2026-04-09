@@ -26,6 +26,25 @@ function readRootLockfile(): string {
 }
 
 describe("dependency denylist guardrails", () => {
+  it("finds blocked packages declared through npm alias specs", () => {
+    expect(
+      findBlockedManifestDependencies({
+        dependencies: {
+          "safe-name": "npm:plain-crypto-js@^4.2.1",
+        },
+        peerDependencies: {
+          "@alias/safe": "npm:@scope/ok@^1.0.0",
+        },
+      }),
+    ).toEqual([
+      {
+        dependencyName: "plain-crypto-js",
+        declaredAs: "safe-name",
+        field: "dependencies",
+      },
+    ]);
+  });
+
   it("pins the axios override to an exact version", () => {
     const manifest = readRootManifest();
     expect(manifest.pnpm?.overrides?.axios).toMatch(/^\d+\.\d+\.\d+$/);
