@@ -302,6 +302,8 @@ export function installSessionToolResultGuard(
       event: PluginHookBeforeMessageWriteEvent,
     ) => PluginHookBeforeMessageWriteResult | undefined;
     maxToolResultChars?: number;
+    suppressNextUserMessagePersistence?: boolean;
+    onUserMessagePersisted?: () => void | Promise<void>;
   },
 ): {
   flushPendingToolResults: () => void;
@@ -328,6 +330,7 @@ export function installSessionToolResultGuard(
   const missingToolResultText = opts?.missingToolResultText;
   const beforeWrite = opts?.beforeMessageWriteHook;
   const maxToolResultChars = resolveMaxToolResultChars(opts);
+  let suppressNextUserMessagePersistence = opts?.suppressNextUserMessagePersistence === true;
 
   /**
    * Run the before_message_write hook. Returns the (possibly modified) message,
@@ -450,6 +453,13 @@ export function installSessionToolResultGuard(
     if (!finalMessage) {
       return undefined;
     }
+    if (
+      (finalMessage as { role?: unknown }).role === "user" &&
+      suppressNextUserMessagePersistence
+    ) {
+      suppressNextUserMessagePersistence = false;
+      return undefined;
+    }
     const result = originalAppend(finalMessage as never);
 
     const sessionFile = (
@@ -466,6 +476,9 @@ export function installSessionToolResultGuard(
 
     if (toolCalls.length > 0) {
       pendingState.trackToolCalls(toolCalls);
+    }
+    if ((finalMessage as { role?: unknown }).role === "user") {
+      void opts?.onUserMessagePersisted?.();
     }
 
     return result;

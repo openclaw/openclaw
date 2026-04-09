@@ -357,6 +357,8 @@ export function runAgentAttempt(params: {
   allowTransientCooldownProbe?: boolean;
   modelFallbacksOverride?: string[];
   sessionHasHistory?: boolean;
+  suppressPromptPersistenceOnRetry?: boolean;
+  onUserMessagePersisted?: () => void;
 }) {
   const isRawModelRun = params.opts.modelRun === true || params.opts.promptMode === "none";
   const claudeCliFallbackPrelude =
@@ -611,6 +613,8 @@ export function runAgentAttempt(params: {
     promptMode: params.opts.promptMode,
     disableTools: params.opts.modelRun === true,
     onAgentEvent: params.onAgentEvent,
+    suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
+    onUserMessagePersisted: params.onUserMessagePersisted,
     bootstrapPromptWarningSignaturesSeen,
     bootstrapPromptWarningSignature,
   });
