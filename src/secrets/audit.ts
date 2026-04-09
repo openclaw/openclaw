@@ -196,9 +196,6 @@ function collectEnvPlaintext(params: { envPath: string; collector: AuditCollecto
     if (!value) {
       continue;
     }
-    if (/^\$\{[A-Za-z_][A-Za-z0-9_]*\}$|^\$[A-Za-z_][A-Za-z0-9_]*$/.test(value)) {
-      continue;
-    }
     addFinding(params.collector, {
       code: "PLAINTEXT_FOUND",
       severity: "warn",

@@ -224,7 +224,7 @@ describe("secrets audit", () => {
     expect(hasFinding(report, (entry) => entry.code === "PLAINTEXT_FOUND")).toBe(true);
   });
 
-  it("ignores env variable references in .env while still flagging real plaintext values", async () => {
+  it("flags all values including env variable references in .env as plaintext", async () => {
     await writeJsonFile(fixture.authStorePath, {
       version: 1,
       profiles: {},
@@ -232,8 +232,8 @@ describe("secrets audit", () => {
     await fs.writeFile(
       fixture.envPath,
       [
-        `${OPENAI_API_KEY_MARKER}=\${OPENAI_API_KEY}`,
-        `${OPENAI_API_KEY_MARKER}=$OPENAI_API_KEY`,
+        `${OPENAI_API_KEY_MARKER}=\${OPENAI_API_KEY}`, // pragma: allowlist secret
+        `${OPENAI_API_KEY_MARKER}=$OPENAI_API_KEY`, // pragma: allowlist secret
         `${OPENAI_API_KEY_MARKER}=sk-openai-plaintext`, // pragma: allowlist secret
       ].join("\n"),
       "utf8",
@@ -247,7 +247,7 @@ describe("secrets audit", () => {
         entry.jsonPath === `$env.${OPENAI_API_KEY_MARKER}`,
     );
 
-    expect(envPlaintextFindings).toHaveLength(1);
+    expect(envPlaintextFindings).toHaveLength(3);
   });
 
   it("does not mutate legacy auth.json during audit", async () => {
