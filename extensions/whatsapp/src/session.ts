@@ -88,13 +88,37 @@ async function safeSaveCreds(
   }
   try {
     await Promise.resolve(saveCreds());
-    try {
-      fsSync.chmodSync(resolveWebCredsPath(authDir), 0o600);
-    } catch {
-      // best-effort on platforms that support it
-    }
+    atomicCredsWriteBack(authDir, logger);
   } catch (err) {
     logger.warn({ error: String(err) }, "failed saving WhatsApp creds");
+  }
+}
+
+function atomicCredsWriteBack(
+  authDir: string,
+  logger: ReturnType<typeof getChildLogger>,
+): void {
+  const credsPath = resolveWebCredsPath(authDir);
+  const tmpPath = credsPath + ".tmp";
+  try {
+    const raw = readCredsJsonRaw(credsPath);
+    if (!raw) {
+      logger.warn(
+        { path: credsPath },
+        "atomic creds write-back skipped: creds.json empty or missing after saveCreds",
+      );
+      return;
+    }
+    JSON.parse(raw);
+    fsSync.writeFileSync(tmpPath, raw, { mode: 0o600 });
+    fsSync.renameSync(tmpPath, credsPath);
+  } catch (err) {
+    try {
+      fsSync.unlinkSync(tmpPath);
+    } catch {
+      // ignore cleanup failure
+    }
+    logger.warn({ error: String(err) }, "atomic creds write-back failed");
   }
 }
 
