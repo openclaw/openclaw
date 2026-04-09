@@ -58,9 +58,9 @@ export type ParsedMessageWithImages = {
    * It is intentionally separate from `images` because downstream model calls
    * do not receive these as inline image blocks.
    *
-   * ⚠️  Call sites (chat.ts, agent.ts, server-node-events.ts) MUST also pass
-   * `supportsImages: modelSupportsImages(model)` so that text-only model runs
-   * do not inject unresolvable media:// markers into prompt text.
+   * ⚠️  When `supportsImages: false` is passed, images are saved to the media
+   * store and `media://inbound/...` markers are injected into prompt text so
+   * that the `image` tool (backed by `imageModel`) can resolve and analyze them.
    */
   offloadedRefs: OffloadedRef[];
 };
@@ -271,12 +271,12 @@ function validateAttachmentBase64OrThrow(
  * because they are not passed inline to the model.
  *
  * ## Text-only model runs
- * Pass `supportsImages: false` for text-only model runs so that no media://
- * markers are injected into prompt text.
+ * Pass `supportsImages: false` for text-only model runs. Images are saved to
+ * the media store and `media://inbound/...` markers are injected into prompt
+ * text, allowing the `image` tool (using `imageModel`) to analyze them.
  *
  * ⚠️  Call sites in chat.ts, agent.ts, and server-node-events.ts MUST be
- * updated to pass `supportsImages: modelSupportsImages(model)`. Until they do,
- * text-only model runs receive unresolvable media:// markers in their prompt.
+ * updated to pass `supportsImages: modelSupportsImages(model)`.
  *
  * ## Cleanup on failure
  * On any parse failure after files have already been offloaded, best-effort
@@ -309,9 +309,6 @@ export async function parseMessageWithAttachments(
   // imageModel) can still access them. Do not return inline images since the
   // primary model cannot process them directly.
   if (opts?.supportsImages === false) {
-    if (attachments.length === 0) {
-      return { message, images: [], imageOrder: [], offloadedRefs: [] };
-    }
     const offloadedRefs: OffloadedRef[] = [];
     const imageOrder: PromptImageOrderEntry[] = [];
     let updatedMessage = message;
@@ -371,8 +368,11 @@ export async function parseMessageWithAttachments(
           log?.warn?.(
             `attachment ${label}: failed to save for text-only offload: ${formatErrorMessage(err)}`,
           );
-          // Best-effort cleanup
+          // Best-effort cleanup + reset state so we don't return refs to deleted files
           await Promise.allSettled(savedMediaIds.map((id) => deleteMediaBuffer(id, "inbound")));
+          offloadedRefs.length = 0;
+          imageOrder.length = 0;
+          updatedMessage = message;
           break;
         }
       }
