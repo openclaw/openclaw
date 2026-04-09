@@ -749,6 +749,9 @@ export function renderApp(state: AppViewState) {
                 state.chatMessage = "";
                 state.chatMessages = [];
                 state.chatToolMessages = [];
+                state.chatStream = null;
+                state.chatRunId = null;
+                state.chatQueue = [];
                 state.resetToolStream();
                 state.applySettings({
                   ...state.settings,

@@ -94,6 +94,8 @@ export function renderTab(state: AppViewState, tab: Tab, opts?: { collapsed?: bo
           if (!state.sessionKey) {
             const mainSessionKey = resolveSidebarChatSessionKey(state);
             resetChatStateForSessionSwitch(state, mainSessionKey);
+          }
+          if (state.tab !== "chat") {
             void state.loadAssistantIdentity();
           }
         }
