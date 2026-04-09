@@ -62,6 +62,9 @@ export type AgentConfig = {
   id: string;
   default?: boolean;
   name?: string;
+  emoji?: string;
+  role?: string;
+  reportsTo?: string;
   workspace?: string;
   agentDir?: string;
   model?: AgentModelConfig;
@@ -87,6 +90,14 @@ export type AgentConfig = {
   tools?: AgentToolsConfig;
   /** Optional runtime descriptor for this agent. */
   runtime?: AgentRuntimeConfig;
+  /** Optional per-agent TTS voice overrides. */
+  tts?: AgentTtsConfig;
+};
+
+/** Per-agent TTS voice configuration (Cartesia voice override). */
+export type AgentTtsConfig = {
+  /** Cartesia voice ID for this agent. */
+  cartesiaVoiceId?: string;
 };
 
 export type AgentsConfig = {

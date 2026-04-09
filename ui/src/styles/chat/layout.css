@@ -283,20 +283,38 @@
   display: none;
 }
 
-/* Override .field textarea min-height (180px) from components.css */
+/* Override .field textarea min-height (180px) from components.css.
+   Height is ~300% taller than the original 40px so long prompts are visible.
+   Border is thick + bright blue to match Wired Wisdom AI Electric Blue (#0A9EFC). */
 .chat-compose .chat-compose__field textarea {
   width: 100%;
-  height: 40px;
-  min-height: 40px;
-  max-height: 150px;
-  padding: 9px 12px;
-  border-radius: 8px;
+  height: 220px;
+  min-height: 220px;
+  max-height: 400px;
+  padding: 14px 16px;
+  border-radius: 10px;
   overflow-y: auto;
-  resize: none;
+  resize: vertical;
   white-space: pre-wrap;
   font-family: var(--font-body);
-  font-size: 14px;
-  line-height: 1.45;
+  font-size: 28px;
+  line-height: 1.4;
+  color: #0A9EFC;
+  border: 3px solid #0A9EFC;
+  box-shadow: 0 0 0 1px rgba(10, 158, 252, 0.25);
+}
+
+.chat-compose .chat-compose__field textarea::placeholder {
+  color: rgba(10, 158, 252, 0.55);
+}
+
+.chat-compose .chat-compose__field textarea:focus {
+  outline: none;
+  border-color: #0A9EFC;
+  border-width: 3px;
+  box-shadow:
+    0 0 0 3px rgba(10, 158, 252, 0.35),
+    0 0 18px rgba(10, 158, 252, 0.45);
 }
 
 .chat-compose__field textarea:disabled {
@@ -312,14 +330,60 @@
 }
 
 .chat-compose .chat-compose__actions .btn {
-  padding: 0 16px;
-  font-size: 13px;
-  height: 40px;
-  min-height: 40px;
-  max-height: 40px;
+  padding: 0 22px;
+  font-size: 18px;
+  height: 110px;
+  min-height: 110px;
+  max-height: 110px;
   line-height: 1;
   white-space: nowrap;
   box-sizing: border-box;
+  border: 3px solid #0A9EFC !important;
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px rgba(10, 158, 252, 0.25);
+}
+
+.chat-compose .chat-compose__actions .btn:hover {
+  box-shadow:
+    0 0 0 3px rgba(10, 158, 252, 0.35),
+    0 0 18px rgba(10, 158, 252, 0.45);
+}
+
+/* Voice toggle button — Bitcoin orange interior, Electric Blue border */
+.voice-toggle {
+  padding: 0 18px !important;
+  min-width: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #F7931A !important;
+  border: 4px solid #0A9EFC !important;
+  opacity: 0.65;
+  transition: opacity 0.2s, background 0.2s, border-color 0.2s;
+}
+
+.voice-toggle:hover {
+  opacity: 0.85;
+}
+
+.voice-toggle--active {
+  opacity: 1;
+  background: #F7931A !important;
+  border-color: #0A9EFC !important;
+}
+
+.voice-toggle__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  font-size: 52px;
+  line-height: 1;
+}
+
+.voice-toggle__icon svg {
+  display: none;
 }
 
 /* Chat controls - moved to content-header area, left aligned */
@@ -478,4 +542,61 @@
   .chat-controls__session {
     min-width: 120px;
   }
+}
+
+/* =============================================
+   ELECTRIC PULSE — click animation for all action buttons
+   ============================================= */
+
+@keyframes electricPulse {
+  0%   { box-shadow: 0 0 0 0 rgba(10, 158, 252, 0.6), 0 0 0 0 rgba(255, 255, 255, 0.3), inset 0 0 0 0 rgba(10, 158, 252, 0); }
+  15%  { box-shadow: 0 0 12px 4px rgba(10, 158, 252, 0.8), 0 0 30px 8px rgba(10, 158, 252, 0.4), inset 0 0 20px 2px rgba(10, 158, 252, 0.3); }
+  30%  { box-shadow: 0 0 6px 2px rgba(10, 158, 252, 0.5), 0 0 15px 4px rgba(10, 158, 252, 0.2), inset 0 0 8px 1px rgba(10, 158, 252, 0.15); }
+  45%  { box-shadow: 0 0 18px 6px rgba(10, 158, 252, 0.9), 0 0 40px 12px rgba(10, 158, 252, 0.5), inset 0 0 25px 4px rgba(10, 158, 252, 0.35); filter: brightness(1.3); }
+  60%  { box-shadow: 0 0 8px 3px rgba(10, 158, 252, 0.4), 0 0 20px 6px rgba(10, 158, 252, 0.2), inset 0 0 10px 2px rgba(10, 158, 252, 0.1); filter: brightness(1.1); }
+  100% { box-shadow: 0 0 0 1px rgba(10, 158, 252, 0.25); filter: brightness(1); }
+}
+
+@keyframes borderCharge {
+  0%   { border-color: #0A9EFC; }
+  20%  { border-color: #5BC8FF; }
+  40%  { border-color: #FFFFFF; }
+  60%  { border-color: #5BC8FF; }
+  100% { border-color: #0A9EFC; }
+}
+
+.chat-compose .chat-compose__actions .btn:active {
+  animation: electricPulse 0.9s ease-out, borderCharge 0.9s ease-out !important;
+}
+
+/* =============================================
+   WIRED WISDOM THEME OVERRIDES
+   Purple accent for Quinn, gold for Send, electric blue for user
+   ============================================= */
+
+/* Send button (primary) — light silver interior, Electric Blue border band */
+.chat-compose .chat-compose__actions .btn.primary {
+  background: #C0C0C0 !important;
+  color: #02020E !important;
+  border: 4px solid #0A9EFC !important;
+  font-weight: 700;
+}
+
+.chat-compose .chat-compose__actions .btn.primary:hover {
+  background: #D0D0D0 !important;
+  box-shadow:
+    0 0 0 3px rgba(10, 158, 252, 0.35),
+    0 0 18px rgba(10, 158, 252, 0.55) !important;
+}
+
+.chat-compose .chat-compose__actions .btn.primary .btn-kbd {
+  color: #02020E !important;
+  background: rgba(2, 2, 14, 0.08);
+  border-color: rgba(2, 2, 14, 0.25);
+}
+
+/* New Session / Stop button (middle, unmarked .btn) — Electric Blue text */
+.chat-compose .chat-compose__actions .btn:not(.primary):not(.voice-toggle) {
+  color: #0A9EFC !important;
+  font-weight: 600;
 }

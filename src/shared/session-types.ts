@@ -9,6 +9,9 @@ export type GatewayAgentIdentity = {
 export type GatewayAgentRow = {
   id: string;
   name?: string;
+  emoji?: string;
+  role?: string;
+  reportsTo?: string;
   identity?: GatewayAgentIdentity;
 };
 

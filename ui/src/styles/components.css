@@ -310,6 +310,88 @@
 }
 
 /* ===========================================
+   Model Tier Toggle
+   =========================================== */
+
+.model-tier-toggle {
+  --tier-item-w: 72px;
+  --tier-item-h: 28px;
+  --tier-gap: 2px;
+  --tier-pad: 4px;
+  position: relative;
+}
+
+.model-tier-toggle__track {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, var(--tier-item-w));
+  gap: var(--tier-gap);
+  padding: var(--tier-pad);
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border);
+  background: var(--secondary);
+}
+
+.model-tier-toggle__indicator {
+  position: absolute;
+  top: 50%;
+  left: var(--tier-pad);
+  width: var(--tier-item-w);
+  height: var(--tier-item-h);
+  border-radius: calc(var(--radius-full) - 2px);
+  transform: translateY(-50%) translateX(calc(var(--tier-index) * (var(--tier-item-w) + var(--tier-gap))));
+  transition: transform var(--duration-normal) var(--ease-out), background var(--duration-normal) ease;
+  z-index: 0;
+  opacity: 0.9;
+}
+
+.model-tier-toggle__button {
+  height: var(--tier-item-h);
+  width: var(--tier-item-w);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 0;
+  padding: 0 4px;
+  background: transparent;
+  cursor: pointer;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 500;
+  position: relative;
+  z-index: 1;
+  transition: color var(--duration-fast) ease;
+  white-space: nowrap;
+}
+
+.model-tier-toggle__button:hover {
+  color: var(--text);
+}
+
+.model-tier-toggle__button.active {
+  color: #fff;
+  font-weight: 600;
+}
+
+.model-tier-toggle__button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.model-tier-toggle__cost {
+  font-weight: 700;
+  font-size: 10px;
+  letter-spacing: -0.5px;
+}
+
+.model-tier-toggle__label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+/* ===========================================
    Status Dot - With glow for emphasis
    =========================================== */
 
@@ -2267,6 +2349,16 @@
   display: grid;
   place-items: center;
   font-weight: 600;
+  flex-shrink: 0;
+}
+
+.agent-avatar-img {
+  object-fit: cover;
+  background: none;
+}
+
+.agent-avatar-initial {
+  display: none;
 }
 
 .agent-avatar--lg {
@@ -2608,5 +2700,211 @@
 
   .agent-tools-list {
     grid-template-columns: 1fr;
+  }
+}
+
+/* ── Org Chart ─────────────────────────────────────────────────── */
+
+.org-chart-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.org-card-badge {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  background: var(--accent);
+  color: var(--on-accent, #fff);
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* ── CEO Card ── */
+
+.dept-ceo-card {
+  position: relative;
+}
+
+.dept-ceo-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.dept-ceo-photo {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 2px solid var(--accent);
+}
+
+.dept-ceo-fallback {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: var(--muted-bg, #2a2a2a);
+  align-items: center;
+  justify-content: center;
+  font-size: 28px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+/* ── Department Grid (3 columns) ── */
+
+.dept-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+.dept-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  transition: box-shadow 0.15s, border-color 0.15s;
+}
+
+.dept-card:hover {
+  border-color: var(--accent);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+}
+
+/* ── Department Head ── */
+
+.dept-card-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 12px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.dept-head-photo {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 2px solid var(--accent);
+}
+
+.dept-head-fallback {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--muted-bg, #2a2a2a);
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.dept-head-info {
+  min-width: 0;
+}
+
+.dept-head-name {
+  font-weight: 700;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dept-head-role {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.3;
+  margin-top: 2px;
+}
+
+/* ── Agent Grid inside department (3 columns) ── */
+
+.dept-agents-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.dept-agent-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 8px;
+  transition: background 0.12s;
+}
+
+.dept-agent-card:hover {
+  background: var(--muted-bg, rgba(255, 255, 255, 0.04));
+}
+
+.dept-agent-photo {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.dept-agent-fallback {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--muted-bg, #2a2a2a);
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.dept-agent-info {
+  min-width: 0;
+}
+
+.dept-agent-name {
+  font-weight: 600;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dept-agent-role {
+  font-size: 10px;
+  color: var(--muted);
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Responsive ── */
+
+@media (max-width: 1200px) {
+  .dept-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .dept-grid {
+    grid-template-columns: 1fr;
+  }
+  .dept-agents-grid {
+    grid-template-columns: repeat(2, 1fr);
   }
 }

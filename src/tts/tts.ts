@@ -27,6 +27,7 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { stripMarkdown } from "../line/markdown-to-line.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
+import { resolveAgentVoiceOverrides } from "./agent-voice.js";
 import {
   DEFAULT_OPENAI_BASE_URL,
   cartesiaTTS,
@@ -46,7 +47,7 @@ import {
 export { OPENAI_TTS_MODELS, OPENAI_TTS_VOICES } from "./tts-core.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-const DEFAULT_TTS_MAX_LENGTH = 1500;
+const DEFAULT_TTS_MAX_LENGTH = 4000;
 const DEFAULT_TTS_SUMMARIZE = true;
 const DEFAULT_MAX_TEXT_LENGTH = 4096;
 
@@ -589,11 +590,13 @@ export async function textToSpeech(params: {
   prefsPath?: string;
   channel?: string;
   overrides?: TtsDirectiveOverrides;
+  agentId?: string;
 }): Promise<TtsResult> {
   const config = resolveTtsConfig(params.cfg);
   const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
   const channelId = resolveChannelId(params.channel);
   const output = resolveOutputFormat(channelId);
+  const agentsList = params.cfg.agents?.list;
 
   if (params.text.length > config.maxTextLength) {
     return {
@@ -625,6 +628,7 @@ export async function textToSpeech(params: {
         const fallbackEdgeOutputFormat =
           edgeOutputFormat !== DEFAULT_EDGE_OUTPUT_FORMAT ? DEFAULT_EDGE_OUTPUT_FORMAT : undefined;
 
+        const agentEdgeOverrides = resolveAgentVoiceOverrides(params.agentId, "edge", agentsList);
         const attemptEdgeTts = async (outputFormat: string) => {
           const extension = inferEdgeExtension(outputFormat);
           const audioPath = path.join(tempDir, `voice-${Date.now()}${extension}`);
@@ -633,6 +637,7 @@ export async function textToSpeech(params: {
             outputPath: audioPath,
             config: {
               ...config.edge,
+              ...(agentEdgeOverrides.edgeVoice ? { voice: agentEdgeOverrides.edgeVoice } : {}),
               outputFormat,
             },
             timeoutMs: config.timeoutMs,
@@ -715,7 +720,9 @@ export async function textToSpeech(params: {
         });
         providerOutputFormat = output.elevenlabs;
       } else if (provider === "cartesia") {
-        if (!config.cartesia.voiceId) {
+        const agentCartesiaOverrides = resolveAgentVoiceOverrides(params.agentId, "cartesia", agentsList);
+        const cartesiaVoiceId = agentCartesiaOverrides.cartesiaVoiceId ?? config.cartesia.voiceId;
+        if (!cartesiaVoiceId) {
           errors.push("cartesia: no voiceId configured");
           continue;
         }
@@ -723,7 +730,7 @@ export async function textToSpeech(params: {
           text: params.text,
           apiKey,
           modelId: config.cartesia.modelId,
-          voiceId: config.cartesia.voiceId,
+          voiceId: cartesiaVoiceId,
           outputFormat: { container: "mp3", encoding: "mp3", sample_rate: 44100 },
           language: config.cartesia.language,
           timeoutMs: config.timeoutMs,

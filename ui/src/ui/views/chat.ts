@@ -81,6 +81,9 @@ export type ChatProps = {
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
+  // Voice mode (Ultron TTS)
+  voiceEnabled?: boolean;
+  onToggleVoice?: () => void;
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
@@ -459,6 +462,13 @@ export function renderChat(props: ChatProps) {
             ></textarea>
           </label>
           <div class="chat-compose__actions">
+            <button
+              class="btn voice-toggle ${props.voiceEnabled ? "voice-toggle--active" : ""}"
+              title="${props.voiceEnabled ? "Voice ON — click to mute" : "Voice OFF — click to enable Ultron voice"}"
+              @click=${props.onToggleVoice}
+            >
+              <span class="voice-toggle__icon">${props.voiceEnabled ? "🔊" : "🔇"}</span>
+            </button>
             <button
               class="btn"
               ?disabled=${!props.connected || (!canAbort && props.sending)}

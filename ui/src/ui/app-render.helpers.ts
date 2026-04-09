@@ -8,6 +8,13 @@ import { OpenClawApp } from "./app.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
+import {
+  MODEL_TIER_LABELS,
+  MODEL_TIER_COST,
+  MODEL_TIER_COLORS,
+  MODEL_TIER_MODELS,
+  type ModelTierMode,
+} from "./model-tier-types.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ThemeMode } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";
@@ -570,5 +577,43 @@ function renderMonitorIcon() {
       <line x1="8" x2="16" y1="21" y2="21"></line>
       <line x1="12" x2="12" y1="17" y2="21"></line>
     </svg>
+  `;
+}
+
+/* ── Model Tier Toggle ── */
+
+const TIER_ORDER: ModelTierMode[] = ["economy", "baller", "einstein"];
+
+export function renderModelTierToggle(state: AppViewState) {
+  const index = Math.max(0, TIER_ORDER.indexOf(state.modelTierMode));
+  const setMode = (mode: ModelTierMode) => async () => {
+    if (state.modelTierLoading) return;
+    if (mode === state.modelTierMode) return;
+    // Einstein confirmation is handled by the caller (app controller)
+    await state.handleModelTierSet(mode);
+  };
+
+  return html`
+    <div class="model-tier-toggle" style="--tier-index: ${index};">
+      <div class="model-tier-toggle__track" role="group" aria-label="Model Tier">
+        <span class="model-tier-toggle__indicator" style="background: ${MODEL_TIER_COLORS[state.modelTierMode]};"></span>
+        ${TIER_ORDER.map(
+          (mode) => html`
+            <button
+              class="model-tier-toggle__button ${state.modelTierMode === mode ? "active" : ""}"
+              @click=${setMode(mode)}
+              ?disabled=${state.modelTierLoading}
+              aria-pressed=${state.modelTierMode === mode}
+              aria-label="${MODEL_TIER_LABELS[mode]} Mode — ${MODEL_TIER_MODELS[mode]}"
+              title="${MODEL_TIER_LABELS[mode]} (${MODEL_TIER_MODELS[mode]}) ${MODEL_TIER_COST[mode]}"
+              style="--tier-color: ${MODEL_TIER_COLORS[mode]};"
+            >
+              <span class="model-tier-toggle__cost" style="color: ${state.modelTierMode === mode ? MODEL_TIER_COLORS[mode] : "inherit"};">${MODEL_TIER_COST[mode]}</span>
+              <span class="model-tier-toggle__label">${MODEL_TIER_LABELS[mode]}</span>
+            </button>
+          `,
+        )}
+      </div>
+    </div>
   `;
 }

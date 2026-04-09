@@ -1,4 +1,10 @@
 import { html, nothing } from "lit";
+import {
+  MODEL_TIER_LABELS,
+  MODEL_TIER_COLORS,
+  MODEL_TIER_COST,
+  type ModelTierMode,
+} from "../model-tier-types.ts";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -88,6 +94,9 @@ export type AgentsProps = {
   onAgentSkillToggle: (agentId: string, skillName: string, enabled: boolean) => void;
   onAgentSkillsClear: (agentId: string) => void;
   onAgentSkillsDisableAll: (agentId: string) => void;
+  modelTierMode: ModelTierMode;
+  modelTierOverrides: Record<string, ModelTierMode>;
+  onModelTierAgentSet: (agentId: string, mode: ModelTierMode | "inherit") => void;
 };
 
 export type AgentContext = {
@@ -133,15 +142,29 @@ export function renderAgents(props: AgentsProps) {
               : agents.map((agent) => {
                   const badge = agentBadgeText(agent.id, defaultId);
                   const emoji = resolveAgentEmoji(agent, props.agentIdentityById[agent.id] ?? null);
+                  const displayName = normalizeAgentLabel(agent);
+                  const photoUrl = `/agents/${displayName.toLowerCase().trim()}.png`;
                   return html`
                     <button
                       type="button"
                       class="agent-row ${selectedId === agent.id ? "active" : ""}"
                       @click=${() => props.onSelectAgent(agent.id)}
                     >
-                      <div class="agent-avatar">${emoji || normalizeAgentLabel(agent).slice(0, 1)}</div>
+                      <img
+                        class="agent-avatar agent-avatar-img"
+                        src=${photoUrl}
+                        alt=${displayName}
+                        loading="lazy"
+                        @error=${(e: Event) => {
+                          const img = e.target as HTMLImageElement;
+                          img.style.display = "none";
+                          const fallback = img.nextElementSibling as HTMLElement;
+                          if (fallback) fallback.style.display = "flex";
+                        }}
+                      />
+                      <div class="agent-avatar agent-avatar-initial" style="display:none;">${emoji || displayName.slice(0, 1)}</div>
                       <div class="agent-info">
-                        <div class="agent-title">${normalizeAgentLabel(agent)}</div>
+                        <div class="agent-title">${displayName}</div>
                         <div class="agent-sub mono">${agent.id}</div>
                       </div>
                       ${badge ? html`<span class="agent-pill">${badge}</span>` : nothing}
@@ -184,6 +207,9 @@ export function renderAgents(props: AgentsProps) {
                         onConfigSave: props.onConfigSave,
                         onModelChange: props.onModelChange,
                         onModelFallbacksChange: props.onModelFallbacksChange,
+                        modelTierMode: props.modelTierMode,
+                        modelTierOverrides: props.modelTierOverrides,
+                        onModelTierAgentSet: props.onModelTierAgentSet,
                       })
                     : nothing
                 }
@@ -299,12 +325,24 @@ function renderAgentHeader(
 ) {
   const badge = agentBadgeText(agent.id, defaultId);
   const displayName = normalizeAgentLabel(agent);
-  const subtitle = agent.identity?.theme?.trim() || "Agent workspace and routing.";
-  const emoji = resolveAgentEmoji(agent, agentIdentity);
+  const subtitle = agent.role || agent.identity?.theme?.trim() || "Agent workspace and routing.";
+  const photoUrl = `/agents/${displayName.toLowerCase().trim()}.png`;
   return html`
     <section class="card agent-header">
       <div class="agent-header-main">
-        <div class="agent-avatar agent-avatar--lg">${emoji || displayName.slice(0, 1)}</div>
+        <img
+          class="agent-avatar agent-avatar--lg agent-avatar-img"
+          src=${photoUrl}
+          alt=${displayName}
+          loading="lazy"
+          @error=${(e: Event) => {
+            const img = e.target as HTMLImageElement;
+            img.style.display = "none";
+            const fallback = img.nextElementSibling as HTMLElement;
+            if (fallback) fallback.style.display = "flex";
+          }}
+        />
+        <div class="agent-avatar agent-avatar--lg agent-avatar-initial" style="display:none;">${resolveAgentEmoji(agent, agentIdentity) || displayName.slice(0, 1)}</div>
         <div>
           <div class="card-title">${displayName}</div>
           <div class="card-sub">${subtitle}</div>
@@ -359,6 +397,9 @@ function renderAgentOverview(params: {
   onConfigSave: () => void;
   onModelChange: (agentId: string, modelId: string | null) => void;
   onModelFallbacksChange: (agentId: string, fallbacks: string[]) => void;
+  modelTierMode: ModelTierMode;
+  modelTierOverrides: Record<string, ModelTierMode>;
+  onModelTierAgentSet: (agentId: string, mode: ModelTierMode | "inherit") => void;
 }) {
   const {
     agent,
@@ -374,6 +415,9 @@ function renderAgentOverview(params: {
     onConfigSave,
     onModelChange,
     onModelFallbacksChange,
+    modelTierMode,
+    modelTierOverrides,
+    onModelTierAgentSet,
   } = params;
   const config = resolveAgentConfig(configForm, agent.id);
   const workspaceFromFiles =
@@ -411,6 +455,8 @@ function renderAgentOverview(params: {
       ? "Unavailable"
       : "";
   const isDefault = Boolean(params.defaultId && agent.id === params.defaultId);
+  const agentRole = agent.role || "-";
+  const agentReportsTo = agent.reportsTo || (isDefault ? "-" : "-");
 
   return html`
     <section class="card">
@@ -431,6 +477,14 @@ function renderAgentOverview(params: {
           ${identityStatus ? html`<div class="agent-kv-sub muted">${identityStatus}</div>` : nothing}
         </div>
         <div class="agent-kv">
+          <div class="label">Role</div>
+          <div>${agentRole}</div>
+        </div>
+        <div class="agent-kv">
+          <div class="label">Reports To</div>
+          <div>${agentReportsTo}</div>
+        </div>
+        <div class="agent-kv">
           <div class="label">Default</div>
           <div>${isDefault ? "yes" : "no"}</div>
         </div>
@@ -444,8 +498,39 @@ function renderAgentOverview(params: {
         </div>
       </div>
 
+      <div class="agent-tier-select" style="margin-top: 20px;">
+        <div class="label">Model Tier</div>
+        <div class="row" style="gap: 12px; align-items: center; flex-wrap: wrap;">
+          <label class="field" style="min-width: 200px;">
+            <span>Tier override for ${agent.name || agent.id}</span>
+            <select
+              @change=${(e: Event) => {
+                const val = (e.target as HTMLSelectElement).value;
+                onModelTierAgentSet(agent.id, val as ModelTierMode | "inherit");
+              }}
+            >
+              <option value="inherit" ?selected=${!modelTierOverrides[agent.id]}>
+                Inherit Global (${MODEL_TIER_LABELS[modelTierMode]})
+              </option>
+              ${(["economy", "baller", "einstein"] as const).map(
+                (mode) => html`
+                  <option value=${mode} ?selected=${modelTierOverrides[agent.id] === mode}>
+                    ${MODEL_TIER_LABELS[mode]} ${MODEL_TIER_COST[mode]}
+                  </option>
+                `,
+              )}
+            </select>
+          </label>
+          ${modelTierOverrides[agent.id]
+            ? html`<span class="pill" style="background: ${MODEL_TIER_COLORS[modelTierOverrides[agent.id]]}; color: #fff; font-size: 11px; padding: 2px 8px; border-radius: 12px;">
+                ${MODEL_TIER_LABELS[modelTierOverrides[agent.id]]} override
+              </span>`
+            : nothing}
+        </div>
+      </div>
+
       <div class="agent-model-select" style="margin-top: 20px;">
-        <div class="label">Model Selection</div>
+        <div class="label">Model Selection (Advanced)</div>
         <div class="row" style="gap: 12px; flex-wrap: wrap;">
           <label class="field" style="min-width: 260px; flex: 1;">
             <span>Primary model${isDefault ? " (default)" : ""}</span>

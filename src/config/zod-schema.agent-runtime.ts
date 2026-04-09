@@ -717,6 +717,9 @@ export const AgentEntrySchema = z
     id: z.string(),
     default: z.boolean().optional(),
     name: z.string().optional(),
+    emoji: z.string().optional(),
+    role: z.string().optional(),
+    reportsTo: z.string().optional(),
     workspace: z.string().optional(),
     agentDir: z.string().optional(),
     model: AgentModelSchema.optional(),
@@ -747,6 +750,12 @@ export const AgentEntrySchema = z
     sandbox: AgentSandboxSchema,
     tools: AgentToolsSchema,
     runtime: AgentRuntimeSchema,
+    tts: z
+      .object({
+        cartesiaVoiceId: z.string().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

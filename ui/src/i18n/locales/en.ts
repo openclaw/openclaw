@@ -24,6 +24,7 @@ export const en: TranslationMap = {
   },
   tabs: {
     agents: "Agents",
+    "org-chart": "Org Chart",
     overview: "Overview",
     channels: "Channels",
     instances: "Instances",
@@ -39,6 +40,7 @@ export const en: TranslationMap = {
   },
   subtitles: {
     agents: "Manage agent workspaces, tools, and identities.",
+    "org-chart": "Visual hierarchy of the agent organization.",
     overview: "Gateway status, entry points, and a fast health read.",
     channels: "Manage channels and settings.",
     instances: "Presence beacons from connected clients and nodes.",

@@ -30,6 +30,7 @@ import type {
   ToolsCatalogResult,
   StatusSummary,
 } from "./types.ts";
+import type { ModelTierMode } from "./model-tier-types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 import type { SessionLogEntry } from "./views/usage.ts";
@@ -67,6 +68,7 @@ export type AppViewState = {
   chatThinkingLevel: string | null;
   chatQueue: ChatQueueItem[];
   chatManualRefreshInFlight: boolean;
+  voiceEnabled: boolean;
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;
   chatNewMessagesBelow: boolean;
@@ -121,6 +123,11 @@ export type AppViewState = {
   nostrProfileFormState: NostrProfileFormState | null;
   nostrProfileAccountId: string | null;
   configFormDirty: boolean;
+  modelTierMode: ModelTierMode;
+  modelTierOverrides: Record<string, ModelTierMode>;
+  modelTierLoading: boolean;
+  handleModelTierSet: (mode: ModelTierMode) => Promise<void>;
+  handleModelTierAgentSet: (agentId: string, mode: ModelTierMode | "inherit") => Promise<void>;
   presenceLoading: boolean;
   presenceEntries: PresenceEntry[];
   presenceError: string | null;

@@ -3,7 +3,7 @@ import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
 import { refreshChatAvatar } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
-import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers.ts";
+import { renderChatControls, renderModelTierToggle, renderTab, renderThemeToggle } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
@@ -86,6 +86,7 @@ import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.t
 import { renderInstances } from "./views/instances.ts";
 import { renderLogs } from "./views/logs.ts";
 import { renderNodes } from "./views/nodes.ts";
+import { renderOrgChart } from "./views/org-chart.ts";
 import { renderOverview } from "./views/overview.ts";
 import { renderSessions } from "./views/sessions.ts";
 import { renderSkills } from "./views/skills.ts";
@@ -270,6 +271,7 @@ export function renderApp(state: AppViewState) {
             <span>${t("common.health")}</span>
             <span class="mono">${state.connected ? t("common.ok") : t("common.offline")}</span>
           </div>
+          ${renderModelTierToggle(state)}
           ${renderThemeToggle(state)}
         </div>
       </header>
@@ -847,6 +849,23 @@ export function renderApp(state: AppViewState) {
                   }
                   updateConfigFormValue(state, basePath, { primary, fallbacks: normalized });
                 },
+                modelTierMode: state.modelTierMode,
+                modelTierOverrides: state.modelTierOverrides,
+                onModelTierAgentSet: (agentId, mode) => {
+                  void state.handleModelTierAgentSet(agentId, mode);
+                },
+              })
+            : nothing
+        }
+
+        ${
+          state.tab === "org-chart"
+            ? renderOrgChart({
+                loading: state.agentsLoading,
+                error: state.agentsError,
+                agentsList: state.agentsList,
+                basePath: state.basePath ?? "",
+                onRefresh: () => loadAgents(state),
               })
             : nothing
         }
@@ -1028,6 +1047,22 @@ export function renderApp(state: AppViewState) {
                 onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
                 assistantName: state.assistantName,
                 assistantAvatar: state.assistantAvatar,
+                voiceEnabled: state.voiceEnabled,
+                onToggleVoice: () => {
+                  state.voiceEnabled = !state.voiceEnabled;
+                  if (state.voiceEnabled) {
+                    import("./voice-tts.ts").then((m) => m.unlockAudio());
+                  }
+                  // Notify parent frame (Mission Control) of voice state change
+                  try {
+                    window.parent?.postMessage(
+                      { type: "openclaw:voice", enabled: state.voiceEnabled },
+                      "*",
+                    );
+                  } catch {
+                    // ignore if no parent
+                  }
+                },
               })
             : nothing
         }

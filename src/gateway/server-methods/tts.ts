@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { loadConfig } from "../../config/config.js";
 import {
   OPENAI_TTS_MODELS,
@@ -79,13 +80,49 @@ export const ttsHandlers: GatewayRequestHandlers = {
     try {
       const cfg = loadConfig();
       const channel = typeof params.channel === "string" ? params.channel.trim() : undefined;
-      const result = await textToSpeech({ text, cfg, channel });
+      const agentId = typeof params.agentId === "string" ? params.agentId.trim() : undefined;
+      const result = await textToSpeech({ text, cfg, channel, agentId });
       if (result.success && result.audioPath) {
         respond(true, {
           audioPath: result.audioPath,
           provider: result.provider,
           outputFormat: result.outputFormat,
           voiceCompatible: result.voiceCompatible,
+        });
+        return;
+      }
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, result.error ?? "TTS conversion failed"),
+      );
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+    }
+  },
+  "tts.speak": async ({ params, respond }) => {
+    const text = typeof params.text === "string" ? params.text.trim() : "";
+    if (!text) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "tts.speak requires text"),
+      );
+      return;
+    }
+    try {
+      const cfg = loadConfig();
+      const agentId = typeof params.agentId === "string" ? params.agentId.trim() : undefined;
+      const result = await textToSpeech({ text, cfg, agentId });
+      if (result.success && result.audioPath) {
+        const audioBuffer = readFileSync(result.audioPath);
+        const base64 = audioBuffer.toString("base64");
+        const ext = result.outputFormat ?? "mp3";
+        const mime = ext.includes("opus") ? "audio/ogg" : "audio/mpeg";
+        respond(true, {
+          audio: base64,
+          mime,
+          provider: result.provider,
         });
         return;
       }

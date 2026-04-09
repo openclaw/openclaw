@@ -57,6 +57,8 @@ import type { CronFieldErrors } from "./controllers/cron.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import { setModelTierGlobal, setModelTierAgent } from "./controllers/model-tier.ts";
+import type { ModelTierMode } from "./model-tier-types.ts";
 import type { SkillMessage } from "./controllers/skills.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
@@ -155,6 +157,7 @@ export class OpenClawApp extends LitElement {
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatAttachments: ChatAttachment[] = [];
   @state() chatManualRefreshInFlight = false;
+  @state() voiceEnabled = false;
   // Sidebar state for tool output viewing
   @state() sidebarOpen = false;
   @state() sidebarContent: string | null = null;
@@ -197,6 +200,9 @@ export class OpenClawApp extends LitElement {
   @state() configForm: Record<string, unknown> | null = null;
   @state() configFormOriginal: Record<string, unknown> | null = null;
   @state() configFormDirty = false;
+  @state() modelTierMode: ModelTierMode = "economy";
+  @state() modelTierOverrides: Record<string, ModelTierMode> = {};
+  @state() modelTierLoading = false;
   @state() configFormMode: "form" | "raw" = "form";
   @state() configSearchQuery = "";
   @state() configActiveSection: string | null = null;
@@ -621,6 +627,32 @@ export class OpenClawApp extends LitElement {
     const newRatio = Math.max(0.4, Math.min(0.7, ratio));
     this.splitRatio = newRatio;
     this.applySettings({ ...this.settings, splitRatio: newRatio });
+  }
+
+  async handleModelTierSet(mode: ModelTierMode) {
+    if (mode === "einstein") {
+      const confirmed = window.confirm(
+        "Einstein Mode uses Claude Opus 4.6\n\n" +
+          "This is significantly more expensive per token.\n" +
+          "Recommended for complex strategy and critical tasks only.\n\n" +
+          "Enable Einstein Mode?",
+      );
+      if (!confirmed) return;
+    }
+    await setModelTierGlobal(this, mode);
+  }
+
+  async handleModelTierAgentSet(agentId: string, mode: ModelTierMode | "inherit") {
+    if (mode === "einstein") {
+      const confirmed = window.confirm(
+        "Einstein Mode uses Claude Opus 4.6\n\n" +
+          "This is significantly more expensive per token.\n" +
+          "Recommended for complex strategy and critical tasks only.\n\n" +
+          `Enable Einstein Mode for agent "${agentId}"?`,
+      );
+      if (!confirmed) return;
+    }
+    await setModelTierAgent(this, agentId, mode);
   }
 
   render() {

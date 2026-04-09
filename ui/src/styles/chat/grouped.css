@@ -139,6 +139,18 @@ img.chat-avatar {
   word-wrap: break-word;
 }
 
+/* Quinn (non-user) bubble — thick bright purple border + glow, matches the Electric Blue compose border pattern */
+.chat-group:not(.user) .chat-bubble {
+  border: 3px solid #B026FF;
+  box-shadow: 0 0 0 1px rgba(176, 38, 255, 0.25);
+}
+
+.chat-group:not(.user) .chat-bubble:hover {
+  box-shadow:
+    0 0 0 3px rgba(176, 38, 255, 0.35),
+    0 0 18px rgba(176, 38, 255, 0.45);
+}
+
 .chat-bubble.has-copy {
   padding-right: 36px;
 }

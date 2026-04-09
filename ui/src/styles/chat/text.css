@@ -19,10 +19,19 @@
 }
 
 .chat-text {
-  font-size: 14px;
+  font-size: 17px;
   line-height: 1.5;
   word-wrap: break-word;
   overflow-wrap: break-word;
+}
+
+/* Quinn (assistant/non-user) text in bright gold */
+.chat-group:not(.user) .chat-text {
+  color: #FFD700;
+}
+
+.chat-group:not(.user) .chat-text :where(a) {
+  color: #FFE44D;
 }
 
 .chat-text :where(p, ul, ol, pre, blockquote, table) {

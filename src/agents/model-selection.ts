@@ -372,6 +372,7 @@ export function resolveDefaultModelForAgent(params: {
           },
         }
       : params.cfg;
+
   return resolveConfiguredModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,

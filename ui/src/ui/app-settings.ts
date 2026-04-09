@@ -138,6 +138,15 @@ export function applySettingsFromUrl(host: SettingsHost) {
     }
   }
 
+  // Voice enable via hash param (e.g. #voice=on) — used by Mission Control
+  const voiceRaw = params.get("voice") ?? hashParams.get("voice");
+  if (voiceRaw != null) {
+    host.voiceEnabled = voiceRaw.trim().toLowerCase() === "on";
+    if (host.voiceEnabled) {
+      import("./voice-tts.ts").then((m) => m.unlockAudio());
+    }
+  }
+
   if (gatewayUrlRaw != null) {
     if (gatewayUrlChanged) {
       host.pendingGatewayUrl = nextGatewayUrl;
@@ -198,6 +207,9 @@ export async function refreshActiveTab(host: SettingsHost) {
   }
   if (host.tab === "skills") {
     await loadSkills(host as unknown as OpenClawApp);
+  }
+  if (host.tab === "org-chart") {
+    await loadAgents(host as unknown as OpenClawApp);
   }
   if (host.tab === "agents") {
     await loadAgents(host as unknown as OpenClawApp);

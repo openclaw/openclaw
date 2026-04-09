@@ -17,6 +17,7 @@ import { doctorHandlers } from "./server-methods/doctor.js";
 import { execApprovalsHandlers } from "./server-methods/exec-approvals.js";
 import { healthHandlers } from "./server-methods/health.js";
 import { logsHandlers } from "./server-methods/logs.js";
+import { modelModeHandlers } from "./server-methods/model-mode.js";
 import { modelsHandlers } from "./server-methods/models.js";
 import { nodeHandlers } from "./server-methods/nodes.js";
 import { pushHandlers } from "./server-methods/push.js";
@@ -27,6 +28,7 @@ import { systemHandlers } from "./server-methods/system.js";
 import { talkHandlers } from "./server-methods/talk.js";
 import { toolsCatalogHandlers } from "./server-methods/tools-catalog.js";
 import { ttsHandlers } from "./server-methods/tts.js";
+import { voiceConfigHandlers } from "./server-methods/voice-config.js";
 import type { GatewayRequestHandlers, GatewayRequestOptions } from "./server-methods/types.js";
 import { updateHandlers } from "./server-methods/update.js";
 import { usageHandlers } from "./server-methods/usage.js";
@@ -77,11 +79,13 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...execApprovalsHandlers,
   ...webHandlers,
   ...modelsHandlers,
+  ...modelModeHandlers,
   ...configHandlers,
   ...wizardHandlers,
   ...talkHandlers,
   ...toolsCatalogHandlers,
   ...ttsHandlers,
+  ...voiceConfigHandlers,
   ...skillsHandlers,
   ...sessionsHandlers,
   ...systemHandlers,

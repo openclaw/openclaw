@@ -3,6 +3,7 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
 import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
+import { speakText } from "./voice-tts.ts";
 import { CHAT_SESSIONS_ACTIVE_MINUTES, flushChatQueueForEvent } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import {
@@ -26,6 +27,7 @@ import {
   parseExecApprovalResolved,
   removeExecApproval,
 } from "./controllers/exec-approval.ts";
+import { loadModelTier } from "./controllers/model-tier.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import {
@@ -91,6 +93,7 @@ type GatewayHost = {
   serverVersion: string | null;
   sessionKey: string;
   chatRunId: string | null;
+  voiceEnabled: boolean;
   refreshSessionsAfterChat: Set<string>;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
@@ -224,6 +227,7 @@ export function connectGateway(host: GatewayHost) {
       void loadToolsCatalog(host as unknown as OpenClawApp);
       void loadNodes(host as unknown as OpenClawApp, { quiet: true });
       void loadDevices(host as unknown as OpenClawApp, { quiet: true });
+      void loadModelTier(host as unknown as OpenClawApp);
       void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
     },
     onClose: ({ code, reason, error }) => {
@@ -318,6 +322,29 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
   const historyReloaded = handleTerminalChatEvent(host, payload, state);
   if (state === "final" && !historyReloaded && shouldReloadHistoryForFinalEvent(payload)) {
     void loadChatHistory(host as unknown as OpenClawApp);
+  }
+  // Ultron voice: speak the final assistant message
+  console.log("[voice] chat event:", state, "voiceEnabled:", host.voiceEnabled);
+  if (state === "final" && host.voiceEnabled && payload?.message) {
+    const msg = payload.message as Record<string, unknown>;
+    let text = "";
+    if (typeof msg.text === "string") {
+      text = msg.text;
+    } else if (Array.isArray(msg.content)) {
+      // Content blocks may or may not have a .type field — accept any block with .text
+      text = (msg.content as Array<{ type?: string; text?: unknown }>)
+        .filter((b) => typeof b.text === "string")
+        .map((b) => b.text as string)
+        .join(" ");
+    }
+    console.log("[voice] extracted text length:", text.length, "preview:", text.substring(0, 80));
+    if (text.trim()) {
+      // Extract agent ID from session key (e.g. "agent:jack:main" → "jack")
+      const sessionAgentId = host.sessionKey?.startsWith("agent:")
+        ? host.sessionKey.split(":")[1] ?? undefined
+        : undefined;
+      void speakText(text, host.client, sessionAgentId ?? host.agentsSelectedId ?? undefined);
+    }
   }
 }
 

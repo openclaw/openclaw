@@ -24,6 +24,7 @@ export const zh_CN: TranslationMap = {
   },
   tabs: {
     agents: "代理",
+    "org-chart": "组织架构",
     overview: "概览",
     channels: "频道",
     instances: "实例",
@@ -39,6 +40,7 @@ export const zh_CN: TranslationMap = {
   },
   subtitles: {
     agents: "管理代理工作区、工具和身份。",
+    "org-chart": "代理组织的可视化层级。",
     overview: "网关状态、入口点和快速健康读取。",
     channels: "管理频道和设置。",
     instances: "来自已连接客户端和节点的在线信号。",
