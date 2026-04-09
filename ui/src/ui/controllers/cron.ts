@@ -337,14 +337,6 @@ export async function loadCronJobsPage(state: CronState, opts?: { append?: boole
   }
 }
 
-export async function loadMoreCronJobs(state: CronState) {
-  await loadCronJobsPage(state, { append: true });
-}
-
-export async function reloadCronJobs(state: CronState) {
-  await loadCronJobsPage(state, { append: false });
-}
-
 export function updateCronJobsFilter(
   state: CronState,
   patch: Partial<

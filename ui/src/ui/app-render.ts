@@ -39,10 +39,9 @@ import {
   removeConfigFormValue,
 } from "./controllers/config.ts";
 import {
+  loadCronJobsPage,
   loadCronRuns,
-  loadMoreCronJobs,
   loadMoreCronRuns,
-  reloadCronJobs,
   toggleCronJob,
   runCronJob,
   removeCronJob,
@@ -1230,7 +1229,7 @@ export function renderApp(state: AppViewState) {
                   updateCronRunsFilter(state, { cronRunsScope: "job" });
                   await loadCronRuns(state, jobId);
                 },
-                onLoadMoreJobs: () => loadMoreCronJobs(state),
+                onLoadMoreJobs: () => loadCronJobsPage(state, { append: true }),
                 onJobsFiltersChange: async (patch) => {
                   updateCronJobsFilter(state, patch);
                   const shouldReload =
@@ -1239,7 +1238,7 @@ export function renderApp(state: AppViewState) {
                     Boolean(patch.cronJobsSortBy) ||
                     Boolean(patch.cronJobsSortDir);
                   if (shouldReload) {
-                    await reloadCronJobs(state);
+                    await loadCronJobsPage(state, { append: false });
                   }
                 },
                 onJobsFiltersReset: async () => {
@@ -1251,7 +1250,7 @@ export function renderApp(state: AppViewState) {
                     cronJobsSortBy: "nextRunAtMs",
                     cronJobsSortDir: "asc",
                   });
-                  await reloadCronJobs(state);
+                  await loadCronJobsPage(state, { append: false });
                 },
                 onLoadMoreRuns: () => loadMoreCronRuns(state),
                 onRunsFiltersChange: async (patch) => {
