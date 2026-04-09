@@ -31,6 +31,7 @@ type MemoryPluginTestConfig = {
   captureMaxChars?: number;
   autoCapture?: boolean;
   autoRecall?: boolean;
+  dreaming?: unknown;
 };
 
 const TEST_RUNTIME_MANIFEST = {
