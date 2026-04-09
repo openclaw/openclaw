@@ -2473,11 +2473,13 @@ resource "aws_cloudwatch_metric_alarm" "custom" {{
         dashboard_block = f"""
 resource "aws_cloudwatch_dashboard" "this" {{
   dashboard_name = "{name}-dashboard"
-  dashboard_body = jsonencode({{
-    widgets = [
+  dashboard_body = <<-EOF
+{{
+  "widgets": [
       {widgets_json}
-    ]
-  }})
+  ]
+}}
+EOF
 }}
 """
 
