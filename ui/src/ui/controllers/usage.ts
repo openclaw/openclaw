@@ -278,8 +278,7 @@ export async function loadSessionTimeSeries(state: UsageState, sessionKey: strin
       state.usageTimeSeries = res as SessionUsageTimeSeries;
     }
   } catch {
-    // Silently fail - time series is optional
-    state.usageTimeSeries = null;
+    // Silently fail - time series is optional.
   } finally {
     state.usageTimeSeriesLoading = false;
   }
@@ -296,12 +295,12 @@ export async function loadSessionLogs(state: UsageState, sessionKey: string) {
       key: sessionKey,
       limit: 1000,
     });
-    if (res && Array.isArray((res as { logs: SessionLogEntry[] }).logs)) {
-      state.usageSessionLogs = (res as { logs: SessionLogEntry[] }).logs;
+    const logs = (res as { logs?: unknown } | null)?.logs;
+    if (Array.isArray(logs)) {
+      state.usageSessionLogs = logs as SessionLogEntry[];
     }
   } catch {
-    // Silently fail - logs are optional
-    state.usageSessionLogs = null;
+    // Silently fail - logs are optional.
   } finally {
     state.usageSessionLogsLoading = false;
   }
