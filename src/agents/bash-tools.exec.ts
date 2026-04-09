@@ -1297,7 +1297,7 @@ function deriveExecShortName(fullPath: string): string {
 export function describeExecTool(params?: { agentId?: string; hasCronTool?: boolean }): string {
   const base = [
     "Execute shell commands with background continuation for work that starts now.",
-    "Use yieldMs/background to continue later via process tool.",
+    "Use yieldMs/background=true to continue later via process tool. Use background=false to force synchronous execution (no auto-backgrounding).",
     "For long-running work started now, rely on automatic completion wake when it is enabled and the command emits output or fails; otherwise use process to confirm completion. Use process whenever you need logs, status, input, or intervention.",
     params?.hasCronTool
       ? "Do not use exec sleep or delay loops for reminders or deferred follow-ups; use cron instead."
@@ -1427,19 +1427,25 @@ export function createExecTool(
       const warnings: string[] = [];
       let execCommandOverride: string | undefined;
       const backgroundRequested = params.background === true;
+      const synchronousRequested = params.background === false;
       const yieldRequested = typeof params.yieldMs === "number";
       if (!allowBackground && (backgroundRequested || yieldRequested)) {
         warnings.push("Warning: background execution is disabled; running synchronously.");
       }
+      if (synchronousRequested && yieldRequested) {
+        warnings.push("Warning: yieldMs is ignored when background=false.");
+      }
       const yieldWindow = allowBackground
-        ? backgroundRequested
-          ? 0
-          : clampWithDefault(
-              params.yieldMs ?? defaultBackgroundMs,
-              defaultBackgroundMs,
-              10,
-              120_000,
-            )
+        ? synchronousRequested
+          ? null
+          : backgroundRequested
+            ? 0
+            : clampWithDefault(
+                params.yieldMs ?? defaultBackgroundMs,
+                defaultBackgroundMs,
+                10,
+                120_000,
+              )
         : null;
       const elevatedDefaults = defaults?.elevated;
       const elevatedAllowed = Boolean(elevatedDefaults?.enabled && elevatedDefaults.allowed);
