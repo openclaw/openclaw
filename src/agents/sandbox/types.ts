@@ -1,4 +1,4 @@
-import type { SandboxBackendHandle, SandboxBackendId } from "./backend.js";
+import type { SandboxBackendHandle, SandboxBackendId } from "./backend-handle.types.js";
 import type { SandboxFsBridge } from "./fs-bridge.types.js";
 import type { SandboxDockerConfig } from "./types.docker.js";
 

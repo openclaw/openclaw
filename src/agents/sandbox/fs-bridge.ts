@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
-import type { SandboxBackendCommandResult } from "./backend.js";
+import type {
+  SandboxBackendCommandResult,
+  SandboxFsBridgeContext,
+} from "./backend-handle.types.js";
 import { runDockerSandboxShellCommand } from "./docker-backend.js";
 import {
   buildPinnedMkdirpPlan,
@@ -16,7 +19,7 @@ import {
   resolveSandboxFsPathWithMounts,
   type SandboxResolvedFsPath,
 } from "./fs-paths.js";
-import type { SandboxContext, SandboxWorkspaceAccess } from "./types.js";
+import type { SandboxWorkspaceAccess } from "./types.js";
 
 type RunCommandOptions = {
   args?: string[];
@@ -27,16 +30,18 @@ type RunCommandOptions = {
 
 export type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.types.js";
 
-export function createSandboxFsBridge(params: { sandbox: SandboxContext }): SandboxFsBridge {
+export function createSandboxFsBridge(params: {
+  sandbox: SandboxFsBridgeContext;
+}): SandboxFsBridge {
   return new SandboxFsBridgeImpl(params.sandbox);
 }
 
 class SandboxFsBridgeImpl implements SandboxFsBridge {
-  private readonly sandbox: SandboxContext;
+  private readonly sandbox: SandboxFsBridgeContext;
   private readonly mounts: ReturnType<typeof buildSandboxFsMounts>;
   private readonly pathGuard: SandboxFsPathGuard;
 
-  constructor(sandbox: SandboxContext) {
+  constructor(sandbox: SandboxFsBridgeContext) {
     this.sandbox = sandbox;
     this.mounts = buildSandboxFsMounts(sandbox);
     const mountsByContainer = [...this.mounts].toSorted(
