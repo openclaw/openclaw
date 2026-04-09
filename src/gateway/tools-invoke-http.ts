@@ -2,13 +2,13 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { runBeforeToolCallHook } from "../agents/pi-tools.before-tool-call.js";
 import { resolveToolLoopDetectionConfig } from "../agents/pi-tools.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
-import { applyOwnerOnlyToolPolicy } from "../agents/tool-policy.js";
 import { normalizeToolName } from "../agents/tool-policy-shared.js";
+import { applyOwnerOnlyToolPolicy } from "../agents/tool-policy.js";
 import { ToolInputError, type AnyAgentTool } from "../agents/tools/common.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { logWarn } from "../logger.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
 import {
   normalizeOptionalLowercaseString,
@@ -234,16 +234,16 @@ export async function handleToolsInvokeHttpRequest(
   const accountId = normalizeOptionalString(getHeader(req, "x-openclaw-account-id"));
   const agentTo = normalizeOptionalString(getHeader(req, "x-openclaw-message-to"));
   const agentThreadId = normalizeOptionalString(getHeader(req, "x-openclaw-thread-id"));
-  const { agentId, tools, allTools, policyFiltered, toolPolicyAudits, gatewayDenySet } =
+  const { agentId, tools, allTools, policyFiltered, getToolPolicyAudit, gatewayDenySet } =
     resolveGatewayScopedTools({
       cfg,
       sessionKey,
       messageProvider: messageChannel ?? undefined,
-    accountId,
-    agentTo,
-    agentThreadId,
-    allowGatewaySubagentBinding: true,
-    allowMediaInvokeCommands: true,
+      accountId,
+      agentTo,
+      agentThreadId,
+      allowGatewaySubagentBinding: true,
+      allowMediaInvokeCommands: true,
       surface: "http",
       disablePluginTools: isKnownCoreToolId(toolName),
     });
@@ -252,9 +252,13 @@ export async function handleToolsInvokeHttpRequest(
   const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, requestAuth);
   const gatewayFiltered = applyOwnerOnlyToolPolicy(tools, senderIsOwner);
   const normalizedToolName = normalizeToolName(toolName);
-  const policyAudit = toolPolicyAudits.get(toolName);
+  const policyAudit = getToolPolicyAudit(toolName);
 
-  function emitToolPolicyAudit(params: { decision: "allow" | "deny"; matchedBy: string; rule?: string }) {
+  function emitToolPolicyAudit(params: {
+    decision: "allow" | "deny";
+    matchedBy: string;
+    rule?: string;
+  }) {
     log.debug(
       [
         "tools-invoke policy:",
@@ -310,7 +314,6 @@ export async function handleToolsInvokeHttpRequest(
         agentId,
         sessionKey,
         loopDetection: resolveToolLoopDetectionConfig({ cfg, agentId }),
-        toolPolicyAudit: policyAudit,
       },
     });
     if (hookResult.blocked) {

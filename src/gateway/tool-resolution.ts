@@ -130,24 +130,17 @@ export function resolveGatewayScopedTools(params: {
     ...(params.excludeToolNames ? Array.from(params.excludeToolNames) : []),
   ]);
 
-  const toolPolicyAudits = new Map<string, ToolPolicyPipelineAudit>();
-  for (const tool of allTools) {
-    toolPolicyAudits.set(
-      tool.name,
-      explainToolPolicyPipelineDecision({
-        toolName: tool.name,
-        tools: allTools,
-        toolMeta,
-        steps: policySteps,
-      }),
-    );
-  }
-
   return {
     agentId,
     allTools,
     policyFiltered,
-    toolPolicyAudits,
+    getToolPolicyAudit: (toolName: string): ToolPolicyPipelineAudit =>
+      explainToolPolicyPipelineDecision({
+        toolName,
+        tools: allTools,
+        toolMeta,
+        steps: policySteps,
+      }),
     gatewayDenySet,
     tools: policyFiltered.filter((tool) => !gatewayDenySet.has(tool.name)),
   };
