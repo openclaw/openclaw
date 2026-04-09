@@ -150,7 +150,9 @@ export function detectToolResultReplayPolicyMeta(params: {
     }
     const path = trimString(record?.path);
     const diagnosticType =
-      path === "plugins.entries" ? "openclaw.plugins_list" : "openclaw.config_snapshot";
+      path && /^plugins\.entries(?:\.|$)/iu.test(path)
+        ? "openclaw.plugins_list"
+        : "openclaw.config_snapshot";
     return {
       transient: true,
       diagnosticType,

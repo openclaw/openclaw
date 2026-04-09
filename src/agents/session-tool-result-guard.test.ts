@@ -959,6 +959,20 @@ describe("installSessionToolResultGuard", () => {
     });
   });
 
+  it("classifies nested plugins.entries gateway paths as plugins_list diagnostics", () => {
+    expect(
+      detectToolResultReplayPolicyMeta({
+        toolName: "gateway",
+        args: { action: "config.get", path: "plugins.entries.openclaw-qqbot.enabled" },
+      }),
+    ).toMatchObject({
+      transient: true,
+      diagnosticType: "openclaw.plugins_list",
+      diagnosticTarget: "plugins.entries.openclaw-qqbot.enabled",
+      sourceTool: "gateway",
+    });
+  });
+
   it("applies before_message_write to synthetic tool-result flushes", () => {
     const sm = SessionManager.inMemory();
     const guard = installSessionToolResultGuard(sm, {
