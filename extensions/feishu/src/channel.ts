@@ -1,4 +1,5 @@
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import { feishuDoctor } from "./doctor.js";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { createMessageToolCardSchema } from "openclaw/plugin-sdk/channel-actions";
 import {
@@ -541,6 +542,7 @@ function resolveFeishuMemberIdType(
 export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResult> =
   createChatChannelPlugin({
     base: {
+      doctor: feishuDoctor,
       id: "feishu",
       meta: {
         ...meta,
