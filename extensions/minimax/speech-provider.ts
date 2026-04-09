@@ -227,7 +227,7 @@ export function buildMinimaxSpeechProvider(): SpeechProviderPlugin {
         audioBuffer,
         outputFormat: "mp3",
         fileExtension: ".mp3",
-        voiceCompatible: true,
+        voiceCompatible: req.target === "voice-note",
       };
     },
   };

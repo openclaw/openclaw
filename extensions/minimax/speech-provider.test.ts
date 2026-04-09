@@ -240,7 +240,7 @@ describe("buildMinimaxSpeechProvider", () => {
 
       expect(result.outputFormat).toBe("mp3");
       expect(result.fileExtension).toBe(".mp3");
-      expect(result.voiceCompatible).toBe(true);
+      expect(result.voiceCompatible).toBe(false);
       expect(result.audioBuffer.toString()).toBe("fake-audio-data");
 
       expect(mockFetch).toHaveBeenCalledOnce();
@@ -250,6 +250,27 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(body.model).toBe("speech-2.8-hd");
       expect(body.text).toBe("Hello world");
       expect(body.voice_setting.voice_id).toBe("English_expressive_narrator");
+    });
+
+    it("sets voiceCompatible true for voice-note target", async () => {
+      const hexAudio = Buffer.from("fake-audio-data").toString("hex");
+      const mockFetch = vi.mocked(globalThis.fetch);
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: { audio: hexAudio } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+
+      const result = await provider.synthesize({
+        text: "Hello world",
+        cfg: {} as never,
+        providerConfig: { apiKey: "sk-test", baseUrl: "https://api.minimaxi.com" },
+        target: "voice-note",
+        timeoutMs: 30000,
+      });
+
+      expect(result.voiceCompatible).toBe(true);
     });
 
     it("applies overrides", async () => {
