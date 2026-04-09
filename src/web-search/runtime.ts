@@ -367,6 +367,7 @@ export async function runWebSearch(
   const allowFallback =
     !hasExplicitProvider || (canUseExplicitFallbacks && effectiveCandidates.length > 1);
   let sawUnavailableProvider = false;
+  let lastErrorResult: { provider: string; result: Record<string, unknown> } | undefined;
 
   for (const candidate of effectiveCandidates) {
     try {
@@ -385,15 +386,18 @@ export async function runWebSearch(
       const result = await definition.execute(params.args);
       // Treat error payloads as fallback failures, not successful results
       if (result && typeof result === "object" && "error" in result) {
-        lastError = new Error(
-          typeof result.error === "string"
-            ? result.error
-            : String(result.error ?? "Provider returned error"),
-        );
+        const errorResult = result as Record<string, unknown>;
         if (!canUseExplicitFallbacks) {
           // Only retry error payloads in explicit fallback mode; otherwise return error
           return { provider: candidate.id, result };
         }
+        // Track last error payload to return if all fallbacks fail with structured errors
+        lastError = new Error(
+          typeof errorResult.error === "string"
+            ? errorResult.error
+            : String(errorResult.error ?? "Provider returned error"),
+        );
+        lastErrorResult = { provider: candidate.id, result: errorResult };
         continue;
       }
       return { provider: candidate.id, result };
@@ -407,6 +411,10 @@ export async function runWebSearch(
 
   if (sawUnavailableProvider && lastError === undefined) {
     throw new Error("web_search is enabled but no provider is currently available.");
+  }
+  // Return last structured error payload if all fallbacks failed with errors
+  if (lastErrorResult) {
+    return lastErrorResult;
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
