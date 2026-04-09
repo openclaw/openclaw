@@ -1,17 +1,21 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { readQaScenarioExecutionConfig } from "./scenario-catalog.js";
 
+const DEFAULT_DISCOVERY_REFS = [
+  "repo/qa/scenarios/index.md",
+  "repo/extensions/qa-lab/src/suite.ts",
+  "repo/docs/help/testing.md",
+];
+
 function readRequiredDiscoveryRefs() {
-  const config = readQaScenarioExecutionConfig("source-docs-discovery-report") as
-    | { requiredFiles?: string[] }
-    | undefined;
-  return (
-    config?.requiredFiles ?? [
-      "repo/qa/scenarios/index.md",
-      "repo/extensions/qa-lab/src/suite.ts",
-      "repo/docs/help/testing.md",
-    ]
-  );
+  try {
+    const config = readQaScenarioExecutionConfig("source-docs-discovery-report") as
+      | { requiredFiles?: string[] }
+      | undefined;
+    return config?.requiredFiles ?? DEFAULT_DISCOVERY_REFS;
+  } catch {
+    return DEFAULT_DISCOVERY_REFS;
+  }
 }
 
 const REQUIRED_DISCOVERY_REFS = readRequiredDiscoveryRefs();
