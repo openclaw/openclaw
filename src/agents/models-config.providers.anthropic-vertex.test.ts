@@ -4,12 +4,19 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
 
+const ANTHROPIC_VERTEX_DISCOVERY_ENV = {
+  OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS: "anthropic",
+} satisfies NodeJS.ProcessEnv;
+
 describe("anthropic-vertex implicit provider", () => {
   it("does not auto-enable from GOOGLE_CLOUD_PROJECT_ID alone", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     const providers = await resolveImplicitProvidersForTest({
       agentDir,
-      env: { GOOGLE_CLOUD_PROJECT_ID: "vertex-project" },
+      env: {
+        ...ANTHROPIC_VERTEX_DISCOVERY_ENV,
+        GOOGLE_CLOUD_PROJECT_ID: "vertex-project",
+      },
     });
     expect(providers?.["anthropic-vertex"]).toBeUndefined();
   });
@@ -24,6 +31,7 @@ describe("anthropic-vertex implicit provider", () => {
       const providers = await resolveImplicitProvidersForTest({
         agentDir,
         env: {
+          ...ANTHROPIC_VERTEX_DISCOVERY_ENV,
           GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
           GOOGLE_CLOUD_LOCATION: "us-east1",
         },
@@ -50,6 +58,7 @@ describe("anthropic-vertex implicit provider", () => {
       const providers = await resolveImplicitProvidersForTest({
         agentDir,
         env: {
+          ...ANTHROPIC_VERTEX_DISCOVERY_ENV,
           GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
           GOOGLE_CLOUD_LOCATION: "us-east5",
         },
@@ -72,6 +81,7 @@ describe("anthropic-vertex implicit provider", () => {
       const providers = await resolveImplicitProvidersForTest({
         agentDir,
         env: {
+          ...ANTHROPIC_VERTEX_DISCOVERY_ENV,
           GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
           GOOGLE_CLOUD_LOCATION: "europe-west4",
         },
@@ -94,6 +104,7 @@ describe("anthropic-vertex implicit provider", () => {
       const providers = await resolveImplicitProvidersForTest({
         agentDir,
         env: {
+          ...ANTHROPIC_VERTEX_DISCOVERY_ENV,
           GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
           GOOGLE_CLOUD_LOCATION: "us-central1.attacker.example",
         },
@@ -114,6 +125,7 @@ describe("anthropic-vertex implicit provider", () => {
       const providers = await resolveImplicitProvidersForTest({
         agentDir,
         env: {
+          ...ANTHROPIC_VERTEX_DISCOVERY_ENV,
           GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
           GOOGLE_CLOUD_LOCATION: "global",
         },
@@ -129,6 +141,7 @@ describe("anthropic-vertex implicit provider", () => {
     const providers = await resolveImplicitProvidersForTest({
       agentDir,
       env: {
+        ...ANTHROPIC_VERTEX_DISCOVERY_ENV,
         ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",
         GOOGLE_CLOUD_LOCATION: "us-east5",
       },
@@ -143,6 +156,7 @@ describe("anthropic-vertex implicit provider", () => {
     const providers = await resolveImplicitProvidersForTest({
       agentDir,
       env: {
+        ...ANTHROPIC_VERTEX_DISCOVERY_ENV,
         ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",
         GOOGLE_CLOUD_LOCATION: "us-east5",
       },
@@ -170,6 +184,7 @@ describe("anthropic-vertex implicit provider", () => {
     const providers = await resolveImplicitProvidersForTest({
       agentDir,
       env: {
+        ...ANTHROPIC_VERTEX_DISCOVERY_ENV,
         KUBERNETES_SERVICE_HOST: "10.0.0.1",
         GOOGLE_CLOUD_LOCATION: "us-east5",
       },

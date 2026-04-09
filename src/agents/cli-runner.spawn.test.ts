@@ -39,6 +39,8 @@ function buildPreparedCliRunContext(params: {
           output: "jsonl" as const,
           input: "stdin" as const,
           modelArg: "--model",
+          sessionArg: "--session-id",
+          sessionMode: "always" as const,
           systemPromptArg: "--append-system-prompt",
           systemPromptWhen: "first" as const,
           serialize: true,
@@ -110,6 +112,7 @@ describe("runCliAgent spawn path", () => {
       output: "jsonl" as const,
       input: "stdin" as const,
       modelArg: "--model",
+      sessionArg: "--session-id",
       systemPromptArg: "--append-system-prompt",
       systemPromptWhen: "first" as const,
       serialize: true,
@@ -182,6 +185,31 @@ describe("runCliAgent spawn path", () => {
     };
     expect(input.input).toContain("Explain this diff");
     expect(input.argv).not.toContain("Explain this diff");
+  });
+
+  it("passes --session-id for new Claude sessions", async () => {
+    mockSuccessfulCliRun();
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-claude-session-id",
+      }),
+    );
+
+    const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
+      argv?: string[];
+      input?: string;
+      mode?: string;
+    };
+    expect(input.mode).toBe("child");
+    expect(input.argv).toContain("claude");
+    const sessionArgIndex = input.argv?.indexOf("--session-id") ?? -1;
+    expect(sessionArgIndex).toBeGreaterThanOrEqual(0);
+    expect(input.argv?.[sessionArgIndex + 1]?.trim()).toBeTruthy();
+    expect(input.input).toContain("hi");
+    expect(input.argv).not.toContain("hi");
   });
 
   it("runs CLI through supervisor and returns payload", async () => {

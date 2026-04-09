@@ -89,11 +89,12 @@ type DoctorMemoryDreamDiaryPayload = {
   content?: unknown;
 };
 
-type DoctorMemoryDreamDiaryActionPayload = {
+type DoctorMemoryDreamActionPayload = {
   action?: unknown;
   removedEntries?: unknown;
   written?: unknown;
   replaced?: unknown;
+  removedShortTermEntries?: unknown;
 };
 
 export type DreamingState = {
@@ -344,7 +345,13 @@ export async function loadDreamDiary(state: DreamingState): Promise<void> {
 
 async function runDreamDiaryAction(
   state: DreamingState,
-  method: "doctor.memory.backfillDreamDiary" | "doctor.memory.resetDreamDiary",
+  method:
+    | "doctor.memory.backfillDreamDiary"
+    | "doctor.memory.resetDreamDiary"
+    | "doctor.memory.resetGroundedShortTerm",
+  options?: {
+    reloadDiary?: boolean;
+  },
 ): Promise<boolean> {
   if (!state.client || !state.connected || state.dreamDiaryActionLoading) {
     return false;
@@ -353,8 +360,10 @@ async function runDreamDiaryAction(
   state.dreamingStatusError = null;
   state.dreamDiaryError = null;
   try {
-    await state.client.request<DoctorMemoryDreamDiaryActionPayload>(method, {});
-    await loadDreamDiary(state);
+    await state.client.request<DoctorMemoryDreamActionPayload>(method, {});
+    if (options?.reloadDiary !== false) {
+      await loadDreamDiary(state);
+    }
     await loadDreamingStatus(state);
     return true;
   } catch (err) {
@@ -373,6 +382,12 @@ export async function backfillDreamDiary(state: DreamingState): Promise<boolean>
 
 export async function resetDreamDiary(state: DreamingState): Promise<boolean> {
   return runDreamDiaryAction(state, "doctor.memory.resetDreamDiary");
+}
+
+export async function resetGroundedShortTerm(state: DreamingState): Promise<boolean> {
+  return runDreamDiaryAction(state, "doctor.memory.resetGroundedShortTerm", {
+    reloadDiary: false,
+  });
 }
 
 async function writeDreamingPatch(

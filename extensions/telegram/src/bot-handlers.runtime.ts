@@ -5,10 +5,8 @@ import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  buildCommandsMessagePaginated,
-  resolveStoredModelOverride,
-} from "openclaw/plugin-sdk/command-auth";
+import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth";
+import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/command-status";
 import { writeConfigFile } from "openclaw/plugin-sdk/config-runtime";
 import {
   loadSessionStore,

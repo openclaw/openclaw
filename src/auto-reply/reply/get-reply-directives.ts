@@ -1,5 +1,4 @@
 import { listAgentEntries } from "../../agents/agent-scope.js";
-import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
@@ -25,6 +24,7 @@ import {
 } from "./get-reply-directive-aliases.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
 import { clearExecInlineDirectives, clearInlineDirectives } from "./get-reply-directives-utils.js";
+import { type ReplyExecOverrides, resolveReplyExecOverrides } from "./get-reply-exec-overrides.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import { defaultGroupActivation, resolveGroupRequireMention } from "./groups.js";
 import { CURRENT_MESSAGE_MARKER, stripMentions, stripStructuralPrefixes } from "./mentions.js";
@@ -38,8 +38,6 @@ import { stripInlineStatus } from "./reply-inline.js";
 import type { TypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
-type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
-type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 
 let commandsRegistryPromise: Promise<typeof import("../commands-registry.runtime.js")> | null =
   null;
@@ -96,7 +94,7 @@ export type ReplyDirectiveContinuation = {
   resolvedVerboseLevel: VerboseLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel: ElevatedLevel;
-  execOverrides?: ExecOverrides;
+  execOverrides?: ReplyExecOverrides;
   blockStreamingEnabled: boolean;
   blockReplyChunking?: {
     minChars: number;
@@ -118,33 +116,6 @@ export type ReplyDirectiveContinuation = {
     dropPolicy?: InlineDirectives["dropPolicy"];
   };
 };
-
-function resolveExecOverrides(params: {
-  directives: InlineDirectives;
-  sessionEntry?: SessionEntry;
-  agentEntry?: AgentEntry;
-}): ExecOverrides | undefined {
-  const host =
-    params.directives.execHost ??
-    (params.sessionEntry?.execHost as ExecOverrides["host"]) ??
-    (params.agentEntry?.tools?.exec?.host as ExecOverrides["host"]);
-  const security =
-    params.directives.execSecurity ??
-    (params.sessionEntry?.execSecurity as ExecOverrides["security"]) ??
-    (params.agentEntry?.tools?.exec?.security as ExecOverrides["security"]);
-  const ask =
-    params.directives.execAsk ??
-    (params.sessionEntry?.execAsk as ExecOverrides["ask"]) ??
-    (params.agentEntry?.tools?.exec?.ask as ExecOverrides["ask"]);
-  const node =
-    params.directives.execNode ??
-    params.sessionEntry?.execNode ??
-    params.agentEntry?.tools?.exec?.node;
-  if (!host && !security && !ask && !node) {
-    return undefined;
-  }
-  return { host, security, ask, node };
-}
 
 export type ReplyDirectiveResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
@@ -566,7 +537,11 @@ export async function resolveReplyDirectives(params: {
   model = applyResult.model;
   contextTokens = applyResult.contextTokens;
   const { directiveAck, perMessageQueueMode, perMessageQueueOptions } = applyResult;
-  const execOverrides = resolveExecOverrides({ directives, sessionEntry, agentEntry });
+  const execOverrides = resolveReplyExecOverrides({
+    directives,
+    sessionEntry,
+    agentExecDefaults: agentEntry?.tools?.exec,
+  });
 
   return {
     kind: "continue",

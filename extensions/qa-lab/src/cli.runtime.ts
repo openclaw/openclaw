@@ -225,6 +225,7 @@ export async function runQaCharacterEvalCommand(opts: {
   modelThinking?: string[];
   judgeModel?: string[];
   judgeTimeoutMs?: number;
+  blindJudgeModels?: boolean;
   concurrency?: number;
   judgeConcurrency?: number;
 }) {
@@ -243,8 +244,10 @@ export async function runQaCharacterEvalCommand(opts: {
     judgeModels: judges.models.length > 0 ? judges.models : undefined,
     judgeModelOptions: judges.optionsByModel,
     judgeTimeoutMs: opts.judgeTimeoutMs,
+    judgeBlindModels: opts.blindJudgeModels === true ? true : undefined,
     candidateConcurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency),
     judgeConcurrency: parseQaPositiveIntegerOption("--judge-concurrency", opts.judgeConcurrency),
+    progress: (message) => process.stderr.write(`${message}\n`),
   });
   process.stdout.write(`QA character eval report: ${result.reportPath}\n`);
   process.stdout.write(`QA character eval summary: ${result.summaryPath}\n`);

@@ -9,6 +9,7 @@ export {
 export type { QueuedDelivery, QueuedDeliveryPayload } from "./delivery-queue-storage.js";
 export {
   computeBackoffMs,
+  drainReconnectQueue,
   isEntryEligibleForRecoveryRetry,
   isPermanentDeliveryError,
   MAX_RETRIES,

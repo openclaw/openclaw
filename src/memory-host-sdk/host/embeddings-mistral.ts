@@ -4,7 +4,7 @@ import {
   createRemoteEmbeddingProvider,
   resolveRemoteEmbeddingClient,
 } from "./embeddings-remote-provider.js";
-import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
+import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.types.js";
 
 export type MistralEmbeddingClient = {
   baseUrl: string;

@@ -7,6 +7,7 @@ import {
   failTaskRunByRunId,
 } from "../../tasks/task-executor.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
+import { configureTaskRegistryRuntime } from "../../tasks/task-registry.store.js";
 import { buildTasksReply, handleTasksCommand } from "./commands-tasks.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
@@ -24,13 +25,33 @@ async function buildTasksReplyForTest(params: { sessionKey?: string } = {}) {
   });
 }
 
+function configureInMemoryTaskRegistryStoreForTests(): void {
+  configureTaskRegistryRuntime({
+    store: {
+      loadSnapshot: () => ({
+        tasks: new Map(),
+        deliveryStates: new Map(),
+      }),
+      saveSnapshot: () => {},
+      upsertTaskWithDeliveryState: () => {},
+      upsertTask: () => {},
+      deleteTaskWithDeliveryState: () => {},
+      deleteTask: () => {},
+      upsertDeliveryState: () => {},
+      deleteDeliveryState: () => {},
+      close: () => {},
+    },
+  });
+}
+
 describe("buildTasksReply", () => {
   beforeEach(() => {
-    resetTaskRegistryForTests();
+    resetTaskRegistryForTests({ persist: false });
+    configureInMemoryTaskRegistryStoreForTests();
   });
 
   afterEach(() => {
-    resetTaskRegistryForTests();
+    resetTaskRegistryForTests({ persist: false });
   });
 
   it("lists active and recent tasks for the current session", async () => {

@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { formatErrorMessage } from "../infra/errors.js";
 import type { Frame, Page } from "playwright-core";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import type { BrowserActRequest, BrowserFormField } from "./client-actions-core.js";
 import { DEFAULT_FILL_FIELD_TYPE } from "./form-fields.js";
@@ -164,59 +164,68 @@ function scheduleDelayedInteractionNavigationGuard(opts: {
   previousUrl: string;
   ssrfPolicy?: SsrFPolicy;
   targetId?: string;
-}): void {
+}): Promise<void> {
   if (!opts.ssrfPolicy) {
-    return;
+    return Promise.resolve();
   }
   const page = opts.page as unknown as NavigationObservablePage;
   if (didCrossDocumentUrlChange(page, opts.previousUrl)) {
-    void assertPageNavigationCompletedSafely({
+    return assertPageNavigationCompletedSafely({
       cdpUrl: opts.cdpUrl,
       page: opts.page,
       response: null,
       ssrfPolicy: opts.ssrfPolicy,
       targetId: opts.targetId,
-    }).catch(() => {});
-    return;
+    });
   }
   if (typeof page.on !== "function" || typeof page.off !== "function") {
-    return;
+    return Promise.resolve();
   }
 
   pendingInteractionNavigationGuardCleanup.get(opts.page)?.();
 
-  const onFrameNavigated = (frame: Frame) => {
-    if (!isMainFrameNavigation(page, frame)) {
-      return;
-    }
-    // Use isHashOnlyNavigation rather than !didCrossDocumentUrlChange: the
-    // event firing is itself the navigation signal, so a same-URL reload must
-    // not be treated as "no navigation" the way URL polling would.
-    if (isHashOnlyNavigation(page.url(), opts.previousUrl)) {
-      return;
-    }
-    cleanup();
-    void assertPageNavigationCompletedSafely({
-      cdpUrl: opts.cdpUrl,
-      page: opts.page,
-      response: null,
-      ssrfPolicy: opts.ssrfPolicy,
-      targetId: opts.targetId,
-    }).catch(() => {});
-  };
-  const timeout = setTimeout(() => {
-    cleanup();
-  }, INTERACTION_NAVIGATION_GRACE_MS);
-  const cleanup = () => {
-    clearTimeout(timeout);
-    page.off!("framenavigated", onFrameNavigated);
-    if (pendingInteractionNavigationGuardCleanup.get(opts.page) === cleanup) {
-      pendingInteractionNavigationGuardCleanup.delete(opts.page);
-    }
-  };
+  return new Promise<void>((resolve, reject) => {
+    const settle = (err?: unknown) => {
+      cleanup();
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve();
+    };
+    const onFrameNavigated = (frame: Frame) => {
+      if (!isMainFrameNavigation(page, frame)) {
+        return;
+      }
+      // Use isHashOnlyNavigation rather than !didCrossDocumentUrlChange: the
+      // event firing is itself the navigation signal, so a same-URL reload must
+      // not be treated as "no navigation" the way URL polling would.
+      if (isHashOnlyNavigation(page.url(), opts.previousUrl)) {
+        return;
+      }
+      cleanup();
+      void assertPageNavigationCompletedSafely({
+        cdpUrl: opts.cdpUrl,
+        page: opts.page,
+        response: null,
+        ssrfPolicy: opts.ssrfPolicy,
+        targetId: opts.targetId,
+      }).then(() => settle(), settle);
+    };
+    const timeout = setTimeout(() => {
+      settle();
+    }, INTERACTION_NAVIGATION_GRACE_MS);
+    const cleanup = () => {
+      clearTimeout(timeout);
+      page.off!("framenavigated", onFrameNavigated);
+      if (pendingInteractionNavigationGuardCleanup.get(opts.page) === settle) {
+        pendingInteractionNavigationGuardCleanup.delete(opts.page);
+      }
+    };
 
-  pendingInteractionNavigationGuardCleanup.set(opts.page, cleanup);
-  page.on("framenavigated", onFrameNavigated);
+    pendingInteractionNavigationGuardCleanup.set(opts.page, settle);
+    page.on!("framenavigated", onFrameNavigated);
+  });
 }
 
 async function assertInteractionNavigationCompletedSafely<T>(opts: {
@@ -292,9 +301,10 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
       });
     }
   } else {
-    // Successful non-navigating interactions should not wait out the grace window,
-    // but we still keep a short-lived listener alive to quarantine late SSRF hops.
-    scheduleDelayedInteractionNavigationGuard({
+    // Successful interactions still need a short grace window: a click can resolve
+    // before the navigation event fires, and a blocked late hop must be observable
+    // to the current caller instead of only quarantining the page in the background.
+    await scheduleDelayedInteractionNavigationGuard({
       cdpUrl: opts.cdpUrl,
       page: opts.page,
       previousUrl: opts.previousUrl,
