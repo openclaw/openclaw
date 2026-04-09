@@ -193,6 +193,10 @@ export function resolveOpenClawMetadata(
   const requires = resolveOpenClawManifestRequires(metadataObj);
   const install = resolveOpenClawManifestInstall(metadataObj, parseInstallSpec);
   const osRaw = resolveOpenClawManifestOs(metadataObj);
+  const preloadFilesRaw = normalizeStringList(
+    (metadataObj as { preloadFiles?: unknown; "preload-files"?: unknown }).preloadFiles ??
+      (metadataObj as { "preload-files"?: unknown })["preload-files"],
+  );
   return {
     always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
     emoji: typeof metadataObj.emoji === "string" ? metadataObj.emoji : undefined,
@@ -202,6 +206,11 @@ export function resolveOpenClawMetadata(
     os: osRaw.length > 0 ? osRaw : undefined,
     requires: requires,
     install: install.length > 0 ? install : undefined,
+    preload:
+      typeof (metadataObj as { preload?: unknown }).preload === "boolean"
+        ? ((metadataObj as { preload?: boolean }).preload as boolean)
+        : undefined,
+    preloadFiles: preloadFilesRaw.length > 0 ? preloadFilesRaw : undefined,
   };
 }
 

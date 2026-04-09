@@ -30,6 +30,18 @@ export type OpenClawSkillMetadata = {
     config?: string[];
   };
   install?: SkillInstallSpec[];
+  /**
+   * If true, the skills-preload bundled hook will embed this skill's SKILL.md
+   * (and any files listed in `preloadFiles`) directly into the agent's system
+   * prompt under `# Project Context` at session start. Use for high-frequency
+   * branded knowledge that every session needs without a Read tool call.
+   */
+  preload?: boolean;
+  /**
+   * Optional list of sibling files (relative to the skill directory) to embed
+   * alongside SKILL.md when `preload` is true. Example: ["services-pricing.md", "brand-voice.md"].
+   */
+  preloadFiles?: string[];
 };
 
 export type SkillInvocationPolicy = {
