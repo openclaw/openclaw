@@ -390,8 +390,8 @@ export async function runWebSearch(
             ? result.error
             : String(result.error ?? "Provider returned error"),
         );
-        if (!allowFallback) {
-          // Return error payload instead of throwing to preserve structured details
+        if (!canUseExplicitFallbacks) {
+          // Only retry error payloads in explicit fallback mode; otherwise return error
           return { provider: candidate.id, result };
         }
         continue;
