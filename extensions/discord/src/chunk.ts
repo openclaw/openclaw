@@ -164,6 +164,17 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
         currentLines = 2;
       }
     }
+    // Pending table header: separator hasn't landed yet, repeat the candidate header
+    // so the separator that follows appears in the same chunk as its header.
+    if (pendingTableHeader && lastLineWasTableCandidate && !openFence && !openTable) {
+      if (current) {
+        current += `\n${lastLineWasTableCandidate}`;
+        currentLines += 1;
+      } else {
+        current = lastLineWasTableCandidate;
+        currentLines = 1;
+      }
+    }
   };
 
   // Helper: apply blockquote prefix to a line if we're inside a blockquote
