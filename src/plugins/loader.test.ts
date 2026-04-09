@@ -2164,6 +2164,32 @@ module.exports = { id: "throws-after-import", register() {} };`,
     ).toThrow("plugin load failed: configurable: invalid config: <root>: must be object");
   });
 
+  it("does not suppress strict failures for explicitly enabled plugins omitted from plugins.allow", () => {
+    setupBundledTelegramPlugin();
+    expect(() =>
+      loadOpenClawPlugins({
+        cache: false,
+        workspaceDir: cachedBundledTelegramDir,
+        throwOnLoadError: true,
+        config: {
+          channels: {
+            telegram: {
+              enabled: true,
+            },
+          },
+          plugins: {
+            allow: ["browser"],
+            entries: {
+              telegram: {
+                config: "nope" as unknown as Record<string, unknown>,
+              },
+            },
+          },
+        },
+      }),
+    ).toThrow("plugin load failed: telegram: invalid config: <root>: must be object");
+  });
+
   it("filters strict plugin load failures by plugins.allow", () => {
     const registry = {
       plugins: [

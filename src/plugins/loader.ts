@@ -822,14 +822,20 @@ function maybeThrowOnPluginLoadError(
   if (errored.length === 0) {
     return;
   }
-  if (allowlist.length > 0) {
-    const allowSet = new Set(allowlist);
-    if (!errored.some((entry) => allowSet.has(entry.id))) {
-      return;
+  const strictIds = new Set<string>();
+  for (const pluginId of allowlist) {
+    strictIds.add(pluginId);
+  }
+  for (const plugin of registry.plugins) {
+    if (plugin.explicitlyEnabled) {
+      strictIds.add(plugin.id);
     }
   }
+  if (strictIds.size > 0 && !errored.some((entry) => strictIds.has(entry.id))) {
+    return;
+  }
   throw new PluginLoadFailureError(registry, {
-    onlyPluginIds: allowlist.length > 0 ? allowlist : undefined,
+    onlyPluginIds: strictIds.size > 0 ? [...strictIds].toSorted() : undefined,
   });
 }
 
