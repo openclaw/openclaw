@@ -6,6 +6,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 type SubagentSurface = {
   run: (params: {
+    idempotencyKey: string;
     sessionKey: string;
     message: string;
     extraSystemPrompt?: string;
@@ -277,12 +278,26 @@ async function assertSafeDreamsPath(dreamsPath: string): Promise<void> {
 
 async function writeDreamsFileAtomic(dreamsPath: string, content: string): Promise<void> {
   await assertSafeDreamsPath(dreamsPath);
+  const existing = await fs.stat(dreamsPath).catch((err: NodeJS.ErrnoException) => {
+    if (err.code === "ENOENT") {
+      return null;
+    }
+    throw err;
+  });
+  const mode = existing?.mode ?? 0o600;
   const tempPath = `${dreamsPath}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(tempPath, content, { encoding: "utf-8", flag: "wx" });
+  await fs.writeFile(tempPath, content, { encoding: "utf-8", flag: "wx", mode });
+  await fs.chmod(tempPath, mode).catch(() => undefined);
   try {
     await fs.rename(tempPath, dreamsPath);
+    await fs.chmod(dreamsPath, mode).catch(() => undefined);
   } catch (err) {
-    await fs.rm(tempPath, { force: true }).catch(() => {});
+    const cleanupError = await fs.rm(tempPath, { force: true }).catch((rmErr) => rmErr);
+    if (cleanupError) {
+      throw new Error(
+        `Atomic DREAMS.md write failed (${formatErrorMessage(err)}); cleanup also failed (${formatErrorMessage(cleanupError)})`,
+      );
+    }
     throw err;
   }
 }
@@ -409,7 +424,7 @@ export async function appendNarrativeEntry(params: {
     }
   }
 
-  await fs.writeFile(dreamsPath, updated.endsWith("\n") ? updated : `${updated}\n`, "utf-8");
+  await writeDreamsFileAtomic(dreamsPath, updated.endsWith("\n") ? updated : `${updated}\n`);
   return dreamsPath;
 }
 
@@ -434,6 +449,7 @@ export async function generateAndAppendDreamNarrative(params: {
 
   try {
     const { runId } = await params.subagent.run({
+      idempotencyKey: sessionKey,
       sessionKey,
       message,
       extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,

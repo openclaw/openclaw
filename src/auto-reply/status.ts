@@ -17,6 +17,7 @@ import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveMainSessionKey,
+  resolveSessionPluginDebugLines,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   type SessionEntry,
@@ -673,6 +674,8 @@ export function buildStatusMessage(args: StatusArgs): string {
   const queueDetails = formatQueueDetails(args.queue);
   const verboseLabel =
     verboseLevel === "full" ? "verbose:full" : verboseLevel === "on" ? "verbose" : null;
+  const pluginDebugLines = verboseLevel !== "off" ? resolveSessionPluginDebugLines(entry) : [];
+  const pluginStatusLine = pluginDebugLines.length > 0 ? pluginDebugLines.join(" · ") : null;
   const elevatedLabel =
     elevatedLevel && elevatedLevel !== "off"
       ? elevatedLevel === "on"
@@ -789,6 +792,19 @@ export function buildStatusMessage(args: StatusArgs): string {
   })();
   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
   const modelLine = `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`;
+
+  // Show configured fallback models (from agent model config)
+  const configuredFallbacks = (() => {
+    const modelConfig = args.agent?.model;
+    if (typeof modelConfig === "object" && modelConfig && Array.isArray(modelConfig.fallbacks)) {
+      return modelConfig.fallbacks;
+    }
+    return undefined;
+  })();
+  const configuredFallbacksLine = configuredFallbacks?.length
+    ? `🔄 Fallbacks: ${configuredFallbacks.join(", ")}`
+    : null;
+
   const showFallbackAuth = activeAuthLabelValue && activeAuthLabelValue !== selectedAuthLabelValue;
   const fallbackLine = fallbackState.active
     ? `↪️ Fallback: ${activeModelLabel}${
@@ -809,6 +825,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     versionLine,
     args.timeLine,
     modelLine,
+    configuredFallbacksLine,
     fallbackLine,
     usageCostLine,
     cacheLine,
@@ -819,6 +836,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     args.subagentsLine,
     args.taskLine,
     `⚙️ ${optionsLine}`,
+    pluginStatusLine ? `🧩 ${pluginStatusLine}` : null,
     voiceLine,
     activationLine,
   ]

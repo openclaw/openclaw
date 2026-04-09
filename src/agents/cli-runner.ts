@@ -4,14 +4,20 @@ import type { OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { executePreparedCliRun } from "./cli-runner/execute.js";
 import { prepareCliRunContext } from "./cli-runner/prepare.js";
-import type { RunCliAgentParams } from "./cli-runner/types.js";
+import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import { FailoverError, isFailoverError, resolveFailoverStatus } from "./failover-error.js";
 import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
 
 export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPiRunResult> {
   const context = await prepareCliRunContext(params);
+  return runPreparedCliAgent(context);
+}
 
+export async function runPreparedCliAgent(
+  context: PreparedCliRunContext,
+): Promise<EmbeddedPiRunResult> {
+  const { params } = context;
   const buildCliRunResult = (resultParams: {
     output: Awaited<ReturnType<typeof executePreparedCliRun>>;
     effectiveCliSessionId?: string;

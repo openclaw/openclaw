@@ -196,9 +196,11 @@ describe("scripts/test-projects changed-target routing", () => {
 describe("scripts/test-projects full-suite sharding", () => {
   it("splits untargeted runs into fixed core shards and per-extension configs", () => {
     const previousParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+    const previousSerial = process.env.OPENCLAW_TEST_PROJECTS_SERIAL;
     delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
     delete process.env.OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD;
     delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+    process.env.OPENCLAW_TEST_PROJECTS_SERIAL = "1";
     try {
       expect(buildFullSuiteVitestRunPlans([], process.cwd()).map((plan) => plan.config)).toEqual([
         "vitest.full-core-unit-fast.config.ts",
@@ -239,13 +241,67 @@ describe("scripts/test-projects full-suite sharding", () => {
       } else {
         process.env.OPENCLAW_TEST_PROJECTS_PARALLEL = previousParallel;
       }
+      if (previousSerial === undefined) {
+        delete process.env.OPENCLAW_TEST_PROJECTS_SERIAL;
+      } else {
+        process.env.OPENCLAW_TEST_PROJECTS_SERIAL = previousSerial;
+      }
+    }
+  });
+
+  it("expands untargeted local runs to leaf project configs by default", () => {
+    const previousLeafShards = process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+    const previousParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+    const previousSerial = process.env.OPENCLAW_TEST_PROJECTS_SERIAL;
+    const previousCi = process.env.CI;
+    const previousActions = process.env.GITHUB_ACTIONS;
+    delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+    delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+    delete process.env.OPENCLAW_TEST_PROJECTS_SERIAL;
+    delete process.env.CI;
+    delete process.env.GITHUB_ACTIONS;
+    try {
+      const configs = buildFullSuiteVitestRunPlans([], process.cwd()).map((plan) => plan.config);
+
+      expect(configs).toContain("vitest.gateway.config.ts");
+      expect(configs).toContain("vitest.extension-telegram.config.ts");
+      expect(configs).not.toContain("vitest.full-agentic.config.ts");
+      expect(configs).not.toContain("vitest.full-core-unit-fast.config.ts");
+    } finally {
+      if (previousLeafShards === undefined) {
+        delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+      } else {
+        process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = previousLeafShards;
+      }
+      if (previousParallel === undefined) {
+        delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+      } else {
+        process.env.OPENCLAW_TEST_PROJECTS_PARALLEL = previousParallel;
+      }
+      if (previousSerial === undefined) {
+        delete process.env.OPENCLAW_TEST_PROJECTS_SERIAL;
+      } else {
+        process.env.OPENCLAW_TEST_PROJECTS_SERIAL = previousSerial;
+      }
+      if (previousCi === undefined) {
+        delete process.env.CI;
+      } else {
+        process.env.CI = previousCi;
+      }
+      if (previousActions === undefined) {
+        delete process.env.GITHUB_ACTIONS;
+      } else {
+        process.env.GITHUB_ACTIONS = previousActions;
+      }
     }
   });
 
   it("can skip the aggregate extension shard when CI runs dedicated extension shards", () => {
     const previous = process.env.OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD;
     const previousParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+    const previousSerial = process.env.OPENCLAW_TEST_PROJECTS_SERIAL;
     delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+    process.env.OPENCLAW_TEST_PROJECTS_SERIAL = "1";
     process.env.OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD = "1";
     try {
       const configs = buildFullSuiteVitestRunPlans([], process.cwd()).map((plan) => plan.config);
@@ -262,6 +318,11 @@ describe("scripts/test-projects full-suite sharding", () => {
         delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
       } else {
         process.env.OPENCLAW_TEST_PROJECTS_PARALLEL = previousParallel;
+      }
+      if (previousSerial === undefined) {
+        delete process.env.OPENCLAW_TEST_PROJECTS_SERIAL;
+      } else {
+        process.env.OPENCLAW_TEST_PROJECTS_SERIAL = previousSerial;
       }
     }
   });

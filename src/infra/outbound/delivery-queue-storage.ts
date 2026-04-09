@@ -38,7 +38,7 @@ export interface QueuedDelivery extends QueuedDeliveryPayload {
   lastError?: string;
 }
 
-function resolveQueueDir(stateDir?: string): string {
+export function resolveQueueDir(stateDir?: string): string {
   const base = stateDir ?? resolveStateDir();
   return path.join(base, QUEUE_DIRNAME);
 }

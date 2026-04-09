@@ -1,10 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Command } from "commander";
-import {
-  createEmbeddingProvider,
-  registerBuiltInMemoryEmbeddingProviders,
-} from "../../extensions/memory-core/runtime-api.js";
 import { agentCommand } from "../agents/agent-command.js";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
@@ -30,6 +26,10 @@ import {
 import { getImageMetadata } from "../media/image-ops.js";
 import { detectMime, extensionForMime, normalizeMimeType } from "../media/mime.js";
 import { saveMediaBuffer } from "../media/store.js";
+import {
+  createEmbeddingProvider,
+  registerBuiltInMemoryEmbeddingProviders,
+} from "../plugin-sdk/memory-core-bundled-runtime.js";
 import {
   listMemoryEmbeddingProviders,
   registerMemoryEmbeddingProvider,
