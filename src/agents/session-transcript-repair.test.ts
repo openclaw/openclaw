@@ -761,6 +761,34 @@ describe("sanitizeToolCallInputs", () => {
     const attachments = (inputObj.attachments ?? []) as Array<Record<string, unknown>>;
     expect(attachments[0]?.content).toBe("__OPENCLAW_REDACTED__");
   });
+
+  it("redacts sessions_spawn attachments in snake_case tool_use blocks", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "call_snake",
+            name: "sessions_spawn",
+            input: {
+              task: "do stuff",
+              attachments: [{ name: "secret.txt", content: "TOP_SECRET" }],
+            },
+          },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input);
+    const toolCalls = getAssistantToolCallBlocks(out) as Array<Record<string, unknown>>;
+
+    expect(toolCalls).toHaveLength(1);
+    const inputObj = (toolCalls[0]?.input ?? {}) as Record<string, unknown>;
+    expect(inputObj.task).toBe("do stuff");
+    const attachments = (inputObj.attachments ?? []) as Array<Record<string, unknown>>;
+    expect(attachments[0]?.content).toBe("__OPENCLAW_REDACTED__");
+  });
   it("preserves other block properties when trimming tool names", () => {
     const toolCalls = sanitizeAssistantToolCalls([
       { type: "toolCall", id: "call_1", name: " read ", arguments: { path: "/tmp/test" } },
