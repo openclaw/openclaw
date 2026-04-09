@@ -479,6 +479,13 @@ class GatewayConfigResolverTest {
   }
 
   @Test
+  fun composeGatewayManualUrlWrapsBareIpv6Hosts() {
+    val url = composeGatewayManualUrl("::1", "18789", tls = false)
+
+    assertEquals("http://[::1]:18789", url)
+  }
+
+  @Test
   fun resolveGatewayConnectConfigManualAcceptsTailscaleHostWithoutPort() {
     val resolved =
       resolveGatewayConnectConfig(
@@ -498,6 +505,28 @@ class GatewayConfigResolverTest {
     assertEquals("mydevice.tail1234.ts.net", resolved?.host)
     assertEquals(443, resolved?.port)
     assertEquals(true, resolved?.tls)
+  }
+
+  @Test
+  fun resolveGatewayConnectConfigManualAcceptsBareIpv6LoopbackHost() {
+    val resolved =
+      resolveGatewayConnectConfig(
+        useSetupCode = false,
+        setupCode = "",
+        savedManualHost = "",
+        savedManualPort = "",
+        savedManualTls = false,
+        manualHostInput = "::1",
+        manualPortInput = "18789",
+        manualTlsInput = false,
+        fallbackBootstrapToken = "",
+        fallbackToken = "",
+        fallbackPassword = "",
+      )
+
+    assertEquals("::1", resolved?.host)
+    assertEquals(18789, resolved?.port)
+    assertEquals(false, resolved?.tls)
   }
 
   private fun encodeSetupCode(payloadJson: String): String {

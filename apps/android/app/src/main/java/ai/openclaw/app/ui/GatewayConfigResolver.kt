@@ -251,7 +251,16 @@ internal fun composeGatewayManualUrl(hostInput: String, portInput: String, tls: 
   }
   if (port !in 1..65535) return null
   val scheme = if (tls) "https" else "http"
-  return "$scheme://$host:$port"
+  val normalizedHost =
+    if (host.startsWith("[") && host.endsWith("]")) {
+      host
+    } else if (host.contains(':')) {
+      // Manual host input accepts raw IPv6 literals, but URLs require bracketed IPv6 hosts.
+      "[$host]"
+    } else {
+      host
+    }
+  return "$scheme://$normalizedHost:$port"
 }
 
 private fun parseJsonObject(input: String): JsonObject? {
