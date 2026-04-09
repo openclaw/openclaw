@@ -1,0 +1,5 @@
+{
+  "id": "reply-boundary-guard",
+  "name": "Reply Boundary Guard",
+  "description": "Applies canonical reply-boundary policy to outbound replies and supplements bare auto-report-back promises."
+}

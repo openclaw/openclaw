@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/reply-boundary-guard",
+  "version": "2026.4.8",
+  "private": true,
+  "description": "OpenClaw reply-boundary guard plugin",
+  "type": "module",
+  "peerDependencies": {
+    "openclaw": "*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
