@@ -81,4 +81,18 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
 
     expect(result.readFile).toBeTypeOf("function");
   });
+
+  it("keeps host reads enabled when no group policy applies", () => {
+    const result = resolveAgentScopedOutboundMediaAccess({
+      cfg: {
+        tools: {
+          allow: ["read"],
+        },
+      } as OpenClawConfig,
+      messageProvider: "whatsapp",
+      requesterSenderId: "trusted-user",
+    });
+
+    expect(result.readFile).toBeTypeOf("function");
+  });
 });

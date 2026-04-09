@@ -49,7 +49,11 @@ function isAgentScopedHostMediaReadAllowed(
     senderUsername: params.requesterSenderUsername,
     senderE164: params.requesterSenderE164,
   });
-  return isToolAllowedByPolicies("read", [groupPolicy]);
+  // Sender/group policy only applies when a concrete group override exists.
+  if (groupPolicy && !isToolAllowedByPolicies("read", [groupPolicy])) {
+    return false;
+  }
+  return true;
 }
 
 export function createAgentScopedHostMediaReadFile(
