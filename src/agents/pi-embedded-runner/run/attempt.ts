@@ -998,6 +998,7 @@ export async function runEmbeddedAttempt(
         model: params.model,
         resolvedApiKey: params.resolvedApiKey,
         authStorage: params.authStorage,
+        httpTimeoutMs: params.timeoutMs,
       });
 
       const { effectiveExtraParams } = applyExtraParamsToAgent(

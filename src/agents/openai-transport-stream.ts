@@ -48,6 +48,9 @@ type BaseStreamOptions = {
   sessionId?: string;
   onPayload?: (payload: unknown, model: Model<Api>) => unknown;
   headers?: Record<string, string>;
+  /** HTTP-level timeout in milliseconds passed to the OpenAI SDK client constructor.
+   * Overrides the SDK's built-in 10-minute default. Derived from the run's timeoutMs. */
+  httpTimeoutMs?: number;
 };
 
 type OpenAIResponsesOptions = BaseStreamOptions & {
@@ -619,6 +622,7 @@ function createOpenAIResponsesClient(
   apiKey: string,
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
+  httpTimeoutMs?: number,
 ) {
   return new OpenAI({
     apiKey,
@@ -626,6 +630,7 @@ function createOpenAIResponsesClient(
     dangerouslyAllowBrowser: true,
     defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders),
     fetch: buildGuardedModelFetch(model),
+    ...(httpTimeoutMs !== undefined ? { timeout: httpTimeoutMs } : {}),
   });
 }
 
@@ -665,6 +670,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           apiKey,
           options?.headers,
           turnState?.headers,
+          (options as BaseStreamOptions | undefined)?.httpTimeoutMs,
         );
         let params = buildOpenAIResponsesParams(
           model,
@@ -819,6 +825,7 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
           apiKey,
           options?.headers,
           turnState?.headers,
+          (options as BaseStreamOptions | undefined)?.httpTimeoutMs,
         );
         const deploymentName = resolveAzureDeploymentName(model);
         let params = buildAzureOpenAIResponsesParams(
@@ -881,6 +888,7 @@ function createAzureOpenAIClient(
   apiKey: string,
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
+  httpTimeoutMs?: number,
 ) {
   return new AzureOpenAI({
     apiKey,
@@ -889,6 +897,7 @@ function createAzureOpenAIClient(
     defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders),
     baseURL: normalizeAzureBaseUrl(model.baseUrl),
     fetch: buildGuardedModelFetch(model),
+    ...(httpTimeoutMs !== undefined ? { timeout: httpTimeoutMs } : {}),
   });
 }
 
@@ -918,6 +927,7 @@ function createOpenAICompletionsClient(
   context: Context,
   apiKey: string,
   optionHeaders?: Record<string, string>,
+  httpTimeoutMs?: number,
 ) {
   return new OpenAI({
     apiKey,
@@ -925,6 +935,7 @@ function createOpenAICompletionsClient(
     dangerouslyAllowBrowser: true,
     defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders),
     fetch: buildGuardedModelFetch(model),
+    ...(httpTimeoutMs !== undefined ? { timeout: httpTimeoutMs } : {}),
   });
 }
 
@@ -952,7 +963,13 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
       };
       try {
         const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-        const client = createOpenAICompletionsClient(model, context, apiKey, options?.headers);
+        const client = createOpenAICompletionsClient(
+          model,
+          context,
+          apiKey,
+          options?.headers,
+          (options as BaseStreamOptions | undefined)?.httpTimeoutMs,
+        );
         let params = buildOpenAICompletionsParams(
           model as OpenAIModeModel,
           context,

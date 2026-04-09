@@ -70,6 +70,8 @@ export function resolveEmbeddedAgentStreamFn(params: {
   model: EmbeddedRunAttemptParams["model"];
   resolvedApiKey?: string;
   authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
+  /** HTTP-level timeout to inject into stream options for OpenAI-compatible transports. */
+  httpTimeoutMs?: number;
 }): StreamFn {
   if (params.providerStreamFn) {
     const inner = params.providerStreamFn;
@@ -84,7 +86,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
     // so keep injecting the resolved runtime apiKey for streamSimple-compatible
     // transports that still read credentials from options.apiKey.
     if (params.authStorage || params.resolvedApiKey) {
-      const { authStorage, model, resolvedApiKey } = params;
+      const { authStorage, httpTimeoutMs, model, resolvedApiKey } = params;
       return async (m, context, options) => {
         const apiKey = await resolveEmbeddedAgentApiKey({
           provider: model.provider,
@@ -94,11 +96,23 @@ export function resolveEmbeddedAgentStreamFn(params: {
         return inner(m, normalizeContext(context), {
           ...options,
           apiKey: apiKey ?? options?.apiKey,
+          ...(httpTimeoutMs !== undefined ? { httpTimeoutMs } : {}),
         });
       };
     }
+    if (params.httpTimeoutMs !== undefined) {
+      const { httpTimeoutMs } = params;
+      return (m, context, options) =>
+        inner(m, normalizeContext(context), { ...options, httpTimeoutMs });
+    }
     return (m, context, options) => inner(m, normalizeContext(context), options);
   }
+
+  const { httpTimeoutMs } = params;
+  const wrapWithTimeout = (fn: StreamFn): StreamFn => {
+    if (httpTimeoutMs === undefined) return fn;
+    return (m, context, options) => fn(m, context, { ...options, httpTimeoutMs });
+  };
 
   const currentStreamFn = params.currentStreamFn ?? streamSimple;
   if (params.shouldUseWebSocketTransport) {
@@ -116,9 +130,9 @@ export function resolveEmbeddedAgentStreamFn(params: {
   if (params.currentStreamFn === undefined || params.currentStreamFn === streamSimple) {
     const boundaryAwareStreamFn = createBoundaryAwareStreamFnForModel(params.model);
     if (boundaryAwareStreamFn) {
-      return boundaryAwareStreamFn;
+      return wrapWithTimeout(boundaryAwareStreamFn);
     }
   }
 
-  return currentStreamFn;
+  return wrapWithTimeout(currentStreamFn);
 }
