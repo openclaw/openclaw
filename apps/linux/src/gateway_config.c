@@ -35,6 +35,159 @@ static void secure_clear_free(gchar *s) {
     g_free(s);
 }
 
+static gboolean is_bind_mode_token(const gchar *bind) {
+    return g_strcmp0(bind, "auto") == 0 ||
+           g_strcmp0(bind, "lan") == 0 ||
+           g_strcmp0(bind, "loopback") == 0 ||
+           g_strcmp0(bind, "custom") == 0 ||
+           g_strcmp0(bind, "tailnet") == 0;
+}
+
+static gboolean is_wildcard_bind_literal(const gchar *bind) {
+    return g_strcmp0(bind, "0.0.0.0") == 0 ||
+           g_strcmp0(bind, "::") == 0 ||
+           g_strcmp0(bind, "::0") == 0;
+}
+
+static gboolean is_valid_hostname_label(const gchar *label, gsize len) {
+    if (!label || len == 0 || len > 63) {
+        return FALSE;
+    }
+    if (!g_ascii_isalnum(label[0]) || !g_ascii_isalnum(label[len - 1])) {
+        return FALSE;
+    }
+    for (gsize i = 0; i < len; i++) {
+        gchar ch = label[i];
+        if (!(g_ascii_isalnum(ch) || ch == '-')) {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+static gboolean is_valid_hostname_literal(const gchar *host) {
+    if (!host || host[0] == '\0') {
+        return FALSE;
+    }
+    gsize host_len = strlen(host);
+    if (host_len > 253) {
+        return FALSE;
+    }
+
+    const gchar *label_start = host;
+    const gchar *p = host;
+    while (TRUE) {
+        if (*p == '.' || *p == '\0') {
+            gsize label_len = (gsize)(p - label_start);
+            if (!is_valid_hostname_label(label_start, label_len)) {
+                return FALSE;
+            }
+            if (*p == '\0') {
+                break;
+            }
+            label_start = p + 1;
+        }
+        p++;
+    }
+    return TRUE;
+}
+
+static gboolean is_valid_bind_host_literal(const gchar *value) {
+    if (!value || value[0] == '\0') {
+        return FALSE;
+    }
+    if (g_hostname_is_ip_address(value)) {
+        return TRUE;
+    }
+    return is_valid_hostname_literal(value);
+}
+
+static gboolean resolve_effective_gateway_host(JsonObject *gateway_obj, GatewayConfig *config) {
+    if (gateway_obj && json_object_has_member(gateway_obj, "host")) {
+        JsonNode *host_node = json_object_get_member(gateway_obj, "host");
+        if (JSON_NODE_HOLDS_VALUE(host_node) && json_node_get_value_type(host_node) == G_TYPE_STRING) {
+            const gchar *host_str = json_node_get_string(host_node);
+            if (host_str && host_str[0] != '\0') {
+                config->host = g_strdup(host_str);
+                return TRUE;
+            }
+        }
+    }
+
+    if (!(gateway_obj && json_object_has_member(gateway_obj, "bind"))) {
+        return TRUE;
+    }
+
+    JsonNode *bind_node = json_object_get_member(gateway_obj, "bind");
+    if (!JSON_NODE_HOLDS_VALUE(bind_node) || json_node_get_value_type(bind_node) != G_TYPE_STRING) {
+        config->valid = FALSE;
+        config->error_code = GW_CFG_ERR_BIND_INVALID;
+        config->error = g_strdup("gateway.bind exists but is not a string");
+        return FALSE;
+    }
+
+    const gchar *bind_str = json_node_get_string(bind_node);
+    if (!bind_str || bind_str[0] == '\0') {
+        return TRUE;
+    }
+
+    if (is_bind_mode_token(bind_str)) {
+        if (g_strcmp0(bind_str, "custom") == 0) {
+            if (!(json_object_has_member(gateway_obj, "customBindHost"))) {
+                config->valid = FALSE;
+                config->error_code = GW_CFG_ERR_BIND_INVALID;
+                config->error = g_strdup("gateway.bind=custom requires gateway.customBindHost");
+                return FALSE;
+            }
+
+            JsonNode *custom_node = json_object_get_member(gateway_obj, "customBindHost");
+            if (!JSON_NODE_HOLDS_VALUE(custom_node) || json_node_get_value_type(custom_node) != G_TYPE_STRING) {
+                config->valid = FALSE;
+                config->error_code = GW_CFG_ERR_BIND_INVALID;
+                config->error = g_strdup("gateway.customBindHost exists but is not a string");
+                return FALSE;
+            }
+
+            const gchar *custom_host = json_node_get_string(custom_node);
+            if (!custom_host || custom_host[0] == '\0') {
+                config->valid = FALSE;
+                config->error_code = GW_CFG_ERR_BIND_INVALID;
+                config->error = g_strdup("gateway.bind=custom requires non-empty gateway.customBindHost");
+                return FALSE;
+            }
+            if (is_bind_mode_token(custom_host) ||
+                is_wildcard_bind_literal(custom_host) ||
+                !is_valid_bind_host_literal(custom_host)) {
+                config->valid = FALSE;
+                config->error_code = GW_CFG_ERR_BIND_INVALID;
+                config->error = g_strdup_printf("gateway.customBindHost is not a valid host literal: '%s'", custom_host);
+                return FALSE;
+            }
+
+            config->host = g_strdup(custom_host);
+            return TRUE;
+        }
+
+        config->host = g_strdup(GATEWAY_DEFAULT_HOST);
+        return TRUE;
+    }
+
+    if (is_wildcard_bind_literal(bind_str)) {
+        config->host = g_strdup(GATEWAY_DEFAULT_HOST);
+        return TRUE;
+    }
+
+    if (!is_valid_bind_host_literal(bind_str)) {
+        config->valid = FALSE;
+        config->error_code = GW_CFG_ERR_BIND_INVALID;
+        config->error = g_strdup_printf("gateway.bind is neither a recognized mode token nor a valid host literal: '%s'", bind_str);
+        return FALSE;
+    }
+
+    config->host = g_strdup(bind_str);
+    return TRUE;
+}
+
 static gchar* resolve_config_path(const GatewayConfigContext *ctx) {
     const gchar *override = g_getenv("OPENCLAW_CONFIG_PATH");
     if (override && override[0] != '\0') {
@@ -459,35 +612,11 @@ GatewayConfig* gateway_config_load(const GatewayConfigContext *ctx) {
         }
     }
 
-    /* L6: Resolve host from config, not always loopback */
+    /* L6: Resolve host from config and bind semantics */
     g_free(config->host);
     config->host = NULL;
-    if (gateway_obj && json_object_has_member(gateway_obj, "host")) {
-        JsonNode *host_node = json_object_get_member(gateway_obj, "host");
-        if (JSON_NODE_HOLDS_VALUE(host_node) && json_node_get_value_type(host_node) == G_TYPE_STRING) {
-            const gchar *host_str = json_node_get_string(host_node);
-            if (host_str && host_str[0] != '\0') {
-                config->host = g_strdup(host_str);
-            }
-        }
-    }
-    /* Fallback: check gateway.bind as alternative host source */
-    if (!config->host && gateway_obj && json_object_has_member(gateway_obj, "bind")) {
-        JsonNode *bind_node = json_object_get_member(gateway_obj, "bind");
-        if (JSON_NODE_HOLDS_VALUE(bind_node) && json_node_get_value_type(bind_node) == G_TYPE_STRING) {
-            const gchar *bind_str = json_node_get_string(bind_node);
-            /* Reject wildcards and unspecified addresses - they are not valid client endpoints */
-            gboolean is_wildcard = (g_strcmp0(bind_str, "0.0.0.0") == 0 ||
-                                    g_strcmp0(bind_str, "::") == 0 ||
-                                    g_strcmp0(bind_str, "::0") == 0);
-            if (bind_str && bind_str[0] != '\0' && !is_wildcard) {
-                if (g_strcmp0(bind_str, "loopback") == 0) {
-                    config->host = g_strdup("127.0.0.1");
-                } else {
-                    config->host = g_strdup(bind_str);
-                }
-            }
-        }
+    if (!resolve_effective_gateway_host(gateway_obj, config)) {
+        return config;
     }
     /* Final fallback to default loopback */
     if (!config->host) {
