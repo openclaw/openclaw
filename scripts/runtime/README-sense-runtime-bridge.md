@@ -1068,6 +1068,11 @@ from the existing runner journal, looks up each job through the existing job-sta
 formats digest-bearing rows with the shared Slack digest formatter, and otherwise returns a
 short `error / summary / status` line for each recent job.
 
+`/nemoclaw failures` is the matching filtered view: it reuses the same recent-job source and
+job-status lookup as `/nemoclaw recent`, but keeps only jobs with `result.error` or
+`result.exit_code != 0`. Digest-bearing failed jobs still render through the shared Slack
+digest formatter; non-digest failures prefer `error`, then `summary`, then minimal status.
+
 The runtime entrypoint now also emits a lightweight feedback layer for the next turn:
 
 - `feedback_summary`

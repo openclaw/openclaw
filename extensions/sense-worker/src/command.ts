@@ -86,23 +86,45 @@ function formatRecentHeader(params: { index: number; jobId: string; body: unknow
   return `${params.index}) ${shortJobId} ${status}${exitCode}`;
 }
 
-async function formatRecentJobs(config: OpenClawConfig | undefined): Promise<string> {
-  const refs = await getRecentSenseJobRefs(3);
-  if (!refs.length) {
-    return "No recent jobs.";
+function isFailedJob(body: unknown): boolean {
+  const record = asRecord(body);
+  const result = asRecord(record?.result);
+  if (typeof result?.error === "string" && result.error.trim()) {
+    return true;
   }
-  const lines = ["recent jobs"];
+  return typeof result?.exit_code === "number" && result.exit_code !== 0;
+}
+
+async function formatJobList(params: {
+  config: OpenClawConfig | undefined;
+  title: string;
+  emptyText: string;
+  limit?: number;
+  filter?: (body: unknown) => boolean;
+}): Promise<string> {
+  const refs = await getRecentSenseJobRefs(5);
+  if (!refs.length) {
+    return params.emptyText;
+  }
+  const lines = [params.title];
+  const limit = Math.max(1, params.limit ?? 3);
   let index = 1;
   for (const ref of refs) {
-    const result = await getSenseJobStatus(ref.jobId, resolveSenseWorkerConfig(config));
+    const result = await getSenseJobStatus(ref.jobId, resolveSenseWorkerConfig(params.config));
+    if (params.filter && !params.filter(result.body)) {
+      continue;
+    }
     lines.push(formatRecentHeader({ index, jobId: ref.jobId, body: result.body }));
     lines.push(
       `   ${formatRecentDigestLine(result.body) ?? formatRecentFallbackLine(result.body) ?? "status only"}`,
     );
     lines.push("");
     index += 1;
+    if (index > limit) {
+      break;
+    }
   }
-  return lines.join("\n").trimEnd();
+  return index === 1 ? params.emptyText : lines.join("\n").trimEnd();
 }
 
 export async function handleNemoClawCommand(
@@ -119,7 +141,25 @@ export async function handleNemoClawCommand(
     return { text: "No notification_digest_summary available." };
   }
   if (normalized === "recent") {
-    return { text: await formatRecentJobs(config) };
+    return {
+      text: await formatJobList({
+        config,
+        title: "recent jobs",
+        emptyText: "No recent jobs.",
+        limit: 3,
+      }),
+    };
+  }
+  if (normalized === "failures") {
+    return {
+      text: await formatJobList({
+        config,
+        title: "failed jobs",
+        emptyText: "No failed jobs.",
+        limit: 3,
+        filter: isFailedJob,
+      }),
+    };
   }
   if (normalized === "job") {
     return { text: "Usage: /nemoclaw job <id>" };
@@ -136,5 +176,8 @@ export async function handleNemoClawCommand(
     }
     return { text: formatJobSummary({ jobId, body: result.body }) };
   }
-  return { text: "Usage: /nemoclaw digest\nUsage: /nemoclaw recent\nUsage: /nemoclaw job <id>" };
+  return {
+    text:
+      "Usage: /nemoclaw digest\nUsage: /nemoclaw recent\nUsage: /nemoclaw failures\nUsage: /nemoclaw job <id>",
+  };
 }

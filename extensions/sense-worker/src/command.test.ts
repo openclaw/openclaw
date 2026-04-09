@@ -180,4 +180,85 @@ describe("handleNemoClawCommand", () => {
       text: "No recent jobs.",
     });
   });
+
+  it("returns failed jobs only", async () => {
+    getRecentSenseJobRefsMock.mockResolvedValue([
+      { jobId: "14c197e7-e508-45f1-a28f-eccd49f83c2c", source: "completed" },
+      { jobId: "9fb06324-8f9d-4c6b-bac5-57af00bc8207", source: "completed" },
+      { jobId: "06be5c75-945f-4c37-b028-45d1d63ddd32", source: "completed" },
+    ]);
+    getSenseJobStatusMock
+      .mockResolvedValueOnce({
+        body: {
+          status: "done",
+          result: {
+            exit_code: 0,
+            summary: "Healthy job.",
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        body: {
+          status: "done",
+          result: {
+            exit_code: 1,
+            error: "<urlopen error [Errno 111] Connection refused>",
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        body: {
+          status: "done",
+          result: {
+            exit_code: 1,
+            notification_digest_summary: [
+              {
+                digest_title: "Auth failures (immediate)",
+                digest_bucket_ui_layouts: {
+                  meta: {
+                    summary_parts: {
+                      display: {
+                        badge: { short: "MAJ" },
+                        leader: { compact: "Leader ★" },
+                      },
+                      percent: "50.0%",
+                      share: 0.5,
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      });
+    const { handleNemoClawCommand } = await import("./command.js");
+    await expect(handleNemoClawCommand("failures")).resolves.toEqual({
+      text:
+        "failed jobs\n" +
+        "1) 9fb06324... done exit=1\n" +
+        "   error=<urlopen error [Errno 111] Connection refused>\n" +
+        "\n" +
+        "2) 06be5c75... done exit=1\n" +
+        "   Auth failures (immediate) | MAJ | 50.0% | Leader ★ | share=0.5",
+    });
+  });
+
+  it("returns no-data text when there are no failed jobs", async () => {
+    getRecentSenseJobRefsMock.mockResolvedValue([
+      { jobId: "14c197e7-e508-45f1-a28f-eccd49f83c2c", source: "completed" },
+    ]);
+    getSenseJobStatusMock.mockResolvedValue({
+      body: {
+        status: "done",
+        result: {
+          exit_code: 0,
+          summary: "Healthy job.",
+        },
+      },
+    });
+    const { handleNemoClawCommand } = await import("./command.js");
+    await expect(handleNemoClawCommand("failures")).resolves.toEqual({
+      text: "No failed jobs.",
+    });
+  });
 });
