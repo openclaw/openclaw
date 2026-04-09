@@ -560,16 +560,18 @@ async function persistPluginStatusLines(params: {
   debugSummary?: string | null;
 }): Promise<void> {
   const sessionKey = params.sessionKey?.trim();
-  if (!sessionKey || !params.agentId.trim()) {
+  if (!sessionKey) {
     return;
   }
   const debugLine = buildPluginDebugLine(params.debugSummary);
+  const agentId = params.agentId.trim();
+  if (!agentId && (params.statusLine || debugLine)) {
+    return;
+  }
   try {
     const storePath = params.api.runtime.agent.session.resolveStorePath(
       params.api.config.session?.store,
-      {
-        agentId: params.agentId,
-      },
+      agentId ? { agentId } : undefined,
     );
     if (!params.statusLine && !debugLine) {
       const store = params.api.runtime.agent.session.loadSessionStore(storePath);
@@ -1068,7 +1070,6 @@ async function maybeResolveActiveRecall(params: {
         : {
             status: "empty",
             elapsedMs: Date.now() - startedAt,
-            rawReply,
             summary: null,
           };
     if (params.config.logging) {

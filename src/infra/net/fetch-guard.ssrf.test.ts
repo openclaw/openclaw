@@ -978,7 +978,9 @@ describe("fetchWithSsrFGuard hardening", () => {
       fetch: vi.fn(async () => okResponse()),
     };
     const lookupFn: LookupFn = vi.fn(async (hostname: string) => {
-      if (hostname === "localhost") return [{ address: "127.0.0.1", family: 4 }];
+      if (hostname === "localhost") {
+        return [{ address: "127.0.0.1", family: 4 }];
+      }
       return [{ address: "149.154.167.220", family: 4 }];
     }) as unknown as LookupFn;
     const fetchImpl = vi.fn(async () => okResponse());
@@ -1008,7 +1010,9 @@ describe("fetchWithSsrFGuard hardening", () => {
       fetch: vi.fn(async () => okResponse()),
     };
     const lookupFn: LookupFn = vi.fn(async (hostname: string) => {
-      if (hostname === "localhost") return [{ address: "127.0.0.1", family: 4 }];
+      if (hostname === "localhost") {
+        return [{ address: "127.0.0.1", family: 4 }];
+      }
       return [{ address: "149.154.167.220", family: 4 }];
     }) as unknown as LookupFn;
     const fetchImpl = vi.fn();

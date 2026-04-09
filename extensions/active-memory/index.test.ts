@@ -619,7 +619,7 @@ describe("active-memory plugin", () => {
   });
 
   it("clears stale status on skipped non-interactive turns even when agentId is missing", async () => {
-    const sessionKey = "agent:main:missing-agent";
+    const sessionKey = "noncanonical-session";
     hoisted.sessionStore[sessionKey] = {
       sessionId: "s-main",
       updatedAt: 0,
