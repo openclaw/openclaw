@@ -34,7 +34,7 @@ def eprint(msg: str) -> None:
 def run_codexbar_cost(provider: str) -> List[Dict[str, Any]]:
     cmd = ["codexbar", "cost", "--format", "json", "--provider", provider]
     try:
-        output = subprocess.check_output(cmd, text=True)
+        output = subprocess.check_output(cmd, text=True, shell=False)
     except FileNotFoundError:
         raise RuntimeError("codexbar not found on PATH. Install CodexBar CLI first.")
     except subprocess.CalledProcessError as exc:
