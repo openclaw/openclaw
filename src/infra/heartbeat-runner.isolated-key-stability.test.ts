@@ -167,6 +167,15 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
       // (:heartbeat)+$ regex in a single pass, then exactly one is re-appended.
       // A deeply accumulated key converges to "<base>:heartbeat" in one call.
       expect(ctx?.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
+
+      const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+        string,
+        { heartbeatIsolatedBaseSessionKey?: string }
+      >;
+      expect(store[deeplyAccumulatedKey]).toBeUndefined();
+      expect(store[`${baseSessionKey}:heartbeat`]).toMatchObject({
+        heartbeatIsolatedBaseSessionKey: baseSessionKey,
+      });
     });
   });
 

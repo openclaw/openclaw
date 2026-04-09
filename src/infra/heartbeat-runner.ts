@@ -35,7 +35,11 @@ import {
 } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
-import { saveSessionStore, updateSessionStore } from "../config/sessions/store.js";
+import {
+  archiveRemovedSessionTranscripts,
+  saveSessionStore,
+  updateSessionStore,
+} from "../config/sessions/store.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -353,6 +357,25 @@ function resolveIsolatedHeartbeatSessionKey(params: {
     isolatedSessionKey: `${params.sessionKey}:heartbeat`,
     isolatedBaseSessionKey: params.sessionKey,
   };
+}
+
+function resolveStaleHeartbeatIsolatedSessionKey(params: {
+  sessionKey: string;
+  isolatedSessionKey: string;
+  isolatedBaseSessionKey: string;
+}) {
+  if (params.sessionKey === params.isolatedSessionKey) {
+    return undefined;
+  }
+  const suffix = params.sessionKey.slice(params.isolatedBaseSessionKey.length);
+  if (
+    params.sessionKey.startsWith(params.isolatedBaseSessionKey) &&
+    suffix.length > 0 &&
+    /^(:heartbeat)+$/.test(suffix)
+  ) {
+    return params.sessionKey;
+  }
+  return undefined;
 }
 
 function resolveHeartbeatReasoningPayloads(
@@ -776,9 +799,46 @@ export async function runHeartbeatOnce(opts: {
       nowMs: startedAt,
       forceNew: true,
     });
+    const staleIsolatedSessionKey = resolveStaleHeartbeatIsolatedSessionKey({
+      sessionKey,
+      isolatedSessionKey,
+      isolatedBaseSessionKey,
+    });
+    const removedSessionFiles = new Map<string, string | undefined>();
+    if (staleIsolatedSessionKey) {
+      const staleEntry = cronSession.store[staleIsolatedSessionKey];
+      if (staleEntry?.sessionId) {
+        removedSessionFiles.set(staleEntry.sessionId, staleEntry.sessionFile);
+      }
+      delete cronSession.store[staleIsolatedSessionKey];
+    }
     cronSession.sessionEntry.heartbeatIsolatedBaseSessionKey = isolatedBaseSessionKey;
     cronSession.store[isolatedSessionKey] = cronSession.sessionEntry;
     await saveSessionStore(cronSession.storePath, cronSession.store);
+    if (removedSessionFiles.size > 0) {
+      try {
+        const referencedSessionIds = new Set(
+          Object.values(cronSession.store)
+            .map((sessionEntry) => sessionEntry?.sessionId)
+            .filter((sessionId): sessionId is string => Boolean(sessionId)),
+        );
+        await archiveRemovedSessionTranscripts({
+          removedSessionFiles,
+          referencedSessionIds,
+          storePath: cronSession.storePath,
+          reason: "deleted",
+          restrictToStoreDir: true,
+        });
+      } catch (err) {
+        log.warn(
+          {
+            err: String(err),
+            sessionKey: staleIsolatedSessionKey,
+          },
+          "heartbeat: failed to archive stale isolated session transcript",
+        );
+      }
+    }
     runSessionKey = isolatedSessionKey;
   }
 
