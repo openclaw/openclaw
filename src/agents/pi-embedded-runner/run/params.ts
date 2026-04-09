@@ -3,6 +3,7 @@ import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registr
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import type { ReplyPayload } from "../../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { GatewayToolAuditContext } from "../../../gateway/tool-audit.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { enqueueCommand } from "../../../process/command-queue.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
@@ -55,6 +56,7 @@ export type RunEmbeddedPiAgentParams = {
   replyToMode?: "off" | "first" | "all" | "batched";
   /** Mutable ref to track if a reply was sent (for "first" mode). */
   hasRepliedRef?: { value: boolean };
+  gatewayToolAudit?: GatewayToolAuditContext;
   /** Require explicit message tool targets (no implicit last-route sends). */
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */

@@ -1,6 +1,7 @@
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
+import type { GatewayToolAuditContext } from "../../gateway/tool-audit.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
@@ -67,6 +68,7 @@ export type AgentCommandOpts = {
   senderIsOwner?: boolean;
   /** Whether this caller is authorized to use provider/model per-run overrides. */
   allowModelOverride?: boolean;
+  gatewayToolAudit?: GatewayToolAuditContext;
   /** Group/spawn metadata for subagent policy inheritance and routing context. */
   groupId?: SpawnedRunMetadata["groupId"];
   groupChannel?: SpawnedRunMetadata["groupChannel"];

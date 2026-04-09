@@ -6,6 +6,11 @@ import { copyPluginToolMeta } from "../plugins/tools.js";
 import { PluginApprovalResolutions, type PluginApprovalResolution } from "../plugins/types.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { isPlainObject } from "../utils.js";
+import {
+  appendGatewayToolAuditRecord,
+  createGatewayToolAuditRecord,
+  type GatewayToolAuditContext,
+} from "../gateway/tool-audit.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -18,6 +23,7 @@ export type HookContext = {
   sessionId?: string;
   runId?: string;
   loopDetection?: ToolLoopDetectionConfig;
+  gatewayToolAudit?: GatewayToolAuditContext;
 };
 
 type HookOutcome = { blocked: true; reason: string } | { blocked: false; params: unknown };
@@ -122,6 +128,30 @@ async function recordLoopOutcome(args: {
     });
   } catch (err) {
     log.warn(`tool loop outcome tracking failed: tool=${args.toolName} error=${String(err)}`);
+  }
+}
+
+async function appendGatewayToolAuditEntry(args: {
+  ctx?: HookContext;
+  toolName: string;
+  toolParams: unknown;
+  toolCallId?: string;
+}): Promise<void> {
+  if (!args.ctx?.gatewayToolAudit) {
+    return;
+  }
+  try {
+    await appendGatewayToolAuditRecord({
+      record: createGatewayToolAuditRecord({
+        tool: args.toolName,
+        args: args.toolParams,
+        ctx: args.ctx.gatewayToolAudit,
+        runId: args.ctx.runId,
+        toolCallId: args.toolCallId,
+      }),
+    });
+  } catch (err) {
+    log.warn(`gateway tool audit append failed: tool=${args.toolName} error=${String(err)}`);
   }
 }
 
@@ -410,6 +440,12 @@ export function wrapToolWithBeforeToolCallHook(
         }
       }
       const normalizedToolName = normalizeToolName(toolName || "tool");
+      await appendGatewayToolAuditEntry({
+        ctx,
+        toolName: normalizedToolName,
+        toolParams: outcome.params,
+        toolCallId,
+      });
       try {
         const result = await execute(toolCallId, outcome.params, signal, onUpdate);
         await recordLoopOutcome({

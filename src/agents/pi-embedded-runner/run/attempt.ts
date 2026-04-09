@@ -513,6 +513,7 @@ export async function runEmbeddedAttempt(
             currentMessageId: params.currentMessageId,
             replyToMode: params.replyToMode,
             hasRepliedRef: params.hasRepliedRef,
+            gatewayToolAudit: params.gatewayToolAudit,
             modelHasVision,
             requireExplicitMessageTarget:
               params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
