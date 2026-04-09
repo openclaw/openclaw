@@ -1180,7 +1180,15 @@ Best practice:
         ous = default_ous
     else:
         extra_ous = [o.strip() for o in extra.split(",") if o.strip()]
-        ous = default_ous + extra_ous
+        ous = default_ous[:]
+        seen_safe = {ou.lower().replace(" ", "_").replace("-", "_") for ou in ous}
+        for ou in extra_ous:
+            safe = ou.lower().replace(" ", "_").replace("-", "_")
+            if safe in seen_safe:
+                print(f"    ⚠️  Skipping duplicate OU: '{ou}'")
+                continue
+            seen_safe.add(safe)
+            ous.append(ou)
     print(f"  ℹ️  Final OUs: {', '.join(ous)}")
 
     # Core accounts
