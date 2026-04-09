@@ -398,6 +398,115 @@ describe("pw-tools-core interaction navigation guard", () => {
     });
   });
 
+  it("runs the post-keypress navigation guard when navigation starts shortly after the keypress resolves", async () => {
+    vi.useFakeTimers();
+    try {
+      const listeners = new Set<() => void>();
+      let currentUrl = "http://127.0.0.1:9222/json/version";
+      const page = {
+        keyboard: {
+          press: vi.fn(async () => {
+            setTimeout(() => {
+              currentUrl = "http://127.0.0.1:9222/private-target";
+              for (const listener of listeners) {
+                listener();
+              }
+            }, 10);
+          }),
+        },
+        on: vi.fn((event: string, listener: () => void) => {
+          if (event === "framenavigated") {
+            listeners.add(listener);
+          }
+        }),
+        off: vi.fn((event: string, listener: () => void) => {
+          if (event === "framenavigated") {
+            listeners.delete(listener);
+          }
+        }),
+        url: vi.fn(() => currentUrl),
+      };
+      setPwToolsCoreCurrentPage(page);
+
+      const task = mod.pressKeyViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        key: "Enter",
+        ssrfPolicy: { allowPrivateNetwork: false },
+      });
+
+      await vi.advanceTimersByTimeAsync(10);
+      await task;
+
+      expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
+        {
+          cdpUrl: "http://127.0.0.1:18792",
+          page,
+          response: null,
+          ssrfPolicy: { allowPrivateNetwork: false },
+          targetId: "T1",
+        },
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("propagates blocked delayed submit navigation instead of reporting type success", async () => {
+    vi.useFakeTimers();
+    try {
+      const listeners = new Set<() => void>();
+      let currentUrl = "https://example.com/form";
+      const locator = {
+        fill: vi.fn(async () => {}),
+        press: vi.fn(async () => {
+          setTimeout(() => {
+            currentUrl = "http://127.0.0.1:9222/private-target";
+            for (const listener of listeners) {
+              listener();
+            }
+          }, 10);
+        }),
+      };
+      const page = {
+        on: vi.fn((event: string, listener: () => void) => {
+          if (event === "framenavigated") {
+            listeners.add(listener);
+          }
+        }),
+        off: vi.fn((event: string, listener: () => void) => {
+          if (event === "framenavigated") {
+            listeners.delete(listener);
+          }
+        }),
+        url: vi.fn(() => currentUrl),
+      };
+      setPwToolsCoreCurrentRefLocator(locator);
+      setPwToolsCoreCurrentPage(page);
+
+      const blocked = new Error("blocked delayed interaction navigation");
+      getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely.mockRejectedValueOnce(
+        blocked,
+      );
+
+      const task = mod.typeViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        ref: "1",
+        text: "hello",
+        submit: true,
+        ssrfPolicy: { allowPrivateNetwork: false },
+      });
+      const rejection = expect(task).rejects.toThrow("blocked delayed interaction navigation");
+
+      await vi.advanceTimersByTimeAsync(10);
+      await rejection;
+      expect(listeners.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not run the post-click navigation guard when the url is unchanged", async () => {
     const click = vi.fn(async () => {});
     const page = { url: vi.fn(() => "http://127.0.0.1:9222/json/version") };
