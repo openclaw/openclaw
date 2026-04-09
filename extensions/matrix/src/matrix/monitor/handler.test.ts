@@ -2119,7 +2119,15 @@ describe("matrix monitor handler draft streaming", () => {
 
     await deliver({ text: "Single block" }, { kind: "final" });
 
-    expect(editMessageMatrixMock).not.toHaveBeenCalled();
+    // MSC4357: even when text is unchanged, a finalize edit is sent to clear
+    // the live marker so supporting clients stop the streaming animation.
+    expect(editMessageMatrixMock).toHaveBeenCalledTimes(1);
+    expect(editMessageMatrixMock).toHaveBeenCalledWith(
+      "!room:example.org",
+      "$draft1",
+      "Single block",
+      expect.objectContaining({ live: false }),
+    );
     expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
     expect(redactEventMock).not.toHaveBeenCalled();
     await finish();
