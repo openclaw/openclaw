@@ -332,6 +332,7 @@ export function createFollowupRunner(params: {
       const finalPayloads = resolveFollowupDeliveryPayloads({
         cfg: runtimeConfig,
         payloads: sanitizedPayloads,
+        currentMessageId: queued.messageId,
         messageProvider: run.messageProvider,
         originatingAccountId: queued.originatingAccountId ?? run.agentAccountId,
         originatingChannel: queued.originatingChannel,

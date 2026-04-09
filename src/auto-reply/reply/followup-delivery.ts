@@ -20,6 +20,7 @@ import { resolveReplyToMode } from "./reply-threading.js";
 export function resolveFollowupDeliveryPayloads(params: {
   cfg: OpenClawConfig;
   payloads: ReplyPayload[];
+  currentMessageId?: string;
   messageProvider?: string;
   originatingAccountId?: string;
   originatingChannel?: string;
@@ -55,6 +56,7 @@ export function resolveFollowupDeliveryPayloads(params: {
     payloads: sanitizedPayloads,
     replyToMode,
     replyToChannel,
+    currentMessageId: params.currentMessageId,
   });
   const dedupedPayloads = filterMessagingToolDuplicates({
     payloads: replyTaggedPayloads,
