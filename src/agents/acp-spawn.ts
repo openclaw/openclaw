@@ -46,6 +46,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import { normalizeOptionalLowercaseString, normalizeOptionalString } from "../shared/string-coerce.js";
+import { createRunningTaskRun } from "../tasks/task-executor.js";
 import {
   deliveryContextFromSession,
   formatConversationTarget,
@@ -109,23 +110,30 @@ export const ACP_SPAWN_ERROR_CODES = [
 ] as const;
 export type SpawnAcpErrorCode = (typeof ACP_SPAWN_ERROR_CODES)[number];
 
-export type SpawnAcpResult = {
-  status: "accepted" | "forbidden" | "error";
+type SpawnAcpResultFields = {
   childSessionKey?: string;
   runId?: string;
   mode?: SpawnAcpMode;
   streamLogPath?: string;
   note?: string;
+};
+
+type SpawnAcpAcceptedResult = SpawnAcpResultFields & {
+  status: "accepted" | "forbidden" | "error";
+  childSessionKey: string;
+  runId: string;
+  mode: SpawnAcpMode;
+};
+
+type SpawnAcpFailedResult = SpawnAcpResultFields & {
+  status: "forbidden" | "error";
   error?: string;
   errorCode?: SpawnAcpErrorCode;
 };
 
-export function isSpawnAcpAcceptedResult(result: SpawnAcpResult): result is SpawnAcpResult & {
-  status: "accepted";
-  childSessionKey: string;
-  runId: string;
-  mode: SpawnAcpMode;
-} {
+export type SpawnAcpResult = SpawnAcpAcceptedResult | SpawnAcpFailedResult;
+
+export function isSpawnAcpAcceptedResult(result: SpawnAcpResult): result is SpawnAcpAcceptedResult {
   return result.status === "accepted";
 }
 
@@ -431,7 +439,7 @@ function createAcpSpawnFailure(params: {
   errorCode: SpawnAcpErrorCode;
   error: string;
   childSessionKey?: string;
-}): SpawnAcpResult {
+}): SpawnAcpFailedResult {
   return {
     status: params.status,
     errorCode: params.errorCode,
@@ -948,6 +956,38 @@ function resolveAcpSpawnBootstrapDeliveryPlan(params: {
   };
 }
 
+function createAcpBackgroundTaskRecord(params: {
+  runId: string;
+  requesterSessionKey: string;
+  requesterOrigin: ReturnType<typeof normalizeDeliveryContext>;
+  childSessionKey: string;
+  label?: string;
+  task: string;
+}) {
+  try {
+    createRunningTaskRun({
+      runtime: "acp",
+      sourceId: params.runId,
+      ownerKey: params.requesterSessionKey,
+      scopeKind: "session",
+      requesterOrigin: params.requesterOrigin,
+      childSessionKey: params.childSessionKey,
+      runId: params.runId,
+      label: params.label,
+      task: params.task,
+      preferMetadata: true,
+      deliveryStatus: params.requesterSessionKey ? "pending" : "parent_missing",
+      startedAt: Date.now(),
+    });
+  } catch (error) {
+    log.warn("Failed to create background task for ACP spawn", {
+      sessionKey: params.childSessionKey,
+      runId: params.runId,
+      error,
+    });
+  }
+}
+
 export async function spawnAcpDirect(
   params: SpawnAcpParams,
   ctx: SpawnAcpContext,
@@ -1218,6 +1258,14 @@ export async function spawnAcpDirect(
       });
     }
     parentRelay?.notifyStarted();
+    createAcpBackgroundTaskRecord({
+      runId: childRunId,
+      requesterSessionKey: requesterInternalKey,
+      requesterOrigin: requesterState.origin,
+      childSessionKey: sessionKey,
+      label: params.label,
+      task: params.task,
+    });
     return {
       status: "accepted",
       childSessionKey: sessionKey,
@@ -1227,6 +1275,15 @@ export async function spawnAcpDirect(
       note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
     };
   }
+
+  createAcpBackgroundTaskRecord({
+    runId: childRunId,
+    requesterSessionKey: requesterInternalKey,
+    requesterOrigin: requesterState.origin,
+    childSessionKey: sessionKey,
+    label: params.label,
+    task: params.task,
+  });
 
   return {
     status: "accepted",

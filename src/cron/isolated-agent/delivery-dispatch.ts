@@ -1,11 +1,11 @@
-import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { countActiveDescendantRuns } from "../../agents/subagent-registry-read.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAgentMainSessionKey, resolveMainSessionKey } from "../../config/sessions.js";
 import { resolveGatewayRpcTimeoutMs } from "../../gateway/call-timeouts.js";
-import { callGateway } from "../../gateway/call.js";
+import { callGateway } from "../../gateway/call.runtime.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import {
   deliverOutboundPayloads,
@@ -13,6 +13,7 @@ import {
 } from "../../infra/outbound/deliver.js";
 import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
+import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { logWarn, logError } from "../../logger.js";
 import { hasScheduledNextRunAtMs } from "../service/jobs.js";
@@ -24,21 +25,22 @@ import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-
 import {
   readDescendantSubagentFallbackReply,
   waitForDescendantSubagentSummary,
-} from "./subagent-followup.js";
+} from "./subagent-followup.runtime.js";
 
 function normalizeDeliveryTarget(channel: string, to: string): string {
   const channelLower = channel.trim().toLowerCase();
   const toTrimmed = to.trim();
+  const normalized = normalizeTargetForProvider(channelLower, toTrimmed) ?? toTrimmed;
   if (channelLower === "feishu" || channelLower === "lark") {
-    const lowered = toTrimmed.toLowerCase();
+    const lowered = normalized.toLowerCase();
     if (lowered.startsWith("user:")) {
-      return toTrimmed.slice("user:".length).trim();
+      return normalized.slice("user:".length).trim();
     }
     if (lowered.startsWith("chat:")) {
-      return toTrimmed.slice("chat:".length).trim();
+      return normalized.slice("chat:".length).trim();
     }
   }
-  return toTrimmed;
+  return normalized;
 }
 
 export function matchesMessagingToolDeliveryTarget(
@@ -67,10 +69,23 @@ export function resolveCronDeliveryBestEffort(job: CronJob): boolean {
   if (typeof job.delivery?.bestEffort === "boolean") {
     return job.delivery.bestEffort;
   }
-  if (job.payload.kind === "agentTurn" && typeof job.payload.bestEffortDeliver === "boolean") {
-    return job.payload.bestEffortDeliver;
+  if (job.payload.kind === "agentTurn") {
+    const legacyBestEffort = (job.payload as { bestEffortDeliver?: unknown }).bestEffortDeliver;
+    if (typeof legacyBestEffort === "boolean") {
+      return legacyBestEffort;
+    }
   }
   return false;
+}
+
+function shouldSuppressSilentDeliveryPayload(payload: ReplyPayload): boolean {
+  return (
+    isSilentReplyText(payload.text ?? "", SILENT_REPLY_TOKEN) &&
+    !payload.mediaUrl &&
+    (!payload.mediaUrls || payload.mediaUrls.length === 0) &&
+    !payload.interactive &&
+    !payload.btw
+  );
 }
 
 export type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
@@ -376,14 +391,38 @@ export async function dispatchCronDelivery(
       delivery,
     });
     try {
-      const payloadsForDelivery =
+      const payloadsForDelivery = (
         deliveryPayloads.length > 0
           ? deliveryPayloads
           : synthesizedText
             ? [{ text: synthesizedText }]
-            : [];
+            : []
+      ).filter((payload) => !shouldSuppressSilentDeliveryPayload(payload));
       if (payloadsForDelivery.length === 0) {
-        return null;
+        deliveryAttempted = true;
+        if (params.job.deleteAfterRun) {
+          try {
+            await callGateway({
+              method: "sessions.delete",
+              params: {
+                key: params.agentSessionKey,
+                deleteTranscript: true,
+                emitLifecycleHooks: false,
+              },
+              timeoutMs: resolveGatewayRpcTimeoutMs(params.cfg),
+            });
+          } catch {
+            // Best-effort cleanup only.
+          }
+        }
+        return params.withRunSession({
+          status: "ok",
+          summary,
+          outputText,
+          deliveryAttempted: true,
+          delivered: false,
+          ...params.telemetry,
+        });
       }
       if (params.isAborted()) {
         return params.withRunSession({
@@ -615,12 +654,14 @@ export async function dispatchCronDelivery(
       });
     }
     if (synthesizedText.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()) {
+      deliveryAttempted = true;
       await cleanupDirectCronSessionIfNeeded();
       return params.withRunSession({
         status: "ok",
         summary,
         outputText,
         delivered: false,
+        deliveryAttempted,
         ...params.telemetry,
       });
     }
