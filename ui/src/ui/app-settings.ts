@@ -14,7 +14,7 @@ import { loadAgentSkills } from "./controllers/agent-skills.ts";
 import { loadAgents } from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
 import { loadConfig, loadConfigSchema } from "./controllers/config.ts";
-import { loadCronJobs, loadCronRuns, loadCronStatus } from "./controllers/cron.ts";
+import { loadCronJobsPage, loadCronRuns, loadCronStatus } from "./controllers/cron.ts";
 import { loadDebug } from "./controllers/debug.ts";
 import { loadDevices } from "./controllers/devices.ts";
 import { loadDreamDiary, loadDreamingStatus } from "./controllers/dreaming.ts";
@@ -545,7 +545,7 @@ export async function loadOverview(host: SettingsHost) {
     loadPresence(app),
     loadSessions(app),
     loadCronStatus(app),
-    loadCronJobs(app),
+    loadCronJobsPage(app),
     loadDebug(app),
     loadSkills(app),
     loadUsage(app),
@@ -689,7 +689,7 @@ export async function loadCron(host: SettingsHost) {
   await Promise.all([
     loadChannels(app, false),
     loadCronStatus(app),
-    loadCronJobs(app),
+    loadCronJobsPage(app),
     loadCronRuns(app, activeCronJobId),
   ]);
 }

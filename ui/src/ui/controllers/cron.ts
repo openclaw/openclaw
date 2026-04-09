@@ -242,10 +242,6 @@ async function withCronBusy(
   }
 }
 
-export async function loadCronJobs(state: CronState) {
-  return await loadCronJobsPage(state, { append: false });
-}
-
 function normalizeCronPageMeta(params: {
   totalRaw: unknown;
   offsetRaw: unknown;
@@ -714,7 +710,7 @@ export async function addCronJob(state: CronState) {
       await client.request("cron.add", job);
       resetCronFormToDefaults(state);
     }
-    await loadCronJobs(state);
+    await loadCronJobsPage(state);
     await loadCronStatus(state);
   });
 }
@@ -722,7 +718,7 @@ export async function addCronJob(state: CronState) {
 export async function toggleCronJob(state: CronState, job: CronJob, enabled: boolean) {
   await withCronBusy(state, async (client) => {
     await client.request("cron.update", { id: job.id, patch: { enabled } });
-    await loadCronJobs(state);
+    await loadCronJobsPage(state);
     await loadCronStatus(state);
   });
 }
@@ -744,7 +740,7 @@ export async function removeCronJob(state: CronState, job: CronJob) {
       state.cronRunsJobId = null;
       clearCronRunsPage(state);
     }
-    await loadCronJobs(state);
+    await loadCronJobsPage(state);
     await loadCronStatus(state);
   });
 }

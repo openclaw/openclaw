@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
   loadConfigMock: vi.fn(async () => {}),
   loadConfigSchemaMock: vi.fn(async () => {}),
   loadCronStatusMock: vi.fn(async () => {}),
-  loadCronJobsMock: vi.fn(async () => {}),
+  loadCronJobsPageMock: vi.fn(async () => {}),
   loadCronRunsMock: vi.fn(async () => {}),
   loadLogsMock: vi.fn(async () => {}),
 }));
@@ -55,7 +55,7 @@ vi.mock("./controllers/config.ts", () => ({
 
 vi.mock("./controllers/cron.ts", () => ({
   loadCronStatus: mocks.loadCronStatusMock,
-  loadCronJobs: mocks.loadCronJobsMock,
+  loadCronJobsPage: mocks.loadCronJobsPageMock,
   loadCronRuns: mocks.loadCronRunsMock,
 }));
 
@@ -126,7 +126,7 @@ describe("refreshActiveTab", () => {
     expectCommonAgentsTabRefresh(host);
     expect(mocks.loadChannelsMock).toHaveBeenCalledWith(host, false);
     expect(mocks.loadCronStatusMock).toHaveBeenCalledOnce();
-    expect(mocks.loadCronJobsMock).toHaveBeenCalledOnce();
+    expect(mocks.loadCronJobsPageMock).toHaveBeenCalledOnce();
     expect(mocks.loadCronRunsMock).toHaveBeenCalledWith(host, "job-123");
     expect(mocks.loadAgentFilesMock).not.toHaveBeenCalled();
     expect(mocks.loadAgentSkillsMock).not.toHaveBeenCalled();
@@ -144,7 +144,7 @@ describe("refreshActiveTab", () => {
     expect(mocks.loadAgentSkillsMock).not.toHaveBeenCalled();
     expect(mocks.loadChannelsMock).not.toHaveBeenCalled();
     expect(mocks.loadCronStatusMock).not.toHaveBeenCalled();
-    expect(mocks.loadCronJobsMock).not.toHaveBeenCalled();
+    expect(mocks.loadCronJobsPageMock).not.toHaveBeenCalled();
     expect(mocks.loadCronRunsMock).not.toHaveBeenCalled();
   });
 

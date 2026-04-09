@@ -1387,20 +1387,20 @@ export function renderApp(state: AppViewState) {
                 },
                 onSelectPanel: (panel) => {
                   state.agentsPanel = panel;
-                  if (panel === "files" && resolvedAgentId) {
-                    if (state.agentFilesList?.agentId !== resolvedAgentId) {
-                      state.agentFilesList = null;
-                      state.agentFilesError = null;
-                      state.agentFileActive = null;
-                      state.agentFileContents = {};
-                      state.agentFileDrafts = {};
-                      void loadAgentFiles(state, resolvedAgentId);
-                    }
+                  if (
+                    panel === "files" &&
+                    resolvedAgentId &&
+                    state.agentFilesList?.agentId !== resolvedAgentId
+                  ) {
+                    state.agentFilesList = null;
+                    state.agentFilesError = null;
+                    state.agentFileActive = null;
+                    state.agentFileContents = {};
+                    state.agentFileDrafts = {};
+                    void loadAgentFiles(state, resolvedAgentId);
                   }
-                  if (panel === "skills") {
-                    if (resolvedAgentId) {
-                      void loadAgentSkills(state, resolvedAgentId);
-                    }
+                  if (panel === "skills" && resolvedAgentId) {
+                    void loadAgentSkills(state, resolvedAgentId);
                   }
                   if (panel === "tools" && resolvedAgentId) {
                     if (
