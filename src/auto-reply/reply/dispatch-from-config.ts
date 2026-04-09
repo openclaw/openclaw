@@ -495,15 +495,38 @@ export async function dispatchReplyFromConfig(params: {
 
   // Bridge to internal hooks (HOOK.md discovery system) - refs #8807
   if (sessionKey) {
-    fireAndForgetHook(
-      triggerInternalHook(
-        createInternalHookEvent("message", "received", sessionKey, {
-          ...toInternalMessageReceivedContext(hookContext),
-          timestamp,
-        }),
-      ),
-      "dispatch-from-config: message_received internal hook failed",
-    );
+    const hookEvent = createInternalHookEvent("message", "received", sessionKey, {
+      ...toInternalMessageReceivedContext(hookContext),
+      timestamp,
+    });
+    try {
+      await triggerInternalHook(hookEvent);
+    } catch (err) {
+      logVerbose(`dispatch-from-config: message_received internal hook failed: ${String(err)}`);
+    }
+    // Send any messages pushed by the hook back to the user
+    if (hookEvent.messages.length > 0) {
+      const replyChannel = originatingChannel ?? currentSurface;
+      const replyTo = originatingTo ?? ctx.From ?? ctx.To;
+      if (replyChannel && replyTo) {
+        const result = await routeReplyRuntime.routeReply({
+          payload: { text: hookEvent.messages.join("\n\n") },
+          channel: replyChannel,
+          to: replyTo,
+          sessionKey,
+          accountId: ctx.AccountId,
+          threadId: routeThreadId,
+          cfg,
+          isGroup,
+          groupId,
+        });
+        if (!result.ok) {
+          logVerbose(
+            `dispatch-from-config: message_received hook reply failed: ${result.error ?? "unknown error"}`,
+          );
+        }
+      }
+    }
   }
 
   markProcessing();
