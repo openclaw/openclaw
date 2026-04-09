@@ -21,6 +21,7 @@ import {
   sendJson,
   sendMethodNotAllowed,
 } from "./http-common.js";
+import { appendGatewayToolAuditRecord, createGatewayToolAuditRecord } from "./tool-audit.js";
 import {
   authorizeGatewayHttpRequestOrReply,
   getHeader,
@@ -288,6 +289,21 @@ export async function handleToolsInvokeHttpRequest(
       });
       return true;
     }
+    await appendGatewayToolAuditRecord({
+      record: createGatewayToolAuditRecord({
+        tool: toolName,
+        args: hookResult.params,
+        ctx: {
+          surface: "tools-invoke",
+          sessionKey,
+          messageChannel: messageChannel ?? undefined,
+          model: null,
+        },
+        toolCallId,
+      }),
+    }).catch((err) => {
+      logWarn(`tools-invoke: gateway tool audit append failed: ${String(err)}`);
+    });
     const result = await gatewayTool.execute?.(toolCallId, hookResult.params);
     sendJson(res, 200, { ok: true, result });
   } catch (err) {
