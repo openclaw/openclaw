@@ -191,10 +191,8 @@ jobs:
           const docsOnly = parseBoolean(process.env.OPENCLAW_CI_DOCS_ONLY);
           const docsChanged = parseBoolean(process.env.OPENCLAW_CI_DOCS_CHANGED);
           const workflowOnly = parseBoolean(process.env.OPENCLAW_CI_WORKFLOW_ONLY);
-          const forkWorkflowOnlyPullRequest =
-            process.env.GITHUB_REPOSITORY === "nathan-widjaja/openclaw" &&
-            eventName === "pull_request" &&
-            workflowOnly;
+          const forkWorkflowOnlyChange =
+            process.env.GITHUB_REPOSITORY === "nathan-widjaja/openclaw" && workflowOnly;
           const runNode = parseBoolean(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly;
           const runMacos = parseBoolean(process.env.OPENCLAW_CI_RUN_MACOS) && !docsOnly;
           const runAndroid = parseBoolean(process.env.OPENCLAW_CI_RUN_ANDROID) && !docsOnly;
@@ -223,17 +221,17 @@ jobs:
           const manifest = {
             docs_only: docsOnly,
             docs_changed: docsChanged,
-            run_node: forkWorkflowOnlyPullRequest ? false : runNode,
-            run_macos: forkWorkflowOnlyPullRequest ? false : runMacos,
-            run_android: forkWorkflowOnlyPullRequest ? false : runAndroid,
-            run_skills_python: forkWorkflowOnlyPullRequest ? false : runSkillsPython,
-            run_windows: forkWorkflowOnlyPullRequest ? false : runWindows,
+            run_node: forkWorkflowOnlyChange ? false : runNode,
+            run_macos: forkWorkflowOnlyChange ? false : runMacos,
+            run_android: forkWorkflowOnlyChange ? false : runAndroid,
+            run_skills_python: forkWorkflowOnlyChange ? false : runSkillsPython,
+            run_windows: forkWorkflowOnlyChange ? false : runWindows,
             has_changed_extensions: hasChangedExtensions,
             changed_extensions_matrix: changedExtensionsMatrix,
-            run_build_artifacts: forkWorkflowOnlyPullRequest ? false : runNode,
-            run_checks_fast: forkWorkflowOnlyPullRequest ? false : runNode,
+            run_build_artifacts: forkWorkflowOnlyChange ? false : runNode,
+            run_checks_fast: forkWorkflowOnlyChange ? false : runNode,
             checks_fast_core_matrix: createMatrix(
-              forkWorkflowOnlyPullRequest
+              forkWorkflowOnlyChange
                 ? []
                 : runNode
                 ? [
@@ -246,12 +244,12 @@ jobs:
                   ]
                 : [],
             ),
-            checks_fast_extensions_matrix: forkWorkflowOnlyPullRequest
+            checks_fast_extensions_matrix: forkWorkflowOnlyChange
               ? createMatrix([])
               : extensionShardMatrix,
-            run_checks: forkWorkflowOnlyPullRequest ? false : runNode,
+            run_checks: forkWorkflowOnlyChange ? false : runNode,
             checks_matrix: createMatrix(
-              forkWorkflowOnlyPullRequest
+              forkWorkflowOnlyChange
                 ? []
                 : runNode
                 ? [
@@ -271,9 +269,9 @@ jobs:
                   ]
                 : [],
             ),
-            run_extension_fast: forkWorkflowOnlyPullRequest ? false : hasChangedExtensions,
+            run_extension_fast: forkWorkflowOnlyChange ? false : hasChangedExtensions,
             extension_fast_matrix: createMatrix(
-              forkWorkflowOnlyPullRequest
+              forkWorkflowOnlyChange
                 ? []
                 : hasChangedExtensions
                 ? (changedExtensionsMatrix.include ?? []).map((entry) => ({
@@ -282,32 +280,32 @@ jobs:
                   }))
                 : [],
             ),
-            run_check: forkWorkflowOnlyPullRequest ? false : runNode,
-            run_check_additional: forkWorkflowOnlyPullRequest ? false : runNode,
-            run_build_smoke: forkWorkflowOnlyPullRequest ? false : runNode,
+            run_check: forkWorkflowOnlyChange ? false : runNode,
+            run_check_additional: forkWorkflowOnlyChange ? false : runNode,
+            run_build_smoke: forkWorkflowOnlyChange ? false : runNode,
             run_check_docs: docsChanged,
             run_control_ui_i18n: runControlUiI18n,
-            run_skills_python_job: forkWorkflowOnlyPullRequest ? false : runSkillsPython,
-            run_checks_windows: forkWorkflowOnlyPullRequest ? false : runWindows,
+            run_skills_python_job: forkWorkflowOnlyChange ? false : runSkillsPython,
+            run_checks_windows: forkWorkflowOnlyChange ? false : runWindows,
             checks_windows_matrix: createMatrix(
-              forkWorkflowOnlyPullRequest
+              forkWorkflowOnlyChange
                 ? []
                 : runWindows
                 ? [{ check_name: "checks-windows-node-test", runtime: "node", task: "test" }]
                 : [],
             ),
-            run_macos_node: forkWorkflowOnlyPullRequest ? false : runMacos,
+            run_macos_node: forkWorkflowOnlyChange ? false : runMacos,
             macos_node_matrix: createMatrix(
-              forkWorkflowOnlyPullRequest
+              forkWorkflowOnlyChange
                 ? []
                 : runMacos
                   ? [{ check_name: "macos-node", runtime: "node", task: "test" }]
                   : [],
             ),
-            run_macos_swift: forkWorkflowOnlyPullRequest ? false : runMacos,
-            run_android_job: forkWorkflowOnlyPullRequest ? false : runAndroid,
+            run_macos_swift: forkWorkflowOnlyChange ? false : runMacos,
+            run_android_job: forkWorkflowOnlyChange ? false : runAndroid,
             android_matrix: createMatrix(
-              forkWorkflowOnlyPullRequest
+              forkWorkflowOnlyChange
                 ? []
                 : runAndroid
                 ? [
@@ -450,7 +448,7 @@ jobs:
           pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" zizmor --files "${workflow_files[@]}"
 
       - name: Audit production dependencies
-        if: github.repository != 'nathan-widjaja/openclaw' || github.event_name != 'pull_request' || steps.workflow_scope.outputs.workflow_only != 'true'
+        if: github.repository != 'nathan-widjaja/openclaw' || steps.workflow_scope.outputs.workflow_only != 'true'
         run: pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" --all-files pnpm-audit-prod
 
   # Build dist once for Node-relevant changes and share it with downstream jobs.

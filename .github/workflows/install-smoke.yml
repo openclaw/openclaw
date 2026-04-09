@@ -102,7 +102,7 @@ jobs:
           run_changed_smoke="${OPENCLAW_CI_RUN_CHANGED_SMOKE:-false}"
           run_install_smoke=false
           if [ "$docs_only" != "true" ] && [ "$run_changed_smoke" = "true" ]; then
-            if [ "${GITHUB_REPOSITORY:-}" = "nathan-widjaja/openclaw" ] && [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ] && [ "$workflow_only" = "true" ]; then
+            if [ "${GITHUB_REPOSITORY:-}" = "nathan-widjaja/openclaw" ] && [ "$workflow_only" = "true" ]; then
               run_install_smoke=false
             else
               run_install_smoke=true
