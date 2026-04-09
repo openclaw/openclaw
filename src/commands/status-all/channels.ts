@@ -10,7 +10,7 @@ import {
   resolveChannelAccountEnabled,
 } from "../../channels/account-summary.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
+import { listChannelPluginsFromRegistry } from "../../channels/plugins/index.js";
 import type {
   ChannelAccountSnapshot,
   ChannelId,
@@ -19,6 +19,7 @@ import type {
 import { inspectReadOnlyChannelAccount } from "../../channels/read-only-account-inspect.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { sha256HexPrefix } from "../../logging/redact-identifier.js";
+import { loadPluginMetadataRegistrySnapshot } from "../../plugins/runtime/metadata-registry-loader.js";
 import { asRecord } from "../../shared/record-coerce.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { formatTimeAgo } from "./format.js";
@@ -486,8 +487,16 @@ export async function buildChannelsTable(
     columns: string[];
     rows: Array<Record<string, string>>;
   }> = [];
+  const sourceConfig = opts?.sourceConfig ?? cfg;
+  const channelPlugins = listChannelPluginsFromRegistry(
+    loadPluginMetadataRegistrySnapshot({
+      config: cfg,
+      activationSourceConfig: sourceConfig,
+      loadModules: false,
+    }),
+  );
 
-  for (const plugin of listChannelPlugins()) {
+  for (const plugin of channelPlugins) {
     const accountIds = plugin.config.listAccountIds(cfg);
     const defaultAccountId = resolveChannelDefaultAccountId({
       plugin,
@@ -497,7 +506,6 @@ export async function buildChannelsTable(
     const resolvedAccountIds = accountIds.length > 0 ? accountIds : [defaultAccountId];
 
     const accounts: ChannelAccountRow[] = [];
-    const sourceConfig = opts?.sourceConfig ?? cfg;
     for (const accountId of resolvedAccountIds) {
       accounts.push(
         await resolveChannelAccountRow({

@@ -15,7 +15,7 @@ import { resolveSkillSource } from "../agents/skills/source.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
-import { listChannelPlugins } from "../channels/plugins/index.js";
+import { listChannelPluginsFromRegistry } from "../channels/plugins/index.js";
 import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
@@ -26,6 +26,7 @@ import { resolveOAuthDir } from "../config/paths.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { readInstalledPackageVersion } from "../infra/package-update-utils.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { loadPluginMetadataRegistrySnapshot } from "../plugins/runtime/metadata-registry-loader.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   normalizeOptionalLowercaseString,
@@ -631,9 +632,15 @@ export async function collectPluginsTrustFindings(params: {
     const allow = params.cfg.plugins?.allow;
     const allowConfigured = Array.isArray(allow) && allow.length > 0;
     if (!allowConfigured) {
+      const configuredChannelPlugins = listChannelPluginsFromRegistry(
+        loadPluginMetadataRegistrySnapshot({
+          config: params.cfg,
+          loadModules: false,
+        }),
+      );
       const skillCommandsLikelyExposed = (
         await Promise.all(
-          listChannelPlugins().map(async (plugin) => {
+          configuredChannelPlugins.map(async (plugin) => {
             if (
               plugin.capabilities.nativeCommands !== true &&
               plugin.commands?.nativeSkillsAutoEnabled !== true

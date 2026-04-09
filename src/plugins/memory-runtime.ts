@@ -1,18 +1,51 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { normalizePluginsConfig } from "./config-state.js";
 import { resolveRuntimePluginRegistry } from "./loader.js";
+import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { getMemoryRuntime } from "./memory-state.js";
+import { hasKind } from "./slots.js";
 import {
   buildPluginRuntimeLoadOptions,
   resolvePluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
+
+function resolveMemoryBootstrapPluginIds(params: {
+  cfg: OpenClawConfig;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+}): string[] {
+  const pluginIds = new Set<string>();
+  const normalizedPlugins = normalizePluginsConfig(params.cfg.plugins);
+  if (normalizedPlugins.slots.memory && normalizedPlugins.slots.memory !== "none") {
+    pluginIds.add(normalizedPlugins.slots.memory);
+  }
+  for (const plugin of loadPluginManifestRegistry({
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  }).plugins) {
+    if (hasKind(plugin.kind, "memory")) {
+      pluginIds.add(plugin.id);
+    }
+  }
+  return [...pluginIds];
+}
 
 function ensureMemoryRuntime(cfg?: OpenClawConfig) {
   const current = getMemoryRuntime();
   if (current || !cfg) {
     return current;
   }
+  const context = resolvePluginRuntimeLoadContext({ config: cfg });
+  const onlyPluginIds = resolveMemoryBootstrapPluginIds({
+    cfg: context.config,
+    workspaceDir: context.workspaceDir,
+    env: context.env,
+  });
   resolveRuntimePluginRegistry(
-    buildPluginRuntimeLoadOptions(resolvePluginRuntimeLoadContext({ config: cfg })),
+    buildPluginRuntimeLoadOptions(context, {
+      ...(onlyPluginIds.length > 0 ? { onlyPluginIds } : {}),
+    }),
   );
   return getMemoryRuntime();
 }

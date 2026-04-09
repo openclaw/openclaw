@@ -1,11 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
+import { listChannelPluginsFromRegistry } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import { loadPluginMetadataRegistrySnapshot } from "../../plugins/runtime/metadata-registry-loader.js";
 import { makeDirectPlugin } from "../../test-utils/channel-plugin-test-fixtures.js";
 import { buildChannelsTable } from "./channels.js";
 
 vi.mock("../../channels/plugins/index.js", () => ({
-  listChannelPlugins: vi.fn(),
+  listChannelPluginsFromRegistry: vi.fn(),
+}));
+
+vi.mock("../../plugins/runtime/metadata-registry-loader.js", () => ({
+  loadPluginMetadataRegistrySnapshot: vi.fn(() => ({ channels: [] })),
 }));
 
 function makeMattermostPlugin(): ChannelPlugin {
@@ -219,7 +224,8 @@ async function buildTestTable(
   plugins: ChannelPlugin[],
   params?: { cfg?: Record<string, unknown>; sourceConfig?: Record<string, unknown> },
 ) {
-  vi.mocked(listChannelPlugins).mockReturnValue(plugins);
+  vi.mocked(loadPluginMetadataRegistrySnapshot).mockReturnValue({ channels: [] } as never);
+  vi.mocked(listChannelPluginsFromRegistry).mockReturnValue(plugins);
   return await buildChannelsTable((params?.cfg ?? { channels: {} }) as never, {
     showSecrets: false,
     sourceConfig: params?.sourceConfig as never,

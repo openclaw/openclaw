@@ -37,14 +37,9 @@ const EMPTY_CHANNEL_PLUGIN_CACHE: CachedChannelPlugins = {
 
 let cachedChannelPlugins = EMPTY_CHANNEL_PLUGIN_CACHE;
 
-function resolveCachedChannelPlugins(): CachedChannelPlugins {
-  const registry = requireActivePluginChannelRegistry();
-  const registryVersion = getActivePluginChannelRegistryVersion();
-  const cached = cachedChannelPlugins;
-  if (cached.registryVersion === registryVersion && cached.registryRef === registry) {
-    return cached;
-  }
-
+export function listChannelPluginsFromRegistry(registry: {
+  channels?: Array<{ plugin?: ChannelPlugin | null } | null>;
+}): ChannelPlugin[] {
   const channelPlugins: ChannelPlugin[] = [];
   if (Array.isArray(registry.channels)) {
     for (const entry of registry.channels) {
@@ -54,7 +49,7 @@ function resolveCachedChannelPlugins(): CachedChannelPlugins {
     }
   }
 
-  const sorted = dedupeChannels(channelPlugins).toSorted((a, b) => {
+  return dedupeChannels(channelPlugins).toSorted((a, b) => {
     const indexA = CHAT_CHANNEL_ORDER.indexOf(a.id as ChatChannelId);
     const indexB = CHAT_CHANNEL_ORDER.indexOf(b.id as ChatChannelId);
     const orderA = a.meta.order ?? (indexA === -1 ? 999 : indexA);
@@ -64,6 +59,17 @@ function resolveCachedChannelPlugins(): CachedChannelPlugins {
     }
     return a.id.localeCompare(b.id);
   });
+}
+
+function resolveCachedChannelPlugins(): CachedChannelPlugins {
+  const registry = requireActivePluginChannelRegistry();
+  const registryVersion = getActivePluginChannelRegistryVersion();
+  const cached = cachedChannelPlugins;
+  if (cached.registryVersion === registryVersion && cached.registryRef === registry) {
+    return cached;
+  }
+
+  const sorted = listChannelPluginsFromRegistry(registry);
   const byId = new Map<string, ChannelPlugin>();
   for (const plugin of sorted) {
     byId.set(plugin.id, plugin);

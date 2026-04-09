@@ -124,9 +124,6 @@ let auditNonDeepModulePromise: Promise<typeof import("./audit.nondeep.runtime.js
 let auditChannelModulePromise:
   | Promise<typeof import("./audit-channel.collect.runtime.js")>
   | undefined;
-let pluginRegistryLoaderModulePromise:
-  | Promise<typeof import("../plugins/runtime/runtime-registry-loader.js")>
-  | undefined;
 let pluginMetadataRegistryLoaderModulePromise:
   | Promise<typeof import("../plugins/runtime/metadata-registry-loader.js")>
   | undefined;
@@ -152,11 +149,6 @@ async function loadAuditNonDeepModule() {
 async function loadAuditChannelModule() {
   auditChannelModulePromise ??= import("./audit-channel.collect.runtime.js");
   return await auditChannelModulePromise;
-}
-
-async function loadPluginRegistryLoaderModule() {
-  pluginRegistryLoaderModulePromise ??= import("../plugins/runtime/runtime-registry-loader.js");
-  return await pluginRegistryLoaderModulePromise;
 }
 
 async function loadPluginMetadataRegistryLoaderModule() {
@@ -1366,15 +1358,16 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     context.includeChannelSecurity &&
     (context.plugins !== undefined || hasPotentialConfiguredChannels(cfg, env));
   if (shouldAuditChannelSecurity) {
-    if (context.plugins === undefined) {
-      (await loadPluginRegistryLoaderModule()).ensurePluginRegistryLoaded({
-        scope: "configured-channels",
-        config: cfg,
-        activationSourceConfig: context.sourceConfig,
-        env,
-      });
-    }
-    const channelPlugins = context.plugins ?? (await loadChannelPlugins()).listChannelPlugins();
+    const channelPlugins =
+      context.plugins ??
+      (await loadChannelPlugins()).listChannelPluginsFromRegistry(
+        (await loadPluginMetadataRegistryLoaderModule()).loadPluginMetadataRegistrySnapshot({
+          config: cfg,
+          activationSourceConfig: context.sourceConfig,
+          env,
+          loadModules: false,
+        }),
+      );
     const { collectChannelSecurityFindings } = await loadAuditChannelModule();
     findings.push(
       ...(await collectChannelSecurityFindings({
