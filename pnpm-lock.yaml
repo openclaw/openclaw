@@ -8,7 +8,7 @@ overrides:
   '@anthropic-ai/sdk': 0.81.0
   hono: 4.12.12
   '@hono/node-server': 1.19.13
-  axios: 1.13.6
+  axios: 1.15.0
   defu: 6.1.5
   fast-xml-parser: 5.5.7
   request: npm:@cypress/request@3.0.10
@@ -4277,8 +4277,8 @@ packages:
     resolution: {integrity: sha512-zJAaP9zxTcvTHRlejau3ZOY4V7SRpiByf3/dxx2uyKxxor19tpmpV2QRsTKikckwhaPmr2dVpxxMr7jOCYVp5g==}
     engines: {node: '>=6.0.0'}
 
-  axios@1.13.6:
-    resolution: {integrity: sha512-ChTCHMouEe2kn713WHbQGcuYrr6fXTBiu460OTwWrWob16g1bXn4vtz07Ope7ewMozJAnEquLk5lWQWtBig9DQ==}
+  axios@1.15.0:
+    resolution: {integrity: sha512-wWyJDlAatxk30ZJer+GeCWS209sA42X+N5jU2jy6oHTp7ufw8uzUTVFBX9+wTfAlhiJXGS0Bq7X6efruWjuK9Q==}
 
   b4a@1.8.0:
     resolution: {integrity: sha512-qRuSmNSkGQaHwNbM7J78Wwy+ghLEYF1zNrSeMxj4Kgw6y33O3mXcQ6Ie9fRvfU/YnxWkOchPXbaLb73TkIsfdg==}
@@ -8822,7 +8822,7 @@ snapshots:
 
   '@larksuiteoapi/node-sdk@1.60.0':
     dependencies:
-      axios: 1.13.6
+      axios: 1.15.0
       lodash.identity: 3.0.0
       lodash.merge: 4.6.2
       lodash.pickby: 4.6.0
@@ -9032,7 +9032,7 @@ snapshots:
       '@microsoft/teams.api': 2.0.6
       '@microsoft/teams.common': 2.0.6
       '@microsoft/teams.graph': 2.0.6
-      axios: 1.13.6
+      axios: 1.15.0
       cors: 2.8.6
       express: 5.2.1
       jsonwebtoken: 9.0.3
@@ -9046,7 +9046,7 @@ snapshots:
 
   '@microsoft/teams.common@2.0.6':
     dependencies:
-      axios: 1.13.6
+      axios: 1.15.0
     transitivePeerDependencies:
       - debug
 
@@ -9824,7 +9824,7 @@ snapshots:
       '@slack/types': 2.20.1
       '@slack/web-api': 7.15.0
       '@types/express': 5.0.6
-      axios: 1.13.6
+      axios: 1.15.0
       express: 5.2.1
       path-to-regexp: 8.4.0
       raw-body: 3.0.2
@@ -9870,7 +9870,7 @@ snapshots:
       '@slack/types': 2.20.1
       '@types/node': 25.5.2
       '@types/retry': 0.12.0
-      axios: 1.13.6
+      axios: 1.15.0
       eventemitter3: 5.0.4
       form-data: 2.5.4
       is-electron: 2.2.2
@@ -10836,11 +10836,11 @@ snapshots:
 
   await-to-js@3.0.0: {}
 
-  axios@1.13.6:
+  axios@1.15.0:
     dependencies:
       follow-redirects: 1.15.11
       form-data: 2.5.4
-      proxy-from-env: 1.1.0
+      proxy-from-env: 2.1.0
     transitivePeerDependencies:
       - debug
 

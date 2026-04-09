@@ -307,6 +307,16 @@ function resolveCronServiceFromStartupEvent(event: unknown): CronServiceLike | n
   return cron as CronServiceLike;
 }
 
+function resolveStartupConfigFromEvent(event: unknown, fallback: OpenClawConfig): OpenClawConfig {
+  const startupEvent = asRecord(event);
+  const startupContext = asRecord(startupEvent?.context);
+  const startupCfg = asRecord(startupContext?.cfg);
+  if (!startupCfg) {
+    return fallback;
+  }
+  return startupCfg as OpenClawConfig;
+}
+
 export function resolveShortTermPromotionDreamingConfig(params: {
   pluginConfig?: Record<string, unknown>;
   cfg?: OpenClawConfig;
@@ -584,9 +594,14 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     "gateway:startup",
     async (event: unknown) => {
       try {
+        // Use the resolved startup snapshot so cron reconciliation matches the boot config.
+        const startupCfg = resolveStartupConfigFromEvent(event, api.config);
         const config = resolveShortTermPromotionDreamingConfig({
-          pluginConfig: resolveMemoryCorePluginConfig(api.config) ?? api.pluginConfig,
-          cfg: api.config,
+          pluginConfig:
+            resolveMemoryCorePluginConfig(startupCfg) ??
+            resolveMemoryCorePluginConfig(api.config) ??
+            api.pluginConfig,
+          cfg: startupCfg,
         });
         const cron = resolveCronServiceFromStartupEvent(event);
         if (!cron && config.enabled) {

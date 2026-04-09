@@ -138,7 +138,7 @@ function resolveParallelFullSuiteConcurrency(specCount, env) {
   ) {
     return 1;
   }
-  return Math.min(5, specCount);
+  return 1;
 }
 
 function orderFullSuiteSpecsForParallelRun(specs) {
