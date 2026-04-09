@@ -211,6 +211,7 @@ export const FeishuConfigSchema = z
     enabled: z.boolean().optional(),
     defaultAccount: z.string().optional(),
     appMode: FeishuAppModeSchema.optional(),
+    disableSecurityWarning: z.boolean().optional(),
     // Top-level credentials (backward compatible for single-account mode)
     appId: z.string().optional(),
     appSecret: buildSecretInputSchema().optional(),

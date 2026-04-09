@@ -249,6 +249,7 @@ export async function runPreparedReply(
       })
     : "";
   const groupSystemPrompt = normalizeOptionalString(sessionCtx.GroupSystemPrompt) ?? "";
+  const dmSystemPrompt = normalizeOptionalString(sessionCtx.DirectMessageSystemPrompt) ?? "";
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
     { includeFormattingHints: !useFastReplyRuntime },
@@ -258,6 +259,7 @@ export async function runPreparedReply(
     groupChatContext,
     groupIntro,
     groupSystemPrompt,
+    dmSystemPrompt,
     buildExecOverridePromptHint({
       execOverrides,
       elevatedLevel: resolvedElevatedLevel,

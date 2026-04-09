@@ -49,4 +49,5 @@ export {
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-ingress";
+export { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 export { setFeishuRuntime } from "./src/runtime.js";

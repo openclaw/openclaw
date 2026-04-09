@@ -244,7 +244,13 @@ describe("createFeishuClient HTTP timeout", () => {
     expect(mockBaseHttpInstance.post).toHaveBeenCalledWith(
       "https://example.com/api",
       { data: 1 },
-      expect.objectContaining({ timeout: FEISHU_HTTP_TIMEOUT_MS, headers: { "X-Custom": "yes" } }),
+      expect.objectContaining({
+        timeout: FEISHU_HTTP_TIMEOUT_MS,
+        headers: expect.objectContaining({
+          "X-Custom": "yes",
+          "User-Agent": expect.stringMatching(/^openclaw-feishu-builtin\//),
+        }),
+      }),
     );
   });
 

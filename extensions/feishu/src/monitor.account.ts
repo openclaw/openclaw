@@ -1,4 +1,7 @@
 import * as crypto from "crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import type { ClawdbotConfig, RuntimeEnv, HistoryEntry } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
@@ -11,7 +14,7 @@ import {
 } from "./bot.js";
 import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
 import { maybeHandleFeishuQuickActionMenu } from "./card-ux-launcher.js";
-import { createEventDispatcher } from "./client.js";
+import { createEventDispatcher, createFeishuClient, setFeishuUserAgentMode } from "./client.js";
 import { handleFeishuCommentEvent } from "./comment-handler.js";
 import { isRecord, readString } from "./comment-shared.js";
 import {
@@ -28,7 +31,7 @@ import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import { botNames, botOpenIds } from "./monitor.state.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { getMessageFeishu } from "./send.js";
+import { getMessageFeishu, sendCardFeishu } from "./send.js";
 import { createFeishuThreadBindingManager } from "./thread-bindings.js";
 import type { FeishuChatType, ResolvedFeishuAccount } from "./types.js";
 
@@ -827,10 +830,219 @@ export type MonitorSingleAccountParams = {
   botOpenIdSource?: BotOpenIdSource;
 };
 
+// --- open policy security warning (one-time) ---
+
+function resolveFeishuStateDir(): string {
+  const stateOverride = process.env.OPENCLAW_STATE_DIR?.trim();
+  if (stateOverride) {
+    return path.join(stateOverride, "feishu");
+  }
+  return path.join(os.homedir(), ".openclaw", "feishu");
+}
+
+function resolveWarningRecordPath(): string {
+  return path.join(resolveFeishuStateDir(), "open-policy-warning.json");
+}
+
+type WarningRecord = {
+  userOpenId: string;
+  warnedAt: string;
+  dmPolicy: string;
+  groupPolicy: string;
+};
+
+function readWarningRecord(): WarningRecord | null {
+  try {
+    const raw = require("node:fs").readFileSync(resolveWarningRecordPath(), "utf-8");
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+async function writeWarningRecord(record: WarningRecord): Promise<void> {
+  const filePath = resolveWarningRecordPath();
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, JSON.stringify(record, null, 2), "utf-8");
+}
+
+function buildOpenPolicyWarningCard(params: {
+  dmOpen: boolean;
+  groupOpen: boolean;
+}): Record<string, unknown> {
+  const risks: string[] = [];
+  const risksEn: string[] = [];
+  if (params.dmOpen) {
+    risks.push("单聊策略为 open，任何人都可以与机器人私聊");
+    risksEn.push("DM policy is open — anyone can chat with the bot");
+  }
+  if (params.groupOpen) {
+    risks.push("群聊策略为 open，任何群成员都可以触发机器人");
+    risksEn.push("Group policy is open — any group member can trigger the bot");
+  }
+
+  const zhContent =
+    "当前使用**用户身份模式**，机器人以你的身份执行飞书操作。但检测到以下安全风险：\n\n" +
+    risks.map((r) => `⚠️ ${r}`).join("\n") +
+    "\n\n" +
+    "这意味着其他用户的对话可能触发以你的身份执行操作，存在**身份越权风险**。\n\n" +
+    "**建议操作：**\n" +
+    "- 将单聊策略（dmPolicy）改为 `allowlist` 或 `pairing`\n" +
+    "- 将群聊策略（groupPolicy）改为 `disabled` 或设置 `groupSenderAllowFrom`\n\n" +
+    "可在 `~/.openclaw/openclaw.json` 的 `channels.feishu` 中修改。";
+
+  const enContent =
+    "You are using **user-identity mode** — the bot operates Feishu as you. However, the following security risks were detected:\n\n" +
+    risksEn.map((r) => `⚠️ ${r}`).join("\n") +
+    "\n\n" +
+    "This means other users' messages may trigger operations under your identity, posing an **identity escalation risk**.\n\n" +
+    "**Recommended actions:**\n" +
+    "- Set dmPolicy to `allowlist` or `pairing`\n" +
+    "- Set groupPolicy to `disabled` or configure `groupSenderAllowFrom`\n\n" +
+    "Edit `channels.feishu` in `~/.openclaw/openclaw.json`.";
+
+  return {
+    config: { wide_screen_mode: true },
+    header: {
+      title: {
+        tag: "plain_text",
+        i18n: {
+          zh_cn: "⚠️ 安全策略提醒",
+          en_us: "⚠️ Security Policy Warning",
+        },
+      },
+      template: "orange",
+    },
+    i18n_elements: {
+      zh_cn: [{ tag: "markdown", content: zhContent }],
+      en_us: [{ tag: "markdown", content: enContent }],
+    },
+  };
+}
+
+export async function checkAndWarnOpenPolicyRisk(params: {
+  cfg: ClawdbotConfig;
+  accountId: string;
+  log: (...args: unknown[]) => void;
+}): Promise<void> {
+  const { cfg, accountId, log } = params;
+  try {
+    const feishuCfg = (cfg as Record<string, unknown>).channels as
+      | Record<string, unknown>
+      | undefined;
+    const accountCfg = (feishuCfg?.feishu ?? feishuCfg?.[accountId]) as
+      | Record<string, unknown>
+      | undefined;
+
+    // 1. Check if security warning is disabled
+    if (accountCfg?.disableSecurityWarning === true) {
+      log(`feishu[${accountId}]: open policy warning skipped: disabled by config`);
+      return;
+    }
+
+    // 2. Only warn in user-identity mode
+    if (accountCfg?.appMode !== "user") {
+      return;
+    }
+
+    // 3. Check if any policy is open
+    const dmPolicy = accountCfg?.dmPolicy as string | undefined;
+    const groupPolicy = accountCfg?.groupPolicy as string | undefined;
+    const dmOpen = dmPolicy === "open";
+    const groupOpen = groupPolicy === "open";
+    if (!dmOpen && !groupOpen) {
+      return;
+    }
+
+    // 4. Check if already warned
+    const existingRecord = readWarningRecord();
+    if (existingRecord) {
+      log(`feishu[${accountId}]: open policy warning skipped: already warned`);
+      return;
+    }
+
+    // 5. Resolve app owner via OAPI
+    let ownerOpenId: string | undefined;
+    try {
+      const account = resolveFeishuAccount({ cfg, accountId });
+      if (!account.configured || !account.appId) {
+        log(`feishu[${accountId}]: open policy warning skipped: account not configured`);
+        return;
+      }
+      const client = createFeishuClient(account) as {
+        request: (opts: Record<string, unknown>) => Promise<Record<string, unknown>>;
+      };
+      const appResp = (await client.request({
+        method: "GET",
+        url: `/open-apis/application/v6/applications/${account.appId}`,
+        data: {},
+        params: { lang: "zh_cn", user_id_type: "open_id" },
+        timeout: 10_000,
+      })) as { data?: { app?: { owner?: { owner_id?: string } } } };
+      ownerOpenId = appResp.data?.app?.owner?.owner_id;
+    } catch (err) {
+      log(
+        `feishu[${accountId}]: open policy warning skipped: failed to resolve owner (${String(err)})`,
+      );
+      return;
+    }
+
+    if (!ownerOpenId) {
+      log(`feishu[${accountId}]: open policy warning skipped: owner not found`);
+      return;
+    }
+
+    // 6. Send warning card
+    const card = buildOpenPolicyWarningCard({ dmOpen, groupOpen });
+    let sent = false;
+    try {
+      await sendCardFeishu({ cfg, to: `user:${ownerOpenId}`, card, accountId });
+      sent = true;
+      log(`feishu[${accountId}]: open policy warning sent to owner ${ownerOpenId}`);
+    } catch (err) {
+      log(
+        `feishu[${accountId}]: open policy warning failed for owner ${ownerOpenId}: ${String(err)}`,
+      );
+    }
+
+    // 7. Write record only on success
+    if (sent) {
+      const warnedAt = new Intl.DateTimeFormat("sv-SE", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+        timeZoneName: "longOffset",
+      })
+        .format(new Date())
+        .replace(" ", "T")
+        .replace(/\s*GMT/, "");
+      await writeWarningRecord({
+        userOpenId: ownerOpenId,
+        warnedAt,
+        dmPolicy: dmPolicy ?? "",
+        groupPolicy: groupPolicy ?? "",
+      });
+    }
+    log(`feishu[${accountId}]: open policy warning complete (sent=${sent})`);
+  } catch (err) {
+    log(`feishu[${accountId}]: open policy warning check failed (non-fatal): ${String(err)}`);
+  }
+}
+
+// --- end open policy security warning ---
+
 export async function monitorSingleAccount(params: MonitorSingleAccountParams): Promise<void> {
   const { cfg, account, runtime, abortSignal } = params;
   const { accountId } = account;
   const log = runtime?.log ?? console.log;
+
+  // Set User-Agent appMode suffix from config (e.g. "bot" or "user")
+  const appMode = (account.config as Record<string, unknown>).appMode as string | undefined;
+  setFeishuUserAgentMode(appMode);
 
   const botOpenIdSource = params.botOpenIdSource ?? { kind: "fetch" };
   const botIdentity =
@@ -856,6 +1068,9 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
   if (warmupCount > 0) {
     log(`feishu[${accountId}]: dedup warmup loaded ${warmupCount} entries from disk`);
   }
+
+  // One-time open policy security warning (non-blocking)
+  void checkAndWarnOpenPolicyRisk({ cfg, accountId, log });
 
   let threadBindingManager: ReturnType<typeof createFeishuThreadBindingManager> | null = null;
   try {

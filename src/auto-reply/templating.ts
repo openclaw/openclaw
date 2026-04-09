@@ -129,6 +129,8 @@ export type MsgContext = {
   GroupSpace?: string;
   GroupMembers?: string;
   GroupSystemPrompt?: string;
+  /** System prompt injected for direct-message conversations (e.g. channel-specific DM context). */
+  DirectMessageSystemPrompt?: string;
   /** Untrusted metadata that must not be treated as system instructions. */
   UntrustedContext?: string[];
   /** System-attached provenance for the current inbound message. */
