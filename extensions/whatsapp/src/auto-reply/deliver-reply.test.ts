@@ -25,6 +25,9 @@ vi.mock("openclaw/plugin-sdk/text-runtime", async () => {
   };
 });
 
+// Note: sanitizeAssistantVisibleText is NOT mocked — we use the real implementation
+// so the test verifies that tool call XML tags are actually stripped end-to-end.
+
 vi.mock("../media.js", () => ({
   loadWebMedia: vi.fn(),
 }));
@@ -99,6 +102,29 @@ describe("deliverWebReply", () => {
 
   it("suppresses payloads that start with reasoning prefix text", async () => {
     await expectReplySuppressed({ text: "   \n Reasoning:\n_hidden_" });
+  });
+
+  it("strips raw tool call XML tags before delivering to WhatsApp", async () => {
+    const msg = makeMsg();
+
+    await deliverWebReply({
+      replyResult: {
+        text: 'Here are the results\n<tool_call>\n{"tool": "web_search", "args": {}}\n</tool_call>',
+      },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 1000,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.reply).toHaveBeenCalledTimes(1);
+    const sent = String(
+      (msg.reply as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0],
+    );
+    expect(sent).toBe("Here are the results");
+    expect(sent).not.toContain("<tool_call>");
+    expect(sent).not.toContain("web_search");
   });
 
   it("does not suppress messages that mention Reasoning: mid-text", async () => {
