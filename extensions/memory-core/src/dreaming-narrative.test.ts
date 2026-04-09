@@ -336,6 +336,44 @@ describe("appendNarrativeEntry", () => {
     expect(renameSpy).toHaveBeenCalledOnce();
     await expect(fs.readFile(dreamsPath, "utf-8")).resolves.toBe("# Existing\n");
   });
+
+  it("preserves restrictive dreams file permissions across atomic replace", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+    await fs.writeFile(dreamsPath, "# Existing\n", { encoding: "utf-8", mode: 0o600 });
+    await fs.chmod(dreamsPath, 0o600);
+
+    await appendNarrativeEntry({
+      workspaceDir,
+      narrative: "Appended dream.",
+      nowMs: Date.parse("2026-04-05T03:00:00Z"),
+      timezone: "UTC",
+    });
+
+    const stat = await fs.stat(dreamsPath);
+    expect(stat.mode & 0o777).toBe(0o600);
+  });
+
+  it("surfaces temp cleanup failure after atomic replace error", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+    await fs.writeFile(dreamsPath, "# Existing\n", "utf-8");
+    vi.spyOn(fs, "rename").mockRejectedValueOnce(
+      Object.assign(new Error("replace failed"), { code: "ENOSPC" }),
+    );
+    vi.spyOn(fs, "rm").mockRejectedValueOnce(
+      Object.assign(new Error("cleanup failed"), { code: "EACCES" }),
+    );
+
+    await expect(
+      appendNarrativeEntry({
+        workspaceDir,
+        narrative: "Appended dream.",
+        nowMs: Date.parse("2026-04-05T03:00:00Z"),
+        timezone: "UTC",
+      }),
+    ).rejects.toThrow("cleanup also failed");
+  });
 });
 
 describe("generateAndAppendDreamNarrative", () => {

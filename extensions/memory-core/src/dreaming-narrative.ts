@@ -278,12 +278,26 @@ async function assertSafeDreamsPath(dreamsPath: string): Promise<void> {
 
 async function writeDreamsFileAtomic(dreamsPath: string, content: string): Promise<void> {
   await assertSafeDreamsPath(dreamsPath);
+  const existing = await fs.stat(dreamsPath).catch((err: NodeJS.ErrnoException) => {
+    if (err.code === "ENOENT") {
+      return null;
+    }
+    throw err;
+  });
+  const mode = existing?.mode ?? 0o600;
   const tempPath = `${dreamsPath}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(tempPath, content, { encoding: "utf-8", flag: "wx" });
+  await fs.writeFile(tempPath, content, { encoding: "utf-8", flag: "wx", mode });
+  await fs.chmod(tempPath, mode).catch(() => undefined);
   try {
     await fs.rename(tempPath, dreamsPath);
+    await fs.chmod(dreamsPath, mode).catch(() => undefined);
   } catch (err) {
-    await fs.rm(tempPath, { force: true }).catch(() => {});
+    const cleanupError = await fs.rm(tempPath, { force: true }).catch((rmErr) => rmErr);
+    if (cleanupError) {
+      throw new Error(
+        `Atomic DREAMS.md write failed (${formatErrorMessage(err)}); cleanup also failed (${formatErrorMessage(cleanupError)})`,
+      );
+    }
     throw err;
   }
 }
