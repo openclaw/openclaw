@@ -684,4 +684,42 @@ describe("session.message websocket events", () => {
       expect(typeof (drainEvent.payload as any).ts).toBe("number");
     });
   });
+
+  test("broadcasts socket.drain event when a session is deleted", async () => {
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+        worker: {
+          sessionId: "sess-worker",
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+
+    await withOperatorSessionSubscriber(harness, async (ws) => {
+      const socketDrainPromise = onceMessage(
+        ws,
+        (message) =>
+          message.type === "event" &&
+          message.event === "socket.drain" &&
+          (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
+            "agent:main:worker",
+      );
+
+      const deleteRes = await rpcReq(ws, "sessions.delete", { key: "agent:main:worker" });
+      expect(deleteRes.ok).toBe(true);
+
+      const drainEvent = await socketDrainPromise;
+      expect(drainEvent.payload).toMatchObject({
+        sessionKey: "agent:main:worker",
+        reason: "deleted",
+      });
+      expect(typeof (drainEvent.payload as any).ts).toBe("number");
+    });
+  });
 });
