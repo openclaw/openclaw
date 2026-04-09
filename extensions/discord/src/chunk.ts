@@ -1,5 +1,13 @@
 import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 
+const BQ_PREFIX_RE = /^(>+\s?)/;
+const TABLE_SEPARATOR_RE = /^\|?[\s-:|]+\|[\s-:|]*$/;
+
+type TableHeader = {
+  headerLine: string;
+  separatorLine: string;
+};
+
 export type ChunkDiscordTextOpts = {
   /** Max characters per Discord message. Default: 2000. */
   maxChars?: number;
@@ -125,6 +133,10 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
   let current = "";
   let currentLines = 0;
   let openFence: OpenFence | null = null;
+  let insideBlockquote: string | null = null; // the `> ` prefix
+  let openTable: TableHeader | null = null;
+  let pendingTableHeader = false; // true when next line might be a separator
+  let lastLineWasTableCandidate = ""; // stash the potential header line
 
   const flush = () => {
     if (!current) {
@@ -136,10 +148,30 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
     }
     current = "";
     currentLines = 0;
+    // Reopen fence context
     if (openFence) {
       current = openFence.openLine;
       currentLines = 1;
     }
+    // Reopen table context: repeat header + separator
+    if (openTable && !openFence) {
+      const tableReopen = `${openTable.headerLine}\n${openTable.separatorLine}`;
+      if (current) {
+        current += `\n${tableReopen}`;
+        currentLines += 2;
+      } else {
+        current = tableReopen;
+        currentLines = 2;
+      }
+    }
+  };
+
+  // Helper: apply blockquote prefix to a line if we're inside a blockquote
+  const applyBlockquoteToSegment = (segment: string, prefix: string | null): string => {
+    if (!prefix) return segment;
+    if (segment.trim() === "") return segment;
+    if (segment.startsWith(prefix.trimEnd())) return segment;
+    return `${prefix}${segment}`;
   };
 
   for (const originalLine of lines) {
@@ -169,9 +201,39 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
       preserveWhitespace: wasInsideFence,
     });
 
+    // Track blockquote state
+    const bqMatch = originalLine.match(BQ_PREFIX_RE);
+    if (bqMatch && !wasInsideFence) {
+      insideBlockquote = bqMatch[1];
+    } else if (!bqMatch || wasInsideFence) {
+      insideBlockquote = null;
+    }
+
+    // Track table state
+    if (!wasInsideFence) {
+      if (pendingTableHeader && TABLE_SEPARATOR_RE.test(originalLine.trim())) {
+        // Confirmed: previous line was header, this line is separator
+        openTable = { headerLine: lastLineWasTableCandidate, separatorLine: originalLine };
+        pendingTableHeader = false;
+        lastLineWasTableCandidate = "";
+      } else if (openTable && originalLine.includes("|")) {
+        // Still inside a table (data row)
+      } else if (originalLine.includes("|") && !openTable) {
+        // Potential table header - stash it and check next line
+        pendingTableHeader = true;
+        lastLineWasTableCandidate = originalLine;
+      } else {
+        // Not a table line - clear table state
+        openTable = null;
+        pendingTableHeader = false;
+        lastLineWasTableCandidate = "";
+      }
+    }
+
     for (let segIndex = 0; segIndex < segments.length; segIndex++) {
-      const segment = segments[segIndex];
+      let segment = segments[segIndex];
       const isLineContinuation = segIndex > 0;
+
       const delimiter = isLineContinuation ? "" : current.length > 0 ? "\n" : "";
       const addition = `${delimiter}${segment}`;
       const nextLen = current.length + addition.length;
@@ -182,6 +244,11 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
 
       if ((wouldExceedChars || wouldExceedLines) && current.length > 0) {
         flush();
+      }
+
+      // After flush, if we're inside a blockquote, prefix the segment
+      if (current.length === 0 && insideBlockquote && !segment.startsWith(insideBlockquote.trimEnd())) {
+        segment = applyBlockquoteToSegment(segment, insideBlockquote);
       }
 
       if (current.length > 0) {

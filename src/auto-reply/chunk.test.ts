@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import { parseBlockquoteSpans } from "../markdown/blockquotes.js";
 import * as fences from "../markdown/fences.js";
+import {
+  scanUnmatchedInlineMarkers,
+  buildInlineClose,
+  buildInlineReopen,
+} from "../markdown/inline-formatting.js";
+import { parseTableSpans } from "../markdown/table-spans.js";
 import { hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
 import {
   chunkByNewline,
@@ -581,4 +588,103 @@ describe("resolveChunkMode", () => {
       expect(resolveChunkMode(cfg as never, provider, accountId)).toBe(expected);
     },
   );
+});
+
+describe("parseTableSpans", () => {
+  it("detects a simple table", () => {
+    const table = "| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |";
+    const spans = parseTableSpans(table);
+    expect(spans).toHaveLength(1);
+    expect(spans[0].headerLine).toBe("| A | B |");
+    expect(spans[0].separatorLine).toBe("| --- | --- |");
+    expect(spans[0].start).toBe(0);
+    expect(spans[0].end).toBe(table.length);
+  });
+
+  it("detects multiple tables", () => {
+    const text = "| A |\n| --- |\n| 1 |\n\nText\n\n| B |\n| --- |\n| 2 |";
+    const spans = parseTableSpans(text);
+    expect(spans).toHaveLength(2);
+  });
+
+  it("returns empty for non-table text", () => {
+    expect(parseTableSpans("Hello world\nNo tables here")).toEqual([]);
+  });
+});
+
+describe("parseBlockquoteSpans", () => {
+  it("detects a blockquote region", () => {
+    const text = "> line 1\n> line 2\n> line 3";
+    const spans = parseBlockquoteSpans(text);
+    expect(spans).toHaveLength(1);
+    expect(spans[0].prefix).toBe("> ");
+  });
+
+  it("detects separate blockquote regions", () => {
+    const text = "> quote 1\n\nplain text\n\n> quote 2";
+    const spans = parseBlockquoteSpans(text);
+    expect(spans).toHaveLength(2);
+  });
+});
+
+describe("scanUnmatchedInlineMarkers", () => {
+  it("detects unmatched bold", () => {
+    const state = scanUnmatchedInlineMarkers("Hello **world");
+    expect(state.openMarkers).toEqual(["**"]);
+    expect(buildInlineClose(state)).toBe("**");
+    expect(buildInlineReopen(state)).toBe("**");
+  });
+
+  it("detects matched markers as balanced", () => {
+    const state = scanUnmatchedInlineMarkers("Hello **world** done");
+    expect(state.openMarkers).toEqual([]);
+  });
+
+  it("detects unmatched backtick", () => {
+    const state = scanUnmatchedInlineMarkers("Hello `code");
+    expect(state.openMarkers).toEqual(["`"]);
+  });
+
+  it("detects multiple unmatched markers", () => {
+    const state = scanUnmatchedInlineMarkers("**bold *italic");
+    expect(state.openMarkers).toEqual(["**", "*"]);
+    expect(buildInlineClose(state)).toBe("***");
+    expect(buildInlineReopen(state)).toBe("***");
+  });
+});
+
+describe("chunkMarkdownText - tables", () => {
+  it("avoids splitting inside a table when possible", () => {
+    const table = "| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |";
+    const text = `Before\n\n${table}\n\nAfter`;
+    const chunks = chunkMarkdownText(text, 60);
+    expect(chunks.some((c) => c.includes("| A | B |") && c.includes("| 3 | 4 |"))).toBe(true);
+  });
+});
+
+describe("chunkMarkdownText - blockquotes", () => {
+  it("re-applies blockquote prefix in continuation chunk", () => {
+    const bq = Array.from({ length: 20 }, (_, i) => `> Line ${i}`).join("\n");
+    const chunks = chunkMarkdownText(bq, 80);
+    expect(chunks.length).toBeGreaterThan(1);
+    // All non-empty lines in continuation chunks should start with >
+    for (let i = 1; i < chunks.length; i++) {
+      const lines = chunks[i].split("\n").filter((l) => l.trim() !== "");
+      for (const line of lines) {
+        expect(line.startsWith(">")).toBe(true);
+      }
+    }
+  });
+});
+
+describe("chunkMarkdownText - inline formatting", () => {
+  it("closes and reopens bold markers at chunk boundaries", () => {
+    const text = `**${"a".repeat(100)}**`;
+    const chunks = chunkMarkdownText(text, 60);
+    expect(chunks.length).toBeGreaterThan(1);
+    // First chunk should end with ** to close
+    expect(chunks[0].endsWith("**")).toBe(true);
+    // Second chunk should start with ** to reopen
+    expect(chunks[1].startsWith("**")).toBe(true);
+  });
 });
