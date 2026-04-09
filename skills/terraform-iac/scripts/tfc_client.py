@@ -24,11 +24,19 @@ import subprocess
 import sys
 from pathlib import Path
 
-try:
-    import requests
-except ImportError:
-    print("ERROR: 'requests' not installed. Run: pip install requests")
-    sys.exit(1)
+requests = None
+
+
+def _require_requests():
+    global requests
+    if requests is None:
+        try:
+            import requests as _r
+            requests = _r
+        except ImportError:
+            print("ERROR: 'requests' not installed. Run: pip install requests")
+            sys.exit(1)
+    return requests
 
 TFC_API = "https://app.terraform.io/api/v2"
 
@@ -3456,6 +3464,7 @@ def cmd_destroy(args):
 
 
 def cmd_state(args):
+    _require_requests()
     org = get_org()
     r = requests.get(
         f"{TFC_API}/organizations/{org}/workspaces/{args.workspace}",
@@ -3482,6 +3491,7 @@ def cmd_state(args):
 
 
 def cmd_outputs(args):
+    _require_requests()
     org = get_org()
     r = requests.get(
         f"{TFC_API}/organizations/{org}/workspaces/{args.workspace}",
@@ -3505,6 +3515,7 @@ def cmd_outputs(args):
 
 
 def cmd_list_workspaces(args):
+    _require_requests()
     org = get_org()
     r = requests.get(f"{TFC_API}/organizations/{org}/workspaces", headers=api_headers())
     r.raise_for_status()
