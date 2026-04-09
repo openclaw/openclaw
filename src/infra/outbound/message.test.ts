@@ -89,6 +89,23 @@ describe("sendMessage", () => {
     );
   });
 
+  it("does not promote legacy `media` when mediaUrls is already set", async () => {
+    await sendMessage({
+      cfg: {},
+      channel: "telegram",
+      to: "123456",
+      content: "caption",
+      mediaUrls: ["https://example.com/authoritative.png"],
+      media: "https://example.com/compat-only.png",
+    });
+
+    const call = mocks.deliverOutboundPayloads.mock.calls[0]?.[0] as {
+      payloads: Array<{ mediaUrl?: string; mediaUrls?: string[] }>;
+    };
+    expect(call?.payloads?.[0]?.mediaUrl).toBeUndefined();
+    expect(call?.payloads?.[0]?.mediaUrls).toEqual(["https://example.com/authoritative.png"]);
+  });
+
   it("propagates the send idempotency key into mirrored transcript delivery", async () => {
     await sendMessage({
       cfg: {},
