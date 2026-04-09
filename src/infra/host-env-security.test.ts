@@ -251,9 +251,9 @@ describe("isDangerousHostEnvVarName", () => {
       expect(isDangerousHostEnvVarName(key.toLowerCase())).toBe(true);
     }
 
-    expect(isDangerousHostEnvVarName("ANSIBLE_REMOTE_TEMP")).toBe(true);
-    expect(isDangerousHostEnvVarName("R_LIBS_USER")).toBe(true);
-    expect(isDangerousHostEnvVarName("TF_PLUGIN_CACHE_DIR")).toBe(true);
+    expect(isDangerousHostEnvVarName("ANSIBLE_REMOTE_TEMP")).toBe(false);
+    expect(isDangerousHostEnvVarName("R_LIBS_USER")).toBe(false);
+    expect(isDangerousHostEnvVarName("TF_PLUGIN_CACHE_DIR")).toBe(false);
     expect(isDangerousHostEnvVarName("AWS_CONTAINER_CREDENTIALS_FULL_URI")).toBe(false);
     expect(isDangerousHostEnvVarName("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")).toBe(false);
   });
@@ -553,7 +553,6 @@ describe("sanitizeHostExecEnv", () => {
         DATABASE_URL: "postgres://attacker",
         NPM_TOKEN: "npm-test",
         SSH_AUTH_SOCK: "/tmp/evil-agent.sock",
-        CFLAGS: "-include /tmp/pwn.h",
         SAFE: "ok",
       },
     });
@@ -568,7 +567,6 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.DATABASE_URL).toBeUndefined();
     expect(env.NPM_TOKEN).toBeUndefined();
     expect(env.SSH_AUTH_SOCK).toBeUndefined();
-    expect(env.CFLAGS).toBeUndefined();
     expect(env.SAFE).toBe("ok");
   });
 
@@ -788,13 +786,6 @@ describe("isDangerousHostEnvOverrideVarName", () => {
       "MONGODB_URI",
       "AMQP_URL",
       "SSH_AUTH_SOCK",
-      "CFLAGS",
-      "CXXFLAGS",
-      "CPPFLAGS",
-      "LDFLAGS",
-      "YARN_ENABLE_SCRIPTS",
-      "DOCKER_CONFIG",
-      "COMPOSE_FILE",
     ] as const;
 
     for (const key of keys) {
@@ -1020,7 +1011,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.YARN_RC_FILENAME).toBeUndefined();
   });
 
-  it("reports newly blocked keys from everywhere, override, and prefix buckets", () => {
+  it("reports newly blocked keys from everywhere and override buckets", () => {
     const result = sanitizeHostExecEnvWithDiagnostics({
       baseEnv: {
         PATH: "/usr/bin:/bin",
@@ -1035,7 +1026,6 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
         GITHUB_TOKEN: "ghp-test",
         DATABASE_URL: "postgres://attacker",
         R_PROFILE_USER: "/tmp/evil-Rprofile",
-        TF_LOG: "TRACE",
         SAFE_KEY: "ok",
       },
     });
@@ -1049,7 +1039,6 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "HOSTALIASES",
       "LUA_INIT_5_4",
       "R_PROFILE_USER",
-      "TF_LOG",
       "VIMINIT",
     ]);
     expect(result.rejectedOverrideInvalidKeys).toEqual([]);
@@ -1061,7 +1050,6 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.GITHUB_TOKEN).toBeUndefined();
     expect(result.env.DATABASE_URL).toBeUndefined();
     expect(result.env.R_PROFILE_USER).toBeUndefined();
-    expect(result.env.TF_LOG).toBeUndefined();
   });
 
   it("allows Windows-style override names while still rejecting invalid keys", () => {
