@@ -37,6 +37,7 @@ import { assertNoPathAliasEscape } from "../../infra/path-alias-guards.js";
 import { isNotFoundPathError } from "../../infra/path-guards.js";
 import { movePathToTrash } from "../../plugin-sdk/browser-maintenance.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import {
   ErrorCodes,
@@ -395,10 +396,6 @@ function sanitizeIdentityLine(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
-function resolveOptionalStringParam(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function respondInvalidMethodParams(
   respond: RespondFn,
   method: string,
@@ -556,7 +553,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
 
     const cfg = loadConfig();
-    const rawName = String(params.name ?? "").trim();
+    const rawName = normalizeOptionalString(String(params.name ?? "")) ?? "";
     const agentId = normalizeAgentId(rawName);
     if (agentId === DEFAULT_AGENT_ID) {
       respond(
@@ -576,7 +573,9 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const workspaceDir = resolveUserPath(String(params.workspace ?? "").trim());
+    const workspaceDir = resolveUserPath(
+      normalizeOptionalString(String(params.workspace ?? "")) ?? "",
+    );
 
     // Resolve agentDir against the config we're about to persist (vs the pre-write config),
     // so subsequent resolutions can't disagree about the agent's directory.
@@ -596,8 +595,8 @@ export const agentsHandlers: GatewayRequestHandlers = {
 
     // Always write Name to IDENTITY.md; optionally include emoji/avatar.
     const safeName = sanitizeIdentityLine(rawName);
-    const emoji = resolveOptionalStringParam(params.emoji);
-    const avatar = resolveOptionalStringParam(params.avatar);
+    const emoji = normalizeOptionalString(params.emoji);
+    const avatar = normalizeOptionalString(params.avatar);
     const lines = [
       "",
       `- Name: ${safeName}`,
@@ -648,8 +647,8 @@ export const agentsHandlers: GatewayRequestHandlers = {
         ? resolveUserPath(params.workspace.trim())
         : undefined;
 
-    const model = resolveOptionalStringParam(params.model);
-    const avatar = resolveOptionalStringParam(params.avatar);
+    const model = normalizeOptionalString(params.model);
+    const avatar = normalizeOptionalString(params.avatar);
 
     const nextConfig = applyAgentConfig(cfg, {
       agentId,

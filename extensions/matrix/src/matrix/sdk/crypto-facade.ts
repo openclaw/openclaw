@@ -22,7 +22,7 @@ export type MatrixCryptoFacade = {
     leftDeviceLists: unknown,
   ) => Promise<void>;
   isRoomEncrypted: (roomId: string) => Promise<boolean>;
-  requestOwnUserVerification: () => Promise<unknown | null>;
+  requestOwnUserVerification: () => Promise<MatrixVerificationSummary | null>;
   encryptMedia: (buffer: Buffer) => Promise<{ buffer: Buffer; file: Omit<EncryptedFile, "url"> }>;
   decryptMedia: (
     file: EncryptedFile,
@@ -111,7 +111,7 @@ export function createMatrixCryptoFacade(deps: {
         return false;
       }
     },
-    requestOwnUserVerification: async (): Promise<unknown | null> => {
+    requestOwnUserVerification: async () => {
       const crypto = deps.client.getCrypto() as MatrixVerificationCryptoApi | undefined;
       return await deps.verificationManager.requestOwnUserVerification(crypto);
     },

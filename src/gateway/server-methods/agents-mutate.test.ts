@@ -38,10 +38,15 @@ const mocks = vi.hoisted(() => ({
   writeFileWithinRoot: vi.fn(async () => {}),
 }));
 
-vi.mock("../../config/config.js", () => ({
-  loadConfig: () => mocks.loadConfigReturn,
-  writeConfigFile: mocks.writeConfigFile,
-}));
+vi.mock("../../config/config.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
+  return {
+    ...actual,
+    loadConfig: () => mocks.loadConfigReturn,
+    writeConfigFile: mocks.writeConfigFile,
+  };
+});
 
 vi.mock("../../commands/agents.config.js", () => ({
   applyAgentConfig: mocks.applyAgentConfig,
@@ -75,9 +80,13 @@ vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
   movePathToTrash: mocks.movePathToTrash,
 }));
 
-vi.mock("../../utils.js", () => ({
-  resolveUserPath: (p: string) => `/resolved${p.startsWith("/") ? "" : "/"}${p}`,
-}));
+vi.mock("../../utils.js", async () => {
+  const actual = await vi.importActual<typeof import("../../utils.js")>("../../utils.js");
+  return {
+    ...actual,
+    resolveUserPath: (p: string) => `/resolved${p.startsWith("/") ? "" : "/"}${p}`,
+  };
+});
 
 vi.mock("../session-utils.js", () => ({
   listAgentsForGateway: mocks.listAgentsForGateway,

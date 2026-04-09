@@ -57,7 +57,6 @@ let tmpDirModule: typeof import("../infra/tmp-openclaw-dir.js");
 
 describe("pw-tools-core", () => {
   beforeAll(async () => {
-    vi.resetModules();
     vi.doMock("./pw-session.js", () => sessionMocks);
     vi.doMock("./chrome.js", () => chromeMocks);
     tmpDirModule = await import("../infra/tmp-openclaw-dir.js");

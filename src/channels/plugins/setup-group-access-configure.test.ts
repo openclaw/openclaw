@@ -23,7 +23,6 @@ async function runConfigureChannelAccess<TResolved>(params: {
 }) {
   return await configureChannelAccessWithAllowlist({
     cfg: params.cfg,
-    // oxlint-disable-next-line typescript/no-explicit-any
     prompter: params.prompter as any,
     label: params.label ?? "Slack channels",
     currentPolicy: "allowlist",
@@ -106,7 +105,6 @@ describe("configureChannelAccessWithAllowlist", () => {
 
     const next = await configureChannelAccessWithAllowlist({
       cfg,
-      // oxlint-disable-next-line typescript/no-explicit-any
       prompter: prompter as any,
       label: "Twitch chat",
       currentPolicy: "disabled",
@@ -154,7 +152,7 @@ describe("configureChannelAccessWithAllowlist", () => {
           ...params.cfg.channels,
           slack: {
             ...params.cfg.channels?.slack,
-            channels: Object.fromEntries(params.resolved.map((id) => [id, { allow: true }])),
+            channels: Object.fromEntries(params.resolved.map((id) => [id, { enabled: true }])),
           },
         },
       };
@@ -170,8 +168,8 @@ describe("configureChannelAccessWithAllowlist", () => {
 
     expect(calls).toEqual(["resolve", "setPolicy", "apply"]);
     expect(next.channels?.slack?.channels).toEqual({
-      C1: { allow: true },
-      C2: { allow: true },
+      C1: { enabled: true },
+      C2: { enabled: true },
     });
   });
 });

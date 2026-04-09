@@ -9,6 +9,10 @@ type NativeApprovalDeliveryMode = "dm" | "channel" | "both";
 type NativeApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type NativeApprovalTarget = { to: string; threadId?: string | number | null };
 type NativeApprovalSurface = "origin" | "approver-dm";
+type ChannelApprovalCapabilitySurfaces = Pick<
+  ChannelApprovalCapability,
+  "delivery" | "nativeRuntime" | "render" | "native"
+>;
 
 type ApprovalAdapterParams = {
   cfg: OpenClawConfig;
@@ -18,6 +22,7 @@ type ApprovalAdapterParams = {
 
 type DeliverySuppressionParams = {
   cfg: OpenClawConfig;
+  approvalKind: ApprovalKind;
   target: { channel: string; accountId?: string | null };
   request: { request: { turnSourceChannel?: string | null; turnSourceAccountId?: string | null } };
 };
@@ -49,16 +54,44 @@ type ApproverRestrictedNativeApprovalParams = {
     request: NativeApprovalRequest;
   }) => NativeApprovalTarget[] | Promise<NativeApprovalTarget[]>;
   notifyOriginWhenDmOnly?: boolean;
+  nativeRuntime?: ChannelApprovalCapability["nativeRuntime"];
+  describeExecApprovalSetup?: ChannelApprovalCapability["describeExecApprovalSetup"];
 };
 
 function buildApproverRestrictedNativeApprovalCapability(
   params: ApproverRestrictedNativeApprovalParams,
 ): ChannelApprovalCapability {
   const pluginSenderAuth = params.isPluginAuthorizedSender ?? params.isExecAuthorizedSender;
+  const availabilityState = (enabled: boolean) =>
+    enabled ? ({ kind: "enabled" } as const) : ({ kind: "disabled" } as const);
   const normalizePreferredSurface = (
     mode: NativeApprovalDeliveryMode,
   ): NativeApprovalSurface | "both" =>
     mode === "channel" ? "origin" : mode === "dm" ? "approver-dm" : "both";
+  const hasConfiguredApprovers = ({
+    cfg,
+    accountId,
+  }: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => params.hasApprovers({ cfg, accountId });
+  const isExecInitiatingSurfaceEnabled = ({
+    cfg,
+    accountId,
+  }: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) =>
+    hasConfiguredApprovers({ cfg, accountId }) &&
+    params.isNativeDeliveryEnabled({ cfg, accountId });
+  const resolveExecInitiatingSurfaceState = ({
+    cfg,
+    accountId,
+  }: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    action: "approve";
+  }) => availabilityState(isExecInitiatingSurfaceEnabled({ cfg, accountId }));
 
   return createChannelApprovalCapability({
     authorizeActorAction: ({
@@ -91,71 +124,67 @@ function buildApproverRestrictedNativeApprovalCapability(
       cfg: OpenClawConfig;
       accountId?: string | null;
       action: "approve";
-    }) =>
-      params.hasApprovers({ cfg, accountId })
-        ? ({ kind: "enabled" } as const)
-        : ({ kind: "disabled" } as const),
-    approvals: {
-      delivery: {
-        hasConfiguredDmRoute: ({ cfg }: { cfg: OpenClawConfig }) =>
-          params.listAccountIds(cfg).some((accountId) => {
-            if (!params.hasApprovers({ cfg, accountId })) {
-              return false;
-            }
-            if (!params.isNativeDeliveryEnabled({ cfg, accountId })) {
-              return false;
-            }
-            const target = params.resolveNativeDeliveryMode({ cfg, accountId });
-            return target === "dm" || target === "both";
-          }),
-        shouldSuppressForwardingFallback: (input: DeliverySuppressionParams) => {
-          const channel = normalizeMessageChannel(input.target.channel) ?? input.target.channel;
-          if (channel !== params.channel) {
+    }) => availabilityState(hasConfiguredApprovers({ cfg, accountId })),
+    getExecInitiatingSurfaceState: resolveExecInitiatingSurfaceState,
+    describeExecApprovalSetup: params.describeExecApprovalSetup,
+    delivery: {
+      hasConfiguredDmRoute: ({ cfg }: { cfg: OpenClawConfig }) =>
+        params.listAccountIds(cfg).some((accountId) => {
+          if (!hasConfiguredApprovers({ cfg, accountId })) {
             return false;
           }
-          if (params.requireMatchingTurnSourceChannel) {
-            const turnSourceChannel = normalizeMessageChannel(
-              input.request.request.turnSourceChannel,
-            );
-            if (turnSourceChannel !== params.channel) {
-              return false;
-            }
+          if (!params.isNativeDeliveryEnabled({ cfg, accountId })) {
+            return false;
           }
-          const resolvedAccountId = params.resolveSuppressionAccountId?.(input);
-          const accountId =
-            (resolvedAccountId === undefined
-              ? input.target.accountId?.trim()
-              : resolvedAccountId.trim()) || undefined;
-          return params.isNativeDeliveryEnabled({ cfg: input.cfg, accountId });
-        },
+          const target = params.resolveNativeDeliveryMode({ cfg, accountId });
+          return target === "dm" || target === "both";
+        }),
+      shouldSuppressForwardingFallback: (input: DeliverySuppressionParams) => {
+        const channel = normalizeMessageChannel(input.target.channel) ?? input.target.channel;
+        if (channel !== params.channel) {
+          return false;
+        }
+        if (params.requireMatchingTurnSourceChannel) {
+          const turnSourceChannel = normalizeMessageChannel(
+            input.request.request.turnSourceChannel,
+          );
+          if (turnSourceChannel !== params.channel) {
+            return false;
+          }
+        }
+        const resolvedAccountId = params.resolveSuppressionAccountId?.(input);
+        const accountId =
+          (resolvedAccountId === undefined
+            ? input.target.accountId?.trim()
+            : resolvedAccountId.trim()) || undefined;
+        return params.isNativeDeliveryEnabled({ cfg: input.cfg, accountId });
       },
-      native:
-        params.resolveOriginTarget || params.resolveApproverDmTargets
-          ? {
-              describeDeliveryCapabilities: ({
-                cfg,
-                accountId,
-              }: {
-                cfg: OpenClawConfig;
-                accountId?: string | null;
-                approvalKind: ApprovalKind;
-                request: NativeApprovalRequest;
-              }) => ({
-                enabled:
-                  params.hasApprovers({ cfg, accountId }) &&
-                  params.isNativeDeliveryEnabled({ cfg, accountId }),
-                preferredSurface: normalizePreferredSurface(
-                  params.resolveNativeDeliveryMode({ cfg, accountId }),
-                ),
-                supportsOriginSurface: Boolean(params.resolveOriginTarget),
-                supportsApproverDmSurface: Boolean(params.resolveApproverDmTargets),
-                notifyOriginWhenDmOnly: params.notifyOriginWhenDmOnly ?? false,
-              }),
-              resolveOriginTarget: params.resolveOriginTarget,
-              resolveApproverDmTargets: params.resolveApproverDmTargets,
-            }
-          : undefined,
     },
+    native:
+      params.resolveOriginTarget || params.resolveApproverDmTargets
+        ? {
+            describeDeliveryCapabilities: ({
+              cfg,
+              accountId,
+            }: {
+              cfg: OpenClawConfig;
+              accountId?: string | null;
+              approvalKind: ApprovalKind;
+              request: NativeApprovalRequest;
+            }) => ({
+              enabled: isExecInitiatingSurfaceEnabled({ cfg, accountId }),
+              preferredSurface: normalizePreferredSurface(
+                params.resolveNativeDeliveryMode({ cfg, accountId }),
+              ),
+              supportsOriginSurface: Boolean(params.resolveOriginTarget),
+              supportsApproverDmSurface: Boolean(params.resolveApproverDmTargets),
+              notifyOriginWhenDmOnly: params.notifyOriginWhenDmOnly ?? false,
+            }),
+            resolveOriginTarget: params.resolveOriginTarget,
+            resolveApproverDmTargets: params.resolveApproverDmTargets,
+          }
+        : undefined,
+    nativeRuntime: params.nativeRuntime,
   });
 }
 
@@ -168,14 +197,32 @@ export function createApproverRestrictedNativeApprovalAdapter(
 export function createChannelApprovalCapability(params: {
   authorizeActorAction?: ChannelApprovalCapability["authorizeActorAction"];
   getActionAvailabilityState?: ChannelApprovalCapability["getActionAvailabilityState"];
-  approvals?: Pick<ChannelApprovalCapability, "delivery" | "render" | "native">;
+  getExecInitiatingSurfaceState?: ChannelApprovalCapability["getExecInitiatingSurfaceState"];
+  resolveApproveCommandBehavior?: ChannelApprovalCapability["resolveApproveCommandBehavior"];
+  describeExecApprovalSetup?: ChannelApprovalCapability["describeExecApprovalSetup"];
+  delivery?: ChannelApprovalCapability["delivery"];
+  nativeRuntime?: ChannelApprovalCapability["nativeRuntime"];
+  render?: ChannelApprovalCapability["render"];
+  native?: ChannelApprovalCapability["native"];
+  /** @deprecated Pass delivery/nativeRuntime/render/native directly. */
+  approvals?: ChannelApprovalCapabilitySurfaces;
 }): ChannelApprovalCapability {
+  const surfaces: ChannelApprovalCapabilitySurfaces = {
+    delivery: params.delivery ?? params.approvals?.delivery,
+    nativeRuntime: params.nativeRuntime ?? params.approvals?.nativeRuntime,
+    render: params.render ?? params.approvals?.render,
+    native: params.native ?? params.approvals?.native,
+  };
   return {
     authorizeActorAction: params.authorizeActorAction,
     getActionAvailabilityState: params.getActionAvailabilityState,
-    delivery: params.approvals?.delivery,
-    render: params.approvals?.render,
-    native: params.approvals?.native,
+    getExecInitiatingSurfaceState: params.getExecInitiatingSurfaceState,
+    resolveApproveCommandBehavior: params.resolveApproveCommandBehavior,
+    describeExecApprovalSetup: params.describeExecApprovalSetup,
+    delivery: surfaces.delivery,
+    nativeRuntime: surfaces.nativeRuntime,
+    render: surfaces.render,
+    native: surfaces.native,
   };
 }
 
@@ -183,19 +230,27 @@ export function splitChannelApprovalCapability(capability: ChannelApprovalCapabi
   auth: {
     authorizeActorAction?: ChannelApprovalCapability["authorizeActorAction"];
     getActionAvailabilityState?: ChannelApprovalCapability["getActionAvailabilityState"];
+    getExecInitiatingSurfaceState?: ChannelApprovalCapability["getExecInitiatingSurfaceState"];
+    resolveApproveCommandBehavior?: ChannelApprovalCapability["resolveApproveCommandBehavior"];
   };
   delivery: ChannelApprovalCapability["delivery"];
+  nativeRuntime: ChannelApprovalCapability["nativeRuntime"];
   render: ChannelApprovalCapability["render"];
   native: ChannelApprovalCapability["native"];
+  describeExecApprovalSetup: ChannelApprovalCapability["describeExecApprovalSetup"];
 } {
   return {
     auth: {
       authorizeActorAction: capability.authorizeActorAction,
       getActionAvailabilityState: capability.getActionAvailabilityState,
+      getExecInitiatingSurfaceState: capability.getExecInitiatingSurfaceState,
+      resolveApproveCommandBehavior: capability.resolveApproveCommandBehavior,
     },
     delivery: capability.delivery,
+    nativeRuntime: capability.nativeRuntime,
     render: capability.render,
     native: capability.native,
+    describeExecApprovalSetup: capability.describeExecApprovalSetup,
   };
 }
 

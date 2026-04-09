@@ -153,7 +153,7 @@ export function createGatewayReloadHandlers(params: {
   const requestGatewayRestart = (
     plan: GatewayReloadPlan,
     nextConfig: ReturnType<typeof loadConfig>,
-  ) => {
+  ): boolean => {
     setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
     const reasons = plan.restartReasons.length
       ? plan.restartReasons.join(", ")
@@ -161,7 +161,7 @@ export function createGatewayReloadHandlers(params: {
 
     if (process.listenerCount("SIGUSR1") === 0) {
       params.logReload.warn("no SIGUSR1 listener found; restart skipped");
-      return;
+      return false;
     }
 
     const getActiveCounts = () => {
@@ -201,7 +201,7 @@ export function createGatewayReloadHandlers(params: {
         params.logReload.info(
           `config change requires gateway restart (${reasons}) — already waiting for operations to complete`,
         );
-        return;
+        return true;
       }
       restartPending = true;
       const initialDetails = formatActiveDetails(active);
@@ -232,6 +232,7 @@ export function createGatewayReloadHandlers(params: {
           },
         },
       });
+      return true;
     } else {
       // No active operations or pending replies, restart immediately
       params.logReload.warn(`config change requires gateway restart (${reasons})`);
@@ -239,6 +240,7 @@ export function createGatewayReloadHandlers(params: {
       if (!emitted) {
         params.logReload.info("gateway restart already scheduled; skipping duplicate signal");
       }
+      return true;
     }
   };
 

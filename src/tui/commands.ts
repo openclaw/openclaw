@@ -2,6 +2,7 @@ import type { SlashCommand } from "@mariozechner/pi-tui";
 import { listChatCommands, listChatCommandsForConfig } from "../auto-reply/commands-registry.js";
 import { formatThinkingLevels, listThinkingLevelLabels } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 const VERBOSE_LEVELS = ["on", "off"];
 const FAST_LEVELS = ["status", "on", "off"];
@@ -23,6 +24,7 @@ export type SlashCommandOptions = {
 
 const COMMAND_ALIASES: Record<string, string> = {
   elev: "elevated",
+  gwstatus: "gateway-status",
 };
 
 function createLevelCompletion(
@@ -30,7 +32,7 @@ function createLevelCompletion(
 ): NonNullable<SlashCommand["getArgumentCompletions"]> {
   return (prefix) =>
     levels
-      .filter((value) => value.startsWith(prefix.toLowerCase()))
+      .filter((value) => value.startsWith(normalizeLowercaseStringOrEmpty(prefix)))
       .map((value) => ({
         value,
         label: value,
@@ -43,7 +45,7 @@ export function parseCommand(input: string): ParsedCommand {
     return { name: "", args: "" };
   }
   const [name, ...rest] = trimmed.split(/\s+/);
-  const normalized = name.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(name);
   return {
     name: COMMAND_ALIASES[normalized] ?? normalized,
     args: rest.join(" ").trim(),
@@ -60,7 +62,8 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
   const activationCompletions = createLevelCompletion(ACTIVATION_LEVELS);
   const commands: SlashCommand[] = [
     { name: "help", description: "Show slash command help" },
-    { name: "status", description: "Show gateway status summary" },
+    { name: "gateway-status", description: "Show gateway status summary" },
+    { name: "gwstatus", description: "Alias for /gateway-status" },
     { name: "agent", description: "Switch agent (or open picker)" },
     { name: "agents", description: "Open agent picker" },
     { name: "session", description: "Switch session (or open picker)" },
@@ -75,7 +78,7 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
       description: "Set thinking level",
       getArgumentCompletions: (prefix) =>
         thinkLevels
-          .filter((v) => v.startsWith(prefix.toLowerCase()))
+          .filter((v) => v.startsWith(normalizeLowercaseStringOrEmpty(prefix)))
           .map((value) => ({ value, label: value })),
     },
     {
@@ -145,6 +148,8 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/help",
     "/commands",
     "/status",
+    "/gateway-status",
+    "/gwstatus",
     "/agent <id> (or /agents)",
     "/session <key> (or /sessions)",
     "/model <provider/model> (or /models)",

@@ -1,7 +1,7 @@
 import type { RequestListener } from "node:http";
-import { createEmptyPluginRegistry } from "openclaw/plugin-sdk/testing";
-import { setActivePluginRegistry } from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../../../src/plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
 import { withServer } from "../../../test/helpers/http-test-server.js";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import {
@@ -11,13 +11,13 @@ import {
   expectImageLifecycleDelivery,
   postWebhookReplay,
 } from "../test-support/lifecycle-test-support.js";
+import { handleZaloWebhookRequest } from "./monitor.js";
 import {
   clearZaloWebhookSecurityStateForTest,
   getZaloWebhookRateLimitStateSizeForTest,
   getZaloWebhookStatusCounterSizeForTest,
-  handleZaloWebhookRequest,
   registerZaloWebhookTarget,
-} from "./monitor.js";
+} from "./monitor.webhook.js";
 import type { ResolvedZaloAccount } from "./types.js";
 const DEFAULT_ACCOUNT: ResolvedZaloAccount = {
   accountId: "default",

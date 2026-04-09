@@ -65,6 +65,15 @@ type SettingsHost = {
   debugPollInterval: number | null;
   pendingGatewayUrl?: string | null;
   pendingGatewayToken?: string | null;
+  dreamingStatusLoading: boolean;
+  dreamingStatusError: string | null;
+  dreamingStatus: null;
+  dreamingModeSaving: boolean;
+  dreamDiaryLoading: boolean;
+  dreamDiaryActionLoading: boolean;
+  dreamDiaryError: string | null;
+  dreamDiaryPath: string | null;
+  dreamDiaryContent: string | null;
 };
 
 function setTestWindowUrl(urlString: string) {
@@ -145,6 +154,15 @@ const createHost = (tab: Tab): SettingsHost => ({
   debugPollInterval: null,
   pendingGatewayUrl: null,
   pendingGatewayToken: null,
+  dreamingStatusLoading: false,
+  dreamingStatusError: null,
+  dreamingStatus: null,
+  dreamingModeSaving: false,
+  dreamDiaryLoading: false,
+  dreamDiaryActionLoading: false,
+  dreamDiaryError: null,
+  dreamDiaryPath: null,
+  dreamDiaryContent: null,
 });
 
 describe("setTabFromRoute", () => {

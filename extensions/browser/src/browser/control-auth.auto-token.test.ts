@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectGeneratedTokenPersistedToGatewayAuth } from "../../test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
 
@@ -88,9 +88,11 @@ describe("ensureBrowserControlAuth", () => {
     });
   };
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ ensureBrowserControlAuth } = await import("./control-auth.js"));
+  });
+
+  beforeEach(() => {
     vi.restoreAllMocks();
     mocks.loadConfig.mockClear();
     mocks.resolveGatewayAuth.mockClear();

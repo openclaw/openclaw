@@ -1,3 +1,4 @@
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
   createMattermostClient,
@@ -86,7 +87,7 @@ async function runMattermostReaction(
     baseUrl,
     botToken,
     fetchImpl: params.fetchImpl,
-    allowPrivateNetwork: resolved.config?.allowPrivateNetwork === true,
+    allowPrivateNetwork: isPrivateNetworkOptInEnabled(resolved.config),
   });
 
   const cacheKey = `${baseUrl}:${botToken}`;

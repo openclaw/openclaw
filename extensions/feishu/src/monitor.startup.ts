@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { RuntimeEnv } from "../runtime-api.js";
 import { probeFeishu } from "./probe.js";
 import type { ResolvedFeishuAccount } from "./types.js";
@@ -33,13 +34,12 @@ export type FeishuMonitorBotIdentity = {
 };
 
 function isTimeoutErrorMessage(message: string | undefined): boolean {
-  return message?.toLowerCase().includes("timeout") || message?.toLowerCase().includes("timed out")
-    ? true
-    : false;
+  const lower = normalizeLowercaseStringOrEmpty(message);
+  return lower.includes("timeout") || lower.includes("timed out");
 }
 
 function isAbortErrorMessage(message: string | undefined): boolean {
-  return message?.toLowerCase().includes("aborted") ?? false;
+  return normalizeLowercaseStringOrEmpty(message).includes("aborted");
 }
 
 export async function fetchBotIdentityForMonitor(

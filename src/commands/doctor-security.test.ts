@@ -118,6 +118,14 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).not.toContain("Gateway bound");
   });
 
+  it("treats unset bind as loopback for host-side doctor checks", async () => {
+    const cfg = { gateway: {} } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain("No channel security warnings detected");
+    expect(message).not.toContain("Gateway bound");
+  });
+
   it("shows explicit dmScope config command for multi-user DMs", async () => {
     pluginRegistry.list = [
       {

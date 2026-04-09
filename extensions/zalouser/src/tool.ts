@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "../runtime-api.js";
 import { sendImageZalouser, sendLinkZalouser, sendMessageZalouser } from "./send.js";
 import { parseZalouserOutboundTarget } from "./session-route.js";
@@ -189,7 +190,7 @@ export async function executeZalouserTool(
     }
   } catch (err) {
     return json({
-      error: err instanceof Error ? err.message : String(err),
+      error: formatErrorMessage(err),
     });
   }
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  createPluginActivationSource,
   normalizePluginsConfig,
   resolveEffectiveEnableState,
   resolveEnableState,
@@ -177,10 +178,7 @@ describe("resolveEffectiveEnableState", () => {
 
   it.each([
     [{ enabled: true }, { enabled: true }],
-    [
-      { enabled: true, allow: ["browser"] as string[] },
-      { enabled: false, reason: "not in allowlist" },
-    ],
+    [{ enabled: true, allow: ["browser"] as string[] }, { enabled: true }],
     [
       {
         enabled: true,
@@ -209,7 +207,7 @@ describe("resolveEffectiveEnableState", () => {
 describe("resolveEffectivePluginActivationState", () => {
   it("distinguishes explicit enablement from auto activation", () => {
     const rawConfig: NonNullable<
-      Parameters<typeof resolveEffectivePluginActivationState>[0]["sourceRootConfig"]
+      Parameters<typeof resolveEffectivePluginActivationState>[0]["rootConfig"]
     > = {
       channels: {
         telegram: {
@@ -234,8 +232,7 @@ describe("resolveEffectivePluginActivationState", () => {
         origin: "bundled",
         config: normalizePluginsConfig(effectiveConfig.plugins),
         rootConfig: effectiveConfig,
-        sourceConfig: normalizePluginsConfig(rawConfig.plugins),
-        sourceRootConfig: rawConfig,
+        activationSource: createPluginActivationSource({ config: rawConfig }),
         autoEnabledReason: "telegram configured",
       }),
     ).toEqual({
@@ -265,8 +262,7 @@ describe("resolveEffectivePluginActivationState", () => {
         origin: "bundled",
         config: normalizePluginsConfig(rawConfig.plugins),
         rootConfig: rawConfig,
-        sourceConfig: normalizePluginsConfig(rawConfig.plugins),
-        sourceRootConfig: rawConfig,
+        activationSource: createPluginActivationSource({ config: rawConfig }),
       }),
     ).toEqual({
       enabled: false,
@@ -312,8 +308,7 @@ describe("resolveEffectivePluginActivationState", () => {
         origin: "bundled",
         config: normalizePluginsConfig(rawConfig.plugins),
         rootConfig: rawConfig,
-        sourceConfig: normalizePluginsConfig(rawConfig.plugins),
-        sourceRootConfig: rawConfig,
+        activationSource: createPluginActivationSource({ config: rawConfig }),
       }),
     ).toEqual({
       enabled: false,
@@ -324,7 +319,7 @@ describe("resolveEffectivePluginActivationState", () => {
     });
   });
 
-  it("keeps allowlists authoritative over bundled channel activation", () => {
+  it("lets explicit bundled channel activation bypass the allowlist", () => {
     const rawConfig = {
       channels: {
         telegram: {
@@ -342,15 +337,43 @@ describe("resolveEffectivePluginActivationState", () => {
         origin: "bundled",
         config: normalizePluginsConfig(rawConfig.plugins),
         rootConfig: rawConfig,
-        sourceConfig: normalizePluginsConfig(rawConfig.plugins),
-        sourceRootConfig: rawConfig,
+        activationSource: createPluginActivationSource({ config: rawConfig }),
+      }),
+    ).toEqual({
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: true,
+      source: "explicit",
+      reason: "channel enabled in config",
+    });
+  });
+
+  it("keeps denylist authoritative over explicit bundled channel activation", () => {
+    const rawConfig = {
+      channels: {
+        telegram: {
+          enabled: true,
+        },
+      },
+      plugins: {
+        deny: ["telegram"],
+      },
+    };
+
+    expect(
+      resolveEffectivePluginActivationState({
+        id: "telegram",
+        origin: "bundled",
+        config: normalizePluginsConfig(rawConfig.plugins),
+        rootConfig: rawConfig,
+        activationSource: createPluginActivationSource({ config: rawConfig }),
       }),
     ).toEqual({
       enabled: false,
       activated: false,
       explicitlyEnabled: true,
       source: "disabled",
-      reason: "not in allowlist",
+      reason: "blocked by denylist",
     });
   });
 
@@ -367,8 +390,7 @@ describe("resolveEffectivePluginActivationState", () => {
         origin: "bundled",
         config: normalizePluginsConfig(rawConfig.plugins),
         rootConfig: rawConfig,
-        sourceConfig: normalizePluginsConfig(rawConfig.plugins),
-        sourceRootConfig: rawConfig,
+        activationSource: createPluginActivationSource({ config: rawConfig }),
         autoEnabledReason: "telegram configured",
       }),
     ).toEqual({
@@ -400,8 +422,7 @@ describe("resolveEffectivePluginActivationState", () => {
         origin: "bundled",
         config: normalizePluginsConfig(effectiveConfig.plugins),
         rootConfig: effectiveConfig,
-        sourceConfig: normalizePluginsConfig(sourceConfig.plugins),
-        sourceRootConfig: sourceConfig,
+        activationSource: createPluginActivationSource({ config: sourceConfig }),
       }),
     ).toEqual({
       enabled: true,

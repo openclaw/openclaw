@@ -18,6 +18,14 @@ function runMutation(args: string[], input?: string) {
   });
 }
 
+function runMutationWithSource(source: string, args: string[], input?: string) {
+  return spawnSync("python3", ["-c", source, ...args], {
+    input,
+    encoding: "utf8",
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+}
+
 function runWritePlan(args: string[], input?: string, env?: NodeJS.ProcessEnv) {
   const plan = buildPinnedWritePlan({
     check: {
@@ -50,6 +58,11 @@ function runWritePlan(args: string[], input?: string, env?: NodeJS.ProcessEnv) {
 
 const hasAbsolutePythonCandidate = SANDBOX_PINNED_MUTATION_PYTHON_CANDIDATES.some((candidate) =>
   existsSync(candidate),
+);
+
+const FORCED_EXDEV_MUTATION_PYTHON = SANDBOX_PINNED_MUTATION_PYTHON.replace(
+  "        os.rename(src_basename, dst_basename, src_dir_fd=src_parent_fd, dst_dir_fd=dst_parent_fd)",
+  "        raise OSError(errno.EXDEV, 'forced EXDEV for test')\n        os.rename(src_basename, dst_basename, src_dir_fd=src_parent_fd, dst_dir_fd=dst_parent_fd)",
 );
 
 describe("sandbox pinned mutation helper", () => {
@@ -246,6 +259,40 @@ describe("sandbox pinned mutation helper", () => {
           fs.readFile(path.join(destRoot, "moved", "nested", "file.txt"), "utf8"),
         ).resolves.toBe("payload");
         await expect(fs.stat(path.join(sourceRoot, "dir"))).rejects.toThrow();
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects hardlinked files during rename EXDEV fallback",
+    async () => {
+      await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+        const sourceRoot = path.join(root, "source");
+        const destRoot = path.join(root, "dest");
+        const outsideRoot = path.join(root, "outside");
+        await fs.mkdir(sourceRoot, { recursive: true });
+        await fs.mkdir(destRoot, { recursive: true });
+        await fs.mkdir(outsideRoot, { recursive: true });
+        await fs.writeFile(path.join(outsideRoot, "secret.txt"), "classified", "utf8");
+        await fs.link(path.join(outsideRoot, "secret.txt"), path.join(sourceRoot, "linked.txt"));
+
+        const result = runMutationWithSource(FORCED_EXDEV_MUTATION_PYTHON, [
+          "rename",
+          sourceRoot,
+          "",
+          "linked.txt",
+          destRoot,
+          "",
+          "copied.txt",
+          "1",
+        ]);
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toMatch(/hardlinked file/i);
+        await expect(fs.stat(path.join(destRoot, "copied.txt"))).rejects.toThrow();
+        await expect(fs.readFile(path.join(outsideRoot, "secret.txt"), "utf8")).resolves.toBe(
+          "classified",
+        );
       });
     },
   );

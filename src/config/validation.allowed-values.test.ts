@@ -47,16 +47,12 @@ describe("config validation allowed-values metadata", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      const issue = result.issues.find((entry) => entry.path === "channels.telegram.streaming");
+      const issue = result.issues.find((entry) => entry.path === "channels.telegram");
       expect(issue).toBeDefined();
-      expect(issue?.allowedValues).toEqual([
-        "true",
-        "false",
-        "off",
-        "partial",
-        "block",
-        "progress",
-      ]);
+      expect(issue?.message).toContain(
+        "channels.telegram.streamMode, channels.telegram.streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy",
+      );
+      expect(issue?.allowedValues).toBeUndefined();
     }
   });
 

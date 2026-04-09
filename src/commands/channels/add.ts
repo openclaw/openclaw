@@ -8,6 +8,7 @@ import type { ChannelId, ChannelPlugin, ChannelSetupInput } from "../../channels
 import { replaceConfigFile, type OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { applyAgentBindings, describeBinding } from "../agents.bindings.js";
 import { isCatalogChannelInstalled } from "../channel-setup/discovery.js";
@@ -28,16 +29,18 @@ export type ChannelsAddOptions = {
 } & Omit<ChannelSetupInput, "groupChannels" | "dmAllowlist" | "initialSyncLimit">;
 
 function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
-  const trimmed = raw.trim().toLowerCase();
+  const trimmed = normalizeOptionalLowercaseString(raw);
   if (!trimmed) {
     return undefined;
   }
   const workspaceDir = cfg ? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) : undefined;
   return listChannelPluginCatalogEntries({ workspaceDir }).find((entry) => {
-    if (entry.id.toLowerCase() === trimmed) {
+    if (normalizeOptionalLowercaseString(entry.id) === trimmed) {
       return true;
     }
-    return (entry.meta.aliases ?? []).some((alias) => alias.trim().toLowerCase() === trimmed);
+    return (entry.meta.aliases ?? []).some(
+      (alias) => normalizeOptionalLowercaseString(alias) === trimmed,
+    );
   });
 }
 

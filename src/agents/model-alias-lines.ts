@@ -1,14 +1,17 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export function buildModelAliasLines(cfg?: OpenClawConfig) {
   const models = cfg?.agents?.defaults?.models ?? {};
   const entries: Array<{ alias: string; model: string }> = [];
   for (const [keyRaw, entryRaw] of Object.entries(models)) {
-    const model = String(keyRaw ?? "").trim();
+    const model = normalizeOptionalString(String(keyRaw ?? "")) ?? "";
     if (!model) {
       continue;
     }
-    const alias = String((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
+    const alias =
+      normalizeOptionalString(String((entryRaw as { alias?: string } | undefined)?.alias ?? "")) ??
+      "";
     if (!alias) {
       continue;
     }

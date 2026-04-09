@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
 import { captureEnv } from "../test-utils/env.js";
 import { sanitizeBinaryOutput } from "./shell-utils.js";
@@ -13,8 +13,9 @@ const shellEnvMocks = vi.hoisted(() => ({
   resolveShellEnvFallbackTimeoutMs: vi.fn(() => 1234),
 }));
 
-vi.mock("../infra/shell-env.js", async (importOriginal) => {
-  const mod = await importOriginal<typeof import("../infra/shell-env.js")>();
+vi.mock("../infra/shell-env.js", async () => {
+  const mod =
+    await vi.importActual<typeof import("../infra/shell-env.js")>("../infra/shell-env.js");
   return {
     ...mod,
     getShellPathFromLoginShell: shellEnvMocks.getShellPathFromLoginShell,
@@ -22,8 +23,10 @@ vi.mock("../infra/shell-env.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
-  const mod = await importOriginal<typeof import("../infra/exec-approvals.js")>();
+vi.mock("../infra/exec-approvals.js", async () => {
+  const mod = await vi.importActual<typeof import("../infra/exec-approvals.js")>(
+    "../infra/exec-approvals.js",
+  );
   return { ...mod, resolveExecApprovals: () => createExecApprovals() };
 });
 
@@ -66,26 +69,6 @@ function createExecApprovals(): ExecApprovalsResolved {
   };
 }
 
-async function loadFreshBashExecPathModulesForTest() {
-  vi.resetModules();
-  vi.doMock("../infra/shell-env.js", async (importOriginal) => {
-    const mod = await importOriginal<typeof import("../infra/shell-env.js")>();
-    return {
-      ...mod,
-      getShellPathFromLoginShell: shellEnvMocks.getShellPathFromLoginShell,
-      resolveShellEnvFallbackTimeoutMs: shellEnvMocks.resolveShellEnvFallbackTimeoutMs,
-    };
-  });
-  vi.doMock("../infra/exec-approvals.js", async (importOriginal) => {
-    const mod = await importOriginal<typeof import("../infra/exec-approvals.js")>();
-    return { ...mod, resolveExecApprovals: () => createExecApprovals() };
-  });
-  const bashExec = await import("./bash-tools.exec.js");
-  return {
-    createExecTool: bashExec.createExecTool,
-  };
-}
-
 const normalizeText = (value?: string) =>
   sanitizeBinaryOutput(value ?? "")
     .replace(/\r\n/g, "\n")
@@ -101,13 +84,16 @@ const normalizePathEntries = (value?: string) =>
 describe("exec PATH login shell merge", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
-  beforeEach(async () => {
+  beforeAll(async () => {
+    ({ createExecTool } = await import("./bash-tools.exec.js"));
+  });
+
+  beforeEach(() => {
     envSnapshot = captureEnv(["PATH", "SHELL"]);
     shellEnvMocks.getShellPathFromLoginShell.mockReset();
     shellEnvMocks.getShellPathFromLoginShell.mockReturnValue("/custom/bin:/opt/bin");
     shellEnvMocks.resolveShellEnvFallbackTimeoutMs.mockReset();
     shellEnvMocks.resolveShellEnvFallbackTimeoutMs.mockReturnValue(1234);
-    ({ createExecTool } = await loadFreshBashExecPathModulesForTest());
   });
 
   afterEach(() => {
@@ -256,7 +242,6 @@ describe("exec host env validation", () => {
     const original = process.env.SSLKEYLOGFILE;
     process.env.SSLKEYLOGFILE = "/tmp/openclaw-ssl-keys.log";
     try {
-      const { createExecTool } = await import("./bash-tools.exec.js");
       const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
       const result = await tool.execute("call1", {
         command: "printf '%s' \"${SSLKEYLOGFILE:-}\"",

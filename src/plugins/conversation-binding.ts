@@ -7,11 +7,17 @@ import {
   resolveConversationBindingRecord,
   unbindConversationBindingRecord,
 } from "../bindings/records.js";
+import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { writeJsonAtomic } from "../infra/json-files.js";
 import { type ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { getActivePluginRegistry } from "./runtime.js";
 import type {
   PluginConversationBinding,
@@ -117,6 +123,22 @@ type PluginBindingGlobalState = {
   approvalsLoaded: boolean;
 };
 
+type PluginConversationBindingState = {
+  ref: ConversationRef;
+  record:
+    | {
+        bindingId: string;
+        conversation: ConversationRef;
+        boundAt: number;
+        metadata?: Record<string, unknown>;
+        targetSessionKey: string;
+      }
+    | null
+    | undefined;
+  binding: PluginConversationBinding | null;
+  isLegacyForeignBinding: boolean;
+};
+
 const pluginBindingGlobalStateKey = Symbol.for("openclaw.plugins.binding.global-state");
 const pluginBindingGlobalState = resolveGlobalSingleton<PluginBindingGlobalState>(
   pluginBindingGlobalStateKey,
@@ -136,7 +158,7 @@ function resolveApprovalsPath(): string {
 }
 
 function normalizeChannel(value: string): string {
-  return value.trim().toLowerCase();
+  return normalizeOptionalLowercaseString(value) ?? "";
 }
 
 function normalizeConversation(params: PluginBindingConversation): PluginBindingConversation {
@@ -144,29 +166,34 @@ function normalizeConversation(params: PluginBindingConversation): PluginBinding
     channel: normalizeChannel(params.channel),
     accountId: params.accountId.trim() || "default",
     conversationId: params.conversationId.trim(),
-    parentConversationId: params.parentConversationId?.trim() || undefined,
+    parentConversationId: normalizeOptionalString(params.parentConversationId),
     threadId:
       typeof params.threadId === "number"
         ? Math.trunc(params.threadId)
-        : params.threadId?.toString().trim() || undefined,
+        : normalizeOptionalString(params.threadId?.toString()),
   };
 }
 
 function toConversationRef(params: PluginBindingConversation): ConversationRef {
   const normalized = normalizeConversation(params);
-  if (normalized.channel === "telegram") {
-    const threadId =
-      typeof normalized.threadId === "number" || typeof normalized.threadId === "string"
-        ? String(normalized.threadId).trim()
-        : "";
-    if (threadId) {
-      const parent = normalized.parentConversationId?.trim() || normalized.conversationId;
-      return {
-        channel: "telegram",
+  const channelId = normalizeChannelId(normalized.channel);
+  const resolvedConversationRef = channelId
+    ? getChannelPlugin(channelId)?.conversationBindings?.resolveConversationRef?.({
         accountId: normalized.accountId,
-        conversationId: `${parent}:topic:${threadId}`,
-      };
-    }
+        conversationId: normalized.conversationId,
+        parentConversationId: normalized.parentConversationId,
+        threadId: normalized.threadId,
+      })
+    : null;
+  if (resolvedConversationRef?.conversationId?.trim()) {
+    return {
+      channel: normalized.channel,
+      accountId: normalized.accountId,
+      conversationId: resolvedConversationRef.conversationId.trim(),
+      ...(resolvedConversationRef.parentConversationId?.trim()
+        ? { parentConversationId: resolvedConversationRef.parentConversationId.trim() }
+        : {}),
+    };
   }
   return {
     channel: normalized.channel,
@@ -209,6 +236,42 @@ function buildPluginBindingSessionKey(params: {
     .digest("hex")
     .slice(0, 24);
   return `${PLUGIN_BINDING_SESSION_PREFIX}:${params.pluginId}:${hash}`;
+}
+
+function buildPluginBindingIdentity(params: PluginBindingIdentity): PluginBindingIdentity {
+  return {
+    pluginId: params.pluginId,
+    pluginName: params.pluginName,
+    pluginRoot: params.pluginRoot,
+  };
+}
+
+function logPluginBindingLifecycleEvent(params: {
+  event:
+    | "migrating legacy record"
+    | "auto-refresh"
+    | "auto-approved"
+    | "requested"
+    | "detached"
+    | "denied"
+    | "approved";
+  pluginId: string;
+  pluginRoot: string;
+  channel: string;
+  accountId: string;
+  conversationId: string;
+  decision?: PluginBindingApprovalDecision;
+}): void {
+  const parts = [
+    `plugin binding ${params.event}`,
+    `plugin=${params.pluginId}`,
+    `root=${params.pluginRoot}`,
+    ...(params.decision ? [`decision=${params.decision}`] : []),
+    `channel=${params.channel}`,
+    `account=${params.accountId}`,
+    `conversation=${params.conversationId}`,
+  ];
+  log.info(parts.join(" "));
 }
 
 function isLegacyPluginBindingRecord(params: {
@@ -286,8 +349,7 @@ function loadApprovalsFromDisk(): PluginBindingApprovalsFile {
           pluginId: typeof entry.pluginId === "string" ? entry.pluginId : "",
           pluginName: typeof entry.pluginName === "string" ? entry.pluginName : undefined,
           channel: typeof entry.channel === "string" ? normalizeChannel(entry.channel) : "",
-          accountId:
-            typeof entry.accountId === "string" ? entry.accountId.trim() || "default" : "default",
+          accountId: normalizeOptionalString(entry.accountId) ?? "default",
           approvedAt:
             typeof entry.approvedAt === "number" && Number.isFinite(entry.approvedAt)
               ? Math.floor(entry.approvedAt)
@@ -368,8 +430,8 @@ function buildBindingMetadata(params: {
     pluginId: params.pluginId,
     pluginName: params.pluginName,
     pluginRoot: params.pluginRoot,
-    summary: params.summary?.trim() || undefined,
-    detachHint: params.detachHint?.trim() || undefined,
+    summary: normalizeOptionalString(params.summary),
+    detachHint: normalizeOptionalString(params.detachHint),
   };
 }
 
@@ -426,6 +488,89 @@ export function toPluginConversationBinding(
   };
 }
 
+function withConversationBindingContext(
+  binding: PluginConversationBinding,
+  conversation: PluginBindingConversation,
+): PluginConversationBinding {
+  return {
+    ...binding,
+    parentConversationId: conversation.parentConversationId,
+    threadId: conversation.threadId,
+  };
+}
+
+function resolvePluginConversationBindingState(params: {
+  conversation: PluginBindingConversation;
+}): PluginConversationBindingState {
+  const ref = toConversationRef(params.conversation);
+  const record = resolveConversationBindingRecord(ref);
+  const binding = toPluginConversationBinding(record);
+  return {
+    ref,
+    record,
+    binding,
+    isLegacyForeignBinding: isLegacyPluginBindingRecord({ record }),
+  };
+}
+
+function resolveOwnedPluginConversationBinding(params: {
+  pluginRoot: string;
+  conversation: PluginBindingConversation;
+}): PluginConversationBinding | null {
+  const state = resolvePluginConversationBindingState({
+    conversation: params.conversation,
+  });
+  if (!state.binding || state.binding.pluginRoot !== params.pluginRoot) {
+    return null;
+  }
+  return withConversationBindingContext(state.binding, params.conversation);
+}
+
+function bindConversationFromIdentity(params: {
+  identity: PluginBindingIdentity;
+  conversation: PluginBindingConversation;
+  summary?: string;
+  detachHint?: string;
+}): Promise<PluginConversationBinding> {
+  return bindConversationNow({
+    identity: buildPluginBindingIdentity(params.identity),
+    conversation: params.conversation,
+    summary: params.summary,
+    detachHint: params.detachHint,
+  });
+}
+
+function bindConversationFromRequest(
+  request: Pick<
+    PendingPluginBindingRequest,
+    "pluginId" | "pluginName" | "pluginRoot" | "conversation" | "summary" | "detachHint"
+  >,
+): Promise<PluginConversationBinding> {
+  return bindConversationFromIdentity({
+    identity: buildPluginBindingIdentity(request),
+    conversation: request.conversation,
+    summary: request.summary,
+    detachHint: request.detachHint,
+  });
+}
+
+function buildApprovalEntryFromRequest(
+  request: Pick<
+    PendingPluginBindingRequest,
+    "pluginRoot" | "pluginId" | "pluginName" | "conversation"
+  >,
+  approvedAt = Date.now(),
+): PluginBindingApprovalEntry {
+  return {
+    pluginRoot: request.pluginRoot,
+    pluginId: request.pluginId,
+    pluginName: request.pluginName,
+    channel: request.conversation.channel,
+    accountId: request.conversation.accountId,
+    approvedAt,
+  };
+}
+
 async function bindConversationNow(params: {
   identity: PluginBindingIdentity;
   conversation: PluginBindingConversation;
@@ -456,11 +601,7 @@ async function bindConversationNow(params: {
   if (!binding) {
     throw new Error("plugin binding was created without plugin metadata");
   }
-  return {
-    ...binding,
-    parentConversationId: params.conversation.parentConversationId,
-    threadId: params.conversation.threadId,
-  };
+  return withConversationBindingContext(binding, params.conversation);
 }
 
 function buildApprovalMessage(request: PendingPluginBindingRequest): string {
@@ -483,7 +624,7 @@ function resolvePluginBindingDisplayName(binding: {
   pluginId: string;
   pluginName?: string;
 }): string {
-  return binding.pluginName?.trim() || binding.pluginId;
+  return normalizeOptionalString(binding.pluginName) || binding.pluginId;
 }
 
 function buildDetachHintSuffix(detachHint?: string): string {
@@ -589,17 +730,19 @@ export async function requestPluginConversationBinding(params: {
   binding: PluginConversationBindingRequestParams | undefined;
 }): Promise<PluginConversationBindingRequestResult> {
   const conversation = normalizeConversation(params.conversation);
-  const ref = toConversationRef(conversation);
-  const existing = resolveConversationBindingRecord(ref);
-  const existingPluginBinding = toPluginConversationBinding(existing);
-  const existingLegacyPluginBinding = isLegacyPluginBindingRecord({
-    record: existing,
+  const state = resolvePluginConversationBindingState({
+    conversation,
   });
-  if (existing && !existingPluginBinding) {
-    if (existingLegacyPluginBinding) {
-      log.info(
-        `plugin binding migrating legacy record plugin=${params.pluginId} root=${params.pluginRoot} channel=${ref.channel} account=${ref.accountId} conversation=${ref.conversationId}`,
-      );
+  if (state.record && !state.binding) {
+    if (state.isLegacyForeignBinding) {
+      logPluginBindingLifecycleEvent({
+        event: "migrating legacy record",
+        pluginId: params.pluginId,
+        pluginRoot: params.pluginRoot,
+        channel: state.ref.channel,
+        accountId: state.ref.accountId,
+        conversationId: state.ref.conversationId,
+      });
     } else {
       return {
         status: "error",
@@ -608,50 +751,52 @@ export async function requestPluginConversationBinding(params: {
       };
     }
   }
-  if (existingPluginBinding && existingPluginBinding.pluginRoot !== params.pluginRoot) {
+  if (state.binding && state.binding.pluginRoot !== params.pluginRoot) {
     return {
       status: "error",
-      message: `This conversation is already bound by plugin "${existingPluginBinding.pluginName ?? existingPluginBinding.pluginId}".`,
+      message: `This conversation is already bound by plugin "${state.binding.pluginName ?? state.binding.pluginId}".`,
     };
   }
 
-  if (existingPluginBinding && existingPluginBinding.pluginRoot === params.pluginRoot) {
-    const rebound = await bindConversationNow({
-      identity: {
-        pluginId: params.pluginId,
-        pluginName: params.pluginName,
-        pluginRoot: params.pluginRoot,
-      },
+  if (state.binding && state.binding.pluginRoot === params.pluginRoot) {
+    const rebound = await bindConversationFromIdentity({
+      identity: buildPluginBindingIdentity(params),
       conversation,
       summary: params.binding?.summary,
       detachHint: params.binding?.detachHint,
     });
-    log.info(
-      `plugin binding auto-refresh plugin=${params.pluginId} root=${params.pluginRoot} channel=${ref.channel} account=${ref.accountId} conversation=${ref.conversationId}`,
-    );
+    logPluginBindingLifecycleEvent({
+      event: "auto-refresh",
+      pluginId: params.pluginId,
+      pluginRoot: params.pluginRoot,
+      channel: state.ref.channel,
+      accountId: state.ref.accountId,
+      conversationId: state.ref.conversationId,
+    });
     return { status: "bound", binding: rebound };
   }
 
   if (
     hasPersistentApproval({
       pluginRoot: params.pluginRoot,
-      channel: ref.channel,
-      accountId: ref.accountId,
+      channel: state.ref.channel,
+      accountId: state.ref.accountId,
     })
   ) {
-    const bound = await bindConversationNow({
-      identity: {
-        pluginId: params.pluginId,
-        pluginName: params.pluginName,
-        pluginRoot: params.pluginRoot,
-      },
+    const bound = await bindConversationFromIdentity({
+      identity: buildPluginBindingIdentity(params),
       conversation,
       summary: params.binding?.summary,
       detachHint: params.binding?.detachHint,
     });
-    log.info(
-      `plugin binding auto-approved plugin=${params.pluginId} root=${params.pluginRoot} channel=${ref.channel} account=${ref.accountId} conversation=${ref.conversationId}`,
-    );
+    logPluginBindingLifecycleEvent({
+      event: "auto-approved",
+      pluginId: params.pluginId,
+      pluginRoot: params.pluginRoot,
+      channel: state.ref.channel,
+      accountId: state.ref.accountId,
+      conversationId: state.ref.conversationId,
+    });
     return { status: "bound", binding: bound };
   }
 
@@ -662,14 +807,19 @@ export async function requestPluginConversationBinding(params: {
     pluginRoot: params.pluginRoot,
     conversation,
     requestedAt: Date.now(),
-    requestedBySenderId: params.requestedBySenderId?.trim() || undefined,
-    summary: params.binding?.summary?.trim() || undefined,
-    detachHint: params.binding?.detachHint?.trim() || undefined,
+    requestedBySenderId: normalizeOptionalString(params.requestedBySenderId),
+    summary: normalizeOptionalString(params.binding?.summary),
+    detachHint: normalizeOptionalString(params.binding?.detachHint),
   };
   pendingRequests.set(request.id, request);
-  log.info(
-    `plugin binding requested plugin=${params.pluginId} root=${params.pluginRoot} channel=${ref.channel} account=${ref.accountId} conversation=${ref.conversationId}`,
-  );
+  logPluginBindingLifecycleEvent({
+    event: "requested",
+    pluginId: params.pluginId,
+    pluginRoot: params.pluginRoot,
+    channel: state.ref.channel,
+    accountId: state.ref.accountId,
+    conversationId: state.ref.conversationId,
+  });
   return {
     status: "pending",
     approvalId: request.id,
@@ -681,35 +831,29 @@ export async function getCurrentPluginConversationBinding(params: {
   pluginRoot: string;
   conversation: PluginBindingConversation;
 }): Promise<PluginConversationBinding | null> {
-  const record = resolveConversationBindingRecord(toConversationRef(params.conversation));
-  const binding = toPluginConversationBinding(record);
-  if (!binding || binding.pluginRoot !== params.pluginRoot) {
-    return null;
-  }
-  return {
-    ...binding,
-    parentConversationId: params.conversation.parentConversationId,
-    threadId: params.conversation.threadId,
-  };
+  return resolveOwnedPluginConversationBinding(params);
 }
 
 export async function detachPluginConversationBinding(params: {
   pluginRoot: string;
   conversation: PluginBindingConversation;
 }): Promise<{ removed: boolean }> {
-  const ref = toConversationRef(params.conversation);
-  const record = resolveConversationBindingRecord(ref);
-  const binding = toPluginConversationBinding(record);
-  if (!binding || binding.pluginRoot !== params.pluginRoot) {
+  const binding = resolveOwnedPluginConversationBinding(params);
+  if (!binding) {
     return { removed: false };
   }
   await unbindConversationBindingRecord({
     bindingId: binding.bindingId,
     reason: "plugin-detach",
   });
-  log.info(
-    `plugin binding detached plugin=${binding.pluginId} root=${binding.pluginRoot} channel=${binding.channel} account=${binding.accountId} conversation=${binding.conversationId}`,
-  );
+  logPluginBindingLifecycleEvent({
+    event: "detached",
+    pluginId: binding.pluginId,
+    pluginRoot: binding.pluginRoot,
+    channel: binding.channel,
+    accountId: binding.accountId,
+    conversationId: binding.conversationId,
+  });
   return { removed: true };
 }
 
@@ -736,34 +880,29 @@ export async function resolvePluginConversationBindingApproval(params: {
       decision: "deny",
       request,
     });
-    log.info(
-      `plugin binding denied plugin=${request.pluginId} root=${request.pluginRoot} channel=${request.conversation.channel} account=${request.conversation.accountId} conversation=${request.conversation.conversationId}`,
-    );
+    logPluginBindingLifecycleEvent({
+      event: "denied",
+      pluginId: request.pluginId,
+      pluginRoot: request.pluginRoot,
+      channel: request.conversation.channel,
+      accountId: request.conversation.accountId,
+      conversationId: request.conversation.conversationId,
+    });
     return { status: "denied", request };
   }
   if (params.decision === "allow-always") {
-    await addPersistentApproval({
-      pluginRoot: request.pluginRoot,
-      pluginId: request.pluginId,
-      pluginName: request.pluginName,
-      channel: request.conversation.channel,
-      accountId: request.conversation.accountId,
-      approvedAt: Date.now(),
-    });
+    await addPersistentApproval(buildApprovalEntryFromRequest(request));
   }
-  const binding = await bindConversationNow({
-    identity: {
-      pluginId: request.pluginId,
-      pluginName: request.pluginName,
-      pluginRoot: request.pluginRoot,
-    },
-    conversation: request.conversation,
-    summary: request.summary,
-    detachHint: request.detachHint,
+  const binding = await bindConversationFromRequest(request);
+  logPluginBindingLifecycleEvent({
+    event: "approved",
+    pluginId: request.pluginId,
+    pluginRoot: request.pluginRoot,
+    decision: params.decision,
+    channel: request.conversation.channel,
+    accountId: request.conversation.accountId,
+    conversationId: request.conversation.conversationId,
   });
-  log.info(
-    `plugin binding approved plugin=${request.pluginId} root=${request.pluginRoot} decision=${params.decision} channel=${request.conversation.channel} account=${request.conversation.accountId} conversation=${request.conversation.conversationId}`,
-  );
   dispatchPluginConversationBindingResolved({
     status: "approved",
     binding,
@@ -822,7 +961,7 @@ async function notifyPluginConversationBindingResolved(params: {
       await registration.handler(event);
     } catch (error) {
       log.warn(
-        `plugin binding resolved callback failed plugin=${registration.pluginId} root=${registration.pluginRoot ?? "<none>"}: ${error instanceof Error ? error.message : String(error)}`,
+        `plugin binding resolved callback failed plugin=${registration.pluginId} root=${registration.pluginRoot ?? "<none>"}: ${formatErrorMessage(error)}`,
       );
     }
   }

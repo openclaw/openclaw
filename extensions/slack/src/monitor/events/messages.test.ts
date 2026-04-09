@@ -7,21 +7,23 @@ import {
 const messageQueueMock = vi.fn();
 const messageAllowMock = vi.fn();
 
-async function createChannelRuntimeMock(
-  importOriginal: () => Promise<typeof import("openclaw/plugin-sdk/channel-runtime")>,
-) {
-  const actual = await importOriginal();
+async function createChannelRuntimeMock() {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/infra-runtime")>(
+    "openclaw/plugin-sdk/infra-runtime",
+  );
   return {
     ...actual,
     enqueueSystemEvent: (...args: unknown[]) => messageQueueMock(...args),
   };
 }
 
-vi.mock("openclaw/plugin-sdk/channel-runtime", createChannelRuntimeMock);
-vi.mock("openclaw/plugin-sdk/channel-runtime.js", createChannelRuntimeMock);
+vi.mock("openclaw/plugin-sdk/infra-runtime", createChannelRuntimeMock);
+vi.mock("openclaw/plugin-sdk/infra-runtime.js", createChannelRuntimeMock);
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
+    "openclaw/plugin-sdk/conversation-runtime",
+  );
   return {
     ...actual,
     readChannelAllowFromStore: (...args: unknown[]) => messageAllowMock(...args),
@@ -58,7 +60,6 @@ function resetMessageMocks(): void {
 }
 
 beforeAll(async () => {
-  vi.resetModules();
   ({ registerSlackMessageEvents } = await import("./messages.js"));
 });
 

@@ -1,5 +1,6 @@
 import { StaticAuthProvider } from "@twurple/auth";
 import { ChatClient } from "@twurple/chat";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { BaseProbeResult } from "../runtime-api.js";
 import type { TwitchAccountConfig } from "./types.js";
 import { normalizeToken } from "./utils/twitch.js";
@@ -102,7 +103,7 @@ export async function probeTwitch(
   } catch (error) {
     return {
       ok: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: formatErrorMessage(error),
       username: account.username,
       channel: account.channel,
       elapsedMs: Date.now() - started,

@@ -1,4 +1,6 @@
 export {
+  chunkText,
+  chunkTextWithMode,
   chunkMarkdownTextWithMode,
   resolveChunkMode,
   resolveTextChunkLimit,

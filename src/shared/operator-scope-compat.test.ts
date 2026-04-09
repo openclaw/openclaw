@@ -80,26 +80,33 @@ describe("roleScopesAllow", () => {
     ).toBe(false);
   });
 
-  it("uses strict matching for non-operator roles", () => {
+  it("uses strict matching with role-prefix partitioning for non-operator roles", () => {
     expect(
       roleScopesAllow({
         role: "node",
-        requestedScopes: ["system.run"],
-        allowedScopes: ["operator.admin", "system.run"],
+        requestedScopes: ["node.exec"],
+        allowedScopes: ["operator.admin", "node.exec"],
       }),
     ).toBe(true);
     expect(
       roleScopesAllow({
         role: "node",
-        requestedScopes: ["system.run"],
+        requestedScopes: ["node.exec"],
         allowedScopes: ["operator.admin"],
       }),
     ).toBe(false);
     expect(
       roleScopesAllow({
+        role: "node",
+        requestedScopes: ["operator.read"],
+        allowedScopes: ["operator.read", "node.exec"],
+      }),
+    ).toBe(false);
+    expect(
+      roleScopesAllow({
         role: " node ",
-        requestedScopes: [" system.run ", "system.run", "  "],
-        allowedScopes: ["system.run", "operator.admin"],
+        requestedScopes: [" node.exec ", "node.exec", "  "],
+        allowedScopes: ["node.exec", "operator.admin"],
       }),
     ).toBe(true);
   });
@@ -145,8 +152,8 @@ describe("roleScopesAllow", () => {
     expect(
       resolveMissingRequestedScope({
         role: "node",
-        requestedScopes: ["system.run"],
-        allowedScopes: ["system.run", "operator.admin"],
+        requestedScopes: ["node.exec"],
+        allowedScopes: ["node.exec", "operator.admin"],
       }),
     ).toBeNull();
   });
