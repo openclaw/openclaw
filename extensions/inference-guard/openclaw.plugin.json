@@ -1,0 +1,43 @@
+{
+  "id": "inference-guard",
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "maxConcurrentInference": {
+        "type": "integer",
+        "default": 1,
+        "description": "Maximum concurrent inference requests"
+      },
+      "deferPolicy": {
+        "type": "object",
+        "properties": {
+          "heartbeat": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": ["defer-behind-user", "queue-fifo"],
+                "default": "defer-behind-user"
+              },
+              "maxQueued": { "type": "integer", "default": 1 }
+            }
+          },
+          "cron": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": ["defer-behind-user", "queue-fifo"],
+                "default": "defer-behind-user"
+              },
+              "maxQueued": { "type": "integer", "default": 3 }
+            }
+          }
+        }
+      },
+      "queueWarnMs": { "type": "integer", "default": 5000 }
+    }
+  }
+}

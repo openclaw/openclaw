@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/inference-guard-plugin",
+  "version": "2026.4.9-beta.1",
+  "private": true,
+  "description": "Priority-aware collision prevention for single-slot local inference",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "npmSpec": "@openclaw/inference-guard-plugin"
+    }
+  }
+}
