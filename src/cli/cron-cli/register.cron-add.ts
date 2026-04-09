@@ -15,20 +15,9 @@ import {
   handleCronCliError,
   printCronJson,
   printCronList,
+  looksLikeShellCommand,
   warnIfCronSchedulerDisabled,
 } from "./shared.js";
-
-const SHELL_COMMAND_PATTERN =
-  /(?:^|\s)(?:python3?|bash|sh|node|bun|deno|uv run|npx|tsx|ts-node|ruby|perl|php|make|cargo|go run|java|dotnet|\.\/)(?:\s|$)/m;
-
-/**
- * Returns true when the system-event text looks like it contains a shell
- * command invocation.  Used to warn users that systemEvent payloads on the
- * main session do not execute shell commands.
- */
-function looksLikeShellCommand(text: string): boolean {
-  return SHELL_COMMAND_PATTERN.test(text);
-}
 
 export function registerCronStatusCommand(cron: Command) {
   addGatewayClientOptions(
