@@ -42,6 +42,20 @@ export function getCliSessionBinding(
         fromBindings.systemPromptCompactionCount >= 0
           ? fromBindings.systemPromptCompactionCount
           : undefined,
+      // Semantic prompt loader fields
+      semanticContextFiles:
+        Array.isArray(fromBindings?.semanticContextFiles) &&
+        fromBindings.semanticContextFiles.length > 0
+          ? fromBindings.semanticContextFiles
+          : undefined,
+      semanticSessionFile: trimOptional(fromBindings?.semanticSessionFile),
+      semanticSessionHash: trimOptional(fromBindings?.semanticSessionHash),
+      semanticCompactionCount:
+        typeof fromBindings?.semanticCompactionCount === "number" &&
+        Number.isFinite(fromBindings.semanticCompactionCount) &&
+        fromBindings.semanticCompactionCount >= 0
+          ? fromBindings.semanticCompactionCount
+          : undefined,
     };
   }
   const fromMap = entry.cliSessionIds?.[normalized];
@@ -103,6 +117,23 @@ export function setCliSessionBinding(
       binding.systemPromptCompactionCount >= 0
         ? {
             systemPromptCompactionCount: Math.floor(binding.systemPromptCompactionCount),
+          }
+        : {}),
+      // Semantic prompt loader fields
+      ...(Array.isArray(binding.semanticContextFiles) && binding.semanticContextFiles.length > 0
+        ? { semanticContextFiles: binding.semanticContextFiles }
+        : {}),
+      ...(trimOptional(binding.semanticSessionFile)
+        ? { semanticSessionFile: trimOptional(binding.semanticSessionFile) }
+        : {}),
+      ...(trimOptional(binding.semanticSessionHash)
+        ? { semanticSessionHash: trimOptional(binding.semanticSessionHash) }
+        : {}),
+      ...(typeof binding.semanticCompactionCount === "number" &&
+      Number.isFinite(binding.semanticCompactionCount) &&
+      binding.semanticCompactionCount >= 0
+        ? {
+            semanticCompactionCount: Math.floor(binding.semanticCompactionCount),
           }
         : {}),
     },

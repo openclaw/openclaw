@@ -66,6 +66,14 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPi
                             result.cliSessionBinding.systemPromptCompactionCount,
                         }
                       : {}),
+                    ...(result.cliSessionBinding?.semanticSessionFile
+                      ? {
+                          semanticContextFiles: result.cliSessionBinding.semanticContextFiles,
+                          semanticSessionFile: result.cliSessionBinding.semanticSessionFile,
+                          semanticSessionHash: result.cliSessionBinding.semanticSessionHash,
+                          semanticCompactionCount: result.cliSessionBinding.semanticCompactionCount,
+                        }
+                      : {}),
                   },
                 }
               : {}),
@@ -119,6 +127,15 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPi
                               systemPromptHash: result.cliSessionBinding.systemPromptHash,
                               systemPromptCompactionCount:
                                 result.cliSessionBinding.systemPromptCompactionCount,
+                            }
+                          : {}),
+                        ...(result.cliSessionBinding?.semanticSessionFile
+                          ? {
+                              semanticContextFiles: result.cliSessionBinding.semanticContextFiles,
+                              semanticSessionFile: result.cliSessionBinding.semanticSessionFile,
+                              semanticSessionHash: result.cliSessionBinding.semanticSessionHash,
+                              semanticCompactionCount:
+                                result.cliSessionBinding.semanticCompactionCount,
                             }
                           : {}),
                       },

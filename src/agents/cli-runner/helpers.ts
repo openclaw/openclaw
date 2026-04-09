@@ -24,8 +24,9 @@ import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
 import { buildSystemPromptParams } from "../system-prompt-params.js";
-import { buildAgentSystemPrompt } from "../system-prompt.js";
+import { buildAgentSystemPrompt, buildAgentSystemPromptSplit } from "../system-prompt.js";
 import { sanitizeImageBlocks } from "../tool-images.js";
+import { ENABLE_SEMANTIC_PROMPT_LOADER } from "./flags.js";
 export { buildCliSupervisorScopeKey, resolveCliNoOutputTimeoutMs } from "./reliability.js";
 
 type CliUsage = {
@@ -100,7 +101,7 @@ export function buildSystemPrompt(params: {
   });
   const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
   const ownerDisplay = resolveOwnerDisplaySetting(params.config);
-  return buildAgentSystemPrompt({
+  const agentPromptParams = {
     workspaceDir: params.workspaceDir,
     defaultThinkLevel: params.defaultThinkLevel,
     extraSystemPrompt: params.extraSystemPrompt,
@@ -121,7 +122,17 @@ export function buildSystemPrompt(params: {
     contextFiles: params.contextFiles,
     ttsHint,
     memoryCitationsMode: params.config?.memory?.citations,
-  });
+  };
+  if (ENABLE_SEMANTIC_PROMPT_LOADER) {
+    // Strip inlined workspace context file content from the assembled prompt;
+    // the semantic loader references those files by path so the agent reads
+    // them directly from source, avoiding duplication.
+    return buildAgentSystemPromptSplit({
+      ...agentPromptParams,
+      omitContextFileContent: true,
+    }).prompt;
+  }
+  return buildAgentSystemPrompt(agentPromptParams);
 }
 
 export function normalizeCliModel(modelId: string, backend: CliBackendConfig): string {

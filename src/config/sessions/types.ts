@@ -76,6 +76,11 @@ export type CliSessionBinding = {
   systemPromptFile?: string;
   systemPromptHash?: string;
   systemPromptCompactionCount?: number;
+  // Semantic prompt loader fields (coexist with legacy chunk-based fields)
+  semanticContextFiles?: string[];
+  semanticSessionFile?: string;
+  semanticSessionHash?: string;
+  semanticCompactionCount?: number;
 };
 
 export type CliPromptLoadStatus = {

@@ -770,6 +770,57 @@ export function buildAgentSystemPrompt(params: {
   return lines.filter(Boolean).join("\n");
 }
 
+export function buildAgentSystemPromptSplit(
+  params: Parameters<typeof buildAgentSystemPrompt>[0] & {
+    omitContextFileContent?: boolean;
+  },
+): {
+  prompt: string;
+  contextFilePaths: string[];
+} {
+  const contextFiles = params.contextFiles ?? [];
+  const validContextFiles = contextFiles.filter(
+    (file) => typeof file.path === "string" && file.path.trim().length > 0,
+  );
+  const contextFilePaths = validContextFiles.map((file) => file.path);
+
+  if (!params.omitContextFileContent) {
+    return {
+      prompt: buildAgentSystemPrompt(params),
+      contextFilePaths,
+    };
+  }
+
+  const promptWithoutContext = buildAgentSystemPrompt({
+    ...params,
+    contextFiles: [],
+  });
+
+  // Replace the dangling "## Workspace Files (injected)" header with a
+  // version that references the files by path (they'll be read separately
+  // via the semantic loader prompt). Without this the section becomes a
+  // misleading header pointing to content that was stripped.
+  const danglingHeader =
+    "## Workspace Files (injected)\nThese user-editable files are loaded by OpenClaw and included below in Project Context.";
+  let replacedPrompt: string;
+  if (contextFilePaths.length > 0) {
+    const referenceBlock = [
+      "## Workspace Files",
+      "The following user-editable workspace files are part of the authoritative system prompt for this session. Read each one with the Read tool (they are also listed in the loader instructions):",
+      ...contextFilePaths.map((p) => `- ${p}`),
+    ].join("\n");
+    replacedPrompt = promptWithoutContext.replace(danglingHeader, referenceBlock);
+  } else {
+    // No context files at all — drop the dangling header entirely.
+    replacedPrompt = promptWithoutContext.replace(`${danglingHeader}\n`, "");
+  }
+
+  return {
+    prompt: replacedPrompt,
+    contextFilePaths,
+  };
+}
+
 export function buildRuntimeLine(
   runtimeInfo?: {
     agentId?: string;

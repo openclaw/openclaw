@@ -21,6 +21,7 @@ import {
   getBootstrapProfileConfig,
   isContextOverflowError,
 } from "../pi-embedded-helpers.js";
+import { ENABLE_SEMANTIC_PROMPT_LOADER } from "./flags.js";
 import {
   appendImagePathsToPrompt,
   buildCliSupervisorScopeKey,
@@ -51,6 +52,14 @@ import {
   estimatePromptTokens,
   ESTIMATED_TOKENS_PER_IMAGE,
 } from "./prepare.js";
+import {
+  type SemanticPromptFiles,
+  writeSemanticSessionFile,
+  buildSemanticLoaderPrompt,
+  buildSemanticCompletionPrompt,
+  isExpectedSemanticPromptFile,
+  resolveSemanticExpectedFiles,
+} from "./semantic-prompt.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 const executeDeps = {
@@ -115,6 +124,11 @@ export type CliSessionBindingResult = {
   systemPromptFile?: string;
   systemPromptHash?: string;
   systemPromptCompactionCount?: number;
+  // Semantic prompt loader fields (coexist with legacy chunk-based fields)
+  semanticContextFiles?: string[];
+  semanticSessionFile?: string;
+  semanticSessionHash?: string;
+  semanticCompactionCount?: number;
 };
 
 export type CliPromptLoadResult = {
@@ -217,6 +231,8 @@ export async function executeWithOverflowProtection(
   let latestCliPromptLoad: CliPromptLoadResult | undefined;
   let latestPromptChunks: ClaudeSystemPromptChunk[] = [];
   const verifiedPromptChunkCounts = new Map<string, number>();
+  let latestSemanticFiles: SemanticPromptFiles | undefined;
+  const verifiedPromptFileSets = new Map<string, Set<string>>();
   const buildCliPromptLoadState = (params: {
     sessionPromptFile?: string;
     currentSessionPromptFile?: string;
@@ -313,7 +329,85 @@ export async function executeWithOverflowProtection(
         : undefined;
 
     // Layer 1: Write session prompt file and build loader prompt (Claude CLI only)
-    if (context.isClaude && !isSystemCall) {
+    if (context.isClaude && !isSystemCall && ENABLE_SEMANTIC_PROMPT_LOADER) {
+      // Semantic prompt loader path: write one session file + reference workspace context files directly
+      try {
+        const semanticContextPaths = _activeContextFiles.map((f) => f.path);
+        const semanticSessionResult = await writeSemanticSessionFile({
+          sessionFile: params.sessionFile,
+          sessionPromptContent: systemPrompt,
+        });
+        latestSemanticFiles = {
+          contextFiles: semanticContextPaths,
+          sessionFile: semanticSessionResult.filePath,
+          sessionHash: semanticSessionResult.hash,
+        };
+        const reloadReason = (() => {
+          if (!resolvedSessionId) {
+            return undefined;
+          }
+          if (!useResume || !matchingCliSessionBinding?.sessionId?.trim()) {
+            return "new-session" as const;
+          }
+          if (forceReloadSystemPromptFile) {
+            return "compaction" as const;
+          }
+          const contextMatch =
+            JSON.stringify(matchingCliSessionBinding.semanticContextFiles ?? []) ===
+            JSON.stringify(latestSemanticFiles.contextFiles);
+          if (!contextMatch) {
+            return "prompt-changed" as const;
+          }
+          if (
+            matchingCliSessionBinding.semanticSessionHash?.trim() !==
+            latestSemanticFiles.sessionHash
+          ) {
+            return "prompt-changed" as const;
+          }
+          if ((matchingCliSessionBinding.semanticCompactionCount ?? 0) < currentCompactionCount) {
+            return "compaction" as const;
+          }
+          return undefined;
+        })();
+        if (cliDebugEnabled) {
+          cliBackendLog.debug("cli semantic prompt file prepared", {
+            sessionId: resolvedSessionId ?? sessionId ?? null,
+            useResume,
+            loaderPromptMode,
+            currentCompactionCount,
+            forceReloadSystemPromptFile,
+            sessionFile: latestSemanticFiles.sessionFile,
+            sessionHash: latestSemanticFiles.sessionHash,
+            contextFileCount: latestSemanticFiles.contextFiles.length,
+            reloadReason: reloadReason ?? null,
+          });
+        }
+        systemPromptToSend =
+          loaderPromptMode === "disabled"
+            ? systemPrompt
+            : reloadReason
+              ? buildSemanticLoaderPrompt({
+                  files: latestSemanticFiles,
+                  reason: reloadReason,
+                  strict: loaderPromptMode === "strict",
+                })
+              : undefined;
+        promptFileTrustedFromBinding = Boolean(
+          !reloadReason &&
+          matchingCliSessionBinding?.semanticSessionFile?.trim() ===
+            latestSemanticFiles.sessionFile &&
+          matchingCliSessionBinding?.semanticSessionHash?.trim() ===
+            latestSemanticFiles.sessionHash,
+        );
+      } catch (error) {
+        cliBackendLog.warn(
+          `failed to write semantic session prompt file; falling back to direct prompt: ${String(error)}`,
+        );
+        systemPromptToSend = systemPrompt;
+        latestSemanticFiles = undefined;
+        loaderFallbackReason = "write_failed";
+      }
+    } else if (context.isClaude && !isSystemCall) {
       try {
         cliSystemPromptFile = await writeClaudeSystemPromptFile({
           sessionFile: params.sessionFile,
@@ -410,7 +504,7 @@ export async function executeWithOverflowProtection(
     const mustVerifyPromptFileRead = Boolean(
       context.isClaude &&
       !isSystemCall &&
-      cliSystemPromptFile &&
+      (cliSystemPromptFile || (ENABLE_SEMANTIC_PROMPT_LOADER && latestSemanticFiles)) &&
       systemPromptToSend &&
       loaderPromptMode !== "disabled",
     );
@@ -440,6 +534,21 @@ export async function executeWithOverflowProtection(
       prependBootstrapPromptWarning(params.prompt, context.bootstrapPromptWarningLines, {
         preserveExactPrompt: context.heartbeatPrompt,
       });
+    // On resume, Claude CLI does not accept --append-system-prompt, so
+    // buildCliArgs will drop systemPromptToSend. When a reload is required
+    // (compaction, prompt-changed), prepend the loader instruction to the
+    // user message so the agent sees the "re-read files" directive on the
+    // first call instead of only after a verification-retry round-trip.
+    if (
+      !promptOverride &&
+      context.isClaude &&
+      !isSystemCall &&
+      useResume &&
+      systemPromptToSend &&
+      systemPromptToSend !== systemPrompt
+    ) {
+      prompt = `${systemPromptToSend}\n\n---\n\n${prompt}`;
+    }
     const resolvedImages =
       !promptOverride && params.images && params.images.length > 0
         ? params.images
@@ -614,6 +723,54 @@ export async function executeWithOverflowProtection(
                       `cli tool start: ${name}${toolUseId ? ` (${toolUseId})` : ""}`,
                     );
                   }
+                  if (
+                    ENABLE_SEMANTIC_PROMPT_LOADER &&
+                    mustVerifyPromptFileRead &&
+                    latestSemanticFiles
+                  ) {
+                    // Semantic verifier: match against expected files set
+                    if (promptFileReadVerified) {
+                      return;
+                    }
+                    if (name !== "Read" && name !== "read") {
+                      return;
+                    }
+                    const readRequest = resolveReadToolRequest(input);
+                    const normalizedFilePath = readRequest.filePath
+                      ? path.resolve(readRequest.filePath)
+                      : undefined;
+                    if (!normalizedFilePath) {
+                      return;
+                    }
+                    const matchedPromptFile = isExpectedSemanticPromptFile(
+                      latestSemanticFiles,
+                      normalizedFilePath,
+                    );
+                    const partialReadRequest =
+                      matchedPromptFile &&
+                      ((typeof readRequest.offset === "number" && readRequest.offset > 1) ||
+                        typeof readRequest.limit === "number");
+                    if (cliDebugEnabled) {
+                      cliBackendLog.debug("cli semantic verifier saw tool use", {
+                        sessionId: resolvedSessionId ?? sessionId ?? null,
+                        toolName: name,
+                        filePath: normalizedFilePath,
+                        matchedPromptFile,
+                        partialReadRequest,
+                        input,
+                      });
+                    }
+                    if (matchedPromptFile && toolUseId?.trim()) {
+                      promptFileReadAttempted = true;
+                      promptFileReadAttemptedPartially = partialReadRequest;
+                      promptFileReadRequests.set(toolUseId.trim(), {
+                        filePath: normalizedFilePath,
+                        partialReadRequest,
+                        chunkIndex: 0, // unused in semantic path but required by type
+                      });
+                    }
+                    return;
+                  }
                   if (!(mustVerifyPromptFileRead && cliSystemPromptFile)) {
                     return;
                   }
@@ -675,6 +832,59 @@ export async function executeWithOverflowProtection(
                   cliBackendLog.info(
                     `cli tool result${toolUseId ? ` (${toolUseId})` : ""}: ${formatCliLogValue(text)}`,
                   );
+                  if (
+                    ENABLE_SEMANTIC_PROMPT_LOADER &&
+                    mustVerifyPromptFileRead &&
+                    latestSemanticFiles &&
+                    toolUseId
+                  ) {
+                    // Semantic verifier: Set-based, no sequential order requirement
+                    const request = promptFileReadRequests.get(toolUseId);
+                    promptFileReadRequests.delete(toolUseId);
+                    if (!request) {
+                      return;
+                    }
+                    const expectedFiles = resolveSemanticExpectedFiles(latestSemanticFiles);
+                    if (!expectedFiles.has(request.filePath)) {
+                      return;
+                    }
+                    promptFileReadAttempted = true;
+                    if (isError) {
+                      // File not found or read error — treat as "confirmed absent"
+                      // so we don't retry it endlessly. Add to verified set and move on.
+                      let verifiedSet = verifiedPromptFileSets.get(resolvedSessionId ?? "");
+                      if (!verifiedSet) {
+                        verifiedSet = new Set();
+                        if (resolvedSessionId) {
+                          verifiedPromptFileSets.set(resolvedSessionId, verifiedSet);
+                        }
+                      }
+                      verifiedSet.add(request.filePath);
+                      promptFileReadVerified = verifiedSet.size >= expectedFiles.size;
+                      return;
+                    }
+                    if (request.partialReadRequest) {
+                      promptFileReadAttemptedPartially = true;
+                      return;
+                    }
+                    // Guard against tool-side truncation (e.g., large file exceeding
+                    // Read output limit) even when the request had no offset/limit.
+                    if (looksLikePartialReadToolResult(text)) {
+                      promptFileReadAttemptedPartially = true;
+                      return;
+                    }
+                    // No sequential order check — just add to verified set.
+                    let verifiedSet = verifiedPromptFileSets.get(resolvedSessionId ?? "");
+                    if (!verifiedSet) {
+                      verifiedSet = new Set();
+                      if (resolvedSessionId) {
+                        verifiedPromptFileSets.set(resolvedSessionId, verifiedSet);
+                      }
+                    }
+                    verifiedSet.add(request.filePath);
+                    promptFileReadVerified = verifiedSet.size >= expectedFiles.size;
+                    return;
+                  }
                   if (!(mustVerifyPromptFileRead && cliSystemPromptFile && toolUseId)) {
                     return;
                   }
@@ -849,6 +1059,23 @@ export async function executeWithOverflowProtection(
 
         // Layer 1: Verify prompt file was read
         if (mustVerifyPromptFileRead && !promptFileReadVerified) {
+          if (ENABLE_SEMANTIC_PROMPT_LOADER && latestSemanticFiles) {
+            const expectedFiles = resolveSemanticExpectedFiles(latestSemanticFiles);
+            const verifiedSet =
+              verifiedPromptFileSets.get(resolvedSessionId ?? "") ?? new Set<string>();
+            const unverifiedPaths = [...expectedFiles].filter((p) => !verifiedSet.has(p));
+            throw new PromptFileReadRequiredError({
+              message: `Claude session did not verify a successful complete Read of the session prompt files.`,
+              reason: promptFileReadErrored
+                ? "read-error"
+                : promptFileReadAttempted
+                  ? "partial-read"
+                  : "not-read",
+              sessionId: cliOutput.sessionId ?? resolvedSessionId,
+              promptFile: unverifiedPaths[0] ?? latestSemanticFiles.sessionFile,
+              unverifiedPaths,
+            });
+          }
           const nextUnreadChunk =
             cliSystemPromptFile?.chunks[verifiedPromptChunkCount] ?? cliSystemPromptFile?.chunks[0];
           throw new PromptFileReadRequiredError({
@@ -864,7 +1091,47 @@ export async function executeWithOverflowProtection(
         }
 
         // Track session binding metadata
-        if (!isSystemCall) {
+        if (!isSystemCall && ENABLE_SEMANTIC_PROMPT_LOADER && latestSemanticFiles) {
+          // Persist semantic binding fields when:
+          //   (a) verification just passed, OR
+          //   (b) verification was not required because the current binding already
+          //       trusts this prompt (trust carry-over — keep the fields across
+          //       trusted resumes so the next turn also skips re-reads).
+          const persistSemanticMetadata =
+            loaderPromptMode !== "disabled" &&
+            (promptFileReadVerified ||
+              (!mustVerifyPromptFileRead &&
+                JSON.stringify(matchingCliSessionBinding?.semanticContextFiles ?? []) ===
+                  JSON.stringify(latestSemanticFiles.contextFiles) &&
+                matchingCliSessionBinding?.semanticSessionHash?.trim() ===
+                  latestSemanticFiles.sessionHash));
+          latestCliSessionBinding =
+            cliOutput.sessionId || resolvedSessionId
+              ? {
+                  sessionId: cliOutput.sessionId ?? resolvedSessionId ?? "",
+                  ...(persistSemanticMetadata
+                    ? {
+                        semanticContextFiles: latestSemanticFiles.contextFiles,
+                        semanticSessionFile: latestSemanticFiles.sessionFile,
+                        semanticSessionHash: latestSemanticFiles.sessionHash,
+                        semanticCompactionCount:
+                          currentCompactionCount > 0 ? currentCompactionCount : undefined,
+                      }
+                    : {}),
+                }
+              : undefined;
+          latestCliPromptLoad = context.isClaude
+            ? buildCliPromptLoadState({
+                sessionPromptFile: latestSemanticFiles.sessionFile,
+                currentSessionPromptFile: latestSemanticFiles.sessionFile,
+                loaderMode: loaderPromptMode,
+                verifiedRead: mustVerifyPromptFileRead
+                  ? promptFileReadVerified
+                  : promptFileTrustedFromBinding,
+                fallbackReason: loaderFallbackReason,
+              })
+            : undefined;
+        } else if (!isSystemCall) {
           const persistPromptFileMetadata =
             loaderPromptMode !== "disabled" &&
             Boolean(cliSystemPromptFile) &&
@@ -962,12 +1229,21 @@ export async function executeWithOverflowProtection(
             verifiedChunkCount: verifiedPromptChunkCounts.get(completionSessionId) ?? 0,
           });
           try {
+            const completionPrompt =
+              ENABLE_SEMANTIC_PROMPT_LOADER && latestSemanticFiles
+                ? buildSemanticCompletionPrompt({
+                    files: latestSemanticFiles,
+                    unverifiedPaths: completionError.unverifiedPaths ?? [
+                      completionError.promptFile ?? "",
+                    ],
+                  })
+                : buildClaudeSystemPromptCompletionPrompt({
+                    chunks: latestPromptChunks,
+                    startIndex: verifiedPromptChunkCounts.get(completionSessionId) ?? 0,
+                  });
             return await executeCliWithSession(
               completionSessionId,
-              buildClaudeSystemPromptCompletionPrompt({
-                chunks: latestPromptChunks,
-                startIndex: verifiedPromptChunkCounts.get(completionSessionId) ?? 0,
-              }),
+              completionPrompt,
               runParams.isSystemCall ?? false,
               runParams.forceReloadSystemPromptFile ?? false,
               "strict",
