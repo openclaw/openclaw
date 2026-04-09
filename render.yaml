@@ -6,11 +6,11 @@ services:
     healthCheckPath: /health
     envVars:
       - key: OPENCLAW_GATEWAY_PORT
-        value: "8080"
+        # CHANGE THIS LINE:
+        fromContext: PORT
       - key: OPENCLAW_STATE_DIR
         value: /tmp/.openclaw
       - key: OPENCLAW_WORKSPACE_DIR
         value: /tmp/workspace
       - key: OPENCLAW_GATEWAY_TOKEN
         generateValue: true
-    # REMOVE THE ENTIRE DISK SECTION BELOW
