@@ -247,6 +247,9 @@ type WebFetchRuntimeParams = {
   cacheTtlMs: number;
   userAgent: string;
   readabilityEnabled: boolean;
+  ssrfPolicy?: {
+    allowRfc2544BenchmarkRange?: boolean;
+  };
   lookupFn?: LookupFn;
   resolveProviderFallback: () => ReturnType<typeof resolveWebFetchDefinition>;
 };
@@ -360,8 +363,14 @@ async function maybeFetchProviderWebFetchPayload(
 }
 
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
+  const policy =
+    params.ssrfPolicy?.allowRfc2544BenchmarkRange === true
+      ? { allowRfc2544BenchmarkRange: true }
+      : undefined;
+  // Include the effective SSRF policy in the cache key to prevent cross-policy cache bypass
+  const ssrfPolicySuffix = policy ? `:${JSON.stringify(policy)}` : "";
   const cacheKey = normalizeCacheKey(
-    `fetch:${params.url}:${params.extractMode}:${params.maxChars}`,
+    `fetch:${params.url}:${params.extractMode}:${params.maxChars}${ssrfPolicySuffix}`,
   );
   const cached = readCache(FETCH_CACHE, cacheKey);
   if (cached) {
@@ -382,12 +391,14 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   let res: Response;
   let release: (() => Promise<void>) | null = null;
   let finalUrl = params.url;
+
   try {
     const result = await fetchWithWebToolsNetworkGuard({
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
       lookupFn: params.lookupFn,
+      policy,
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
@@ -573,6 +584,7 @@ export function createWebFetchTool(options?: {
     return null;
   }
   const readabilityEnabled = resolveFetchReadabilityEnabled(fetch);
+  const ssrfPolicy = fetch?.ssrfPolicy;
   const userAgent =
     (fetch && "userAgent" in fetch && typeof fetch.userAgent === "string" && fetch.userAgent) ||
     DEFAULT_FETCH_USER_AGENT;
@@ -617,6 +629,7 @@ export function createWebFetchTool(options?: {
         cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         userAgent,
         readabilityEnabled,
+        ssrfPolicy,
         lookupFn: options?.lookupFn,
         resolveProviderFallback,
       });
