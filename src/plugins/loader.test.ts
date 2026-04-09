@@ -12,6 +12,7 @@ import {
   __testing,
   clearPluginLoaderCache,
   loadOpenClawPlugins,
+  PluginLoadFailureError,
   PluginLoadReentryError,
   resolveRuntimePluginRegistry,
 } from "./loader.js";
@@ -2161,6 +2162,19 @@ module.exports = { id: "throws-after-import", register() {} };`,
         },
       }),
     ).toThrow("plugin load failed: configurable: invalid config: <root>: must be object");
+  });
+
+  it("filters strict plugin load failures by plugins.allow", () => {
+    const registry = {
+      plugins: [
+        { id: "allowed", status: "error", error: "boom" },
+        { id: "blocked", status: "error", error: "nope" },
+      ],
+    } as unknown as PluginRegistry;
+
+    const error = new PluginLoadFailureError(registry, { onlyPluginIds: ["allowed"] });
+    expect(error.pluginIds).toEqual(["allowed"]);
+    expect(error.message).toBe("plugin load failed: allowed: boom");
   });
 
   it("fails when plugin export id mismatches manifest id", () => {
