@@ -96,9 +96,27 @@ function appendUniqueSuffix(base: string, suffix: string): string {
   if (base.endsWith(suffix)) {
     return base;
   }
+
   const maxOverlap = Math.min(base.length, suffix.length);
+  const suffixFirstChar = suffix.charCodeAt(0);
+
   for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
-    if (base.slice(-overlap) === suffix.slice(0, overlap)) {
+    const baseOffset = base.length - overlap;
+    if (base.charCodeAt(baseOffset) !== suffixFirstChar) {
+      continue;
+    }
+    if (base.charCodeAt(base.length - 1) !== suffix.charCodeAt(overlap - 1)) {
+      continue;
+    }
+
+    let matches = true;
+    for (let i = 1; i < overlap - 1; i++) {
+      if (base.charCodeAt(baseOffset + i) !== suffix.charCodeAt(i)) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) {
       return base + suffix.slice(overlap);
     }
   }
