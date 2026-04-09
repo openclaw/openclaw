@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
-import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/config-runtime";
-import { jsonResult, readStringParam } from "openclaw/plugin-sdk/provider-web-search";
+import { getRuntimeConfigSnapshot } from "@openclaw/plugin-sdk/config-runtime";
+import { jsonResult, readStringParam } from "@openclaw/plugin-sdk/provider-web-search";
 import {
   buildXaiCodeExecutionPayload,
   requestXaiCodeExecution,

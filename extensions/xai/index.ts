@@ -1,7 +1,7 @@
 import { Type } from "@sinclair/typebox";
-import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
-import { jsonResult, readProviderEnvValue } from "openclaw/plugin-sdk/provider-web-search";
+import { defineSingleProviderPluginEntry } from "@openclaw/plugin-sdk/provider-entry";
+import { buildProviderReplayFamilyHooks } from "@openclaw/plugin-sdk/provider-model-shared";
+import { jsonResult, readProviderEnvValue } from "@openclaw/plugin-sdk/provider-web-search";
 import {
   applyXaiModelCompat,
   normalizeXaiModelId,

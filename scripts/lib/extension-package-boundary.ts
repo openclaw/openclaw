@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join, posix, resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 export const EXTENSION_PACKAGE_BOUNDARY_BASE_CONFIG =
   "extensions/tsconfig.package-boundary.base.json" as const;
@@ -65,46 +65,36 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   "@openclaw/plugin-sdk/*": ["../dist/plugin-sdk/src/plugin-sdk/*.d.ts"],
 } as const;
 
-function prefixExtensionPackageBoundaryPaths(
-  paths: Record<string, readonly string[]>,
-  prefix: string,
-): Record<string, readonly string[]> {
-  return Object.fromEntries(
-    Object.entries(paths).map(([key, values]) => [
-      key,
-      values.map((value) => posix.join(prefix, value)),
-    ]),
-  );
-}
+const XAI_FORBIDDEN_LEGACY_PLUGIN_SDK_EXACT_PATH = [
+  "./.boundary-stubs/forbidden-openclaw-plugin-sdk.d.ts",
+] as const;
+const XAI_FORBIDDEN_LEGACY_PLUGIN_SDK_WILDCARD_PATH = [
+  "./.boundary-stubs/forbidden-openclaw-plugin-sdk-*.d.ts",
+] as const;
 
 export const EXTENSION_PACKAGE_BOUNDARY_XAI_PATHS = {
-  ...prefixExtensionPackageBoundaryPaths(
-    (({
-      "openclaw/plugin-sdk/channel-secret-basic-runtime": _omitBasic,
-      "openclaw/plugin-sdk/channel-secret-tts-runtime": _omitTts,
-      ...rest
-    }) => rest)(EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS),
-    "../",
-  ),
-  "openclaw/plugin-sdk/channel-entry-contract": [
-    "../../dist/plugin-sdk/src/plugin-sdk/channel-entry-contract.d.ts",
-  ],
-  "openclaw/plugin-sdk/browser-maintenance": [
-    "../../dist/plugin-sdk/src/plugin-sdk/browser-maintenance.d.ts",
-  ],
-  "openclaw/plugin-sdk/cli-runtime": ["../../dist/plugin-sdk/src/plugin-sdk/cli-runtime.d.ts"],
-  "openclaw/plugin-sdk/provider-catalog-shared": [
-    "../../dist/plugin-sdk/src/plugin-sdk/provider-catalog-shared.d.ts",
-  ],
-  "openclaw/plugin-sdk/provider-env-vars": [
-    "../../dist/plugin-sdk/src/plugin-sdk/provider-env-vars.d.ts",
-  ],
-  "openclaw/plugin-sdk/provider-entry": [
-    "../../dist/plugin-sdk/src/plugin-sdk/provider-entry.d.ts",
-  ],
+  "openclaw/extension-api": ["../../src/extensionAPI.ts"],
+  "openclaw/plugin-sdk": [...XAI_FORBIDDEN_LEGACY_PLUGIN_SDK_EXACT_PATH],
+  "openclaw/plugin-sdk/*": [...XAI_FORBIDDEN_LEGACY_PLUGIN_SDK_WILDCARD_PATH],
+  "openclaw/plugin-sdk/account-id": [...XAI_FORBIDDEN_LEGACY_PLUGIN_SDK_EXACT_PATH],
+  "openclaw/plugin-sdk/channel-entry-contract": [...XAI_FORBIDDEN_LEGACY_PLUGIN_SDK_EXACT_PATH],
+  "openclaw/plugin-sdk/browser-maintenance": [...XAI_FORBIDDEN_LEGACY_PLUGIN_SDK_EXACT_PATH],
+  "openclaw/plugin-sdk/browser-config-runtime": [...XAI_FORBIDDEN_LEGACY_PLUGIN_SDK_EXACT_PATH],
+  "openclaw/plugin-sdk/browser-node-runtime": [...XAI_FORBIDDEN_LEGACY_PLUGIN_SDK_EXACT_PATH],
+  "openclaw/plugin-sdk/browser-setup-tools": [...XAI_FORBIDDEN_LEGACY_PLUGIN_SDK_EXACT_PATH],
+  "openclaw/plugin-sdk/browser-security-runtime": [...XAI_FORBIDDEN_LEGACY_PLUGIN_SDK_EXACT_PATH],
+  "openclaw/plugin-sdk/channel-secret-runtime": [...XAI_FORBIDDEN_LEGACY_PLUGIN_SDK_EXACT_PATH],
+  "openclaw/plugin-sdk/channel-streaming": [...XAI_FORBIDDEN_LEGACY_PLUGIN_SDK_EXACT_PATH],
+  "openclaw/plugin-sdk/cli-runtime": [...XAI_FORBIDDEN_LEGACY_PLUGIN_SDK_EXACT_PATH],
+  "openclaw/plugin-sdk/error-runtime": [...XAI_FORBIDDEN_LEGACY_PLUGIN_SDK_EXACT_PATH],
+  "openclaw/plugin-sdk/provider-catalog-shared": [...XAI_FORBIDDEN_LEGACY_PLUGIN_SDK_EXACT_PATH],
+  "openclaw/plugin-sdk/provider-env-vars": [...XAI_FORBIDDEN_LEGACY_PLUGIN_SDK_EXACT_PATH],
+  "openclaw/plugin-sdk/provider-entry": [...XAI_FORBIDDEN_LEGACY_PLUGIN_SDK_EXACT_PATH],
   "openclaw/plugin-sdk/provider-web-search-contract": [
-    "../../dist/plugin-sdk/src/plugin-sdk/provider-web-search-contract.d.ts",
+    ...XAI_FORBIDDEN_LEGACY_PLUGIN_SDK_EXACT_PATH,
   ],
+  "openclaw/plugin-sdk/secret-ref-runtime": [...XAI_FORBIDDEN_LEGACY_PLUGIN_SDK_EXACT_PATH],
+  "openclaw/plugin-sdk/ssrf-runtime": [...XAI_FORBIDDEN_LEGACY_PLUGIN_SDK_EXACT_PATH],
   "@openclaw/*.js": ["../../packages/plugin-sdk/dist/extensions/*.d.ts", "../*"],
   "@openclaw/*": ["../*"],
   "@openclaw/plugin-sdk/*": ["../../dist/plugin-sdk/src/plugin-sdk/*.d.ts"],
@@ -118,7 +108,7 @@ export type ExtensionPackageBoundaryTsConfigJson = {
   extends?: unknown;
   compilerOptions?: {
     rootDir?: unknown;
-    paths?: unknown;
+    paths?: Record<string, readonly string[]>;
   };
   include?: unknown;
   exclude?: unknown;

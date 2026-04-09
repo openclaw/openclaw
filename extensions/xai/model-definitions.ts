@@ -1,5 +1,5 @@
-import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import type { ModelDefinitionConfig } from "@openclaw/plugin-sdk/provider-model-shared";
+import { normalizeOptionalLowercaseString } from "@openclaw/plugin-sdk/text-runtime";
 
 export const XAI_BASE_URL = "https://api.x.ai/v1";
 export const XAI_DEFAULT_MODEL_ID = "grok-4";

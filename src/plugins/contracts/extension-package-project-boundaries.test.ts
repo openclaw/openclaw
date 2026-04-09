@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   collectExtensionsWithTsconfig,
@@ -22,7 +22,7 @@ const EXTENSION_PACKAGE_BOUNDARY_BASE_CONFIG =
 type TsConfigJson = {
   extends?: unknown;
   compilerOptions?: {
-    paths?: unknown;
+    paths?: Record<string, readonly string[]>;
     rootDir?: unknown;
     outDir?: unknown;
     declaration?: unknown;
@@ -40,6 +40,23 @@ type PackageJson = {
 
 function readJsonFile<T>(relativePath: string): T {
   return JSON.parse(readFileSync(resolve(REPO_ROOT, relativePath), "utf8")) as T;
+}
+
+function collectFilesBySuffix(rootPath: string, suffix: string): string[] {
+  const files: string[] = [];
+
+  for (const entry of readdirSync(rootPath, { withFileTypes: true })) {
+    const entryPath = join(rootPath, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...collectFilesBySuffix(entryPath, suffix));
+      continue;
+    }
+    if (entry.isFile() && entry.name.endsWith(suffix)) {
+      files.push(entryPath);
+    }
+  }
+
+  return files.toSorted();
 }
 
 describe("opt-in extension package boundaries", () => {
@@ -86,6 +103,27 @@ describe("opt-in extension package boundaries", () => {
   it("keeps xai's boundary-specific path overrides derived from the shared package boundary map", () => {
     const tsconfig = readExtensionPackageBoundaryTsconfig("xai", REPO_ROOT);
     expect(tsconfig.compilerOptions?.paths).toEqual(EXTENSION_PACKAGE_BOUNDARY_XAI_PATHS);
+    expect(tsconfig.compilerOptions?.paths?.["openclaw/plugin-sdk"]).toEqual([
+      "./.boundary-stubs/forbidden-openclaw-plugin-sdk.d.ts",
+    ]);
+    expect(tsconfig.compilerOptions?.paths?.["openclaw/plugin-sdk/*"]).toEqual([
+      "./.boundary-stubs/forbidden-openclaw-plugin-sdk-*.d.ts",
+    ]);
+    expect(tsconfig.compilerOptions?.paths?.["@openclaw/plugin-sdk/*"]).toEqual([
+      "../../dist/plugin-sdk/src/plugin-sdk/*.d.ts",
+    ]);
+  });
+
+  it("keeps xai tests on the scoped plugin-sdk package name", () => {
+    const xaiRoot = resolve(REPO_ROOT, "extensions/xai");
+    const testFiles = collectFilesBySuffix(xaiRoot, ".test.ts");
+
+    expect(testFiles.length).toBeGreaterThan(0);
+
+    for (const filePath of testFiles) {
+      const contents = readFileSync(filePath, "utf8");
+      expect(contents).not.toContain('"openclaw/plugin-sdk/');
+    }
   });
 
   it("keeps plugin-sdk package types generated from the package build, not a hand-maintained types bridge", () => {

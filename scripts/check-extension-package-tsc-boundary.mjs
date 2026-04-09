@@ -28,6 +28,9 @@ const COMPILE_INPUT_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", 
 const ROOTDIR_BOUNDARY_CANARY_IMPORT_PATH =
   "../../src/plugins/contracts/rootdir-boundary-canary.ts";
 const ROOTDIR_BOUNDARY_CANARY_OUTPUT_HINT = "src/plugins/contracts/rootdir-boundary-canary.ts";
+const LEGACY_PLUGIN_SDK_CANARY_IMPORT_PATH = "openclaw/plugin-sdk/provider-entry";
+const LEGACY_PLUGIN_SDK_CANARY_OUTPUT_HINT = "openclaw/plugin-sdk/provider-entry";
+const XAI_LEGACY_PLUGIN_SDK_FORBIDDEN_HINT = "forbidden-openclaw-plugin-sdk";
 
 function parseMode(argv) {
   const modeArg = argv.find((arg) => arg.startsWith("--mode="));
@@ -172,6 +175,16 @@ function resolveExtensionTsconfigPath(extensionId) {
 
 function readExtensionTsconfig(extensionId) {
   return readJsonFile(resolveExtensionTsconfigPath(extensionId));
+}
+
+function hasLegacyPluginSdkPoison(tsconfig) {
+  const legacyPath = tsconfig?.compilerOptions?.paths?.["openclaw/plugin-sdk"];
+  return (
+    Array.isArray(legacyPath) &&
+    legacyPath.some(
+      (entry) => typeof entry === "string" && entry.includes(XAI_LEGACY_PLUGIN_SDK_FORBIDDEN_HINT),
+    )
+  );
 }
 
 function collectOptInExtensionIds() {
@@ -666,6 +679,7 @@ async function runCanaryCheck(extensionIds) {
   await Promise.all(
     extensionIds.map(async (extensionId, index) => {
       const { canaryPath, tsconfigPath } = resolveCanaryArtifactPaths(extensionId);
+      const extensionTsconfig = readExtensionTsconfig(extensionId);
 
       cleanupCanaryArtifacts(extensionId);
       process.stdout.write(`[${index + 1}/${extensionIds.length}] ${extensionId} canary\n`);
@@ -709,6 +723,44 @@ async function runCanaryCheck(extensionIds) {
             : String(error);
         if (!output.includes("TS6059") || !output.includes(ROOTDIR_BOUNDARY_CANARY_OUTPUT_HINT)) {
           throw error;
+        }
+
+        if (hasLegacyPluginSdkPoison(extensionTsconfig)) {
+          writeFileSync(
+            canaryPath,
+            [
+              `import { defineSingleProviderPluginEntry } from "${LEGACY_PLUGIN_SDK_CANARY_IMPORT_PATH}";`,
+              "void defineSingleProviderPluginEntry;",
+              "export {};",
+              "",
+            ].join("\n"),
+            "utf8",
+          );
+
+          try {
+            const legacyResult = await runNodeStepAsync(
+              `${extensionId} legacy-plugin-sdk canary`,
+              [tscBin, "-p", tsconfigPath, "--noEmit"],
+              120_000,
+            );
+        throw new Error(
+          `${extensionId} legacy-plugin-sdk canary unexpectedly passed\n${legacyResult.stdout}${legacyResult.stderr}`,
+          { cause: error },
+        );
+          } catch (legacyError) {
+            const legacyOutput =
+              legacyError instanceof Error && typeof legacyError.fullOutput === "string"
+                ? legacyError.fullOutput
+                : String(legacyError);
+            if (
+              !legacyOutput.includes(LEGACY_PLUGIN_SDK_CANARY_OUTPUT_HINT) ||
+              (!legacyOutput.includes("TS2307") &&
+                !legacyOutput.includes("Cannot find module") &&
+                !legacyOutput.includes("TS2305"))
+            ) {
+              throw legacyError;
+            }
+          }
         }
       } finally {
         cleanupCanaryArtifacts(extensionId);
