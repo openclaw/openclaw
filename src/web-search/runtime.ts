@@ -391,7 +391,8 @@ export async function runWebSearch(
             : String(result.error ?? "Provider returned error"),
         );
         if (!allowFallback) {
-          throw lastError;
+          // Return error payload instead of throwing to preserve structured details
+          return { provider: candidate.id, result };
         }
         continue;
       }
