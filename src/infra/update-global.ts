@@ -408,6 +408,109 @@ export function globalInstallFallbackArgs(
   return [resolved.command, "i", "-g", spec, ...NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS];
 }
 
+/**
+ * Derives the bin directory for a global npm install from the node_modules root.
+ * Standard npm layouts: <prefix>/lib/node_modules -> <prefix>/bin (Unix),
+ * or <prefix>/node_modules -> <prefix>/bin (flat layout).
+ */
+function inferBinDirFromGlobalRoot(globalRoot: string): string | null {
+  const normalized = path.resolve(globalRoot.trim() || "");
+  if (!normalized) {
+    return null;
+  }
+  const parentDir = path.dirname(normalized);
+  // Unix standard layout: <prefix>/lib/node_modules -> <prefix>/bin
+  if (path.basename(parentDir) === "lib") {
+    return path.join(path.dirname(parentDir), "bin");
+  }
+  // Windows: bins are .cmd shims directly in the npm prefix; complex to recreate, skip
+  if (process.platform === "win32") {
+    return null;
+  }
+  // Flat layout fallback: <prefix>/node_modules -> <prefix>/bin
+  return path.join(parentDir, "bin");
+}
+
+/**
+ * After a global npm install, npm's reify step can leave stale temp bin entries
+ * (e.g. `.openclaw-OKPnnPWD`) and fail to restore the primary bin symlink.
+ * This function cleans up stale temp bin entries and recreates any missing bin
+ * symlinks from the installed package's `bin` manifest entries.
+ */
+export async function repairGlobalBinLinks(params: {
+  globalRoot: string;
+  packageRoot: string;
+  packageName: string;
+  binEntries: Record<string, string>;
+}): Promise<{ cleaned: string[]; repaired: string[] }> {
+  const cleaned: string[] = [];
+  const repaired: string[] = [];
+
+  // Windows bin link repair requires generating .cmd wrappers; skip
+  if (process.platform === "win32") {
+    return { cleaned, repaired };
+  }
+
+  const binDir = inferBinDirFromGlobalRoot(params.globalRoot);
+  if (!binDir) {
+    return { cleaned, repaired };
+  }
+
+  let entries: string[] = [];
+  try {
+    entries = await fs.readdir(binDir);
+  } catch {
+    return { cleaned, repaired };
+  }
+
+  const prefix = `${GLOBAL_RENAME_PREFIX}${params.packageName}-`;
+
+  // Remove stale temp bin entries (symlinks/files, not directories)
+  for (const entry of entries) {
+    if (!entry.startsWith(prefix)) {
+      continue;
+    }
+    const target = path.join(binDir, entry);
+    try {
+      const stat = await fs.lstat(target);
+      if (stat.isDirectory()) {
+        continue;
+      }
+      await fs.unlink(target);
+      cleaned.push(entry);
+    } catch {
+      // ignore cleanup failures
+    }
+  }
+
+  // Recreate any missing or broken bin symlinks
+  for (const [binName, relTarget] of Object.entries(params.binEntries)) {
+    const binLink = path.join(binDir, binName);
+    let linkOk = false;
+    try {
+      await fs.access(binLink);
+      linkOk = true;
+    } catch {
+      // missing or broken symlink
+    }
+    if (linkOk) {
+      continue;
+    }
+    const absTarget = path.join(params.packageRoot, relTarget);
+    const relFromBin = path.relative(binDir, absTarget);
+    try {
+      // Remove any dangling symlink before recreating
+      await fs.unlink(binLink).catch(() => {});
+      await fs.symlink(relFromBin, binLink);
+      repaired.push(binName);
+    } catch {
+      // ignore repair failures
+    }
+  }
+
+  return { cleaned, repaired };
+}
+
 export async function cleanupGlobalRenameDirs(params: {
   globalRoot: string;
   packageName: string;

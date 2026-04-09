@@ -16,6 +16,7 @@ import {
   isExplicitPackageInstallSpec,
   isMainPackageTarget,
   OPENCLAW_MAIN_PACKAGE_SPEC,
+  repairGlobalBinLinks,
   resolveGlobalInstallCommand,
   resolveGlobalPackageRoot,
   resolveGlobalInstallTarget,
@@ -348,6 +349,92 @@ describe("update global helpers", () => {
       await expect(fs.stat(path.join(root, "openclaw"))).resolves.toBeDefined();
       await expect(fs.stat(path.join(root, ".openclaw-file"))).resolves.toBeDefined();
     });
+  });
+
+  it("cleans stale temp bin entries and recreates missing bin symlink", async () => {
+    if (process.platform === "win32") {
+      return; // Windows bin repair skipped (requires .cmd wrappers)
+    }
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    try {
+      await withTempDir({ prefix: "openclaw-update-bin-repair-" }, async (base) => {
+        // Simulate standard Unix npm layout: <prefix>/lib/node_modules/<pkg>
+        const prefix = path.join(base, "prefix");
+        const globalRoot = path.join(prefix, "lib", "node_modules");
+        const packageRoot = path.join(globalRoot, "openclaw");
+        const binDir = path.join(prefix, "bin");
+        await fs.mkdir(packageRoot, { recursive: true });
+        await fs.mkdir(binDir, { recursive: true });
+
+        // Create the binary target file
+        const binTarget = path.join(packageRoot, "openclaw.mjs");
+        await fs.writeFile(binTarget, "#!/usr/bin/env node\n", "utf8");
+
+        // Simulate npm reify leaving a stale temp bin entry and no primary link
+        await fs.writeFile(path.join(binDir, ".openclaw-OKPnnPWD"), "", "utf8");
+
+        const result = await repairGlobalBinLinks({
+          globalRoot,
+          packageRoot,
+          packageName: "openclaw",
+          binEntries: { openclaw: "openclaw.mjs" },
+        });
+
+        expect(result.cleaned).toEqual([".openclaw-OKPnnPWD"]);
+        expect(result.repaired).toEqual(["openclaw"]);
+
+        // Stale temp entry should be gone
+        await expect(fs.stat(path.join(binDir, ".openclaw-OKPnnPWD"))).rejects.toThrow();
+
+        // Primary bin link should exist and point to the right target
+        const linkTarget = await fs.readlink(path.join(binDir, "openclaw"));
+        expect(linkTarget).toBe(path.relative(binDir, binTarget));
+      });
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("leaves valid bin links untouched and skips directory entries in bin dir", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    try {
+      await withTempDir({ prefix: "openclaw-update-bin-noop-" }, async (base) => {
+        const prefix = path.join(base, "prefix");
+        const globalRoot = path.join(prefix, "lib", "node_modules");
+        const packageRoot = path.join(globalRoot, "openclaw");
+        const binDir = path.join(prefix, "bin");
+        await fs.mkdir(packageRoot, { recursive: true });
+        await fs.mkdir(binDir, { recursive: true });
+
+        const binTarget = path.join(packageRoot, "openclaw.mjs");
+        await fs.writeFile(binTarget, "#!/usr/bin/env node\n", "utf8");
+
+        // Create a valid symlink already pointing to the target
+        const relFromBin = path.relative(binDir, binTarget);
+        await fs.symlink(relFromBin, path.join(binDir, "openclaw"));
+
+        // A directory matching the prefix should not be removed
+        await fs.mkdir(path.join(binDir, ".openclaw-dir"), { recursive: true });
+
+        const result = await repairGlobalBinLinks({
+          globalRoot,
+          packageRoot,
+          packageName: "openclaw",
+          binEntries: { openclaw: "openclaw.mjs" },
+        });
+
+        expect(result.cleaned).toEqual([]);
+        expect(result.repaired).toEqual([]);
+
+        // Directory must remain
+        await expect(fs.stat(path.join(binDir, ".openclaw-dir"))).resolves.toBeDefined();
+      });
+    } finally {
+      platformSpy.mockRestore();
+    }
   });
 
   it("checks bundled runtime sidecars, including Matrix helper-api", async () => {

@@ -6,7 +6,7 @@ import {
   resolveControlUiDistIndexHealth,
   resolveControlUiDistIndexPathForRoot,
 } from "./control-ui-assets.js";
-import { readPackageName, readPackageVersion } from "./package-json.js";
+import { readPackageBin, readPackageName, readPackageVersion } from "./package-json.js";
 import { normalizePackageTagInput } from "./package-tag.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
@@ -26,6 +26,7 @@ import {
   detectGlobalInstallManagerForRoot,
   globalInstallArgs,
   globalInstallFallbackArgs,
+  repairGlobalBinLinks,
   resolveExpectedInstalledVersionFromSpec,
   resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
@@ -1157,14 +1158,12 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       }
     }
 
-    const verifiedPackageRoot =
-      (
-        await resolveGlobalInstallTarget({
-          manager: installTarget,
-          runCommand,
-          timeoutMs,
-        })
-      ).packageRoot ?? pkgRoot;
+    const verifiedTarget = await resolveGlobalInstallTarget({
+      manager: installTarget,
+      runCommand,
+      timeoutMs,
+    });
+    const verifiedPackageRoot = verifiedTarget.packageRoot ?? pkgRoot;
     const expectedVersion = resolveExpectedInstalledVersionFromSpec(packageName, spec);
     const verificationErrors = await collectInstalledGlobalPackageErrors({
       packageRoot: verifiedPackageRoot,
@@ -1179,6 +1178,19 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         exitCode: 1,
         stderrTail: verificationErrors.join("\n"),
       });
+    }
+    // Repair bin links that npm's reify may have left broken (stale temp entries,
+    // missing openclaw symlink) after a global install.
+    if (globalManager === "npm" && verifiedTarget.globalRoot) {
+      const binEntries = await readPackageBin(verifiedPackageRoot);
+      if (binEntries) {
+        await repairGlobalBinLinks({
+          globalRoot: verifiedTarget.globalRoot,
+          packageRoot: verifiedPackageRoot,
+          packageName,
+          binEntries,
+        }).catch(() => {});
+      }
     }
     const afterVersion = await readPackageVersion(verifiedPackageRoot);
     const failedStep =
