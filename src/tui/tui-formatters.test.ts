@@ -8,6 +8,26 @@ import {
 } from "./tui-formatters.js";
 
 describe("extractTextFromMessage", () => {
+  it("prefers final_answer text over commentary text for assistant messages", () => {
+    const text = extractTextFromMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Commentary that should not render",
+          textSignature: JSON.stringify({ v: 1, id: "c1", phase: "commentary" }),
+        },
+        {
+          type: "text",
+          text: "Final answer for the TUI",
+          textSignature: JSON.stringify({ v: 1, id: "f1", phase: "final_answer" }),
+        },
+      ],
+    });
+
+    expect(text).toBe("Final answer for the TUI");
+  });
+
   it("renders errorMessage when assistant content is empty", () => {
     const text = extractTextFromMessage({
       role: "assistant",
@@ -19,7 +39,7 @@ describe("extractTextFromMessage", () => {
 
     expect(text).toContain("HTTP 429");
     expect(text).toContain("rate_limit_error");
-    expect(text).toContain("req_123");
+    expect(text).toContain("This request would exceed your account's rate limit.");
   });
 
   it("falls back to a generic message when errorMessage is missing", () => {
@@ -117,6 +137,29 @@ Actual user message`,
     });
 
     expect(text).toBe("Actual user message");
+  });
+
+  it("strips leading inbound metadata blocks for command messages (#59871)", () => {
+    const text = extractTextFromMessage({
+      command: true,
+      content: `Conversation info (untrusted metadata):
+\`\`\`json
+{
+  "message_id": "abc123"
+}
+\`\`\`
+
+Sender (untrusted metadata):
+\`\`\`json
+{
+  "label": "Someone"
+}
+\`\`\`
+
+Exec completed: task finished successfully`,
+    });
+
+    expect(text).toBe("Exec completed: task finished successfully");
   });
 
   it("keeps metadata-like blocks for non-user messages", () => {
@@ -250,14 +293,14 @@ describe("sanitizeRenderableText", () => {
   });
 
   it("preserves long credential-like mixed alnum tokens for copy safety", () => {
-    const input = "e3b19c3b87bcf364b23eebb2c276e96ec478956ba1d84c93";
+    const input = "e3b19c3b87bcf364b23eebb2c276e96ec478956ba1d84c93"; // pragma: allowlist secret
     const sanitized = sanitizeRenderableText(input);
 
     expect(sanitized).toBe(input);
   });
 
   it("preserves quoted credential-like mixed alnum tokens for copy safety", () => {
-    const input = "'e3b19c3b87bcf364b23eebb2c276e96ec478956ba1d84c93'";
+    const input = "'e3b19c3b87bcf364b23eebb2c276e96ec478956ba1d84c93'"; // pragma: allowlist secret
     const sanitized = sanitizeRenderableText(input);
 
     expect(sanitized).toBe(input);

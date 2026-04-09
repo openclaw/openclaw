@@ -1,5 +1,7 @@
+import path from "node:path";
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempSecretFiles } from "../../test-utils/secret-file-fixture.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 
 const startGatewayServer = vi.fn(async (_port: number, _opts?: unknown) => ({
@@ -7,6 +9,7 @@ const startGatewayServer = vi.fn(async (_port: number, _opts?: unknown) => ({
 }));
 const setGatewayWsLogStyle = vi.fn((_style: string) => undefined);
 const setVerbose = vi.fn((_enabled: boolean) => undefined);
+const setConsoleSubsystemFilter = vi.fn((_filters: string[]) => undefined);
 const forceFreePortAndWait = vi.fn(async (_port: number, _opts: unknown) => ({
   killed: [],
   waitedMs: 0,
@@ -17,9 +20,13 @@ const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
 const runGatewayLoop = vi.fn(async ({ start }: { start: () => Promise<unknown> }) => {
   await start();
 });
+const gatewayLogMessages = vi.hoisted(() => [] as string[]);
 const configState = vi.hoisted(() => ({
   cfg: {} as Record<string, unknown>,
   snapshot: { exists: false } as Record<string, unknown>,
+}));
+const controlUiState = vi.hoisted(() => ({
+  root: "/tmp/openclaw-control-ui" as string | null,
 }));
 
 const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
@@ -62,6 +69,10 @@ vi.mock("../../gateway/server.js", () => ({
   startGatewayServer: (port: number, opts?: unknown) => startGatewayServer(port, opts),
 }));
 
+vi.mock("../../infra/control-ui-assets.js", () => ({
+  resolveControlUiRootSync: () => controlUiState.root,
+}));
+
 vi.mock("../../gateway/ws-logging.js", () => ({
   setGatewayWsLogStyle: (style: string) => setGatewayWsLogStyle(style),
 }));
@@ -80,13 +91,15 @@ vi.mock("../../infra/ports.js", () => ({
 }));
 
 vi.mock("../../logging/console.js", () => ({
-  setConsoleSubsystemFilter: () => undefined,
+  setConsoleSubsystemFilter: (filters: string[]) => setConsoleSubsystemFilter(filters),
   setConsoleTimestampPrefix: () => undefined,
 }));
 
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({
-    info: () => undefined,
+    info: (message: string) => {
+      gatewayLogMessages.push(message);
+    },
     warn: () => undefined,
     error: () => undefined,
   }),
@@ -129,9 +142,12 @@ describe("gateway run option collisions", () => {
     resetRuntimeCapture();
     configState.cfg = {};
     configState.snapshot = { exists: false };
+    controlUiState.root = "/tmp/openclaw-control-ui";
+    gatewayLogMessages.length = 0;
     startGatewayServer.mockClear();
     setGatewayWsLogStyle.mockClear();
     setVerbose.mockClear();
+    setConsoleSubsystemFilter.mockClear();
     forceFreePortAndWait.mockClear();
     waitForPortBindable.mockClear();
     ensureDevGatewayConfig.mockClear();
@@ -168,7 +184,7 @@ describe("gateway run option collisions", () => {
     expect(forceFreePortAndWait).toHaveBeenCalledWith(18789, expect.anything());
     expect(waitForPortBindable).toHaveBeenCalledWith(
       18789,
-      expect.objectContaining({ host: "127.0.0.1" }),
+      expect.objectContaining({ intervalMs: 150, timeoutMs: 3000 }),
     );
     expect(setGatewayWsLogStyle).toHaveBeenCalledWith("full");
     expect(startGatewayServer).toHaveBeenCalledWith(
@@ -179,6 +195,18 @@ describe("gateway run option collisions", () => {
         }),
       }),
     );
+  });
+
+  it.each([
+    ["--cli-backend-logs", "generic flag"],
+    ["--claude-cli-logs", "deprecated alias"],
+  ])("enables CLI backend log filtering via %s (%s)", async (flag) => {
+    delete process.env.OPENCLAW_CLI_BACKEND_LOG_OUTPUT;
+
+    await runGatewayCli(["gateway", "run", flag, "--allow-unconfigured"]);
+
+    expect(setConsoleSubsystemFilter).toHaveBeenCalledWith(["agent/cli-backend"]);
+    expect(process.env.OPENCLAW_CLI_BACKEND_LOG_OUTPUT).toBe("1");
   });
 
   it("starts gateway when token mode has no configured token (startup bootstrap path)", async () => {
@@ -192,16 +220,48 @@ describe("gateway run option collisions", () => {
     );
   });
 
-  it("accepts --auth none override", async () => {
-    await runGatewayCli(["gateway", "run", "--auth", "none", "--allow-unconfigured"]);
+  it("logs when first startup will build missing Control UI assets", async () => {
+    controlUiState.root = null;
 
-    expectAuthOverrideMode("none");
+    await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+
+    expect(gatewayLogMessages).toContain(
+      "Control UI assets are missing; first startup may spend a few seconds building them before the gateway binds. Prebuild with `pnpm ui:build` for a faster first boot.",
+    );
   });
 
-  it("accepts --auth trusted-proxy override", async () => {
-    await runGatewayCli(["gateway", "run", "--auth", "trusted-proxy", "--allow-unconfigured"]);
+  it("blocks startup when the observed snapshot loses gateway.mode even if loadConfig still says local", async () => {
+    configState.cfg = {
+      gateway: {
+        mode: "local",
+      },
+    };
+    configState.snapshot = {
+      exists: true,
+      valid: true,
+      config: {
+        update: { channel: "beta" },
+      },
+      parsed: {
+        update: { channel: "beta" },
+      },
+    };
 
-    expectAuthOverrideMode("trusted-proxy");
+    await expect(runGatewayCli(["gateway", "run"])).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain(
+      "Gateway start blocked: existing config is missing gateway.mode. Treat this as suspicious or clobbered config. Re-run `openclaw onboard --mode local` or `openclaw setup`, set gateway.mode=local manually, or pass --allow-unconfigured.",
+    );
+    expect(runtimeErrors).toContain(
+      `Config write audit: ${path.join("/tmp", "logs", "config-audit.jsonl")}`,
+    );
+    expect(startGatewayServer).not.toHaveBeenCalled();
+  });
+
+  it.each(["none", "trusted-proxy"] as const)("accepts --auth %s override", async (mode) => {
+    await runGatewayCli(["gateway", "run", "--auth", mode, "--allow-unconfigured"]);
+
+    expectAuthOverrideMode(mode);
   });
 
   it("prints all supported modes on invalid --auth value", async () => {
@@ -238,5 +298,73 @@ describe("gateway run option collisions", () => {
         bind: "loopback",
       }),
     );
+  });
+
+  it("reads gateway password from --password-file", async () => {
+    await withTempSecretFiles(
+      "openclaw-gateway-run-",
+      { password: "pw_from_file\n" },
+      async ({ passwordFile }) => {
+        await runGatewayCli([
+          "gateway",
+          "run",
+          "--auth",
+          "password",
+          "--password-file",
+          passwordFile ?? "",
+          "--allow-unconfigured",
+        ]);
+      },
+    );
+
+    expect(startGatewayServer).toHaveBeenCalledWith(
+      18789,
+      expect.objectContaining({
+        auth: expect.objectContaining({
+          mode: "password",
+          password: "pw_from_file", // pragma: allowlist secret
+        }),
+      }),
+    );
+    expect(runtimeErrors).not.toContain(
+      "Warning: --password can be exposed via process listings. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
+    );
+  });
+
+  it("warns when gateway password is passed inline", async () => {
+    await runGatewayCli([
+      "gateway",
+      "run",
+      "--auth",
+      "password",
+      "--password",
+      "pw_inline",
+      "--allow-unconfigured",
+    ]);
+
+    expect(runtimeErrors).toContain(
+      "Warning: --password can be exposed via process listings. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
+    );
+  });
+
+  it("rejects using both --password and --password-file", async () => {
+    await withTempSecretFiles(
+      "openclaw-gateway-run-",
+      { password: "pw_from_file\n" },
+      async ({ passwordFile }) => {
+        await expect(
+          runGatewayCli([
+            "gateway",
+            "run",
+            "--password",
+            "pw_inline",
+            "--password-file",
+            passwordFile ?? "",
+            "--allow-unconfigured",
+          ]),
+        ).rejects.toThrow("__exit__:1");
+      },
+    );
+    expect(runtimeErrors[0]).toContain("Use either --passw***d or --password-file.");
   });
 });

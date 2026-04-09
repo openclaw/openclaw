@@ -1,0 +1,123 @@
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import {
+  ensureChannelSetupPluginInstalled,
+  loadChannelSetupPluginRegistrySnapshotForChannel,
+} from "./channel-setup/plugin-install.js";
+import { configMocks } from "./channels.mock-harness.js";
+import {
+  createMSTeamsCatalogEntry,
+  createMSTeamsDeletePlugin,
+} from "./channels.plugin-install.test-helpers.js";
+import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
+
+let channelsRemoveCommand: typeof import("./channels.js").channelsRemoveCommand;
+
+const catalogMocks = vi.hoisted(() => ({
+  listChannelPluginCatalogEntries: vi.fn((): ChannelPluginCatalogEntry[] => []),
+}));
+
+vi.mock("../channels/plugins/catalog.js", async () => {
+  const actual = await vi.importActual<typeof import("../channels/plugins/catalog.js")>(
+    "../channels/plugins/catalog.js",
+  );
+  return {
+    ...actual,
+    listChannelPluginCatalogEntries: catalogMocks.listChannelPluginCatalogEntries,
+  };
+});
+
+vi.mock("./channel-setup/plugin-install.js", async () => {
+  const actual = await vi.importActual<typeof import("./channel-setup/plugin-install.js")>(
+    "./channel-setup/plugin-install.js",
+  );
+  const { createMockChannelSetupPluginInstallModule } =
+    await import("./channels.plugin-install.test-helpers.js");
+  return createMockChannelSetupPluginInstallModule(actual);
+});
+
+const runtime = createTestRuntime();
+
+describe("channelsRemoveCommand", () => {
+  beforeAll(async () => {
+    ({ channelsRemoveCommand } = await import("./channels.js"));
+  });
+
+  beforeEach(() => {
+    resetPluginRuntimeStateForTest();
+    configMocks.readConfigFileSnapshot.mockClear();
+    configMocks.writeConfigFile.mockClear();
+    configMocks.replaceConfigFile
+      .mockReset()
+      .mockImplementation(async (params: { nextConfig: unknown }) => {
+        await configMocks.writeConfigFile(params.nextConfig);
+      });
+    runtime.log.mockClear();
+    runtime.error.mockClear();
+    runtime.exit.mockClear();
+    catalogMocks.listChannelPluginCatalogEntries.mockClear();
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([]);
+    vi.mocked(ensureChannelSetupPluginInstalled).mockClear();
+    vi.mocked(ensureChannelSetupPluginInstalled).mockImplementation(async ({ cfg }) => ({
+      cfg,
+      installed: true,
+    }));
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockClear();
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+      createTestRegistry(),
+    );
+    setActivePluginRegistry(createTestRegistry());
+  });
+
+  it("removes an external channel account after installing its plugin on demand", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {
+        channels: {
+          msteams: {
+            enabled: true,
+            tenantId: "tenant-1",
+          },
+        },
+      },
+    });
+    const catalogEntry: ChannelPluginCatalogEntry = createMSTeamsCatalogEntry();
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([catalogEntry]);
+    const scopedPlugin = createMSTeamsDeletePlugin();
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel)
+      .mockReturnValueOnce(createTestRegistry())
+      .mockReturnValueOnce(
+        createTestRegistry([
+          {
+            pluginId: "@openclaw/msteams-plugin",
+            plugin: scopedPlugin,
+            source: "test",
+          },
+        ]),
+      );
+
+    await channelsRemoveCommand(
+      {
+        channel: "msteams",
+        account: "default",
+        delete: true,
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
+    expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        channels: expect.objectContaining({
+          msteams: expect.anything(),
+        }),
+      }),
+    );
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+});

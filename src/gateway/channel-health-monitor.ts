@@ -1,3 +1,4 @@
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -118,13 +119,18 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           if (!status) {
             continue;
           }
+          if (!channelManager.isHealthMonitorEnabled(channelId as ChannelId, accountId)) {
+            continue;
+          }
           if (channelManager.isManuallyStopped(channelId as ChannelId, accountId)) {
             continue;
           }
           const healthPolicy: ChannelHealthPolicy = {
+            channelId,
             now,
             staleEventThresholdMs: timing.staleEventThresholdMs,
             channelConnectGraceMs: timing.channelConnectGraceMs,
+            skipStaleSocketCheck: getChannelPlugin(channelId)?.status?.skipStaleSocketHealthCheck,
           };
           const health = evaluateChannelHealth(status, healthPolicy);
           if (health.healthy) {

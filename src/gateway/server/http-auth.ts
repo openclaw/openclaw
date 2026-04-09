@@ -1,16 +1,14 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
 import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH } from "../../canvas-host/a2ui.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
 import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import {
   authorizeHttpGatewayConnect,
-  isLocalDirectRequest,
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "../auth.js";
 import { CANVAS_CAPABILITY_TTL_MS } from "../canvas-capability.js";
-import { authorizeGatewayBearerRequestOrReply } from "../http-auth-helpers.js";
-import { getBearerToken } from "../http-utils.js";
+import { getBearerToken, resolveHttpBrowserOriginPolicy } from "../http-utils.js";
 import { GATEWAY_CLIENT_MODES, normalizeGatewayClientMode } from "../protocol/client-info.js";
 import type { GatewayWsClient } from "./ws-types.js";
 
@@ -78,9 +76,6 @@ export async function authorizeCanvasRequest(params: {
   if (malformedScopedPath) {
     return { ok: false, reason: "unauthorized" };
   }
-  if (isLocalDirectRequest(req, trustedProxies, allowRealIpFallback)) {
-    return { ok: true };
-  }
 
   let lastAuthFailure: GatewayAuthResult | null = null;
   const token = getBearerToken(req);
@@ -92,6 +87,7 @@ export async function authorizeCanvasRequest(params: {
       trustedProxies,
       allowRealIpFallback,
       rateLimiter,
+      browserOriginPolicy: resolveHttpBrowserOriginPolicy(req),
     });
     if (authResult.ok) {
       return authResult;
@@ -103,15 +99,4 @@ export async function authorizeCanvasRequest(params: {
     return { ok: true };
   }
   return lastAuthFailure ?? { ok: false, reason: "unauthorized" };
-}
-
-export async function enforcePluginRouteGatewayAuth(params: {
-  req: IncomingMessage;
-  res: ServerResponse;
-  auth: ResolvedGatewayAuth;
-  trustedProxies: string[];
-  allowRealIpFallback: boolean;
-  rateLimiter?: AuthRateLimiter;
-}): Promise<boolean> {
-  return await authorizeGatewayBearerRequestOrReply(params);
 }

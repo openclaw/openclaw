@@ -1,6 +1,8 @@
 import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
-import { resolveGatewayService } from "../daemon/service.js";
+import { describeGatewayServiceRestart, resolveGatewayService } from "../daemon/service.js";
+import { isNonFatalSystemdInstallProbeError } from "../daemon/systemd.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import { confirm, select } from "./configure.shared.js";
@@ -23,7 +25,10 @@ export async function maybeInstallDaemon(params: {
   let loaded = false;
   try {
     loaded = await service.isLoaded({ env: process.env });
-  } catch {
+  } catch (error) {
+    if (!isNonFatalSystemdInstallProbeError(error)) {
+      throw error;
+    }
     loaded = false;
   }
   let shouldCheckLinger = false;
@@ -46,11 +51,13 @@ export async function maybeInstallDaemon(params: {
         { label: "Gateway service", indeterminate: true, delayMs: 0 },
         async (progress) => {
           progress.setLabel("Restarting Gateway service…");
-          await service.restart({
+          const restartResult = await service.restart({
             env: process.env,
             stdout: process.stdout,
           });
-          progress.setLabel("Gateway service restarted.");
+          progress.setLabel(
+            describeGatewayServiceRestart("Gateway", restartResult).progressMessage,
+          );
         },
       );
       shouldCheckLinger = true;
@@ -112,7 +119,6 @@ export async function maybeInstallDaemon(params: {
         const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
           env: process.env,
           port: params.port,
-          token: tokenResolution.token,
           runtime: daemonRuntime,
           warn: (message, title) => note(message, title),
           config: cfg,
@@ -129,7 +135,7 @@ export async function maybeInstallDaemon(params: {
           });
           progress.setLabel("Gateway service installed.");
         } catch (err) {
-          installError = err instanceof Error ? err.message : String(err);
+          installError = formatErrorMessage(err);
           progress.setLabel("Gateway service install failed.");
         }
       },

@@ -1,11 +1,27 @@
-import { logDebug } from "../logger.js";
 import { formatBonjourError } from "./bonjour-errors.js";
 
-export function ignoreCiaoCancellationRejection(reason: unknown): boolean {
-  const message = formatBonjourError(reason).toUpperCase();
-  if (!message.includes("CIAO ANNOUNCEMENT CANCELLED")) {
-    return false;
+const CIAO_CANCELLATION_MESSAGE_RE = /^CIAO (?:ANNOUNCEMENT|PROBING) CANCELLED\b/u;
+const CIAO_INTERFACE_ASSERTION_MESSAGE_RE =
+  /REACHED ILLEGAL STATE!?\s+IPV4 ADDRESS CHANGE FROM DEFINED TO UNDEFINED!?/u;
+
+export type CiaoUnhandledRejectionClassification =
+  | { kind: "cancellation"; formatted: string }
+  | { kind: "interface-assertion"; formatted: string };
+
+export function classifyCiaoUnhandledRejection(
+  reason: unknown,
+): CiaoUnhandledRejectionClassification | null {
+  const formatted = formatBonjourError(reason);
+  const message = formatted.toUpperCase();
+  if (CIAO_CANCELLATION_MESSAGE_RE.test(message)) {
+    return { kind: "cancellation", formatted };
   }
-  logDebug(`bonjour: ignoring unhandled ciao rejection: ${formatBonjourError(reason)}`);
-  return true;
+  if (CIAO_INTERFACE_ASSERTION_MESSAGE_RE.test(message)) {
+    return { kind: "interface-assertion", formatted };
+  }
+  return null;
+}
+
+export function ignoreCiaoUnhandledRejection(reason: unknown): boolean {
+  return classifyCiaoUnhandledRejection(reason) !== null;
 }

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { readAccessToken } from "./token-response.js";
 import { hasConfiguredMSTeamsCredentials, resolveMSTeamsCredentials } from "./token.js";
 
 const ORIGINAL_ENV = {
@@ -35,7 +36,7 @@ describe("resolveMSTeamsCredentials", () => {
 
     expect(resolved).toEqual({
       appId: "app-id",
-      appPassword: "app-password",
+      appPassword: "app-password", // pragma: allowlist secret
       tenantId: "tenant-id",
     });
   });
@@ -68,5 +69,20 @@ describe("hasConfiguredMSTeamsCredentials", () => {
     });
 
     expect(configured).toBe(true);
+  });
+});
+
+describe("readAccessToken", () => {
+  it("reads string and object token forms", () => {
+    expect(readAccessToken("abc")).toBe("abc");
+    expect(readAccessToken({ accessToken: "access-token" })).toBe("access-token");
+    expect(readAccessToken({ token: "fallback-token" })).toBe("fallback-token");
+  });
+
+  it("returns null for unsupported token payloads", () => {
+    expect(readAccessToken({ accessToken: 123 })).toBeNull();
+    expect(readAccessToken({ token: false })).toBeNull();
+    expect(readAccessToken(null)).toBeNull();
+    expect(readAccessToken(undefined)).toBeNull();
   });
 });

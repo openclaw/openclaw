@@ -56,6 +56,7 @@ export const ConnectParamsSchema = Type.Object(
       Type.Object(
         {
           token: Type.Optional(Type.String()),
+          bootstrapToken: Type.Optional(Type.String()),
           deviceToken: Type.Optional(Type.String()),
           password: Type.Optional(Type.String()),
         },
@@ -95,6 +96,19 @@ export const HelloOkSchema = Type.Object(
           role: NonEmptyString,
           scopes: Type.Array(NonEmptyString),
           issuedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+          deviceTokens: Type.Optional(
+            Type.Array(
+              Type.Object(
+                {
+                  deviceToken: NonEmptyString,
+                  role: NonEmptyString,
+                  scopes: Type.Array(NonEmptyString),
+                  issuedAtMs: Type.Integer({ minimum: 0 }),
+                },
+                { additionalProperties: false },
+              ),
+            ),
+          ),
         },
         { additionalProperties: false },
       ),

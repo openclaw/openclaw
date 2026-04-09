@@ -2,18 +2,21 @@ import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
-import { resolveControlUiRootSync } from "../infra/control-ui-assets.js";
+import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import {
+  isPackageProvenControlUiRootSync,
+  resolveControlUiRootSync,
+} from "../infra/control-ui-assets.js";
 import { isWithinDir } from "../infra/path-safety.js";
 import { openVerifiedFileSync } from "../infra/safe-open-sync.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
-import { resolveRuntimeServiceVersion } from "../version.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   type ControlUiBootstrapConfig,
 } from "./control-ui-contract.js";
-import { buildControlUiCspHeader } from "./control-ui-csp.js";
+import { buildControlUiCspHeader, computeInlineScriptHashes } from "./control-ui-csp.js";
 import {
   isReadHttpMethod,
   respondNotFound as respondControlUiNotFound,
@@ -39,6 +42,7 @@ export type ControlUiRequestOptions = {
 };
 
 export type ControlUiRootState =
+  | { kind: "bundled"; path: string }
   | { kind: "resolved"; path: string }
   | { kind: "invalid"; path: string }
   | { kind: "missing" };
@@ -217,7 +221,7 @@ export function handleControlUiAvatarRequest(
 }
 
 function setStaticFileHeaders(res: ServerResponse, filePath: string) {
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
   res.setHeader("Content-Type", contentTypeForExt(ext));
   // Static UI should never be cached aggressively while iterating; allow the
   // browser to revalidate.
@@ -230,6 +234,13 @@ function serveResolvedFile(res: ServerResponse, filePath: string, body: Buffer) 
 }
 
 function serveResolvedIndexHtml(res: ServerResponse, body: string) {
+  const hashes = computeInlineScriptHashes(body);
+  if (hashes.length > 0) {
+    res.setHeader(
+      "Content-Security-Policy",
+      buildControlUiCspHeader({ inlineScriptHashes: hashes }),
+    );
+  }
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
   res.end(body);
@@ -256,6 +267,7 @@ function resolveSafeAvatarFile(filePath: string): { path: string; fd: number } |
 function resolveSafeControlUiFile(
   rootReal: string,
   filePath: string,
+  rejectHardlinks: boolean,
 ): { path: string; fd: number } | null {
   const opened = openBoundaryFileSync({
     absolutePath: filePath,
@@ -263,12 +275,15 @@ function resolveSafeControlUiFile(
     rootRealPath: rootReal,
     boundaryLabel: "control ui root",
     skipLexicalRootCheck: true,
+    rejectHardlinks,
   });
   if (!opened.ok) {
-    if (opened.reason === "io") {
-      throw opened.error;
-    }
-    return null;
+    return matchBoundaryFileOpenFailure(opened, {
+      io: (failure) => {
+        throw failure.error;
+      },
+      fallback: () => null,
+    });
   }
   return { path: opened.path, fd: opened.fd };
 }
@@ -350,8 +365,6 @@ export function handleControlUiHttpRequest(
       basePath,
       assistantName: identity.name,
       assistantAvatar: avatarValue ?? identity.avatar,
-      assistantAgentId: identity.agentId,
-      serverVersion: resolveRuntimeServiceVersion(process.env),
     } satisfies ControlUiBootstrapConfig);
     return true;
   }
@@ -367,7 +380,7 @@ export function handleControlUiHttpRequest(
   }
 
   const root =
-    rootState?.kind === "resolved"
+    rootState?.kind === "resolved" || rootState?.kind === "bundled"
       ? rootState.path
       : resolveControlUiRootSync({
           moduleUrl: import.meta.url,
@@ -419,7 +432,16 @@ export function handleControlUiHttpRequest(
     return true;
   }
 
-  const safeFile = resolveSafeControlUiFile(rootReal, filePath);
+  const isBundledRoot =
+    rootState?.kind === "bundled" ||
+    (rootState === undefined &&
+      isPackageProvenControlUiRootSync(root, {
+        moduleUrl: import.meta.url,
+        argv1: process.argv[1],
+        cwd: process.cwd(),
+      }));
+  const rejectHardlinks = !isBundledRoot;
+  const safeFile = resolveSafeControlUiFile(rootReal, filePath, rejectHardlinks);
   if (safeFile) {
     try {
       if (respondHeadForFile(req, res, safeFile.path)) {
@@ -441,14 +463,14 @@ export function handleControlUiHttpRequest(
   // against the same set of extensions that contentTypeForExt() recognises so
   // that dotted SPA routes (e.g. /user/jane.doe, /v2.0) still get the
   // client-side router fallback.
-  if (STATIC_ASSET_EXTENSIONS.has(path.extname(fileRel).toLowerCase())) {
+  if (STATIC_ASSET_EXTENSIONS.has(normalizeLowercaseStringOrEmpty(path.extname(fileRel)))) {
     respondControlUiNotFound(res);
     return true;
   }
 
   // SPA fallback (client-side router): serve index.html for unknown paths.
   const indexPath = path.join(root, "index.html");
-  const safeIndex = resolveSafeControlUiFile(rootReal, indexPath);
+  const safeIndex = resolveSafeControlUiFile(rootReal, indexPath, rejectHardlinks);
   if (safeIndex) {
     try {
       if (respondHeadForFile(req, res, safeIndex.path)) {

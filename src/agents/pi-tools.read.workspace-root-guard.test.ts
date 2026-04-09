@@ -1,6 +1,5 @@
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { wrapToolWorkspaceRootGuardWithOptions } from "./pi-tools.read.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -24,8 +23,16 @@ function createToolHarness() {
   return { execute, tool };
 }
 
+async function loadModule() {
+  ({ wrapToolWorkspaceRootGuardWithOptions } = await import("./pi-tools.read.js"));
+}
+
+let wrapToolWorkspaceRootGuardWithOptions: typeof import("./pi-tools.read.js").wrapToolWorkspaceRootGuardWithOptions;
+
 describe("wrapToolWorkspaceRootGuardWithOptions", () => {
   const root = "/tmp/root";
+
+  beforeAll(loadModule);
 
   beforeEach(() => {
     mocks.assertSandboxPath.mockClear();
@@ -56,6 +63,21 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
 
     expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
       filePath: path.resolve(root, "docs", "readme.md"),
+      cwd: root,
+      root,
+    });
+  });
+
+  it("does not remap remote-host file:// paths", async () => {
+    const { tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+    });
+
+    await wrapped.execute("tc-remote-file-url", { path: "file://attacker/share/readme.md" });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: "file://attacker/share/readme.md",
       cwd: root,
       root,
     });
@@ -104,5 +126,39 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
       cwd: root,
       root,
     });
+  });
+
+  it("does not guard outPath by default", async () => {
+    const { tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+    });
+
+    await wrapped.execute("tc-outpath-default", { outPath: "/workspace/videos/capture.mp4" });
+
+    expect(mocks.assertSandboxPath).not.toHaveBeenCalled();
+  });
+
+  it("guards custom outPath params when configured", async () => {
+    const { execute, tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+      pathParamKeys: ["outPath"],
+      normalizeGuardedPathParams: true,
+    });
+
+    await wrapped.execute("tc-outpath-custom", { outPath: "videos/capture.mp4" });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: "videos/capture.mp4",
+      cwd: root,
+      root,
+    });
+    expect(execute).toHaveBeenCalledWith(
+      "tc-outpath-custom",
+      { outPath: path.resolve(root, "videos", "capture.mp4") },
+      undefined,
+      undefined,
+    );
   });
 });

@@ -1,15 +1,25 @@
 {
   "name": "@openclaw/bluebubbles",
-  "version": "2026.3.3",
+  "version": "2026.4.10",
   "description": "OpenClaw BlueBubbles channel plugin",
   "type": "module",
-  "dependencies": {
-    "zod": "^4.3.6"
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.4.10"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
   },
   "openclaw": {
     "extensions": [
       "./index.ts"
     ],
+    "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "bluebubbles",
       "label": "BlueBubbles",
@@ -29,8 +39,18 @@
     },
     "install": {
       "npmSpec": "@openclaw/bluebubbles",
-      "localPath": "extensions/bluebubbles",
-      "defaultChoice": "npm"
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.10"
+    },
+    "compat": {
+      "pluginApi": ">=2026.4.10"
+    },
+    "build": {
+      "openclawVersion": "2026.4.10"
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
     }
   }
 }

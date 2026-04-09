@@ -1,5 +1,6 @@
 import { parseFrontmatterBlock } from "../markdown/frontmatter.js";
 import {
+  applyOpenClawManifestInstallCommonFields,
   getFrontmatterString,
   normalizeStringList,
   parseOpenClawManifestInstallBase,
@@ -9,6 +10,7 @@ import {
   resolveOpenClawManifestOs,
   resolveOpenClawManifestRequires,
 } from "../shared/frontmatter.js";
+import { readStringValue } from "../shared/string-coerce.js";
 import type {
   OpenClawHookMetadata,
   HookEntry,
@@ -27,19 +29,12 @@ function parseInstallSpec(input: unknown): HookInstallSpec | undefined {
     return undefined;
   }
   const { raw } = parsed;
-  const spec: HookInstallSpec = {
-    kind: parsed.kind as HookInstallSpec["kind"],
-  };
-
-  if (parsed.id) {
-    spec.id = parsed.id;
-  }
-  if (parsed.label) {
-    spec.label = parsed.label;
-  }
-  if (parsed.bins) {
-    spec.bins = parsed.bins;
-  }
+  const spec = applyOpenClawManifestInstallCommonFields<HookInstallSpec>(
+    {
+      kind: parsed.kind as HookInstallSpec["kind"],
+    },
+    parsed,
+  );
   if (typeof raw.package === "string") {
     spec.package = raw.package;
   }
@@ -63,10 +58,10 @@ export function resolveOpenClawMetadata(
   const eventsRaw = normalizeStringList(metadataObj.events);
   return {
     always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
-    emoji: typeof metadataObj.emoji === "string" ? metadataObj.emoji : undefined,
-    homepage: typeof metadataObj.homepage === "string" ? metadataObj.homepage : undefined,
-    hookKey: typeof metadataObj.hookKey === "string" ? metadataObj.hookKey : undefined,
-    export: typeof metadataObj.export === "string" ? metadataObj.export : undefined,
+    emoji: readStringValue(metadataObj.emoji),
+    homepage: readStringValue(metadataObj.homepage),
+    hookKey: readStringValue(metadataObj.hookKey),
+    export: readStringValue(metadataObj.export),
     os: osRaw.length > 0 ? osRaw : undefined,
     events: eventsRaw.length > 0 ? eventsRaw : [],
     requires: requires,

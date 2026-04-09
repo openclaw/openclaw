@@ -1,5 +1,6 @@
 import type { VoiceCallTtsConfig } from "./config.js";
 import type { CoreConfig } from "./core-bridge.js";
+import { deepMergeDefined } from "./deep-merge.js";
 import { convertPcmToMulaw8k } from "./telephony-audio.js";
 
 export type TelephonyTtsRuntime = {
@@ -12,6 +13,8 @@ export type TelephonyTtsRuntime = {
     audioBuffer?: Buffer;
     sampleRate?: number;
     provider?: string;
+    fallbackFrom?: string;
+    attemptedProviders?: string[];
     error?: string;
   }>;
 };
@@ -20,14 +23,15 @@ export type TelephonyTtsProvider = {
   synthesizeForTelephony: (text: string) => Promise<Buffer>;
 };
 
-const BLOCKED_MERGE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
-
 export function createTelephonyTtsProvider(params: {
   coreConfig: CoreConfig;
   ttsOverride?: VoiceCallTtsConfig;
   runtime: TelephonyTtsRuntime;
+  logger?: {
+    warn?: (message: string) => void;
+  };
 }): TelephonyTtsProvider {
-  const { coreConfig, ttsOverride, runtime } = params;
+  const { coreConfig, ttsOverride, runtime, logger } = params;
   const mergedConfig = applyTtsOverride(coreConfig, ttsOverride);
 
   return {
@@ -39,6 +43,16 @@ export function createTelephonyTtsProvider(params: {
 
       if (!result.success || !result.audioBuffer || !result.sampleRate) {
         throw new Error(result.error ?? "TTS conversion failed");
+      }
+
+      if (result.fallbackFrom && result.provider && result.fallbackFrom !== result.provider) {
+        const attemptedChain =
+          result.attemptedProviders && result.attemptedProviders.length > 0
+            ? result.attemptedProviders.join(" -> ")
+            : `${result.fallbackFrom} -> ${result.provider}`;
+        logger?.warn?.(
+          `[voice-call] Telephony TTS fallback used from=${result.fallbackFrom} to=${result.provider} attempts=${attemptedChain}`,
+        );
       }
 
       return convertPcmToMulaw8k(result.audioBuffer, result.sampleRate);
@@ -79,28 +93,5 @@ function mergeTtsConfig(
   if (!base) {
     return override;
   }
-  return deepMerge(base, override);
-}
-
-function deepMerge<T>(base: T, override: T): T {
-  if (!isPlainObject(base) || !isPlainObject(override)) {
-    return override;
-  }
-  const result: Record<string, unknown> = { ...base };
-  for (const [key, value] of Object.entries(override)) {
-    if (BLOCKED_MERGE_KEYS.has(key) || value === undefined) {
-      continue;
-    }
-    const existing = (base as Record<string, unknown>)[key];
-    if (isPlainObject(existing) && isPlainObject(value)) {
-      result[key] = deepMerge(existing, value);
-    } else {
-      result[key] = value;
-    }
-  }
-  return result as T;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  return deepMergeDefined(base, override) as VoiceCallTtsConfig;
 }
