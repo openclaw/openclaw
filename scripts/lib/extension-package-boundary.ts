@@ -60,6 +60,14 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
     "../dist/plugin-sdk/src/plugin-sdk/secret-ref-runtime.d.ts",
   ],
   "openclaw/plugin-sdk/ssrf-runtime": ["../dist/plugin-sdk/src/plugin-sdk/ssrf-runtime.d.ts"],
+  "@openclaw/qa-channel/*.js": [
+    "../dist/plugin-sdk/extensions/qa-channel/*.d.ts",
+    "../extensions/qa-channel/*",
+  ],
+  "@openclaw/qa-channel/*": [
+    "../dist/plugin-sdk/extensions/qa-channel/*.d.ts",
+    "../extensions/qa-channel/*",
+  ],
   "@openclaw/*.js": ["../packages/plugin-sdk/dist/extensions/*.d.ts", "../extensions/*"],
   "@openclaw/*": ["../packages/plugin-sdk/dist/extensions/*", "../extensions/*"],
   "@openclaw/plugin-sdk/*": ["../dist/plugin-sdk/src/plugin-sdk/*.d.ts"],
@@ -104,6 +112,14 @@ export const EXTENSION_PACKAGE_BOUNDARY_XAI_PATHS = {
   ],
   "openclaw/plugin-sdk/provider-web-search-contract": [
     "../../dist/plugin-sdk/src/plugin-sdk/provider-web-search-contract.d.ts",
+  ],
+  "@openclaw/qa-channel/*.js": [
+    "../../dist/plugin-sdk/extensions/qa-channel/*.d.ts",
+    "../qa-channel/*",
+  ],
+  "@openclaw/qa-channel/*": [
+    "../../dist/plugin-sdk/extensions/qa-channel/*.d.ts",
+    "../qa-channel/*",
   ],
   "@openclaw/*.js": ["../../packages/plugin-sdk/dist/extensions/*.d.ts", "../*"],
   "@openclaw/*": ["../*"],
