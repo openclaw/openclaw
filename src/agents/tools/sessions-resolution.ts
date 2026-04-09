@@ -66,10 +66,7 @@ export async function listSpawnedSessionKeys(params: {
       },
     });
     const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
-    const keys = sessions
-      .map((entry) => (typeof entry?.key === "string" ? entry.key : ""))
-      .map((value) => value.trim())
-      .filter(Boolean);
+    const keys = sessions.map((entry) => normalizeOptionalString(entry?.key) ?? "").filter(Boolean);
     return new Set(keys);
   } catch {
     return new Set();
@@ -238,7 +235,7 @@ async function callGatewayResolveSessionId(params: {
     method: "sessions.resolve",
     params: buildSessionIdResolveParams(params),
   });
-  const key = typeof result?.key === "string" ? result.key.trim() : "";
+  const key = normalizeOptionalString(result?.key) ?? "";
   if (!key) {
     throw new Error(
       `Session not found: ${params.sessionId} (use the full sessionKey from sessions_list)`,
@@ -298,7 +295,7 @@ async function resolveSessionKeyFromKey(params: {
         spawnedBy: params.restrictToSpawned ? params.requesterInternalKey : undefined,
       },
     });
-    const key = typeof result?.key === "string" ? result.key.trim() : "";
+    const key = normalizeOptionalString(result?.key) ?? "";
     if (!key) {
       return null;
     }

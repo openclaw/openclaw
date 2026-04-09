@@ -26,6 +26,7 @@ export async function resolvePreferredProviderForAuthChoice(params: {
     workspaceDir: params.workspaceDir,
     env: params.env,
     mode: "setup",
+    includeUntrustedWorkspacePlugins: params.includeUntrustedWorkspacePlugins,
   });
   const pluginResolved = resolveProviderPluginChoice({
     providers,

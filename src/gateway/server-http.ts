@@ -781,7 +781,7 @@ export function createGatewayHttpServer(opts: {
     });
 
     // Don't interfere with WebSocket upgrades; ws handles the 'upgrade' event.
-    if (String(req.headers.upgrade ?? "").toLowerCase() === "websocket") {
+    if (normalizeLowercaseStringOrEmpty(req.headers.upgrade) === "websocket") {
       return;
     }
 

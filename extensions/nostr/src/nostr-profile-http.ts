@@ -9,19 +9,20 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   readStringValue,
 } from "openclaw/plugin-sdk/text-runtime";
 import { z } from "openclaw/plugin-sdk/zod";
 import {
   createFixedWindowRateLimiter,
-  isBlockedHostnameOrIp,
   readJsonBodyWithLimit,
   requestBodyErrorToText,
-} from "../api.js";
+} from "../runtime-api.js";
 import { publishNostrProfile, getNostrProfileState } from "./channel.js";
 import { NostrProfileSchema, type NostrProfile } from "./config-schema.js";
 import { importProfileFromRelays, mergeProfiles } from "./nostr-profile-import.js";
+import { validateUrlSafety } from "./nostr-profile-url-safety.js";
 
 // ============================================================================
 // Types
@@ -102,30 +103,6 @@ async function withPublishLock<T>(accountId: string, fn: () => Promise<T>): Prom
   }
 }
 
-// ============================================================================
-// SSRF Protection
-// ============================================================================
-
-function validateUrlSafety(urlStr: string): { ok: true } | { ok: false; error: string } {
-  try {
-    const url = new URL(urlStr);
-
-    if (url.protocol !== "https:") {
-      return { ok: false, error: "URL must use https:// protocol" };
-    }
-
-    const hostname = url.hostname.toLowerCase();
-
-    if (isBlockedHostnameOrIp(hostname)) {
-      return { ok: false, error: "URL must not point to private/internal addresses" };
-    }
-
-    return { ok: true };
-  } catch {
-    return { ok: false, error: "Invalid URL format" };
-  }
-}
-
 // Export for use in import validation
 export { validateUrlSafety };
 
@@ -197,7 +174,7 @@ function isLoopbackRemoteAddress(remoteAddress: string | undefined): boolean {
     return false;
   }
 
-  const ipLower = remoteAddress.toLowerCase().replace(/^\[|\]$/g, "");
+  const ipLower = normalizeLowercaseStringOrEmpty(remoteAddress).replace(/^\[|\]$/g, "");
 
   // IPv6 loopback
   if (ipLower === "::1") {
@@ -221,7 +198,7 @@ function isLoopbackRemoteAddress(remoteAddress: string | undefined): boolean {
 function isLoopbackOriginLike(value: string): boolean {
   try {
     const url = new URL(value);
-    const hostname = url.hostname.toLowerCase();
+    const hostname = normalizeLowercaseStringOrEmpty(url.hostname);
     return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
   } catch {
     return false;

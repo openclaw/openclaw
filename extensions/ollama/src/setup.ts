@@ -20,7 +20,7 @@ import {
 } from "./provider-models.js";
 
 const OLLAMA_SUGGESTED_MODELS_LOCAL = [OLLAMA_DEFAULT_MODEL];
-const OLLAMA_SUGGESTED_MODELS_CLOUD = ["kimi-k2.5:cloud", "minimax-m2.5:cloud", "glm-5:cloud"];
+const OLLAMA_SUGGESTED_MODELS_CLOUD = ["kimi-k2.5:cloud", "minimax-m2.7:cloud", "glm-5.1:cloud"];
 const OLLAMA_CONTEXT_ENRICH_LIMIT = 200;
 
 type OllamaMode = "remote" | "local";

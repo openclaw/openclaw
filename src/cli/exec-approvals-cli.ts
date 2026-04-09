@@ -15,6 +15,7 @@ import {
 } from "../infra/exec-approvals.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { isRich, theme } from "../terminal/theme.js";
@@ -58,7 +59,7 @@ async function resolveTargetNodeId(opts: ExecApprovalsCliOpts): Promise<string |
   if (opts.gateway) {
     return null;
   }
-  const raw = opts.node?.trim() ?? "";
+  const raw = normalizeOptionalString(opts.node) ?? "";
   if (!raw) {
     return null;
   }
@@ -278,7 +279,7 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
   for (const [agentId, agent] of Object.entries(agents)) {
     const allowlist = Array.isArray(agent.allowlist) ? agent.allowlist : [];
     for (const entry of allowlist) {
-      const pattern = entry?.pattern?.trim() ?? "";
+      const pattern = normalizeOptionalString(entry?.pattern) ?? "";
       if (!pattern) {
         continue;
       }
@@ -351,12 +352,12 @@ async function saveSnapshot(
 }
 
 function resolveAgentKey(value?: string | null): string {
-  const trimmed = value?.trim() ?? "";
+  const trimmed = normalizeOptionalString(value) ?? "";
   return trimmed ? trimmed : "*";
 }
 
 function normalizeAllowlistEntry(entry: { pattern?: string } | null): string | null {
-  const pattern = entry?.pattern?.trim() ?? "";
+  const pattern = normalizeOptionalString(entry?.pattern) ?? "";
   return pattern ? pattern : null;
 }
 

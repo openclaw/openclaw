@@ -114,7 +114,7 @@ function normalizeTelegramNetworkMethod(method?: string | null): string | null {
   if (!trimmed) {
     return null;
   }
-  return trimmed.toLowerCase();
+  return normalizeLowercaseStringOrEmpty(trimmed);
 }
 
 export function tagTelegramNetworkError(err: unknown, origin: TelegramNetworkErrorOrigin): void {

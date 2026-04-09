@@ -1,12 +1,11 @@
 import {
-  getScopedCredentialValue,
-  resolveProviderWebSearchPluginConfig,
-  setProviderWebSearchPluginConfigValue,
-  setScopedCredentialValue,
+  createWebSearchProviderContractFields,
   type WebSearchProviderPlugin,
-} from "openclaw/plugin-sdk/provider-web-search-contract";
+} from "openclaw/plugin-sdk/provider-web-search-config-contract";
 
 export function createXaiWebSearchProvider(): WebSearchProviderPlugin {
+  const credentialPath = "plugins.entries.xai.config.webSearch.apiKey";
+
   return {
     id: "grok",
     label: "Grok (xAI)",
@@ -18,17 +17,12 @@ export function createXaiWebSearchProvider(): WebSearchProviderPlugin {
     signupUrl: "https://console.x.ai/",
     docsUrl: "https://docs.openclaw.ai/tools/web",
     autoDetectOrder: 30,
-    credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
-    inactiveSecretPaths: ["plugins.entries.xai.config.webSearch.apiKey"],
-    getCredentialValue: (searchConfig?: Record<string, unknown>) =>
-      getScopedCredentialValue(searchConfig, "grok"),
-    setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) =>
-      setScopedCredentialValue(searchConfigTarget, "grok", value),
-    getConfiguredCredentialValue: (config) =>
-      resolveProviderWebSearchPluginConfig(config, "xai")?.apiKey,
-    setConfiguredCredentialValue: (configTarget, value) => {
-      setProviderWebSearchPluginConfigValue(configTarget, "xai", "apiKey", value);
-    },
+    credentialPath,
+    ...createWebSearchProviderContractFields({
+      credentialPath,
+      searchCredential: { type: "scoped", scopeId: "grok" },
+      configuredCredential: { pluginId: "xai" },
+    }),
     createTool: () => null,
   };
 }

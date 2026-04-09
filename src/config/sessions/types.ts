@@ -162,6 +162,12 @@ export type SessionEntry = {
   responseUsage?: "on" | "off" | "tokens" | "full";
   providerOverride?: string;
   modelOverride?: string;
+  /**
+   * Tracks whether the persisted model override came from an explicit user
+   * action (`/model`, `sessions.patch`) or from a temporary runtime fallback.
+   * Resets only preserve user-driven overrides.
+   */
+  modelOverrideSource?: "auto" | "user";
   authProfileOverride?: string;
   authProfileOverrideSource?: "auto" | "user";
   authProfileOverrideCompactionCount?: number;

@@ -38,7 +38,7 @@ export async function noteMacLaunchAgentOverrides() {
 async function launchctlGetenv(name: string): Promise<string | undefined> {
   try {
     const result = await execFileAsync("/bin/launchctl", ["getenv", name], { encoding: "utf8" });
-    const value = String(result.stdout ?? "").trim();
+    const value = normalizeOptionalString(String(result.stdout ?? "")) ?? "";
     return value.length > 0 ? value : undefined;
   } catch {
     return undefined;
@@ -144,9 +144,9 @@ export function noteStartupOptimizationHints(
   }
 
   const noteFn = deps?.noteFn ?? note;
-  const compileCache = env.NODE_COMPILE_CACHE?.trim() ?? "";
-  const disableCompileCache = env.NODE_DISABLE_COMPILE_CACHE?.trim() ?? "";
-  const noRespawn = env.OPENCLAW_NO_RESPAWN?.trim() ?? "";
+  const compileCache = normalizeOptionalString(env.NODE_COMPILE_CACHE) ?? "";
+  const disableCompileCache = normalizeOptionalString(env.NODE_DISABLE_COMPILE_CACHE) ?? "";
+  const noRespawn = normalizeOptionalString(env.OPENCLAW_NO_RESPAWN) ?? "";
   const lines: string[] = [];
 
   if (!compileCache) {

@@ -146,8 +146,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             toolContext,
           }),
       },
+      approvalCapability: whatsappApprovalAuth,
       auth: {
-        ...whatsappApprovalAuth,
         login: async ({ cfg, accountId, runtime, verbose }) => {
           const resolvedAccountId =
             accountId?.trim() ||

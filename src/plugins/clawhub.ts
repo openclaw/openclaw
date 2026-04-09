@@ -25,6 +25,7 @@ import {
   type ClawHubPackageVersion,
 } from "../infra/clawhub.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import { installPluginFromArchive, type InstallPluginResult } from "./install.js";
@@ -113,6 +114,11 @@ type JSZipObjectWithSize = JSZip.JSZipObject & {
 
 const CLAWHUB_GENERATED_ARCHIVE_METADATA_FILE = "_meta.json";
 
+type ClawHubArchiveEntryLimits = {
+  maxEntryBytes: number;
+  addArchiveBytes: (bytes: number) => boolean;
+};
+
 export function formatClawHubSpecifier(params: { name: string; version?: string }): string {
   return `clawhub:${params.name}${params.version ? `@${params.version}` : ""}`;
 }
@@ -164,7 +170,7 @@ function resolveRequestedVersion(params: {
 }
 
 function readTrimmedString(value: unknown): string | null {
-  return typeof value === "string" ? value.trim() : null;
+  return normalizeOptionalString(value) ?? null;
 }
 
 function normalizeClawHubRelativePath(value: unknown): string | null {
@@ -308,10 +314,14 @@ function resolveClawHubArchiveVerification(
   };
 }
 
-async function readClawHubArchiveEntryBuffer(
+async function readLimitedClawHubArchiveEntry<T>(
   entry: JSZip.JSZipObject,
-  limits: { maxEntryBytes: number; addArchiveBytes: (bytes: number) => boolean },
-): Promise<Buffer | ClawHubInstallFailure> {
+  limits: ClawHubArchiveEntryLimits,
+  handlers: {
+    onChunk: (buffer: Buffer) => void;
+    onEnd: () => T;
+  },
+): Promise<T | ClawHubInstallFailure> {
   const hintedSize = (entry as JSZipObjectWithSize)._data?.uncompressedSize;
   if (
     typeof hintedSize === "number" &&
@@ -324,8 +334,7 @@ async function readClawHubArchiveEntryBuffer(
     );
   }
   let entryBytes = 0;
-  const chunks: Buffer[] = [];
-  return await new Promise<Buffer | ClawHubInstallFailure>((resolve) => {
+  return await new Promise<T | ClawHubInstallFailure>((resolve) => {
     let settled = false;
     const stream = entry.nodeStream("nodebuffer") as NodeJS.ReadableStream & {
       destroy?: (error?: Error) => void;
@@ -359,14 +368,14 @@ async function readClawHubArchiveEntryBuffer(
         );
         return;
       }
-      chunks.push(buffer);
+      handlers.onChunk(buffer);
     });
     stream.once("end", () => {
       if (settled) {
         return;
       }
       settled = true;
-      resolve(Buffer.concat(chunks));
+      resolve(handlers.onEnd());
     });
     stream.once("error", (error: unknown) => {
       if (settled) {
@@ -383,78 +392,33 @@ async function readClawHubArchiveEntryBuffer(
   });
 }
 
+async function readClawHubArchiveEntryBuffer(
+  entry: JSZip.JSZipObject,
+  limits: ClawHubArchiveEntryLimits,
+): Promise<Buffer | ClawHubInstallFailure> {
+  const chunks: Buffer[] = [];
+  return await readLimitedClawHubArchiveEntry(entry, limits, {
+    onChunk(buffer) {
+      chunks.push(buffer);
+    },
+    onEnd() {
+      return Buffer.concat(chunks);
+    },
+  });
+}
+
 async function hashClawHubArchiveEntry(
   entry: JSZip.JSZipObject,
-  limits: { maxEntryBytes: number; addArchiveBytes: (bytes: number) => boolean },
+  limits: ClawHubArchiveEntryLimits,
 ): Promise<string | ClawHubInstallFailure> {
-  const hintedSize = (entry as JSZipObjectWithSize)._data?.uncompressedSize;
-  if (
-    typeof hintedSize === "number" &&
-    Number.isFinite(hintedSize) &&
-    hintedSize > limits.maxEntryBytes
-  ) {
-    return buildClawHubInstallFailure(
-      `ClawHub archive fallback verification rejected "${entry.name}" because it exceeds the per-file size limit.`,
-      CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-    );
-  }
-  let entryBytes = 0;
   const digest = createHash("sha256");
-  return await new Promise<string | ClawHubInstallFailure>((resolve) => {
-    let settled = false;
-    const stream = entry.nodeStream("nodebuffer") as NodeJS.ReadableStream & {
-      destroy?: (error?: Error) => void;
-    };
-    stream.on("data", (chunk: Buffer | Uint8Array | string) => {
-      if (settled) {
-        return;
-      }
-      const buffer =
-        typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk as Uint8Array);
-      entryBytes += buffer.byteLength;
-      if (entryBytes > limits.maxEntryBytes) {
-        settled = true;
-        stream.destroy?.();
-        resolve(
-          buildClawHubInstallFailure(
-            `ClawHub archive fallback verification rejected "${entry.name}" because it exceeds the per-file size limit.`,
-            CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-          ),
-        );
-        return;
-      }
-      if (!limits.addArchiveBytes(buffer.byteLength)) {
-        settled = true;
-        stream.destroy?.();
-        resolve(
-          buildClawHubInstallFailure(
-            "ClawHub archive fallback verification exceeded the total extracted-size limit.",
-            CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-          ),
-        );
-        return;
-      }
+  return await readLimitedClawHubArchiveEntry(entry, limits, {
+    onChunk(buffer) {
       digest.update(buffer);
-    });
-    stream.once("end", () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      resolve(digest.digest("hex"));
-    });
-    stream.once("error", (error: unknown) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      resolve(
-        buildClawHubInstallFailure(
-          error instanceof Error ? error.message : String(error),
-          CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-        ),
-      );
-    });
+    },
+    onEnd() {
+      return digest.digest("hex");
+    },
   });
 }
 
@@ -894,8 +858,8 @@ export async function installPluginFromClawHub(
       clawhub: {
         source: "clawhub",
         clawhubUrl:
-          params.baseUrl?.trim() ||
-          process.env.OPENCLAW_CLAWHUB_URL?.trim() ||
+          normalizeOptionalString(params.baseUrl) ||
+          normalizeOptionalString(process.env.OPENCLAW_CLAWHUB_URL) ||
           "https://clawhub.ai",
         clawhubPackage: parsed.name,
         clawhubFamily,

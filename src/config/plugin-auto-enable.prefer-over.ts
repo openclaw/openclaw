@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { getChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { isRecord, resolveConfigDir, resolveUserPath } from "../utils.js";
 import type { OpenClawConfig } from "./config.js";
 import type { PluginAutoEnableCandidate } from "./plugin-auto-enable.shared.js";
@@ -14,21 +16,19 @@ type ExternalCatalogChannelEntry = {
 const ENV_CATALOG_PATHS = ["OPENCLAW_PLUGIN_CATALOG_PATHS", "OPENCLAW_MPM_CATALOG_PATHS"];
 
 function splitEnvPaths(value: string): string[] {
-  const trimmed = value.trim();
+  const trimmed = normalizeOptionalString(value) ?? "";
   if (!trimmed) {
     return [];
   }
-  return trimmed
-    .split(/[;,]/g)
-    .flatMap((chunk) => chunk.split(path.delimiter))
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  return normalizeStringEntries(
+    trimmed.split(/[;,]/g).flatMap((chunk) => chunk.split(path.delimiter)),
+  );
 }
 
 function resolveExternalCatalogPaths(env: NodeJS.ProcessEnv): string[] {
   for (const key of ENV_CATALOG_PATHS) {
-    const raw = env[key];
-    if (raw && raw.trim()) {
+    const raw = normalizeOptionalString(env[key]);
+    if (raw) {
       return splitEnvPaths(raw);
     }
   }
@@ -58,7 +58,7 @@ function parseExternalCatalogChannelEntries(raw: unknown): ExternalCatalogChanne
       continue;
     }
     const channel = entry.openclaw.channel;
-    const id = typeof channel.id === "string" ? channel.id.trim() : "";
+    const id = normalizeOptionalString(channel.id) ?? "";
     if (!id) {
       continue;
     }

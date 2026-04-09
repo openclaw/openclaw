@@ -134,17 +134,22 @@ function buildTelegramExecApprovalPendingPayloadForTest(params: {
 
 const telegramApprovalPlugin: Pick<
   ChannelPlugin,
-  "id" | "meta" | "capabilities" | "config" | "approvals"
+  "id" | "meta" | "capabilities" | "config" | "approvalCapability"
 > = {
   ...createChannelTestPluginBase({ id: "telegram" }),
-  approvals: {
+  approvalCapability: {
     delivery: {
-      shouldSuppressForwardingFallback: (params) =>
-        shouldSuppressTelegramExecApprovalForwardingFallbackForTest(params),
+      shouldSuppressForwardingFallback: (params: {
+        cfg: OpenClawConfig;
+        target: { channel: string; accountId?: string | null };
+        request: {
+          request: { turnSourceChannel?: string | null; turnSourceAccountId?: string | null };
+        };
+      }) => shouldSuppressTelegramExecApprovalForwardingFallbackForTest(params),
     },
     render: {
       exec: {
-        buildPendingPayload: ({ request }) =>
+        buildPendingPayload: ({ request }: { request: { id: string } }) =>
           buildTelegramExecApprovalPendingPayloadForTest({ request }),
       },
     },
@@ -152,12 +157,18 @@ const telegramApprovalPlugin: Pick<
 };
 const discordApprovalPlugin: Pick<
   ChannelPlugin,
-  "id" | "meta" | "capabilities" | "config" | "approvals"
+  "id" | "meta" | "capabilities" | "config" | "approvalCapability"
 > = {
   ...createChannelTestPluginBase({ id: "discord" }),
-  approvals: {
+  approvalCapability: {
     delivery: {
-      shouldSuppressForwardingFallback: ({ cfg, target }) =>
+      shouldSuppressForwardingFallback: ({
+        cfg,
+        target,
+      }: {
+        cfg: OpenClawConfig;
+        target: { channel: string; accountId?: string | null };
+      }) =>
         target.channel === "discord" &&
         isDiscordExecApprovalClientEnabledForTest({ cfg, accountId: target.accountId }),
     },

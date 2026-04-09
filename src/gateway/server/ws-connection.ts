@@ -4,6 +4,7 @@ import { resolveCanvasHostUrl } from "../../infra/canvas-host-url.js";
 import { removeRemoteNodeInfo } from "../../infra/skills-remote.js";
 import { upsertPresence } from "../../infra/system-presence.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
 import type { AuthRateLimiter } from "../auth-rate-limit.js";
@@ -231,7 +232,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
 
     const isNoisySwiftPmHelperClose = (userAgent: string | undefined, remote: string | undefined) =>
       Boolean(
-        userAgent?.toLowerCase().includes("swiftpm-testing-helper") && isLoopbackAddress(remote),
+        normalizeLowercaseStringOrEmpty(userAgent).includes("swiftpm-testing-helper") &&
+        isLoopbackAddress(remote),
       );
 
     socket.once("close", (code, reason) => {

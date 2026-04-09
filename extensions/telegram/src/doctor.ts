@@ -4,6 +4,7 @@ import {
 } from "openclaw/plugin-sdk/channel-contract";
 import { type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
 import { isNumericTelegramUserId, normalizeTelegramAllowFromEntry } from "./allow-from.js";
@@ -34,7 +35,7 @@ function sanitizeForLog(value: string): string {
 }
 
 function hasAllowFromEntries(values?: DoctorAllowFromList): boolean {
-  return Array.isArray(values) && values.some((entry) => String(entry).trim());
+  return Array.isArray(values) && values.some((entry) => normalizeOptionalString(String(entry)));
 }
 
 function collectTelegramAccountScopes(
@@ -113,7 +114,7 @@ export function scanTelegramAllowFromUsernameEntries(
       if (!normalized || normalized === "*" || isNumericTelegramUserId(normalized)) {
         continue;
       }
-      hits.push({ path: pathLabel, entry: String(entry).trim() });
+      hits.push({ path: pathLabel, entry: normalizeOptionalString(String(entry)) ?? "" });
     }
   };
 
@@ -177,7 +178,8 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
         `- Telegram account ${accountId}: failed to inspect bot token (configured but unavailable in this command path).`,
       );
     }
-    const token = inspected.tokenSource === "none" ? "" : inspected.token.trim();
+    const token =
+      inspected.tokenSource === "none" ? "" : (normalizeOptionalString(inspected.token) ?? "");
     if (token) {
       resolverAccountIds.push(accountId);
     }
@@ -195,7 +197,7 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
     };
   }
   const resolveUserId = async (raw: string): Promise<string | null> => {
-    const trimmed = raw.trim();
+    const trimmed = normalizeOptionalString(raw) ?? "";
     if (!trimmed) {
       return null;
     }
@@ -252,15 +254,15 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
       const resolved = await resolveUserId(String(entry));
       if (resolved) {
         out.push(resolved);
-        replaced.push({ from: String(entry).trim(), to: resolved });
+        replaced.push({ from: normalizeOptionalString(String(entry)) ?? "", to: resolved });
       } else {
-        out.push(String(entry).trim());
+        out.push(normalizeOptionalString(String(entry)) ?? "");
       }
     }
     const deduped: DoctorAllowFromList = [];
     const seen = new Set<string>();
     for (const entry of out) {
-      const keyValue = String(entry).trim();
+      const keyValue = normalizeOptionalString(String(entry)) ?? "";
       if (!keyValue || seen.has(keyValue)) {
         continue;
       }

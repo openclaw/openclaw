@@ -142,7 +142,7 @@ function addTags(set: Set<ConfigTag>, tags: ReadonlyArray<ConfigTag>): void {
 }
 
 export function deriveTagsForPath(path: string, hint?: ConfigUiHint): ConfigTag[] {
-  const lowerPath = path.toLowerCase();
+  const lowerPath = normalizeLowercaseStringOrEmpty(path);
   const override = resolveOverride(path);
   if (override) {
     return normalizeTags(override);

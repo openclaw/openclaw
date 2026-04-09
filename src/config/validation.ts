@@ -26,6 +26,7 @@ import {
   isWindowsAbsolutePath,
 } from "../shared/avatar-policy.js";
 import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "../shared/net/ip.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
@@ -830,7 +831,7 @@ function validateConfigObjectWithPluginsBase(
 
   const heartbeatChannelIds = new Set<string>();
   for (const channelId of CHANNEL_IDS) {
-    heartbeatChannelIds.add(channelId.toLowerCase());
+    heartbeatChannelIds.add(normalizeLowercaseStringOrEmpty(channelId));
   }
 
   const validateHeartbeatTarget = (target: string | undefined, path: string) => {
@@ -842,7 +843,7 @@ function validateConfigObjectWithPluginsBase(
       issues.push({ path, message: "heartbeat target must not be empty" });
       return;
     }
-    const normalized = trimmed.toLowerCase();
+    const normalized = normalizeLowercaseStringOrEmpty(trimmed);
     if (normalized === "last" || normalized === "none") {
       return;
     }
@@ -855,7 +856,7 @@ function validateConfigObjectWithPluginsBase(
         for (const channelId of record.channels) {
           const pluginChannel = channelId.trim();
           if (pluginChannel) {
-            heartbeatChannelIds.add(pluginChannel.toLowerCase());
+            heartbeatChannelIds.add(normalizeLowercaseStringOrEmpty(pluginChannel));
           }
         }
       }
@@ -967,11 +968,7 @@ function validateConfigObjectWithPluginsBase(
     }
     seenPlugins.add(pluginId);
     const entry = normalizedPlugins.entries[pluginId];
-    const entryExists = entry !== undefined;
     const entryHasConfig = Boolean(entry?.config);
-    const shouldReplacePluginConfig = opts.applyDefaults
-      ? entryExists || entryHasConfig
-      : entryHasConfig;
 
     const activationState = resolveEffectivePluginActivationState({
       id: pluginId,
@@ -998,7 +995,8 @@ function validateConfigObjectWithPluginsBase(
       }
     }
 
-    const shouldValidate = enabled || entryExists || entryHasConfig;
+    const shouldReplacePluginConfig = entryHasConfig || (opts.applyDefaults && enabled);
+    const shouldValidate = enabled || entryHasConfig;
     if (shouldValidate) {
       if (record.configSchema) {
         const res = validateJsonSchemaValue({

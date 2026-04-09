@@ -82,12 +82,10 @@ export function createUpdatePlanTool(): AnyAgentTool {
     parameters: UpdatePlanToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const explanation = readStringParam(params, "explanation");
-      const plan = readPlanSteps(params);
+      readStringParam(params, "explanation");
+      readPlanSteps(params);
       return textResult("Plan updated.", {
         status: "updated" as const,
-        ...(explanation ? { explanation } : {}),
-        plan,
       });
     },
   };

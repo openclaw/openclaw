@@ -4,6 +4,7 @@ import type {
 } from "openclaw/plugin-sdk/directory-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/text-runtime";
 import { resolveSlackAccount } from "./accounts.js";
@@ -107,11 +108,11 @@ export async function listSlackDirectoryPeersLive(
       if (!id) {
         return null;
       }
-      const handle = member.name?.trim();
+      const handle = normalizeOptionalString(member.name);
       const display =
-        member.profile?.display_name?.trim() ||
-        member.profile?.real_name?.trim() ||
-        member.real_name?.trim() ||
+        normalizeOptionalString(member.profile?.display_name) ||
+        normalizeOptionalString(member.profile?.real_name) ||
+        normalizeOptionalString(member.real_name) ||
         handle;
       return {
         kind: "user",

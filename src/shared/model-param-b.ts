@@ -1,5 +1,7 @@
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.js";
+
 export function inferParamBFromIdOrName(text: string): number | null {
-  const raw = text.toLowerCase();
+  const raw = normalizeLowercaseStringOrEmpty(text);
   const matches = raw.matchAll(/(?:^|[^a-z0-9])[a-z]?(\d+(?:\.\d+)?)b(?:[^a-z0-9]|$)/g);
   let best: number | null = null;
   for (const match of matches) {

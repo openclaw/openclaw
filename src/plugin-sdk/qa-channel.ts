@@ -20,6 +20,7 @@ export {
   setQaChannelRuntime,
 } from "../../extensions/qa-channel/api.js";
 export type {
+  QaBusAttachment,
   QaBusConversation,
   QaBusConversationKind,
   QaBusCreateThreadInput,

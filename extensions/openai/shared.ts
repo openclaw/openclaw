@@ -4,6 +4,7 @@ import {
   cloneFirstTemplateModel,
   matchesExactOrPrefix,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
 type SyntheticOpenAIModelCatalogEntry = {
   provider: string;
@@ -22,11 +23,11 @@ export function toOpenAIDataUrl(buffer: Buffer, mimeType: string): string {
 }
 
 export function resolveConfiguredOpenAIBaseUrl(cfg: OpenClawConfig | undefined): string {
-  return cfg?.models?.providers?.openai?.baseUrl?.trim() || OPENAI_API_BASE_URL;
+  return normalizeOptionalString(cfg?.models?.providers?.openai?.baseUrl) ?? OPENAI_API_BASE_URL;
 }
 
 export function isOpenAIApiBaseUrl(baseUrl?: string): boolean {
-  const trimmed = baseUrl?.trim();
+  const trimmed = normalizeOptionalString(baseUrl);
   if (!trimmed) {
     return false;
   }
@@ -34,7 +35,7 @@ export function isOpenAIApiBaseUrl(baseUrl?: string): boolean {
 }
 
 export function isOpenAICodexBaseUrl(baseUrl?: string): boolean {
-  const trimmed = baseUrl?.trim();
+  const trimmed = normalizeOptionalString(baseUrl);
   if (!trimmed) {
     return false;
   }

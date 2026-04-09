@@ -42,9 +42,11 @@ const NODE_ROLE_METHODS = new Set([
 const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
   [APPROVALS_SCOPE]: [
     "exec.approval.get",
+    "exec.approval.list",
     "exec.approval.request",
     "exec.approval.waitDecision",
     "exec.approval.resolve",
+    "plugin.approval.list",
     "plugin.approval.request",
     "plugin.approval.waitDecision",
     "plugin.approval.resolve",
@@ -132,6 +134,9 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "sessions.steer",
     "sessions.abort",
     "sessions.compaction.branch",
+    "doctor.memory.backfillDreamDiary",
+    "doctor.memory.resetDreamDiary",
+    "doctor.memory.resetGroundedShortTerm",
     "push.test",
     "node.pending.enqueue",
   ],

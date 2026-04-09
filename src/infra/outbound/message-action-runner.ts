@@ -236,7 +236,7 @@ async function resolveActionTarget(params: {
   accountId?: string | null;
 }): Promise<ResolvedMessagingTarget | undefined> {
   let resolvedTarget: ResolvedMessagingTarget | undefined;
-  const toRaw = typeof params.args.to === "string" ? params.args.to.trim() : "";
+  const toRaw = normalizeOptionalString(params.args.to) ?? "";
   if (toRaw) {
     const resolved = await resolveResolvedTargetOrThrow({
       cfg: params.cfg,
@@ -247,8 +247,7 @@ async function resolveActionTarget(params: {
     params.args.to = resolved.to;
     resolvedTarget = resolved;
   }
-  const channelIdRaw =
-    typeof params.args.channelId === "string" ? params.args.channelId.trim() : "";
+  const channelIdRaw = normalizeOptionalString(params.args.channelId) ?? "";
   if (channelIdRaw) {
     const resolved = await resolveResolvedTargetOrThrow({
       cfg: params.cfg,

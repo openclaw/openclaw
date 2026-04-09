@@ -764,19 +764,19 @@ function mergeCronDelivery(
       };
       if (patchFd) {
         if ("channel" in patchFd) {
-          const channel = typeof patchFd.channel === "string" ? patchFd.channel.trim() : "";
+          const channel = normalizeOptionalString(patchFd.channel) ?? "";
           nextFd.channel = channel ? channel : undefined;
         }
         if ("to" in patchFd) {
-          const to = typeof patchFd.to === "string" ? patchFd.to.trim() : "";
+          const to = normalizeOptionalString(patchFd.to) ?? "";
           nextFd.to = to ? to : undefined;
         }
         if ("accountId" in patchFd) {
-          const accountId = typeof patchFd.accountId === "string" ? patchFd.accountId.trim() : "";
+          const accountId = normalizeOptionalString(patchFd.accountId) ?? "";
           nextFd.accountId = accountId ? accountId : undefined;
         }
         if ("mode" in patchFd) {
-          const mode = typeof patchFd.mode === "string" ? patchFd.mode.trim() : "";
+          const mode = normalizeOptionalString(patchFd.mode) ?? "";
           nextFd.mode = mode === "announce" || mode === "webhook" ? mode : undefined;
         }
       }
@@ -818,11 +818,11 @@ function mergeCronFailureAlert(
     next.cooldownMs = cooldownMs >= 0 ? Math.floor(cooldownMs) : undefined;
   }
   if ("mode" in patch) {
-    const mode = typeof patch.mode === "string" ? patch.mode.trim() : "";
+    const mode = normalizeOptionalString(patch.mode) ?? "";
     next.mode = mode === "announce" || mode === "webhook" ? mode : undefined;
   }
   if ("accountId" in patch) {
-    const accountId = typeof patch.accountId === "string" ? patch.accountId.trim() : "";
+    const accountId = normalizeOptionalString(patch.accountId) ?? "";
     next.accountId = accountId ? accountId : undefined;
   }
 

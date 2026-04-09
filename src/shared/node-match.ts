@@ -1,4 +1,8 @@
-import { normalizeOptionalLowercaseString, normalizeOptionalString } from "./string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "./string-coerce.js";
 
 export type NodeMatchCandidate = {
   nodeId: string;
@@ -15,8 +19,7 @@ type ScoredNodeMatch = {
 };
 
 export function normalizeNodeKey(value: string) {
-  return value
-    .toLowerCase()
+  return normalizeLowercaseStringOrEmpty(value)
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+/, "")
     .replace(/-+$/, "");

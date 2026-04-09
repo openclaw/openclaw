@@ -1,5 +1,6 @@
 import { requireApiKey, resolveApiKeyForProvider } from "../../agents/model-auth.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { EmbeddingProviderOptions } from "./embeddings.js";
 import { buildRemoteBaseUrlPolicy } from "./remote-http.js";
 import { resolveMemorySecretInputString } from "./secret-input.js";
@@ -16,7 +17,7 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
     value: remote?.apiKey,
     path: "agents.*.memorySearch.remote.apiKey",
   });
-  const remoteBaseUrl = remote?.baseUrl?.trim();
+  const remoteBaseUrl = normalizeOptionalString(remote?.baseUrl);
   const providerConfig = params.options.config.models?.providers?.[params.provider];
   const apiKey = remoteApiKey
     ? remoteApiKey
@@ -28,7 +29,8 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
         }),
         params.provider,
       );
-  const baseUrl = remoteBaseUrl || providerConfig?.baseUrl?.trim() || params.defaultBaseUrl;
+  const baseUrl =
+    remoteBaseUrl || normalizeOptionalString(providerConfig?.baseUrl) || params.defaultBaseUrl;
   const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
   const headers: Record<string, string> = {
     "Content-Type": "application/json",

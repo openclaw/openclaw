@@ -345,11 +345,13 @@ const { registerPluginsCli } = await import("./plugins-cli.js");
 
 export { registerPluginsCli };
 
-export function runPluginsCommand(argv: string[]) {
+export async function runPluginsCommand(argv: string[]) {
   const program = new Command();
   program.exitOverride();
-  registerPluginsCli(program);
-  return program.parseAsync(argv, { from: "user" });
+  vi.resetModules();
+  const { registerPluginsCli: registerPluginsCliFresh } = await import("./plugins-cli.js");
+  registerPluginsCliFresh(program);
+  return await program.parseAsync(argv, { from: "user" });
 }
 
 export function resetPluginsCliTestState() {

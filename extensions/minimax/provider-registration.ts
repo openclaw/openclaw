@@ -15,6 +15,7 @@ import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-aut
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { fetchMinimaxUsage } from "openclaw/plugin-sdk/provider-usage";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { isMiniMaxModernModelId, MINIMAX_DEFAULT_MODEL_ID } from "./api.js";
 import type { MiniMaxRegion } from "./oauth.js";
 import { applyMinimaxApiConfig, applyMinimaxApiConfigCn } from "./onboard.js";
@@ -82,15 +83,13 @@ function resolvePortalCatalog(ctx: ProviderCatalogContext) {
     allowKeychainPrompt: false,
   });
   const hasProfiles = listProfilesForProvider(authStore, PORTAL_PROVIDER_ID).length > 0;
-  const explicitApiKey =
-    typeof explicitProvider?.apiKey === "string" ? explicitProvider.apiKey.trim() : undefined;
+  const explicitApiKey = normalizeOptionalString(explicitProvider?.apiKey);
   const apiKey = envApiKey ?? explicitApiKey ?? (hasProfiles ? MINIMAX_OAUTH_MARKER : undefined);
   if (!apiKey) {
     return null;
   }
 
-  const explicitBaseUrl =
-    typeof explicitProvider?.baseUrl === "string" ? explicitProvider.baseUrl.trim() : undefined;
+  const explicitBaseUrl = normalizeOptionalString(explicitProvider?.baseUrl);
 
   return {
     provider: buildPortalProviderCatalog({

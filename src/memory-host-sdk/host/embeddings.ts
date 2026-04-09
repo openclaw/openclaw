@@ -3,6 +3,7 @@ import type { Llama, LlamaEmbeddingContext, LlamaModel } from "node-llama-cpp";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SecretInput } from "../../config/types.secrets.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import type { EmbeddingInput } from "./embedding-inputs.js";
 import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
@@ -120,8 +121,8 @@ function isMissingApiKeyError(err: unknown): boolean {
 export async function createLocalEmbeddingProvider(
   options: EmbeddingProviderOptions,
 ): Promise<EmbeddingProvider> {
-  const modelPath = options.local?.modelPath?.trim() || DEFAULT_LOCAL_MODEL;
-  const modelCacheDir = options.local?.modelCacheDir?.trim();
+  const modelPath = normalizeOptionalString(options.local?.modelPath) || DEFAULT_LOCAL_MODEL;
+  const modelCacheDir = normalizeOptionalString(options.local?.modelCacheDir);
 
   // Lazy-load node-llama-cpp to keep startup light unless local is enabled.
   const { getLlama, resolveModelFile, LlamaLogLevel } = await importNodeLlamaCpp();

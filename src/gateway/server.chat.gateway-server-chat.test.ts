@@ -565,6 +565,50 @@ describe("gateway server chat", () => {
     expect(collectHistoryTextValues(historyMessages)).toEqual(["hello", "real reply"]);
   });
 
+  test("chat.history hides assistant announce/reply skip-only entries", async () => {
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "ANNOUNCE_SKIP" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "REPLY_SKIP" }],
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        text: "real text field reply",
+        content: "ANNOUNCE_SKIP",
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "real reply" }],
+        timestamp: 4,
+      },
+    ]);
+    const roleAndText = historyMessages
+      .map((message) => {
+        const role =
+          message &&
+          typeof message === "object" &&
+          typeof (message as { role?: unknown }).role === "string"
+            ? (message as { role: string }).role
+            : "unknown";
+        const text =
+          message &&
+          typeof message === "object" &&
+          typeof (message as { text?: unknown }).text === "string"
+            ? (message as { text: string }).text
+            : (extractFirstTextBlock(message) ?? "");
+        return `${role}:${text}`;
+      })
+      .filter((entry) => entry !== "unknown:");
+
+    expect(roleAndText).toEqual(["assistant:real text field reply", "assistant:real reply"]);
+  });
   test("routes chat.send slash commands without agent runs", async () => {
     await withMainSessionStore(async () => {
       const spy = vi.mocked(agentCommand);

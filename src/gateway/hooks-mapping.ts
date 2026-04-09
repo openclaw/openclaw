@@ -188,7 +188,7 @@ function normalizeHookMapping(
   index: number,
   transformsDir: string,
 ): HookMappingResolved {
-  const id = mapping.id?.trim() || `mapping-${index + 1}`;
+  const id = normalizeOptionalString(mapping.id) || `mapping-${index + 1}`;
   const matchPath = normalizeMatchPath(mapping.match?.path);
   const matchSource = mapping.match?.source?.trim();
   const action = mapping.action ?? "agent";

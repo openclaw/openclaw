@@ -402,7 +402,9 @@ function formatErrorCodes(err: unknown): string {
 function shouldUseTelegramTransportFallback(err: unknown): boolean {
   const ctx: TelegramTransportFallbackContext = {
     message:
-      err && typeof err === "object" && "message" in err ? String(err.message).toLowerCase() : "",
+      err && typeof err === "object" && "message" in err
+        ? normalizeLowercaseStringOrEmpty(String(err.message))
+        : "",
     codes: collectErrorCodes(err),
   };
   for (const rule of TELEGRAM_TRANSPORT_FALLBACK_RULES) {

@@ -8,6 +8,21 @@ type DiaryEntry = {
   body: string;
 };
 
+type DiaryEntryNav = {
+  date: string;
+  body: string;
+  page: number;
+  timestamp: number | null;
+  signalWeight: number;
+};
+
+type StructuredDiaryEntry = {
+  whatHappened: string[];
+  reflections: string[];
+  candidates: string[];
+  lastingUpdates: string[];
+};
+
 const DIARY_START_RE = /<!--\s*openclaw:dreaming:diary:start\s*-->/;
 const DIARY_END_RE = /<!--\s*openclaw:dreaming:diary:end\s*-->/;
 
@@ -53,12 +68,248 @@ function parseDiaryEntries(raw: string): DiaryEntry[] {
   return entries;
 }
 
+function parseDiaryTimestamp(date: string): number | null {
+  const parsed = Date.parse(date);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatDiaryChipLabel(date: string): string {
+  const parsed = parseDiaryTimestamp(date);
+  if (parsed === null) {
+    return date;
+  }
+  const value = new Date(parsed);
+  return `${value.getMonth() + 1}/${value.getDate()}`;
+}
+
+function formatDiaryMonthLabel(date: string): string {
+  const parsed = parseDiaryTimestamp(date);
+  if (parsed === null) {
+    return date;
+  }
+  return new Date(parsed).toLocaleDateString([], {
+    month: "short",
+  });
+}
+
+function normalizeStructuredDiaryItem(line: string): string {
+  return line
+    .replace(/^(?:\d+\.\s+|-\s+(?:\[[^\]]+\]\s+)?(?:[a-z_]+:\s+)?|\[[^\]]+\]\s+)/i, "")
+    .replace(/^(?:likely_durable|likely_situational|unclear):\s+/i, "")
+    .trim();
+}
+
+function parseStructuredDiaryEntry(body: string): StructuredDiaryEntry | null {
+  const lines = body
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) {
+    return null;
+  }
+  const sections: StructuredDiaryEntry = {
+    whatHappened: [],
+    reflections: [],
+    candidates: [],
+    lastingUpdates: [],
+  };
+  let current: keyof StructuredDiaryEntry | null = null;
+  for (const line of lines) {
+    if (line === "What Happened") {
+      current = "whatHappened";
+      continue;
+    }
+    if (line === "Reflections") {
+      current = "reflections";
+      continue;
+    }
+    if (line === "Candidates") {
+      current = "candidates";
+      continue;
+    }
+    if (line === "Possible Lasting Updates") {
+      current = "lastingUpdates";
+      continue;
+    }
+    if (!current) {
+      continue;
+    }
+    sections[current].push(normalizeStructuredDiaryItem(line));
+  }
+  if (
+    sections.whatHappened.length === 0 &&
+    sections.reflections.length === 0 &&
+    sections.candidates.length === 0 &&
+    sections.lastingUpdates.length === 0
+  ) {
+    return null;
+  }
+  return sections;
+}
+
+function scoreStructuredDiaryEntry(entry: StructuredDiaryEntry | null): number {
+  if (!entry) {
+    return 1;
+  }
+  return Math.max(
+    1,
+    entry.whatHappened.length +
+      entry.reflections.length +
+      entry.candidates.length * 2 +
+      entry.lastingUpdates.length * 3,
+  );
+}
+
+function buildDiaryNavigation(entries: DiaryEntry[]): DiaryEntryNav[] {
+  const reversed = [...entries].toReversed();
+  return reversed.map((entry, page) => ({
+    ...entry,
+    page,
+    timestamp: parseDiaryTimestamp(entry.date),
+    signalWeight: scoreStructuredDiaryEntry(parseStructuredDiaryEntry(entry.body)),
+  }));
+}
+
+const DIARY_LABEL_INTERVAL = 7;
+
+function shouldShowDiaryLabel(
+  entries: DiaryEntryNav[],
+  index: number,
+  activePage: number,
+): boolean {
+  if (index === activePage || index === 0 || index % DIARY_LABEL_INTERVAL === 0) {
+    return true;
+  }
+  const previous = entries[index - 1];
+  return (
+    formatDiaryMonthLabel(previous?.date ?? "") !==
+    formatDiaryMonthLabel(entries[index]?.date ?? "")
+  );
+}
+
+function renderDiaryNavigator(
+  entries: DiaryEntryNav[],
+  activePage: number,
+  requestUpdate?: () => void,
+) {
+  return html`
+    <div class="dreams-diary__timeline" aria-label="Diary day browser">
+      <div class="dreams-diary__timeline-months">
+        ${entries.map((entry, index) => {
+          const previous = entries[index - 1];
+          const showLabel =
+            index === 0 ||
+            formatDiaryMonthLabel(previous?.date ?? "") !== formatDiaryMonthLabel(entry.date);
+          return html`
+            <span
+              class="dreams-diary__timeline-month ${showLabel
+                ? ""
+                : "dreams-diary__timeline-month--ghost"}"
+            >
+              ${showLabel ? formatDiaryMonthLabel(entry.date) : ""}
+            </span>
+          `;
+        })}
+      </div>
+      <div class="dreams-diary__timeline-days">
+        ${entries.map(
+          (entry, index) => html`
+            <button
+              class="dreams-diary__day-chip ${entry.page === activePage
+                ? "dreams-diary__day-chip--active"
+                : ""}"
+              @click=${() => {
+                setDiaryPage(entry.page);
+                requestUpdate?.();
+              }}
+              title=${entry.date}
+            >
+              ${shouldShowDiaryLabel(entries, index, activePage)
+                ? formatDiaryChipLabel(entry.date)
+                : html`<span aria-hidden="true">&nbsp;</span>`}
+            </button>
+          `,
+        )}
+      </div>
+      <div class="dreams-diary__heatmap" aria-label="Diary activity map">
+        ${entries.map((entry) => {
+          const intensity = Math.min(4, Math.max(1, entry.signalWeight));
+          return html`
+            <button
+              class="dreams-diary__heatmap-cell ${entry.page === activePage
+                ? "dreams-diary__heatmap-cell--active"
+                : ""}"
+              data-intensity=${String(intensity)}
+              @click=${() => {
+                setDiaryPage(entry.page);
+                requestUpdate?.();
+              }}
+              title=${`${entry.date} · ${entry.signalWeight} signals`}
+            >
+              <span class="dreams-diary__heatmap-pill"></span>
+            </button>
+          `;
+        })}
+      </div>
+    </div>
+  `;
+}
+
 export type DreamingProps = {
   active: boolean;
   shortTermCount: number;
+  groundedSignalCount: number;
   totalSignalCount: number;
-  phaseSignalCount: number;
   promotedCount: number;
+  phaseSignalCount: number;
+  shortTermEntries: {
+    key: string;
+    path: string;
+    startLine: number;
+    endLine: number;
+    snippet: string;
+    recallCount: number;
+    dailyCount: number;
+    groundedCount: number;
+    totalSignalCount: number;
+    lightHits: number;
+    remHits: number;
+    phaseHitCount: number;
+    promotedAt?: string;
+    lastRecalledAt?: string;
+  }[];
+  signalEntries: {
+    key: string;
+    path: string;
+    startLine: number;
+    endLine: number;
+    snippet: string;
+    recallCount: number;
+    dailyCount: number;
+    groundedCount: number;
+    totalSignalCount: number;
+    lightHits: number;
+    remHits: number;
+    phaseHitCount: number;
+    promotedAt?: string;
+    lastRecalledAt?: string;
+  }[];
+  promotedEntries: {
+    key: string;
+    path: string;
+    startLine: number;
+    endLine: number;
+    snippet: string;
+    recallCount: number;
+    dailyCount: number;
+    groundedCount: number;
+    totalSignalCount: number;
+    lightHits: number;
+    remHits: number;
+    phaseHitCount: number;
+    promotedAt?: string;
+    lastRecalledAt?: string;
+  }[];
   dreamingOf: string | null;
   nextCycle: string | null;
   timezone: string | null;
@@ -66,11 +317,15 @@ export type DreamingProps = {
   statusError: string | null;
   modeSaving: boolean;
   dreamDiaryLoading: boolean;
+  dreamDiaryActionLoading: boolean;
   dreamDiaryError: string | null;
   dreamDiaryPath: string | null;
   dreamDiaryContent: string | null;
   onRefresh: () => void;
   onRefreshDiary: () => void;
+  onBackfillDiary: () => void;
+  onResetDiary: () => void;
+  onResetGroundedShortTerm: () => void;
   onToggleEnabled: (enabled: boolean) => void;
   onRequestUpdate?: () => void;
 };
@@ -220,6 +475,7 @@ export function renderDreaming(props: DreamingProps) {
 // ── Scene renderer ────────────────────────────────────────────────────
 
 function renderScene(props: DreamingProps, idle: boolean, dreamText: string) {
+  const groundedEntries = props.shortTermEntries.filter((entry) => entry.groundedCount > 0);
   return html`
     <section class="dreams ${idle ? "dreams--idle" : ""}">
       ${STARS.map(
@@ -278,12 +534,45 @@ function renderScene(props: DreamingProps, idle: boolean, dreamText: string) {
         </div>
       </div>
 
+      <div class="dreams__actions">
+        <button
+          class="btn btn--subtle btn--sm"
+          ?disabled=${props.modeSaving || props.dreamDiaryActionLoading}
+          @click=${() => props.onBackfillDiary()}
+        >
+          ${props.dreamDiaryActionLoading
+            ? t("dreaming.scene.working")
+            : t("dreaming.scene.backfill")}
+        </button>
+        <button
+          class="btn btn--subtle btn--sm"
+          ?disabled=${props.modeSaving || props.dreamDiaryActionLoading}
+          @click=${() => props.onResetDiary()}
+        >
+          ${t("dreaming.scene.reset")}
+        </button>
+        <button
+          class="btn btn--subtle btn--sm"
+          ?disabled=${props.modeSaving || props.dreamDiaryActionLoading}
+          @click=${() => props.onResetGroundedShortTerm()}
+        >
+          ${t("dreaming.scene.clearGrounded")}
+        </button>
+      </div>
+
       <div class="dreams__stats">
         <div class="dreams__stat">
           <span class="dreams__stat-value" style="color: var(--text-strong);"
             >${props.shortTermCount}</span
           >
           <span class="dreams__stat-label">${t("dreaming.stats.shortTerm")}</span>
+        </div>
+        <div class="dreams__stat-divider"></div>
+        <div class="dreams__stat">
+          <span class="dreams__stat-value" style="color: var(--accent-muted);"
+            >${props.groundedSignalCount}</span
+          >
+          <span class="dreams__stat-label">${t("dreaming.stats.grounded")}</span>
         </div>
         <div class="dreams__stat-divider"></div>
         <div class="dreams__stat">
@@ -295,15 +584,144 @@ function renderScene(props: DreamingProps, idle: boolean, dreamText: string) {
         <div class="dreams__stat-divider"></div>
         <div class="dreams__stat">
           <span class="dreams__stat-value" style="color: var(--accent-2);"
-            >${props.phaseSignalCount}</span
+            >${props.promotedCount}</span
           >
-          <span class="dreams__stat-label">${t("dreaming.stats.phaseHits")}</span>
+          <span class="dreams__stat-label">${t("dreaming.stats.promoted")}</span>
         </div>
+      </div>
+
+      <div class="dreams__trace">
+        ${renderTraceSection("shortTerm", props.shortTermEntries, {
+          count: props.shortTermCount,
+          emptyKey: "dreaming.trace.emptyShortTerm",
+          meta: (entry) =>
+            [
+              entry.recallCount > 0
+                ? `${entry.recallCount} recall${entry.recallCount === 1 ? "" : "s"}`
+                : null,
+              entry.dailyCount > 0 ? `${entry.dailyCount} daily` : null,
+              entry.groundedCount > 0 ? `${entry.groundedCount} grounded` : null,
+              entry.phaseHitCount > 0
+                ? `${entry.phaseHitCount} phase hit${entry.phaseHitCount === 1 ? "" : "s"}`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(" · "),
+        })}
+        ${renderTraceSection("grounded", groundedEntries, {
+          count: groundedEntries.length,
+          emptyKey: "dreaming.trace.emptyGrounded",
+          meta: (entry) =>
+            [
+              `${entry.groundedCount} grounded`,
+              entry.recallCount > 0
+                ? `${entry.recallCount} recall${entry.recallCount === 1 ? "" : "s"}`
+                : null,
+              entry.dailyCount > 0 ? `${entry.dailyCount} daily` : null,
+              isGroundedLed(entry) ? t("dreaming.trace.groundedLed") : null,
+            ]
+              .filter(Boolean)
+              .join(" · "),
+        })}
+        ${renderTraceSection("signals", props.signalEntries, {
+          count: props.totalSignalCount,
+          emptyKey: "dreaming.trace.emptySignals",
+          meta: (entry) =>
+            [
+              `${entry.totalSignalCount} signal${entry.totalSignalCount === 1 ? "" : "s"}`,
+              entry.phaseHitCount > 0
+                ? `${entry.phaseHitCount} phase hit${entry.phaseHitCount === 1 ? "" : "s"}`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(" · "),
+        })}
+        ${renderTraceSection("promoted", props.promotedEntries, {
+          count: props.promotedCount,
+          emptyKey: "dreaming.trace.emptyPromoted",
+          meta: (entry) =>
+            [
+              entry.promotedAt ? formatCompactDateTime(entry.promotedAt) : null,
+              entry.groundedCount > 0 ? `${entry.groundedCount} grounded` : null,
+              isGroundedLed(entry) ? t("dreaming.trace.groundedLed") : null,
+              entry.totalSignalCount > 0
+                ? `${entry.totalSignalCount} signal${entry.totalSignalCount === 1 ? "" : "s"} before promote`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(" · "),
+        })}
       </div>
 
       ${props.statusError
         ? html`<div class="dreams__controls-error">${props.statusError}</div>`
         : nothing}
+    </section>
+  `;
+}
+
+function formatRange(path: string, startLine: number, endLine: number): string {
+  return startLine === endLine ? `${path}:${startLine}` : `${path}:${startLine}-${endLine}`;
+}
+
+function formatCompactDateTime(value: string): string {
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) {
+    return value;
+  }
+  return new Date(parsed).toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function isGroundedLed(
+  entry: Pick<
+    DreamingProps["shortTermEntries"][number],
+    "groundedCount" | "recallCount" | "dailyCount"
+  >,
+): boolean {
+  return (
+    entry.groundedCount > 0 &&
+    entry.groundedCount >= entry.recallCount &&
+    entry.groundedCount >= entry.dailyCount
+  );
+}
+
+function renderTraceSection(
+  kind: "shortTerm" | "grounded" | "signals" | "promoted",
+  entries: DreamingProps["shortTermEntries"],
+  options: {
+    count: number;
+    emptyKey: string;
+    meta: (entry: DreamingProps["shortTermEntries"][number]) => string;
+  },
+) {
+  return html`
+    <section class="dreams__trace-section">
+      <div class="dreams__trace-header">
+        <span class="dreams__trace-title">${t(`dreaming.trace.${kind}`)}</span>
+        <span class="dreams__trace-count">${options.count}</span>
+      </div>
+      ${entries.length === 0
+        ? html`<div class="dreams__trace-empty">${t(options.emptyKey)}</div>`
+        : html`
+            <div class="dreams__trace-list">
+              ${entries.map(
+                (entry) => html`
+                  <article class="dreams__trace-item" data-kind=${kind} data-key=${entry.key}>
+                    <div class="dreams__trace-snippet">${entry.snippet}</div>
+                    <div class="dreams__trace-source">
+                      ${formatRange(entry.path, entry.startLine, entry.endLine)}
+                    </div>
+                    <div class="dreams__trace-meta">${options.meta(entry)}</div>
+                  </article>
+                `,
+              )}
+            </div>
+          `}
     </section>
   `;
 }
@@ -361,13 +779,13 @@ function renderDiarySection(props: DreamingProps) {
     `;
   }
 
-  // Show most recent entries first (reverse chronological).
-  const reversed = [...entries].toReversed();
+  const reversed = buildDiaryNavigation(entries);
   // Clamp page.
   const page = Math.max(0, Math.min(_diaryPage, reversed.length - 1));
   const entry = reversed[page];
   const hasPrev = page > 0;
   const hasNext = page < reversed.length - 1;
+  const structured = parseStructuredDiaryEntry(entry.body);
 
   return html`
     <section class="dreams-diary">
@@ -410,19 +828,109 @@ function renderDiarySection(props: DreamingProps) {
         </button>
       </div>
 
-      <article class="dreams-diary__entry" key="${page}">
+      <div class="dreams-diary__navigator">
+        <div class="dreams-diary__navigator-content">
+          ${renderDiaryNavigator(reversed, page, props.onRequestUpdate)}
+        </div>
+      </div>
+
+      <article
+        class="dreams-diary__entry ${structured ? "dreams-diary__entry--structured" : ""}"
+        key="${page}"
+      >
         <div class="dreams-diary__accent"></div>
         ${entry.date ? html`<time class="dreams-diary__date">${entry.date}</time>` : nothing}
-        <div class="dreams-diary__prose">
-          ${entry.body
-            .split("\n")
-            .map(
-              (para, i) =>
-                html`<p class="dreams-diary__para" style="animation-delay: ${0.3 + i * 0.15}s;">
-                  ${para}
-                </p>`,
-            )}
-        </div>
+        ${structured
+          ? html`
+              <div class="dreams-diary__grid">
+                <section class="dreams-diary__panel">
+                  <h3 class="dreams-diary__panel-title">What Happened</h3>
+                  <div class="dreams-diary__panel-list dreams-diary__panel-list--points">
+                    ${structured.whatHappened.map(
+                      (item, i) => html`
+                        <div
+                          class="dreams-diary__point"
+                          style="animation-delay: ${0.2 + i * 0.06}s;"
+                        >
+                          <span class="dreams-diary__point-bullet"></span>
+                          <p class="dreams-diary__item">${item}</p>
+                        </div>
+                      `,
+                    )}
+                  </div>
+                </section>
+                <section class="dreams-diary__panel">
+                  <h3 class="dreams-diary__panel-title">Reflections</h3>
+                  <div class="dreams-diary__panel-list dreams-diary__panel-list--points">
+                    ${structured.reflections.map(
+                      (item, i) => html`
+                        <div
+                          class="dreams-diary__point"
+                          style="animation-delay: ${0.26 + i * 0.06}s;"
+                        >
+                          <span class="dreams-diary__point-bullet"></span>
+                          <p class="dreams-diary__item dreams-diary__item--reflection">${item}</p>
+                        </div>
+                      `,
+                    )}
+                  </div>
+                </section>
+                <section class="dreams-diary__panel">
+                  <h3 class="dreams-diary__panel-title">Candidates + Possible Lasting Updates</h3>
+                  ${structured.candidates.length > 0
+                    ? html`
+                        <div class="dreams-diary__panel-subtitle">Candidates</div>
+                        <div class="dreams-diary__panel-list dreams-diary__panel-list--points">
+                          ${structured.candidates.map(
+                            (item, i) => html`
+                              <div
+                                class="dreams-diary__point"
+                                style="animation-delay: ${0.32 + i * 0.06}s;"
+                              >
+                                <span class="dreams-diary__point-bullet"></span>
+                                <p class="dreams-diary__item">${item}</p>
+                              </div>
+                            `,
+                          )}
+                        </div>
+                      `
+                    : nothing}
+                  ${structured.lastingUpdates.length > 0
+                    ? html`
+                        <div class="dreams-diary__panel-subtitle">Possible Lasting Updates</div>
+                        <div class="dreams-diary__panel-list dreams-diary__panel-list--points">
+                          ${structured.lastingUpdates.map(
+                            (item, i) => html`
+                              <div
+                                class="dreams-diary__point"
+                                style="animation-delay: ${0.38 + i * 0.06}s;"
+                              >
+                                <span class="dreams-diary__point-bullet"></span>
+                                <p class="dreams-diary__item dreams-diary__item--update">${item}</p>
+                              </div>
+                            `,
+                          )}
+                        </div>
+                      `
+                    : nothing}
+                </section>
+              </div>
+            `
+          : html`
+              <div class="dreams-diary__prose">
+                ${entry.body
+                  .split("\n")
+                  .map(
+                    (para, i) =>
+                      html`<p
+                        class="dreams-diary__para"
+                        style="animation-delay: ${0.3 + i * 0.15}s;"
+                      >
+                        ${para}
+                      </p>`,
+                  )}
+              </div>
+            `}
       </article>
     </section>
   `;
