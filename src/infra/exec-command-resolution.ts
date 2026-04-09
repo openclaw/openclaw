@@ -342,8 +342,9 @@ export function matchAllowlist(
   // preserves the pre-existing behaviour.
   // Use the caller-supplied target platform rather than process.platform so that
   // a Linux gateway evaluating a Windows node command applies argPattern correctly.
-  const effectivePlatform = platform ?? process.platform;
-  const useArgPattern = String(effectivePlatform).trim().toLowerCase().startsWith("win");
+  const effectivePlatform = (platform ?? process.platform) as NodeJS.Platform;
+  const normalizedPlatform = String(effectivePlatform).trim().toLowerCase();
+  const useArgPattern = normalizedPlatform.startsWith("win");
   let pathOnlyMatch: ExecAllowlistEntry | null = null;
   for (const entry of entries) {
     const pattern = entry.pattern?.trim();
@@ -355,12 +356,21 @@ export function matchAllowlist(
       // Bare patterns (no path separators) match against the executable name
       // rather than the full resolved path.  This allows patterns like
       // "python3" or "node" to work regardless of where the binary lives.
-      // On Windows, strip the .exe suffix so "python3" matches "python3.exe".
-      let bareTarget = resolution.executableName;
-      if (useArgPattern && bareTarget.toLowerCase().endsWith(".exe")) {
-        bareTarget = bareTarget.slice(0, -4);
+      // On win32, also test a stripped extension form so patterns like
+      // "python3" match "python3.exe" while explicit extension patterns
+      // ("python3.exe") still match via the original executable name.
+      const bareTargets = [resolution.executableName];
+      if (normalizedPlatform === "win32") {
+        const strippedBareTarget = path.parse(resolution.executableName).name;
+        if (strippedBareTarget && strippedBareTarget !== resolution.executableName) {
+          bareTargets.push(strippedBareTarget);
+        }
       }
-      if (matchesExecAllowlistPattern(pattern, bareTarget, effectivePlatform)) {
+      if (
+        bareTargets.some((target) =>
+          matchesExecAllowlistPattern(pattern, target, effectivePlatform),
+        )
+      ) {
         if (!entry.argPattern) {
           if (!useArgPattern) {
             return entry;

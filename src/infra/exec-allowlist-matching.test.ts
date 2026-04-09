@@ -46,6 +46,18 @@ describe("exec allowlist matching", () => {
     expect(
       matchAllowlist([{ pattern: "python3" }], winResolution, undefined, "win32")?.pattern,
     ).toBe("python3");
+    expect(
+      matchAllowlist([{ pattern: "python3.exe" }], winResolution, undefined, "win32")?.pattern,
+    ).toBe("python3.exe");
+
+    const winCmdResolution = {
+      rawExecutable: "deploy",
+      resolvedPath: "C:\\tools\\deploy.cmd",
+      executableName: "deploy.cmd",
+    };
+    expect(
+      matchAllowlist([{ pattern: "deploy" }], winCmdResolution, undefined, "win32")?.pattern,
+    ).toBe("deploy");
 
     // On a Linux host evaluating a Windows target, case-insensitive matching
     // should use the target platform, not the host platform.
