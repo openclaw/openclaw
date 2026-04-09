@@ -177,7 +177,7 @@ export function findBlockedNodeModulesDirectory(params: {
     .filter(Boolean);
 
   for (let index = 0; index < segments.length; index += 1) {
-    if (segments[index] !== "node_modules") {
+    if (segments[index]?.toLowerCase() !== "node_modules") {
       continue;
     }
     const packageScopeOrName = segments[index + 1];

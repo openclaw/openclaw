@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   blockedInstallDependencyPackageNames,
   findBlockedManifestDependencies,
+  findBlockedNodeModulesDirectory,
 } from "./dependency-denylist.js";
 
 type RootPackageManifest = {
@@ -82,6 +83,25 @@ describe("dependency denylist guardrails", () => {
     const manifest = readRootManifest();
     expect(manifest.overrides?.axios).toMatch(/^\d+\.\d+\.\d+$/);
     expect(manifest.pnpm?.overrides?.axios).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
+  it("finds blocked package directories under node_modules regardless of node_modules casing", () => {
+    expect(
+      findBlockedNodeModulesDirectory({
+        directoryRelativePath: "vendor/Node_Modules/plain-crypto-js",
+      }),
+    ).toEqual({
+      dependencyName: "plain-crypto-js",
+      directoryRelativePath: "vendor/Node_Modules/plain-crypto-js",
+    });
+  });
+
+  it("does not treat similarly named non-node_modules segments as package-resolution paths", () => {
+    expect(
+      findBlockedNodeModulesDirectory({
+        directoryRelativePath: "vendor/node_modules_backup/plain-crypto-js",
+      }),
+    ).toBeUndefined();
   });
 
   it("keeps blocked packages out of the root manifest", () => {
