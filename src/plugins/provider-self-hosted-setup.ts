@@ -7,6 +7,7 @@ import {
 } from "../agents/self-hosted-provider-defaults.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
+import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   normalizeOptionalString,
@@ -58,15 +59,25 @@ export async function discoverOpenAICompatibleLocalModels(params: {
 
   try {
     const trimmedApiKey = normalizeOptionalString(params.apiKey);
-    const response = await fetch(url, {
-      headers: trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : undefined,
-      signal: AbortSignal.timeout(5000),
+    // SECURITY: Use SSRF-guarded fetch to prevent internal network probing
+    // via user-provided baseUrl (e.g., cloud metadata endpoints, internal services).
+    // allowPrivateNetwork is needed because self-hosted providers are often local.
+    const { response, release } = await fetchWithSsrFGuard({
+      url,
+      init: {
+        headers: trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : undefined,
+      },
+      timeoutMs: 5000,
+      policy: { allowPrivateNetwork: true },
+      mode: "trusted_env_proxy",
     });
     if (!response.ok) {
+      await release();
       log.warn(`Failed to discover ${params.label} models: ${response.status}`);
       return [];
     }
     const data = (await response.json()) as OpenAICompatModelsResponse;
+    await release();
     const models = data.data ?? [];
     if (models.length === 0) {
       log.warn(`No ${params.label} models found on local instance`);
