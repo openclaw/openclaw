@@ -248,11 +248,20 @@ async function collectPackageManifestPaths(
     // Intentionally walk vendored/node_modules trees so bundled transitive
     // manifests cannot hide blocked packages from install-time policy checks.
     for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
-      if (entry.isSymbolicLink()) {
-        continue;
-      }
       const nextPath = path.join(currentDir, entry.name);
       const relativeNextPath = path.relative(rootDir, nextPath) || entry.name;
+      if (entry.isSymbolicLink()) {
+        const blockedDirectoryFinding = findBlockedNodeModulesDirectory({
+          directoryRelativePath: relativeNextPath,
+        });
+        if (blockedDirectoryFinding) {
+          return {
+            blockedDirectoryFinding,
+            packageManifestPaths,
+          };
+        }
+        continue;
+      }
       if (entry.isDirectory()) {
         const blockedDirectoryFinding = findBlockedNodeModulesDirectory({
           directoryRelativePath: relativeNextPath,

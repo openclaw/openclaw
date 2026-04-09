@@ -918,6 +918,40 @@ describe("installPluginFromArchive", () => {
     }
   });
 
+  it.runIf(process.platform !== "win32")(
+    "blocks package installs when node_modules contains a blocked package symlink",
+    async () => {
+      const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+
+      fs.writeFileSync(
+        path.join(pluginDir, "package.json"),
+        JSON.stringify({
+          name: "blocked-package-symlink-plugin",
+          version: "1.0.0",
+          openclaw: { extensions: ["index.js"] },
+        }),
+      );
+      fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n");
+
+      const actualDir = path.join(pluginDir, "vendor", "actual-package");
+      fs.mkdirSync(actualDir, { recursive: true });
+      fs.writeFileSync(path.join(actualDir, "index.js"), "module.exports = {};\n");
+
+      const nodeModulesDir = path.join(pluginDir, "vendor", "node_modules");
+      fs.mkdirSync(nodeModulesDir, { recursive: true });
+      fs.symlinkSync("../actual-package", path.join(nodeModulesDir, "plain-crypto-js"), "dir");
+
+      const { result } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+        expect(result.error).toContain('blocked dependency directory "plain-crypto-js"');
+        expect(result.error).toContain("vendor/node_modules/plain-crypto-js");
+      }
+    },
+  );
+
   it("does not block package installs for blocked-looking names outside node_modules", async () => {
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
 
@@ -1251,6 +1285,35 @@ describe("installPluginFromArchive", () => {
       expect(result.error).toContain("vendor/node_modules/plain-crypto-js");
     }
   });
+
+  it.runIf(process.platform !== "win32")(
+    "blocks bundle installs when node_modules contains a blocked package symlink",
+    async () => {
+      const { pluginDir, extensionsDir } = setupBundleInstallFixture({
+        bundleFormat: "codex",
+        name: "Blocked Package Symlink Bundle",
+      });
+      const actualDir = path.join(pluginDir, "vendor", "actual-package");
+      fs.mkdirSync(actualDir, { recursive: true });
+      fs.writeFileSync(path.join(actualDir, "index.js"), "module.exports = {};\n");
+
+      const nodeModulesDir = path.join(pluginDir, "vendor", "node_modules");
+      fs.mkdirSync(nodeModulesDir, { recursive: true });
+      fs.symlinkSync("../actual-package", path.join(nodeModulesDir, "plain-crypto-js"), "dir");
+
+      const { result } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+        expect(result.error).toContain(
+          'Bundle "blocked-package-symlink-bundle" installation blocked',
+        );
+        expect(result.error).toContain('blocked dependency directory "plain-crypto-js"');
+        expect(result.error).toContain("vendor/node_modules/plain-crypto-js");
+      }
+    },
+  );
 
   it("surfaces plugin scanner findings from before_install", async () => {
     const handler = vi.fn().mockReturnValue({
