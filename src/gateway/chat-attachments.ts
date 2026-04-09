@@ -342,6 +342,11 @@ export async function parseMessageWithAttachments(
           log?.warn?.(`attachment ${label}: detected non-image (${sniffedMime}), skipping`);
           continue;
         }
+        // When sniffing fails, check provided mime — skip declared non-images
+        if (!sniffedMime && finalMime && !isImageMime(finalMime)) {
+          log?.warn?.(`attachment ${label}: non-image mime (${finalMime}), skipping`);
+          continue;
+        }
         try {
           const buffer = Buffer.from(b64, "base64");
           const labelWithExt = ensureExtension(label, finalMime);
@@ -368,12 +373,9 @@ export async function parseMessageWithAttachments(
           log?.warn?.(
             `attachment ${label}: failed to save for text-only offload: ${formatErrorMessage(err)}`,
           );
-          // Best-effort cleanup + reset state so we don't return refs to deleted files
+          // Best-effort cleanup, then throw — callers handle MediaOffloadError
           await Promise.allSettled(savedMediaIds.map((id) => deleteMediaBuffer(id, "inbound")));
-          offloadedRefs.length = 0;
-          imageOrder.length = 0;
-          updatedMessage = message;
-          break;
+          throw err;
         }
       }
     } catch (err) {
