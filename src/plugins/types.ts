@@ -874,6 +874,7 @@ export type ProviderBuildUnknownModelHintContext = {
   env: NodeJS.ProcessEnv;
   provider: string;
   modelId: string;
+  baseUrl?: string;
 };
 
 /**
@@ -890,6 +891,7 @@ export type ProviderBuiltInModelSuppressionContext = {
   env: NodeJS.ProcessEnv;
   provider: string;
   modelId: string;
+  baseUrl?: string;
 };
 
 export type ProviderBuiltInModelSuppressionResult = {

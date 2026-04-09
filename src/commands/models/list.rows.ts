@@ -80,7 +80,14 @@ export function appendDiscoveredRows(params: {
   });
 
   for (const model of sorted) {
-    if (shouldSuppressBuiltInModel({ provider: model.provider, id: model.id })) {
+    if (
+      shouldSuppressBuiltInModel({
+        provider: model.provider,
+        id: model.id,
+        baseUrl: model.baseUrl,
+        config: params.context.cfg,
+      })
+    ) {
       continue;
     }
     if (!matchesRowFilter(params.context.filter, model)) {
@@ -127,6 +134,16 @@ export async function appendCatalogSupplementRows(params: {
     if (!model || !matchesRowFilter(params.context.filter, model)) {
       continue;
     }
+    if (
+      shouldSuppressBuiltInModel({
+        provider: model.provider,
+        id: model.id,
+        baseUrl: model.baseUrl,
+        config: params.context.cfg,
+      })
+    ) {
+      continue;
+    }
     params.rows.push(
       buildRow({
         model,
@@ -162,6 +179,17 @@ export function appendConfiguredRows(params: {
       continue;
     }
     if (params.context.filter.local && !model) {
+      continue;
+    }
+    if (
+      model &&
+      shouldSuppressBuiltInModel({
+        provider: model.provider,
+        id: model.id,
+        baseUrl: model.baseUrl,
+        config: params.context.cfg,
+      })
+    ) {
       continue;
     }
     params.rows.push(

@@ -102,6 +102,7 @@
   "dangerous-name-runtime",
   "command-auth",
   "command-auth-native",
+  "command-status",
   "command-detection",
   "command-surface",
   "collection-runtime",
