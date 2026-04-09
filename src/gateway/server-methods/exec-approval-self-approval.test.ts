@@ -52,7 +52,7 @@ describe("exec-approval self-approval prevention (CWE-284)", () => {
       params: { id, decision },
       respond,
       client: resolverConnId != null ? { connId: resolverConnId } : null,
-      context: {},
+      context: { broadcast: vi.fn() },
     } as any);
     return respond;
   }
