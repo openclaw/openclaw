@@ -1,12 +1,23 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { Api, Model } from "@mariozechner/pi-ai";
 import * as PiCodingAgent from "@mariozechner/pi-coding-agent";
 import type {
   AuthStorage as PiAuthStorage,
   ModelRegistry as PiModelRegistry,
 } from "@mariozechner/pi-coding-agent";
+import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
+import {
+  applyProviderResolvedModelCompatWithPlugins,
+  applyProviderResolvedTransportWithPlugin,
+  normalizeProviderResolvedModelWithPlugin,
+  resolveProviderSyntheticAuthWithPlugin,
+} from "../plugins/provider-runtime.js";
+import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
+import type { ProviderRuntimeModel } from "../plugins/types.js";
+import { isRecord } from "../utils.js";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
-import { PROVIDER_ENV_API_KEY_CANDIDATES } from "./model-auth-env-vars.js";
+import { resolveProviderEnvApiKeyCandidates } from "./model-auth-env-vars.js";
 import { resolveEnvApiKey } from "./model-auth-env.js";
 import { resolvePiCredentialMapFromStore, type PiCredentialMap } from "./pi-auth-credentials.js";
 
@@ -44,11 +55,89 @@ function createInMemoryAuthStorageBackend(
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+export function normalizeDiscoveredPiModel<T>(value: T, agentDir: string): T {
+  if (!isRecord(value)) {
+    return value;
+  }
+  if (
+    typeof value.id !== "string" ||
+    typeof value.name !== "string" ||
+    typeof value.provider !== "string" ||
+    typeof value.api !== "string"
+  ) {
+    return value;
+  }
+  const model = value as unknown as ProviderRuntimeModel;
+  const pluginNormalized =
+    normalizeProviderResolvedModelWithPlugin({
+      provider: model.provider,
+      context: {
+        provider: model.provider,
+        modelId: model.id,
+        model,
+        agentDir,
+      },
+    }) ?? model;
+  const compatNormalized =
+    applyProviderResolvedModelCompatWithPlugins({
+      provider: model.provider,
+      context: {
+        provider: model.provider,
+        modelId: model.id,
+        model: pluginNormalized,
+        agentDir,
+      },
+    }) ?? pluginNormalized;
+  const transportNormalized =
+    applyProviderResolvedTransportWithPlugin({
+      provider: model.provider,
+      context: {
+        provider: model.provider,
+        modelId: model.id,
+        model: compatNormalized,
+        agentDir,
+      },
+    }) ?? compatNormalized;
+  return normalizeModelCompat(transportNormalized as Model<Api>) as T;
 }
 
-function scrubLegacyStaticAuthJsonEntries(pathname: string): void {
+type PiModelRegistryClassLike = {
+  create?: (authStorage: PiAuthStorage, modelsJsonPath: string) => PiModelRegistry;
+  new (authStorage: PiAuthStorage, modelsJsonPath: string): PiModelRegistry;
+};
+
+function instantiatePiModelRegistry(
+  authStorage: PiAuthStorage,
+  modelsJsonPath: string,
+): PiModelRegistry {
+  const Registry = PiModelRegistryClass as unknown as PiModelRegistryClassLike;
+  if (typeof Registry.create === "function") {
+    return Registry.create(authStorage, modelsJsonPath);
+  }
+  return new Registry(authStorage, modelsJsonPath);
+}
+
+function createOpenClawModelRegistry(
+  authStorage: PiAuthStorage,
+  modelsJsonPath: string,
+  agentDir: string,
+): PiModelRegistry {
+  const registry = instantiatePiModelRegistry(authStorage, modelsJsonPath);
+  const getAll = registry.getAll.bind(registry);
+  const getAvailable = registry.getAvailable.bind(registry);
+  const find = registry.find.bind(registry);
+
+  registry.getAll = () =>
+    getAll().map((entry: Model<Api>) => normalizeDiscoveredPiModel(entry, agentDir));
+  registry.getAvailable = () =>
+    getAvailable().map((entry: Model<Api>) => normalizeDiscoveredPiModel(entry, agentDir));
+  registry.find = (provider: string, modelId: string) =>
+    normalizeDiscoveredPiModel(find(provider, modelId), agentDir);
+
+  return registry;
+}
+
+export function scrubLegacyStaticAuthJsonEntriesForDiscovery(pathname: string): void {
   if (process.env.OPENCLAW_AUTH_STORE_READONLY === "1") {
     return;
   }
@@ -136,23 +225,52 @@ function createAuthStorage(AuthStorageLike: unknown, path: string, creds: PiCred
   return withRuntimeOverride;
 }
 
-function resolvePiCredentials(agentDir: string): PiCredentialMap {
-  const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
-  const credentials = resolvePiCredentialMapFromStore(store);
+export function addEnvBackedPiCredentials(
+  credentials: PiCredentialMap,
+  env: NodeJS.ProcessEnv = process.env,
+): PiCredentialMap {
+  const next = { ...credentials };
   // pi-coding-agent hides providers from its registry when auth storage lacks
   // a matching credential entry. Mirror env-backed provider auth here so
   // live/model discovery sees the same providers runtime auth can use.
-  for (const provider of Object.keys(PROVIDER_ENV_API_KEY_CANDIDATES)) {
+  for (const provider of Object.keys(resolveProviderEnvApiKeyCandidates())) {
+    if (next[provider]) {
+      continue;
+    }
+    const resolved = resolveEnvApiKey(provider, env);
+    if (!resolved?.apiKey) {
+      continue;
+    }
+    next[provider] = {
+      type: "api_key",
+      key: resolved.apiKey,
+    };
+  }
+  return next;
+}
+
+export function resolvePiCredentialsForDiscovery(agentDir: string): PiCredentialMap {
+  const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+  const credentials = addEnvBackedPiCredentials(resolvePiCredentialMapFromStore(store));
+  for (const provider of resolveRuntimeSyntheticAuthProviderRefs()) {
     if (credentials[provider]) {
       continue;
     }
-    const resolved = resolveEnvApiKey(provider);
-    if (!resolved?.apiKey) {
+    const resolved = resolveProviderSyntheticAuthWithPlugin({
+      provider,
+      context: {
+        config: undefined,
+        provider,
+        providerConfig: undefined,
+      },
+    });
+    const apiKey = resolved?.apiKey?.trim();
+    if (!apiKey) {
       continue;
     }
     credentials[provider] = {
       type: "api_key",
-      key: resolved.apiKey,
+      key: apiKey,
     };
   }
   return credentials;
@@ -160,12 +278,12 @@ function resolvePiCredentials(agentDir: string): PiCredentialMap {
 
 // Compatibility helpers for pi-coding-agent 0.50+ (discover* helpers removed).
 export function discoverAuthStorage(agentDir: string): PiAuthStorage {
-  const credentials = resolvePiCredentials(agentDir);
+  const credentials = resolvePiCredentialsForDiscovery(agentDir);
   const authPath = path.join(agentDir, "auth.json");
-  scrubLegacyStaticAuthJsonEntries(authPath);
+  scrubLegacyStaticAuthJsonEntriesForDiscovery(authPath);
   return createAuthStorage(PiAuthStorageClass, authPath, credentials);
 }
 
 export function discoverModels(authStorage: PiAuthStorage, agentDir: string): PiModelRegistry {
-  return new PiModelRegistryClass(authStorage, path.join(agentDir, "models.json"));
+  return createOpenClawModelRegistry(authStorage, path.join(agentDir, "models.json"), agentDir);
 }

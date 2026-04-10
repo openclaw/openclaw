@@ -369,6 +369,33 @@ export type AgentsFilesSetResult = {
 
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
 
+export type SessionCompactionCheckpointReason =
+  | "manual"
+  | "auto-threshold"
+  | "overflow-retry"
+  | "timeout-retry";
+
+export type SessionCompactionTranscriptReference = {
+  sessionId: string;
+  sessionFile?: string;
+  leafId?: string;
+  entryId?: string;
+};
+
+export type SessionCompactionCheckpoint = {
+  checkpointId: string;
+  sessionKey: string;
+  sessionId: string;
+  createdAt: number;
+  reason: SessionCompactionCheckpointReason;
+  tokensBefore?: number;
+  tokensAfter?: number;
+  summary?: string;
+  firstKeptEntryId?: string;
+  preCompaction: SessionCompactionTranscriptReference;
+  postCompaction: SessionCompactionTranscriptReference;
+};
+
 export type GatewaySessionRow = {
   key: string;
   spawnedBy?: string;
@@ -412,9 +439,46 @@ export type GatewaySessionRow = {
   lastChannel?: import("../../../src/config/sessions.js").SessionEntry["lastChannel"];
   lastTo?: string;
   lastAccountId?: string;
+  compactionCheckpointCount?: number;
+  latestCompactionCheckpoint?: SessionCompactionCheckpoint;
 };
 
 export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;
+
+export type SessionsCompactionListResult = {
+  ok: true;
+  key: string;
+  checkpoints: SessionCompactionCheckpoint[];
+};
+
+export type SessionsCompactionGetResult = {
+  ok: true;
+  key: string;
+  checkpoint: SessionCompactionCheckpoint;
+};
+
+export type SessionsCompactionBranchResult = {
+  ok: true;
+  sourceKey: string;
+  key: string;
+  sessionId: string;
+  checkpoint: SessionCompactionCheckpoint;
+  entry: {
+    sessionId: string;
+    updatedAt: number;
+  } & Record<string, unknown>;
+};
+
+export type SessionsCompactionRestoreResult = {
+  ok: true;
+  key: string;
+  sessionId: string;
+  checkpoint: SessionCompactionCheckpoint;
+  entry: {
+    sessionId: string;
+    updatedAt: number;
+  } & Record<string, unknown>;
+};
 
 export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;
@@ -655,6 +719,7 @@ export type ModelCatalogEntry = {
   id: string;
   name: string;
   provider: string;
+  alias?: string;
   contextWindow?: number;
   reasoning?: boolean;
   input?: Array<"text" | "image" | "document">;

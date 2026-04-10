@@ -4,12 +4,12 @@ import {
   createScopedChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
+import { createChannelPluginBase, getChatChannelMeta } from "openclaw/plugin-sdk/core";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
-  createChannelPluginBase,
-  getChatChannelMeta,
-  type ChannelPlugin,
-} from "openclaw/plugin-sdk/core";
-import { normalizeE164 } from "openclaw/plugin-sdk/setup";
+  normalizeE164,
+  normalizeStringifiedOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
@@ -38,8 +38,8 @@ export const signalConfigAdapter = createScopedChannelConfigAdapter<ResolvedSign
   resolveAllowFrom: (account: ResolvedSignalAccount) => account.config.allowFrom,
   formatAllowFrom: (allowFrom) =>
     allowFrom
-      .map((entry) => String(entry).trim())
-      .filter(Boolean)
+      .map((entry) => normalizeStringifiedOptionalString(entry))
+      .filter((entry): entry is string => Boolean(entry))
       .map((entry) => (entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, ""))))
       .filter(Boolean),
   resolveDefaultTo: (account: ResolvedSignalAccount) => account.config.defaultTo,
@@ -74,8 +74,9 @@ export function createSignalPluginBase(params: {
   | "config"
   | "security"
   | "setup"
+  | "messaging"
 > {
-  return createChannelPluginBase({
+  const base = createChannelPluginBase({
     id: SIGNAL_CHANNEL,
     meta: {
       ...getChatChannelMeta(SIGNAL_CHANNEL),
@@ -105,7 +106,13 @@ export function createSignalPluginBase(params: {
     },
     security: signalSecurityAdapter,
     setup: params.setup,
-  }) as Pick<
+  });
+  return {
+    ...base,
+    messaging: {
+      defaultMarkdownTableMode: "bullets",
+    },
+  } as Pick<
     ChannelPlugin<ResolvedSignalAccount>,
     | "id"
     | "meta"
@@ -117,5 +124,6 @@ export function createSignalPluginBase(params: {
     | "config"
     | "security"
     | "setup"
+    | "messaging"
   >;
 }

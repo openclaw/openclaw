@@ -1,9 +1,8 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
-import { loadConfig } from "../config/config.js";
-import { callGateway } from "../gateway/call.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import {
@@ -11,16 +10,15 @@ import {
   buildAnnounceIdempotencyKey,
 } from "./announce-idempotency.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./internal-events.js";
-import { isEmbeddedPiRunActive, waitForEmbeddedPiRunEnd } from "./pi-embedded.js";
 import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
   loadSessionEntryByKey,
-  resolveAnnounceOrigin,
   runAnnounceDeliveryWithRetry,
   resolveSubagentAnnounceTimeoutMs,
   resolveSubagentCompletionOrigin,
 } from "./subagent-announce-delivery.js";
+import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 import {
   applySubagentWaitOutcome,
   buildChildCompletionFindings,
@@ -32,15 +30,34 @@ import {
   type SubagentRunOutcome,
   waitForSubagentRunOutcome,
 } from "./subagent-announce-output.js";
+import {
+  callGateway,
+  isEmbeddedPiRunActive,
+  loadConfig,
+  waitForEmbeddedPiRunEnd,
+} from "./subagent-announce.runtime.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.js";
-import { isAnnounceSkip } from "./tools/sessions-send-helpers.js";
+import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
+
+type SubagentAnnounceDeps = {
+  callGateway: typeof callGateway;
+  loadConfig: typeof loadConfig;
+};
+
+const defaultSubagentAnnounceDeps: SubagentAnnounceDeps = {
+  callGateway,
+  loadConfig,
+};
+
+let subagentAnnounceDeps: SubagentAnnounceDeps = defaultSubagentAnnounceDeps;
+
 let subagentRegistryRuntimePromise: Promise<
-  typeof import("./subagent-registry-runtime.js")
+  typeof import("./subagent-announce.registry.runtime.js")
 > | null = null;
 
 function loadSubagentRegistryRuntime() {
-  subagentRegistryRuntimePromise ??= import("./subagent-registry-runtime.js");
+  subagentRegistryRuntimePromise ??= import("./subagent-announce.registry.runtime.js");
   return subagentRegistryRuntimePromise;
 }
 
@@ -86,7 +103,7 @@ export function buildSubagentSystemPrompt(params: {
     "3. **Don't initiate** - No heartbeats, no proactive actions, no side quests",
     "4. **Be ephemeral** - You may be terminated after task completion. That's fine.",
     "5. **Trust push-based completion** - Descendant results are auto-announced back to you; do not busy-poll for status.",
-    "6. **Recover from compacted/truncated tool output** - If you see `[compacted: tool output removed to free context]` or `[truncated: output exceeded context limit]`, assume prior output was reduced. Re-read only what you need using smaller chunks (`read` with offset/limit, or targeted `rg`/`head`/`tail`) instead of full-file `cat`.",
+    "6. **Recover from truncated tool output** - If you see a notice like `[... N more characters truncated]`, assume prior output was reduced. Re-read only what you need using smaller chunks (`read` with offset/limit, or targeted `rg`/`head`/`tail`) instead of full-file `cat`.",
     "",
     "## Output Format",
     "When complete, your final response should include:",
@@ -235,7 +252,7 @@ async function wakeSubagentRunAfterDescendants(params: {
     return false;
   }
 
-  const cfg = loadConfig();
+  const cfg = subagentAnnounceDeps.loadConfig();
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
   const wakeMessage = buildDescendantWakeMessage({
     findings: params.findings,
@@ -248,7 +265,7 @@ async function wakeSubagentRunAfterDescendants(params: {
       operation: "descendant wake agent call",
       signal: params.signal,
       run: async () =>
-        await callGateway({
+        await subagentAnnounceDeps.callGateway({
           method: "agent",
           params: {
             sessionKey: params.childSessionKey,
@@ -265,7 +282,7 @@ async function wakeSubagentRunAfterDescendants(params: {
           timeoutMs: announceTimeoutMs,
         }),
     });
-    wakeRunId = typeof wakeResponse?.runId === "string" ? wakeResponse.runId.trim() : "";
+    wakeRunId = normalizeOptionalString(wakeResponse?.runId) ?? "";
   } catch {
     return false;
   }
@@ -431,7 +448,7 @@ export async function runSubagentAnnounceFlow(params: {
     }
 
     if (!childCompletionFindings) {
-      const fallbackReply = params.fallbackReply?.trim() ? params.fallbackReply.trim() : undefined;
+      const fallbackReply = normalizeOptionalString(params.fallbackReply);
       const fallbackIsSilent =
         Boolean(fallbackReply) &&
         (isAnnounceSkip(fallbackReply) || isSilentReplyText(fallbackReply, SILENT_REPLY_TOKEN));
@@ -583,6 +600,7 @@ export async function runSubagentAnnounceFlow(params: {
       steerMessage: triggerMessage,
       internalEvents,
       summaryLine: taskLabel,
+      requesterSessionOrigin: targetRequesterOrigin,
       requesterOrigin:
         expectsCompletionMessage && !requesterIsSubagent
           ? completionDirectOrigin
@@ -612,7 +630,7 @@ export async function runSubagentAnnounceFlow(params: {
     // Patch label after all writes complete
     if (params.label) {
       try {
-        await callGateway({
+        await subagentAnnounceDeps.callGateway({
           method: "sessions.patch",
           params: { key: params.childSessionKey, label: params.label },
           timeoutMs: 10_000,
@@ -623,7 +641,7 @@ export async function runSubagentAnnounceFlow(params: {
     }
     if (shouldDeleteChildSession) {
       try {
-        await callGateway({
+        await subagentAnnounceDeps.callGateway({
           method: "sessions.delete",
           params: {
             key: params.childSessionKey,
@@ -639,3 +657,14 @@ export async function runSubagentAnnounceFlow(params: {
   }
   return didAnnounce;
 }
+
+export const __testing = {
+  setDepsForTest(overrides?: Partial<SubagentAnnounceDeps>) {
+    subagentAnnounceDeps = overrides
+      ? {
+          ...defaultSubagentAnnounceDeps,
+          ...overrides,
+        }
+      : defaultSubagentAnnounceDeps;
+  },
+};

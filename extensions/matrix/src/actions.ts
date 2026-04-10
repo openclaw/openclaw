@@ -1,4 +1,6 @@
 import { Type } from "@sinclair/typebox";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { requiresExplicitMatrixDefaultAccount } from "./account-selection.js";
 import { resolveDefaultMatrixAccountId, resolveMatrixAccount } from "./matrix/accounts.js";
 import {
@@ -107,14 +109,14 @@ function buildMatrixProfileToolSchema(): NonNullable<ChannelMessageToolDiscovery
 }
 
 export const matrixMessageActions: ChannelMessageActionAdapter = {
-  describeMessageTool: ({ cfg }) => {
+  describeMessageTool: ({ cfg, accountId }) => {
     const resolvedCfg = cfg as CoreConfig;
-    if (requiresExplicitMatrixDefaultAccount(resolvedCfg)) {
+    if (!accountId && requiresExplicitMatrixDefaultAccount(resolvedCfg)) {
       return { actions: [], capabilities: [] };
     }
     const account = resolveMatrixAccount({
       cfg: resolvedCfg,
-      accountId: resolveDefaultMatrixAccountId(resolvedCfg),
+      accountId: accountId ?? resolveDefaultMatrixAccountId(resolvedCfg),
     });
     if (!account.enabled || !account.configured) {
       return { actions: [], capabilities: [] };
@@ -133,15 +135,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
   },
   supportsAction: ({ action }) => MATRIX_PLUGIN_HANDLED_ACTIONS.has(action),
   extractToolSend: ({ args }): ChannelToolSend | null => {
-    const action = typeof args.action === "string" ? args.action.trim() : "";
-    if (action !== "sendMessage") {
-      return null;
-    }
-    const to = typeof args.to === "string" ? args.to : undefined;
-    if (!to) {
-      return null;
-    }
-    return { to };
+    return extractToolSend(args, "sendMessage");
   },
   handleAction: async (ctx: ChannelMessageActionContext) => {
     const { handleMatrixAction } = await import("./tool-actions.runtime.js");
@@ -294,13 +288,11 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "permissions") {
-      const operation = (
+      const operation = normalizeLowercaseStringOrEmpty(
         readStringParam(params, "operation") ??
-        readStringParam(params, "mode") ??
-        "verification-list"
-      )
-        .trim()
-        .toLowerCase();
+          readStringParam(params, "mode") ??
+          "verification-list",
+      );
       const operationToAction: Record<string, string> = {
         "encryption-status": "encryptionStatus",
         "verification-status": "verificationStatus",

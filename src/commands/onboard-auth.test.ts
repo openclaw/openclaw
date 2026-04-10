@@ -3,8 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
-import { applyAuthProfileConfig } from "../plugins/provider-auth-helpers.js";
-import { setMinimaxApiKey, writeOAuthCredentials } from "../plugins/provider-auth-storage.js";
+import {
+  applyAuthProfileConfig,
+  upsertApiKeyProfile,
+  writeOAuthCredentials,
+} from "../plugins/provider-auth-helpers.js";
 import {
   createAuthTestLifecycle,
   readAuthProfilesForAgent,
@@ -163,7 +166,7 @@ describe("writeOAuthCredentials", () => {
   });
 });
 
-describe("setMinimaxApiKey", () => {
+describe("upsertApiKeyProfile", () => {
   const lifecycle = createAuthTestLifecycle([
     "OPENCLAW_STATE_DIR",
     "OPENCLAW_AGENT_DIR",
@@ -178,7 +181,7 @@ describe("setMinimaxApiKey", () => {
     const env = await setupAuthTestEnv("openclaw-minimax-", { agentSubdir: "custom-agent" });
     lifecycle.setStateDir(env.stateDir);
 
-    await setMinimaxApiKey("sk-minimax-test");
+    upsertApiKeyProfile({ provider: "minimax", input: "sk-minimax-test" });
 
     const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, { type?: string; provider?: string; key?: string }>;
@@ -233,6 +236,54 @@ describe("applyAuthProfileConfig", () => {
     );
 
     expect(next.auth?.order?.kilocode).toEqual(["kilocode:default", "kilocode:legacy"]);
+  });
+
+  it("repairs aliased auth.order keys instead of duplicating them", () => {
+    const next = applyAuthProfileConfig(
+      {
+        auth: {
+          profiles: {
+            "zai:default": { provider: "z.ai", mode: "api_key" },
+          },
+          order: { "z.ai": ["zai:default"] },
+        },
+      },
+      {
+        profileId: "zai:work",
+        provider: "z-ai",
+        mode: "oauth",
+      },
+    );
+
+    expect(next.auth?.order).toEqual({
+      zai: ["zai:work", "zai:default"],
+    });
+  });
+
+  it("merges split canonical and aliased auth.order entries for the same provider", () => {
+    const next = applyAuthProfileConfig(
+      {
+        auth: {
+          profiles: {
+            "zai:default": { provider: "z.ai", mode: "api_key" },
+            "zai:backup": { provider: "z-ai", mode: "token" },
+          },
+          order: {
+            zai: ["zai:default"],
+            "z.ai": ["zai:backup"],
+          },
+        },
+      },
+      {
+        profileId: "zai:work",
+        provider: "z-ai",
+        mode: "oauth",
+      },
+    );
+
+    expect(next.auth?.order).toEqual({
+      zai: ["zai:work", "zai:default", "zai:backup"],
+    });
   });
 
   it("keeps implicit round-robin when no mixed provider modes are present", () => {

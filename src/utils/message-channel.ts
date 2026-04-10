@@ -1,6 +1,8 @@
 import type { ChannelId } from "../channels/plugins/types.js";
 import {
   CHANNEL_IDS,
+  getChatChannelMeta,
+  getRegisteredChannelPluginMeta,
   listRegisteredChannelPluginAliases,
   listRegisteredChannelPluginIds,
   listChatChannelAliases,
@@ -15,19 +17,10 @@ import {
   normalizeGatewayClientMode,
   normalizeGatewayClientName,
 } from "../gateway/protocol/client-info.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 export const INTERNAL_MESSAGE_CHANNEL = "webchat" as const;
 export type InternalMessageChannel = typeof INTERNAL_MESSAGE_CHANNEL;
-
-const MARKDOWN_CAPABLE_CHANNELS = new Set<string>([
-  "slack",
-  "telegram",
-  "signal",
-  "discord",
-  "googlechat",
-  "tui",
-  INTERNAL_MESSAGE_CHANNEL,
-]);
 
 export { GATEWAY_CLIENT_NAMES, GATEWAY_CLIENT_MODES };
 export type { GatewayClientName, GatewayClientMode };
@@ -65,7 +58,7 @@ export function isWebchatClient(client?: GatewayClientInfoLike | null): boolean 
 }
 
 export function normalizeMessageChannel(raw?: string | null): string | undefined {
-  const normalized = raw?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(raw);
   if (!normalized) {
     return undefined;
   }
@@ -92,7 +85,7 @@ export const listDeliverableMessageChannels = (): ChannelId[] =>
 
 export type DeliverableMessageChannel = ChannelId;
 
-export type GatewayMessageChannel = DeliverableMessageChannel | InternalMessageChannel;
+export type GatewayMessageChannel = DeliverableMessageChannel;
 
 export const listGatewayMessageChannels = (): GatewayMessageChannel[] => [
   ...listDeliverableMessageChannels(),
@@ -102,7 +95,7 @@ export const listGatewayMessageChannels = (): GatewayMessageChannel[] => [
 export const listGatewayAgentChannelAliases = (): string[] =>
   Array.from(new Set([...listChatChannelAliases(), ...listPluginChannelAliases()]));
 
-export type GatewayAgentChannelHint = GatewayMessageChannel | "last";
+export type GatewayAgentChannelHint = GatewayMessageChannel;
 
 export const listGatewayAgentChannelValues = (): string[] =>
   Array.from(
@@ -139,5 +132,12 @@ export function isMarkdownCapableMessageChannel(raw?: string | null): boolean {
   if (!channel) {
     return false;
   }
-  return MARKDOWN_CAPABLE_CHANNELS.has(channel);
+  if (channel === INTERNAL_MESSAGE_CHANNEL || channel === "tui") {
+    return true;
+  }
+  const builtInChannel = normalizeChatChannelId(channel);
+  if (builtInChannel) {
+    return getChatChannelMeta(builtInChannel).markdownCapable === true;
+  }
+  return getRegisteredChannelPluginMeta(channel)?.markdownCapable === true;
 }

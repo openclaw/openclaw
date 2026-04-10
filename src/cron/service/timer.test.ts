@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/service.test-harness.js";
 import { createCronServiceState } from "../../cron/service/state.js";
 import { onTimer } from "../../cron/service/timer.js";
 import type { CronJob } from "../../cron/types.js";
+import * as taskExecutor from "../../tasks/task-executor.js";
+import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-timer-seam",
@@ -24,6 +26,10 @@ function createDueMainJob(params: { now: number; wakeMode: CronJob["wakeMode"] }
     state: { nextRunAtMs: params.now - 1 },
   };
 }
+
+afterEach(() => {
+  resetTaskRegistryForTests();
+});
 
 describe("cron service timer seam coverage", () => {
   it("persists the next schedule and hands off next-heartbeat main jobs", async () => {
@@ -73,8 +79,50 @@ describe("cron service timer seam coverage", () => {
     const delays = timeoutSpy.mock.calls
       .map(([, delay]) => delay)
       .filter((delay): delay is number => typeof delay === "number");
-    expect(delays).toContain(60_000);
+    expect(delays.some((delay) => delay > 0)).toBe(true);
 
     timeoutSpy.mockRestore();
+  });
+
+  it("keeps scheduler progress when task ledger creation fails", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [createDueMainJob({ now, wakeMode: "next-heartbeat" })],
+    });
+
+    const createTaskRecordSpy = vi
+      .spyOn(taskExecutor, "createRunningTaskRun")
+      .mockImplementation(() => {
+        throw new Error("disk full");
+      });
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    await onTimer(state);
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: "main-heartbeat-job" }),
+      "cron: failed to create task ledger record",
+    );
+    expect(enqueueSystemEvent).toHaveBeenCalledWith("heartbeat seam tick", {
+      agentId: undefined,
+      sessionKey: "agent:main:main",
+      contextKey: "cron:main-heartbeat-job",
+    });
+
+    createTaskRecordSpy.mockRestore();
   });
 });

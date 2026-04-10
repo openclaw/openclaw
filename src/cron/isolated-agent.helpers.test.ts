@@ -59,4 +59,79 @@ describe("resolveCronPayloadOutcome", () => {
 
     expect(String(result.summary ?? "")).toMatch(/…$/);
   });
+
+  it("preserves all successful deliverable payloads when no final assistant text is available", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        { text: "line 1" },
+        { text: "temporary error", isError: true },
+        { text: "line 2" },
+      ],
+    });
+
+    expect(result.deliveryPayloads).toEqual([{ text: "line 1" }, { text: "line 2" }]);
+    expect(result.deliveryPayload).toEqual({ text: "line 2" });
+  });
+
+  it("prefers finalAssistantVisibleText for text-only announce delivery", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        { text: "section 1" },
+        { text: "temporary error", isError: true },
+        { text: "section 2" },
+      ],
+      finalAssistantVisibleText: "section 1\nsection 2",
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.summary).toBe("section 1\nsection 2");
+    expect(result.outputText).toBe("section 1\nsection 2");
+    expect(result.synthesizedText).toBe("section 1\nsection 2");
+    expect(result.deliveryPayloads).toEqual([{ text: "section 1\nsection 2" }]);
+    expect(result.deliveryPayload).toEqual({ text: "section 2" });
+  });
+
+  it("keeps structured-content detection scoped to the last delivery payload", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ mediaUrl: "https://example.com/report.png" }, { text: "final text" }],
+      finalAssistantVisibleText: "full final report",
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.deliveryPayloads).toEqual([
+      { mediaUrl: "https://example.com/report.png" },
+      { text: "final text" },
+    ]);
+    expect(result.outputText).toBe("final text");
+    expect(result.synthesizedText).toBe("final text");
+    expect(result.deliveryPayloadHasStructuredContent).toBe(false);
+  });
+
+  it("returns only the last error payload when all payloads are errors", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        { text: "first error", isError: true },
+        { text: "last error", isError: true },
+      ],
+      finalAssistantVisibleText: "Recovered final answer",
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.outputText).toBe("last error");
+    expect(result.deliveryPayloads).toEqual([{ text: "last error", isError: true }]);
+    expect(result.deliveryPayload).toEqual({ text: "last error", isError: true });
+  });
+
+  it("keeps multi-payload direct delivery when finalAssistantVisibleText is not preferred", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "Working on it..." }, { text: "Final weather summary" }],
+      finalAssistantVisibleText: "Final weather summary",
+    });
+
+    expect(result.outputText).toBe("Final weather summary");
+    expect(result.deliveryPayloads).toEqual([
+      { text: "Working on it..." },
+      { text: "Final weather summary" },
+    ]);
+  });
 });

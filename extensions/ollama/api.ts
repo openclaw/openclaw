@@ -11,7 +11,9 @@ export {
   fetchOllamaModels,
   isReasoningModelHeuristic,
   queryOllamaContextWindow,
+  queryOllamaModelShowInfo,
   resolveOllamaApiBase,
+  type OllamaModelShowInfo,
   type OllamaModelWithContext,
   type OllamaTagModel,
   type OllamaTagsResponse,
@@ -23,6 +25,8 @@ export {
   promptAndConfigureOllama,
 } from "./src/setup.js";
 export {
+  buildOllamaChatRequest,
+  createConfiguredOllamaCompatStreamWrapper,
   isOllamaCompatProvider,
   resolveOllamaCompatNumCtxEnabled,
   shouldInjectOllamaCompatNumCtx,

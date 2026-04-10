@@ -1,7 +1,8 @@
 #!/usr/bin/env -S node --import tsx
 
-import { execSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { execFileSync, execSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -10,10 +11,21 @@ import {
   type ExtensionPackageJson as PackageJson,
 } from "./lib/bundled-extension-manifest.ts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
+import {
+  collectBundledPluginRootRuntimeMirrorErrors,
+  collectBundledPluginRuntimeDependencySpecs,
+  collectRootDistBundledRuntimeMirrors,
+} from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
 import { listPluginSdkDistArtifacts } from "./lib/plugin-sdk-entries.mjs";
+import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mjs";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 
 export { collectBundledExtensionManifestErrors } from "./lib/bundled-extension-manifest.ts";
+export {
+  collectBundledPluginRootRuntimeMirrorErrors,
+  collectRootDistBundledRuntimeMirrors,
+  packageNameFromSpecifier,
+} from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
 
 type PackFile = { path: string };
 type PackResult = { files?: PackFile[]; filename?: string; unpackedSize?: number };
@@ -23,17 +35,26 @@ const requiredPathGroups = [
   ["dist/entry.js", "dist/entry.mjs"],
   ...listPluginSdkDistArtifacts(),
   ...listBundledPluginPackArtifacts(),
+  ...listStaticExtensionAssetOutputs(),
+  "scripts/npm-runner.mjs",
+  "scripts/postinstall-bundled-plugins.mjs",
   "dist/plugin-sdk/compat.js",
   "dist/plugin-sdk/root-alias.cjs",
   "dist/build-info.json",
   "dist/channel-catalog.json",
   "dist/control-ui/index.html",
 ];
-const forbiddenPrefixes = ["dist-runtime/", "dist/OpenClaw.app/"];
+const forbiddenPrefixes = [
+  "dist-runtime/",
+  "dist/OpenClaw.app/",
+  "dist/plugin-sdk/.tsbuildinfo",
+  "docs/.generated/",
+];
 // 2026.3.12 ballooned to ~213.6 MiB unpacked and correlated with low-memory
 // startup/doctor OOM reports. Keep enough headroom for the current pack with
-// restored bundled upgrade surfaces while still catching regressions quickly.
-const npmPackUnpackedSizeBudgetBytes = 190 * 1024 * 1024;
+// restored bundled upgrade surfaces and Control UI assets while still catching
+// regressions quickly.
+const npmPackUnpackedSizeBudgetBytes = 191 * 1024 * 1024;
 const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionDateKey = 20260227;
@@ -62,9 +83,26 @@ function collectBundledExtensions(): BundledExtension[] {
 function checkBundledExtensionMetadata() {
   const extensions = collectBundledExtensions();
   const manifestErrors = collectBundledExtensionManifestErrors(extensions);
-  if (manifestErrors.length > 0) {
+  const rootPackage = JSON.parse(readFileSync(resolve("package.json"), "utf8")) as {
+    dependencies?: Record<string, string>;
+    optionalDependencies?: Record<string, string>;
+  };
+  const bundledRuntimeDependencySpecs = collectBundledPluginRuntimeDependencySpecs(
+    resolve("extensions"),
+  );
+  const requiredRootMirrors = collectRootDistBundledRuntimeMirrors({
+    bundledRuntimeDependencySpecs,
+    distDir: resolve("dist"),
+  });
+  const rootMirrorErrors = collectBundledPluginRootRuntimeMirrorErrors({
+    bundledRuntimeDependencySpecs,
+    requiredRootMirrors,
+    rootPackageJson: rootPackage,
+  });
+  const errors = [...manifestErrors, ...rootMirrorErrors];
+  if (errors.length > 0) {
     console.error("release-check: bundled extension manifest validation failed:");
-    for (const error of manifestErrors) {
+    for (const error of errors) {
       console.error(`  - ${error}`);
     }
     process.exit(1);
@@ -80,6 +118,92 @@ function runPackDry(): PackResult[] {
   return JSON.parse(raw) as PackResult[];
 }
 
+function runPack(packDestination: string): PackResult[] {
+  const raw = execFileSync(
+    "npm",
+    ["pack", "--json", "--ignore-scripts", "--pack-destination", packDestination],
+    {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: 1024 * 1024 * 100,
+    },
+  );
+  return JSON.parse(raw) as PackResult[];
+}
+
+function resolvePackedTarballPath(packDestination: string, results: PackResult[]): string {
+  const filenames = results
+    .map((entry) => entry.filename)
+    .filter((filename): filename is string => typeof filename === "string" && filename.length > 0);
+  if (filenames.length !== 1) {
+    throw new Error(
+      `release-check: npm pack produced ${filenames.length} tarballs; expected exactly one.`,
+    );
+  }
+  return resolve(packDestination, filenames[0]);
+}
+
+function installPackedTarball(prefixDir: string, tarballPath: string, cwd: string): void {
+  execFileSync(
+    "npm",
+    [
+      "install",
+      "-g",
+      "--prefix",
+      prefixDir,
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+      tarballPath,
+    ],
+    {
+      cwd,
+      encoding: "utf8",
+      stdio: "inherit",
+    },
+  );
+}
+
+function resolveGlobalRoot(prefixDir: string, cwd: string): string {
+  return execFileSync("npm", ["root", "-g", "--prefix", prefixDir], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+}
+
+function runPackedBundledChannelEntrySmoke(): void {
+  const tmpRoot = mkdtempSync(join(tmpdir(), "openclaw-release-pack-smoke-"));
+  try {
+    const packDir = join(tmpRoot, "pack");
+    mkdirSync(packDir);
+
+    const packResults = runPack(packDir);
+    const tarballPath = resolvePackedTarballPath(packDir, packResults);
+    const prefixDir = join(tmpRoot, "prefix");
+    installPackedTarball(prefixDir, tarballPath, tmpRoot);
+
+    const packageRoot = join(resolveGlobalRoot(prefixDir, tmpRoot), "openclaw");
+    execFileSync(
+      process.execPath,
+      [
+        resolve("scripts/test-built-bundled-channel-entry-smoke.mjs"),
+        "--package-root",
+        packageRoot,
+      ],
+      {
+        stdio: "inherit",
+        env: {
+          ...process.env,
+          OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
+        },
+      },
+    );
+  } finally {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  }
+}
+
 export function collectMissingPackPaths(paths: Iterable<string>): string[] {
   const available = new Set(paths);
   return requiredPathGroups
@@ -89,7 +213,7 @@ export function collectMissingPackPaths(paths: Iterable<string>): string[] {
       }
       return available.has(group) ? [] : [group];
     })
-    .toSorted();
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 export function collectForbiddenPackPaths(paths: Iterable<string>): string[] {
@@ -357,7 +481,9 @@ async function main() {
     process.exit(1);
   }
 
-  console.log("release-check: npm pack contents look OK.");
+  runPackedBundledChannelEntrySmoke();
+
+  console.log("release-check: npm pack contents and bundled channel entrypoints look OK.");
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

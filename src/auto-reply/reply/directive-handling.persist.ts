@@ -3,7 +3,7 @@ import {
   resolveDefaultAgentId,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
-import { lookupCachedContextTokens } from "../../agents/context-cache.js";
+import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -16,6 +16,7 @@ import { resolveModelSelectionFromDirective } from "./directive-handling.model-s
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import {
   canPersistInternalExecDirective,
+  canPersistInternalVerboseDirective,
   enqueueModeSwitchEvents,
 } from "./directive-handling.shared.js";
 import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
@@ -40,6 +41,7 @@ export async function persistInlineDirectives(params: {
   initialModelLabel: string;
   formatModelSwitchEvent: (label: string, alias?: string) => string;
   agentCfg: NonNullable<OpenClawConfig["agents"]>["defaults"] | undefined;
+  messageProvider?: string;
   surface?: string;
   gatewayClientScopes?: string[];
 }): Promise<{ provider: string; model: string; contextTokens: number }> {
@@ -62,6 +64,12 @@ export async function persistInlineDirectives(params: {
   } = params;
   let { provider, model } = params;
   const allowInternalExecPersistence = canPersistInternalExecDirective({
+    messageProvider: params.messageProvider,
+    surface: params.surface,
+    gatewayClientScopes: params.gatewayClientScopes,
+  });
+  const allowInternalVerbosePersistence = canPersistInternalVerboseDirective({
+    messageProvider: params.messageProvider,
     surface: params.surface,
     gatewayClientScopes: params.gatewayClientScopes,
   });
@@ -89,7 +97,11 @@ export async function persistInlineDirectives(params: {
       sessionEntry.thinkingLevel = directives.thinkLevel;
       updated = true;
     }
-    if (directives.hasVerboseDirective && directives.verboseLevel) {
+    if (
+      directives.hasVerboseDirective &&
+      directives.verboseLevel &&
+      allowInternalVerbosePersistence
+    ) {
       applyVerboseOverride(sessionEntry, directives.verboseLevel);
       updated = true;
     }
@@ -209,6 +221,12 @@ export async function persistInlineDirectives(params: {
     provider,
     model,
     contextTokens:
-      agentCfg?.contextTokens ?? lookupCachedContextTokens(model) ?? DEFAULT_CONTEXT_TOKENS,
+      resolveContextTokensForModel({
+        cfg,
+        provider,
+        model,
+        contextTokensOverride: agentCfg?.contextTokens,
+        allowAsyncLoad: false,
+      }) ?? DEFAULT_CONTEXT_TOKENS,
   };
 }

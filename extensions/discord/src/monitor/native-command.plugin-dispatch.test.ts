@@ -1,9 +1,12 @@
 import { ChannelType } from "discord-api-types/v10";
+import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { NativeCommandSpec } from "../../../../src/auto-reply/commands-registry.js";
-import { setDefaultChannelPluginRegistryForTests } from "../../../../src/commands/channel-test-helpers.js";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import { clearPluginCommands, registerPluginCommand } from "../../../../src/plugins/commands.js";
+import {
+  createTestRegistry,
+  setActivePluginRegistry,
+} from "../../../../test/helpers/plugins/plugin-registry.js";
 import {
   createMockCommandInteraction,
   type MockCommandInteraction,
@@ -18,8 +21,10 @@ const runtimeModuleMocks = vi.hoisted(() => ({
   dispatchReplyWithDispatcher: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>();
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-runtime")>(
+    "openclaw/plugin-sdk/plugin-runtime",
+  );
   return {
     ...actual,
     matchPluginCommand: (...args: unknown[]) => runtimeModuleMocks.matchPluginCommand(...args),
@@ -27,8 +32,10 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/reply-runtime")>(
+    "openclaw/plugin-sdk/reply-runtime",
+  );
   return {
     ...actual,
     dispatchReplyWithDispatcher: (...args: unknown[]) =>
@@ -39,6 +46,7 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
 function createInteraction(params?: {
   channelType?: ChannelType;
   channelId?: string;
+  threadParentId?: string | null;
   guildId?: string;
   guildName?: string;
 }): MockCommandInteraction {
@@ -48,6 +56,7 @@ function createInteraction(params?: {
     globalName: "Tester",
     channelType: params?.channelType ?? ChannelType.DM,
     channelId: params?.channelId ?? "dm-1",
+    threadParentId: params?.threadParentId,
     guildId: params?.guildId ?? null,
     guildName: params?.guildName,
     interactionId: "interaction-1",
@@ -113,7 +122,7 @@ function createConfiguredAcpCase(params: {
                   guilds: {
                     [params.guildId!]: {
                       channels: {
-                        [params.channelId]: { allow: true, requireMention: false },
+                        [params.channelId]: { enabled: true, requireMention: false },
                       },
                     },
                   },
@@ -273,9 +282,10 @@ async function expectPairCommandReply(params: {
   );
 
   expect(dispatchSpy).not.toHaveBeenCalled();
-  expect(params.interaction.reply).toHaveBeenCalledWith(
+  expect(params.interaction.followUp).toHaveBeenCalledWith(
     expect.objectContaining({ content: "paired:now" }),
   );
+  expect(params.interaction.reply).not.toHaveBeenCalled();
 }
 
 async function createStatusCommand(cfg: OpenClawConfig) {
@@ -336,7 +346,7 @@ describe("Discord native plugin command dispatch", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     clearPluginCommands();
-    setDefaultChannelPluginRegistryForTests();
+    setActivePluginRegistry(createTestRegistry());
     const actualPluginRuntime = await vi.importActual<
       typeof import("openclaw/plugin-sdk/plugin-runtime")
     >("openclaw/plugin-sdk/plugin-runtime");
@@ -413,7 +423,7 @@ describe("Discord native plugin command dispatch", () => {
             "345678901234567890": {
               channels: {
                 "234567890123456789": {
-                  allow: true,
+                  enabled: true,
                   requireMention: false,
                 },
               },
@@ -456,12 +466,49 @@ describe("Discord native plugin command dispatch", () => {
 
     expect(executeSpy).not.toHaveBeenCalled();
     expect(dispatchSpy).not.toHaveBeenCalled();
-    expect(interaction.reply).toHaveBeenCalledWith(
+    expect(interaction.followUp).toHaveBeenCalledWith(
       expect.objectContaining({
         content: "You are not authorized to use this command.",
         ephemeral: true,
       }),
     );
+    expect(interaction.reply).not.toHaveBeenCalled();
+  });
+
+  it("rejects group DM slash commands outside dm.groupChannels before dispatch", async () => {
+    const cfg = {
+      commands: {
+        allowFrom: {
+          discord: ["user:owner"],
+        },
+      },
+      channels: {
+        discord: {
+          dm: {
+            enabled: true,
+            policy: "open",
+            groupEnabled: true,
+            groupChannels: ["allowed-group"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const interaction = createInteraction({
+      channelType: ChannelType.GroupDM,
+      channelId: "blocked-group",
+    });
+    const dispatchSpy = createDispatchSpy();
+    const command = await createStatusCommand(cfg);
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expect(interaction.followUp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "This group DM is not allowed.",
+      }),
+    );
+    expect(interaction.reply).not.toHaveBeenCalled();
   });
 
   it("executes matched plugin commands directly without invoking the agent dispatcher", async () => {
@@ -496,8 +543,77 @@ describe("Discord native plugin command dispatch", () => {
 
     expect(executeSpy).toHaveBeenCalledTimes(1);
     expect(dispatchSpy).not.toHaveBeenCalled();
-    expect(interaction.reply).toHaveBeenCalledWith(
+    expect(interaction.followUp).toHaveBeenCalledWith(
       expect.objectContaining({ content: "direct plugin output" }),
+    );
+    expect(interaction.reply).not.toHaveBeenCalled();
+  });
+
+  it("forwards Discord thread metadata into direct plugin command execution", async () => {
+    const cfg = {
+      commands: {
+        useAccessGroups: false,
+      },
+      channels: {
+        discord: {
+          groupPolicy: "allowlist",
+          guilds: {
+            "345678901234567890": {
+              channels: {
+                "thread-123": {
+                  enabled: true,
+                  requireMention: false,
+                },
+                "parent-456": {
+                  enabled: true,
+                  requireMention: false,
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const commandSpec: NativeCommandSpec = {
+      name: "cron_jobs",
+      description: "List cron jobs",
+      acceptsArgs: false,
+    };
+    const interaction = createInteraction({
+      channelType: ChannelType.PublicThread,
+      channelId: "thread-123",
+      threadParentId: "parent-456",
+      guildId: "345678901234567890",
+      guildName: "Test Guild",
+    });
+    const pluginMatch = {
+      command: {
+        name: "cron_jobs",
+        description: "List cron jobs",
+        pluginId: "cron-jobs",
+        acceptsArgs: false,
+        handler: vi.fn().mockResolvedValue({ text: "jobs" }),
+      },
+      args: undefined,
+    };
+
+    runtimeModuleMocks.matchPluginCommand.mockReturnValue(pluginMatch as never);
+    const executeSpy = runtimeModuleMocks.executePluginCommand.mockResolvedValue({
+      text: "direct plugin output",
+    });
+    const command = await createNativeCommand(cfg, commandSpec);
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(executeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        from: "discord:channel:thread-123",
+        to: "slash:owner",
+        sessionKey: "agent:main:discord:channel:thread-123",
+        messageThreadId: "thread-123",
+        threadParentId: "parent-456",
+      }),
     );
   });
 
@@ -546,7 +662,7 @@ describe("Discord native plugin command dispatch", () => {
           guilds: {
             [guildId]: {
               channels: {
-                [channelId]: { allow: true, requireMention: false },
+                [channelId]: { enabled: true, requireMention: false },
               },
             },
           },
@@ -624,6 +740,39 @@ describe("Discord native plugin command dispatch", () => {
       interaction,
       expectedPattern: /^agent:codex:acp:binding:discord:default:/,
     });
+  });
+
+  it("does not bypass configured ACP readiness for Discord /new", async () => {
+    const { cfg, interaction } = createConfiguredAcpCase({
+      channelType: ChannelType.GuildText,
+      channelId: "1478844424791396446",
+      peerKind: "channel",
+      guildId: "1459246755253325866",
+      guildName: "Ops",
+    });
+    const resolveRouteState = vi.fn(async () =>
+      createConfiguredRouteState({
+        sessionKey: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
+        agentId: "claude",
+      }),
+    );
+    discordNativeCommandTesting.setResolveDiscordNativeInteractionRouteState(resolveRouteState);
+    runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
+    const dispatchSpy = createDispatchSpy();
+    const command = await createNativeCommand(cfg, {
+      name: "new",
+      description: "Start a new session.",
+      acceptsArgs: true,
+    });
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(resolveRouteState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        enforceConfiguredBindingReadiness: true,
+      }),
+    );
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
   });
 
   it("allows recovery commands through configured ACP bindings even when ensure fails", async () => {

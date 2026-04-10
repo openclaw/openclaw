@@ -1,6 +1,7 @@
 import { Container, Separator, TextDisplay } from "@buape/carbon";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { vi } from "vitest";
+import type { ChannelMessageActionName } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 
 let applyCrossContextDecoration: typeof import("./outbound-policy.js").applyCrossContextDecoration;
@@ -52,6 +53,19 @@ const mocks = vi.hoisted(() => ({
   ),
 }));
 
+vi.mock("./channel-adapters.js", () => ({
+  getChannelMessageAdapter: mocks.getChannelMessageAdapter,
+}));
+
+vi.mock("./target-normalization.js", () => ({
+  normalizeTargetForProvider: mocks.normalizeTargetForProvider,
+}));
+
+vi.mock("./target-resolver.js", () => ({
+  formatTargetDisplay: mocks.formatTargetDisplay,
+  lookupDirectoryDisplay: mocks.lookupDirectoryDisplay,
+}));
+
 const slackConfig = {
   channels: {
     slack: {
@@ -67,20 +81,35 @@ const discordConfig = {
   },
 } as OpenClawConfig;
 
+function expectCrossContextPolicyResult(params: {
+  cfg: OpenClawConfig;
+  channel: string;
+  action: "send" | "upload-file";
+  to: string;
+  currentChannelId: string;
+  currentChannelProvider: string;
+  expected: "allow" | RegExp;
+}) {
+  const run = () =>
+    enforceCrossContextPolicy({
+      cfg: params.cfg,
+      channel: params.channel,
+      action: params.action,
+      args: { to: params.to },
+      toolContext: {
+        currentChannelId: params.currentChannelId,
+        currentChannelProvider: params.currentChannelProvider,
+      },
+    });
+  if (params.expected === "allow") {
+    expect(run).not.toThrow();
+    return;
+  }
+  expect(run).toThrow(params.expected);
+}
+
 describe("outbound policy helpers", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.clearAllMocks();
-    vi.doMock("./channel-adapters.js", () => ({
-      getChannelMessageAdapter: mocks.getChannelMessageAdapter,
-    }));
-    vi.doMock("./target-normalization.js", () => ({
-      normalizeTargetForProvider: mocks.normalizeTargetForProvider,
-    }));
-    vi.doMock("./target-resolver.js", () => ({
-      formatTargetDisplay: mocks.formatTargetDisplay,
-      lookupDirectoryDisplay: mocks.lookupDirectoryDisplay,
-    }));
+  beforeAll(async () => {
     ({
       applyCrossContextDecoration,
       buildCrossContextDecoration,
@@ -89,73 +118,64 @@ describe("outbound policy helpers", () => {
     } = await import("./outbound-policy.js"));
   });
 
-  it("allows cross-provider sends when enabled", () => {
-    const cfg = {
-      ...slackConfig,
-      tools: {
-        message: { crossContext: { allowAcrossProviders: true } },
-      },
-    } as OpenClawConfig;
-
-    expect(() =>
-      enforceCrossContextPolicy({
-        cfg,
-        channel: "telegram",
-        action: "send",
-        args: { to: "telegram:@ops" },
-        toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
-      }),
-    ).not.toThrow();
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
-  it("blocks cross-provider sends when not allowed", () => {
-    expect(() =>
-      enforceCrossContextPolicy({
-        cfg: slackConfig,
-        channel: "telegram",
-        action: "send",
-        args: { to: "telegram:@ops" },
-        toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
-      }),
-    ).toThrow(/target provider "telegram" while bound to "slack"/);
-  });
-
-  it("blocks same-provider cross-context sends when allowWithinProvider is false", () => {
-    const cfg = {
-      ...slackConfig,
-      tools: {
-        message: { crossContext: { allowWithinProvider: false } },
-      },
-    } as OpenClawConfig;
-
-    expect(() =>
-      enforceCrossContextPolicy({
-        cfg,
-        channel: "slack",
-        action: "send",
-        args: { to: "C999" },
-        toolContext: { currentChannelId: "C123", currentChannelProvider: "slack" },
-      }),
-    ).toThrow(/target="C999" while bound to "C123"/);
-  });
-
-  it("blocks same-provider cross-context uploads when allowWithinProvider is false", () => {
-    const cfg = {
-      ...slackConfig,
-      tools: {
-        message: { crossContext: { allowWithinProvider: false } },
-      },
-    } as OpenClawConfig;
-
-    expect(() =>
-      enforceCrossContextPolicy({
-        cfg,
-        channel: "slack",
-        action: "upload-file",
-        args: { to: "C999" },
-        toolContext: { currentChannelId: "C123", currentChannelProvider: "slack" },
-      }),
-    ).toThrow(/target="C999" while bound to "C123"/);
+  it.each([
+    {
+      cfg: {
+        ...slackConfig,
+        tools: {
+          message: { crossContext: { allowAcrossProviders: true } },
+        },
+      } as OpenClawConfig,
+      channel: "telegram",
+      action: "send" as const,
+      to: "telegram:@ops",
+      currentChannelId: "C12345678",
+      currentChannelProvider: "slack",
+      expected: "allow" as const,
+    },
+    {
+      cfg: slackConfig,
+      channel: "telegram",
+      action: "send" as const,
+      to: "telegram:@ops",
+      currentChannelId: "C12345678",
+      currentChannelProvider: "slack",
+      expected: /target provider "telegram" while bound to "slack"/,
+    },
+    {
+      cfg: {
+        ...slackConfig,
+        tools: {
+          message: { crossContext: { allowWithinProvider: false } },
+        },
+      } as OpenClawConfig,
+      channel: "slack",
+      action: "send" as const,
+      to: "C999",
+      currentChannelId: "C123",
+      currentChannelProvider: "slack",
+      expected: /target="C999" while bound to "C123"/,
+    },
+    {
+      cfg: {
+        ...slackConfig,
+        tools: {
+          message: { crossContext: { allowWithinProvider: false } },
+        },
+      } as OpenClawConfig,
+      channel: "slack",
+      action: "upload-file" as const,
+      to: "C999",
+      currentChannelId: "C123",
+      currentChannelProvider: "slack",
+      expected: /target="C999" while bound to "C123"/,
+    },
+  ])("enforces cross-context policy for %j", (params) => {
+    expectCrossContextPolicyResult(params);
   });
 
   it("uses components when available and preferred", async () => {
@@ -204,10 +224,15 @@ describe("outbound policy helpers", () => {
     });
   });
 
-  it("marks only supported cross-context actions", () => {
-    expect(shouldApplyCrossContextMarker("send")).toBe(true);
-    expect(shouldApplyCrossContextMarker("upload-file")).toBe(true);
-    expect(shouldApplyCrossContextMarker("thread-reply")).toBe(true);
-    expect(shouldApplyCrossContextMarker("thread-create")).toBe(false);
-  });
+  it.each([
+    { action: "send", expected: true },
+    { action: "upload-file", expected: true },
+    { action: "thread-reply", expected: true },
+    { action: "thread-create", expected: false },
+  ] satisfies Array<{ action: ChannelMessageActionName; expected: boolean }>)(
+    "marks supported cross-context action %j",
+    ({ action, expected }) => {
+      expect(shouldApplyCrossContextMarker(action)).toBe(expected);
+    },
+  );
 });

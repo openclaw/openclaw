@@ -41,6 +41,11 @@ function buildProps(result: SessionsListResult): SessionsProps {
     page: 0,
     pageSize: 10,
     selectedKeys: new Set<string>(),
+    expandedCheckpointKey: null,
+    checkpointItemsByKey: {},
+    checkpointLoadingKey: null,
+    checkpointBusyKey: null,
+    checkpointErrorByKey: {},
     onFiltersChange: () => undefined,
     onSearchChange: () => undefined,
     onSortChange: () => undefined,
@@ -53,6 +58,9 @@ function buildProps(result: SessionsListResult): SessionsProps {
     onDeselectPage: () => undefined,
     onDeselectAll: () => undefined,
     onDeleteSelected: () => undefined,
+    onToggleCheckpointDetails: () => undefined,
+    onBranchFromCheckpoint: () => undefined,
+    onRestoreCheckpoint: () => undefined,
   };
 }
 

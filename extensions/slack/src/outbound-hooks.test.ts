@@ -1,17 +1,18 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+const sendMessageSlackMock = vi.hoisted(() => vi.fn());
+const getGlobalHookRunnerMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./send.js", () => ({
-  sendMessageSlack: vi.fn().mockResolvedValue({ messageId: "1234.5678", channelId: "C123" }),
+  sendMessageSlack: sendMessageSlackMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
-  getGlobalHookRunner: vi.fn(),
+  getGlobalHookRunner: getGlobalHookRunnerMock,
 }));
 
-import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
-import { slackOutbound } from "./outbound-adapter.js";
-import { sendMessageSlack } from "./send.js";
+let slackOutbound: typeof import("./outbound-adapter.js").slackOutbound;
 
 type SlackSendTextCtx = {
   to: string;
@@ -32,7 +33,10 @@ const BASE_SLACK_SEND_CTX = {
 } as const;
 
 const sendSlackText = async (ctx: SlackSendTextCtx) => {
-  const sendText = slackOutbound.sendText as NonNullable<typeof slackOutbound.sendText>;
+  const sendText = slackOutbound.sendText;
+  if (!sendText) {
+    throw new Error("slackOutbound.sendText is unavailable");
+  }
   return await sendText({
     cfg: {} as OpenClawConfig,
     ...ctx,
@@ -64,12 +68,21 @@ const expectSlackSendCalledWith = (
     cfg: expect.any(Object),
     ...(options?.identity ? { identity: expect.objectContaining(options.identity) } : {}),
   };
-  expect(sendMessageSlack).toHaveBeenCalledWith("C123", text, expect.objectContaining(expected));
+  expect(sendMessageSlackMock).toHaveBeenCalledWith(
+    "C123",
+    text,
+    expect.objectContaining(expected),
+  );
 };
 
 describe("slack outbound hook wiring", () => {
+  beforeAll(async () => {
+    ({ slackOutbound } = await import("./outbound-adapter.js"));
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
+    sendMessageSlackMock.mockResolvedValue({ messageId: "1234.5678", channelId: "C123" });
   });
 
   afterEach(() => {
@@ -77,14 +90,14 @@ describe("slack outbound hook wiring", () => {
   });
 
   it("calls send without hooks when no hooks registered", async () => {
-    vi.mocked(getGlobalHookRunner).mockReturnValue(null);
+    getGlobalHookRunnerMock.mockReturnValue(null);
 
     await sendSlackTextWithDefaults({ text: "hello" });
     expectSlackSendCalledWith("hello");
   });
 
   it("forwards identity opts when present", async () => {
-    vi.mocked(getGlobalHookRunner).mockReturnValue(null);
+    getGlobalHookRunnerMock.mockReturnValue(null);
 
     await sendSlackTextWithDefaults({
       text: "hello",
@@ -101,7 +114,7 @@ describe("slack outbound hook wiring", () => {
   });
 
   it("forwards icon_emoji only when icon_url is absent", async () => {
-    vi.mocked(getGlobalHookRunner).mockReturnValue(null);
+    getGlobalHookRunnerMock.mockReturnValue(null);
 
     await sendSlackTextWithDefaults({
       text: "hello",
@@ -118,7 +131,7 @@ describe("slack outbound hook wiring", () => {
       hasHooks: vi.fn().mockReturnValue(true),
       runMessageSending: vi.fn().mockResolvedValue(undefined),
     };
-    vi.mocked(getGlobalHookRunner).mockReturnValue(mockRunner as never);
+    getGlobalHookRunnerMock.mockReturnValue(mockRunner);
 
     await sendSlackTextWithDefaults({ text: "hello" });
 
@@ -130,16 +143,51 @@ describe("slack outbound hook wiring", () => {
     expectSlackSendCalledWith("hello");
   });
 
+  it("uses configured defaultAccount for hook context when accountId is omitted", async () => {
+    const mockRunner = {
+      hasHooks: vi.fn().mockReturnValue(true),
+      runMessageSending: vi.fn().mockResolvedValue(undefined),
+    };
+    getGlobalHookRunnerMock.mockReturnValue(mockRunner);
+
+    const sendText = slackOutbound.sendText;
+    if (!sendText) {
+      throw new Error("slackOutbound.sendText is unavailable");
+    }
+    await sendText({
+      cfg: {
+        channels: {
+          slack: {
+            defaultAccount: "work",
+            accounts: {
+              work: {
+                botToken: "xoxb-work",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      to: "C123",
+      text: "hello",
+      replyToId: "1111.2222",
+    });
+
+    expect(mockRunner.runMessageSending).toHaveBeenCalledWith(
+      { to: "C123", content: "hello", metadata: { threadTs: "1111.2222", channelId: "C123" } },
+      { channelId: "slack", accountId: "work" },
+    );
+  });
+
   it("cancels send when hook returns cancel:true", async () => {
     const mockRunner = {
       hasHooks: vi.fn().mockReturnValue(true),
       runMessageSending: vi.fn().mockResolvedValue({ cancel: true }),
     };
-    vi.mocked(getGlobalHookRunner).mockReturnValue(mockRunner as never);
+    getGlobalHookRunnerMock.mockReturnValue(mockRunner);
 
     const result = await sendSlackTextWithDefaults({ text: "hello" });
 
-    expect(sendMessageSlack).not.toHaveBeenCalled();
+    expect(sendMessageSlackMock).not.toHaveBeenCalled();
     expect(result.channel).toBe("slack");
   });
 
@@ -148,7 +196,7 @@ describe("slack outbound hook wiring", () => {
       hasHooks: vi.fn().mockReturnValue(true),
       runMessageSending: vi.fn().mockResolvedValue({ content: "modified" }),
     };
-    vi.mocked(getGlobalHookRunner).mockReturnValue(mockRunner as never);
+    getGlobalHookRunnerMock.mockReturnValue(mockRunner);
 
     await sendSlackTextWithDefaults({ text: "original" });
     expectSlackSendCalledWith("modified");
@@ -159,11 +207,11 @@ describe("slack outbound hook wiring", () => {
       hasHooks: vi.fn().mockReturnValue(false),
       runMessageSending: vi.fn(),
     };
-    vi.mocked(getGlobalHookRunner).mockReturnValue(mockRunner as never);
+    getGlobalHookRunnerMock.mockReturnValue(mockRunner);
 
     await sendSlackTextWithDefaults({ text: "hello" });
 
     expect(mockRunner.runMessageSending).not.toHaveBeenCalled();
-    expect(sendMessageSlack).toHaveBeenCalled();
+    expect(sendMessageSlackMock).toHaveBeenCalled();
   });
 });

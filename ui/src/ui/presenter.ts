@@ -1,4 +1,10 @@
-import { formatRelativeTimestamp, formatDurationHuman, formatMs } from "./format.ts";
+import { t } from "../i18n/index.ts";
+import {
+  formatRelativeTimestamp,
+  formatDurationHuman,
+  formatMs,
+  formatUnknownText,
+} from "./format.ts";
 import type { CronJob, GatewaySessionRow, PresenceEntry } from "./types.ts";
 
 export function formatPresenceSummary(entry: PresenceEntry): string {
@@ -11,12 +17,12 @@ export function formatPresenceSummary(entry: PresenceEntry): string {
 
 export function formatPresenceAge(entry: PresenceEntry): string {
   const ts = entry.ts ?? null;
-  return ts ? formatRelativeTimestamp(ts) : "n/a";
+  return ts ? formatRelativeTimestamp(ts) : t("common.na");
 }
 
 export function formatNextRun(ms?: number | null) {
   if (!ms) {
-    return "n/a";
+    return t("common.na");
   }
   const weekday = new Date(ms).toLocaleDateString(undefined, { weekday: "short" });
   return `${weekday}, ${formatMs(ms)} (${formatRelativeTimestamp(ms)})`;
@@ -24,9 +30,9 @@ export function formatNextRun(ms?: number | null) {
 
 export function formatSessionTokens(row: GatewaySessionRow) {
   if (row.totalTokens == null && row.inputTokens == null && row.outputTokens == null) {
-    return "n/a";
+    return t("common.na");
   }
-  const total = row.totalTokens ?? 0;
+  const total = row.totalTokens ?? (row.inputTokens ?? 0) + (row.outputTokens ?? 0);
   const ctx = row.contextTokens ?? 0;
   const base = ctx ? `${total} / ${ctx}` : String(total);
   if (row.inputTokens != null || row.outputTokens != null) {
@@ -45,16 +51,15 @@ export function formatEventPayload(payload: unknown): string {
   try {
     return JSON.stringify(payload, null, 2);
   } catch {
-    // oxlint-disable typescript/no-base-to-string
-    return String(payload);
+    return formatUnknownText(payload);
   }
 }
 
 export function formatCronState(job: CronJob) {
   const state = job.state ?? {};
-  const next = state.nextRunAtMs ? formatMs(state.nextRunAtMs) : "n/a";
-  const last = state.lastRunAtMs ? formatMs(state.lastRunAtMs) : "n/a";
-  const status = state.lastStatus ?? "n/a";
+  const next = state.nextRunAtMs ? formatMs(state.nextRunAtMs) : t("common.na");
+  const last = state.lastRunAtMs ? formatMs(state.lastRunAtMs) : t("common.na");
+  const status = state.lastStatus ?? t("common.na");
   return `${status} · next ${next} · last ${last}`;
 }
 

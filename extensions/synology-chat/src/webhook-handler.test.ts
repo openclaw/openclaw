@@ -1,18 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { resolveLegacyWebhookNameToChatUserId, sendMessage } from "./client.js";
 import { makeFormBody, makeReq, makeRes, makeStalledReq } from "./test-http-utils.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 import type { WebhookHandlerDeps } from "./webhook-handler.js";
-import {
-  clearSynologyWebhookRateLimiterStateForTest,
-  createWebhookHandler,
-} from "./webhook-handler.js";
+const clientModule = await import("./client.js");
+const sendMessage = vi.spyOn(clientModule, "sendMessage").mockResolvedValue(true);
+const resolveLegacyWebhookNameToChatUserId = vi
+  .spyOn(clientModule, "resolveLegacyWebhookNameToChatUserId")
+  .mockResolvedValue(undefined);
+const { clearSynologyWebhookRateLimiterStateForTest, createWebhookHandler } =
+  await import("./webhook-handler.js");
 
-// Mock sendMessage and resolveLegacyWebhookNameToChatUserId to prevent real HTTP calls
-vi.mock("./client.js", () => ({
-  sendMessage: vi.fn().mockResolvedValue(true),
-  resolveLegacyWebhookNameToChatUserId: vi.fn().mockResolvedValue(undefined),
-}));
+type TestLog = {
+  info: (...args: unknown[]) => void;
+  warn: (...args: unknown[]) => void;
+  error: (...args: unknown[]) => void;
+};
 
 function makeAccount(
   overrides: Partial<ResolvedSynologyChatAccount> = {},
@@ -44,7 +46,7 @@ const validBody = makeFormBody({
 });
 
 async function runDangerousNameMatchReply(
-  log: { info: any; warn: any; error: any },
+  log: TestLog,
   options: {
     resolvedChatUserId?: number;
     accountIdSuffix: string;
@@ -77,10 +79,14 @@ async function runDangerousNameMatchReply(
 }
 
 describe("createWebhookHandler", () => {
-  let log: { info: any; warn: any; error: any };
+  let log: TestLog;
 
   beforeEach(() => {
     clearSynologyWebhookRateLimiterStateForTest();
+    sendMessage.mockClear();
+    sendMessage.mockResolvedValue(true);
+    resolveLegacyWebhookNameToChatUserId.mockClear();
+    resolveLegacyWebhookNameToChatUserId.mockResolvedValue(undefined);
     log = {
       info: vi.fn(),
       warn: vi.fn(),
@@ -158,6 +164,33 @@ describe("createWebhookHandler", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("rejects excess concurrent pre-auth body reads from the same remote IP", async () => {
+    const handler = createWebhookHandler({
+      account: makeAccount({ accountId: "preauth-inflight-test-" + Date.now() }),
+      deliver: vi.fn(),
+      log,
+    });
+
+    const requests = Array.from({ length: 12 }, () => {
+      const req = makeStalledReq("POST");
+      (req.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.10";
+      return req;
+    });
+    const responses = requests.map(() => makeRes());
+    const runs = requests.map((req, index) => handler(req, responses[index]));
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Default maxInFlightPerKey is 8; 12 total requests leaves 4 rejected with 429.
+    expect(responses.filter((res) => res._status === 0)).toHaveLength(8);
+    expect(responses.filter((res) => res._status === 429)).toHaveLength(4);
+
+    for (const req of requests) {
+      req.emit("end");
+    }
+    await Promise.all(runs);
   });
 
   it("returns 401 for invalid token", async () => {

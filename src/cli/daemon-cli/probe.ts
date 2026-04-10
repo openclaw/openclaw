@@ -1,4 +1,18 @@
+import { formatErrorMessage } from "../../infra/errors.js";
 import { withProgress } from "../progress.js";
+
+function resolveProbeFailureMessage(result: {
+  error?: string | null;
+  close?: { code: number; reason: string } | null;
+}): string {
+  const closeHint = result.close
+    ? `gateway closed (${result.close.code}): ${result.close.reason}`
+    : null;
+  if (closeHint && (!result.error || result.error === "timeout")) {
+    return closeHint;
+  }
+  return result.error ?? closeHint ?? "gateway probe failed";
+}
 
 export async function probeGatewayStatus(opts: {
   url: string;
@@ -47,17 +61,14 @@ export async function probeGatewayStatus(opts: {
     if (result.ok) {
       return { ok: true } as const;
     }
-    const closeHint = result.close
-      ? `gateway closed (${result.close.code}): ${result.close.reason}`
-      : null;
     return {
       ok: false,
-      error: result.error ?? closeHint ?? "gateway probe failed",
+      error: resolveProbeFailureMessage(result),
     } as const;
   } catch (err) {
     return {
       ok: false,
-      error: err instanceof Error ? err.message : String(err),
+      error: formatErrorMessage(err),
     } as const;
   }
 }

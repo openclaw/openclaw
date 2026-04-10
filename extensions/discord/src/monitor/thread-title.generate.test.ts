@@ -1,5 +1,5 @@
-import * as agentRuntimeModule from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import * as agentRuntimeModule from "openclaw/plugin-sdk/simple-completion-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const completeWithPreparedSimpleCompletionModelMock =
@@ -173,9 +173,11 @@ describe("generateThreadTitle", () => {
     expect(completeWithPreparedSimpleCompletionModelMock.mock.calls[0]?.[0]?.options).toEqual(
       expect.objectContaining({
         maxTokens: 24,
-        temperature: 0.2,
       }),
     );
+    expect(
+      completeWithPreparedSimpleCompletionModelMock.mock.calls[0]?.[0]?.options,
+    ).not.toHaveProperty("temperature");
   });
 
   it("returns null when completion throws", async () => {

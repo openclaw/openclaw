@@ -1,15 +1,19 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../../config/config.js";
-import type { PluginHookBeforeAgentStartResult } from "../../../plugins/types.js";
+import type {
+  PluginHookBeforeAgentStartResult,
+  ProviderRuntimeModel,
+} from "../../../plugins/types.js";
 import {
   CONTEXT_WINDOW_HARD_MIN_TOKENS,
   CONTEXT_WINDOW_WARN_BELOW_TOKENS,
   evaluateContextWindowGuard,
   resolveContextWindowInfo,
+  type ContextWindowInfo,
 } from "../../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { FailoverError } from "../../failover-error.js";
 import { log } from "../logger.js";
+import { readPiModelContextTokens } from "../model-context-tokens.js";
 
 type HookContext = {
   agentId?: string;
@@ -99,12 +103,16 @@ export function resolveEffectiveRuntimeModel(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   modelId: string;
-  runtimeModel: Model<Api>;
-}) {
+  runtimeModel: ProviderRuntimeModel;
+}): {
+  ctxInfo: ContextWindowInfo;
+  effectiveModel: ProviderRuntimeModel;
+} {
   const ctxInfo = resolveContextWindowInfo({
     cfg: params.cfg,
     provider: params.provider,
     modelId: params.modelId,
+    modelContextTokens: readPiModelContextTokens(params.runtimeModel),
     modelContextWindow: params.runtimeModel.contextWindow,
     defaultTokens: DEFAULT_CONTEXT_TOKENS,
   });

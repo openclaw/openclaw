@@ -10,11 +10,13 @@
  * 6. Optionally sends a proactive follow-up to the user
  */
 
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import {
   dispatchReplyFromConfigWithSettledDispatcher,
   type OpenClawConfig,
 } from "../runtime-api.js";
 import type { StoredConversationReference } from "./conversation-store.js";
+import { formatUnknownError } from "./errors.js";
 import { buildReflectionPrompt, parseReflectionResponse } from "./feedback-reflection-prompt.js";
 import {
   DEFAULT_COOLDOWN_MS,
@@ -137,7 +139,7 @@ function createReflectionCaptureDispatcher(params: {
     typingCallbacks: noopTypingCallbacks,
     humanDelay: core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),
     onError: (err) => {
-      params.log.debug?.("reflection reply error", { error: String(err) });
+      params.log.debug?.("reflection reply error", { error: formatUnknownError(err) });
     },
   });
 
@@ -207,7 +209,7 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
       replyOptions: capture.replyOptions,
     });
   } catch (err) {
-    log.error("reflection dispatch failed", { error: String(err) });
+    log.error("reflection dispatch failed", { error: formatUnknownError(err) });
     return;
   }
 
@@ -237,10 +239,12 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
       learning: parsedReflection.learning,
     });
   } catch (err) {
-    log.debug?.("failed to store reflection learning", { error: String(err) });
+    log.debug?.("failed to store reflection learning", { error: formatUnknownError(err) });
   }
 
-  const conversationType = params.conversationRef.conversation?.conversationType?.toLowerCase();
+  const conversationType = normalizeOptionalLowercaseString(
+    params.conversationRef.conversation?.conversationType,
+  );
   const shouldNotify =
     conversationType === "personal" &&
     parsedReflection.followUp &&
@@ -265,7 +269,7 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
     });
     log.info("sent reflection follow-up", { sessionKey });
   } catch (err) {
-    log.debug?.("failed to send reflection follow-up", { error: String(err) });
+    log.debug?.("failed to send reflection follow-up", { error: formatUnknownError(err) });
   }
 }
 

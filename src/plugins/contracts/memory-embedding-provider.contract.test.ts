@@ -1,46 +1,19 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
+import {
+  createPluginRegistryFixture,
+  registerVirtualTestPlugin,
+} from "../../../test/helpers/plugins/contracts-testkit.js";
 import { getRegisteredMemoryEmbeddingProvider } from "../memory-embedding-providers.js";
-import { createPluginRegistry, type PluginRecord } from "../registry.js";
-import type { PluginRuntime } from "../runtime/types.js";
-import { createPluginRecord } from "../status.test-helpers.js";
-import type { OpenClawPluginApi } from "../types.js";
-
-function registerTestPlugin(params: {
-  registry: ReturnType<typeof createPluginRegistry>;
-  config: OpenClawConfig;
-  record: PluginRecord;
-  register(api: OpenClawPluginApi): void;
-}) {
-  params.registry.registry.plugins.push(params.record);
-  params.register(
-    params.registry.createApi(params.record, {
-      config: params.config,
-    }),
-  );
-}
 
 describe("memory embedding provider registration", () => {
-  it("only allows memory plugins to register adapters", () => {
-    const config = {} as OpenClawConfig;
-    const registry = createPluginRegistry({
-      logger: {
-        info() {},
-        warn() {},
-        error() {},
-        debug() {},
-      },
-      runtime: {} as PluginRuntime,
-    });
+  it("rejects non-memory plugins that did not declare the capability contract", () => {
+    const { config, registry } = createPluginRegistryFixture();
 
-    registerTestPlugin({
+    registerVirtualTestPlugin({
       registry,
       config,
-      record: createPluginRecord({
-        id: "not-memory",
-        name: "Not Memory",
-        source: "/virtual/not-memory/index.ts",
-      }),
+      id: "not-memory",
+      name: "Not Memory",
       register(api) {
         api.registerMemoryEmbeddingProvider({
           id: "forbidden",
@@ -54,43 +27,57 @@ describe("memory embedding provider registration", () => {
       expect.arrayContaining([
         expect.objectContaining({
           pluginId: "not-memory",
-          message: "only memory plugins can register memory embedding providers",
+          message:
+            "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: forbidden",
         }),
       ]),
     );
   });
 
-  it("records the owning memory plugin id for registered adapters", () => {
-    const config = {} as OpenClawConfig;
-    const registry = createPluginRegistry({
-      logger: {
-        info() {},
-        warn() {},
-        error() {},
-        debug() {},
-      },
-      runtime: {} as PluginRuntime,
-    });
+  it("allows non-memory plugins that declare the capability contract", () => {
+    const { config, registry } = createPluginRegistryFixture();
 
-    registerTestPlugin({
+    registerVirtualTestPlugin({
       registry,
       config,
-      record: createPluginRecord({
-        id: "memory-core",
-        name: "Memory Core",
-        kind: "memory",
-        source: "/virtual/memory-core/index.ts",
-      }),
+      id: "ollama",
+      name: "Ollama",
+      contracts: {
+        memoryEmbeddingProviders: ["ollama"],
+      },
       register(api) {
         api.registerMemoryEmbeddingProvider({
-          id: "openai",
+          id: "ollama",
           create: async () => ({ provider: null }),
         });
       },
     });
 
-    expect(getRegisteredMemoryEmbeddingProvider("openai")).toEqual({
-      adapter: expect.objectContaining({ id: "openai" }),
+    expect(getRegisteredMemoryEmbeddingProvider("ollama")).toEqual({
+      adapter: expect.objectContaining({ id: "ollama" }),
+      ownerPluginId: "ollama",
+    });
+  });
+
+  it("records the owning memory plugin id for registered adapters", () => {
+    const { config, registry } = createPluginRegistryFixture();
+
+    registerVirtualTestPlugin({
+      registry,
+      config,
+      id: "memory-core",
+      name: "Memory Core",
+      kind: "memory",
+      register(api) {
+        api.registerMemoryEmbeddingProvider({
+          id: "demo-embedding",
+          create: async () => ({ provider: null }),
+        });
+      },
+    });
+
+    expect(getRegisteredMemoryEmbeddingProvider("demo-embedding")).toEqual({
+      adapter: expect.objectContaining({ id: "demo-embedding" }),
       ownerPluginId: "memory-core",
     });
   });

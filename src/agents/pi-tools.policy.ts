@@ -1,10 +1,17 @@
 import { getChannelPlugin } from "../channels/plugins/index.js";
+import {
+  resolveSessionConversationRef,
+  resolveSessionParentSessionKey,
+} from "../channels/plugins/session-conversation.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { resolveThreadParentSessionKey } from "../sessions/session-key-utils.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig, resolveAgentIdFromSessionKey } from "./agent-scope.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
@@ -30,9 +37,6 @@ const SUBAGENT_TOOL_DENY_ALWAYS = [
   // Status/scheduling - main agent coordinates
   "session_status",
   "cron",
-  // Memory - pass relevant info in spawn prompt instead
-  "memory_search",
-  "memory_get",
   // Direct session sends - subagents communicate through announce chain
   "sessions_send",
 ];
@@ -128,7 +132,7 @@ type ToolPolicyConfig = {
 };
 
 function normalizeProviderKey(value: string): string {
-  return value.trim().toLowerCase();
+  return normalizeLowercaseStringOrEmpty(value);
 }
 
 function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
@@ -139,7 +143,18 @@ function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   if (!raw) {
     return {};
   }
-  const base = resolveThreadParentSessionKey(raw) ?? raw;
+  const resolvedConversation = resolveSessionConversationRef(raw);
+  if (resolvedConversation) {
+    const groupId = resolvedConversation.baseConversationId;
+    if (!groupId) {
+      return {};
+    }
+    return {
+      channel: resolvedConversation.channel,
+      groupId,
+    };
+  }
+  const base = resolveSessionParentSessionKey(raw) ?? raw;
   const parts = base.split(":").filter(Boolean);
   let body = parts[0] === "agent" ? parts.slice(2) : parts;
   if (body[0] === "subagent") {
@@ -156,7 +171,7 @@ function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   if (!groupId) {
     return {};
   }
-  return { channel: channel.trim().toLowerCase(), groupId };
+  return { channel: normalizeLowercaseStringOrEmpty(channel), groupId };
 }
 
 function resolveProviderToolPolicy(params: {
@@ -184,7 +199,7 @@ function resolveProviderToolPolicy(params: {
   }
 
   const normalizedProvider = normalizeProviderKey(provider);
-  const rawModelId = params.modelId?.trim().toLowerCase();
+  const rawModelId = normalizeOptionalLowercaseString(params.modelId);
   const fullModelId =
     rawModelId && !rawModelId.includes("/") ? `${normalizedProvider}/${rawModelId}` : rawModelId;
 

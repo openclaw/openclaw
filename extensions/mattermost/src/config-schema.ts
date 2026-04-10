@@ -1,1 +1,1 @@
-export { MattermostConfigSchema } from "./config-schema-core.js";
+export { MattermostChannelConfigSchema } from "./config-surface.js";

@@ -20,7 +20,9 @@ Secrets are resolved into an in-memory runtime snapshot.
 - Resolution is eager during activation, not lazy on request paths.
 - Startup fails fast when an effectively active SecretRef cannot be resolved.
 - Reload uses atomic swap: full success, or keep the last-known-good snapshot.
+- SecretRef policy violations (for example OAuth-mode auth profiles combined with SecretRef input) fail activation before runtime swap.
 - Runtime requests read from the active in-memory snapshot only.
+- After the first successful config activation/load, runtime code paths keep reading that active in-memory snapshot until a successful reload swaps it.
 - Outbound delivery paths also read from that active snapshot (for example Discord reply/thread delivery and Telegram action sends); they do not re-resolve SecretRefs on each send.
 
 This keeps secret-provider outages off hot request paths.
@@ -288,6 +290,39 @@ Optional per-id errors:
 }
 ```
 
+## MCP server environment variables
+
+MCP server env vars configured via `plugins.entries.acpx.config.mcpServers` support SecretInput. This keeps API keys and tokens out of plaintext config:
+
+```json5
+{
+  plugins: {
+    entries: {
+      acpx: {
+        enabled: true,
+        config: {
+          mcpServers: {
+            github: {
+              command: "npx",
+              args: ["-y", "@modelcontextprotocol/server-github"],
+              env: {
+                GITHUB_PERSONAL_ACCESS_TOKEN: {
+                  source: "env",
+                  provider: "default",
+                  id: "MCP_GITHUB_PAT",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Plaintext string values still work. Env-template refs like `${MCP_SERVER_API_KEY}` and SecretRef objects are resolved during gateway activation before the MCP server process is spawned. As with other SecretRef surfaces, unresolved refs only block activation when the `acpx` plugin is effectively active.
+
 ## Sandbox SSH auth material
 
 The core `ssh` sandbox backend also supports SecretRefs for SSH auth material:
@@ -330,6 +365,7 @@ Runtime-minted or rotating credentials and OAuth refresh material are intentiona
 - Field without a ref: unchanged.
 - Field with a ref: required on active surfaces during activation.
 - If both plaintext and ref are present, ref takes precedence on supported precedence paths.
+- The redaction sentinel `__OPENCLAW_REDACTED__` is reserved for internal config redaction/restore and is rejected as literal submitted config data.
 
 Warning and audit signals:
 
@@ -349,12 +385,14 @@ Secret activation runs on:
 - Config reload hot-apply path
 - Config reload restart-check path
 - Manual reload via `secrets.reload`
+- Gateway config write RPC preflight (`config.set` / `config.apply` / `config.patch`) for active-surface SecretRef resolvability within the submitted config payload before persisting edits
 
 Activation contract:
 
 - Success swaps the snapshot atomically.
 - Startup failure aborts gateway startup.
 - Runtime reload failure keeps the last-known-good snapshot.
+- Write-RPC preflight failure rejects the submitted config and keeps both disk config and active runtime snapshot unchanged.
 - Providing an explicit per-call channel token to an outbound helper/tool call does not trigger SecretRef activation; activation points remain startup, reload, and explicit `secrets.reload`.
 
 ## Degraded and recovered signals
@@ -379,7 +417,7 @@ Command paths can opt into supported SecretRef resolution via gateway snapshot R
 
 There are two broad behaviors:
 
-- Strict command paths (for example `openclaw memory` remote-memory paths and `openclaw qr --remote`) read from the active snapshot and fail fast when a required SecretRef is unavailable.
+- Strict command paths (for example `openclaw memory` remote-memory paths and `openclaw qr --remote` when it needs remote shared-secret refs) read from the active snapshot and fail fast when a required SecretRef is unavailable.
 - Read-only command paths (for example `openclaw status`, `openclaw status --all`, `openclaw channels status`, `openclaw channels resolve`, `openclaw security audit`, and read-only doctor/config repair flows) also prefer the active snapshot, but degrade instead of aborting when a targeted SecretRef is unavailable in that command path.
 
 Read-only behavior:

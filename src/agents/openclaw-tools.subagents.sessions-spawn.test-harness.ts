@@ -1,6 +1,14 @@
 import { vi, type Mock } from "vitest";
+import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
+import { __testing as subagentRegistryTesting } from "./subagent-registry.js";
+import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
+import { __testing as subagentSpawnTesting } from "./subagent-spawn.js";
 
 type SessionsSpawnTestConfig = ReturnType<(typeof import("../config/config.js"))["loadConfig"]>;
+type SessionsSpawnHookRunner = SubagentLifecycleHookRunner | null;
+type CaptureSubagentCompletionReply =
+  (typeof import("./subagent-announce.js"))["captureSubagentCompletionReply"];
+type RunSubagentAnnounceFlow = (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
 type CreateSessionsSpawnTool =
   (typeof import("./tools/sessions-spawn-tool.js"))["createSessionsSpawnTool"];
 export type CreateOpenClawToolsOpts = Parameters<CreateSessionsSpawnTool>[0];
@@ -24,9 +32,66 @@ const hoisted = vi.hoisted(() => {
       scope: "per-sender",
     },
   } as SessionsSpawnTestConfig;
-  const state = { configOverride: defaultConfigOverride };
+  let configOverride = defaultConfigOverride;
+  const defaultRunSubagentAnnounceFlow: RunSubagentAnnounceFlow = async (params) => {
+    const statusLabel =
+      params.outcome?.status === "timeout" ? "timed out" : "completed successfully";
+    const requesterSessionKey = resolveRequesterStoreKey(
+      configOverride,
+      params.requesterSessionKey,
+    );
+
+    await callGatewayMock({
+      method: "agent",
+      params: {
+        sessionKey: requesterSessionKey,
+        message: `subagent task ${statusLabel}`,
+        deliver: false,
+      },
+    });
+
+    if (params.label) {
+      await callGatewayMock({
+        method: "sessions.patch",
+        params: {
+          key: params.childSessionKey,
+          label: params.label,
+        },
+      });
+    }
+
+    if (params.cleanup === "delete") {
+      await callGatewayMock({
+        method: "sessions.delete",
+        params: {
+          key: params.childSessionKey,
+          deleteTranscript: true,
+          emitLifecycleHooks: params.spawnMode === "session",
+        },
+      });
+    }
+
+    return true;
+  };
+  const defaultCaptureSubagentCompletionReply: CaptureSubagentCompletionReply = async () =>
+    undefined;
+  const state = {
+    get configOverride() {
+      return configOverride;
+    },
+    set configOverride(next: SessionsSpawnTestConfig) {
+      configOverride = next;
+    },
+    hookRunnerOverride: null as SessionsSpawnHookRunner,
+    defaultCaptureSubagentCompletionReply,
+    captureSubagentCompletionReplyOverride: defaultCaptureSubagentCompletionReply,
+    defaultRunSubagentAnnounceFlow,
+    runSubagentAnnounceFlowOverride: defaultRunSubagentAnnounceFlow,
+  };
   return { callGatewayMock, defaultConfigOverride, state };
 });
+
+let cachedCreateSessionsSpawnTool: CreateSessionsSpawnTool | null = null;
 
 export function getCallGatewayMock(): Mock {
   return hoisted.callGatewayMock;
@@ -52,11 +117,41 @@ export function setSessionsSpawnConfigOverride(next: SessionsSpawnTestConfig): v
   hoisted.state.configOverride = next;
 }
 
+export function resetSessionsSpawnAnnounceFlowOverride(): void {
+  hoisted.state.runSubagentAnnounceFlowOverride = hoisted.state.defaultRunSubagentAnnounceFlow;
+}
+
+export function resetSessionsSpawnHookRunnerOverride(): void {
+  hoisted.state.hookRunnerOverride = null;
+}
+
+export function setSessionsSpawnHookRunnerOverride(next: SessionsSpawnHookRunner): void {
+  hoisted.state.hookRunnerOverride = next;
+}
+
+export function setSessionsSpawnAnnounceFlowOverride(next: RunSubagentAnnounceFlow): void {
+  hoisted.state.runSubagentAnnounceFlowOverride = next;
+}
+
 export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
-  // Dynamic import: ensure harness mocks are installed before tool modules load.
-  vi.resetModules();
-  const { createSessionsSpawnTool } = await import("./tools/sessions-spawn-tool.js");
-  return createSessionsSpawnTool(opts);
+  subagentSpawnTesting.setDepsForTest({
+    callGateway: (optsUnknown) => hoisted.callGatewayMock(optsUnknown),
+    getGlobalHookRunner: () => hoisted.state.hookRunnerOverride,
+    loadConfig: () => hoisted.state.configOverride,
+    updateSessionStore: async (_storePath, mutator) => mutator({}),
+  });
+  subagentRegistryTesting.setDepsForTest({
+    callGateway: (optsUnknown) => hoisted.callGatewayMock(optsUnknown),
+    loadConfig: () => hoisted.state.configOverride,
+    captureSubagentCompletionReply: (sessionKey) =>
+      hoisted.state.captureSubagentCompletionReplyOverride(sessionKey),
+    runSubagentAnnounceFlow: (params) => hoisted.state.runSubagentAnnounceFlowOverride(params),
+  });
+  if (!cachedCreateSessionsSpawnTool) {
+    ({ createSessionsSpawnTool: cachedCreateSessionsSpawnTool } =
+      await import("./tools/sessions-spawn-tool.js"));
+  }
+  return cachedCreateSessionsSpawnTool(opts);
 }
 
 export function setupSessionsSpawnGatewayMock(setupOpts: SessionsSpawnGatewayMockOptions): {
@@ -156,8 +251,8 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => hoisted.callGatewayMock(opts),
 }));
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
     loadConfig: () => hoisted.state.configOverride,
@@ -166,8 +261,8 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 
 // Same module, different specifier (used by tools under src/agents/tools/*).
-vi.mock("../../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
     loadConfig: () => hoisted.state.configOverride,

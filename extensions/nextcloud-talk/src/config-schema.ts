@@ -1,32 +1,14 @@
 import {
-  ReplyRuntimeConfigSchemaShape,
-  ToolPolicySchema,
-} from "openclaw/plugin-sdk/agent-config-primitives";
-import {
-  BlockStreamingCoalesceSchema,
-  DmConfigSchema,
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
+  ReplyRuntimeConfigSchemaShape,
+  ToolPolicySchema,
   requireOpenAllowFrom,
-} from "openclaw/plugin-sdk/channel-config-primitives";
+} from "openclaw/plugin-sdk/channel-config-schema";
+import { requireChannelOpenAllowFrom } from "openclaw/plugin-sdk/extension-shared";
 import { z } from "openclaw/plugin-sdk/zod";
 import { buildSecretInputSchema } from "./secret-input.js";
-
-function requireNextcloudTalkOpenAllowFrom(params: {
-  policy?: string;
-  allowFrom?: string[];
-  ctx: z.RefinementCtx;
-}) {
-  requireOpenAllowFrom({
-    policy: params.policy,
-    allowFrom: params.allowFrom,
-    ctx: params.ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.nextcloud-talk.dmPolicy="open" requires channels.nextcloud-talk.allowFrom to include "*"',
-  });
-}
 
 export const NextcloudTalkRoomSchema = z
   .object({
@@ -38,6 +20,14 @@ export const NextcloudTalkRoomSchema = z
     systemPrompt: z.string().optional(),
   })
   .strict();
+
+const NextcloudTalkNetworkSchema = z
+  .object({
+    /** Dangerous opt-in for self-hosted Nextcloud Talk on trusted private/internal hosts. */
+    dangerouslyAllowPrivateNetwork: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
 
 export const NextcloudTalkAccountSchemaBase = z
   .object({
@@ -59,18 +49,20 @@ export const NextcloudTalkAccountSchemaBase = z
     groupAllowFrom: z.array(z.string()).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     rooms: z.record(z.string(), NextcloudTalkRoomSchema.optional()).optional(),
-    /** Allow fetching from private/internal IP addresses (e.g. localhost). Required for self-hosted Nextcloud on LAN/VPN. */
-    allowPrivateNetwork: z.boolean().optional(),
+    /** Network policy overrides for self-hosted Nextcloud Talk on trusted private/internal hosts. */
+    network: NextcloudTalkNetworkSchema,
     ...ReplyRuntimeConfigSchemaShape,
   })
   .strict();
 
 export const NextcloudTalkAccountSchema = NextcloudTalkAccountSchemaBase.superRefine(
   (value, ctx) => {
-    requireNextcloudTalkOpenAllowFrom({
+    requireChannelOpenAllowFrom({
+      channel: "nextcloud-talk",
       policy: value.dmPolicy,
       allowFrom: value.allowFrom,
       ctx,
+      requireOpenAllowFrom,
     });
   },
 );
@@ -79,9 +71,11 @@ export const NextcloudTalkConfigSchema = NextcloudTalkAccountSchemaBase.extend({
   accounts: z.record(z.string(), NextcloudTalkAccountSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
-  requireNextcloudTalkOpenAllowFrom({
+  requireChannelOpenAllowFrom({
+    channel: "nextcloud-talk",
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,
     ctx,
+    requireOpenAllowFrom,
   });
 });

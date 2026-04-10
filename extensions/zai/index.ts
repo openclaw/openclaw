@@ -16,50 +16,58 @@ import {
   upsertAuthProfile,
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { DEFAULT_CONTEXT_TOKENS, normalizeModelCompat } from "openclaw/plugin-sdk/provider-models";
-import { createZaiToolStreamWrapper } from "openclaw/plugin-sdk/provider-stream";
+import {
+  buildProviderReplayFamilyHooks,
+  normalizeModelCompat,
+} from "openclaw/plugin-sdk/provider-model-shared";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { fetchZaiUsage, resolveLegacyPiAgentAccessToken } from "openclaw/plugin-sdk/provider-usage";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
 import { zaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import { buildZaiModelDefinition } from "./model-definitions.js";
 import { applyZaiConfig, applyZaiProviderConfig, ZAI_DEFAULT_MODEL_REF } from "./onboard.js";
 
 const PROVIDER_ID = "zai";
-const GLM5_MODEL_ID = "glm-5";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
 const PROFILE_ID = "zai:default";
+const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
+  family: "openai-compatible",
+});
+const ZAI_TOOL_STREAM_HOOKS = buildProviderStreamFamilyHooks("tool-stream-default-on");
 
 function resolveGlm5ForwardCompatModel(
   ctx: ProviderResolveDynamicModelContext,
 ): ProviderRuntimeModel | undefined {
   const trimmedModelId = ctx.modelId.trim();
-  const lower = trimmedModelId.toLowerCase();
-  if (lower !== GLM5_MODEL_ID && !lower.startsWith(`${GLM5_MODEL_ID}-`)) {
+  if (!normalizeLowercaseStringOrEmpty(trimmedModelId).startsWith("glm-5")) {
     return undefined;
   }
 
+  const existing = ctx.modelRegistry.find(
+    PROVIDER_ID,
+    trimmedModelId,
+  ) as ProviderRuntimeModel | null;
+  if (existing) {
+    return existing;
+  }
+
+  const def = buildZaiModelDefinition({ id: trimmedModelId });
   const template = ctx.modelRegistry.find(
     PROVIDER_ID,
     GLM5_TEMPLATE_MODEL_ID,
   ) as ProviderRuntimeModel | null;
-  if (template) {
-    return normalizeModelCompat({
-      ...template,
-      id: trimmedModelId,
-      name: trimmedModelId,
-      reasoning: true,
-    } as ProviderRuntimeModel);
-  }
-
   return normalizeModelCompat({
-    id: trimmedModelId,
-    name: trimmedModelId,
+    ...template,
+    id: def.id,
+    name: def.name,
     api: "openai-completions",
     provider: PROVIDER_ID,
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_TOKENS,
-    maxTokens: DEFAULT_CONTEXT_TOKENS,
+    reasoning: def.reasoning,
+    input: def.input,
+    cost: def.cost,
+    contextWindow: def.contextWindow,
+    maxTokens: def.maxTokens,
   } as ProviderRuntimeModel);
 }
 
@@ -272,6 +280,7 @@ export default definePluginEntry({
         }),
       ],
       resolveDynamicModel: (ctx) => resolveGlm5ForwardCompatModel(ctx),
+      ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
       prepareExtraParams: (ctx) => {
         if (ctx.extraParams?.tool_stream !== undefined) {
           return ctx.extraParams;
@@ -281,11 +290,10 @@ export default definePluginEntry({
           tool_stream: true,
         };
       },
-      wrapStreamFn: (ctx) =>
-        createZaiToolStreamWrapper(ctx.streamFn, ctx.extraParams?.tool_stream !== false),
+      ...ZAI_TOOL_STREAM_HOOKS,
       isBinaryThinking: () => true,
       isModernModelRef: ({ modelId }) => {
-        const lower = modelId.trim().toLowerCase();
+        const lower = normalizeLowercaseStringOrEmpty(modelId);
         return (
           lower.startsWith("glm-5") ||
           lower.startsWith("glm-4.7") ||

@@ -2,11 +2,26 @@ import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { buildPluginConfigSchema, emptyPluginConfigSchema } from "./config-schema.js";
 
+function expectSafeParseCases(
+  safeParse: ((value: unknown) => unknown) | undefined,
+  cases: ReadonlyArray<readonly [unknown, unknown]>,
+) {
+  expect(safeParse).toBeDefined();
+  expect(cases.map(([value]) => safeParse?.(value))).toEqual(cases.map(([, expected]) => expected));
+}
+
+function expectJsonSchema(
+  result: ReturnType<typeof buildPluginConfigSchema>,
+  expected: Record<string, unknown>,
+) {
+  expect(result.jsonSchema).toMatchObject(expected);
+}
+
 describe("buildPluginConfigSchema", () => {
   it("builds json schema when toJSONSchema is available", () => {
     const schema = z.strictObject({ enabled: z.boolean().default(true) });
     const result = buildPluginConfigSchema(schema);
-    expect(result.jsonSchema).toMatchObject({
+    expectJsonSchema(result, {
       type: "object",
       additionalProperties: false,
       properties: { enabled: { type: "boolean", default: true } },
@@ -43,7 +58,7 @@ describe("buildPluginConfigSchema", () => {
   it("falls back when toJSONSchema is missing", () => {
     const legacySchema = {} as unknown as Parameters<typeof buildPluginConfigSchema>[0];
     const result = buildPluginConfigSchema(legacySchema);
-    expect(result.jsonSchema).toEqual({ type: "object", additionalProperties: true });
+    expectJsonSchema(result, { type: "object", additionalProperties: true });
   });
 
   it("uses zod runtime parsing by default", () => {
@@ -71,11 +86,13 @@ describe("buildPluginConfigSchema", () => {
 describe("emptyPluginConfigSchema", () => {
   it("accepts undefined and empty objects only", () => {
     const schema = emptyPluginConfigSchema();
-    expect(schema.safeParse?.(undefined)).toEqual({ success: true, data: undefined });
-    expect(schema.safeParse?.({})).toEqual({ success: true, data: {} });
-    expect(schema.safeParse?.({ nope: true })).toEqual({
-      success: false,
-      error: { issues: [{ path: [], message: "config must be empty" }] },
-    });
+    expectSafeParseCases(schema.safeParse, [
+      [undefined, { success: true, data: undefined }],
+      [{}, { success: true, data: {} }],
+      [
+        { nope: true },
+        { success: false, error: { issues: [{ path: [], message: "config must be empty" }] } },
+      ],
+    ] as const);
   });
 });

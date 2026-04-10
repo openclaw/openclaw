@@ -2,6 +2,7 @@ import { t } from "../../i18n/index.ts";
 import { DEFAULT_CRON_FORM } from "../app-defaults.ts";
 import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type {
   CronJob,
   CronDeliveryStatus,
@@ -900,13 +901,13 @@ export function startCronEdit(state: CronState, job: CronJob) {
 function buildCloneName(name: string, existingNames: Set<string>) {
   const base = name.trim() || "Job";
   const first = `${base} copy`;
-  if (!existingNames.has(first.toLowerCase())) {
+  if (!existingNames.has(normalizeLowercaseStringOrEmpty(first))) {
     return first;
   }
   let index = 2;
   while (index < 1000) {
     const next = `${base} copy ${index}`;
-    if (!existingNames.has(next.toLowerCase())) {
+    if (!existingNames.has(normalizeLowercaseStringOrEmpty(next))) {
       return next;
     }
     index += 1;
@@ -917,7 +918,9 @@ function buildCloneName(name: string, existingNames: Set<string>) {
 export function startCronClone(state: CronState, job: CronJob) {
   clearCronEditState(state);
   state.cronRunsJobId = job.id;
-  const existingNames = new Set(state.cronJobs.map((entry) => entry.name.trim().toLowerCase()));
+  const existingNames = new Set(
+    state.cronJobs.map((entry) => normalizeLowercaseStringOrEmpty(entry.name)),
+  );
   const cloned = jobToForm(job, state.cronForm);
   cloned.name = buildCloneName(job.name, existingNames);
   state.cronForm = cloned;

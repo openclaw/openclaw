@@ -6,9 +6,13 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { buildBrowseProvidersButton } from "../../plugin-sdk/telegram-runtime.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { shortenHomePath } from "../../utils.js";
 import { resolveSelectedAndActiveModel } from "../model-runtime.js";
 import type { ReplyPayload } from "../types.js";
@@ -34,7 +38,7 @@ function pushUniqueCatalogEntry(params: {
   fallbackNameToId: boolean;
 }) {
   const provider = normalizeProviderId(params.provider);
-  const id = String(params.id ?? "").trim();
+  const id = normalizeOptionalString(params.id) ?? "";
   if (!provider || !id) {
     return;
   }
@@ -79,7 +83,7 @@ function buildModelPickerCatalog(params: {
     };
 
     const pushRaw = (raw?: string) => {
-      const value = String(raw ?? "").trim();
+      const value = normalizeOptionalString(raw) ?? "";
       if (!value) {
         return;
       }
@@ -205,8 +209,8 @@ export async function maybeHandleModelDirectiveInfo(params: {
     return undefined;
   }
 
-  const rawDirective = params.directives.rawModelDirective?.trim();
-  const directive = rawDirective?.toLowerCase();
+  const rawDirective = normalizeOptionalString(params.directives.rawModelDirective);
+  const directive = rawDirective ? normalizeLowercaseStringOrEmpty(rawDirective) : undefined;
   const wantsStatus = directive === "status";
   const wantsSummary = !rawDirective;
   const wantsLegacyList = directive === "list";
@@ -241,13 +245,12 @@ export async function maybeHandleModelDirectiveInfo(params: {
       sessionEntry: params.sessionEntry,
     });
     const current = modelRefs.selected.label;
-    const isTelegram = params.surface === "telegram";
     const activeRuntimeLine = modelRefs.activeDiffers
       ? `Active: ${modelRefs.active.label} (runtime)`
       : null;
-
-    if (isTelegram) {
-      const buttons = buildBrowseProvidersButton();
+    const commandPlugin = params.surface ? getChannelPlugin(params.surface) : null;
+    const channelData = commandPlugin?.commands?.buildModelBrowseChannelData?.();
+    if (channelData) {
       return {
         text: [
           `Current: ${current}${modelRefs.activeDiffers ? " (selected)" : ""}`,
@@ -259,7 +262,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
         ]
           .filter(Boolean)
           .join("\n"),
-        channelData: { telegram: { buttons } },
+        channelData,
       };
     }
 

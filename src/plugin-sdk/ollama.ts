@@ -1,16 +1,12 @@
-// Public Ollama provider helpers.
+type FacadeModule = typeof import("@openclaw/ollama/api.js");
+import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
 
-export {
-  OLLAMA_NATIVE_BASE_URL,
-  buildAssistantMessage,
-  convertToOllamaMessages,
-  createConfiguredOllamaCompatNumCtxWrapper,
-  createConfiguredOllamaStreamFn,
-  createOllamaStreamFn,
-  isOllamaCompatProvider,
-  parseNdjsonStream,
-  resolveOllamaBaseUrlForRun,
-  resolveOllamaCompatNumCtxEnabled,
-  shouldInjectOllamaCompatNumCtx,
-  wrapOllamaCompatNumCtx,
-} from "../../extensions/ollama/runtime-api.js";
+function loadFacadeModule(): FacadeModule {
+  return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
+    dirName: "ollama",
+    artifactBasename: "api.js",
+  });
+}
+
+export const resolveOllamaApiBase: FacadeModule["resolveOllamaApiBase"] = ((...args) =>
+  loadFacadeModule().resolveOllamaApiBase(...args)) as FacadeModule["resolveOllamaApiBase"];

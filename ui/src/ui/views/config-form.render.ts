@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { icons } from "../icons.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type { ConfigUiHints } from "../types.ts";
 import { matchesNodeSearch, parseConfigSearchQuery, renderNode } from "./config-form.node.ts";
 import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
@@ -8,6 +9,7 @@ export type ConfigFormProps = {
   schema: JsonSchema | null;
   uiHints: ConfigUiHints;
   value: Record<string, unknown> | null;
+  rawAvailable?: boolean;
   disabled?: boolean;
   unsupportedPaths?: string[];
   searchQuery?: string;
@@ -341,9 +343,9 @@ function matchesSearch(params: {
   const meta = SECTION_META[params.key];
   const sectionMetaMatches =
     q &&
-    (params.key.toLowerCase().includes(q) ||
-      (meta?.label ? meta.label.toLowerCase().includes(q) : false) ||
-      (meta?.description ? meta.description.toLowerCase().includes(q) : false));
+    (normalizeLowercaseStringOrEmpty(params.key).includes(q) ||
+      (meta?.label ? normalizeLowercaseStringOrEmpty(meta.label).includes(q) : false) ||
+      (meta?.description ? normalizeLowercaseStringOrEmpty(meta.description).includes(q) : false));
 
   if (sectionMetaMatches && criteria.tags.length === 0) {
     return true;
@@ -360,16 +362,12 @@ function matchesSearch(params: {
 
 export function renderConfigForm(props: ConfigFormProps) {
   if (!props.schema) {
-    return html`
-      <div class="muted">Schema unavailable.</div>
-    `;
+    return html` <div class="muted">Schema unavailable.</div> `;
   }
   const schema = props.schema;
   const value = props.value ?? {};
   if (schemaType(schema) !== "object" || !schema.properties) {
-    return html`
-      <div class="callout danger">Unsupported schema. Use Raw.</div>
-    `;
+    return html` <div class="callout danger">Unsupported schema. Use Raw.</div> `;
   }
   const unsupported = new Set(props.unsupportedPaths ?? []);
   const properties = schema.properties;
@@ -449,11 +447,9 @@ export function renderConfigForm(props: ConfigFormProps) {
         <span class="config-section-card__icon">${getSectionIcon(params.sectionKey)}</span>
         <div class="config-section-card__titles">
           <h3 class="config-section-card__title">${params.label}</h3>
-          ${
-            params.description
-              ? html`<p class="config-section-card__desc">${params.description}</p>`
-              : nothing
-          }
+          ${params.description
+            ? html`<p class="config-section-card__desc">${params.description}</p>`
+            : nothing}
         </div>
       </div>
       <div class="config-section-card__content">
@@ -462,6 +458,7 @@ export function renderConfigForm(props: ConfigFormProps) {
           value: params.nodeValue,
           path: params.path,
           hints: props.uiHints,
+          rawAvailable: props.rawAvailable ?? true,
           unsupported,
           disabled: props.disabled ?? false,
           showLabel: false,
@@ -477,45 +474,43 @@ export function renderConfigForm(props: ConfigFormProps) {
 
   return html`
     <div class="config-form config-form--modern">
-      ${
-        subsectionContext
-          ? (() => {
-              const { sectionKey, subsectionKey, schema: node } = subsectionContext;
-              const hint = hintForPath([sectionKey, subsectionKey], props.uiHints);
-              const label = hint?.label ?? node.title ?? humanize(subsectionKey);
-              const description = hint?.help ?? node.description ?? "";
-              const sectionValue = value[sectionKey];
-              const scopedValue =
-                sectionValue && typeof sectionValue === "object"
-                  ? (sectionValue as Record<string, unknown>)[subsectionKey]
-                  : undefined;
-              return renderSectionCard({
-                id: `config-section-${sectionKey}-${subsectionKey}`,
-                sectionKey,
-                label,
-                description,
-                node,
-                nodeValue: scopedValue,
-                path: [sectionKey, subsectionKey],
-              });
-            })()
-          : filteredEntries.map(([key, node]) => {
-              const meta = SECTION_META[key] ?? {
-                label: key.charAt(0).toUpperCase() + key.slice(1),
-                description: node.description ?? "",
-              };
+      ${subsectionContext
+        ? (() => {
+            const { sectionKey, subsectionKey, schema: node } = subsectionContext;
+            const hint = hintForPath([sectionKey, subsectionKey], props.uiHints);
+            const label = hint?.label ?? node.title ?? humanize(subsectionKey);
+            const description = hint?.help ?? node.description ?? "";
+            const sectionValue = value[sectionKey];
+            const scopedValue =
+              sectionValue && typeof sectionValue === "object"
+                ? (sectionValue as Record<string, unknown>)[subsectionKey]
+                : undefined;
+            return renderSectionCard({
+              id: `config-section-${sectionKey}-${subsectionKey}`,
+              sectionKey,
+              label,
+              description,
+              node,
+              nodeValue: scopedValue,
+              path: [sectionKey, subsectionKey],
+            });
+          })()
+        : filteredEntries.map(([key, node]) => {
+            const meta = SECTION_META[key] ?? {
+              label: key.charAt(0).toUpperCase() + key.slice(1),
+              description: node.description ?? "",
+            };
 
-              return renderSectionCard({
-                id: `config-section-${key}`,
-                sectionKey: key,
-                label: meta.label,
-                description: meta.description,
-                node,
-                nodeValue: value[key],
-                path: [key],
-              });
-            })
-      }
+            return renderSectionCard({
+              id: `config-section-${key}`,
+              sectionKey: key,
+              label: meta.label,
+              description: meta.description,
+              node,
+              nodeValue: value[key],
+              path: [key],
+            });
+          })}
     </div>
   `;
 }

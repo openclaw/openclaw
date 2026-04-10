@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { fileExists } from "./archive.js";
+import { formatErrorMessage } from "./errors.js";
 import { assertCanonicalPathWithinBase, resolveSafeInstallDir } from "./install-safe-path.js";
 
 export async function resolveCanonicalInstallTarget(params: {
@@ -26,7 +27,7 @@ export async function resolveCanonicalInstallTarget(params: {
       boundaryLabel: params.boundaryLabel,
     });
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return { ok: false, error: formatErrorMessage(err) };
   }
   return { ok: true, targetDir: targetDirResult.path };
 }

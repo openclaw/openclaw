@@ -1,18 +1,32 @@
 import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { generateSecureUuid } from "openclaw/plugin-sdk/infra-runtime";
+import { generateSecureUuid } from "openclaw/plugin-sdk/core";
 import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/media-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
 import { redactIdentifier } from "openclaw/plugin-sdk/text-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
-import { markdownToWhatsApp } from "openclaw/plugin-sdk/text-runtime";
-import { toWhatsappJid } from "openclaw/plugin-sdk/text-runtime";
-import { resolveWhatsAppAccount, resolveWhatsAppMediaMaxBytes } from "./accounts.js";
+import {
+  resolveDefaultWhatsAppAccountId,
+  resolveWhatsAppAccount,
+  resolveWhatsAppMediaMaxBytes,
+} from "./accounts.js";
 import { type ActiveWebSendOptions, requireActiveWebListener } from "./active-listener.js";
-import { loadWebMedia } from "./media.js";
+import { loadOutboundMediaFromUrl } from "./runtime-api.js";
+import { markdownToWhatsApp, toWhatsappJid } from "./text-runtime.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
+
+function resolveOutboundWhatsAppAccountId(params: {
+  cfg: OpenClawConfig;
+  accountId?: string;
+}): string | undefined {
+  const explicitAccountId = params.accountId?.trim();
+  if (explicitAccountId) {
+    return explicitAccountId;
+  }
+  return resolveDefaultWhatsAppAccountId(params.cfg);
+}
 
 export async function sendMessageWhatsApp(
   to: string,
@@ -21,7 +35,12 @@ export async function sendMessageWhatsApp(
     verbose: boolean;
     cfg?: OpenClawConfig;
     mediaUrl?: string;
+    mediaAccess?: {
+      localRoots?: readonly string[];
+      readFile?: (filePath: string) => Promise<Buffer>;
+    };
     mediaLocalRoots?: readonly string[];
+    mediaReadFile?: (filePath: string) => Promise<Buffer>;
     gifPlayback?: boolean;
     accountId?: string;
   },
@@ -33,10 +52,13 @@ export async function sendMessageWhatsApp(
   }
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();
-  const { listener: active, accountId: resolvedAccountId } = requireActiveWebListener(
-    options.accountId,
-  );
   const cfg = options.cfg ?? loadConfig();
+  const effectiveAccountId = resolveOutboundWhatsAppAccountId({
+    cfg,
+    accountId: options.accountId,
+  });
+  const { listener: active, accountId: resolvedAccountId } =
+    requireActiveWebListener(effectiveAccountId);
   const account = resolveWhatsAppAccount({
     cfg,
     accountId: resolvedAccountId ?? options.accountId,
@@ -60,13 +82,15 @@ export async function sendMessageWhatsApp(
     let mediaType: string | undefined;
     let documentFileName: string | undefined;
     if (options.mediaUrl) {
-      const media = await loadWebMedia(options.mediaUrl, {
+      const media = await loadOutboundMediaFromUrl(options.mediaUrl, {
         maxBytes: resolveWhatsAppMediaMaxBytes(account),
-        localRoots: options.mediaLocalRoots,
+        mediaAccess: options.mediaAccess,
+        mediaLocalRoots: options.mediaLocalRoots,
+        mediaReadFile: options.mediaReadFile,
       });
       const caption = text || undefined;
       mediaBuffer = media.buffer;
-      mediaType = media.contentType;
+      mediaType = media.contentType ?? "application/octet-stream";
       if (media.kind === "audio") {
         // WhatsApp expects explicit opus codec for PTT voice notes.
         mediaType =
@@ -126,7 +150,12 @@ export async function sendReactionWhatsApp(
   },
 ): Promise<void> {
   const correlationId = generateSecureUuid();
-  const { listener: active } = requireActiveWebListener(options.accountId);
+  const cfg = loadConfig();
+  const effectiveAccountId = resolveOutboundWhatsAppAccountId({
+    cfg,
+    accountId: options.accountId,
+  });
+  const { listener: active } = requireActiveWebListener(effectiveAccountId);
   const redactedChatJid = redactIdentifier(chatJid);
   const logger = getChildLogger({
     module: "web-outbound",
@@ -164,7 +193,12 @@ export async function sendPollWhatsApp(
 ): Promise<{ messageId: string; toJid: string }> {
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();
-  const { listener: active } = requireActiveWebListener(options.accountId);
+  const cfg = options.cfg ?? loadConfig();
+  const effectiveAccountId = resolveOutboundWhatsAppAccountId({
+    cfg,
+    accountId: options.accountId,
+  });
+  const { listener: active } = requireActiveWebListener(effectiveAccountId);
   const redactedTo = redactIdentifier(to);
   const logger = getChildLogger({
     module: "web-outbound",

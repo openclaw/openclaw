@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const randomBytesMock = vi.hoisted(() => vi.fn());
 
@@ -17,10 +17,13 @@ let generatePairingToken: PairingTokenModule["generatePairingToken"];
 let PAIRING_TOKEN_BYTES: PairingTokenModule["PAIRING_TOKEN_BYTES"];
 let verifyPairingToken: PairingTokenModule["verifyPairingToken"];
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
   ({ generatePairingToken, PAIRING_TOKEN_BYTES, verifyPairingToken } =
     await import("./pairing-token.js"));
+});
+
+beforeEach(() => {
+  randomBytesMock.mockReset();
 });
 
 describe("generatePairingToken", () => {

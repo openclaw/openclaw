@@ -4,6 +4,7 @@ import type {
   CommandArgChoice,
 } from "../../../../src/auto-reply/commands-registry.types.js";
 import type { IconName } from "../icons.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
 export type SlashCommandCategory = "session" | "model" | "agents" | "tools";
 
@@ -66,6 +67,8 @@ const LOCAL_COMMANDS = new Set([
   "usage",
   "agents",
   "kill",
+  "steer",
+  "redirect",
 ]);
 
 const UI_ONLY_COMMANDS: SlashCommandDef[] = [
@@ -75,6 +78,15 @@ const UI_ONLY_COMMANDS: SlashCommandDef[] = [
     description: "Clear chat history",
     icon: "trash",
     category: "session",
+    executeLocal: true,
+  },
+  {
+    key: "redirect",
+    name: "redirect",
+    description: "Abort and restart with a new message",
+    args: "[id] <message>",
+    icon: "refresh",
+    category: "agents",
     executeLocal: true,
   },
 ];
@@ -92,6 +104,7 @@ const CATEGORY_OVERRIDES: Partial<Record<string, SlashCommandCategory>> = {
   subagents: "agents",
   kill: "agents",
   steer: "agents",
+  redirect: "agents",
   session: "session",
   stop: "session",
   reset: "session",
@@ -107,6 +120,14 @@ const CATEGORY_OVERRIDES: Partial<Record<string, SlashCommandCategory>> = {
   reasoning: "model",
   elevated: "model",
   queue: "model",
+};
+
+const COMMAND_DESCRIPTION_OVERRIDES: Partial<Record<string, string>> = {
+  steer: "Inject a message into the active run",
+};
+
+const COMMAND_ARGS_OVERRIDES: Partial<Record<string, string>> = {
+  steer: "[id] <message>",
 };
 
 function normalizeUiKey(command: ChatCommandDefinition): string {
@@ -170,8 +191,8 @@ function toSlashCommand(command: ChatCommandDefinition): SlashCommandDef | null 
     key: command.key,
     name,
     aliases: getSlashAliases(command).filter((alias) => alias !== name),
-    description: command.description,
-    args: formatArgs(command),
+    description: COMMAND_DESCRIPTION_OVERRIDES[command.key] ?? command.description,
+    args: COMMAND_ARGS_OVERRIDES[command.key] ?? formatArgs(command),
     icon: mapIcon(command),
     category: mapCategory(command),
     executeLocal: LOCAL_COMMANDS.has(command.key),
@@ -196,13 +217,13 @@ export const CATEGORY_LABELS: Record<SlashCommandCategory, string> = {
 };
 
 export function getSlashCommandCompletions(filter: string): SlashCommandDef[] {
-  const lower = filter.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(filter);
   const commands = lower
     ? SLASH_COMMANDS.filter(
         (cmd) =>
           cmd.name.startsWith(lower) ||
-          cmd.aliases?.some((alias) => alias.toLowerCase().startsWith(lower)) ||
-          cmd.description.toLowerCase().includes(lower),
+          cmd.aliases?.some((alias) => normalizeLowercaseStringOrEmpty(alias).startsWith(lower)) ||
+          normalizeLowercaseStringOrEmpty(cmd.description).includes(lower),
       )
     : SLASH_COMMANDS;
   return commands.toSorted((a, b) => {
@@ -246,11 +267,11 @@ export function parseSlashCommand(text: string): ParsedSlashCommand | null {
     return null;
   }
 
-  const normalizedName = name.toLowerCase();
+  const normalizedName = normalizeLowercaseStringOrEmpty(name);
   const command = SLASH_COMMANDS.find(
     (cmd) =>
       cmd.name === normalizedName ||
-      cmd.aliases?.some((alias) => alias.toLowerCase() === normalizedName),
+      cmd.aliases?.some((alias) => normalizeLowercaseStringOrEmpty(alias) === normalizedName),
   );
   if (!command) {
     return null;

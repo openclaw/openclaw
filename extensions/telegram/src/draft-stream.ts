@@ -1,7 +1,9 @@
 import type { Bot } from "grammy";
 import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-lifecycle";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import { isSafeToRetrySendError, isTelegramClientRejection } from "./network-errors.js";
+import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
 
 const TELEGRAM_STREAM_MAX_CHARS = 4096;
 const DEFAULT_THROTTLE_MS = 1000;
@@ -12,7 +14,7 @@ const DRAFT_METHOD_UNAVAILABLE_RE =
 const DRAFT_CHAT_UNSUPPORTED_RE = /(can't be used|can be used only)/i;
 
 type TelegramSendMessageDraft = (
-  chatId: number,
+  chatId: Parameters<Bot["api"]["sendMessage"]>[0],
   draftId: number,
   text: string,
   params?: {
@@ -20,6 +22,18 @@ type TelegramSendMessageDraft = (
     parse_mode?: "HTML";
   },
 ) => Promise<unknown>;
+
+type TelegramSendMessageParams = Parameters<Bot["api"]["sendMessage"]>[2];
+
+function hasNumericMessageThreadId(
+  params: TelegramSendMessageParams | undefined,
+): params is TelegramSendMessageParams & { message_thread_id: number } {
+  return (
+    typeof params === "object" &&
+    params !== null &&
+    typeof (params as { message_thread_id?: unknown }).message_thread_id === "number"
+  );
+}
 
 /**
  * Keep draft-id allocation shared across bundled chunks so concurrent preview
@@ -103,7 +117,7 @@ type SupersededTelegramPreview = {
 
 export function createTelegramDraftStream(params: {
   api: Bot["api"];
-  chatId: number;
+  chatId: Parameters<Bot["api"]["sendMessage"]>[0];
   maxChars?: number;
   thread?: TelegramThreadSpec | null;
   previewTransport?: "auto" | "message" | "draft";
@@ -133,11 +147,12 @@ export function createTelegramDraftStream(params: {
         ? false
         : params.thread?.scope === "dm";
   const threadParams = buildTelegramThreadParams(params.thread);
+  const replyToMessageId = normalizeTelegramReplyToMessageId(params.replyToMessageId);
   const replyParams =
-    params.replyToMessageId != null
+    replyToMessageId != null
       ? {
           ...threadParams,
-          reply_to_message_id: params.replyToMessageId,
+          reply_to_message_id: replyToMessageId,
           allow_sending_without_reply: true,
         }
       : threadParams;
@@ -177,9 +192,7 @@ export function createTelegramDraftStream(params: {
           parse_mode: sendArgs.renderedParseMode,
         }
       : replyParams;
-    const usedThreadParams =
-      "message_thread_id" in (sendParams ?? {}) &&
-      typeof (sendParams as { message_thread_id?: unknown }).message_thread_id === "number";
+    const usedThreadParams = hasNumericMessageThreadId(sendParams);
     try {
       return {
         sent: await params.api.sendMessage(chatId, sendArgs.renderedText, sendParams),
@@ -189,9 +202,7 @@ export function createTelegramDraftStream(params: {
       if (!usedThreadParams || !THREAD_NOT_FOUND_RE.test(String(err))) {
         throw err;
       }
-      const threadlessParams = {
-        ...(sendParams as Record<string, unknown>),
-      };
+      const threadlessParams: TelegramSendMessageParams = { ...sendParams };
       delete threadlessParams.message_thread_id;
       params.warn?.(sendArgs.fallbackWarnMessage);
       return {
@@ -352,9 +363,7 @@ export function createTelegramDraftStream(params: {
       return sent;
     } catch (err) {
       streamState.stopped = true;
-      params.warn?.(
-        `telegram stream preview failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      params.warn?.(`telegram stream preview failed: ${formatErrorMessage(err)}`);
       return false;
     }
   };
@@ -441,9 +450,7 @@ export function createTelegramDraftStream(params: {
         return streamMessageId;
       }
     } catch (err) {
-      params.warn?.(
-        `telegram stream preview materialize failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      params.warn?.(`telegram stream preview materialize failed: ${formatErrorMessage(err)}`);
     }
     return undefined;
   };

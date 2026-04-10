@@ -1,6 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNonExitingRuntime } from "../runtime.js";
-
 const resolveCleanupPlanFromDisk = vi.fn();
 const removePath = vi.fn();
 const listAgentSessionDirs = vi.fn();
@@ -22,10 +21,13 @@ vi.mock("./cleanup-utils.js", () => ({
   removeWorkspaceDirs,
 }));
 
-const { resetCommand } = await import("./reset.js");
-
 describe("resetCommand", () => {
   const runtime = createNonExitingRuntime();
+  let resetCommand: typeof import("./reset.js").resetCommand;
+
+  beforeAll(async () => {
+    ({ resetCommand } = await import("./reset.js"));
+  });
 
   beforeEach(() => {
     vi.clearAllMocks();

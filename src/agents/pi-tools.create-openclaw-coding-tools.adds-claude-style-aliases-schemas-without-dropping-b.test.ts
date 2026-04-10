@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import "./test-helpers/fast-coding-tools.js";
+import "./test-helpers/fast-openclaw-tools.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 
 const defaultTools = createOpenClawCodingTools({ senderIsOwner: true });
@@ -61,7 +62,7 @@ describe("createOpenClawCodingTools", () => {
 
     const openAiTools = createOpenClawCodingTools({
       modelProvider: "openai",
-      modelId: "gpt-5.2",
+      modelId: "gpt-5.4",
     });
     expect(openAiTools.some((tool) => tool.name === "apply_patch")).toBe(true);
 
@@ -81,35 +82,35 @@ describe("createOpenClawCodingTools", () => {
     const disabledOpenAiTools = createOpenClawCodingTools({
       config: disabledConfig,
       modelProvider: "openai",
-      modelId: "gpt-5.2",
+      modelId: "gpt-5.4",
     });
     expect(disabledOpenAiTools.some((tool) => tool.name === "apply_patch")).toBe(false);
 
     const anthropicTools = createOpenClawCodingTools({
       config: disabledConfig,
       modelProvider: "anthropic",
-      modelId: "claude-opus-4-5",
+      modelId: "claude-opus-4-6",
     });
     expect(anthropicTools.some((tool) => tool.name === "apply_patch")).toBe(false);
 
     const allowModelsConfig: OpenClawConfig = {
       tools: {
         exec: {
-          applyPatch: { allowModels: ["gpt-5.2"] },
+          applyPatch: { allowModels: ["gpt-5.4"] },
         },
       },
     };
     const allowed = createOpenClawCodingTools({
       config: allowModelsConfig,
       modelProvider: "openai",
-      modelId: "gpt-5.2",
+      modelId: "gpt-5.4",
     });
     expect(allowed.some((tool) => tool.name === "apply_patch")).toBe(true);
 
     const denied = createOpenClawCodingTools({
       config: allowModelsConfig,
       modelProvider: "openai",
-      modelId: "gpt-5-mini",
+      modelId: "gpt-5.4-mini",
     });
     expect(denied.some((tool) => tool.name === "apply_patch")).toBe(false);
 
