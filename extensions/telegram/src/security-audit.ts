@@ -54,7 +54,7 @@ export async function collectTelegramSecurityAuditFindings(params: {
     () => [],
   );
   const storeHasWildcard = storeAllowFrom.some(
-    (value) => (normalizeOptionalString(String(value)) ?? "") === "*",
+    (value) => (normalizeOptionalString(value) ?? "") === "*",
   );
   const invalidTelegramAllowFromEntries = new Set<string>();
   collectInvalidTelegramAllowFromEntries({
