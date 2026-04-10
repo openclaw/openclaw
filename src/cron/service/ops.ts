@@ -28,6 +28,7 @@ import {
   armTimer,
   emit,
   executeJobCoreWithTimeout,
+  jobExists,
   normalizeCronRunErrorText,
   runMissedJobs,
   stopTimer,
