@@ -222,9 +222,27 @@ function resolveAgentsBootstrapRunRole(params: {
   return isSubagentSessionKey(params.sessionKey ?? params.sessionId) ? "subagent" : "main";
 }
 
-function buildBootstrapSignature(filePath: string): string {
+function buildBootstrapSignature(filePath: string, workspaceDir?: string): string {
   const normalizedPath = normalizeOptionalString(filePath)?.replace(/\\/g, "/");
-  return normalizedPath ? `agents:${normalizedPath}` : DEFAULT_BOOTSTRAP_SIGNATURE;
+  if (!normalizedPath) {
+    return DEFAULT_BOOTSTRAP_SIGNATURE;
+  }
+  const normalizedWorkspaceDir = normalizeOptionalString(workspaceDir);
+  if (normalizedWorkspaceDir) {
+    const resolvedWorkspaceDir = resolveUserPath(normalizedWorkspaceDir);
+    const resolvedPath = normalizedPath.startsWith("~")
+      ? resolveUserPath(normalizedPath)
+      : path.isAbsolute(normalizedPath)
+        ? path.resolve(normalizedPath)
+        : path.resolve(resolvedWorkspaceDir, normalizedPath);
+    if (isPathWithinRoot(resolvedWorkspaceDir, resolvedPath)) {
+      const relativePath = path.relative(resolvedWorkspaceDir, resolvedPath).replace(/\\/g, "/");
+      if (relativePath && relativePath !== ".") {
+        return `agents:${relativePath}`;
+      }
+    }
+  }
+  return `agents:${normalizedPath}`;
 }
 
 function formatUnavailableBootstrapFileReason(
@@ -255,7 +273,7 @@ function uniqueResolvedPathCandidates(
     if (!candidate) {
       continue;
     }
-    const key = `${candidate.label}|${candidate.resolvedPath}`;
+    const key = candidate.resolvedPath;
     if (seen.has(key)) {
       continue;
     }
@@ -460,7 +478,7 @@ export async function resolveEffectiveAgentsBootstrapFileForRun(params: {
 
   return {
     bootstrapFile: resolvedFile,
-    bootstrapSignature: buildBootstrapSignature(resolvedFile.path),
+    bootstrapSignature: buildBootstrapSignature(resolvedFile.path, resolvedWorkspaceDir),
     modelRefKey,
     runRole,
   };
@@ -520,7 +538,7 @@ export async function resolveBootstrapFilesWithSignatureForRun(params: {
     bootstrapFiles.find((file) => file.name === DEFAULT_AGENTS_FILENAME)?.path ?? "";
   return {
     bootstrapFiles,
-    bootstrapSignature: buildBootstrapSignature(selectedAgentsFile),
+    bootstrapSignature: buildBootstrapSignature(selectedAgentsFile, params.workspaceDir),
   };
 }
 
@@ -555,9 +573,8 @@ export async function resolveBootstrapContextForRun(params: {
   contextFiles: EmbeddedContextFile[];
   bootstrapSignature: string;
 }> {
-  const { bootstrapFiles, bootstrapSignature } = await resolveBootstrapFilesWithSignatureForRun(
-    params,
-  );
+  const { bootstrapFiles, bootstrapSignature } =
+    await resolveBootstrapFilesWithSignatureForRun(params);
   const contextFiles = buildBootstrapContextFiles(bootstrapFiles, {
     maxChars: resolveBootstrapMaxChars(params.config),
     totalMaxChars: resolveBootstrapTotalMaxChars(params.config),

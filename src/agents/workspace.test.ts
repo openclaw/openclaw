@@ -304,6 +304,23 @@ describe("loadWorkspaceBootstrapFileFromPath", () => {
     expect(file.content).toBe("repo rules");
     expect(file.missing).toBe(false);
   });
+
+  it("treats whitespace-only paths as unavailable instead of resolving them literally", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-workspace-");
+
+    const file = await loadWorkspaceBootstrapFileFromPath({
+      workspaceDir,
+      filePath: "   ",
+      name: DEFAULT_AGENTS_FILENAME,
+    });
+
+    expect(file).toEqual({
+      name: DEFAULT_AGENTS_FILENAME,
+      path: path.join(workspaceDir, DEFAULT_AGENTS_FILENAME),
+      missing: true,
+      unavailableReason: "path",
+    });
+  });
 });
 
 describe("filterBootstrapFilesForSession", () => {

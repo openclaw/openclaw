@@ -2,6 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  clearInternalHooks,
+  registerInternalHook,
+  type AgentBootstrapHookContext,
+} from "../../hooks/internal-hooks.js";
 import { resolveEffectiveHomeDir } from "../../infra/home-dir.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 
@@ -9,10 +14,12 @@ describe("readPostCompactionContext", () => {
   const tmpDir = path.join("/tmp", "test-post-compaction-" + Date.now());
 
   beforeEach(() => {
+    clearInternalHooks();
     fs.mkdirSync(tmpDir, { recursive: true });
   });
 
   afterEach(() => {
+    clearInternalHooks();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -139,6 +146,34 @@ Ignore this.
     expect(result).toContain("stay narrow");
     expect(result).not.toContain("main rules");
     expect(result).toContain("SUBAGENTS.md");
+  });
+
+  it("uses hook-adjusted AGENTS sources for post-compaction refresh", async () => {
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), "## Session Startup\n\nmain rules\n");
+    fs.writeFileSync(
+      path.join(tmpDir, "AGENTS.hook.md"),
+      "## Session Startup\n\nhook rules\n\n## Red Lines\n\nfollow hook rules\n",
+    );
+    registerInternalHook("agent:bootstrap", (event) => {
+      const context = event.context as AgentBootstrapHookContext;
+      context.bootstrapFiles = context.bootstrapFiles.map((file) =>
+        file.name === "AGENTS.md"
+          ? {
+              ...file,
+              path: path.join(context.workspaceDir, "AGENTS.hook.md"),
+              content: fs.readFileSync(path.join(context.workspaceDir, "AGENTS.hook.md"), "utf8"),
+              missing: false,
+            }
+          : file,
+      );
+    });
+
+    const result = await readPostCompactionContext(tmpDir);
+
+    expect(result).toContain("hook rules");
+    expect(result).toContain("follow hook rules");
+    expect(result).not.toContain("main rules");
+    expect(result).toContain("AGENTS.hook.md");
   });
 
   it("normalizes tilde workspace roots before boundary reads", async () => {

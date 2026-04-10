@@ -11,7 +11,7 @@ import {
   type CompactionProvider,
 } from "../../plugins/compaction-provider.js";
 import { resolveUserPath } from "../../utils.js";
-import { resolveEffectiveAgentsBootstrapFileForRun } from "../bootstrap-files.js";
+import { resolveBootstrapFilesWithSignatureForRun } from "../bootstrap-files.js";
 import {
   hasMeaningfulConversationContent,
   isRealConversationMessage,
@@ -682,7 +682,7 @@ async function readWorkspaceContextForSummary(
 ): Promise<string> {
   const MAX_SUMMARY_CONTEXT_CHARS = 2000;
   const workspaceDir = resolveUserPath(runtime?.workspaceDir ?? process.cwd());
-  const { bootstrapFile } = await resolveEffectiveAgentsBootstrapFileForRun({
+  const { bootstrapFiles } = await resolveBootstrapFilesWithSignatureForRun({
     workspaceDir,
     config: runtime?.cfg,
     sessionKey: runtime?.sessionKey,
@@ -691,6 +691,10 @@ async function readWorkspaceContextForSummary(
     modelProviderId: runtime?.modelProviderId,
     modelId: runtime?.modelId,
   });
+  const bootstrapFile = bootstrapFiles.find((file) => file.name === "AGENTS.md");
+  if (!bootstrapFile) {
+    return "";
+  }
   const agentsPath = bootstrapFile.path;
   const cachedContent = bootstrapFile.content;
 
