@@ -214,9 +214,7 @@ describe("msteams attachment helpers", () => {
         messageId: "msg-1",
       });
       expect(urls).toHaveLength(1);
-      expect(urls[0]).toContain(
-        "/chats/19%3Areal-graph-chat-id%40unq.gbl.spaces/messages/msg-1",
-      );
+      expect(urls[0]).toContain("/chats/19%3Areal-graph-chat-id%40unq.gbl.spaces/messages/msg-1");
     });
 
     it("still builds URLs when a: conversation ID is passed (caller did not resolve)", () => {

@@ -25,13 +25,13 @@ import {
 import { isRecord } from "../attachments/shared.js";
 import type { StoredConversationReference } from "../conversation-store.js";
 import { formatUnknownError } from "../errors.js";
-import { resolveGraphChatId } from "../graph-upload.js";
 import {
   fetchChannelMessage,
   fetchThreadReplies,
   formatThreadContext,
   resolveTeamGroupId,
 } from "../graph-thread.js";
+import { resolveGraphChatId } from "../graph-upload.js";
 import {
   extractMSTeamsConversationMessageId,
   extractMSTeamsQuoteInfo,
