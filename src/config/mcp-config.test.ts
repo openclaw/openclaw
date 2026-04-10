@@ -154,4 +154,85 @@ describe("config mcp config", () => {
       });
     });
   });
+
+  it("accepts MCP server configs with tools.allow and tools.deny", async () => {
+    await withTempHomeConfig({}, async () => {
+      const setResult = await setConfiguredMcpServer({
+        name: "plane",
+        server: {
+          url: "https://mcp.plane.so/http/api-key/mcp",
+          tools: {
+            allow: ["list_work_items", "retrieve_work_item"],
+            deny: ["delete_project"],
+          },
+        },
+      });
+
+      expect(setResult.ok).toBe(true);
+      const loaded = await listConfiguredMcpServers();
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) {
+        throw new Error("expected MCP config to load");
+      }
+      expect(loaded.mcpServers.plane).toEqual({
+        url: "https://mcp.plane.so/http/api-key/mcp",
+        tools: {
+          allow: ["list_work_items", "retrieve_work_item"],
+          deny: ["delete_project"],
+        },
+      });
+    });
+  });
+
+  it("rejects tools field when it is not an object", async () => {
+    await withTempHomeConfig({}, async () => {
+      const setResult = await setConfiguredMcpServer({
+        name: "plane",
+        server: {
+          url: "https://mcp.plane.so/http/api-key/mcp",
+          tools: "allow",
+        },
+      });
+      expect(setResult.ok).toBe(false);
+    });
+  });
+
+  it("rejects tools.allow with an empty string entry", async () => {
+    await withTempHomeConfig({}, async () => {
+      const setResult = await setConfiguredMcpServer({
+        name: "plane",
+        server: {
+          url: "https://mcp.plane.so/http/api-key/mcp",
+          tools: { allow: [""] },
+        },
+      });
+      expect(setResult.ok).toBe(false);
+    });
+  });
+
+  it("rejects tools.allow: [] (load-bearing guard against silent-hide footgun)", async () => {
+    await withTempHomeConfig({}, async () => {
+      const setResult = await setConfiguredMcpServer({
+        name: "plane",
+        server: {
+          url: "https://mcp.plane.so/http/api-key/mcp",
+          tools: { allow: [] },
+        },
+      });
+      expect(setResult.ok).toBe(false);
+    });
+  });
+
+  it("rejects tools.deny: [] (symmetric guard with allow)", async () => {
+    await withTempHomeConfig({}, async () => {
+      const setResult = await setConfiguredMcpServer({
+        name: "plane",
+        server: {
+          url: "https://mcp.plane.so/http/api-key/mcp",
+          tools: { deny: [] },
+        },
+      });
+      expect(setResult.ok).toBe(false);
+    });
+  });
 });

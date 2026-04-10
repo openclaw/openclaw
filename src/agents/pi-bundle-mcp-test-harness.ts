@@ -42,17 +42,26 @@ export async function waitForFileText(filePath: string, timeoutMs = 5_000): Prom
 }
 
 export async function startSseProbeServer(
-  probeText = "FROM-SSE",
+  probeTextOrOptions: string | { probeText?: string; extraToolNames?: string[] } = "FROM-SSE",
 ): Promise<{ port: number; close: () => Promise<void> }> {
+  const options =
+    typeof probeTextOrOptions === "string"
+      ? { probeText: probeTextOrOptions, extraToolNames: [] as string[] }
+      : { probeText: probeTextOrOptions.probeText ?? "FROM-SSE", extraToolNames: probeTextOrOptions.extraToolNames ?? [] };
   const { McpServer } = await import(SDK_SERVER_MCP_PATH);
   const { SSEServerTransport } = await import(SDK_SERVER_SSE_PATH);
 
   const mcpServer = new McpServer({ name: "sse-probe", version: "1.0.0" });
   mcpServer.tool("sse_probe", "SSE MCP probe", async () => {
     return {
-      content: [{ type: "text", text: probeText }],
+      content: [{ type: "text", text: options.probeText }],
     };
   });
+  for (const extraToolName of options.extraToolNames) {
+    mcpServer.tool(extraToolName, "SSE MCP extra probe", async () => ({
+      content: [{ type: "text", text: extraToolName }],
+    }));
+  }
 
   let sseTransport:
     | {

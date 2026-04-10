@@ -210,6 +210,14 @@ const TalkSchema = z
     }
   });
 
+const McpServerToolFilterSchema = z
+  .object({
+    allow: z.array(z.string().min(1)).min(1).optional(),
+    deny: z.array(z.string().min(1)).min(1).optional(),
+  })
+  .strict()
+  .optional();
+
 const McpServerSchema = z
   .object({
     command: z.string().optional(),
@@ -224,6 +232,7 @@ const McpServerSchema = z
         z.union([z.string().register(sensitive), z.number(), z.boolean()]).register(sensitive),
       )
       .optional(),
+    tools: McpServerToolFilterSchema,
   })
   .catchall(z.unknown());
 

@@ -11,6 +11,7 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { loadEmbeddedPiMcpConfig } from "./embedded-pi-mcp.js";
 import { isMcpConfigRecord } from "./mcp-config-shared.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
+import { applyMcpToolFilter } from "./pi-bundle-mcp-filter.js";
 import { sanitizeServerName } from "./pi-bundle-mcp-names.js";
 import type {
   McpCatalogTool,
@@ -195,12 +196,25 @@ export function createSessionMcpRuntime(params: {
             failIfDisposed();
             const listedTools = await listAllTools(client);
             failIfDisposed();
+            // rawServer is Record<string, unknown> (from ConfigMcpServers at mcp-config.ts:6)
+            // because the config is validated against a zod schema with .catchall(z.unknown()),
+            // so the `tools` field loses its narrowed type after normalization. The cast below
+            // is the trade-off for keeping the schema permissive — don't "fix" it by removing
+            // it without first re-typing normalizeConfiguredMcpServers. The tools field is
+            // validated at config-load time by McpServerSchema in zod-schema.ts.
+            const toolFilter = (rawServer as { tools?: { allow?: string[]; deny?: string[] } })
+              .tools;
+            const filteredTools = applyMcpToolFilter({
+              serverName,
+              tools: listedTools,
+              filter: toolFilter,
+            });
             servers[serverName] = {
               serverName,
               launchSummary: resolved.description,
-              toolCount: listedTools.length,
+              toolCount: filteredTools.length,
             };
-            for (const tool of listedTools) {
+            for (const tool of filteredTools) {
               const toolName = tool.name.trim();
               if (!toolName) {
                 continue;
