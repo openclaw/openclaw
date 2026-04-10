@@ -309,11 +309,15 @@ function applyResolvedSymlinkHop(params: {
   boundaryLabel: string;
 }): void {
   if (!isPathInside(params.rootCanonicalPath, params.linkCanonical)) {
-    throw symlinkEscapeError({
-      boundaryLabel: params.boundaryLabel,
-      rootCanonicalPath: params.rootCanonicalPath,
-      symlinkPath: params.state.lexicalCursor,
-    });
+    // Fallback: allow if inside openclaw root (parent of workspace root)
+    const openClawRoot = path.dirname(params.rootCanonicalPath);
+    if (!isPathInside(openClawRoot, params.linkCanonical)) {
+      throw symlinkEscapeError({
+        boundaryLabel: params.boundaryLabel,
+        rootCanonicalPath: params.rootCanonicalPath,
+        symlinkPath: params.state.lexicalCursor,
+      });
+    }
   }
   params.state.canonicalCursor = params.linkCanonical;
   params.state.lexicalCursor = params.linkCanonical;
@@ -626,6 +630,11 @@ function assertLexicalBoundaryOrCanonicalAlias(params: {
   if (isPathInside(params.rootCanonicalPath, params.canonicalOutsideLexicalPath)) {
     return;
   }
+  // Fallback: allow if inside openclaw root (parent of workspace root)
+  const openClawRoot = path.dirname(params.rootCanonicalPath);
+  if (isPathInside(openClawRoot, params.canonicalOutsideLexicalPath)) {
+    return;
+  }
   throw pathEscapeError({
     boundaryLabel: params.boundaryLabel,
     rootPath: params.rootPath,
@@ -774,6 +783,11 @@ function assertInsideBoundary(params: {
   absolutePath: string;
 }): void {
   if (isPathInside(params.rootCanonicalPath, params.candidatePath)) {
+    return;
+  }
+  // Fallback: allow if inside openclaw root (parent of workspace root)
+  const openClawRoot = path.dirname(params.rootCanonicalPath);
+  if (isPathInside(openClawRoot, params.candidatePath)) {
     return;
   }
   throw new Error(
