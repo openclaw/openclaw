@@ -326,6 +326,33 @@ describe("existing-session interaction navigation guard", () => {
     await expect(completion).rejects.toThrow("Unable to verify stable post-interaction navigation");
   });
 
+  it("fails closed when a probe error follows two stable reads", async () => {
+    // Probes 1 + 2 match (sawStableAllowedUrl would be true), probe 3 throws.
+    // Guard must NOT return success — the throw invalidates prior stability.
+    chromeMcpMocks.evaluateChromeMcpScript
+      .mockResolvedValueOnce("result" as never) // action evaluate result
+      .mockResolvedValueOnce("https://example.com" as never) // location probe 1
+      .mockResolvedValueOnce("https://example.com" as never) // location probe 2 → stable pair
+      .mockRejectedValueOnce(new Error("context destroyed") as never) // location probe 3 → error
+      .mockRejectedValueOnce(new Error("context destroyed") as never); // follow-up → still errored
+
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    const pending =
+      handler?.(
+        { params: {}, query: {}, body: { kind: "evaluate", fn: "() => 1" } },
+        response.res,
+      ) ?? Promise.resolve();
+    void pending.catch(() => {});
+    const completion = (async () => {
+      await vi.runAllTimersAsync();
+      await pending;
+    })();
+
+    await expect(completion).rejects.toThrow("Unable to verify stable post-interaction navigation");
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledTimes(2);
+  });
+
   it("skips the guard when no SSRF policy is configured", async () => {
     const response = await runAction({ kind: "press", key: "Enter" }, null);
 

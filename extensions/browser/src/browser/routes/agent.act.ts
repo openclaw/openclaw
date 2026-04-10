@@ -87,6 +87,7 @@ async function assertExistingSessionPostInteractionNavigationAllowed(params: {
     try {
       currentUrl = await readExistingSessionLocationHref(params);
     } catch {
+      sawStableAllowedUrl = false;
       continue;
     }
     await assertBrowserNavigationResultAllowed({
