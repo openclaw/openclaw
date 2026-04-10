@@ -54,12 +54,17 @@ function makeParams(): HandleCommandsParams {
   return {
     ctx: {
       SessionKey: "agent:main:default",
+      SenderId: "sender-1",
+      SenderName: "Alice",
+      SenderUsername: "alice_u",
+      SenderE164: "+15551234567",
     },
     cfg: {},
     command: {
       surface: "telegram",
       channel: "telegram",
       ownerList: [],
+      senderId: "sender-1",
       senderIsOwner: true,
       isAuthorizedSender: true,
       rawBodyNormalized: "/context",
@@ -117,6 +122,10 @@ describe("resolveCommandsSystemPromptBundle", () => {
         sessionKey: "agent:main:default",
         workspaceDir: "/tmp/workspace",
         messageProvider: "telegram",
+        senderId: "sender-1",
+        senderName: "Alice",
+        senderUsername: "alice_u",
+        senderE164: "+15551234567",
       }),
     );
   });
