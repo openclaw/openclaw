@@ -4,13 +4,12 @@ services:
     runtime: docker
     plan: free
     healthCheckPath: /health
-    # Explicitly tell Render which port to proxy to
-    port: 10000 
+    # Render Docker services use PORT env var, not the port field 
     envVars:
       - key: PORT
         value: 10000
       - key: OPENCLAW_GATEWAY_PORT
-        fromContext: PORT
+        value: 10000
       - key: OPENCLAW_STATE_DIR
         value: /tmp/.openclaw
       - key: OPENCLAW_WORKSPACE_DIR
