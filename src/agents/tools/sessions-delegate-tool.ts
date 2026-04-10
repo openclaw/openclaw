@@ -83,15 +83,10 @@ async function readChildOutput(params: {
   childSessionKey: string;
 }): Promise<string | undefined> {
   const deadline = Date.now() + FROZEN_RESULT_MAX_POLL_MS;
-  while (Date.now() < deadline) {
     const entry = subagentRuns.get(params.runId);
-    if (entry?.frozenResultText) {
-      return entry.frozenResultText;
+    if (entry && entry.frozenResultText !== undefined) {
+      return entry.frozenResultText ?? undefined;
     }
-    await new Promise((resolve) => setTimeout(resolve, FROZEN_RESULT_POLL_INTERVAL_MS));
-  }
-  // Fall back to reading the latest assistant reply from chat history.
-  return readLatestAssistantReply({ sessionKey: params.childSessionKey });
 }
 
 type SingleDelegateResult = {
@@ -355,10 +350,9 @@ export function createSessionsDelegateBatchTool(opts?: DelegateToolOpts): AnyAge
         }
       }
 
-      const allSucceeded = completed === tasks.length;
       const batchStatus = allSucceeded
         ? "ok"
-        : failureMode === "all" && !allSucceeded
+        : failureMode === "all"
           ? "error"
           : "partial";
 
