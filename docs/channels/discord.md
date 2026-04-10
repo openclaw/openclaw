@@ -1126,6 +1126,27 @@ Notes:
 - OpenClaw watches receive-decrypt failures and auto-recovers by leaving/rejoining the voice channel when failures repeat.
 - If you see repeated `DecryptionFailed(UnencryptedWhenPassthroughDisabled)`, this often maps to upstream `@discordjs/voice` behavior tracked in [discord.js #11419](https://github.com/discordjs/discord.js/issues/11419).
 
+### Pipeline and credentials
+
+- Audio capture and STT:
+  - Captured PCM is converted to WAV and passed to OpenClaw runtime `mediaUnderstanding.transcribeAudioFile`.
+  - Transcription uses `tools.media.audio` models (for example `openai` + `gpt-4o-mini-transcribe`), not `voice.model`.
+  - `voice.model` does **not** affect STT.
+- Brain/response model:
+  - By default this uses the resolved route/session model (typically your active `agents.defaults.model.primary` chain).
+  - If configured, `channels.discord.voice.model` overrides only this VC LLM model (for example `openai-codex/gpt-5.4`), while everything else remains unchanged.
+- TTS:
+  - Response text is converted using `voice.tts` merged over `messages.tts` and then played back.
+  - Default example in this doc uses `openai` + `gpt-4o-mini-tts`.
+
+Required credentials by component:
+
+- LLM model path (for example `openai-codex/*`, `openai/*`): normal provider auth for that route (`OPENAI_API_KEY` for `openai/*`, Codex auth for `openai-codex/*`).
+- STT model path (`tools.media.audio`): provider-specific auth (for OpenAI audio model, `OPENAI_API_KEY`/`openai` provider config or profile).
+- TTS model path (`messages.tts` / `voice.tts`): provider-specific auth (`ELEVENLABS_API_KEY` or `OPENAI_API_KEY`, depending on provider).
+
+This is also a maintenance note from the PR context: Discord voice runtime behavior in prior versions could leave sessions unstable (join/drop/no transcript/reply path), and this change set is intended as a repair-path fix.
+
 ## Voice messages
 
 Discord voice messages show a waveform preview and require OGG/Opus audio plus metadata. OpenClaw generates the waveform automatically, but it needs `ffmpeg` and `ffprobe` available on the gateway host to inspect and convert audio files.
