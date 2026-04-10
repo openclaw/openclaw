@@ -416,8 +416,13 @@ function localAuthModeAllowsGatewaySecretInputPath(params: {
   path: SupportedGatewaySecretInputPath;
 }): boolean {
   const { authMode, path } = params;
-  if (authMode === "none" || authMode === "trusted-proxy") {
+  if (authMode === "none") {
     return false;
+  }
+  if (authMode === "trusted-proxy") {
+    // Token is mutually exclusive with trusted-proxy, but password is not:
+    // the browser extension auto-generates a password for loopback clients.
+    return !isTokenGatewaySecretInputPath(path);
   }
   if (authMode === "token") {
     return isTokenGatewaySecretInputPath(path);
