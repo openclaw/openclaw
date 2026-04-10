@@ -1,0 +1,27 @@
+{
+  "name": "@openclaw/bluesky",
+  "version": "2026.4.10",
+  "description": "Bluesky DM channel plugin for OpenClaw",
+  "type": "module",
+  "dependencies": {
+    "@atproto/api": "^0.13.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "bluesky",
+      "label": "Bluesky",
+      "selectionLabel": "Bluesky (DMs)",
+      "docsPath": "/channels/bluesky",
+      "docsLabel": "bluesky",
+      "blurb": "Connect OpenClaw to Bluesky DMs via the AT Protocol chat API.",
+      "order": 85
+    },
+    "install": {
+      "npmSpec": "@openclaw/bluesky",
+      "defaultChoice": "npm"
+    }
+  }
+}

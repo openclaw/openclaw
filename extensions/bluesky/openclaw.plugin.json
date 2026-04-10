@@ -1,0 +1,12 @@
+{
+  "id": "bluesky",
+  "channels": ["bluesky"],
+  "channelEnvVars": {
+    "bluesky": ["BLUESKY_HANDLE", "BLUESKY_APP_PASSWORD", "BLUESKY_PDS_URL"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
