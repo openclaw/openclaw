@@ -11,6 +11,7 @@ import { isMainModule } from "../infra/is-main.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { enableConsoleCapture } from "../logging.js";
+import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { hasMemoryRuntime } from "../plugins/memory-state.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -63,10 +64,57 @@ export function shouldUseRootHelpFastPath(argv: string[]): boolean {
   return resolveCliArgvInvocation(argv).isRootHelpInvocation;
 }
 
-export function resolveMissingPluginCommandMessage(
+async function isBundledPluginCliRootCommand(
   pluginId: string,
   config?: OpenClawConfig,
-): string | null {
+): Promise<boolean> {
+  const pluginRegistry = loadPluginManifestRegistry({ config });
+  const hasBundledPluginId = pluginRegistry.plugins.some(
+    (plugin) =>
+      plugin.origin === "bundled" && normalizeLowercaseStringOrEmpty(plugin.id) === pluginId,
+  );
+  if (!hasBundledPluginId) {
+    return false;
+  }
+
+  const {
+    createPluginCliLogger,
+    loadPluginCliMetadataRegistryWithContext,
+    resolvePluginCliLoadContext,
+  } = await import("../plugins/cli-registry-loader.js");
+  const detectedAllow = new Set(config?.plugins?.allow ?? []);
+  detectedAllow.add(pluginId);
+  const detectionConfig: OpenClawConfig = {
+    ...config,
+    plugins: {
+      ...config?.plugins,
+      ...(config?.plugins?.enabled === false ? { enabled: true } : {}),
+      allow: [...detectedAllow],
+      entries: {
+        ...config?.plugins?.entries,
+        [pluginId]: {
+          ...config?.plugins?.entries?.[pluginId],
+          enabled: true,
+        },
+      },
+    },
+  };
+  const context = resolvePluginCliLoadContext({
+    cfg: detectionConfig,
+    logger: createPluginCliLogger(),
+  });
+  const { registry } = await loadPluginCliMetadataRegistryWithContext(context);
+  return registry.cliRegistrars.some(
+    (entry) =>
+      normalizeLowercaseStringOrEmpty(entry.pluginId) === pluginId &&
+      entry.commands.some((name) => normalizeLowercaseStringOrEmpty(name) === pluginId),
+  );
+}
+
+export async function resolveMissingPluginCommandMessage(
+  pluginId: string,
+  config?: OpenClawConfig,
+): Promise<string | null> {
   const normalizedPluginId = normalizeLowercaseStringOrEmpty(pluginId);
   if (!normalizedPluginId) {
     return null;
@@ -78,14 +126,22 @@ export function resolveMissingPluginCommandMessage(
           .map((entry) => normalizeOptionalLowercaseString(entry))
           .filter(Boolean)
       : [];
-  if (allow.length > 0 && !allow.includes(normalizedPluginId)) {
+  const blockedByAllowlist = allow.length > 0 && !allow.includes(normalizedPluginId);
+  const explicitlyDisabled = config?.plugins?.entries?.[normalizedPluginId]?.enabled === false;
+  if (!blockedByAllowlist && !explicitlyDisabled) {
+    return null;
+  }
+  if (!(await isBundledPluginCliRootCommand(normalizedPluginId, config))) {
+    return null;
+  }
+  if (blockedByAllowlist) {
     return (
       `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
       `\`plugins.allow\` excludes "${normalizedPluginId}". Add "${normalizedPluginId}" to ` +
       `\`plugins.allow\` if you want that bundled plugin CLI surface.`
     );
   }
-  if (config?.plugins?.entries?.[normalizedPluginId]?.enabled === false) {
+  if (explicitlyDisabled) {
     return (
       `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
       `\`plugins.entries.${normalizedPluginId}.enabled=false\`. Re-enable that entry if you want ` +
@@ -214,7 +270,10 @@ export async function runCli(argv: string[] = process.argv) {
       );
       if (config) {
         if (primary && !program.commands.some((command) => command.name() === primary)) {
-          const missingPluginCommandMessage = resolveMissingPluginCommandMessage(primary, config);
+          const missingPluginCommandMessage = await resolveMissingPluginCommandMessage(
+            primary,
+            config,
+          );
           if (missingPluginCommandMessage) {
             throw new Error(missingPluginCommandMessage);
           }

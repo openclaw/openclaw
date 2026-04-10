@@ -72,18 +72,18 @@ describe("shouldUseRootHelpFastPath", () => {
 });
 
 describe("resolveMissingPluginCommandMessage", () => {
-  it("explains plugins.allow misses for a bundled plugin command", () => {
-    expect(
+  it("explains plugins.allow misses for a bundled plugin command", async () => {
+    await expect(
       resolveMissingPluginCommandMessage("browser", {
         plugins: {
           allow: ["telegram"],
         },
       }),
-    ).toContain('`plugins.allow` excludes "browser"');
+    ).resolves.toContain('`plugins.allow` excludes "browser"');
   });
 
-  it("explains explicit bundled plugin disablement", () => {
-    expect(
+  it("explains explicit bundled plugin disablement", async () => {
+    await expect(
       resolveMissingPluginCommandMessage("browser", {
         plugins: {
           entries: {
@@ -93,16 +93,26 @@ describe("resolveMissingPluginCommandMessage", () => {
           },
         },
       }),
-    ).toContain("plugins.entries.browser.enabled=false");
+    ).resolves.toContain("plugins.entries.browser.enabled=false");
   });
 
-  it("returns null when the bundled plugin command is already allowed", () => {
-    expect(
+  it("returns null when the bundled plugin command is already allowed", async () => {
+    await expect(
       resolveMissingPluginCommandMessage("browser", {
         plugins: {
           allow: ["browser"],
         },
       }),
-    ).toBeNull();
+    ).resolves.toBeNull();
+  });
+
+  it("returns null for unknown commands under a restrictive plugins.allow", async () => {
+    await expect(
+      resolveMissingPluginCommandMessage("run", {
+        plugins: {
+          allow: ["telegram"],
+        },
+      }),
+    ).resolves.toBeNull();
   });
 });
