@@ -6,12 +6,6 @@ export function resolveEmbeddedFullAccessState(params: {
   sandboxEnabled: boolean;
   execElevated?: ExecElevatedDefaults;
 }): { available: boolean; blockedReason?: EmbeddedFullAccessBlockedReason } {
-  if (!params.sandboxEnabled) {
-    return {
-      available: false,
-      blockedReason: "runtime",
-    };
-  }
   if (params.execElevated?.fullAccessAvailable === true) {
     return { available: true };
   }
@@ -26,6 +20,9 @@ export function resolveEmbeddedFullAccessState(params: {
       available: false,
       blockedReason: "host-policy",
     };
+  }
+  if (!params.sandboxEnabled) {
+    return { available: true };
   }
   return { available: true };
 }
