@@ -55,7 +55,7 @@
   /* Grow, shrink, and use 0 base for proper scrolling */
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 0 6px 6px;
+  padding: 0 8px 10px;
   margin: 0 0 0 0;
   min-height: 0;
   /* Allow shrinking for flex scroll behavior */
@@ -187,8 +187,12 @@
   gap: 12px;
   margin-top: auto;
   /* Push to bottom of flex container */
-  padding: 12px 4px 4px;
-  background: linear-gradient(to bottom, transparent, var(--bg) 20%);
+  padding: 14px 6px 6px;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    color-mix(in srgb, var(--bg) 94%, var(--panel) 6%) 24%
+  );
   z-index: 10;
 }
 
@@ -199,7 +203,7 @@
   gap: 8px;
   padding: 8px;
   background: var(--panel);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border);
   width: fit-content;
   max-width: 100%;
@@ -331,7 +335,7 @@
   min-height: 40px;
   max-height: 150px;
   padding: 9px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   overflow-y: auto;
   resize: none;
   white-space: pre-wrap;
@@ -355,9 +359,9 @@
 .chat-compose .chat-compose__actions .btn {
   padding: 0 16px;
   font-size: 13px;
-  height: 40px;
-  min-height: 40px;
-  max-height: 40px;
+  height: 42px;
+  min-height: 42px;
+  max-height: 42px;
   line-height: 1;
   white-space: nowrap;
   box-sizing: border-box;
@@ -367,11 +371,11 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  margin: 0 18px 14px;
+  margin: 0 18px 16px;
   padding: 0;
-  background: var(--card);
+  background: color-mix(in srgb, var(--card) 92%, var(--bg-elevated) 8%);
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   flex-shrink: 0;
   overflow: hidden;
   transition:
@@ -380,8 +384,8 @@
 }
 
 .agent-chat__input:focus-within {
-  border-color: var(--border-strong);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--border-strong) 24%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border-strong));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 @supports (backdrop-filter: blur(1px)) {
@@ -419,7 +423,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 10px;
+  padding: 7px 11px;
   border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
 }
 
@@ -494,12 +498,12 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   border-radius: var(--radius-md);
   border: none;
-  background: var(--muted-strong);
-  color: var(--text-strong);
+  background: var(--accent);
+  color: var(--accent-foreground);
   cursor: pointer;
   flex-shrink: 0;
   transition:
@@ -519,8 +523,8 @@
 }
 
 .chat-send-btn:hover:not(:disabled) {
-  background: var(--muted);
-  box-shadow: none;
+  background: var(--accent-hover);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--accent) 32%, transparent);
 }
 
 .chat-send-btn:disabled {
@@ -777,20 +781,6 @@
   color: var(--text);
 }
 
-/* Light theme icon button overrides */
-:root[data-theme-mode="light"] .btn--icon {
-  background: #ffffff;
-  border-color: var(--border);
-  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
-  color: var(--muted);
-}
-
-:root[data-theme-mode="light"] .btn--icon:hover {
-  background: #ffffff;
-  border-color: var(--border-strong);
-  color: var(--text);
-}
-
 :root[data-theme-mode="light"] .chat-controls .btn--icon.active {
   border-color: var(--accent);
   background: var(--accent-subtle);
@@ -827,7 +817,7 @@
   gap: 4px;
   font-size: 12px;
   padding: 4px 10px;
-  background: rgba(255, 255, 255, 0.04);
+  background: color-mix(in srgb, var(--bg-hover) 56%, transparent);
   border-radius: 6px;
   border: 1px solid var(--border);
 }
@@ -923,7 +913,7 @@
   font-size: 20px;
   font-weight: 600;
   margin: 0;
-  color: var(--foreground);
+  color: var(--text-strong);
 }
 
 .agent-chat__avatar--logo {
@@ -1000,7 +990,7 @@
   border-radius: 100px;
   border: 1px solid var(--border);
   background: var(--panel);
-  color: var(--foreground);
+  color: var(--text);
   cursor: pointer;
   transition:
     background 0.15s,

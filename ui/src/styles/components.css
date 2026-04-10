@@ -194,8 +194,8 @@
 .card {
   border: 1px solid var(--border);
   background: var(--card);
-  border-radius: var(--radius-lg);
-  padding: 18px;
+  border-radius: var(--radius-xl);
+  padding: 20px;
   animation: rise 0.25s var(--ease-out) backwards;
   transition:
     border-color var(--duration-normal) var(--ease-out),
@@ -204,7 +204,7 @@
 
 .card:hover {
   border-color: var(--border-strong);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-card);
 }
 
 .card-title {
@@ -530,9 +530,9 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  border: 1px solid var(--border);
-  background: var(--bg-elevated);
-  padding: 8px 14px;
+  border: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
+  background: color-mix(in srgb, var(--bg-elevated) 90%, var(--bg) 10%);
+  padding: 9px 15px;
   border-radius: var(--radius-md);
   font-size: 13px;
   font-weight: 500;
@@ -545,8 +545,8 @@
 }
 
 .btn:hover {
-  background: var(--bg-hover);
-  border-color: var(--border-strong);
+  background: color-mix(in srgb, var(--bg-hover) 88%, var(--bg-elevated) 12%);
+  border-color: color-mix(in srgb, var(--border-strong) 94%, transparent);
 }
 
 .btn:active {
@@ -568,13 +568,13 @@
   border-color: var(--accent);
   background: var(--accent);
   color: var(--primary-foreground);
-  box-shadow: 0 1px 3px rgba(255, 92, 92, 0.25);
+  box-shadow: 0 10px 22px color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
 .btn.primary:hover {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
-  box-shadow: 0 2px 12px rgba(255, 92, 92, 0.3);
+  box-shadow: 0 14px 30px color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
 /* Keyboard shortcut badge (shadcn style) */
@@ -1194,7 +1194,7 @@
 
 .callout {
   padding: 14px 16px;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: var(--secondary);
   border: 1px solid var(--border);
   font-size: 13px;
@@ -1203,20 +1203,32 @@
 }
 
 .callout.danger {
-  border-color: rgba(239, 68, 68, 0.25);
-  background: linear-gradient(135deg, rgba(239, 68, 68, 0.08) 0%, rgba(239, 68, 68, 0.04) 100%);
+  border-color: color-mix(in srgb, var(--danger) 36%, transparent);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--danger-subtle) 82%, transparent) 0%,
+    color-mix(in srgb, var(--danger-subtle) 50%, transparent) 100%
+  );
   color: var(--danger);
 }
 
 .callout.info {
-  border-color: rgba(59, 130, 246, 0.25);
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.08) 0%, rgba(59, 130, 246, 0.04) 100%);
+  border-color: color-mix(in srgb, var(--info) 36%, transparent);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--info) 14%, transparent) 0%,
+    color-mix(in srgb, var(--info) 8%, transparent) 100%
+  );
   color: var(--info);
 }
 
 .callout.success {
-  border-color: rgba(34, 197, 94, 0.25);
-  background: linear-gradient(135deg, rgba(34, 197, 94, 0.08) 0%, rgba(34, 197, 94, 0.04) 100%);
+  border-color: color-mix(in srgb, var(--ok) 34%, transparent);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--ok-subtle) 82%, transparent) 0%,
+    color-mix(in srgb, var(--ok-subtle) 56%, transparent) 100%
+  );
   color: var(--ok);
 }
 
@@ -1408,20 +1420,23 @@
 
 .list {
   display: grid;
-  gap: 8px;
+  gap: 10px;
   container-type: inline-size;
 }
 
 .list-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(200px, 260px);
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 300px);
+  gap: 18px;
   align-items: start;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 12px;
+  border-radius: var(--radius-lg);
+  padding: 14px 15px;
   background: var(--card);
-  transition: border-color var(--duration-fast) ease;
+  transition:
+    border-color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease,
+    background var(--duration-fast) ease;
 }
 
 .list-item-clickable {
@@ -1430,11 +1445,15 @@
 
 .list-item-clickable:hover {
   border-color: var(--border-strong);
+  background: color-mix(in srgb, var(--card) 90%, var(--bg-hover) 10%);
+  box-shadow: var(--shadow-sm);
 }
 
 .list-item-selected {
   border-color: var(--accent);
-  box-shadow: var(--focus-ring);
+  box-shadow:
+    var(--focus-ring),
+    0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .list-main {
@@ -1444,7 +1463,8 @@
 }
 
 .list-title {
-  font-weight: 500;
+  font-weight: 600;
+  color: var(--text-strong);
 }
 
 .list-sub {
@@ -1457,7 +1477,7 @@
   color: var(--muted);
   font-size: 12px;
   display: grid;
-  gap: 4px;
+  gap: 6px;
   min-width: 200px;
 }
 
@@ -1704,7 +1724,7 @@
 .table {
   display: grid;
   container-type: inline-size;
-  gap: 6px;
+  gap: 8px;
 }
 
 .table-head,
@@ -1719,19 +1739,24 @@
   font-size: 12px;
   font-weight: 500;
   color: var(--muted);
-  padding: 0 12px;
+  padding: 0 14px;
 }
 
 .table-row {
   border: 1px solid var(--border);
-  padding: 10px 12px;
-  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  border-radius: var(--radius-lg);
   background: var(--card);
-  transition: border-color var(--duration-fast) ease;
+  transition:
+    border-color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease,
+    background var(--duration-fast) ease;
 }
 
 .table-row:hover {
   border-color: var(--border-strong);
+  background: color-mix(in srgb, var(--card) 90%, var(--bg-hover) 10%);
+  box-shadow: var(--shadow-sm);
 }
 
 @media (max-width: 1100px) {
@@ -1780,15 +1805,16 @@
 
 .data-table-wrapper {
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   overflow: hidden;
+  background: var(--card);
 }
 
 .data-table-toolbar {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 12px;
+  padding: 12px 14px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-elevated);
 }
@@ -1800,19 +1826,23 @@
 
 .data-table-search input {
   width: 100%;
-  padding: 6px 10px;
+  padding: 8px 11px;
   font-size: 13px;
   color: var(--text);
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   outline: none;
-  transition: border-color var(--duration-fast) ease;
+  transition:
+    border-color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease,
+    background var(--duration-fast) ease;
 }
 
 .data-table-search input:focus {
-  border-color: var(--border-strong);
+  border-color: var(--accent);
   box-shadow: var(--focus-ring);
+  background: color-mix(in srgb, var(--card) 86%, var(--bg-hover) 14%);
 }
 
 .data-table-search input::placeholder {
@@ -1836,7 +1866,7 @@
 }
 
 .data-table th {
-  padding: 10px 12px;
+  padding: 11px 13px;
   text-align: left;
   font-weight: 600;
   font-size: 12px;
@@ -1889,7 +1919,7 @@
 }
 
 .data-table td {
-  padding: 10px 12px;
+  padding: 11px 13px;
   border-bottom: 1px solid var(--border);
   color: var(--text);
   vertical-align: middle;
@@ -1943,7 +1973,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 12px;
+  padding: 11px 13px;
   border-top: 1px solid var(--border);
   background: var(--bg-elevated);
   font-size: 13px;
@@ -1957,10 +1987,10 @@
 }
 
 .data-table-pagination__controls button {
-  padding: 4px 12px;
+  padding: 6px 12px;
   font-size: 13px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--card);
   color: var(--text);
   cursor: pointer;
@@ -1970,13 +2000,14 @@
 }
 
 .data-table-pagination__controls button:hover:not(:disabled) {
-  background: var(--bg-hover);
+  background: color-mix(in srgb, var(--bg-hover) 86%, var(--card) 14%);
   border-color: var(--border-strong);
 }
 
 .data-table-pagination__controls button:disabled {
-  opacity: 0.4;
+  opacity: 0.45;
   cursor: not-allowed;
+  filter: grayscale(0.2);
 }
 
 /* Row actions */
@@ -1991,7 +2022,7 @@
   width: 32px;
   height: 32px;
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
   cursor: pointer;
@@ -2010,7 +2041,7 @@
 }
 
 .data-table-row-actions__trigger:hover {
-  background: var(--bg-hover);
+  background: color-mix(in srgb, var(--bg-hover) 84%, var(--card) 16%);
   color: var(--text);
   border-color: var(--border);
 }
@@ -2843,14 +2874,15 @@
 
 .agents-layout {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 14px;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 16px;
 }
 
 .agents-sidebar {
   display: grid;
   gap: 12px;
   align-self: start;
+  grid-column: span 4;
 }
 
 .agents-toolbar {
@@ -2998,6 +3030,7 @@
 .agents-main {
   display: grid;
   gap: 14px;
+  grid-column: span 8;
 }
 
 .agent-list {
@@ -3013,20 +3046,27 @@
   width: 100%;
   text-align: left;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: var(--card);
-  padding: 8px 12px;
+  padding: 10px 13px;
   cursor: pointer;
-  transition: border-color var(--duration-fast) ease;
+  transition:
+    border-color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease,
+    background var(--duration-fast) ease;
 }
 
 .agent-row:hover {
   border-color: var(--border-strong);
+  background: color-mix(in srgb, var(--card) 88%, var(--bg-hover) 12%);
+  box-shadow: var(--shadow-sm);
 }
 
 .agent-row.active {
   border-color: var(--accent);
-  box-shadow: var(--focus-ring);
+  box-shadow:
+    var(--focus-ring),
+    0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
 .agent-avatar {
@@ -3234,8 +3274,8 @@
 
 .agent-files-grid {
   display: grid;
-  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
-  gap: 14px;
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  gap: 16px;
 }
 
 .agent-files-list {
@@ -3251,20 +3291,27 @@
   width: 100%;
   text-align: left;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: var(--card);
-  padding: 10px 12px;
+  padding: 11px 13px;
   cursor: pointer;
-  transition: border-color var(--duration-fast) ease;
+  transition:
+    border-color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease,
+    background var(--duration-fast) ease;
 }
 
 .agent-file-row:hover {
   border-color: var(--border-strong);
+  background: color-mix(in srgb, var(--card) 88%, var(--bg-hover) 12%);
+  box-shadow: var(--shadow-sm);
 }
 
 .agent-file-row.active {
   border-color: var(--accent);
-  box-shadow: var(--focus-ring);
+  box-shadow:
+    var(--focus-ring),
+    0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
 .agent-file-name {
@@ -3451,6 +3498,16 @@
 }
 
 @media (max-width: 980px) {
+  .agents-layout {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .agents-sidebar,
+  .agents-main {
+    grid-column: auto;
+  }
+
   .agent-header {
     grid-template-columns: 1fr;
   }
@@ -3606,16 +3663,16 @@
 
 .ov-cards {
   display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 16px;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
 }
 
 .ov-card {
   display: grid;
-  gap: 6px;
-  padding: 16px;
+  gap: 8px;
+  padding: 18px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   background: var(--card);
   cursor: pointer;
   text-align: left;
@@ -3624,6 +3681,10 @@
     box-shadow var(--duration-normal) var(--ease-out),
     transform var(--duration-fast) var(--ease-out);
   animation: rise 0.25s var(--ease-out) backwards;
+}
+
+.ov-cards > .ov-card {
+  grid-column: span 3;
 }
 
 .ov-card:hover {
@@ -3655,7 +3716,7 @@
 
 .ov-card__hint {
   font-size: 12px;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--muted) 88%, var(--text) 12%);
   line-height: 1.35;
 }
 
@@ -3698,13 +3759,13 @@
 }
 
 .ov-attention-item.warn {
-  border-color: var(--warning-subtle, rgba(234, 179, 8, 0.2));
-  background: rgba(234, 179, 8, 0.05);
+  border-color: color-mix(in srgb, var(--warn) 36%, transparent);
+  background: color-mix(in srgb, var(--warn-subtle) 88%, transparent);
 }
 
 .ov-attention-item.danger {
-  border-color: var(--danger-subtle, rgba(239, 68, 68, 0.2));
-  background: rgba(239, 68, 68, 0.05);
+  border-color: color-mix(in srgb, var(--danger) 38%, transparent);
+  background: color-mix(in srgb, var(--danger-subtle) 86%, transparent);
 }
 
 .ov-attention-icon {
@@ -3719,11 +3780,11 @@
 }
 
 .ov-attention-item.warn .ov-attention-icon {
-  color: var(--warning, #eab308);
+  color: var(--warn);
 }
 
 .ov-attention-item.danger .ov-attention-icon {
-  color: var(--danger, #ef4444);
+  color: var(--danger);
 }
 
 .ov-attention-icon svg {
@@ -3748,7 +3809,7 @@
 
 .ov-attention-link {
   font-size: 12px;
-  color: var(--accent, #3b82f6);
+  color: var(--accent);
   text-decoration: none;
 }
 
@@ -3840,13 +3901,30 @@
 /* Bottom grid (event log + log tail) */
 .ov-bottom-grid {
   display: grid;
-  gap: 20px;
-  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 18px;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+}
+
+.ov-bottom-grid > .card {
+  grid-column: span 6;
 }
 
 @media (max-width: 768px) {
+  .ov-cards {
+    gap: 12px;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .ov-cards > .ov-card {
+    grid-column: span 3;
+  }
+
   .ov-bottom-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .ov-bottom-grid > .card {
+    grid-column: span 6;
   }
 
   .ov-access-grid {
@@ -3918,7 +3996,7 @@
 
 @media (max-width: 600px) {
   .ov-cards {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
   }
 

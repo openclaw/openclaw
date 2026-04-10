@@ -5,9 +5,9 @@
 .shell {
   --shell-pad: 16px;
   --shell-gap: 16px;
-  --shell-nav-width: 258px;
-  --shell-nav-rail-width: 78px;
-  --shell-topbar-height: 52px;
+  --shell-nav-width: 300px;
+  --shell-nav-rail-width: 88px;
+  --shell-topbar-height: 58px;
   --shell-focus-duration: 200ms;
   --shell-focus-ease: var(--ease-out);
   height: 100vh;
@@ -85,12 +85,12 @@
   z-index: 40;
   display: flex;
   align-items: center;
-  padding: 0 24px;
-  min-height: 58px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
-  background: color-mix(in srgb, var(--bg) 82%, transparent);
-  backdrop-filter: blur(12px) saturate(1.6);
-  -webkit-backdrop-filter: blur(12px) saturate(1.6);
+  padding: 0 26px;
+  min-height: 62px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  backdrop-filter: blur(16px) saturate(1.35);
+  -webkit-backdrop-filter: blur(16px) saturate(1.35);
 }
 
 .topnav-shell {
@@ -217,7 +217,7 @@
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;
-  min-width: 200px;
+  min-width: 220px;
 }
 
 .topbar-search:hover {
@@ -313,7 +313,7 @@
   display: flex;
   min-height: 100%;
   overflow: hidden;
-  border-right: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
+  border-right: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
   transition: width var(--shell-focus-duration) var(--shell-focus-ease);
 }
 
@@ -328,7 +328,11 @@
   min-height: 0;
   min-width: 0;
   overflow: hidden;
-  background: color-mix(in srgb, var(--bg) 96%, var(--bg-elevated) 4%);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--panel) 94%, var(--bg-elevated) 6%) 0%,
+    color-mix(in srgb, var(--panel-strong) 92%, var(--bg) 8%) 100%
+  );
 }
 
 :root[data-theme-mode="light"] .sidebar {
@@ -340,7 +344,7 @@
   flex-direction: column;
   min-height: 0;
   flex: 1;
-  padding: 14px 10px 12px;
+  padding: 16px 12px 14px;
   border: none;
   border-radius: 0;
   background: transparent;
@@ -364,7 +368,7 @@
   justify-content: space-between;
   gap: 12px;
   min-height: 0;
-  padding: 0 8px 18px;
+  padding: 0 10px 18px;
 }
 
 .sidebar-shell__body {
@@ -564,6 +568,7 @@
   color: var(--muted);
   cursor: pointer;
   text-decoration: none;
+  min-width: 0;
   transition:
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
@@ -597,6 +602,9 @@
 .nav-item__text {
   font-size: 14px;
   font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -853,7 +861,7 @@
 
 .content {
   grid-area: content;
-  padding: 16px 20px 32px;
+  padding: 20px 24px 36px;
   display: block;
   min-height: 0;
   overflow-y: auto;
@@ -906,7 +914,7 @@
 }
 
 .page-title {
-  font-size: 22px;
+  font-size: 24px;
   font-weight: 650;
   letter-spacing: -0.03em;
   line-height: 1.2;
@@ -915,7 +923,7 @@
 
 .page-sub {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 400;
   margin-top: 4px;
   letter-spacing: -0.005em;

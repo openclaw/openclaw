@@ -472,15 +472,42 @@ async function waitForGatewayPortRelease(port: number, timeoutMs = 5_000): Promi
 }
 
 async function terminateBusyPortListeners(port: number): Promise<number[]> {
+  const verified = findVerifiedGatewayListenerPidsOnPortSync(port);
+  if (verified.length > 0) {
+    for (const pid of verified) {
+      await terminateGatewayProcessTree(pid, 300);
+    }
+    return verified;
+  }
+
   const diagnostics = await inspectPortUsage(port).catch(() => null);
   if (diagnostics?.status !== "busy") {
     return [];
   }
-  const pids = Array.from(
+
+  const matchedGatewayPids = Array.from(
     new Set(
       diagnostics.listeners
-        .map((listener) => listener.pid)
-        .filter((pid): pid is number => typeof pid === "number" && Number.isFinite(pid) && pid > 0),
+        .filter(
+          (listener) =>
+            typeof listener.pid === "number" &&
+            listener.commandLine &&
+            isGatewayArgv(parseCmdScriptCommandLine(listener.commandLine), {
+              allowGatewayBinary: true,
+            }),
+        )
+        .map((listener) => listener.pid as number),
+    ),
+  );
+  if (matchedGatewayPids.length === 0) {
+    return [];
+  }
+
+  const pids = Array.from(
+    new Set(
+      matchedGatewayPids.filter(
+        (pid): pid is number => typeof pid === "number" && Number.isFinite(pid) && pid > 0,
+      ),
     ),
   );
   for (const pid of pids) {

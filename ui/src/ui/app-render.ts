@@ -436,8 +436,8 @@ export function renderApp(state: AppViewState) {
               @click=${() => {
                 state.paletteOpen = !state.paletteOpen;
               }}
-              title="Search or jump to… (⌘K)"
-              aria-label="Open command palette"
+              title="${t("common.searchOrJump")}"
+              aria-label="${t("common.openCommandPalette")}"
             >
               <span class="topbar-search__label">${t("common.search")}</span>
               <kbd class="topbar-search__kbd">⌘K</kbd>
@@ -527,7 +527,7 @@ export function renderApp(state: AppViewState) {
                   href="https://docs.openclaw.ai"
                   target=${EXTERNAL_LINK_TARGET}
                   rel=${buildExternalLinkRel()}
-                  title="${t("common.docs")} (opens in new tab)"
+                  title="${t("common.docs")} (${t("common.opensInNewTab")})"
                 >
                   <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
                   ${
@@ -573,18 +573,18 @@ export function renderApp(state: AppViewState) {
           state.updateAvailable.latestVersion !== state.updateAvailable.currentVersion &&
           !isUpdateBannerDismissed(state.updateAvailable)
             ? html`<div class="update-banner callout danger" role="alert">
-              <strong>Update available:</strong> v${state.updateAvailable.latestVersion}
-              (running v${state.updateAvailable.currentVersion}).
+              <strong>${t("common.updateAvailable")}:</strong> v${state.updateAvailable.latestVersion}
+              (${t("common.running")} v${state.updateAvailable.currentVersion}).
               <button
                 class="btn btn--sm update-banner__btn"
                 ?disabled=${state.updateRunning || !state.connected}
                 @click=${() => runUpdate(state)}
-              >${state.updateRunning ? "Updating…" : "Update now"}</button>
+              >${state.updateRunning ? t("common.updating") : t("common.updateNow")}</button>
               <button
                 class="update-banner__close"
                 type="button"
-                title="Dismiss"
-                aria-label="Dismiss update banner"
+                title="${t("common.dismiss")}"
+                aria-label="${t("common.dismissUpdateBanner")}"
                 @click=${() => {
                   dismissUpdateBanner(state.updateAvailable);
                   state.updateAvailable = null;
@@ -1618,7 +1618,7 @@ export function renderApp(state: AppViewState) {
                 gatewayUrl: state.settings.gatewayUrl,
                 assistantName: state.assistantName,
                 configPath: state.configSnapshot?.path ?? null,
-                navRootLabel: "Communication",
+                navRootLabel: t("tabs.communications"),
                 includeSections: [...COMMUNICATION_SECTION_KEYS],
                 includeVirtualSections: false,
               })
@@ -1685,7 +1685,7 @@ export function renderApp(state: AppViewState) {
                 gatewayUrl: state.settings.gatewayUrl,
                 assistantName: state.assistantName,
                 configPath: state.configSnapshot?.path ?? null,
-                navRootLabel: "Appearance",
+                navRootLabel: t("tabs.appearance"),
                 includeSections: [...APPEARANCE_SECTION_KEYS],
                 includeVirtualSections: true,
               })
@@ -1752,7 +1752,7 @@ export function renderApp(state: AppViewState) {
                 gatewayUrl: state.settings.gatewayUrl,
                 assistantName: state.assistantName,
                 configPath: state.configSnapshot?.path ?? null,
-                navRootLabel: "Automation",
+                navRootLabel: t("tabs.automation"),
                 includeSections: [...AUTOMATION_SECTION_KEYS],
                 includeVirtualSections: false,
               })
@@ -1819,7 +1819,7 @@ export function renderApp(state: AppViewState) {
                 gatewayUrl: state.settings.gatewayUrl,
                 assistantName: state.assistantName,
                 configPath: state.configSnapshot?.path ?? null,
-                navRootLabel: "Infrastructure",
+                navRootLabel: t("tabs.infrastructure"),
                 includeSections: [...INFRASTRUCTURE_SECTION_KEYS],
                 includeVirtualSections: false,
               })
@@ -1886,7 +1886,7 @@ export function renderApp(state: AppViewState) {
                 gatewayUrl: state.settings.gatewayUrl,
                 assistantName: state.assistantName,
                 configPath: state.configSnapshot?.path ?? null,
-                navRootLabel: "AI & Agents",
+                navRootLabel: t("tabs.aiAgents"),
                 includeSections: [...AI_AGENTS_SECTION_KEYS],
                 includeVirtualSections: false,
               })

@@ -155,6 +155,10 @@ describe("program routes", () => {
     await expectRunFalse(["status"], ["node", "openclaw", "status", "--timeout"]);
   });
 
+  it("returns false for status route when unknown option appears", async () => {
+    await expectRunFalse(["status"], ["node", "openclaw", "status", "--mystery"]);
+  });
+
   it("routes status --json through the lean JSON command", async () => {
     const route = expectRoute(["status"]);
     await expect(

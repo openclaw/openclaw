@@ -44,7 +44,6 @@ export function normalizeWindowsArgv(argv: string[]): string[] {
       path.basename(lower) === execBase ||
       lower.endsWith("\\node.exe") ||
       lower.endsWith("/node.exe") ||
-      lower.includes("node.exe") ||
       (path.basename(lower) === "node.exe" && fs.existsSync(normalized))
     );
   };

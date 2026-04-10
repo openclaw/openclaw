@@ -7,9 +7,9 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 0;
-  height: calc(100vh - 160px);
-  margin: 0 -16px -32px;
-  border-radius: var(--radius-xl);
+  height: calc(100vh - 138px);
+  margin: 0 -20px -36px;
+  border-radius: calc(var(--radius-xl) + 2px);
   border: 1px solid var(--border);
   background: var(--panel);
   overflow: hidden;
@@ -187,7 +187,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 20px;
+  padding: 12px 22px;
   background: var(--bg-accent);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
@@ -237,7 +237,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 20px;
+  padding: 12px 22px;
   background: var(--bg-accent);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
@@ -453,9 +453,10 @@
 .config-content {
   flex: 1;
   overflow-y: auto;
-  padding: 20px 22px;
+  padding: 24px 26px;
   min-width: 0;
   scroll-behavior: smooth;
+  container-type: inline-size;
 }
 
 /* ===========================================
@@ -779,21 +780,27 @@
 
 .config-form--modern {
   display: grid;
-  gap: 14px;
+  gap: 16px;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
   width: 100%;
   min-width: 0;
 }
 
 .config-section-card {
+  grid-column: span 12;
   width: 100%;
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   background: var(--bg-elevated);
   overflow: hidden;
   transition:
     border-color var(--duration-normal) ease,
     box-shadow var(--duration-normal) ease;
   animation: section-card-enter 0.25s var(--ease-out) backwards;
+}
+
+.config-form--modern .config-section-card--half {
+  grid-column: span 6;
 }
 
 @keyframes section-card-enter {
@@ -809,7 +816,7 @@
 
 .config-section-card:hover {
   border-color: var(--border-strong);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-card);
 }
 
 :root[data-theme-mode="light"] .config-section-card {
@@ -824,7 +831,7 @@
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 18px 20px;
+  padding: 20px 22px;
   background: var(--bg-accent);
   border-bottom: 1px solid var(--border);
 }
@@ -874,7 +881,7 @@
 }
 
 .config-section-card__content {
-  padding: 16px 18px;
+  padding: 18px 20px;
   min-width: 0;
 }
 
@@ -932,7 +939,7 @@
 
 .cfg-field__help {
   font-size: 11.5px;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--muted) 90%, var(--text) 10%);
   line-height: 1.45;
 }
 
@@ -960,7 +967,7 @@
 
 .cfg-field__error {
   font-size: 12px;
-  color: var(--danger);
+  color: color-mix(in srgb, var(--danger) 92%, var(--text-strong) 8%);
 }
 
 /* Text Input */
@@ -972,8 +979,8 @@
 .cfg-input {
   flex: 1;
   padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
+  border-radius: var(--radius-lg);
   background: var(--bg-accent);
   font-size: 13px;
   outline: none;
@@ -990,12 +997,13 @@
 
 .cfg-input:hover:not(:focus) {
   border-color: var(--border-strong);
+  background: color-mix(in srgb, var(--bg-hover) 72%, var(--bg-accent) 28%);
 }
 
 .cfg-input:focus {
   border-color: var(--accent);
   box-shadow: var(--focus-ring);
-  background: var(--bg-hover);
+  background: color-mix(in srgb, var(--bg-hover) 82%, var(--bg-accent) 18%);
 }
 
 :root[data-theme-mode="light"] .cfg-input {
@@ -1019,7 +1027,7 @@
 .cfg-input__reset {
   padding: 9px 12px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: var(--bg-elevated);
   color: var(--muted);
   font-size: 13px;
@@ -1037,14 +1045,15 @@
 .cfg-input__reset:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+  filter: grayscale(0.2);
 }
 
 /* Textarea */
 .cfg-textarea {
   width: 100%;
   padding: 10px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
+  border-radius: var(--radius-lg);
   background: var(--bg-accent);
   font-family: var(--mono);
   font-size: 13px;
@@ -1058,11 +1067,13 @@
 
 .cfg-textarea:hover:not(:focus) {
   border-color: var(--border-strong);
+  background: color-mix(in srgb, var(--bg-hover) 72%, var(--bg-accent) 28%);
 }
 
 .cfg-textarea:focus {
   border-color: var(--accent);
   box-shadow: var(--focus-ring);
+  background: color-mix(in srgb, var(--bg-hover) 82%, var(--bg-accent) 18%);
 }
 
 :root[data-theme-mode="light"] .cfg-textarea {
@@ -1086,7 +1097,7 @@
 .cfg-number {
   display: inline-flex;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   overflow: hidden;
   background: var(--bg-accent);
   transition: border-color var(--duration-fast) ease;
@@ -1151,8 +1162,8 @@
 /* Select */
 .cfg-select {
   padding: 8px 36px 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
+  border-radius: var(--radius-lg);
   background-color: var(--bg-accent);
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
   background-repeat: no-repeat;
@@ -1168,6 +1179,7 @@
 
 .cfg-select:hover:not(:focus) {
   border-color: var(--border-strong);
+  background-color: color-mix(in srgb, var(--bg-hover) 74%, var(--bg-accent) 26%);
 }
 
 .cfg-select:focus {
@@ -1185,7 +1197,7 @@
   display: inline-flex;
   padding: 3px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: var(--bg-accent);
   gap: 1px;
 }
@@ -1197,7 +1209,7 @@
 .cfg-segmented__btn {
   padding: 6px 14px;
   border: none;
-  border-radius: calc(var(--radius-md) - 3px);
+  border-radius: calc(var(--radius-lg) - 4px);
   background: transparent;
   color: var(--muted);
   font-size: 12px;
@@ -1233,7 +1245,7 @@
   gap: 14px;
   padding: 12px 14px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: var(--bg-accent);
   cursor: pointer;
   transition:
@@ -1247,8 +1259,9 @@
 }
 
 .cfg-toggle-row.disabled {
-  opacity: 0.55;
+  opacity: 0.58;
   cursor: not-allowed;
+  filter: grayscale(0.16);
 }
 
 :root[data-theme-mode="light"] .cfg-toggle-row {
@@ -1275,7 +1288,7 @@
   display: block;
   margin-top: 2px;
   font-size: 11px;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--muted) 92%, var(--text) 8%);
   line-height: 1.45;
 }
 
@@ -1341,7 +1354,7 @@
 /* Object (collapsible) */
 .cfg-object {
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: transparent;
   overflow: hidden;
   transition: border-color var(--duration-fast) ease;
@@ -1418,7 +1431,7 @@
 /* Array */
 .cfg-array {
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   overflow: hidden;
 }
 
@@ -1466,7 +1479,7 @@
   gap: 6px;
   padding: 7px 14px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: var(--bg-elevated);
   color: var(--text);
   font-size: 12px;
@@ -1577,7 +1590,7 @@
 /* Map (custom entries) */
 .cfg-map {
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   overflow: hidden;
 }
 
@@ -1607,7 +1620,7 @@
   gap: 6px;
   padding: 7px 14px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: var(--bg-elevated);
   color: var(--text);
   font-size: 12px;
@@ -1648,7 +1661,7 @@
   gap: 8px;
   padding: 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: var(--bg-accent);
 }
 
@@ -1725,7 +1738,7 @@
   .config-layout {
     height: calc(100vh - 100px);
     height: calc(100dvh - 100px);
-    margin: 0 -8px -16px;
+    margin: 0 -6px -16px;
     border-radius: var(--radius-md);
   }
 
@@ -1771,7 +1784,17 @@
   }
 
   .config-content {
-    padding: 16px;
+    padding: 16px 14px;
+  }
+
+  .config-form--modern {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .config-form--modern .config-section-card,
+  .config-form--modern .config-section-card--half {
+    grid-column: auto;
   }
 
   .settings-theme-grid {

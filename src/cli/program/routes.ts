@@ -14,12 +14,29 @@ export type RouteSpec = {
   run: (argv: string[]) => Promise<boolean>;
 };
 
+function hasOnlyKnownOptions(
+  argv: string[],
+  commandPath: string[],
+  booleanFlags: string[],
+  valueFlags: string[] = [],
+): boolean {
+  const positionals = getCommandPositionalsWithRootOptions(argv, {
+    commandPath,
+    booleanFlags,
+    valueFlags,
+  });
+  return Array.isArray(positionals) && positionals.length === 0;
+}
+
 const routeHealth: RouteSpec = {
   match: (path) => path[0] === "health",
   // `health --json` only relays gateway RPC output and does not need local plugin metadata.
   // Keep plugin preload for text output where channel diagnostics/logSelfId are rendered.
   loadPlugins: (argv) => !hasFlag(argv, "--json"),
   run: async (argv) => {
+    if (!hasOnlyKnownOptions(argv, ["health"], ["--json", "--verbose", "--debug"], ["--timeout"])) {
+      return false;
+    }
     const json = hasFlag(argv, "--json");
     const verbose = getVerboseFlag(argv, { includeDebug: true });
     const timeoutMs = getPositiveIntFlagValue(argv, "--timeout");
@@ -38,6 +55,16 @@ const routeStatus: RouteSpec = {
   // proves it is needed, which keeps the fast-path startup lightweight.
   loadPlugins: (argv) => !hasFlag(argv, "--json"),
   run: async (argv) => {
+    if (
+      !hasOnlyKnownOptions(
+        argv,
+        ["status"],
+        ["--json", "--deep", "--all", "--usage", "--verbose", "--debug"],
+        ["--timeout"],
+      )
+    ) {
+      return false;
+    }
     const json = hasFlag(argv, "--json");
     const deep = hasFlag(argv, "--deep");
     const all = hasFlag(argv, "--all");
@@ -61,6 +88,16 @@ const routeStatus: RouteSpec = {
 const routeGatewayStatus: RouteSpec = {
   match: (path) => path[0] === "gateway" && path[1] === "status",
   run: async (argv) => {
+    if (
+      !hasOnlyKnownOptions(
+        argv,
+        ["gateway", "status"],
+        ["--deep", "--json", "--require-rpc", "--no-probe", "--ssh-auto"],
+        ["--url", "--token", "--password", "--timeout", "--ssh", "--ssh-identity"],
+      )
+    ) {
+      return false;
+    }
     const url = getFlagValue(argv, "--url");
     if (url === null) {
       return false;
@@ -120,6 +157,16 @@ const routeSessions: RouteSpec = {
   // must fall through to Commander so nested handlers run.
   match: (path) => path[0] === "sessions" && !path[1],
   run: async (argv) => {
+    if (
+      !hasOnlyKnownOptions(
+        argv,
+        ["sessions"],
+        ["--json", "--all-agents"],
+        ["--agent", "--store", "--active"],
+      )
+    ) {
+      return false;
+    }
     const json = hasFlag(argv, "--json");
     const allAgents = hasFlag(argv, "--all-agents");
     const agent = getFlagValue(argv, "--agent");
@@ -143,6 +190,9 @@ const routeSessions: RouteSpec = {
 const routeAgentsList: RouteSpec = {
   match: (path) => path[0] === "agents" && path[1] === "list",
   run: async (argv) => {
+    if (!hasOnlyKnownOptions(argv, ["agents", "list"], ["--json", "--bindings"])) {
+      return false;
+    }
     const json = hasFlag(argv, "--json");
     const bindings = hasFlag(argv, "--bindings");
     const { agentsListCommand } = await import("../../commands/agents.js");
@@ -154,6 +204,16 @@ const routeAgentsList: RouteSpec = {
 const routeMemoryStatus: RouteSpec = {
   match: (path) => path[0] === "memory" && path[1] === "status",
   run: async (argv) => {
+    if (
+      !hasOnlyKnownOptions(
+        argv,
+        ["memory", "status"],
+        ["--json", "--deep", "--index", "--verbose"],
+        ["--agent"],
+      )
+    ) {
+      return false;
+    }
     const agent = getFlagValue(argv, "--agent");
     if (agent === null) {
       return false;
@@ -239,6 +299,16 @@ const routeConfigUnset: RouteSpec = {
 const routeModelsList: RouteSpec = {
   match: (path) => path[0] === "models" && path[1] === "list",
   run: async (argv) => {
+    if (
+      !hasOnlyKnownOptions(
+        argv,
+        ["models", "list"],
+        ["--all", "--local", "--json", "--plain"],
+        ["--provider"],
+      )
+    ) {
+      return false;
+    }
     const provider = getFlagValue(argv, "--provider");
     if (provider === null) {
       return false;
@@ -256,6 +326,23 @@ const routeModelsList: RouteSpec = {
 const routeModelsStatus: RouteSpec = {
   match: (path) => path[0] === "models" && path[1] === "status",
   run: async (argv) => {
+    if (
+      !hasOnlyKnownOptions(
+        argv,
+        ["models", "status"],
+        ["--json", "--plain", "--check", "--probe"],
+        [
+          "--probe-provider",
+          "--probe-timeout",
+          "--probe-concurrency",
+          "--probe-max-tokens",
+          "--probe-profile",
+          "--agent",
+        ],
+      )
+    ) {
+      return false;
+    }
     const probeProvider = getFlagValue(argv, "--probe-provider");
     if (probeProvider === null) {
       return false;

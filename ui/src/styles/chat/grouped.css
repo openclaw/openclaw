@@ -7,9 +7,9 @@
   display: flex;
   gap: 10px;
   align-items: flex-start;
-  margin-bottom: 14px;
-  margin-left: 4px;
-  margin-right: 16px;
+  margin-bottom: 16px;
+  margin-left: 6px;
+  margin-right: 14px;
 }
 
 /* User messages on right */
@@ -178,10 +178,10 @@ img.chat-avatar {
 .chat-bubble {
   position: relative;
   display: inline-block;
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
   background: var(--card);
   border-radius: var(--radius-lg);
-  padding: 10px 14px;
+  padding: 11px 15px;
   box-shadow: none;
   transition:
     background var(--duration-fast) ease-out,
@@ -318,13 +318,14 @@ img.chat-avatar {
 }
 
 .chat-bubble:hover {
-  background: var(--bg-hover);
+  background: color-mix(in srgb, var(--bg-hover) 88%, var(--card) 12%);
+  border-color: var(--border-strong);
 }
 
 /* User bubbles have different styling */
 .chat-group.user .chat-bubble {
-  background: var(--accent-subtle);
-  border-color: transparent;
+  background: color-mix(in srgb, var(--accent-subtle) 85%, var(--card) 15%);
+  border-color: color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 :root[data-theme-mode="light"] .chat-group.user .chat-bubble {
@@ -333,7 +334,7 @@ img.chat-avatar {
 }
 
 .chat-group.user .chat-bubble:hover {
-  background: rgba(255, 77, 77, 0.15);
+  background: color-mix(in srgb, var(--accent-subtle) 95%, var(--card) 5%);
 }
 
 /* Streaming animation */

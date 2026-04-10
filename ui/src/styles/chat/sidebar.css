@@ -18,12 +18,13 @@
 
 .chat-sidebar {
   flex: 1;
-  min-width: 300px;
-  border-left: 1px solid var(--border);
+  min-width: 340px;
+  border-left: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   animation: slide-in 200ms ease-out;
+  background: color-mix(in srgb, var(--panel) 92%, var(--bg-elevated) 8%);
 }
 
 @keyframes slide-in {
@@ -49,7 +50,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 16px;
+  padding: 14px 18px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
   position: sticky;
@@ -68,13 +69,14 @@
 
 .sidebar-title {
   font-weight: 600;
-  font-size: 14px;
+  font-size: 15px;
+  letter-spacing: -0.01em;
 }
 
 .sidebar-content {
   flex: 1;
   overflow: auto;
-  padding: 16px;
+  padding: 18px;
 }
 
 .sidebar-markdown {
@@ -95,9 +97,10 @@
 }
 
 .sidebar-markdown pre {
-  background: rgba(0, 0, 0, 0.12);
-  border-radius: 4px;
-  padding: 12px;
+  background: color-mix(in srgb, var(--secondary) 82%, transparent);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  padding: 12px 14px;
   overflow-x: auto;
 }
 

@@ -1,8 +1,8 @@
 /* Tool Card Styles */
 .chat-tool-card {
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 10px 12px;
+  border-radius: var(--radius-lg);
+  padding: 11px 13px;
   margin-top: 6px;
   background: var(--card);
   transition:
@@ -14,7 +14,8 @@
 
 .chat-tool-card:hover {
   border-color: var(--border-strong);
-  background: var(--bg-hover);
+  background: color-mix(in srgb, var(--card) 88%, var(--bg-hover) 12%);
+  box-shadow: var(--shadow-sm);
 }
 
 /* First tool card in a group - no top margin */
@@ -127,7 +128,7 @@
   margin-top: 8px;
   padding: 8px 10px;
   background: var(--secondary);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   white-space: pre-wrap;
   overflow: hidden;
   max-height: 44px;
@@ -136,7 +137,7 @@
 }
 
 .chat-tool-card--clickable:hover .chat-tool-card__preview {
-  background: var(--bg-hover);
+  background: color-mix(in srgb, var(--bg-hover) 80%, var(--secondary) 20%);
   border-color: var(--border-strong);
 }
 
@@ -222,7 +223,7 @@
 }
 
 .chat-tools-collapse__body {
-  padding: 4px 12px 12px;
+  padding: 6px 12px 12px;
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
@@ -233,7 +234,7 @@
 .chat-json-collapse {
   margin-top: 4px;
   border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--secondary) 60%, transparent);
   overflow: hidden;
 }
@@ -329,7 +330,7 @@
   user-select: none;
   list-style: none;
   border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--bg-hover) 35%, transparent);
   transition:
     color 150ms ease,

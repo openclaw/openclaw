@@ -278,6 +278,12 @@
     flex: 1;
   }
 
+  .topbar-search__label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .topbar-theme-mode {
     display: none;
   }
@@ -402,7 +408,7 @@
     height: 44px;
   }
   .content {
-    padding: 4px 4px 16px;
+    padding: 10px 10px calc(18px + env(safe-area-inset-bottom));
     gap: 12px;
   }
 
