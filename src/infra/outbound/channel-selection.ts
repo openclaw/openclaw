@@ -34,7 +34,7 @@ function resolveKnownChannel(value?: string | null): MessageChannelId | undefine
   if (!isKnownChannel(normalized)) {
     return undefined;
   }
-  return normalized as MessageChannelId;
+  return normalized;
 }
 
 function resolveAvailableKnownChannel(params: {

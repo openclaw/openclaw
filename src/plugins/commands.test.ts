@@ -237,6 +237,7 @@ describe("registerPluginCommand", () => {
         name: "demo_cmd",
         description: "Demo command",
         pluginId: "demo-plugin",
+        acceptsArgs: false,
       },
     ]);
     expect(getPluginCommandSpecs()).toEqual([

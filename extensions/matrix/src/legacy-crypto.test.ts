@@ -1,8 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../../../test/helpers/temp-home.js";
+
+const legacyCryptoInspectorAvailability = vi.hoisted(() => ({
+  available: true,
+}));
+
+vi.mock("./legacy-crypto-inspector-availability.js", () => ({
+  isMatrixLegacyCryptoInspectorAvailable: () => legacyCryptoInspectorAvailability.available,
+}));
+
 import { autoPrepareLegacyMatrixCrypto, detectLegacyMatrixCrypto } from "./legacy-crypto.js";
 import { resolveMatrixAccountStorageRoot } from "./storage-paths.js";
 import {
@@ -74,13 +83,16 @@ function createOpsLegacyCryptoFixture(params: {
 }
 
 describe("matrix legacy encrypted-state migration", () => {
-  afterEach(() => {});
+  afterEach(() => {
+    legacyCryptoInspectorAvailability.available = true;
+  });
 
   it("extracts a saved backup key into the new recovery-key path", async () => {
     await withTempHome(async (home) => {
       const { cfg, rootDir } = writeDefaultLegacyCryptoFixture(home);
 
       const detection = detectLegacyMatrixCrypto({ cfg, env: process.env });
+      expect(detection.inspectorAvailable).toBe(true);
       expect(detection.warnings).toEqual([]);
       expect(detection.plans).toHaveLength(1);
 
@@ -189,6 +201,34 @@ describe("matrix legacy encrypted-state migration", () => {
 
       expect(result.migrated).toBe(true);
       expect(fs.existsSync(path.join(rootDir, "recovery-key.json"))).toBe(true);
+    });
+  });
+
+  it("stays warning-only when the legacy crypto inspector artifact is unavailable", async () => {
+    legacyCryptoInspectorAvailability.available = false;
+
+    await withTempHome(async (home) => {
+      const { cfg } = writeDefaultLegacyCryptoFixture(home);
+
+      const detection = detectLegacyMatrixCrypto({ cfg, env: process.env });
+      expect(detection.inspectorAvailable).toBe(false);
+      expect(detection.plans).toHaveLength(1);
+      expect(detection.warnings).toContain(
+        "Legacy Matrix encrypted state was detected, but the Matrix crypto inspector is unavailable.",
+      );
+
+      const result = await autoPrepareLegacyMatrixCrypto({
+        cfg,
+        env: process.env,
+      });
+
+      expect(result).toEqual({
+        migrated: false,
+        changes: [],
+        warnings: [
+          "Legacy Matrix encrypted state was detected, but the Matrix crypto inspector is unavailable.",
+        ],
+      });
     });
   });
 });

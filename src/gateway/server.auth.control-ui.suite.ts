@@ -1222,8 +1222,9 @@ export function registerControlUiAndPairingSuite(): void {
       expect(reconnect.ok).toBe(true);
 
       const repaired = await getPairedDevice(deviceId);
-      expect(repaired?.roles ?? []).toContain("operator");
-      expect(repaired?.scopes ?? []).toContain("operator.read");
+      expect(repaired?.role).toBe("operator");
+      expect(repaired?.approvedScopes ?? []).toContain("operator.read");
+      expect(repaired?.tokens?.operator?.scopes ?? []).toContain("operator.read");
       const list = await listDevicePairing();
       expect(list.pending.filter((entry) => entry.deviceId === deviceId)).toEqual([]);
     } finally {

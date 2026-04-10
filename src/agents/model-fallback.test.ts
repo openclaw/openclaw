@@ -14,6 +14,11 @@ import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import { runWithImageModelFallback, runWithModelFallback } from "./model-fallback.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
+vi.mock("../plugins/provider-runtime.js", () => ({
+  buildProviderMissingAuthMessageWithPlugin: () => undefined,
+  resolveExternalAuthProfilesWithPlugins: () => [],
+}));
+
 const makeCfg = makeModelFallbackCfg;
 
 function makeFallbacksOnlyCfg(): OpenClawConfig {
@@ -1272,11 +1277,10 @@ describe("runWithModelFallback", () => {
     });
   });
 
-  // Tests for Bug B fix: Rate limit vs auth/billing cooldown distinction
   describe("fallback behavior with provider cooldowns", () => {
     async function makeAuthStoreWithCooldown(
       provider: string,
-      reason: "rate_limit" | "overloaded" | "auth" | "billing",
+      reason: "rate_limit" | "overloaded" | "timeout" | "auth" | "billing",
     ): Promise<{ store: AuthProfileStore; dir: string }> {
       const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
       const now = Date.now();
@@ -1287,15 +1291,12 @@ describe("runWithModelFallback", () => {
         },
         usageStats: {
           [`${provider}:default`]:
-            reason === "rate_limit" || reason === "overloaded"
+            reason === "rate_limit" || reason === "overloaded" || reason === "timeout"
               ? {
-                  // Transient cooldown reasons are tracked through
-                  // cooldownUntil and failureCounts, not disabledReason.
                   cooldownUntil: now + 300000,
                   failureCounts: { [reason]: 1 },
                 }
               : {
-                  // Auth/billing issues use disabledUntil
                   disabledUntil: now + 300000,
                   disabledReason: reason,
                 },
@@ -1318,7 +1319,7 @@ describe("runWithModelFallback", () => {
         },
       });
 
-      const run = vi.fn().mockResolvedValueOnce("sonnet success"); // Fallback succeeds
+      const run = vi.fn().mockResolvedValueOnce("sonnet success");
 
       const result = await runWithModelFallback({
         cfg,
@@ -1329,7 +1330,7 @@ describe("runWithModelFallback", () => {
       });
 
       expect(result.result).toBe("sonnet success");
-      expect(run).toHaveBeenCalledTimes(1); // Primary skipped, fallback attempted
+      expect(run).toHaveBeenCalledTimes(1);
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
         allowTransientCooldownProbe: true,
       });
@@ -1337,6 +1338,36 @@ describe("runWithModelFallback", () => {
 
     it("attempts same-provider fallbacks during overloaded cooldown", async () => {
       const { dir } = await makeAuthStoreWithCooldown("anthropic", "overloaded");
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-opus-4-6",
+              fallbacks: ["anthropic/claude-sonnet-4-5", "groq/llama-3.3-70b-versatile"],
+            },
+          },
+        },
+      });
+
+      const run = vi.fn().mockResolvedValueOnce("sonnet success");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        run,
+        agentDir: dir,
+      });
+
+      expect(result.result).toBe("sonnet success");
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
+        allowTransientCooldownProbe: true,
+      });
+    });
+
+    it("attempts same-provider fallbacks during timeout cooldown", async () => {
+      const { dir } = await makeAuthStoreWithCooldown("anthropic", "timeout");
       const cfg = makeCfg({
         agents: {
           defaults: {
@@ -1422,7 +1453,6 @@ describe("runWithModelFallback", () => {
     });
 
     it("tries cross-provider fallbacks when same provider has rate limit", async () => {
-      // Anthropic in rate limit cooldown, Groq available
       const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
       const store: AuthProfileStore = {
         version: AUTH_STORE_VERSION,
@@ -1432,11 +1462,9 @@ describe("runWithModelFallback", () => {
         },
         usageStats: {
           "anthropic:default": {
-            // Rate-limit reason is inferred from failureCounts for cooldown windows.
             cooldownUntil: Date.now() + 300000,
             failureCounts: { rate_limit: 2 },
           },
-          // Groq not in cooldown
         },
       };
       saveAuthProfileStore(store, tmpDir);
@@ -1454,8 +1482,8 @@ describe("runWithModelFallback", () => {
 
       const run = vi
         .fn()
-        .mockRejectedValueOnce(new Error("Still rate limited")) // Sonnet still fails
-        .mockResolvedValueOnce("groq success"); // Groq works
+        .mockRejectedValueOnce(new Error("Still rate limited"))
+        .mockResolvedValueOnce("groq success");
 
       const result = await runWithModelFallback({
         cfg,
@@ -1469,8 +1497,8 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenCalledTimes(2);
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
         allowTransientCooldownProbe: true,
-      }); // Rate limit allows attempt
-      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile"); // Cross-provider works
+      });
+      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile");
     });
 
     it("limits cooldown probes to one per provider before moving to cross-provider fallback", async () => {
@@ -1492,8 +1520,8 @@ describe("runWithModelFallback", () => {
 
       const run = vi
         .fn()
-        .mockRejectedValueOnce(new Error("Still rate limited")) // First same-provider probe fails
-        .mockResolvedValueOnce("groq success"); // Next provider succeeds
+        .mockRejectedValueOnce(new Error("Still rate limited"))
+        .mockResolvedValueOnce("groq success");
 
       const result = await runWithModelFallback({
         cfg,
@@ -1504,8 +1532,6 @@ describe("runWithModelFallback", () => {
       });
 
       expect(result.result).toBe("groq success");
-      // Primary is skipped, first same-provider fallback is probed, second same-provider fallback
-      // is skipped (probe already attempted), then cross-provider fallback runs.
       expect(run).toHaveBeenCalledTimes(2);
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
         allowTransientCooldownProbe: true,

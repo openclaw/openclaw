@@ -224,4 +224,104 @@ describe("handleAgentEnd", () => {
     resolveChannelFlush?.();
     await endPromise;
   });
+
+  it("emits lifecycle end after async channel flush completes", async () => {
+    let resolveChannelFlush: (() => void) | undefined;
+    const onAgentEvent = vi.fn();
+    const onBlockReplyFlush = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveChannelFlush = resolve;
+        }),
+    );
+    const ctx = createContext(undefined, { onAgentEvent, onBlockReplyFlush });
+
+    const endPromise = handleAgentEnd(ctx);
+
+    expect(onAgentEvent).not.toHaveBeenCalled();
+
+    resolveChannelFlush?.();
+    await endPromise;
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+  });
+
+  it("emits lifecycle error after async channel flush completes", async () => {
+    let resolveChannelFlush: (() => void) | undefined;
+    const onAgentEvent = vi.fn();
+    const onBlockReplyFlush = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveChannelFlush = resolve;
+        }),
+    );
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: "connection refused",
+        content: [{ type: "text", text: "" }],
+      },
+      { onAgentEvent, onBlockReplyFlush },
+    );
+
+    const endPromise = handleAgentEnd(ctx);
+
+    expect(onAgentEvent).not.toHaveBeenCalled();
+
+    resolveChannelFlush?.();
+    await endPromise;
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        error: "LLM request failed: connection refused by the provider endpoint.",
+      },
+    });
+  });
+
+  it("emits lifecycle end when block reply flush rejects", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.flushBlockReplyBuffer = vi.fn().mockRejectedValue(new Error("flush failed"));
+
+    await expect(handleAgentEnd(ctx)).rejects.toThrow("flush failed");
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+  });
+
+  it("emits lifecycle end when channel flush rejects", async () => {
+    const onAgentEvent = vi.fn();
+    const onBlockReplyFlush = vi.fn().mockRejectedValue(new Error("channel flush failed"));
+    const ctx = createContext(undefined, { onAgentEvent, onBlockReplyFlush });
+
+    await expect(handleAgentEnd(ctx)).rejects.toThrow("channel flush failed");
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+  });
+
+  it("emits lifecycle end when block reply flush throws", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.flushBlockReplyBuffer = vi.fn(() => {
+      throw new Error("flush exploded");
+    });
+
+    expect(() => handleAgentEnd(ctx)).toThrow("flush exploded");
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+  });
 });

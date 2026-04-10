@@ -20,6 +20,7 @@ vi.mock("./graph-upload.js", () => {
 
 import {
   buildActivity,
+  buildConversationReference,
   renderReplyPayloadsToMessages,
   sendMSTeamsMessages,
   type MSTeamsAdapter,
@@ -474,6 +475,147 @@ describe("msteams messenger", () => {
       expect(reference.activityId).toBeUndefined();
     });
 
+    it("uses threadId instead of activityId for channel revoke fallback (#58030)", async () => {
+      const proactiveSent: string[] = [];
+      let capturedReference: unknown;
+
+      const channelRef: StoredConversationReference = {
+        activityId: "current-message-id",
+        user: { id: "user123", name: "User" },
+        agent: { id: "bot123", name: "Bot" },
+        conversation: {
+          id: "19:abc@thread.tacv2",
+          conversationType: "channel",
+        },
+        channelId: "msteams",
+        serviceUrl: "https://service.example.com",
+        // threadId is the thread root, which differs from activityId (current message)
+        threadId: "thread-root-msg-id",
+      };
+
+      const ctx = createRevokedThreadContext();
+      const adapter: MSTeamsAdapter = {
+        continueConversation: async (_appId, reference, logic) => {
+          capturedReference = reference;
+          await logic({
+            sendActivity: createRecordedSendActivity(proactiveSent),
+            updateActivity: noopUpdateActivity,
+            deleteActivity: noopDeleteActivity,
+          });
+        },
+        process: async () => {},
+        updateActivity: noopUpdateActivity,
+        deleteActivity: noopDeleteActivity,
+      };
+
+      await sendMSTeamsMessages({
+        replyStyle: "thread",
+        adapter,
+        appId: "app123",
+        conversationRef: channelRef,
+        context: ctx,
+        messages: [{ text: "hello" }],
+      });
+
+      expect(proactiveSent).toEqual(["hello"]);
+      const ref = capturedReference as { conversation?: { id?: string }; activityId?: string };
+      // Should use threadId (thread root), NOT activityId (current message)
+      expect(ref.conversation?.id).toBe("19:abc@thread.tacv2;messageid=thread-root-msg-id");
+      expect(ref.activityId).toBeUndefined();
+    });
+
+    it("falls back to activityId when threadId is not set (backward compat)", async () => {
+      const proactiveSent: string[] = [];
+      let capturedReference: unknown;
+
+      const channelRef: StoredConversationReference = {
+        activityId: "legacy-activity-id",
+        user: { id: "user123", name: "User" },
+        agent: { id: "bot123", name: "Bot" },
+        conversation: {
+          id: "19:abc@thread.tacv2",
+          conversationType: "channel",
+        },
+        channelId: "msteams",
+        serviceUrl: "https://service.example.com",
+        // No threadId — older stored references may not have it
+      };
+
+      const ctx = createRevokedThreadContext();
+      const adapter: MSTeamsAdapter = {
+        continueConversation: async (_appId, reference, logic) => {
+          capturedReference = reference;
+          await logic({
+            sendActivity: createRecordedSendActivity(proactiveSent),
+            updateActivity: noopUpdateActivity,
+            deleteActivity: noopDeleteActivity,
+          });
+        },
+        process: async () => {},
+        updateActivity: noopUpdateActivity,
+        deleteActivity: noopDeleteActivity,
+      };
+
+      await sendMSTeamsMessages({
+        replyStyle: "thread",
+        adapter,
+        appId: "app123",
+        conversationRef: channelRef,
+        context: ctx,
+        messages: [{ text: "hello" }],
+      });
+
+      expect(proactiveSent).toEqual(["hello"]);
+      const ref = capturedReference as { conversation?: { id?: string } };
+      // Falls back to activityId when threadId is missing
+      expect(ref.conversation?.id).toBe("19:abc@thread.tacv2;messageid=legacy-activity-id");
+    });
+
+    it("does not add thread suffix for top-level replyStyle even with threadId set", async () => {
+      let capturedReference: unknown;
+      const sent: string[] = [];
+
+      const channelRef: StoredConversationReference = {
+        activityId: "current-msg",
+        user: { id: "user123", name: "User" },
+        agent: { id: "bot123", name: "Bot" },
+        conversation: {
+          id: "19:abc@thread.tacv2",
+          conversationType: "channel",
+        },
+        channelId: "msteams",
+        serviceUrl: "https://service.example.com",
+        threadId: "thread-root-msg-id",
+      };
+
+      const adapter: MSTeamsAdapter = {
+        continueConversation: async (_appId, reference, logic) => {
+          capturedReference = reference;
+          await logic({
+            sendActivity: createRecordedSendActivity(sent),
+            updateActivity: noopUpdateActivity,
+            deleteActivity: noopDeleteActivity,
+          });
+        },
+        process: async () => {},
+        updateActivity: noopUpdateActivity,
+        deleteActivity: noopDeleteActivity,
+      };
+
+      await sendMSTeamsMessages({
+        replyStyle: "top-level",
+        adapter,
+        appId: "app123",
+        conversationRef: channelRef,
+        messages: [{ text: "hello" }],
+      });
+
+      expect(sent).toEqual(["hello"]);
+      const ref = capturedReference as { conversation?: { id?: string } };
+      // Top-level sends should NOT include thread suffix
+      expect(ref.conversation?.id).toBe("19:abc@thread.tacv2");
+    });
+
     it("retries top-level sends on transient (5xx)", async () => {
       const attempts: string[] = [];
 
@@ -623,6 +765,98 @@ describe("msteams messenger", () => {
       const activity = await buildActivity({ text: "hello" }, baseRef);
       const channelData = activity.channelData as Record<string, unknown>;
       expect(channelData.feedbackLoopEnabled).toBe(false);
+    });
+  });
+
+  // Regression coverage for #58774: proactive Teams sends fail with HTTP 403
+  // when the Bot Framework connector does not see `tenantId` / `aadObjectId`
+  // on the outbound conversation reference.
+  describe("buildConversationReference tenant/aad forwarding (#58774)", () => {
+    const storedWithChannelDataTenant: StoredConversationReference = {
+      activityId: "activity-1",
+      user: { id: "user123", name: "User", aadObjectId: "aad-user-123" },
+      agent: { id: "bot123", name: "Bot" },
+      conversation: {
+        id: "19:abc@thread.tacv2",
+        conversationType: "channel",
+      },
+      // Canonical channelData source captured by message-handler inbound code.
+      tenantId: "tenant-abc",
+      aadObjectId: "aad-user-123",
+      channelId: "msteams",
+      serviceUrl: "https://smba.trafficmanager.net/amer/",
+    };
+
+    it("forwards top-level tenantId and aadObjectId onto the outbound reference", () => {
+      const reference = buildConversationReference(storedWithChannelDataTenant);
+      expect(reference.tenantId).toBe("tenant-abc");
+      expect(reference.aadObjectId).toBe("aad-user-123");
+      expect(reference.conversation.tenantId).toBe("tenant-abc");
+      expect(reference.user?.aadObjectId).toBe("aad-user-123");
+    });
+
+    it("falls back to conversation.tenantId when no top-level tenantId is stored (legacy ref)", () => {
+      const legacy: StoredConversationReference = {
+        activityId: "activity-legacy",
+        user: { id: "user-legacy", name: "Legacy", aadObjectId: "aad-legacy" },
+        agent: { id: "bot-legacy", name: "Bot" },
+        conversation: {
+          id: "a:personal-chat",
+          conversationType: "personal",
+          tenantId: "tenant-legacy",
+        },
+        channelId: "msteams",
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
+      };
+      const reference = buildConversationReference(legacy);
+      expect(reference.tenantId).toBe("tenant-legacy");
+      expect(reference.aadObjectId).toBe("aad-legacy");
+    });
+
+    it("omits tenantId and aadObjectId when neither source is available", () => {
+      const minimal: StoredConversationReference = {
+        activityId: "activity-2",
+        user: { id: "user456", name: "User" },
+        agent: { id: "bot456", name: "Bot" },
+        conversation: { id: "19:xyz@thread.tacv2", conversationType: "channel" },
+        channelId: "msteams",
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
+      };
+      const reference = buildConversationReference(minimal);
+      expect(reference.tenantId).toBeUndefined();
+      expect(reference.aadObjectId).toBeUndefined();
+      expect(reference.conversation.tenantId).toBeUndefined();
+    });
+
+    it("propagates tenantId/aadObjectId through sendMSTeamsMessages proactive path", async () => {
+      let capturedReference:
+        | { tenantId?: string; aadObjectId?: string; user?: { aadObjectId?: string } }
+        | undefined;
+      const adapter: MSTeamsAdapter = {
+        continueConversation: async (_appId, reference, logic) => {
+          capturedReference = reference as typeof capturedReference;
+          await logic({
+            sendActivity: async () => ({ id: "ok" }),
+            updateActivity: noopUpdateActivity,
+            deleteActivity: noopDeleteActivity,
+          });
+        },
+        process: async () => {},
+        updateActivity: noopUpdateActivity,
+        deleteActivity: noopDeleteActivity,
+      };
+
+      await sendMSTeamsMessages({
+        replyStyle: "top-level",
+        adapter,
+        appId: "app123",
+        conversationRef: storedWithChannelDataTenant,
+        messages: [{ text: "hello" }],
+      });
+
+      expect(capturedReference?.tenantId).toBe("tenant-abc");
+      expect(capturedReference?.aadObjectId).toBe("aad-user-123");
+      expect(capturedReference?.user?.aadObjectId).toBe("aad-user-123");
     });
   });
 });

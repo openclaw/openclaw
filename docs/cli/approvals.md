@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw approvals` (exec approvals for gateway or node hosts)"
+summary: "CLI reference for `openclaw approvals` and `openclaw exec-policy`"
 read_when:
   - You want to edit exec approvals from the CLI
   - You need to manage allowlists on gateway or node hosts
@@ -17,6 +17,45 @@ Related:
 
 - Exec approvals: [Exec approvals](/tools/exec-approvals)
 - Nodes: [Nodes](/nodes)
+
+## `openclaw exec-policy`
+
+`openclaw exec-policy` is the local convenience command for keeping the requested
+`tools.exec.*` config and the local host approvals file aligned in one step.
+
+Use it when you want to:
+
+- inspect the local requested policy, host approvals file, and effective merge
+- apply a local preset such as YOLO or deny-all
+- synchronize local `tools.exec.*` and local `~/.openclaw/exec-approvals.json`
+
+Examples:
+
+```bash
+openclaw exec-policy show
+openclaw exec-policy show --json
+
+openclaw exec-policy preset yolo
+openclaw exec-policy preset cautious --json
+
+openclaw exec-policy set --host gateway --security full --ask off --ask-fallback full
+```
+
+Output modes:
+
+- no `--json`: prints the human-readable table view
+- `--json`: prints machine-readable structured output
+
+Current scope:
+
+- `exec-policy` is **local-only**
+- it updates the local config file and the local approvals file together
+- it does **not** push policy to the gateway host or a node host
+- `--host node` is rejected in this command because node exec approvals are fetched from the node at runtime and must be managed through node-targeted approvals commands instead
+- `openclaw exec-policy show` marks `host=node` scopes as node-managed at runtime instead of deriving an effective policy from the local approvals file
+
+If you need to edit remote host approvals directly, keep using `openclaw approvals set --gateway`
+or `openclaw approvals set --node <id|name|ip>`.
 
 ## Common commands
 
@@ -99,6 +138,16 @@ Why `tools.exec.host=gateway` in this example:
 - If you want host exec even when a sandbox is configured, make the host choice explicit with `gateway` or `/exec host=gateway`.
 
 This matches the current host-default YOLO behavior. Tighten it if you want approvals.
+
+Local shortcut:
+
+```bash
+openclaw exec-policy preset yolo
+```
+
+That local shortcut updates both the requested local `tools.exec.*` config and the
+local approvals defaults together. It is equivalent in intent to the manual two-step
+setup above, but only for the local machine.
 
 ## Allowlist helpers
 

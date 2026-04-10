@@ -12,6 +12,28 @@ const shutdownLog = createSubsystemLogger("gateway/shutdown");
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
 
+export async function runGatewayClosePrelude(params: {
+  stopDiagnostics?: () => void;
+  clearSkillsRefreshTimer?: () => void;
+  skillsChangeUnsub?: () => void;
+  disposeAuthRateLimiter?: () => void;
+  disposeBrowserAuthRateLimiter: () => void;
+  stopModelPricingRefresh?: () => void;
+  stopChannelHealthMonitor?: () => void;
+  clearSecretsRuntimeSnapshot?: () => void;
+  closeMcpServer?: () => Promise<void>;
+}): Promise<void> {
+  params.stopDiagnostics?.();
+  params.clearSkillsRefreshTimer?.();
+  params.skillsChangeUnsub?.();
+  params.disposeAuthRateLimiter?.();
+  params.disposeBrowserAuthRateLimiter();
+  params.stopModelPricingRefresh?.();
+  params.stopChannelHealthMonitor?.();
+  params.clearSecretsRuntimeSnapshot?.();
+  await params.closeMcpServer?.().catch(() => {});
+}
+
 export function createGatewayCloseHandler(params: {
   bonjourStop: (() => Promise<void>) | null;
   tailscaleCleanup: (() => Promise<void>) | null;

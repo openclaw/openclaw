@@ -53,9 +53,11 @@ const loadPluginManifestRegistry = vi.hoisted(() =>
     diagnostics: [],
   })),
 );
+const resolveManifestContractOwnerPluginId = vi.hoisted(() => vi.fn<() => undefined>());
 
 vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry,
+  resolveManifestContractOwnerPluginId,
 }));
 
 describe("provider auth aliases", () => {

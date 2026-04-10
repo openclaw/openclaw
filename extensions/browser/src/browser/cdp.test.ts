@@ -6,6 +6,7 @@ import { rawDataToString } from "../infra/ws.js";
 import { isWebSocketUrl } from "./cdp.helpers.js";
 import { createTargetViaCdp, evaluateJavaScript, normalizeCdpWsUrl, snapshotAria } from "./cdp.js";
 import { parseHttpUrl } from "./config.js";
+import { BrowserCdpEndpointBlockedError } from "./errors.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 
 describe("cdp", () => {
@@ -241,7 +242,7 @@ describe("cdp", () => {
           allowedHostnames: ["127.0.0.1"],
         },
       }),
-    ).rejects.toBeInstanceOf(SsrFBlockedError);
+    ).rejects.toBeInstanceOf(BrowserCdpEndpointBlockedError);
   });
 
   it("blocks the initial /json/version fetch when the cdpUrl host is outside strict SSRF policy", async () => {
@@ -254,7 +255,7 @@ describe("cdp", () => {
           allowedHostnames: ["127.0.0.1"],
         },
       }),
-    ).rejects.toBeInstanceOf(SsrFBlockedError);
+    ).rejects.toBeInstanceOf(BrowserCdpEndpointBlockedError);
   });
 
   it("blocks direct websocket cdp urls outside strict SSRF policy", async () => {
@@ -267,7 +268,7 @@ describe("cdp", () => {
           allowedHostnames: ["127.0.0.1"],
         },
       }),
-    ).rejects.toBeInstanceOf(SsrFBlockedError);
+    ).rejects.toBeInstanceOf(BrowserCdpEndpointBlockedError);
   });
 
   it("evaluates javascript via CDP", async () => {

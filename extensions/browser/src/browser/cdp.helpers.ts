@@ -1,12 +1,18 @@
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
-import { type SsrFPolicy, resolvePinnedHostnameWithPolicy } from "../infra/net/ssrf.js";
+import {
+  SsrFBlockedError,
+  type SsrFPolicy,
+  resolvePinnedHostnameWithPolicy,
+} from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { getDirectAgentForCdp, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import { CDP_HTTP_REQUEST_TIMEOUT_MS, CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-timeouts.js";
-import { resolveBrowserRateLimitMessage } from "./client-fetch.js";
+import { BrowserCdpEndpointBlockedError } from "./errors.js";
+import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
 
 export { isLoopbackHost };
 
@@ -62,9 +68,19 @@ export async function assertCdpEndpointAllowed(
   if (!["http:", "https:", "ws:", "wss:"].includes(parsed.protocol)) {
     throw new Error(`Invalid CDP URL protocol: ${parsed.protocol.replace(":", "")}`);
   }
-  await resolvePinnedHostnameWithPolicy(parsed.hostname, {
-    policy: ssrfPolicy,
-  });
+  try {
+    await resolvePinnedHostnameWithPolicy(parsed.hostname, {
+      policy: ssrfPolicy,
+    });
+  } catch (err) {
+    // Rethrow SSRF policy failures against the CDP endpoint itself as a
+    // browser-endpoint-scoped error so the route mapping does not confuse
+    // them with navigation-target policy blocks.
+    if (err instanceof SsrFBlockedError) {
+      throw new BrowserCdpEndpointBlockedError({ cause: err });
+    }
+    throw err;
+  }
 }
 
 export function redactCdpUrl(cdpUrl: string | null | undefined): string | null | undefined {
@@ -229,11 +245,27 @@ export async function fetchCdpChecked(
 ): Promise<Response> {
   const ctrl = new AbortController();
   const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
+  let release: (() => Promise<void>) | undefined;
   try {
     const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
-    const res = await withNoProxyForCdpUrl(url, () =>
-      fetch(url, { ...init, headers, signal: ctrl.signal }),
+    // Block redirects on all CDP HTTP paths (not just probes) because a
+    // redirect to an internal host is an SSRF vector regardless of whether
+    // the call is /json/version, /json/list, /json/activate, or /json/close.
+    const guarded = await withNoProxyForCdpUrl(url, () =>
+      fetchWithSsrFGuard({
+        url,
+        init: { ...init, headers },
+        maxRedirects: 0,
+        policy: { allowPrivateNetwork: true },
+        signal: ctrl.signal,
+        auditContext: "browser-cdp",
+      }),
     );
+    release = guarded.release;
+    const res = guarded.response;
+    if (res.status >= 300 && res.status < 400) {
+      throw new Error("CDP endpoint redirects are not allowed");
+    }
     if (!res.ok) {
       if (res.status === 429) {
         // Do not reflect upstream response text into the error surface (log/agent injection risk)
@@ -241,9 +273,23 @@ export async function fetchCdpChecked(
       }
       throw new Error(`HTTP ${res.status}`);
     }
-    return res;
+    if (typeof res.arrayBuffer !== "function") {
+      return res;
+    }
+    const body = await res.arrayBuffer();
+    return new Response(body, {
+      headers: res.headers,
+      status: res.status,
+      statusText: res.statusText,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("Too many redirects")) {
+      throw new Error("CDP endpoint redirects are not allowed", { cause: error });
+    }
+    throw error;
   } finally {
     clearTimeout(t);
+    await release?.();
   }
 }
 

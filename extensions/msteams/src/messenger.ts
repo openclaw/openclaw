@@ -51,6 +51,18 @@ export type MSTeamsConversationReference = {
   channelId: string;
   serviceUrl?: string;
   locale?: string;
+  /**
+   * Top-level tenant ID echoed onto the Bot Framework connector request. Included
+   * alongside `conversation.tenantId` so the connector can route proactive sends
+   * to the correct Azure AD tenant. Missing it causes HTTP 403 on proactive
+   * (bot-initiated) messages.
+   */
+  tenantId?: string;
+  /**
+   * Azure AD object ID of the target user, forwarded on proactive sends so
+   * Bot Framework can resolve the personal DM recipient on the connector side.
+   */
+  aadObjectId?: string;
 };
 
 export type MSTeamsAdapter = {
@@ -119,18 +131,26 @@ export function buildConversationReference(
   if (!user?.id) {
     throw new Error("Invalid stored reference: missing user.id");
   }
+  // Bot Framework proactive sends require `tenantId` on the outbound activity
+  // so the connector routes to the correct Azure AD tenant; otherwise it rejects
+  // with HTTP 403. Prefer the explicit top-level `ref.tenantId` (captured from
+  // `channelData.tenant.id` inbound) and fall back to `conversation.tenantId`.
+  const tenantId = ref.tenantId ?? ref.conversation?.tenantId;
+  const aadObjectId = ref.aadObjectId ?? user.aadObjectId;
   return {
     activityId: ref.activityId,
-    user,
+    user: aadObjectId ? { ...user, aadObjectId } : user,
     agent,
     conversation: {
       id: normalizeConversationId(conversationId),
       conversationType: ref.conversation?.conversationType,
-      tenantId: ref.conversation?.tenantId,
+      tenantId,
     },
     channelId: ref.channelId ?? "msteams",
     serviceUrl: ref.serviceUrl,
     locale: ref.locale,
+    ...(tenantId ? { tenantId } : {}),
+    ...(aadObjectId ? { aadObjectId } : {}),
   };
 }
 
@@ -521,12 +541,16 @@ export async function sendMSTeamsMessages(params: {
     return messageIds;
   };
 
+  // Resolve the thread root message ID for channel thread routing.
+  // `threadId` is the canonical thread root (set on inbound for channel threads);
+  // fall back to `activityId` for backward compatibility with older stored refs.
+  const resolvedThreadId = params.conversationRef.threadId ?? params.conversationRef.activityId;
+
   if (params.replyStyle === "thread") {
     const ctx = params.context;
     if (!ctx) {
       throw new Error("Missing context for replyStyle=thread");
     }
-    const threadActivityId = params.conversationRef.activityId;
     const messageIds: string[] = [];
     for (const [idx, message] of messages.entries()) {
       const result = await withRevokedProxyFallback({
@@ -541,7 +565,7 @@ export async function sendMSTeamsMessages(params: {
           const remaining = messages.slice(idx);
           return {
             ids:
-              remaining.length > 0 ? await sendProactively(remaining, idx, threadActivityId) : [],
+              remaining.length > 0 ? await sendProactively(remaining, idx, resolvedThreadId) : [],
             fellBack: true,
           };
         },

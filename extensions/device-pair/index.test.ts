@@ -722,7 +722,8 @@ describe("device-pair /pair approve", () => {
     });
     vi.mocked(approveDevicePairing).mockResolvedValueOnce({
       status: "forbidden",
-      missingScope: "operator.admin",
+      reason: "caller-missing-scope",
+      scope: "operator.admin",
     });
 
     const command = registerPairCommand();

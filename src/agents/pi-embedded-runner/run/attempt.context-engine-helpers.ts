@@ -1,8 +1,106 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { MemoryCitationsMode } from "../../../config/types.memory.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../../context-engine/types.js";
+import type { NormalizedUsage } from "../../usage.js";
+import type { PromptCacheChange } from "../prompt-cache-observability.js";
+import type { EmbeddedRunAttemptResult } from "./types.js";
 
 export type AttemptContextEngine = ContextEngine;
+
+export type AttemptBootstrapContext = {
+  bootstrapFiles: unknown[];
+  contextFiles: unknown[];
+};
+
+export async function resolveAttemptBootstrapContext<
+  TContext extends AttemptBootstrapContext,
+>(params: {
+  contextInjectionMode: "always" | "continuation-skip";
+  bootstrapContextMode?: string;
+  bootstrapContextRunKind?: string;
+  sessionFile: string;
+  hasCompletedBootstrapTurn: (sessionFile: string) => Promise<boolean>;
+  resolveBootstrapContextForRun: () => Promise<TContext>;
+}): Promise<
+  TContext & {
+    isContinuationTurn: boolean;
+    shouldRecordCompletedBootstrapTurn: boolean;
+  }
+> {
+  const isContinuationTurn =
+    params.contextInjectionMode === "continuation-skip" &&
+    params.bootstrapContextRunKind !== "heartbeat" &&
+    (await params.hasCompletedBootstrapTurn(params.sessionFile));
+  const shouldRecordCompletedBootstrapTurn =
+    !isContinuationTurn &&
+    params.bootstrapContextMode !== "lightweight" &&
+    params.bootstrapContextRunKind !== "heartbeat";
+
+  const context = isContinuationTurn
+    ? ({ bootstrapFiles: [], contextFiles: [] } as unknown as TContext)
+    : await params.resolveBootstrapContextForRun();
+
+  return {
+    ...context,
+    isContinuationTurn,
+    shouldRecordCompletedBootstrapTurn,
+  };
+}
+
+export function buildContextEnginePromptCacheInfo(params: {
+  retention?: "none" | "short" | "long";
+  lastCallUsage?: NormalizedUsage;
+  observation?:
+    | {
+        broke: boolean;
+        previousCacheRead?: number;
+        cacheRead?: number;
+        changes?: PromptCacheChange[] | null;
+      }
+    | undefined;
+  lastCacheTouchAt?: number | null;
+}): EmbeddedRunAttemptResult["promptCache"] {
+  const promptCache: NonNullable<EmbeddedRunAttemptResult["promptCache"]> = {};
+  if (params.retention) {
+    promptCache.retention = params.retention;
+  }
+  if (params.lastCallUsage) {
+    promptCache.lastCallUsage = { ...params.lastCallUsage };
+  }
+  if (params.observation) {
+    promptCache.observation = {
+      broke: params.observation.broke,
+      ...(typeof params.observation.previousCacheRead === "number"
+        ? { previousCacheRead: params.observation.previousCacheRead }
+        : {}),
+      ...(typeof params.observation.cacheRead === "number"
+        ? { cacheRead: params.observation.cacheRead }
+        : {}),
+      ...(params.observation.changes && params.observation.changes.length > 0
+        ? {
+            changes: params.observation.changes.map((change) => ({
+              code: change.code,
+              detail: change.detail,
+            })),
+          }
+        : {}),
+    };
+  }
+  if (typeof params.lastCacheTouchAt === "number" && Number.isFinite(params.lastCacheTouchAt)) {
+    promptCache.lastCacheTouchAt = params.lastCacheTouchAt;
+  }
+  return Object.keys(promptCache).length > 0 ? promptCache : undefined;
+}
+
+export function findCurrentAttemptAssistantMessage(params: {
+  messagesSnapshot: AgentMessage[];
+  prePromptMessageCount: number;
+}): AgentMessage | undefined {
+  return params.messagesSnapshot
+    .slice(Math.max(0, params.prePromptMessageCount))
+    .toReversed()
+    .find((message) => message.role === "assistant");
+}
 
 export async function runAttemptContextEngineBootstrap(params: {
   hadSessionFile: boolean;
