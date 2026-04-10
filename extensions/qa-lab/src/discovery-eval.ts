@@ -1,29 +1,41 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { readQaScenarioExecutionConfig } from "./scenario-catalog.js";
 
+const DEFAULT_REQUIRED_DISCOVERY_REFS = [
+  "repo/qa/scenarios/index.md",
+  "repo/extensions/qa-lab/src/suite.ts",
+  "repo/docs/help/testing.md",
+] as const;
+
+let cachedRequiredDiscoveryRefsLower: string[] | undefined;
+
+function sanitizeRequiredDiscoveryRefs(requiredFiles: unknown): string[] {
+  if (!Array.isArray(requiredFiles)) {
+    return [];
+  }
+  return requiredFiles
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+}
+
 function readRequiredDiscoveryRefs() {
   try {
     const config = readQaScenarioExecutionConfig("source-docs-discovery-report") as
-      | { requiredFiles?: string[] }
+      | { requiredFiles?: unknown }
       | undefined;
-    return (
-      config?.requiredFiles ?? [
-        "repo/qa/scenarios/index.md",
-        "repo/extensions/qa-lab/src/suite.ts",
-        "repo/docs/help/testing.md",
-      ]
-    );
+    const configuredRefs = sanitizeRequiredDiscoveryRefs(config?.requiredFiles);
+    return configuredRefs.length > 0 ? configuredRefs : [...DEFAULT_REQUIRED_DISCOVERY_REFS];
   } catch {
-    return [
-      "repo/qa/scenarios/index.md",
-      "repo/extensions/qa-lab/src/suite.ts",
-      "repo/docs/help/testing.md",
-    ];
+    return [...DEFAULT_REQUIRED_DISCOVERY_REFS];
   }
 }
 
 function getRequiredDiscoveryRefsLower() {
-  return readRequiredDiscoveryRefs().map(normalizeLowercaseStringOrEmpty);
+  cachedRequiredDiscoveryRefsLower ??= readRequiredDiscoveryRefs().map(
+    normalizeLowercaseStringOrEmpty,
+  );
+  return cachedRequiredDiscoveryRefsLower;
 }
 
 const DISCOVERY_SCOPE_LEAK_PHRASES = [
