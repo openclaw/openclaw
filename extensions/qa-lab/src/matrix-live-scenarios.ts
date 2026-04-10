@@ -1,4 +1,9 @@
 import { randomUUID } from "node:crypto";
+import {
+  collectLiveTransportStandardScenarioCoverage,
+  selectLiveTransportScenarios,
+  type LiveTransportScenarioDefinition,
+} from "./live-transport-scenarios.js";
 import { createMatrixQaClient, type MatrixQaObservedEvent } from "./matrix-driver-client.js";
 
 export type MatrixQaScenarioId =
@@ -10,11 +15,7 @@ export type MatrixQaScenarioId =
   | "matrix-mention-gating"
   | "matrix-allowlist-block";
 
-export type MatrixQaScenarioDefinition = {
-  id: MatrixQaScenarioId;
-  timeoutMs: number;
-  title: string;
-};
+export type MatrixQaScenarioDefinition = LiveTransportScenarioDefinition<MatrixQaScenarioId>;
 
 export type MatrixQaReplyArtifact = {
   bodyPreview?: string;
@@ -78,54 +79,59 @@ const NO_REPLY_WINDOW_MS = 8_000;
 export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
   {
     id: "matrix-thread-follow-up",
+    standardId: "thread-follow-up",
     timeoutMs: 60_000,
     title: "Matrix thread follow-up reply",
   },
   {
     id: "matrix-thread-isolation",
+    standardId: "thread-isolation",
     timeoutMs: 75_000,
     title: "Matrix top-level reply stays out of prior thread",
   },
   {
     id: "matrix-top-level-reply-shape",
+    standardId: "top-level-reply-shape",
     timeoutMs: 45_000,
     title: "Matrix top-level reply keeps replyToMode off",
   },
   {
     id: "matrix-reaction-notification",
+    standardId: "reaction-observation",
     timeoutMs: 45_000,
     title: "Matrix reactions on bot replies are observed",
   },
   {
     id: "matrix-restart-resume",
+    standardId: "restart-resume",
     timeoutMs: 60_000,
     title: "Matrix lane resumes cleanly after gateway restart",
   },
   {
     id: "matrix-mention-gating",
+    standardId: "mention-gating",
     timeoutMs: NO_REPLY_WINDOW_MS,
     title: "Matrix room message without mention does not trigger",
   },
   {
     id: "matrix-allowlist-block",
+    standardId: "allowlist-block",
     timeoutMs: NO_REPLY_WINDOW_MS,
     title: "Matrix allowlist blocks non-driver replies",
   },
 ];
 
+export const MATRIX_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
+  alwaysOnStandardScenarioIds: ["canary"],
+  scenarios: MATRIX_QA_SCENARIOS,
+});
+
 export function findMatrixQaScenarios(ids?: string[]) {
-  if (!ids || ids.length === 0) {
-    return [...MATRIX_QA_SCENARIOS];
-  }
-  const requested = new Set(ids);
-  const selected = MATRIX_QA_SCENARIOS.filter((scenario) => ids.includes(scenario.id));
-  const missingIds = [...requested].filter(
-    (id) => !selected.some((scenario) => scenario.id === id),
-  );
-  if (missingIds.length > 0) {
-    throw new Error(`unknown Matrix QA scenario id(s): ${missingIds.join(", ")}`);
-  }
-  return selected;
+  return selectLiveTransportScenarios({
+    ids,
+    laneLabel: "Matrix",
+    scenarios: MATRIX_QA_SCENARIOS,
+  });
 }
 
 export function buildMentionPrompt(sutUserId: string, token: string) {
@@ -571,6 +577,7 @@ export async function runMatrixQaScenario(
 }
 
 export const __testing = {
+  MATRIX_QA_STANDARD_SCENARIO_IDS,
   buildMatrixReplyDetails,
   buildMentionPrompt,
   findMatrixQaScenarios,

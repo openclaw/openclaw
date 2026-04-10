@@ -70,6 +70,34 @@ These commands sit beside the main test suites when you need QA-lab realism:
   - Provisions three temporary Matrix users (`driver`, `sut`, `observer`) plus one private room, then starts a QA gateway child with the real Matrix plugin as the SUT transport.
   - Uses the pinned stable Tuwunel image `ghcr.io/matrix-construct/tuwunel:v1.5.1` by default. Override with `OPENCLAW_QA_MATRIX_TUWUNEL_IMAGE` when you need to test a different image.
   - Writes a Matrix QA report, summary, and observed-events artifact under `.artifacts/qa-e2e/...`.
+- `pnpm openclaw qa telegram`
+  - Runs the Telegram live QA lane against a real private group using the driver and SUT bot tokens from env.
+  - Writes a Telegram QA report, summary, and observed-messages artifact under `.artifacts/qa-e2e/...`.
+
+Live transport lanes share one standard contract so new transports do not drift:
+
+- Baseline:
+  - canary
+  - mention gating
+  - sender allowlist block
+  - top-level reply shape
+  - restart resume
+- Capability add-ons:
+  - thread follow-up
+  - thread isolation
+  - reaction observation
+  - help command
+
+Current lane coverage:
+
+- Matrix:
+  - baseline contract
+  - thread follow-up
+  - thread isolation
+  - reaction observation
+- Telegram:
+  - canary
+  - help command
 
 ## Test suites (what runs where)
 

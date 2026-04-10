@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+  LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
+  findMissingLiveTransportStandardScenarios,
+} from "./live-transport-scenarios.js";
 import { __testing as scenarioTesting } from "./matrix-live-scenarios.js";
 
 describe("matrix live qa scenarios", () => {
@@ -24,5 +28,24 @@ describe("matrix live qa scenarios", () => {
     expect(() =>
       scenarioTesting.findMatrixQaScenarios(["matrix-thread-follow-up", "typo-scenario"]),
     ).toThrow("unknown Matrix QA scenario id(s): typo-scenario");
+  });
+
+  it("covers the baseline live transport contract plus Matrix-specific extras", () => {
+    expect(scenarioTesting.MATRIX_QA_STANDARD_SCENARIO_IDS).toEqual([
+      "canary",
+      "thread-follow-up",
+      "thread-isolation",
+      "top-level-reply-shape",
+      "reaction-observation",
+      "restart-resume",
+      "mention-gating",
+      "allowlist-block",
+    ]);
+    expect(
+      findMissingLiveTransportStandardScenarios({
+        coveredStandardScenarioIds: scenarioTesting.MATRIX_QA_STANDARD_SCENARIO_IDS,
+        expectedStandardScenarioIds: LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
+      }),
+    ).toEqual([]);
   });
 });

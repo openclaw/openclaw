@@ -64,6 +64,36 @@ the real Matrix plugin inside a QA gateway child. The live transport lane keeps
 the child config scoped to the transport under test, so Matrix runs without
 `qa-channel` in the child config.
 
+Live transport lanes now share one smaller contract instead of each inventing
+their own scenario list shape:
+
+- Baseline contract:
+  - canary
+  - mention gating
+  - sender allowlist block
+  - top-level reply shape
+  - restart resume
+- Capability add-ons:
+  - thread follow-up
+  - thread isolation
+  - reaction observation
+  - help command
+
+Current coverage:
+
+- Matrix:
+  - baseline contract
+  - thread follow-up
+  - thread isolation
+  - reaction observation
+- Telegram:
+  - canary
+  - help command
+
+This keeps `qa-channel` as the broad product-behavior suite while Matrix,
+Telegram, and future live transports share one explicit transport-contract
+checklist.
+
 For a disposable Linux VM lane without bringing Docker into the QA path, run:
 
 ```bash

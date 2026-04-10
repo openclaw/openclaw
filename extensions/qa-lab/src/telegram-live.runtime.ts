@@ -7,6 +7,11 @@ import { startQaGatewayChild } from "./gateway-child.js";
 import { startQaLiveLaneGateway } from "./live-gateway.runtime.js";
 import { appendLiveLaneIssue, buildLiveLaneArtifactsError } from "./live-lane-helpers.js";
 import {
+  collectLiveTransportStandardScenarioCoverage,
+  selectLiveTransportScenarios,
+  type LiveTransportScenarioDefinition,
+} from "./live-transport-scenarios.js";
+import {
   defaultQaModelForMode,
   normalizeQaProviderMode,
   type QaProviderModeInput,
@@ -25,10 +30,7 @@ type TelegramBotIdentity = {
   username?: string;
 };
 
-type TelegramQaScenarioDefinition = {
-  id: "telegram-help-command";
-  title: string;
-  timeoutMs: number;
+type TelegramQaScenarioDefinition = LiveTransportScenarioDefinition<"telegram-help-command"> & {
   buildInput: (sutUsername: string) => string;
 };
 
@@ -157,11 +159,17 @@ type TelegramSendMessageResult = {
 const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
   {
     id: "telegram-help-command",
+    standardId: "help-command",
     title: "Telegram help command reply",
     timeoutMs: 45_000,
     buildInput: (sutUsername) => `/help@${sutUsername}`,
   },
 ];
+
+export const TELEGRAM_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
+  alwaysOnStandardScenarioIds: ["canary"],
+  scenarios: TELEGRAM_QA_SCENARIOS,
+});
 
 const TELEGRAM_QA_ENV_KEYS = [
   "OPENCLAW_QA_TELEGRAM_GROUP_ID",
@@ -487,18 +495,11 @@ function buildObservedMessagesArtifact(params: {
 }
 
 function findScenario(ids?: string[]) {
-  if (!ids || ids.length === 0) {
-    return [...TELEGRAM_QA_SCENARIOS];
-  }
-  const requested = new Set(ids);
-  const selected = TELEGRAM_QA_SCENARIOS.filter((scenario) => ids.includes(scenario.id));
-  const missingIds = [...requested].filter(
-    (id) => !selected.some((scenario) => scenario.id === id),
-  );
-  if (missingIds.length > 0) {
-    throw new Error(`unknown Telegram QA scenario id(s): ${missingIds.join(", ")}`);
-  }
-  return selected;
+  return selectLiveTransportScenarios({
+    ids,
+    laneLabel: "Telegram",
+    scenarios: TELEGRAM_QA_SCENARIOS,
+  });
 }
 
 function classifyCanaryReply(params: {
@@ -879,6 +880,7 @@ export async function runTelegramQaLive(params: {
 
 export const __testing = {
   TELEGRAM_QA_SCENARIOS,
+  TELEGRAM_QA_STANDARD_SCENARIO_IDS,
   buildTelegramQaConfig,
   buildObservedMessagesArtifact,
   canaryFailureMessage,
