@@ -304,7 +304,9 @@ function expectOpenAllowWarnings(params: {
   expectedWarnings: number;
   label: string;
 }) {
-  const openAllowWarnings = params.warnings.filter((msg) => msg.includes("plugins.allow is empty"));
+  const openAllowWarnings = params.warnings.filter((msg) =>
+    msg.includes("effective plugin allowlist is empty"),
+  );
   expect(openAllowWarnings, params.label).toHaveLength(params.expectedWarnings);
   if (params.expectedWarnings > 0) {
     expect(

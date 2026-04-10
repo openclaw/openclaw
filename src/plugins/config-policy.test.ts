@@ -25,6 +25,18 @@ describe("normalizePluginsConfigWithResolver", () => {
     expect(normalized.deny).toEqual(["BETA"]);
     expect(normalized.entries).toHaveProperty("GAMMA");
   });
+
+  it("preserves the explicit context engine slot", () => {
+    const normalized = normalizePluginsConfigWithResolver({
+      slots: {
+        memory: "memory-core",
+        contextEngine: "lossless-claw",
+      },
+    });
+
+    expect(normalized.slots.memory).toBe("memory-core");
+    expect(normalized.slots.contextEngine).toBe("lossless-claw");
+  });
 });
 
 describe("hasExplicitPluginConfig", () => {
