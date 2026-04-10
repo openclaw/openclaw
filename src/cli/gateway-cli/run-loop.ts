@@ -281,8 +281,20 @@ export async function runGatewayLoop(params: {
             );
           }, STARTUP_TIMEOUT_MS);
         });
+        // Hold a reference to the start promise so we can abort a timed-out
+        // startup that resolves late, preventing an untracked server from
+        // holding the gateway port across restart boundaries.
+        const startPromise = params.start({ startupStartedAt });
         try {
-          server = await Promise.race([params.start({ startupStartedAt }), startupTimeoutPromise]);
+          server = await Promise.race([startPromise, startupTimeoutPromise]);
+        } catch (err) {
+          // If the timeout fired while start() was still in-flight, close any
+          // server it eventually produces so it cannot hold the port untracked.
+          void startPromise.then(
+            (s) => void s.close({ reason: "startup timed out", restartExpectedMs: null }),
+            () => {},
+          );
+          throw err;
         } finally {
           // The Promise constructor callback is synchronous, so startupTimeoutHandle
           // is always assigned by the time this finally block runs.

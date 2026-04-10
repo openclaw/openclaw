@@ -478,6 +478,75 @@ describe("runGatewayLoop", () => {
     }
   });
 
+  it("closes a late-resolving start() after timeout to avoid untracked server holding the port", async () => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+
+    try {
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const closeFirst = vi.fn(async () => {});
+        const lateStartClose = vi.fn(async () => {});
+        const { runtime, exited } = createRuntimeWithExitSignal();
+
+        // Signal so we know exactly when the second start() is invoked
+        let resolveSecondStartCalled: (() => void) | null = null;
+        const secondStartCalled = new Promise<void>((r) => {
+          resolveSecondStartCalled = r;
+        });
+        // Use an object property to avoid TypeScript narrowing the let-binding to never
+        const startControl = { resolve: null as (() => void) | null };
+
+        const start = vi
+          .fn()
+          .mockResolvedValueOnce({ close: closeFirst })
+          .mockImplementationOnce(
+            () =>
+              new Promise((resolve) => {
+                resolveSecondStartCalled?.();
+                startControl.resolve = () => resolve({ close: lateStartClose });
+              }),
+          );
+
+        const { runGatewayLoop } = await import("./run-loop.js");
+        void runGatewayLoop({
+          start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+          runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+        });
+
+        // Flush setImmediate queue (faked by vi.useFakeTimers) and microtasks
+        await vi.advanceTimersByTimeAsync(0);
+        const sigusr1 = captureSignal("SIGUSR1");
+        const sigterm = captureSignal("SIGTERM");
+
+        sigusr1();
+
+        // The restart chain is all microtasks — wait for second start() to be invoked
+        await secondStartCalled;
+        // Flush any pending setImmediate calls
+        await vi.advanceTimersByTimeAsync(0);
+
+        // Now the startupTimeoutPromise is live — advance past the 60 s deadline
+        await vi.advanceTimersByTimeAsync(60_001);
+        await vi.advanceTimersByTimeAsync(0);
+
+        // Second start() resolves late — the orphan server must be closed immediately
+        startControl.resolve?.();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(lateStartClose).toHaveBeenCalledWith({
+          reason: "startup timed out",
+          restartExpectedMs: null,
+        });
+
+        sigterm();
+        await vi.advanceTimersByTimeAsync(0);
+        await expect(exited).resolves.toBe(0);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("exits when lock reacquire fails during in-process restart fallback", async () => {
     vi.clearAllMocks();
 
