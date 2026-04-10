@@ -9,7 +9,12 @@ import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
 import { type BundledPluginSource, findBundledPluginSource } from "../plugins/bundled-sources.js";
 import { formatClawHubSpecifier, installPluginFromClawHub } from "../plugins/clawhub.js";
 import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
-import { installPluginFromNpmSpec, installPluginFromPath } from "../plugins/install.js";
+import {
+  installPluginFromNpmSpec,
+  installPluginFromPath,
+  PLUGIN_INSTALL_ERROR_CODE,
+  type InstallPluginResult,
+} from "../plugins/install.js";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import {
   installPluginFromMarketplace,
@@ -46,6 +51,15 @@ function resolveInstallSafetyOverrides(overrides: InstallSafetyOverrides): Insta
   return {
     dangerouslyForceUnsafeInstall: overrides.dangerouslyForceUnsafeInstall,
   };
+}
+
+function shouldAttemptHookPackFallback(
+  result: Extract<InstallPluginResult, { ok: false }>,
+): boolean {
+  return (
+    result.code !== PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED &&
+    result.code !== PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED
+  );
 }
 
 async function installBundledPluginSource(params: {
@@ -402,6 +416,10 @@ export async function runPluginInstallCommand(params: {
       logger: createPluginInstallLogger(),
     });
     if (!result.ok) {
+      if (!shouldAttemptHookPackFallback(result)) {
+        defaultRuntime.error(result.error);
+        return defaultRuntime.exit(1);
+      }
       const hookFallback = await tryInstallHookPackFromLocalPath({
         config: cfg,
         installMode,
@@ -547,6 +565,10 @@ export async function runPluginInstallCommand(params: {
     logger: createPluginInstallLogger(),
   });
   if (!result.ok) {
+    if (!shouldAttemptHookPackFallback(result)) {
+      defaultRuntime.error(result.error);
+      return defaultRuntime.exit(1);
+    }
     const bundledFallbackPlan = resolveBundledInstallPlanForNpmFailure({
       rawSpec: raw,
       code: result.code,

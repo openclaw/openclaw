@@ -205,6 +205,16 @@ function primeHookPackNpmFallback() {
   return { cfg, installedCfg };
 }
 
+function primeBlockedNpmPluginInstall(params: { spec: string; pluginId: string }) {
+  loadConfig.mockReturnValue({} as OpenClawConfig);
+  mockClawHubPackageNotFound(params.spec);
+  installPluginFromNpmSpec.mockResolvedValue({
+    ok: false,
+    error: `Plugin "${params.pluginId}" installation blocked: dangerous code patterns detected: finding details`,
+    code: "security_scan_blocked",
+  });
+}
+
 function primeHookPackPathFallback(params: {
   tmpRoot: string;
   pluginInstallError: string;
@@ -710,6 +720,21 @@ describe("plugins cli install", () => {
     );
     expect(writeConfigFile).toHaveBeenCalledWith(installedCfg);
     expect(runtimeLogs.some((line) => line.includes("Installed hook pack: demo-hooks"))).toBe(true);
+  });
+
+  it("does not try hook-pack fallback after a blocked npm security scan", async () => {
+    primeBlockedNpmPluginInstall({
+      spec: "@acme/unsafe-plugin",
+      pluginId: "unsafe-plugin",
+    });
+
+    await expect(runPluginsCommand(["plugins", "install", "@acme/unsafe-plugin"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(installHooksFromNpmSpec).not.toHaveBeenCalled();
+    expect(runtimeErrors.at(-1)).toContain('Plugin "unsafe-plugin" installation blocked');
+    expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
   });
 
   it("passes force through as overwrite mode for hook-pack npm fallback installs", async () => {
