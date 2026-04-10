@@ -1570,7 +1570,7 @@ describe("openai transport stream", () => {
         choices: [
           {
             index: 0,
-            delta: { role: "assistant", content: "" },
+            delta: { role: "assistant" as const, content: "" },
             logprobs: null,
             finish_reason: null,
           },
@@ -1598,23 +1598,25 @@ describe("openai transport stream", () => {
         choices: [
           {
             index: 0,
-            delta: { tool_calls: [] },
+            delta: { tool_calls: [] as never[] },
             logprobs: null,
-            finish_reason: "tool_calls",
+            finish_reason: "tool_calls" as const,
           },
         ],
       },
-    ];
+    ] as const;
 
     async function* mockStream() {
       for (const chunk of mockChunks) {
-        yield chunk;
+        yield chunk as never;
       }
     }
 
     await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.stopReason).toBe("stop");
-    expect(output.content.some((block) => block.type === "toolCall")).toBe(false);
+    expect(output.content.some((block) => (block as { type?: string }).type === "toolCall")).toBe(
+      false,
+    );
   });
 });
