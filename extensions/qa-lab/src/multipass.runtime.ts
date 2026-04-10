@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import { access, appendFile, mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -150,7 +150,7 @@ function createOutputStamp() {
 }
 
 function createVmSuffix() {
-  return `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
+  return `${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}`;
 }
 
 function sleep(ms: number) {
