@@ -602,6 +602,9 @@ export async function modelsAuthPasteTokenCommand(
     return undefined;
   };
   const rawToken = normalizeOptionalString(opts.token);
+  if (opts.token !== undefined && !rawToken) {
+    throw new Error("--token value must not be empty");
+  }
   if (rawToken !== undefined) {
     const rawTokenValidation = validateTokenInput(rawToken);
     if (rawTokenValidation) {
