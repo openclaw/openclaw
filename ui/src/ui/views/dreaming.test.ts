@@ -7,60 +7,12 @@ import { renderDreaming, setDreamSubTab, type DreamingProps } from "./dreaming.t
 function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
   return {
     active: true,
-    shortTermCount: 47,
-    groundedSignalCount: 9,
-    totalSignalCount: 182,
     promotedCount: 12,
-    phaseSignalCount: 29,
-    shortTermEntries: [
-      {
-        key: "memory:memory/2026-04-05.md:1:2",
-        path: "memory/2026-04-05.md",
-        startLine: 1,
-        endLine: 2,
-        snippet: "Emma prefers shorter, lower-pressure check-ins.",
-        recallCount: 2,
-        dailyCount: 1,
-        groundedCount: 1,
-        totalSignalCount: 3,
-        lightHits: 1,
-        remHits: 1,
-        phaseHitCount: 2,
-      },
-    ],
-    signalEntries: [
-      {
-        key: "memory:memory/2026-04-05.md:1:2",
-        path: "memory/2026-04-05.md",
-        startLine: 1,
-        endLine: 2,
-        snippet: "Emma prefers shorter, lower-pressure check-ins.",
-        recallCount: 2,
-        dailyCount: 1,
-        groundedCount: 1,
-        totalSignalCount: 3,
-        lightHits: 1,
-        remHits: 1,
-        phaseHitCount: 2,
-      },
-    ],
-    promotedEntries: [
-      {
-        key: "memory:memory/2026-04-04.md:4:5",
-        path: "memory/2026-04-04.md",
-        startLine: 4,
-        endLine: 5,
-        snippet: "Use the Happy Together calendar for flights.",
-        recallCount: 3,
-        dailyCount: 2,
-        groundedCount: 4,
-        totalSignalCount: 9,
-        lightHits: 0,
-        remHits: 0,
-        phaseHitCount: 0,
-        promotedAt: "2026-04-05T04:00:00.000Z",
-      },
-    ],
+    phases: {
+      light: { enabled: true, cron: "0 * * * *", nextRunAtMs: Date.parse("2026-04-05T11:30:00Z") },
+      deep: { enabled: true, cron: "30 * * * *", nextRunAtMs: Date.parse("2026-04-05T12:00:00Z") },
+      rem: { enabled: false, cron: "0 4 * * *" },
+    },
     dreamingOf: null,
     nextCycle: "4:00 AM",
     timezone: "America/Los_Angeles",
@@ -77,8 +29,6 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
     onRefreshDiary: () => {},
     onBackfillDiary: () => {},
     onResetDiary: () => {},
-    onResetGroundedShortTerm: () => {},
-    onToggleEnabled: () => {},
     ...overrides,
   };
 }
@@ -113,56 +63,23 @@ describe("dreaming view", () => {
     expect(container.querySelector(".dreams__moon")).not.toBeNull();
   });
 
-  it("displays memory stats", () => {
+  it("displays sleep phase cards", () => {
     const container = renderInto(buildProps());
-    const values = container.querySelectorAll(".dreams__stat-value");
-    expect(values.length).toBe(4);
-    expect(values[0]?.textContent).toBe("47");
-    expect(values[1]?.textContent).toBe("9");
-    expect(values[2]?.textContent).toBe("182");
-    expect(values[3]?.textContent).toBe("12");
-  });
-
-  it("renders short-term, grounded, signals, and promoted detail sections", () => {
-    const container = renderInto(buildProps());
-    const titles = [...container.querySelectorAll(".dreams__trace-title")].map((node) =>
+    const phases = [...container.querySelectorAll(".dreams__phase-name")].map((node) =>
       node.textContent?.trim(),
     );
-    expect(titles).toEqual(["Short-term", "Grounded", "Signals", "Promoted"]);
-    expect(
-      container.querySelector('[data-kind="shortTerm"] .dreams__trace-snippet')?.textContent,
-    ).toContain("Emma prefers shorter");
-    expect(
-      container.querySelector('[data-kind="grounded"] .dreams__trace-meta')?.textContent,
-    ).toContain("1 grounded");
-    expect(
-      container.querySelector('[data-kind="signals"] .dreams__trace-meta')?.textContent,
-    ).toContain("3 signals");
-    expect(
-      container.querySelector('[data-kind="promoted"] .dreams__trace-source')?.textContent,
-    ).toContain("memory/2026-04-04.md:4-5");
-    expect(
-      container.querySelector('[data-kind="promoted"] .dreams__trace-meta')?.textContent,
-    ).toContain("grounded-led");
+    expect(phases).toEqual(["Light", "Deep", "Rem"]);
+    expect(container.querySelectorAll(".dreams__phase").length).toBe(3);
+    expect(container.querySelector(".dreams__phase--off")?.textContent).toContain("off");
   });
 
-  it("keeps the tab bar above the scene trace shell", () => {
-    const container = renderInto(buildProps());
-    const page = container.querySelector(".dreams-page");
-    expect(page?.firstElementChild?.matches("nav.dreams__tabs")).toBe(true);
-    expect(page?.children[1]?.matches("section.dreams")).toBe(true);
-    expect(container.querySelector(".dreams__trace")).not.toBeNull();
-    expect(container.querySelectorAll(".dreams__trace-section")).toHaveLength(4);
-  });
-
-  it("renders scene backfill, reset, and clear grounded controls", () => {
+  it("renders scene backfill and reset controls", () => {
     const container = renderInto(buildProps());
     const buttons = [...container.querySelectorAll("button")].map((node) =>
       node.textContent?.trim(),
     );
     expect(buttons).toContain("Backfill");
     expect(buttons).toContain("Reset");
-    expect(buttons).toContain("Clear Grounded");
   });
 
   it("shows dream bubble when active", () => {
@@ -234,7 +151,7 @@ describe("dreaming view", () => {
     setDreamSubTab("scene");
   });
 
-  it("renders structured backfill diary entries as three panels", () => {
+  it("flattens structured backfill diary entries into plain prose", () => {
     setDreamSubTab("diary");
     const container = renderInto(
       buildProps({
@@ -265,31 +182,18 @@ describe("dreaming view", () => {
         ].join("\n"),
       }),
     );
-    const panelTitles = [...container.querySelectorAll(".dreams-diary__panel-title")].map((node) =>
+    const prose = [...container.querySelectorAll(".dreams-diary__para")].map((node) =>
       node.textContent?.trim(),
     );
-    expect(panelTitles).toEqual([
-      "What Happened",
-      "Reflections",
-      "Candidates + Possible Lasting Updates",
-    ]);
-    expect(container.querySelector(".dreams-diary__grid")).not.toBeNull();
-    expect(container.querySelectorAll(".dreams-diary__grid > .dreams-diary__panel")).toHaveLength(
-      3,
-    );
-    expect(container.querySelector(".dreams-diary__panel-subtitle")?.textContent).toContain(
-      "Candidates",
-    );
-    expect(container.querySelector(".dreams-diary__item--reflection")?.textContent).toContain(
-      "Stable preferences were made explicit",
-    );
-    expect(container.querySelector(".dreams-diary__item--update")?.textContent).toContain(
-      "Use Happy Together for flights",
-    );
+    expect(prose).toContain("Always use Happy Together for flights.");
+    expect(prose).toContain("Stable preferences were made explicit.");
+    expect(prose).toContain("Happy Together rule");
+    expect(prose).toContain("Use Happy Together for flights.");
+    expect(container.querySelector(".dreams-diary__panel-title")).toBeNull();
     setDreamSubTab("scene");
   });
 
-  it("renders diary day navigation and a density map", () => {
+  it("renders diary day chips without the old density map", () => {
     setDreamSubTab("diary");
     const container = renderInto(
       buildProps({
@@ -320,8 +224,8 @@ describe("dreaming view", () => {
       }),
     );
     expect(container.querySelectorAll(".dreams-diary__day-chip").length).toBe(2);
-    expect(container.querySelectorAll(".dreams-diary__heatmap-cell").length).toBe(2);
-    expect(container.querySelector(".dreams-diary__timeline-month")?.textContent).toContain("Jan");
+    expect(container.querySelector(".dreams-diary__heatmap-cell")).toBeNull();
+    expect(container.querySelector(".dreams-diary__timeline-month")).toBeNull();
     const labels = [...container.querySelectorAll(".dreams-diary__day-chip")].map((node) =>
       node.textContent?.replace(/\s+/g, "").trim(),
     );
@@ -346,13 +250,11 @@ describe("dreaming view", () => {
     setDreamSubTab("scene");
   });
 
-  it("renders page navigation for diary entries", () => {
+  it("does not render the old page navigation chrome", () => {
     setDreamSubTab("diary");
     const container = renderInto(buildProps());
-    const pageInfo = container.querySelector(".dreams-diary__page");
-    expect(pageInfo?.textContent).toContain("1 / 1");
-    const navBtns = container.querySelectorAll(".dreams-diary__nav-btn");
-    expect(navBtns.length).toBe(2);
+    expect(container.querySelector(".dreams-diary__page")).toBeNull();
+    expect(container.querySelector(".dreams-diary__nav-btn")).toBeNull();
     setDreamSubTab("scene");
   });
 
