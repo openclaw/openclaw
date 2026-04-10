@@ -93,6 +93,8 @@ export type EmbeddedPiCompactResult = {
   };
 };
 
+export type EmbeddedFullAccessBlockedReason = "sandbox" | "host-policy" | "channel" | "runtime";
+
 export type EmbeddedSandboxInfo = {
   enabled: boolean;
   workspaceDir?: string;
@@ -104,5 +106,7 @@ export type EmbeddedSandboxInfo = {
   elevated?: {
     allowed: boolean;
     defaultLevel: "on" | "off" | "ask" | "full";
+    fullAccessAvailable: boolean;
+    fullAccessBlockedReason?: EmbeddedFullAccessBlockedReason;
   };
 };
