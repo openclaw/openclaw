@@ -115,6 +115,10 @@ interface KnownRuntime {
   probeCommand: string | null;
   /** Parse the raw tmux capture-pane output from the probe session. */
   parseProbe: ((raw: string) => ProbeResult) | null;
+  /** How long to wait for CLI init before sending the slash command (ms). */
+  probeInitWaitMs: number;
+  /** How long to wait after sending the command for output to render (ms). */
+  probeCommandWaitMs: number;
   notes: string;
 }
 
@@ -629,7 +633,8 @@ function parseClaudeProbe(raw: string): ProbeResult {
 }
 
 function parseCodexProbe(raw: string): ProbeResult {
-  // /status output contains usage percentages, windows, reset times
+  // /status output format: "gpt-5.4 default · 100% left · ~/path"
+  // The percentage is "X% left" (remaining), NOT "X% used"
   const lines = raw
     .split("\n")
     .map((l) => l.trim())
@@ -637,47 +642,49 @@ function parseCodexProbe(raw: string): ProbeResult {
   const parsed: Record<string, unknown> = {};
 
   for (const line of lines) {
-    // Look for percentage usage
-    const pctMatch = line.match(/([\d.]+)%/);
-    if (pctMatch) {
-      const pct = parseFloat(pctMatch[1]);
-      if (line.toLowerCase().includes("primary") || lines.indexOf(line) === 0) {
-        parsed.primaryUsedPercent = pct;
-      } else if (line.toLowerCase().includes("secondary")) {
-        parsed.secondaryUsedPercent = pct;
-      } else if (!parsed.usedPercent) {
-        parsed.usedPercent = pct;
-      }
+    // Codex format: "X% left" means X% remaining
+    const leftMatch = line.match(/([\d.]+)%\s*left/i);
+    if (leftMatch) {
+      parsed.remainingPercent = parseFloat(leftMatch[1]);
+      parsed.usedPercent = 100 - (parsed.remainingPercent as number);
     }
-    // Look for reset time
+    // Also check "X% used" format as fallback
+    const usedMatch = line.match(/([\d.]+)%\s*used/i);
+    if (usedMatch && parsed.usedPercent == null) {
+      parsed.usedPercent = parseFloat(usedMatch[1]);
+      parsed.remainingPercent = 100 - (parsed.usedPercent as number);
+    }
+    // Model info in the status line
+    const modelMatch = line.match(/(gpt-[\w.-]+)\s*(?:default)?/i);
+    if (modelMatch) {
+      parsed.model = modelMatch[1];
+    }
+    // Reset time
     const resetMatch = line.match(/reset.*?(\d+\s*(?:min|hour|h|m))/i);
     if (resetMatch) {
       parsed.resetIn = resetMatch[1];
     }
-    // Look for plan type
+    // Plan type
     if (line.toLowerCase().includes("pro") || line.toLowerCase().includes("plus")) {
       parsed.plan = line;
     }
-    // Look for window info
-    const windowMatch = line.match(/(\d+)\s*(?:hour|h)\s*(?:window|rolling)/i);
-    if (windowMatch) {
-      parsed.windowHours = parseInt(windowMatch[1], 10);
-    }
   }
 
-  const usedPct = (parsed.primaryUsedPercent ?? parsed.usedPercent ?? null) as number | null;
-  const remaining = usedPct != null ? (100 - usedPct).toFixed(0) : "unknown";
+  const remainingPct = parsed.remainingPercent as number | undefined;
+  const usedPct = parsed.usedPercent as number | undefined;
+  const modelStr = typeof parsed.model === "string" ? parsed.model + " · " : "";
 
   return {
     available: true,
     rawOutput: raw,
     parsed,
     detail:
-      usedPct != null
-        ? usedPct.toFixed(0) +
-          "% used, " +
-          remaining +
-          "% remaining" +
+      remainingPct != null
+        ? modelStr +
+          remainingPct.toFixed(0) +
+          "% remaining, " +
+          (usedPct ?? 0).toFixed(0) +
+          "% used" +
           (typeof parsed.resetIn === "string" ? ", resets in " + parsed.resetIn : "")
         : "quota data captured (check raw output for details)",
   };
@@ -685,11 +692,28 @@ function parseCodexProbe(raw: string): ProbeResult {
 
 function parseGeminiProbe(raw: string): ProbeResult {
   // /stats output contains token usage and remaining quota per model
+  // Also parse the startup banner for plan info (e.g., "Plan: Gemini Code Assist in Google One AI Ultra")
   const lines = raw
     .split("\n")
     .map((l) => l.trim())
     .filter(Boolean);
   const parsed: Record<string, unknown> = {};
+
+  // Detect plan from startup banner
+  for (const line of lines) {
+    const planMatch = line.match(/Plan:\s*(.+)/i);
+    if (planMatch) {
+      const planStr = planMatch[1].trim();
+      parsed.plan = planStr;
+      if (planStr.toLowerCase().includes("ultra")) {
+        parsed.tier = "ultra";
+      } else if (planStr.toLowerCase().includes("pro")) {
+        parsed.tier = "pro";
+      } else {
+        parsed.tier = "free";
+      }
+    }
+  }
   const models: Array<{ model: string; remaining: string }> = [];
 
   for (const line of lines) {
@@ -732,7 +756,9 @@ function parseGeminiProbe(raw: string): ProbeResult {
           (typeof parsed.resetAt === "string" ? ", resets at " + parsed.resetAt : "")
         : models.length > 0
           ? models.map((m) => m.model + ": " + m.remaining + " remaining").join(", ")
-          : "stats captured (check raw output for details)",
+          : typeof parsed.plan === "string"
+            ? parsed.plan + (typeof parsed.tier === "string" ? " (" + parsed.tier + " tier)" : "")
+            : "stats captured (check raw output for details)",
   };
 }
 
@@ -765,6 +791,8 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     modelProbe: noModelProbe,
     probeCommand: null,
     parseProbe: null,
+    probeInitWaitMs: 0,
+    probeCommandWaitMs: 0,
     notes:
       "Native OpenClaw agent loop — no external tool needed. Always available when Gateway is running.",
   },
@@ -780,6 +808,8 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     modelProbe: probeClaudeModels,
     probeCommand: "/cost",
     parseProbe: parseClaudeProbe,
+    probeInitWaitMs: 4000,
+    probeCommandWaitMs: 5000,
     notes:
       "Anthropic CLI. Supports --output-format stream-json for structured output. Requires Anthropic API key or OAuth.",
   },
@@ -795,6 +825,8 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     modelProbe: probeCodexModels,
     probeCommand: "/status",
     parseProbe: parseCodexProbe,
+    probeInitWaitMs: 4000,
+    probeCommandWaitMs: 5000,
     notes:
       "OpenAI CLI. Supports --json structured output mode. Requires OpenAI API key or ChatGPT OAuth.",
   },
@@ -810,6 +842,8 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     modelProbe: noModelProbe,
     probeCommand: "/stats",
     parseProbe: parseGeminiProbe,
+    probeInitWaitMs: 8000,
+    probeCommandWaitMs: 8000,
     notes: "Google CLI. Supports structured output. Requires Google API credentials.",
   },
   {
@@ -824,6 +858,8 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     modelProbe: noModelProbe,
     probeCommand: null,
     parseProbe: null,
+    probeInitWaitMs: 0,
+    probeCommandWaitMs: 0,
     notes: "AI pair programming tool. Interactive TUI only — driven via PTY/tmux.",
   },
   {
@@ -838,6 +874,8 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     modelProbe: noModelProbe,
     probeCommand: null,
     parseProbe: null,
+    probeInitWaitMs: 0,
+    probeCommandWaitMs: 0,
     notes: "Cursor editor CLI. Interactive — driven via PTY/tmux if CLI mode available.",
   },
   {
@@ -852,6 +890,8 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     modelProbe: noModelProbe,
     probeCommand: null,
     parseProbe: null,
+    probeInitWaitMs: 0,
+    probeCommandWaitMs: 0,
     notes: "GitHub Copilot via `gh copilot`. Requires GitHub CLI + Copilot extension.",
   },
   {
@@ -866,6 +906,8 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     modelProbe: noModelProbe,
     probeCommand: null,
     parseProbe: null,
+    probeInitWaitMs: 0,
+    probeCommandWaitMs: 0,
     notes: "Open-source coding agent. Supports structured output mode.",
   },
 ];
@@ -915,7 +957,13 @@ export function discoverRuntimes(opts?: {
     if (found && opts?.probe && known.probeCommand && known.parseProbe) {
       const sessionName = `octo-probe-${known.binary.replace(/[^a-z0-9]/g, "")}`;
       process.stdout.write(`  Probing ${known.name} (${known.probeCommand})...\n`);
-      const raw = runTuiProbe(known.binary, known.probeCommand, sessionName);
+      const raw = runTuiProbe(
+        known.binary,
+        known.probeCommand,
+        sessionName,
+        known.probeInitWaitMs,
+        known.probeCommandWaitMs,
+      );
       if (raw) {
         probe = known.parseProbe(raw);
       } else {
