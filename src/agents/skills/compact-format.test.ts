@@ -1,4 +1,5 @@
 import os from "node:os";
+import path from "node:path";
 import { formatSkillsForPrompt as upstreamFormatSkillsForPrompt } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -123,6 +124,22 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     expect(prompt).not.toContain("hidden");
   });
 
+  it("sorts available skills alphabetically before formatting the prompt", () => {
+    const prompt = buildPrompt([
+      makeSkill("zebra", "last"),
+      makeSkill("monkey", "middle"),
+      makeSkill("ant", "first"),
+    ]);
+
+    const antIndex = prompt.indexOf("<name>ant</name>");
+    const monkeyIndex = prompt.indexOf("<name>monkey</name>");
+    const zebraIndex = prompt.indexOf("<name>zebra</name>");
+
+    expect(antIndex).toBeGreaterThanOrEqual(0);
+    expect(monkeyIndex).toBeGreaterThan(antIndex);
+    expect(zebraIndex).toBeGreaterThan(monkeyIndex);
+  });
+
   it("tier 1: uses full format when under budget", () => {
     const skills = [makeSkill("weather", "Get weather data")];
     const prompt = buildPrompt(skills, { maxChars: 50_000 });
@@ -230,15 +247,15 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     const home = os.homedir();
     const skills = Array.from({ length: 30 }, (_, i) =>
       makeSkill(
-        `skill-${i}`,
+        `skill-${String(i).padStart(2, "0")}`,
         "A".repeat(200),
-        `${home}/.openclaw/workspace/skills/skill-${i}/SKILL.md`,
+        path.join(home, ".openclaw", "workspace", "skills", `skill-${String(i).padStart(2, "0")}`, "SKILL.md"),
       ),
     );
     // Compute compacted lengths (what the prompt will actually contain)
     const compactedSkills = skills.map((s) => ({
       ...s,
-      filePath: s.filePath.replace(home, "~"),
+      filePath: s.filePath.replace(`${home}${path.sep}`, "~/"),
     }));
     const compactedCompactLen = formatSkillsCompact(compactedSkills).length;
     const canonicalCompactLen = formatSkillsCompact(skills).length;
@@ -249,7 +266,7 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     const budget = Math.floor((compactedCompactLen + canonicalCompactLen) / 2) + 150;
     const prompt = buildPrompt(skills, { maxChars: budget });
     // All 30 skills should be preserved in compact form (tier 2, no dropping)
-    expect(prompt).toContain("skill-0");
+    expect(prompt).toContain("skill-00");
     expect(prompt).toContain("skill-29");
     expect(prompt).not.toContain("included");
     expect(prompt).toContain("compact format");
@@ -261,7 +278,11 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
   it("resolvedSkills in snapshot keeps canonical paths, not compacted", () => {
     const home = os.homedir();
     const skills = Array.from({ length: 5 }, (_, i) =>
-      makeSkill(`skill-${i}`, "A skill", `${home}/.openclaw/workspace/skills/skill-${i}/SKILL.md`),
+      makeSkill(
+        `skill-${i}`,
+        "A skill",
+        path.join(home, ".openclaw", "workspace", "skills", `skill-${i}`, "SKILL.md"),
+      ),
     );
     const snapshot = buildWorkspaceSkillSnapshot("/fake", {
       entries: skills.map(makeEntry),

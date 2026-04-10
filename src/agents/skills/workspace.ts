@@ -648,7 +648,9 @@ function resolveWorkspaceSkillPromptState(
   );
   const promptEntries = eligible.filter((entry) => isSkillVisibleInAvailableSkillsPrompt(entry));
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
-  const resolvedSkills = promptEntries.map((entry) => entry.skill);
+  const resolvedSkills = promptEntries
+    .map((entry) => entry.skill)
+    .toSorted((a, b) => a.name.localeCompare(b.name));
   // Derive prompt-facing skills with compacted paths (e.g. ~/...) once.
   // Budget checks and final render both use this same representation so the
   // tier decision is based on the exact strings that end up in the prompt.
