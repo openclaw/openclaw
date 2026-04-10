@@ -212,6 +212,19 @@ export const unitFastTestFiles = collectUnitFastTestFileAnalysis()
   .filter((entry) => entry.unitFast)
   .map((entry) => entry.file);
 
+export function partitionUnitFastTestFiles(index, total) {
+  if (
+    !Number.isInteger(index) ||
+    !Number.isInteger(total) ||
+    total < 1 ||
+    index < 0 ||
+    index >= total
+  ) {
+    throw new Error(`invalid unit-fast partition ${index}/${total}`);
+  }
+  return unitFastTestFiles.filter((_file, fileIndex) => fileIndex % total === index);
+}
+
 const unitFastTestFileSet = new Set(unitFastTestFiles);
 const sourceToUnitFastTestFile = new Map(
   [...pluginSdkLightSourceFiles, ...commandsLightSourceFiles].flatMap((sourceFile) => {

@@ -1,13 +1,13 @@
 import { getChannelPlugin } from "../channels/plugins/index.js";
-import {
-  resolveSessionConversationRef,
-  resolveSessionParentSessionKey,
-} from "../channels/plugins/session-conversation.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import {
+  parseRawSessionConversationRef,
+  parseThreadSessionSuffix,
+} from "../sessions/session-key-utils.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -143,18 +143,13 @@ function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   if (!raw) {
     return {};
   }
-  const resolvedConversation = resolveSessionConversationRef(raw);
-  if (resolvedConversation) {
-    const groupId = resolvedConversation.baseConversationId;
-    if (!groupId) {
-      return {};
-    }
-    return {
-      channel: resolvedConversation.channel,
-      groupId,
-    };
+  const { baseSessionKey, threadId } = parseThreadSessionSuffix(raw);
+  const conversationKey = threadId ? baseSessionKey : raw;
+  const conversation = parseRawSessionConversationRef(conversationKey);
+  if (conversation) {
+    return { channel: conversation.channel, groupId: conversation.rawId };
   }
-  const base = resolveSessionParentSessionKey(raw) ?? raw;
+  const base = conversationKey ?? raw;
   const parts = base.split(":").filter(Boolean);
   let body = parts[0] === "agent" ? parts.slice(2) : parts;
   if (body[0] === "subagent") {
@@ -330,34 +325,37 @@ export function resolveGroupToolPolicy(params: {
   if (!channel) {
     return undefined;
   }
+  const configTools = resolveChannelGroupToolsPolicy({
+    cfg: params.config,
+    channel,
+    groupId,
+    accountId: params.accountId,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+  });
+  if (configTools) {
+    return pickSandboxToolPolicy(configTools);
+  }
+
   let plugin;
   try {
     plugin = getChannelPlugin(channel);
   } catch {
     plugin = undefined;
   }
-  const toolsConfig =
-    plugin?.groups?.resolveToolPolicy?.({
-      cfg: params.config,
-      groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
-      accountId: params.accountId,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-    }) ??
-    resolveChannelGroupToolsPolicy({
-      cfg: params.config,
-      channel,
-      groupId,
-      accountId: params.accountId,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-    });
+  const toolsConfig = plugin?.groups?.resolveToolPolicy?.({
+    cfg: params.config,
+    groupId,
+    groupChannel: params.groupChannel,
+    groupSpace: params.groupSpace,
+    accountId: params.accountId,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+  });
   return pickSandboxToolPolicy(toolsConfig);
 }
 

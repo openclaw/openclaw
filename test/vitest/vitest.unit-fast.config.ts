@@ -5,7 +5,7 @@ import { unitFastTestFiles } from "./vitest.unit-fast-paths.mjs";
 
 export function createUnitFastVitestConfig(
   env: Record<string, string | undefined> = process.env,
-  options: { argv?: string[] } = {},
+  options: { argv?: string[]; include?: string[]; name?: string } = {},
 ) {
   const sharedTest = sharedVitestConfig.test ?? {};
   const includeFromEnv = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
@@ -15,11 +15,11 @@ export function createUnitFastVitestConfig(
     ...sharedVitestConfig,
     test: {
       ...sharedTest,
-      name: "unit-fast",
+      name: options.name ?? "unit-fast",
       isolate: false,
       runner: undefined,
       setupFiles: [],
-      include: includeFromEnv ?? cliInclude ?? unitFastTestFiles,
+      include: includeFromEnv ?? cliInclude ?? options.include ?? unitFastTestFiles,
       exclude: sharedTest.exclude ?? [],
       passWithNoTests: true,
     },
