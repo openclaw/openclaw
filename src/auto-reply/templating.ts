@@ -106,6 +106,8 @@ export type MsgContext = {
   MediaPaths?: string[];
   MediaUrls?: string[];
   MediaTypes?: string[];
+  /** Provider-native file IDs for inbound media (e.g. Slack file IDs for download-file). */
+  MediaFileIds?: string[];
   /** Telegram sticker metadata (emoji, set name, file IDs, cached description). */
   Sticker?: StickerContextMetadata;
   /** True when current-turn sticker media is present in MediaPaths (false for cached-description path). */

@@ -763,6 +763,10 @@ export async function prepareSlackMessage(params: {
       effectiveMedia && effectiveMedia.length > 0
         ? effectiveMedia.map((m) => m.contentType ?? "")
         : undefined,
+    MediaFileIds:
+      effectiveMedia && effectiveMedia.length > 0
+        ? effectiveMedia.map((m) => m.fileId ?? "")
+        : undefined,
     CommandAuthorized: commandAuthorized,
     OriginatingChannel: "slack" as const,
     OriginatingTo: slackTo,
