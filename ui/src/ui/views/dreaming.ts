@@ -430,13 +430,19 @@ function formatCompactDateTime(value: string): string {
   });
 }
 
+function parseSortableTimestamp(value?: string): number {
+  if (!value) {
+    return Number.NEGATIVE_INFINITY;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+}
+
 function compareWaitingEntryByRecency(a: DreamingEntry, b: DreamingEntry): number {
-  const aMs = a.lastRecalledAt ? Date.parse(a.lastRecalledAt) : Number.NEGATIVE_INFINITY;
-  const bMs = b.lastRecalledAt ? Date.parse(b.lastRecalledAt) : Number.NEGATIVE_INFINITY;
-  if (Number.isFinite(aMs) || Number.isFinite(bMs)) {
-    if (bMs !== aMs) {
-      return bMs - aMs;
-    }
+  const aMs = parseSortableTimestamp(a.lastRecalledAt);
+  const bMs = parseSortableTimestamp(b.lastRecalledAt);
+  if (bMs !== aMs) {
+    return bMs - aMs;
   }
   if (b.totalSignalCount !== a.totalSignalCount) {
     return b.totalSignalCount - a.totalSignalCount;

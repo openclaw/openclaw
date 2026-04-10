@@ -409,5 +409,68 @@ describe("dreaming view", () => {
     setDreamSubTab("scene");
   });
 
+  it("treats malformed waiting-entry timestamps as oldest in both sort modes", () => {
+    setDreamSubTab("advanced");
+    const shortTermEntries = [
+      {
+        key: "memory:valid-recent",
+        path: "memory/2026-04-06.md",
+        startLine: 1,
+        endLine: 1,
+        snippet: "Valid recent timestamp",
+        recallCount: 1,
+        dailyCount: 0,
+        groundedCount: 0,
+        totalSignalCount: 3,
+        lightHits: 1,
+        remHits: 0,
+        phaseHitCount: 1,
+        lastRecalledAt: "2026-04-06T12:00:00.000Z",
+      },
+      {
+        key: "memory:malformed-time",
+        path: "memory/2026-04-05.md",
+        startLine: 1,
+        endLine: 1,
+        snippet: "Malformed timestamp",
+        recallCount: 1,
+        dailyCount: 0,
+        groundedCount: 0,
+        totalSignalCount: 3,
+        lightHits: 1,
+        remHits: 0,
+        phaseHitCount: 1,
+        lastRecalledAt: "not-a-timestamp",
+      },
+    ];
+
+    setDreamAdvancedWaitingSort("recent");
+    let container = renderInto(
+      buildProps({
+        shortTermEntries,
+        promotedEntries: [],
+      }),
+    );
+    const recentOrder = [...container.querySelectorAll("[data-entry-key]")].map((node) =>
+      node.getAttribute("data-entry-key"),
+    );
+    expect(recentOrder).toEqual(["memory:valid-recent", "memory:malformed-time"]);
+
+    setDreamAdvancedWaitingSort("signals");
+    container = renderInto(
+      buildProps({
+        shortTermEntries,
+        promotedEntries: [],
+      }),
+    );
+    const signalOrder = [...container.querySelectorAll("[data-entry-key]")].map((node) =>
+      node.getAttribute("data-entry-key"),
+    );
+    expect(signalOrder).toEqual(["memory:valid-recent", "memory:malformed-time"]);
+
+    setDreamAdvancedWaitingSort("recent");
+    setDreamSubTab("scene");
+  });
+
   // Toggle lives in the page header (app-render.ts), not inside the dreaming view.
 });
