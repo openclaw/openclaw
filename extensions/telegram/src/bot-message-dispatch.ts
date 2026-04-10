@@ -561,7 +561,12 @@ export const dispatchTelegramMessage = async ({
       const store = (telegramDeps.loadSessionStore ?? loadSessionStore)(storePath, {
         skipCache: true,
       });
-      const sessionKey = ctxPayload.SessionKey;
+      // Use route.sessionKey if ctxPayload.SessionKey lacks thread suffix for DM topic.
+      // route.sessionKey is updated with thread suffix in bot-message-context.ts.
+      let sessionKey = ctxPayload.SessionKey;
+      if (sessionKey && !sessionKey.includes(":thread:")) {
+        sessionKey = route.sessionKey;
+      }
       if (sessionKey) {
         const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
         isFirstTurnInSession = !entry?.systemSent;
