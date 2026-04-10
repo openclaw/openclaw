@@ -105,7 +105,7 @@ messages to OpenClaw, which decrypts and processes them.
 ```
 
 3. Set the callback URL in WeCom Admin Console to
-   `https://YOUR_HOST/api/wecom/webhook/BOT_ACCOUNT_ID`.
+   `https://YOUR_HOST/plugins/wecom/bot`.
 
 ## Configure
 

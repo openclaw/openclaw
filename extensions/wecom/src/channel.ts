@@ -681,7 +681,7 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
       });
     },
     logoutAccount: async ({ cfg, accountId }) => {
-      const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
+      const resolvedAccountId = accountId ?? resolveDefaultWeComAccountId(cfg);
       const isMulti = hasMultiAccounts(cfg);
       let nextCfg = { ...cfg } as OpenClawConfig;
       let cleared = false;
@@ -755,6 +755,8 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
             delete nextAgent.corpId;
             delete nextAgent.corpSecret;
             delete nextAgent.agentId;
+            delete nextAgent.token;
+            delete nextAgent.encodingAESKey;
             nextAccount.agent = (
               Object.keys(nextAgent).length > 0 ? nextAgent : undefined
             ) as typeof nextAccount.agent;
