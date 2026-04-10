@@ -9,6 +9,7 @@ import {
 } from "./provider-openai-codex-oauth-tls.js";
 
 const manualInputPromptMessage = "Paste the authorization code (or full redirect URL):";
+const openAICodexOAuthOriginator = "openclaw";
 
 export async function loginOpenAICodexOAuth(params: {
   prompter: WizardPrompter;
@@ -61,6 +62,7 @@ export async function loginOpenAICodexOAuth(params: {
     const creds = await loginOpenAICodex({
       onAuth: baseOnAuth,
       onPrompt,
+      originator: openAICodexOAuthOriginator,
       onManualCodeInput: isRemote
         ? async () =>
             await onPrompt({
