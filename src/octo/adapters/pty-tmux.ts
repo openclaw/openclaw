@@ -21,6 +21,8 @@
 // implicit Enter.
 
 import { execFile } from "node:child_process";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import type { TmuxManager } from "../node-agent/tmux-manager.ts";
 import type { ArmSpec } from "../wire/schema.ts";
@@ -43,6 +45,12 @@ export interface PtyTmuxAdapterOptions {
   captureIntervalMs?: number;
   /** Override tmux binary path (forwarded to direct exec calls). */
   tmuxBin?: string;
+  /**
+   * Directory for sentinel files. The adapter wraps the user command to
+   * write `$?` to `<sentinelDir>/<arm_id>.exit` on exit so ProcessWatcher
+   * can detect clean vs. failed exits. Defaults to `$TMPDIR/octo-sentinels`.
+   */
+  sentinelDir?: string;
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -62,6 +70,7 @@ export class PtyTmuxAdapter implements Adapter {
 
   private readonly captureIntervalMs: number;
   private readonly tmuxBin: string;
+  private readonly sentinelDir: string;
   private readonly spawnTimestamps = new Map<string, number>();
   private readonly outputByteCounters = new Map<string, number>();
 
@@ -71,6 +80,7 @@ export class PtyTmuxAdapter implements Adapter {
   ) {
     this.captureIntervalMs = opts?.captureIntervalMs ?? 250;
     this.tmuxBin = opts?.tmuxBin ?? "tmux";
+    this.sentinelDir = opts?.sentinelDir ?? join(process.env.TMPDIR ?? "/tmp", "octo-sentinels");
   }
 
   // ── spawn ──────────────────────────────────────────────────────────────
@@ -84,12 +94,34 @@ export class PtyTmuxAdapter implements Adapter {
       captureRows?: number;
     };
 
-    const sessionName = rtOpts.tmuxSessionName ?? armSessionName(spec.idempotency_key);
+    // Derive arm_id from the injected _arm_id field (set by gateway handler)
+    // or fall back to the idempotency_key for the session name.
+    const armId = (spec as Record<string, unknown>)._arm_id as string | undefined;
+    const sessionName = rtOpts.tmuxSessionName ?? armSessionName(armId ?? spec.idempotency_key);
 
     // Build the command string for tmux new-session. If args are provided,
     // join them space-separated (tmux parses the combined string itself).
     const cmdParts = [rtOpts.command, ...(rtOpts.args ?? [])];
-    const cmd = cmdParts.join(" ");
+    const userCmd = cmdParts.join(" ");
+
+    // Wrap the user command with sentinel file writing so ProcessWatcher
+    // can detect clean exits (exit code 0 → completed, non-zero → failed).
+    // Without this wrapper, ProcessWatcher sees "session gone, no sentinel"
+    // and always emits failed with reason "session_terminated_no_sentinel".
+    //
+    // The wrapper captures $? from the user command, writes it to a
+    // sentinel file, then exits with the original code. The sentinel path
+    // uses the same convention as NodeAgent.sentinelPathForArm().
+    let cmd: string;
+    if (armId) {
+      mkdirSync(this.sentinelDir, { recursive: true });
+      const sentinelPath = join(this.sentinelDir, `${armId}.exit`);
+      // Sentinel paths are under tmpdir and contain only alphanumeric/dash/dot
+      // characters, so direct interpolation is safe.
+      cmd = `${userCmd}; echo $? > ${sentinelPath}`;
+    } else {
+      cmd = userCmd;
+    }
 
     try {
       await this.tmuxManager.createSession(sessionName, cmd, spec.cwd);
@@ -110,6 +142,7 @@ export class PtyTmuxAdapter implements Adapter {
       metadata: {
         captureCols: rtOpts.captureCols,
         captureRows: rtOpts.captureRows,
+        tmux_session_name: sessionName,
       },
     };
   }
