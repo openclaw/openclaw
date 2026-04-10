@@ -203,18 +203,6 @@ describe("handleRoamInbound", () => {
       expect(defaultRuntime.log).toHaveBeenCalledWith(expect.stringContaining("drop self-message"));
     });
 
-    it("drops messages from bot with tagged ID prefix", async () => {
-      await handleRoamInbound({
-        message: makeMessage({ senderId: "B-bot-uuid" }),
-        account: makeAccount(),
-        config: defaultConfig,
-        runtime: defaultRuntime,
-        botId: "bot-uuid",
-      });
-
-      expect(mockDispatchInboundReplyWithBase).not.toHaveBeenCalled();
-    });
-
     it("dispatches messages from other users when botId is set", async () => {
       await handleRoamInbound({
         message: makeMessage({ senderId: "user-1" }),
@@ -291,9 +279,9 @@ describe("handleRoamInbound", () => {
       expect(ctxArg.BodyForAgent).toBe("<@other-user> hello");
     });
 
-    it("strips all U- mentions when botId is unknown", async () => {
+    it("strips all mentions when botId is unknown", async () => {
       await handleRoamInbound({
-        message: makeMessage({ text: "<@U-01234567-abcd-4000-8000-000000000000> hello world" }),
+        message: makeMessage({ text: "<@01234567-abcd-4000-8000-000000000000> hello world" }),
         account: makeAccount(),
         config: defaultConfig,
         runtime: defaultRuntime,
@@ -307,7 +295,7 @@ describe("handleRoamInbound", () => {
     it("does not treat arbitrary user mentions as bot mention when botId is unknown", async () => {
       await handleRoamInbound({
         message: makeMessage({
-          text: "<@U-01234567-abcd-4000-8000-000000000000> hello",
+          text: "<@01234567-abcd-4000-8000-000000000000> hello",
           chatType: "group",
         }),
         account: makeAccount(),

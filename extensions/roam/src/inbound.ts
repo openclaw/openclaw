@@ -30,11 +30,6 @@ import type { CoreConfig, RoamInboundMessage } from "./types.js";
 
 const CHANNEL_ID = "roam" as const;
 
-/** Strip Roam tagged-ID prefix (e.g. "B-<uuid>" → "<uuid>", "U-<uuid>" → "<uuid>"). */
-function stripTagPrefix(id: string): string {
-  return /^[A-Z]-/.test(id) ? id.slice(2) : id;
-}
-
 /** Strip Roam mention syntax for the bot's own user ID. */
 function stripBotMention(text: string, botId?: string): string {
   if (botId) {
@@ -42,8 +37,8 @@ function stripBotMention(text: string, botId?: string): string {
     const escaped = botId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     return text.replace(new RegExp(`<!?@${escaped}>`, "gi"), "").trim();
   }
-  // Fallback: strip all <@U-xxx> mentions when bot ID is unknown
-  return text.replace(/<!?@U-[0-9a-f-]+>/gi, "").trim();
+  // Fallback: strip all <@xxx> mentions when bot ID is unknown
+  return text.replace(/<!?@[0-9a-f-]+>/gi, "").trim();
 }
 
 /** Check if the bot was mentioned in the message. */
@@ -111,8 +106,7 @@ export async function handleRoamInbound(params: {
   const core = getRoamRuntime();
 
   // Drop messages sent by the bot itself to prevent infinite loops.
-  // Sender may be a tagged ID (B-<uuid>) while botId is a plain UUID.
-  if (botId && stripTagPrefix(message.senderId) === botId) {
+  if (botId && message.senderId === botId) {
     runtime.log?.(`roam: drop self-message from bot ${botId}`);
     return;
   }

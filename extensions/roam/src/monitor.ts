@@ -39,13 +39,10 @@ function parseRoamWebhookEvent(raw: unknown): RoamWebhookEvent | null {
     return null;
   }
   const obj = raw as Record<string, unknown>;
-  // V1 events have type="message", userId, chatId
-  // V0 events have type="chat:message:*", sender, chat
   if (typeof obj.type !== "string") {
     return null;
   }
-  // Require at least one sender field (V1: userId, V0: sender)
-  if (typeof obj.userId !== "string" && typeof obj.sender !== "string") {
+  if (typeof obj.userId !== "string") {
     return null;
   }
   return obj as unknown as RoamWebhookEvent;
@@ -55,12 +52,11 @@ function webhookEventToInbound(
   event: RoamWebhookEvent,
   chatType: "direct" | "group",
 ): RoamInboundMessage {
-  // V1 uses userId/chatId (bare UUIDs), V0 uses sender/chat (tagged IDs)
   const msg: RoamInboundMessage = {
     messageId: event.messageId ?? String(event.timestamp),
-    chatId: event.chatId ?? event.chat ?? "",
-    senderId: event.userId ?? event.sender ?? "",
-    senderName: event.senderName ?? "",
+    chatId: event.chatId,
+    senderId: event.userId,
+    senderName: "",
     text: event.text,
     timestamp: event.timestamp,
     chatType,
@@ -133,11 +129,8 @@ async function handleRoamWebhookRequest(
       res.setHeader("Content-Type", "application/json");
       res.end("{}");
 
-      // V1 chat.message events include chatType ("dm" or "group") in the payload.
-      // Fall back to V0 event type detection for backwards compatibility.
       const rawObj = body.value as Record<string, unknown>;
-      const chatType: "direct" | "group" =
-        rawObj.chatType === "dm" || event.type === "chat:message:dm" ? "direct" : "group";
+      const chatType: "direct" | "group" = rawObj.chatType === "dm" ? "direct" : "group";
 
       const message = webhookEventToInbound(event, chatType);
       target.runtime.log?.(

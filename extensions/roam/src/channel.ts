@@ -162,7 +162,7 @@ export const roamPlugin: ChannelPlugin<ResolvedRoamAccount> = {
     resolveOutboundSessionRoute: (params) => resolveRoamOutboundSessionRoute(params),
     targetResolver: {
       looksLikeId: looksLikeRoamTargetId,
-      hint: "<TaggedUUID> (e.g. G-xxx or D-xxx)",
+      hint: "<UUID> (e.g. 01234567-abcd-4000-8000-000000000000)",
     },
   },
   setup: roamSetupAdapter,

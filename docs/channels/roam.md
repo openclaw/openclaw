@@ -140,14 +140,14 @@ Groups are allowlisted by default. Add group chat IDs to the `groups` map:
 
 ### Sender allowlists
 
-Restrict who can message the bot with `allowFrom` (DMs) and `groupAllowFrom` (groups). Roam user UUIDs work with or without the `U-` tag prefix:
+Restrict who can message the bot with `allowFrom` (DMs) and `groupAllowFrom` (groups). Use bare Roam user UUIDs:
 
 ```json5
 {
   channels: {
     roam: {
       allowFrom: ["01234567-abcd-4000-8000-000000000000"],
-      groupAllowFrom: ["U-01234567-abcd-4000-8000-000000000000"],
+      groupAllowFrom: ["01234567-abcd-4000-8000-000000000000"],
     },
   },
 }

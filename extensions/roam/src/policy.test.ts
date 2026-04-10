@@ -6,14 +6,8 @@ describe("normalizeRoamAllowlist", () => {
     expect(normalizeRoamAllowlist(["roam:abc"])).toEqual(["abc"]);
   });
 
-  it("strips tag prefix from tagged UUIDs", () => {
-    expect(normalizeRoamAllowlist(["U-01234567-abcd-4000-8000-000000000000"])).toEqual([
-      "01234567-abcd-4000-8000-000000000000",
-    ]);
-  });
-
-  it("strips both roam: and tag prefix", () => {
-    expect(normalizeRoamAllowlist(["roam:U-abc-123"])).toEqual(["abc-123"]);
+  it("strips roam-hq: prefix", () => {
+    expect(normalizeRoamAllowlist(["roam-hq:abc"])).toEqual(["abc"]);
   });
 
   it("lowercases entries", () => {
@@ -26,26 +20,18 @@ describe("normalizeRoamAllowlist", () => {
 });
 
 describe("resolveRoamAllowlistMatch", () => {
-  it("matches bare UUID sender against tagged UUID in allowFrom", () => {
+  it("matches bare UUID sender against allowFrom", () => {
     const result = resolveRoamAllowlistMatch({
-      allowFrom: ["U-01234567-abcd-4000-8000-000000000000"],
+      allowFrom: ["01234567-abcd-4000-8000-000000000000"],
       senderId: "01234567-abcd-4000-8000-000000000000",
     });
     expect(result.allowed).toBe(true);
   });
 
-  it("matches tagged UUID sender against bare UUID in allowFrom", () => {
+  it("matches with roam: prefix in allowFrom", () => {
     const result = resolveRoamAllowlistMatch({
-      allowFrom: ["01234567-abcd-4000-8000-000000000000"],
-      senderId: "U-01234567-abcd-4000-8000-000000000000",
-    });
-    expect(result.allowed).toBe(true);
-  });
-
-  it("matches tagged UUID sender against tagged UUID in allowFrom", () => {
-    const result = resolveRoamAllowlistMatch({
-      allowFrom: ["U-abc-123"],
-      senderId: "U-abc-123",
+      allowFrom: ["roam:01234567-abcd-4000-8000-000000000000"],
+      senderId: "01234567-abcd-4000-8000-000000000000",
     });
     expect(result.allowed).toBe(true);
   });
@@ -61,7 +47,7 @@ describe("resolveRoamAllowlistMatch", () => {
 
   it("rejects unmatched sender", () => {
     const result = resolveRoamAllowlistMatch({
-      allowFrom: ["U-allowed-user"],
+      allowFrom: ["allowed-user"],
       senderId: "different-user",
     });
     expect(result.allowed).toBe(false);

@@ -3,7 +3,6 @@ import type {
   DmConfig,
   DmPolicy,
   GroupPolicy,
-  GroupToolPolicyConfig,
   SecretInput,
 } from "../runtime-api.js";
 
@@ -92,17 +91,17 @@ export type RoamBotIdentity = {
 // --- Roam API types ---
 
 /**
- * Roam V1 webhook event payload (chat.message event type).
- * All IDs are bare UUIDs (no tagged-ID prefixes).
+ * Roam webhook event payload (chat.message event type).
+ * All IDs are bare UUIDs.
  */
 export type RoamWebhookEvent = {
-  /** Always "message" for V1 chat.message events. */
+  /** Always "message" for chat.message events. */
   type: string;
   /** Content type (e.g. "text"). */
   contentType?: string;
-  /** Sender user UUID (bare). */
+  /** Sender user UUID. */
   userId: string;
-  /** Chat UUID (bare). */
+  /** Chat UUID. */
   chatId: string;
   /** Message text content. */
   text: string;
@@ -114,15 +113,7 @@ export type RoamWebhookEvent = {
   replyTimestamp?: number;
   /** Attached items (images, files). Each has at least id, type, url. */
   items?: RoamWebhookItem[];
-
-  // --- Fields from V0 events (kept for backwards compatibility during migration) ---
-  /** @deprecated V0 field: tagged chat ID. */
-  chat?: string;
-  /** @deprecated V0 field: tagged sender ID. */
-  sender?: string;
-  /** @deprecated V0 field: sender display name (not present in V1). */
-  senderName?: string;
-  /** @deprecated V0 field. */
+  /** Message ID. */
   messageId?: string;
 };
 

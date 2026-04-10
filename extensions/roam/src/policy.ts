@@ -15,14 +15,10 @@ import {
 import type { RoamGroupConfig } from "./types.js";
 
 function normalizeAllowEntry(raw: string): string {
-  let entry = raw
+  return raw
     .trim()
     .toLowerCase()
     .replace(/^(roam|roam-hq):/i, "");
-  // Strip Roam tagged-ID prefix (e.g. "U-<uuid>" → "<uuid>", "B-<uuid>" → "<uuid>")
-  // so that allowFrom entries with tagged IDs match bare UUID sender IDs from V1 webhooks.
-  entry = entry.replace(/^[a-z]-/i, "");
-  return entry;
 }
 
 export function normalizeRoamAllowlist(values: Array<string | number> | undefined): string[] {

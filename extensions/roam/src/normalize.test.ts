@@ -71,20 +71,8 @@ describe("looksLikeRoamTargetId", () => {
     expect(looksLikeRoamTargetId("roam-hq:abc")).toBe(true);
   });
 
-  it("detects U- tagged UUID", () => {
-    expect(looksLikeRoamTargetId("U-01234567-abcd-4000-8000-000000000000")).toBe(true);
-  });
-
-  it("detects B- tagged UUID", () => {
-    expect(looksLikeRoamTargetId("B-01234567-abcd-4000-8000-000000000000")).toBe(true);
-  });
-
-  it("detects G- tagged UUID", () => {
-    expect(looksLikeRoamTargetId("G-01234567-abcd-4000-8000-000000000000")).toBe(true);
-  });
-
-  it("detects D- tagged UUID", () => {
-    expect(looksLikeRoamTargetId("D-01234567-abcd-4000-8000-000000000000")).toBe(true);
+  it("detects bare UUID", () => {
+    expect(looksLikeRoamTargetId("01234567-abcd-4000-8000-000000000000")).toBe(true);
   });
 
   it("rejects random string", () => {
@@ -95,7 +83,7 @@ describe("looksLikeRoamTargetId", () => {
     expect(looksLikeRoamTargetId("")).toBe(false);
   });
 
-  it("rejects partial tagged UUID", () => {
-    expect(looksLikeRoamTargetId("U-01234567")).toBe(false);
+  it("rejects partial UUID", () => {
+    expect(looksLikeRoamTargetId("01234567")).toBe(false);
   });
 });

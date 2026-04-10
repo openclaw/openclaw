@@ -11,12 +11,11 @@ import {
   createTopLevelChannelDmPolicy,
   promptParsedAllowFromForAccount,
   resolveSetupAccountId,
-  setSetupChannelEnabled,
 } from "openclaw/plugin-sdk/setup";
 import type { ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup";
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
-import { listRoamAccountIds, resolveDefaultRoamAccountId, resolveRoamAccount } from "./accounts.js";
+import { resolveDefaultRoamAccountId, resolveRoamAccount } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
 
 const channel = "roam" as const;
@@ -58,7 +57,7 @@ export function clearRoamAccountFields(
     return {
       ...cfg,
       channels: {
-        ...(cfg.channels ?? {}),
+        ...cfg.channels,
         roam: nextSection as RoamSection,
       },
     } as CoreConfig;
@@ -76,7 +75,7 @@ export function clearRoamAccountFields(
   return {
     ...cfg,
     channels: {
-      ...(cfg.channels ?? {}),
+      ...cfg.channels,
       roam: {
         ...section,
         accounts: {
@@ -101,14 +100,14 @@ async function promptRoamAllowFrom(params: {
     noteTitle: "Roam user id",
     noteLines: [
       "1) Find user IDs in Roam Administration > Members",
-      "2) Roam user IDs are TaggedUUIDs like U-7861a4c6-765a-495d-898d-fae3d8fbba2d",
+      "2) Roam user IDs are UUIDs like 7861a4c6-765a-495d-898d-fae3d8fbba2d",
       "3) You can also check webhook payload logs when someone messages",
       `Docs: ${formatDocsLink("/channels/roam", "roam")}`,
     ],
-    message: "Roam allowFrom (user TaggedUUID)",
-    placeholder: "U-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+    message: "Roam allowFrom (user UUID)",
+    placeholder: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
     parseEntries: (raw) => ({
-      entries: String(raw)
+      entries: raw
         .split(/[\n,;]+/g)
         .map((value) => value.trim().toLowerCase())
         .filter(Boolean),

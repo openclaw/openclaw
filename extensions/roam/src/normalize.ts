@@ -46,6 +46,6 @@ export function looksLikeRoamTargetId(raw: string): boolean {
     return true;
   }
 
-  // Roam TaggedUUID pattern: single letter, dash, UUID (e.g. U-xxx, G-xxx, D-xxx, B-xxx)
-  return /^[UGDB]-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed);
+  // Bare UUID pattern
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed);
 }
