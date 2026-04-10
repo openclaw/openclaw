@@ -135,17 +135,24 @@ describe("slugifyLLMResponse", () => {
     // string at a separator boundary, the resulting slug ended with a
     // dangling dash that the date-prefixed filename template never
     // cleaned up. The fix moves the strip to after the slice.
+    //
+    // To genuinely exercise this bug, the input must slugify to a
+    // string whose character at index MAX_SLUG_LENGTH - 1 is a `-`.
+    // "a" * 29 + " bcd" slugifies to 29 `a`s, a separator-dash, then
+    // "bcd" — 33 characters total. slice(0, 30) leaves exactly
+    // "aaaa...aaa-" (30 chars ending in `-`). Only the fix strips
+    // that dash; the old order left it in place.
+    const TRAILING_DASH_INPUT = `${"a".repeat(29)} bcd`;
+
     it("does not produce a slug ending in a dash", () => {
-      // Five short words that slugify to >30 chars and put a dash at
-      // index 30 of the slugified string.
-      const result = slugifyLLMResponse("alpha beta gamma delta epsilon");
+      const result = slugifyLLMResponse(TRAILING_DASH_INPUT);
       expect(result).not.toBeNull();
       expect(result).not.toMatch(/-$/);
       expect(result).not.toMatch(/^-/);
     });
 
     it("respects the MAX_SLUG_LENGTH cap", () => {
-      const result = slugifyLLMResponse("alpha beta gamma delta epsilon");
+      const result = slugifyLLMResponse(TRAILING_DASH_INPUT);
       expect(result).not.toBeNull();
       expect(result!.length).toBeLessThanOrEqual(30);
     });
