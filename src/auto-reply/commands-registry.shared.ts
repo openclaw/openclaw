@@ -824,6 +824,27 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
         },
       ],
     }),
+    defineChatCommand({
+      key: "octo",
+      nativeName: "octo",
+      description: "Octopus Orchestrator — manage multi-agent missions.",
+      textAlias: "/octo",
+      category: "management",
+      acceptsArgs: true,
+      args: [
+        {
+          name: "action",
+          description: "status | mission | arm | grip | claims | events | doctor",
+          type: "string",
+        },
+        {
+          name: "subaction",
+          description: "Subcommand (e.g. create, list, show, pause, abort)",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+    }),
   ];
 
   registerAlias(commands, "whoami", "/id");
