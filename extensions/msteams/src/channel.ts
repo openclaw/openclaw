@@ -36,6 +36,7 @@ import type { ProbeMSTeamsResult } from "./probe.js";
 import {
   normalizeMSTeamsMessagingTarget,
   normalizeMSTeamsUserInput,
+  looksLikeMSTeamsTargetId,
   parseMSTeamsConversationId,
   parseMSTeamsTeamChannelInput,
   resolveMSTeamsChannelAllowlist,
@@ -329,6 +330,9 @@ function describeMSTeamsMessageTool({
           "react",
           "reactions",
           "search",
+          "member-info",
+          "channel-list",
+          "channel-info",
           "addParticipant",
           "removeParticipant",
           "renameGroup",
@@ -389,21 +393,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         normalizeTarget: normalizeMSTeamsMessagingTarget,
         resolveOutboundSessionRoute: (params) => resolveMSTeamsOutboundSessionRoute(params),
         targetResolver: {
-          looksLikeId: (raw) => {
-            const trimmed = raw.trim();
-            if (!trimmed) {
-              return false;
-            }
-            if (/^conversation:/i.test(trimmed)) {
-              return true;
-            }
-            if (/^user:/i.test(trimmed)) {
-              // Only treat as ID if the value after user: looks like a UUID
-              const id = trimmed.slice("user:".length).trim();
-              return /^[0-9a-fA-F-]{16,}$/.test(id);
-            }
-            return trimmed.includes("@thread");
-          },
+          looksLikeId: (raw) => looksLikeMSTeamsTargetId(raw),
           hint: "<conversationId|user:ID|conversation:ID>",
         },
       },
@@ -627,6 +617,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                     readOptionalTrimmedString(ctx.params, "filename") ??
                     readOptionalTrimmedString(ctx.params, "title"),
                   mediaLocalRoots: ctx.mediaLocalRoots,
+                  mediaReadFile: ctx.mediaReadFile,
                 });
                 return jsonActionResultWithDetails(
                   {
