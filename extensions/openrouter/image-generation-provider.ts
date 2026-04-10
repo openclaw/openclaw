@@ -11,8 +11,7 @@ import {
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-
-const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+import { OPENROUTER_BASE_URL, resolveConfiguredBaseUrl } from "./openrouter-config.js";
 const DEFAULT_OPENROUTER_IMAGE_MODEL = "google/gemini-2.5-flash-image";
 const OPENROUTER_IMAGE_MODELS = [
   "google/gemini-2.5-flash-image",
@@ -58,10 +57,11 @@ function extractBase64FromDataUrl(dataUrl: string): { buffer: Buffer; mimeType: 
   };
 }
 
-function resolveConfiguredBaseUrl(
-  cfg: { models?: { providers?: Record<string, { baseUrl?: string }> } } | undefined,
-): string | undefined {
-  return normalizeOptionalString(cfg?.models?.providers?.openrouter?.baseUrl);
+function resolveFileExtension(mimeType: string): string {
+  if (mimeType.includes("jpeg")) return "jpg";
+  if (mimeType.includes("webp")) return "webp";
+  if (mimeType.includes("gif")) return "gif";
+  return "png";
 }
 
 export function buildOpenrouterImageGenerationProvider(): ImageGenerationProvider {
@@ -161,7 +161,7 @@ export function buildOpenrouterImageGenerationProvider(): ImageGenerationProvide
             return {
               buffer: parsed.buffer,
               mimeType: parsed.mimeType,
-              fileName: `image-${index + 1}.png`,
+              fileName: `image-${index + 1}.${resolveFileExtension(parsed.mimeType)}`,
             };
           })
           .filter((entry): entry is NonNullable<typeof entry> => entry !== null);

@@ -99,7 +99,11 @@ describe("openrouter music generation provider", () => {
     expect(result.tracks).toHaveLength(1);
     expect(result.tracks[0]?.mimeType).toBe("audio/mpeg");
     expect(result.tracks[0]?.fileName).toBe("track-1.mp3");
-    const expectedBuffer = Buffer.from(audioBase64Part1 + audioBase64Part2, "base64");
+    // Each base64 chunk is decoded individually then concatenated as raw bytes.
+    const expectedBuffer = Buffer.concat([
+      Buffer.from(audioBase64Part1, "base64"),
+      Buffer.from(audioBase64Part2, "base64"),
+    ]);
     expect(result.tracks[0]?.buffer).toEqual(expectedBuffer);
     expect(result.lyrics).toEqual(["Hello world"]);
     expect(result.model).toBe("openai/gpt-4o-audio-preview");

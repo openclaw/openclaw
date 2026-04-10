@@ -13,8 +13,7 @@ import {
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-
-const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+import { OPENROUTER_BASE_URL, resolveConfiguredBaseUrl } from "./openrouter-config.js";
 const DEFAULT_OPENROUTER_VIDEO_MODEL = "google/veo-3.1";
 const OPENROUTER_VIDEO_MODELS = ["google/veo-3.1"] as const;
 const POLL_INTERVAL_MS = 5_000;
@@ -46,12 +45,6 @@ type OpenRouterVideoPollResponse = {
     is_byok?: boolean;
   };
 };
-
-function resolveConfiguredBaseUrl(
-  cfg: { models?: { providers?: Record<string, { baseUrl?: string }> } } | undefined,
-): string | undefined {
-  return normalizeOptionalString(cfg?.models?.providers?.openrouter?.baseUrl);
-}
 
 function toBase64DataUrl(buffer: Buffer, mimeType: string): string {
   return `data:${mimeType};base64,${buffer.toString("base64")}`;
@@ -117,13 +110,16 @@ async function downloadOpenRouterVideo(params: {
   fetchFn: typeof fetch;
   unsignedUrl?: string;
 }): Promise<GeneratedVideoAsset> {
+  const isUnsigned = Boolean(params.unsignedUrl);
   const url =
     params.unsignedUrl ?? `${params.baseUrl}/videos/${params.videoId}/content?index=0`;
+  // Unsigned URLs may point to third-party CDNs; omit auth headers to avoid leaking the API key.
+  const downloadHeaders = isUnsigned ? new Headers() : params.headers;
   const response = await fetchWithTimeout(
     url,
     {
       method: "GET",
-      headers: params.headers,
+      headers: downloadHeaders,
     },
     params.timeoutMs,
     params.fetchFn,

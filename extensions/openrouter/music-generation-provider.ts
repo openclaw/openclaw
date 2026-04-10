@@ -11,17 +11,11 @@ import {
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { OPENROUTER_BASE_URL, resolveConfiguredBaseUrl } from "./openrouter-config.js";
 
-const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const DEFAULT_OPENROUTER_MUSIC_MODEL = "openai/gpt-4o-audio-preview";
 const OPENROUTER_MUSIC_MODELS = ["openai/gpt-4o-audio-preview"] as const;
 const DEFAULT_TIMEOUT_MS = 120_000;
-
-function resolveConfiguredBaseUrl(
-  cfg: { models?: { providers?: Record<string, { baseUrl?: string }> } } | undefined,
-): string | undefined {
-  return normalizeOptionalString(cfg?.models?.providers?.openrouter?.baseUrl);
-}
 
 function buildMusicPrompt(req: MusicGenerationRequest): string {
   const parts = [req.prompt.trim()];
@@ -64,8 +58,9 @@ type SseAudioChunk = {
 
 async function collectStreamedAudio(
   response: Response,
-): Promise<{ audioBase64: string; transcript: string }> {
-  const audioChunks: string[] = [];
+): Promise<{ audioBuffer: Buffer; transcript: string }> {
+  // Decode each base64 chunk individually to avoid corruption from padding chars mid-string.
+  const audioBuffers: Buffer[] = [];
   const transcriptParts: string[] = [];
 
   const body = response.body;
@@ -108,7 +103,7 @@ async function collectStreamedAudio(
       }
       const data = audioDelta.data;
       if (typeof data === "string" && data.length > 0) {
-        audioChunks.push(data);
+        audioBuffers.push(Buffer.from(data, "base64"));
       }
       const transcript = audioDelta.transcript;
       if (typeof transcript === "string" && transcript.length > 0) {
@@ -118,7 +113,7 @@ async function collectStreamedAudio(
   }
 
   return {
-    audioBase64: audioChunks.join(""),
+    audioBuffer: Buffer.concat(audioBuffers),
     transcript: transcriptParts.join(""),
   };
 }
@@ -188,15 +183,15 @@ export function buildOpenrouterMusicGenerationProvider(): MusicGenerationProvide
       );
       await assertOkOrThrowHttpError(response, "OpenRouter music generation failed");
 
-      const { audioBase64, transcript } = await collectStreamedAudio(response);
-      if (!audioBase64) {
+      const { audioBuffer, transcript } = await collectStreamedAudio(response);
+      if (audioBuffer.length === 0) {
         throw new Error("OpenRouter music generation response missing audio data");
       }
 
       const mimeType = resolveOutputMimeType(audioFormat);
       const extension = audioFormat === "wav" ? "wav" : "mp3";
       const track: GeneratedMusicAsset = {
-        buffer: Buffer.from(audioBase64, "base64"),
+        buffer: audioBuffer,
         mimeType,
         fileName: `track-1.${extension}`,
       };

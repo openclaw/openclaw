@@ -87,7 +87,7 @@ describe("openrouter image generation provider", () => {
     expect(result.images).toHaveLength(1);
     expect(result.images[0]?.mimeType).toBe("image/png");
     expect(result.images[0]?.buffer.toString()).toBe("png-bytes");
-    expect(result.images[0]?.fileName).toBe("image-1.png");
+    expect(result.images[0]?.fileName).toBe("image-1.png"); // PNG from data URL MIME type
     expect(result.model).toBe("google/gemini-2.5-flash-image");
 
     expect(postJsonRequestMock).toHaveBeenCalledWith(
