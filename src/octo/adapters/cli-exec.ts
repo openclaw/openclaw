@@ -398,4 +398,29 @@ export class CliExecAdapter implements Adapter {
     }
     return session.alive ? "alive" : "dead";
   }
+
+  // ── onExit ─────────────────────────────────────────────────────────────
+  //
+  // Registers a callback that fires when the subprocess exits. Used by
+  // the arm spawn handler to cascade process exit → arm FSM transition.
+  // Without this, cli_exec arms have no exit detection (ProcessWatcher
+  // is tmux-specific and cannot monitor raw subprocesses).
+
+  onExit(sessionId: string, callback: (exitCode: number | null) => void): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return;
+    }
+
+    // If already exited, fire immediately.
+    if (!session.alive) {
+      callback(session.exitCode);
+      return;
+    }
+
+    // Otherwise, listen for exit.
+    session.process.once("exit", (code) => {
+      callback(code);
+    });
+  }
 }

@@ -40,6 +40,7 @@
 import { Value } from "@sinclair/typebox/value";
 import { isAdapterError, type SessionRef as AdapterSessionRef } from "../adapters/base.ts";
 import type { AdapterType } from "../adapters/base.ts";
+import { CliExecAdapter } from "../adapters/cli-exec.ts";
 import { createAdapter } from "../adapters/factory.ts";
 import { applyArmTransition, type ArmState } from "../head/arm-fsm.ts";
 import type { EventLogService } from "../head/event-log.ts";
@@ -530,7 +531,73 @@ export class OctoGatewayHandlers {
       }
     }
 
-    // Step 12 — return.
+    // Step 12 — cli_exec exit monitoring. For pty_tmux arms, ProcessWatcher
+    // handles exit detection via sentinel files. cli_exec arms use raw
+    // subprocesses with no tmux session, so we register an onExit callback
+    // directly on the adapter to transition the arm FSM on process exit.
+    if (adapter instanceof CliExecAdapter && adapterRef.session_id) {
+      adapter.onExit(adapterRef.session_id, async (exitCode) => {
+        try {
+          const arm = this.registry.getArm(arm_id);
+          if (!arm) {
+            return;
+          }
+          const terminalStates = new Set(["completed", "failed", "terminated", "archived"]);
+          if (terminalStates.has(arm.state)) {
+            return;
+          }
+
+          const targetState = exitCode === 0 ? "completed" : "failed";
+          const now = this.now();
+
+          // Drive starting → active first if needed.
+          let currentArm = arm;
+          if (currentArm.state === "starting") {
+            try {
+              const active = applyArmTransition(
+                { state: currentArm.state, updated_at: currentArm.updated_at },
+                "active",
+                { now, arm_id },
+              );
+              currentArm = this.registry.casUpdateArm(arm_id, currentArm.version, {
+                state: active.state,
+                updated_at: active.updated_at,
+              });
+            } catch {
+              // If transition fails, try to go directly to target state.
+            }
+          }
+
+          try {
+            const next = applyArmTransition(
+              { state: currentArm.state, updated_at: currentArm.updated_at },
+              targetState,
+              { now, arm_id },
+            );
+            this.registry.casUpdateArm(arm_id, currentArm.version, {
+              state: next.state,
+              updated_at: next.updated_at,
+            });
+
+            await this.eventLog.append({
+              schema_version: 1,
+              entity_type: "arm",
+              entity_id: arm_id,
+              event_type: targetState === "completed" ? "arm.completed" : "arm.failed",
+              ts: new Date(now).toISOString(),
+              actor: `node-agent:${this.nodeId}`,
+              payload: { exit_code: exitCode, adapter_type: "cli_exec" },
+            });
+          } catch {
+            // Best-effort — don't crash on FSM/CAS failures.
+          }
+        } catch {
+          // Swallow all errors in the exit callback.
+        }
+      });
+    }
+
+    // Step 13 — return.
     return { arm_id, session_ref };
   }
 
