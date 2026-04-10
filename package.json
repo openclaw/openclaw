@@ -877,6 +877,10 @@
       "types": "./dist/plugin-sdk/plugin-entry.d.ts",
       "default": "./dist/plugin-sdk/plugin-entry.js"
     },
+    "./plugin-sdk/privacy-runtime": {
+      "types": "./dist/plugin-sdk/privacy-runtime.d.ts",
+      "default": "./dist/plugin-sdk/privacy-runtime.js"
+    },
     "./plugin-sdk/provider-catalog-shared": {
       "types": "./dist/plugin-sdk/provider-catalog-shared.d.ts",
       "default": "./dist/plugin-sdk/provider-catalog-shared.js"

@@ -20,6 +20,7 @@ import type {
 } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
+import { redactPiiText } from "openclaw/plugin-sdk/privacy-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { isVerbose, logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -1135,6 +1136,14 @@ export async function maybeApplyTtsToPayload(params: {
   }
 
   textForAudio = stripMarkdown(textForAudio).trim();
+
+  // Privacy: redact PII from TTS text before it leaves the machine to
+  // the speech provider (ElevenLabs, OpenAI, Edge).
+  const ttsPrivacyCfg = params.cfg.privacy;
+  if (ttsPrivacyCfg?.enabled && ttsPrivacyCfg.pii?.enabled) {
+    textForAudio = redactPiiText(textForAudio, ttsPrivacyCfg);
+  }
+
   if (textForAudio.length < 10) {
     return nextPayload;
   }
