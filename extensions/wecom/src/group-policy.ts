@@ -5,9 +5,12 @@
  */
 
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { CHANNEL_ID } from "./const.js";
 import type { ResolvedWeComAccount, WeComConfig, WeComGroupConfig } from "./utils.js";
+
+interface GroupPolicyRuntime {
+  log?: (message: string) => void;
+}
 
 // ============================================================================
 // Check result types
@@ -127,7 +130,7 @@ export function checkGroupPolicy(params: {
   senderId: string;
   account: ResolvedWeComAccount;
   config: OpenClawConfig;
-  runtime: RuntimeEnv;
+  runtime: GroupPolicyRuntime;
 }): GroupPolicyCheckResult {
   const { chatId, senderId, account, runtime } = params;
   // Use account.config (already merged for multi-account), not top-level config.channels.wecom

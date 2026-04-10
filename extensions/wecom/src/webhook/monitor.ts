@@ -19,6 +19,7 @@ import {
   resolveWecomCommandAuthorization,
   buildWecomUnauthorizedCommandPrompt,
 } from "../shared/command-auth.js";
+import { toStr } from "../shared/to-str.js";
 import {
   truncateUtf8Bytes,
   appendDmContent,
@@ -45,7 +46,6 @@ import {
 import { wecomFetch } from "./http.js";
 import { getMonitorState } from "./state.js";
 import type { WecomWebhookTarget, WebhookInboundMessage } from "./types.js";
-import { toStr } from "../shared/to-str.js";
 import {
   STREAM_MAX_BYTES,
   BOT_WINDOW_MS,
@@ -99,9 +99,7 @@ export async function handleInboundMessage(
   }
 
   const userid = msgFilterData?.senderUserId ?? "";
-  const chatType = toStr(message.chattype)
-    .trim()
-    .toLowerCase();
+  const chatType = toStr(message.chattype).trim().toLowerCase();
   const chatId = msgFilterData?.chatId ?? message.chatid ?? "";
   // Original conversationKey format: wecom:{accountId}:{userid}:{chatId}
   // For single chat, chatId equals userid
@@ -446,11 +444,16 @@ export async function startAgentForStream(params: {
         try {
           // Validate path against allowed media roots
           const resolved = pathModule.resolve(p);
-          if (allowedRoots.length > 0 && !allowedRoots.some((r) => {
-            const root = pathModule.resolve(r);
-            return resolved === root || resolved.startsWith(root + pathModule.sep);
-          })) {
-            target.runtime.error?.(`[webhook] local-path: path ${p} outside allowed media roots, skipping`);
+          if (
+            allowedRoots.length > 0 &&
+            !allowedRoots.some((r) => {
+              const root = pathModule.resolve(r);
+              return resolved === root || resolved.startsWith(root + pathModule.sep);
+            })
+          ) {
+            target.runtime.error?.(
+              `[webhook] local-path: path ${p} outside allowed media roots, skipping`,
+            );
             continue;
           }
           const buf = await fs.readFile(resolved);
@@ -764,8 +767,7 @@ export async function startAgentForStream(params: {
       account: target.account,
       config,
       runtime: {
-        log: (msg) => target.runtime.log?.(msg),
-        error: (msg) => target.runtime.error?.(msg),
+        log: (msg: string) => target.runtime.log?.(msg),
       },
     });
     if (!groupPolicyResult.allowed) {
@@ -1006,11 +1008,16 @@ export async function startAgentForStream(params: {
                 const pathModule = await import("node:path");
                 const resolved = pathModule.resolve(p);
                 const roots = target.account.config.mediaLocalRoots ?? [];
-                if (roots.length > 0 && !roots.some((r) => {
-                  const root = pathModule.resolve(r);
-                  return resolved === root || resolved.startsWith(root + pathModule.sep);
-                })) {
-                  target.runtime.error?.(`[webhook] local-path: path ${p} outside allowed media roots, skipping`);
+                if (
+                  roots.length > 0 &&
+                  !roots.some((r) => {
+                    const root = pathModule.resolve(r);
+                    return resolved === root || resolved.startsWith(root + pathModule.sep);
+                  })
+                ) {
+                  target.runtime.error?.(
+                    `[webhook] local-path: path ${p} outside allowed media roots, skipping`,
+                  );
                   continue;
                 }
                 const buf = await fs.readFile(resolved);
@@ -1129,10 +1136,13 @@ export async function startAgentForStream(params: {
               const pathMod = await import("node:path");
               const resolved = pathMod.resolve(mPath);
               const roots = target.account.config.mediaLocalRoots ?? [];
-              if (roots.length > 0 && !roots.some((r) => {
-                const root = pathMod.resolve(r);
-                return resolved === root || resolved.startsWith(root + pathMod.sep);
-              })) {
+              if (
+                roots.length > 0 &&
+                !roots.some((r) => {
+                  const root = pathMod.resolve(r);
+                  return resolved === root || resolved.startsWith(root + pathMod.sep);
+                })
+              ) {
                 throw new Error(`Path "${mPath}" outside allowed media roots`);
               }
               buf = await fs.readFile(resolved);
@@ -1541,10 +1551,13 @@ async function agentDmMedia(params: {
     const pathMod = await import("node:path");
     const resolved = pathMod.resolve(mediaUrlOrPath);
     const roots = target.account.config.mediaLocalRoots ?? [];
-    if (roots.length > 0 && !roots.some((r) => {
-      const root = pathMod.resolve(r);
-      return resolved === root || resolved.startsWith(root + pathMod.sep);
-    })) {
+    if (
+      roots.length > 0 &&
+      !roots.some((r) => {
+        const root = pathMod.resolve(r);
+        return resolved === root || resolved.startsWith(root + pathMod.sep);
+      })
+    ) {
       throw new Error(`Path "${mediaUrlOrPath}" outside allowed media roots`);
     }
     buffer = await fs.readFile(resolved);

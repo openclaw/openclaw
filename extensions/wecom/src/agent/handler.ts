@@ -17,6 +17,7 @@ import {
   buildWecomUnauthorizedCommandPrompt,
   resolveWecomCommandAuthorization,
 } from "../shared/command-auth.js";
+import { toStr } from "../shared/to-str.js";
 import {
   extractMsgType,
   extractFromUser,
@@ -30,8 +31,6 @@ import {
 import type { ResolvedAgentAccount } from "../types/index.js";
 import type { WecomAgentInboundMessage } from "../types/index.js";
 import { sendText, downloadMedia, uploadMedia, sendMedia as sendAgentMedia } from "./api-client.js";
-
-import { toStr } from "../shared/to-str.js";
 function resolveWecomMediaMaxBytes(config: OpenClawConfig): number {
   return (
     (config.channels?.wecom?.media?.maxBytes as number | undefined) ??
@@ -173,14 +172,10 @@ export function shouldProcessAgentInboundMessage(params: {
   fromUser: string;
   eventType?: string;
 }): AgentInboundProcessDecision {
-  const msgType = toStr(params.msgType)
-    .trim()
-    .toLowerCase();
+  const msgType = toStr(params.msgType).trim().toLowerCase();
   const fromUser = toStr(params.fromUser).trim();
   const normalizedFromUser = fromUser.toLowerCase();
-  const eventType = toStr(params.eventType)
-    .trim()
-    .toLowerCase();
+  const eventType = toStr(params.eventType).trim().toLowerCase();
 
   if (msgType === "event") {
     return {
@@ -541,8 +536,12 @@ async function processAgentMessage(params: {
     core,
     cfg: config,
     accountConfig: {
-      dmPolicy: (accountConfig.dmPolicy as DmPolicyType) ?? (agent.config as Record<string, unknown>).dmPolicy as DmPolicyType,
-      allowFrom: (accountConfig.allowFrom as Array<string | number> | undefined) ?? (agent.config as Record<string, unknown>).allowFrom as Array<string | number> | undefined,
+      dmPolicy:
+        (accountConfig.dmPolicy as DmPolicyType) ??
+        ((agent.config as Record<string, unknown>).dmPolicy as DmPolicyType),
+      allowFrom:
+        (accountConfig.allowFrom as Array<string | number> | undefined) ??
+        ((agent.config as Record<string, unknown>).allowFrom as Array<string | number> | undefined),
     },
     rawBody: finalContent,
     senderUserId: fromUser,
@@ -566,7 +565,7 @@ async function processAgentMessage(params: {
       senderId: fromUser,
       account: resolvedAccount,
       config,
-      runtime: { log: (msg) => log?.(msg), error: (msg) => error?.(msg) },
+      runtime: { log: (msg: string) => log?.(msg) },
     });
     if (!groupPolicyResult.allowed) {
       log?.(`[wecom-agent] group ${peerId} not allowed by groupPolicy, skipping`);

@@ -239,7 +239,7 @@ export function createWeComMcpTool(accountId = "default") {
         try {
           const { getWeComRuntime } = await import("../runtime.js");
           const { resolveDefaultWeComAccountId } = await import("../accounts.js");
-          const cfg = getWeComRuntime().config.readConfigFile();
+          const cfg = getWeComRuntime().config.loadConfig();
           resolvedAccountId = resolveDefaultWeComAccountId(cfg);
         } catch {
           resolvedAccountId = accountId; // factory fallback
