@@ -4804,6 +4804,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     title: "Heartbeat Suppress Tool Error Warnings",
                     description: "Suppress tool error warning payloads during heartbeat runs.",
                   },
+                  timeoutSeconds: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                    title: "Heartbeat Timeout (Seconds)",
+                    description:
+                      "Maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use agents.defaults.timeoutSeconds.",
+                  },
                   lightContext: {
                     type: "boolean",
                   },
@@ -6046,8 +6054,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     },
                     suppressToolErrorWarnings: {
                       type: "boolean",
-                      title: "Agent Heartbeat Suppress Tool Error Warnings",
+                      title: "Heartbeat Suppress Tool Error Warnings",
                       description: "Suppress tool error warning payloads during heartbeat runs.",
+                    },
+                    timeoutSeconds: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                      title: "Heartbeat Timeout (Seconds)",
+                      description:
+                        "Per-agent maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to inherit the merged heartbeat/default agent timeout.",
                     },
                     lightContext: {
                       type: "boolean",
@@ -25420,6 +25436,19 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Suppress tool error warning payloads during heartbeat runs.",
       tags: ["automation"],
     },
+    "agents.list.*.heartbeat.suppressToolErrorWarnings": {
+      label: "Heartbeat Suppress Tool Error Warnings",
+      tags: ["automation"],
+    },
+    "agents.defaults.heartbeat.timeoutSeconds": {
+      label: "Heartbeat Timeout (Seconds)",
+      help: "Maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use agents.defaults.timeoutSeconds.",
+      tags: ["performance", "automation"],
+    },
+    "agents.list.*.heartbeat.timeoutSeconds": {
+      label: "Heartbeat Timeout (Seconds)",
+      tags: ["performance", "automation"],
+    },
     "agents.defaults.sandbox.browser.network": {
       label: "Sandbox Browser Network",
       help: "Docker network for sandbox browser containers (default: openclaw-sandbox-browser). Avoid bridge if you need stricter isolation.",
@@ -26482,6 +26511,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Agent Heartbeat Suppress Tool Error Warnings",
       help: "Suppress tool error warning payloads during heartbeat runs.",
       tags: ["automation"],
+    },
+    "agents.list[].heartbeat.timeoutSeconds": {
+      label: "Agent Heartbeat Timeout (Seconds)",
+      help: "Per-agent maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to inherit the merged heartbeat/default agent timeout.",
+      tags: ["performance", "automation"],
     },
     "agents.list[].sandbox.browser.network": {
       label: "Agent Sandbox Browser Network",
