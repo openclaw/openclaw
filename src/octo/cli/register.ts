@@ -137,6 +137,20 @@ export function registerOctoCli(program: Command) {
       process.exit(code);
     });
 
+  // ── top ──────────────────────────────────────────────────────────────────
+
+  octo
+    .command("top")
+    .description("Real-time TUI dashboard — missions, arms, grips, claims")
+    .option("--refresh <ms>", "Refresh interval in milliseconds", "2000")
+    .action(async (opts) => {
+      const { runOctoTop } = await import("./top/dashboard.js");
+      const code = await withRegistry(({ registry }) =>
+        runOctoTop(registry, { refreshMs: parseInt(opts.refresh, 10) }),
+      );
+      process.exit(code);
+    });
+
   // ── mission ─────────────────────────────────────────────────────────────
 
   const mission = octo.command("mission").description("Manage Octopus missions");
