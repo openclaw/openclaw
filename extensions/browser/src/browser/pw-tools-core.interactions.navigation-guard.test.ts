@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  getPwToolsCoreNavigationGuardMocks,
   getPwToolsCoreSessionMocks,
   installPwToolsCoreTestHooks,
   setPwToolsCoreCurrentPage,
@@ -120,12 +121,12 @@ describe("pw-tools-core interaction navigation guard", () => {
     }
   });
 
-  it("ignores subframe framenavigated events before the main frame navigates", async () => {
+  it("checks subframe navigations before a later main-frame navigation", async () => {
     vi.useFakeTimers();
     try {
       const listeners = new Set<(frame: object) => void>();
       const mainFrame = {};
-      const subframe = {};
+      const subframe = { url: () => "https://example.com/embed" };
       let currentUrl = "http://127.0.0.1:9222/json/version";
       const click = vi.fn(async () => {
         setTimeout(() => {
@@ -169,10 +170,19 @@ describe("pw-tools-core interaction navigation guard", () => {
       expect(
         getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely,
       ).not.toHaveBeenCalled();
+      expect(
+        getPwToolsCoreNavigationGuardMocks().assertBrowserNavigationResultAllowed,
+      ).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(10);
       await task;
 
+      expect(
+        getPwToolsCoreNavigationGuardMocks().assertBrowserNavigationResultAllowed,
+      ).toHaveBeenCalledWith({
+        ssrfPolicy: { allowPrivateNetwork: false },
+        url: "https://example.com/embed",
+      });
       expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
         {
           cdpUrl: "http://127.0.0.1:18792",
@@ -182,6 +192,178 @@ describe("pw-tools-core interaction navigation guard", () => {
           targetId: "T1",
         },
       );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("blocks subframe-only navigation to a private URL during the post-action grace window", async () => {
+    vi.useFakeTimers();
+    try {
+      const listeners = new Set<(frame: object) => void>();
+      const mainFrame = {};
+      const subframe = { url: () => "http://169.254.169.254/latest/meta-data/" };
+      const click = vi.fn(async () => {
+        setTimeout(() => {
+          for (const listener of listeners) {
+            listener(subframe);
+          }
+        }, 10);
+      });
+      const page = {
+        mainFrame: vi.fn(() => mainFrame),
+        on: vi.fn((event: string, listener: (frame: object) => void) => {
+          if (event === "framenavigated") {
+            listeners.add(listener);
+          }
+        }),
+        off: vi.fn((event: string, listener: (frame: object) => void) => {
+          if (event === "framenavigated") {
+            listeners.delete(listener);
+          }
+        }),
+        url: vi.fn(() => "https://attacker.example.com/page"),
+      };
+      setPwToolsCoreCurrentRefLocator({ click });
+      setPwToolsCoreCurrentPage(page);
+
+      const blocked = new Error("SSRF blocked: private network");
+      getPwToolsCoreNavigationGuardMocks().assertBrowserNavigationResultAllowed.mockRejectedValueOnce(
+        blocked,
+      );
+
+      const task = mod.clickViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        ref: "1",
+        ssrfPolicy: { allowPrivateNetwork: false },
+      });
+      const rejection = expect(task).rejects.toThrow("SSRF blocked: private network");
+
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.advanceTimersByTimeAsync(240);
+      await rejection;
+      expect(
+        getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely,
+      ).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not stop watching for a later main-frame navigation after a harmless subframe hop", async () => {
+    vi.useFakeTimers();
+    try {
+      const listeners = new Set<(frame: object) => void>();
+      const mainFrame = {};
+      const subframe = { url: () => "about:blank" };
+      let currentUrl = "http://127.0.0.1:9222/json/version";
+      const click = vi.fn(async () => {
+        setTimeout(() => {
+          for (const listener of listeners) {
+            listener(subframe);
+          }
+        }, 10);
+        setTimeout(() => {
+          currentUrl = "http://127.0.0.1:9222/json/list";
+          for (const listener of listeners) {
+            listener(mainFrame);
+          }
+        }, 20);
+      });
+      const page = {
+        mainFrame: vi.fn(() => mainFrame),
+        on: vi.fn((event: string, listener: (frame: object) => void) => {
+          if (event === "framenavigated") {
+            listeners.add(listener);
+          }
+        }),
+        off: vi.fn((event: string, listener: (frame: object) => void) => {
+          if (event === "framenavigated") {
+            listeners.delete(listener);
+          }
+        }),
+        url: vi.fn(() => currentUrl),
+      };
+      setPwToolsCoreCurrentRefLocator({ click });
+      setPwToolsCoreCurrentPage(page);
+
+      const task = mod.clickViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        ref: "1",
+        ssrfPolicy: { allowPrivateNetwork: false },
+      });
+
+      await vi.advanceTimersByTimeAsync(20);
+      await task;
+
+      expect(
+        getPwToolsCoreNavigationGuardMocks().assertBrowserNavigationResultAllowed,
+      ).not.toHaveBeenCalled();
+      expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
+        {
+          cdpUrl: "http://127.0.0.1:18792",
+          page,
+          response: null,
+          ssrfPolicy: { allowPrivateNetwork: false },
+          targetId: "T1",
+        },
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("checks delayed subframe navigations in the action-error recovery path", async () => {
+    vi.useFakeTimers();
+    try {
+      const listeners = new Set<(frame: object) => void>();
+      const mainFrame = {};
+      const subframe = { url: () => "http://169.254.169.254/latest/meta-data/" };
+      const page = {
+        mainFrame: vi.fn(() => mainFrame),
+        evaluate: vi.fn(async () => {
+          setTimeout(() => {
+            for (const listener of listeners) {
+              listener(subframe);
+            }
+          }, 10);
+          throw new Error("evaluate failed");
+        }),
+        on: vi.fn((event: string, listener: (frame: object) => void) => {
+          if (event === "framenavigated") {
+            listeners.add(listener);
+          }
+        }),
+        off: vi.fn((event: string, listener: (frame: object) => void) => {
+          if (event === "framenavigated") {
+            listeners.delete(listener);
+          }
+        }),
+        url: vi.fn(() => "https://attacker.example.com/page"),
+      };
+      setPwToolsCoreCurrentPage(page);
+
+      const blocked = new Error("SSRF blocked: private network");
+      getPwToolsCoreNavigationGuardMocks().assertBrowserNavigationResultAllowed.mockRejectedValueOnce(
+        blocked,
+      );
+
+      const task = mod.evaluateViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        fn: "() => 1",
+        ssrfPolicy: { allowPrivateNetwork: false },
+      });
+      const rejection = expect(task).rejects.toThrow("SSRF blocked: private network");
+
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.advanceTimersByTimeAsync(240);
+      await rejection;
+      expect(
+        getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely,
+      ).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

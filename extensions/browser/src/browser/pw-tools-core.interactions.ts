@@ -12,6 +12,10 @@ import {
 } from "./act-policy.js";
 import type { BrowserActRequest, BrowserFormField } from "./client-actions.types.js";
 import { DEFAULT_FILL_FIELD_TYPE } from "./form-fields.js";
+import {
+  assertBrowserNavigationResultAllowed,
+  withBrowserNavigationPolicy,
+} from "./navigation-guard.js";
 import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
 import {
   assertPageNavigationCompletedSafely,
@@ -119,20 +123,75 @@ function isMainFrameNavigation(page: NavigationObservablePage, frame: Frame): bo
   return frame === page.mainFrame();
 }
 
+async function assertSubframeNavigationAllowed(
+  frame: Frame,
+  ssrfPolicy?: SsrFPolicy,
+): Promise<void> {
+  if (!ssrfPolicy) {
+    return;
+  }
+
+  let frameUrl: string;
+  try {
+    frameUrl = frame.url();
+  } catch {
+    return;
+  }
+  if (!frameUrl.startsWith("http://") && !frameUrl.startsWith("https://")) {
+    // Non-network frame URLs like about:blank and about:srcdoc do not cross the
+    // browser SSRF boundary, so they should not trigger the navigation policy.
+    return;
+  }
+
+  await assertBrowserNavigationResultAllowed({
+    url: frameUrl,
+    ...withBrowserNavigationPolicy(ssrfPolicy),
+  });
+}
+
+type ObservedDelayedNavigations = {
+  mainFrameNavigated: boolean;
+  subframes: Frame[];
+};
+
+async function assertObservedDelayedNavigations(opts: {
+  cdpUrl: string;
+  page: Page;
+  ssrfPolicy?: SsrFPolicy;
+  targetId?: string;
+  observed: ObservedDelayedNavigations;
+}): Promise<void> {
+  for (const frame of opts.observed.subframes) {
+    await assertSubframeNavigationAllowed(frame, opts.ssrfPolicy);
+  }
+  if (!opts.observed.mainFrameNavigated) {
+    return;
+  }
+  await assertPageNavigationCompletedSafely({
+    cdpUrl: opts.cdpUrl,
+    page: opts.page,
+    response: null,
+    ssrfPolicy: opts.ssrfPolicy,
+    targetId: opts.targetId,
+  });
+}
+
 function observeDelayedInteractionNavigation(
   page: NavigationObservablePage,
   previousUrl: string,
-): Promise<boolean> {
+): Promise<ObservedDelayedNavigations> {
   if (didCrossDocumentUrlChange(page, previousUrl)) {
-    return Promise.resolve(true);
+    return Promise.resolve({ mainFrameNavigated: true, subframes: [] });
   }
   if (typeof page.on !== "function" || typeof page.off !== "function") {
-    return Promise.resolve(false);
+    return Promise.resolve({ mainFrameNavigated: false, subframes: [] });
   }
 
-  return new Promise<boolean>((resolve) => {
+  return new Promise<ObservedDelayedNavigations>((resolve) => {
+    const subframes: Frame[] = [];
     const onFrameNavigated = (frame: Frame) => {
       if (!isMainFrameNavigation(page, frame)) {
+        subframes.push(frame);
         return;
       }
       // Use isHashOnlyNavigation rather than !didCrossDocumentUrlChange: the
@@ -142,11 +201,14 @@ function observeDelayedInteractionNavigation(
         return;
       }
       cleanup();
-      resolve(true);
+      resolve({ mainFrameNavigated: true, subframes });
     };
     const timeout = setTimeout(() => {
       cleanup();
-      resolve(didCrossDocumentUrlChange(page, previousUrl));
+      resolve({
+        mainFrameNavigated: didCrossDocumentUrlChange(page, previousUrl),
+        subframes,
+      });
     }, INTERACTION_NAVIGATION_GRACE_MS);
     const cleanup = () => {
       clearTimeout(timeout);
@@ -196,8 +258,10 @@ function scheduleDelayedInteractionNavigationGuard(opts: {
       }
       resolve();
     };
+    const subframes: Frame[] = [];
     const onFrameNavigated = (frame: Frame) => {
       if (!isMainFrameNavigation(page, frame)) {
+        subframes.push(frame);
         return;
       }
       // Use isHashOnlyNavigation rather than !didCrossDocumentUrlChange: the
@@ -207,16 +271,26 @@ function scheduleDelayedInteractionNavigationGuard(opts: {
         return;
       }
       cleanup();
-      void assertPageNavigationCompletedSafely({
+      void assertObservedDelayedNavigations({
         cdpUrl: opts.cdpUrl,
         page: opts.page,
-        response: null,
         ssrfPolicy: opts.ssrfPolicy,
         targetId: opts.targetId,
+        observed: { mainFrameNavigated: true, subframes },
       }).then(() => settle(), settle);
     };
     const timeout = setTimeout(() => {
-      settle();
+      cleanup();
+      void assertObservedDelayedNavigations({
+        cdpUrl: opts.cdpUrl,
+        page: opts.page,
+        ssrfPolicy: opts.ssrfPolicy,
+        targetId: opts.targetId,
+        observed: {
+          mainFrameNavigated: didCrossDocumentUrlChange(page, opts.previousUrl),
+          subframes,
+        },
+      }).then(() => settle(), settle);
     }, INTERACTION_NAVIGATION_GRACE_MS);
     const cleanup = () => {
       clearTimeout(timeout);
@@ -248,8 +322,10 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
   // slow interactions, silently bypassing the SSRF guard.
   const navPage = opts.page as unknown as NavigationObservablePage;
   let navigatedDuringAction = false;
+  const subframeNavigationsDuringAction: Frame[] = [];
   const onFrameNavigated = (frame: Frame) => {
     if (!isMainFrameNavigation(navPage, frame)) {
+      subframeNavigationsDuringAction.push(frame);
       return;
     }
     // Use isHashOnlyNavigation rather than didCrossDocumentUrlChange: the event
@@ -278,6 +354,10 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
   const navigationObserved =
     navigatedDuringAction || didCrossDocumentUrlChange(opts.page, opts.previousUrl);
 
+  for (const frame of subframeNavigationsDuringAction) {
+    await assertSubframeNavigationAllowed(frame, opts.ssrfPolicy);
+  }
+
   if (navigationObserved) {
     await assertPageNavigationCompletedSafely({
       cdpUrl: opts.cdpUrl,
@@ -290,17 +370,14 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
     // Preserve the action-error path semantics: if a rejected click/evaluate still
     // triggers a delayed navigation, the SSRF block must win over the original
     // action error instead of surfacing a stale interaction failure.
-    const delayedNavigationObserved = await observeDelayedInteractionNavigation(
-      opts.page,
-      opts.previousUrl,
-    );
-    if (delayedNavigationObserved) {
-      await assertPageNavigationCompletedSafely({
+    const observed = await observeDelayedInteractionNavigation(opts.page, opts.previousUrl);
+    if (observed.mainFrameNavigated || observed.subframes.length > 0) {
+      await assertObservedDelayedNavigations({
         cdpUrl: opts.cdpUrl,
         page: opts.page,
-        response: null,
         ssrfPolicy: opts.ssrfPolicy,
         targetId: opts.targetId,
+        observed,
       });
     }
   } else {

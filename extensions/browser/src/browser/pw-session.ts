@@ -704,6 +704,32 @@ function isTopLevelNavigationRequest(page: Page, request: Request): boolean {
   }
 }
 
+function isSubframeDocumentNavigationRequest(page: Page, request: Request): boolean {
+  let sameMainFrame = false;
+  try {
+    sameMainFrame = request.frame() === page.mainFrame();
+  } catch {
+    return false;
+  }
+  if (sameMainFrame) {
+    return false;
+  }
+
+  try {
+    if (request.isNavigationRequest()) {
+      return true;
+    }
+  } catch {
+    // Fall through to the resource-type check.
+  }
+
+  try {
+    return request.resourceType() === "document";
+  } catch {
+    return false;
+  }
+}
+
 function isPolicyDenyNavigationError(err: unknown): boolean {
   return err instanceof SsrFBlockedError || err instanceof InvalidBrowserNavigationUrlError;
 }
@@ -769,7 +795,10 @@ export async function gotoPageWithNavigationGuard(opts: {
       await route.abort().catch(() => {});
       return;
     }
-    if (!isTopLevelNavigationRequest(opts.page, request)) {
+    const isTopLevel = isTopLevelNavigationRequest(opts.page, request);
+    const isSubframeDocument =
+      !isTopLevel && isSubframeDocumentNavigationRequest(opts.page, request);
+    if (!isTopLevel && !isSubframeDocument) {
       await route.continue();
       return;
     }
@@ -780,7 +809,9 @@ export async function gotoPageWithNavigationGuard(opts: {
       });
     } catch (err) {
       if (isPolicyDenyNavigationError(err)) {
-        blockedError = err;
+        if (isTopLevel) {
+          blockedError = err;
+        }
         await route.abort().catch(() => {});
         return;
       }

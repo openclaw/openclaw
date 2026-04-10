@@ -126,6 +126,7 @@ async function dispatchMockNavigation(params: {
   getRouteHandler: () => MockRouteHandler | null;
   mainFrame: object;
   url: string;
+  frame?: object;
   isNavigationRequest?: boolean;
   resourceType?: string;
   route?: Partial<MockRoute>;
@@ -137,7 +138,7 @@ async function dispatchMockNavigation(params: {
   const { resourceType } = params;
   await handler(createMockRoute(params.route), {
     isNavigationRequest: () => params.isNavigationRequest ?? true,
-    frame: () => params.mainFrame,
+    frame: () => params.frame ?? params.mainFrame,
     ...(resourceType ? { resourceType: () => resourceType } : {}),
     url: () => params.url,
   });
@@ -235,6 +236,41 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
 
     expect(pageGoto).toHaveBeenCalledTimes(1);
     expect(pageClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts private subframe document hops without quarantining the page", async () => {
+    const { pageGoto, pageClose, getRouteHandler, mainFrame } = installBrowserMocks();
+    const subframe = {};
+    const subframeRoute = createMockRoute();
+    pageGoto.mockImplementationOnce(async () => {
+      await dispatchMockNavigation({
+        getRouteHandler,
+        mainFrame,
+        url: "https://93.184.216.34/start",
+      });
+      await dispatchMockNavigation({
+        getRouteHandler,
+        mainFrame,
+        frame: subframe,
+        url: "http://127.0.0.1:18080/internal-hop",
+        route: subframeRoute,
+      });
+      return {
+        request: () => ({
+          url: () => "https://93.184.216.34/start",
+          redirectedFrom: () => null,
+        }),
+      };
+    });
+
+    const created = await createPageViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      url: "https://93.184.216.34/start",
+    });
+
+    expect(created.targetId).toBe("TARGET_1");
+    expect(subframeRoute.abort).toHaveBeenCalledTimes(1);
+    expect(pageClose).not.toHaveBeenCalled();
   });
 
   it("preserves the created tab on ordinary navigation failure", async () => {
