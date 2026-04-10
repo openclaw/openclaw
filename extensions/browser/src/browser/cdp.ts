@@ -187,7 +187,6 @@ export async function createTargetViaCdp(opts: {
     wsUrl = opts.cdpUrl;
   } else {
     // Standard HTTP(S) CDP endpoint — discover WebSocket URL via /json/version.
-    await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
     const version = await fetchJson<{ webSocketDebuggerUrl?: string }>(
       appendCdpPath(opts.cdpUrl, "/json/version"),
       1500,

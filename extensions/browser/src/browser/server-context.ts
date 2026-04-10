@@ -87,6 +87,7 @@ function createProfileContext(
     profile,
     state,
     getProfileState,
+    getSsrFPolicy: () => state().resolved.ssrfPolicy,
     ensureBrowserAvailable,
     listTabs,
     openTab,
