@@ -2,8 +2,29 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { __testing } from "./telegram-live.runtime.js";
 
+const fetchWithSsrFGuardMock = vi.hoisted(() =>
+  vi.fn(async (params: { url: string; init?: RequestInit; signal?: AbortSignal }) => ({
+    response: await fetch(params.url, {
+      ...params.init,
+      signal: params.signal,
+    }),
+    release: async () => {},
+  })),
+);
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
+    "openclaw/plugin-sdk/ssrf-runtime",
+  );
+  return {
+    ...actual,
+    fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+  };
+});
+
 describe("telegram live qa runtime", () => {
   afterEach(() => {
+    fetchWithSsrFGuardMock.mockClear();
     vi.unstubAllGlobals();
   });
 
