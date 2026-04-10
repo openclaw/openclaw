@@ -35,6 +35,18 @@ export type AgentBootstrapHookEvent = InternalHookEvent & {
   context: AgentBootstrapHookContext;
 };
 
+export type AgentProviderTrippedHookContext = {
+  provider: string;
+  reason: string;
+  model?: string;
+};
+
+export type AgentProviderTrippedHookEvent = InternalHookEvent & {
+  type: "agent";
+  action: "provider_tripped";
+  context: AgentProviderTrippedHookContext;
+};
+
 export type GatewayStartupHookContext = {
   cfg?: OpenClawConfig;
   deps?: CliDeps;

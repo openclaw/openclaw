@@ -812,7 +812,7 @@ function classifyFailoverClassificationFromMessage(
     return toReasonClassification("billing");
   }
   if (isPeriodicUsageLimitErrorMessage(raw)) {
-    return toReasonClassification(isBillingErrorMessage(raw) ? "billing" : "rate_limit");
+    return toReasonClassification("quota_exhausted");
   }
   if (isRateLimitErrorMessage(raw)) {
     return toReasonClassification("rate_limit");

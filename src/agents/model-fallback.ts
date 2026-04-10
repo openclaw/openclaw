@@ -743,7 +743,7 @@ function resolveCooldownDecision(params: {
   // 402 might have been misclassified. Probe single-provider setups on the
   // standard throttle so they can recover without a restart; when fallbacks
   // exist, only probe near cooldown expiry so the fallback chain stays preferred.
-  if (inferredReason === "billing") {
+  if (inferredReason === "billing" || inferredReason === "quota_exhausted") {
     const shouldProbeSingleProviderBilling =
       params.isPrimary &&
       !params.hasFallbackCandidates &&
