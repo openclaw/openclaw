@@ -17,6 +17,7 @@ import { extractHandleFromChatGuid, normalizeBlueBubblesHandle } from "./targets
 import {
   blueBubblesFetchWithTimeout,
   buildBlueBubblesApiUrl,
+  type BlueBubblesSendMethod,
   type BlueBubblesSendTarget,
   type SsrFPolicy,
 } from "./types.js";
@@ -29,6 +30,7 @@ export type BlueBubblesSendOpts = {
   serverUrl?: string;
   password?: string;
   accountId?: string;
+  sendMethod?: BlueBubblesSendMethod;
   timeoutMs?: number;
   cfg?: OpenClawConfig;
   /** Message GUID to reply to (reply threading) */
@@ -337,6 +339,7 @@ export async function createChatForHandle(params: {
   password: string;
   address: string;
   message?: string;
+  sendMethod?: BlueBubblesSendMethod;
   timeoutMs?: number;
   allowPrivateNetwork?: boolean;
 }): Promise<{ chatGuid: string | null; messageId: string }> {
@@ -349,6 +352,7 @@ export async function createChatForHandle(params: {
     addresses: [params.address],
     message: params.message ?? "",
     tempGuid: `temp-${crypto.randomUUID()}`,
+    ...(params.sendMethod ? { method: params.sendMethod } : {}),
   };
   const res = await blueBubblesFetchWithTimeout(
     url,
@@ -421,6 +425,7 @@ async function createNewChatWithMessage(params: {
   password: string;
   address: string;
   message: string;
+  sendMethod?: BlueBubblesSendMethod;
   timeoutMs?: number;
   allowPrivateNetwork?: boolean;
 }): Promise<BlueBubblesSendResult> {
@@ -429,6 +434,7 @@ async function createNewChatWithMessage(params: {
     password: params.password,
     address: params.address,
     message: params.message,
+    sendMethod: params.sendMethod,
     timeoutMs: params.timeoutMs,
     allowPrivateNetwork: params.allowPrivateNetwork,
   });
@@ -450,12 +456,14 @@ export async function sendMessageBlueBubbles(
     throw new Error("BlueBubbles send requires text (message was empty after markdown removal)");
   }
 
-  const { baseUrl, password, accountId, allowPrivateNetwork } = resolveBlueBubblesServerAccount({
-    cfg: opts.cfg ?? {},
-    accountId: opts.accountId,
-    serverUrl: opts.serverUrl,
-    password: opts.password,
-  });
+  const { baseUrl, password, accountId, allowPrivateNetwork, sendMethod } =
+    resolveBlueBubblesServerAccount({
+      cfg: opts.cfg ?? {},
+      accountId: opts.accountId,
+      sendMethod: opts.sendMethod,
+      serverUrl: opts.serverUrl,
+      password: opts.password,
+    });
   const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
 
   const target = resolveBlueBubblesSendTarget(to);
@@ -475,6 +483,7 @@ export async function sendMessageBlueBubbles(
         password,
         address: target.address,
         message: strippedText,
+        sendMethod,
         timeoutMs: opts.timeoutMs,
         allowPrivateNetwork,
       });
@@ -504,8 +513,9 @@ export async function sendMessageBlueBubbles(
     tempGuid: crypto.randomUUID(),
     message: strippedText,
   };
-  if (privateApiDecision.canUsePrivateApi) {
-    payload.method = "private-api";
+  const deliveryMethod = privateApiDecision.canUsePrivateApi ? "private-api" : sendMethod;
+  if (deliveryMethod) {
+    payload.method = deliveryMethod;
   }
 
   // Add reply threading support

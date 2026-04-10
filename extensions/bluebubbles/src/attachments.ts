@@ -22,6 +22,7 @@ import {
   blueBubblesFetchWithTimeout,
   buildBlueBubblesApiUrl,
   type BlueBubblesAttachment,
+  type BlueBubblesSendMethod,
   type SsrFPolicy,
 } from "./types.js";
 
@@ -33,6 +34,7 @@ export type BlueBubblesAttachmentOpts = {
   serverUrl?: string;
   password?: string;
   accountId?: string;
+  sendMethod?: BlueBubblesSendMethod;
   timeoutMs?: number;
   cfg?: OpenClawConfig;
 };
@@ -170,7 +172,7 @@ export async function sendBlueBubblesAttachment(params: {
   const fallbackName = wantsVoice ? "Audio Message" : "attachment";
   filename = sanitizeFilename(filename, fallbackName);
   contentType = normalizeOptionalString(contentType);
-  const { baseUrl, password, accountId, allowPrivateNetwork } = resolveAccount(opts);
+  const { baseUrl, password, accountId, allowPrivateNetwork, sendMethod } = resolveAccount(opts);
   const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
   const privateApiEnabled = isBlueBubblesPrivateApiStatusEnabled(privateApiStatus);
 
@@ -209,6 +211,7 @@ export async function sendBlueBubblesAttachment(params: {
         baseUrl,
         password,
         address: target.address,
+        sendMethod,
         timeoutMs: opts.timeoutMs,
         allowPrivateNetwork,
       });
@@ -265,8 +268,10 @@ export async function sendBlueBubblesAttachment(params: {
   addField("chatGuid", chatGuid);
   addField("name", filename);
   addField("tempGuid", `temp-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`);
-  if (privateApiEnabled) {
-    addField("method", "private-api");
+  const trimmedReplyTo = replyToMessageGuid?.trim();
+  const deliveryMethod = trimmedReplyTo && privateApiEnabled ? "private-api" : sendMethod;
+  if (deliveryMethod) {
+    addField("method", deliveryMethod);
   }
 
   // Add isAudioMessage flag for voice memos
@@ -274,7 +279,6 @@ export async function sendBlueBubblesAttachment(params: {
     addField("isAudioMessage", "true");
   }
 
-  const trimmedReplyTo = replyToMessageGuid?.trim();
   if (trimmedReplyTo && privateApiEnabled) {
     addField("selectedMessageGuid", trimmedReplyTo);
     addField("partIndex", typeof replyToPartIndex === "number" ? String(replyToPartIndex) : "0");

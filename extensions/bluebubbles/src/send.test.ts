@@ -456,6 +456,28 @@ describe("send", () => {
       expect(body.method).toBeUndefined();
     });
 
+    it("uses configured apple-script send method for plain sends", async () => {
+      mockResolvedHandleTarget();
+      mockSendResponse({ data: { guid: "msg-apple-script-123" } });
+
+      const result = await sendMessageBlueBubbles("+15551234567", "Hello world!", {
+        serverUrl: "http://localhost:1234",
+        password: "test",
+        cfg: {
+          channels: {
+            bluebubbles: {
+              sendMethod: "apple-script",
+            },
+          },
+        },
+      });
+
+      expect(result.messageId).toBe("msg-apple-script-123");
+      const sendCall = mockFetch.mock.calls[1];
+      const body = JSON.parse(sendCall[1].body);
+      expect(body.method).toBe("apple-script");
+    });
+
     it("auto-enables private-network fetches for loopback serverUrl when allowPrivateNetwork is not set", async () => {
       const policies: unknown[] = [];
       installSsrFPolicyCapture(policies);
@@ -550,6 +572,27 @@ describe("send", () => {
       expect(body.message).toBe("Hello new chat");
     });
 
+    it("uses configured apple-script send method when creating a new chat", async () => {
+      mockNewChatSendResponse("new-msg-apple-script");
+
+      const result = await sendMessageBlueBubbles("+15550009999", "Hello new chat", {
+        serverUrl: "http://localhost:1234",
+        password: "test",
+        cfg: {
+          channels: {
+            bluebubbles: {
+              sendMethod: "apple-script",
+            },
+          },
+        },
+      });
+
+      expect(result.messageId).toBe("new-msg-apple-script");
+      const createCall = mockFetch.mock.calls[1];
+      const body = JSON.parse(createCall[1].body);
+      expect(body.method).toBe("apple-script");
+    });
+
     it("throws when creating a new chat requires Private API", async () => {
       mockFetch
         .mockResolvedValueOnce({
@@ -593,6 +636,34 @@ describe("send", () => {
       expect(body.method).toBe("private-api");
       expect(body.selectedMessageGuid).toBe("reply-guid-123");
       expect(body.partIndex).toBe(1);
+    });
+
+    it("prefers private-api over configured apple-script for reply threading", async () => {
+      mockBlueBubblesPrivateApiStatusOnce(
+        privateApiStatusMock,
+        BLUE_BUBBLES_PRIVATE_API_STATUS.enabled,
+      );
+      mockResolvedHandleTarget();
+      mockSendResponse({ data: { guid: "msg-uuid-124-override" } });
+
+      const result = await sendMessageBlueBubbles("+15551234567", "Replying", {
+        serverUrl: "http://localhost:1234",
+        password: "test",
+        replyToMessageGuid: "reply-guid-123",
+        cfg: {
+          channels: {
+            bluebubbles: {
+              sendMethod: "apple-script",
+            },
+          },
+        },
+      });
+
+      expect(result.messageId).toBe("msg-uuid-124-override");
+      const sendCall = mockFetch.mock.calls[1];
+      const body = JSON.parse(sendCall[1].body);
+      expect(body.method).toBe("private-api");
+      expect(body.selectedMessageGuid).toBe("reply-guid-123");
     });
 
     it("downgrades threaded reply to plain send when private API is disabled", async () => {

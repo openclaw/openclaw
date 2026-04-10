@@ -40,6 +40,8 @@ const bluebubblesNetworkSchema = z
   .strict()
   .optional();
 
+const bluebubblesSendMethodSchema = z.enum(["apple-script", "private-api"]).optional();
+
 const bluebubblesAccountSchema = z
   .object({
     name: z.string().optional(),
@@ -60,6 +62,7 @@ const bluebubblesAccountSchema = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     mediaMaxMb: z.number().int().positive().optional(),
     mediaLocalRoots: z.array(z.string()).optional(),
+    sendMethod: bluebubblesSendMethodSchema,
     sendReadReceipts: z.boolean().optional(),
     network: bluebubblesNetworkSchema,
     blockStreaming: z.boolean().optional(),

@@ -229,6 +229,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             type: "string",
           },
         },
+        sendMethod: {
+          type: "string",
+          enum: ["apple-script", "private-api"],
+        },
         sendReadReceipts: {
           type: "boolean",
         },
@@ -506,6 +510,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   type: "string",
                 },
               },
+              sendMethod: {
+                type: "string",
+                enum: ["apple-script", "private-api"],
+              },
               sendReadReceipts: {
                 type: "boolean",
               },
@@ -578,6 +586,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       dmPolicy: {
         label: "BlueBubbles DM Policy",
         help: 'Direct message access control ("pairing" recommended). "open" requires channels.bluebubbles.allowFrom=["*"].',
+      },
+      sendMethod: {
+        label: "BlueBubbles Send Method",
+        help: 'Optional outbound delivery method override. Use "apple-script" on hosts where the default BlueBubbles HTTP send path does not deliver without an explicit method; use "private-api" only when the server Private API is enabled.',
       },
     },
   },

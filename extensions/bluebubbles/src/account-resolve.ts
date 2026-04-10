@@ -5,11 +5,13 @@ import {
 } from "./accounts.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { normalizeResolvedSecretInputString } from "./secret-input.js";
+import { normalizeBlueBubblesSendMethod, type BlueBubblesSendMethod } from "./types.js";
 
 export type BlueBubblesAccountResolveOpts = {
   serverUrl?: string;
   password?: string;
   accountId?: string;
+  sendMethod?: BlueBubblesSendMethod;
   cfg?: OpenClawConfig;
 };
 
@@ -19,6 +21,7 @@ export function resolveBlueBubblesServerAccount(params: BlueBubblesAccountResolv
   accountId: string;
   allowPrivateNetwork: boolean;
   allowPrivateNetworkConfig?: boolean;
+  sendMethod?: BlueBubblesSendMethod;
 } {
   const account = resolveBlueBubblesAccount({
     cfg: params.cfg ?? {},
@@ -53,6 +56,9 @@ export function resolveBlueBubblesServerAccount(params: BlueBubblesAccountResolv
     baseUrl,
     password,
     accountId: account.accountId,
+    sendMethod:
+      normalizeBlueBubblesSendMethod(params.sendMethod) ??
+      normalizeBlueBubblesSendMethod(account.config.sendMethod),
     allowPrivateNetwork: resolveBlueBubblesEffectiveAllowPrivateNetwork({
       baseUrl,
       config: account.config,
