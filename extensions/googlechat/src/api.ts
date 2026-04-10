@@ -164,11 +164,26 @@ export async function sendGoogleChatMessage(params: {
     urlObj.searchParams.set("messageReplyOption", "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
   }
   const url = urlObj.toString();
-  const result = await fetchJson<{ name?: string }>(account, url, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-  return result ? { messageName: result.name } : null;
+  try {
+    const result = await fetchJson<{ name?: string }>(account, url, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    return result ? { messageName: result.name } : null;
+  } catch (err) {
+    // If the thread resource name is invalid, retry without threading
+    // to avoid infinite retry loops (see #64313).
+    if (thread && String(err).includes("INVALID_ARGUMENT")) {
+      delete body.thread;
+      const fallbackUrl = new URL(`${CHAT_API_BASE}/${space}/messages`).toString();
+      const result = await fetchJson<{ name?: string }>(account, fallbackUrl, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      return result ? { messageName: result.name } : null;
+    }
+    throw err;
+  }
 }
 
 export async function updateGoogleChatMessage(params: {
