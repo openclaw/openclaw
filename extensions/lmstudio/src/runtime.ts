@@ -7,7 +7,12 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
-import { LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER, LMSTUDIO_PROVIDER_ID } from "./defaults.js";
+import {
+  LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
+  LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
+  LMSTUDIO_PROVIDER_ID,
+} from "./defaults.js";
+import { hasLmstudioAuthorizationHeader } from "./provider-auth.js";
 
 type LmstudioAuthHeadersParams = {
   apiKey?: string;
@@ -19,7 +24,7 @@ export function buildLmstudioAuthHeaders(
   params: LmstudioAuthHeadersParams,
 ): Record<string, string> | undefined {
   const headers: Record<string, string> = { ...params.headers };
-  // Keep auth optional because LM Studio can run without a token.
+  // Runtime auth resolution is strict, but guard known non-secret markers here.
   const apiKey = params.apiKey?.trim();
   const isSyntheticLocalKey = apiKey === LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER;
   if (apiKey && !isSyntheticLocalKey && !isNonSecretApiKeyMarker(apiKey)) {
@@ -57,34 +62,25 @@ function sanitizeStringHeaders(headers: unknown): Record<string, string> | undef
 export async function resolveLmstudioConfiguredApiKey(params: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  allowLocalFallback?: boolean;
   path?: string;
 }): Promise<string | undefined> {
   const providerConfig = params.config?.models?.providers?.[LMSTUDIO_PROVIDER_ID];
   const apiKeyInput = providerConfig?.apiKey;
-  const allowLocalFallback = params.allowLocalFallback === true;
   if (apiKeyInput === undefined || apiKeyInput === null) {
-    return allowLocalFallback ? LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER : undefined;
+    return undefined;
   }
 
   const directApiKey = normalizeOptionalSecretInput(apiKeyInput);
   if (directApiKey !== undefined) {
     const trimmed = normalizeApiKeyConfig(directApiKey).trim();
     if (!trimmed) {
-      return allowLocalFallback ? LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER : undefined;
-    }
-    if (trimmed === LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER) {
-      return allowLocalFallback ? trimmed : undefined;
+      return undefined;
     }
     if (isKnownEnvApiKeyMarker(trimmed)) {
       const envValue = normalizeOptionalSecretInput((params.env ?? process.env)[trimmed]);
-      return envValue ?? (allowLocalFallback ? LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER : undefined);
+      return envValue;
     }
-    return isNonSecretApiKeyMarker(trimmed)
-      ? allowLocalFallback
-        ? LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER
-        : undefined
-      : trimmed;
+    return isNonSecretApiKeyMarker(trimmed) ? undefined : trimmed;
   }
 
   if (!params.config) {
@@ -102,10 +98,14 @@ export async function resolveLmstudioConfiguredApiKey(params: {
     throw new Error(`${path}: ${resolved.unresolvedRefReason}`);
   }
   const resolvedValue = normalizeOptionalSecretInput(resolved.value);
-  if (resolvedValue) {
-    return resolvedValue;
+  const trimmedResolvedValue = resolvedValue ? normalizeApiKeyConfig(resolvedValue).trim() : "";
+  if (!trimmedResolvedValue) {
+    return undefined;
   }
-  return allowLocalFallback ? LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER : undefined;
+  if (isNonSecretApiKeyMarker(trimmedResolvedValue)) {
+    return undefined;
+  }
+  return trimmedResolvedValue;
 }
 
 export async function resolveLmstudioProviderHeaders(params: {
@@ -155,17 +155,19 @@ export async function resolveLmstudioRequestContext(params: {
   env?: NodeJS.ProcessEnv;
   providerHeaders?: unknown;
 }): Promise<{ apiKey: string | undefined; headers: Record<string, string> | undefined }> {
+  const providerHeaders =
+    params.providerHeaders ?? params.config?.models?.providers?.[LMSTUDIO_PROVIDER_ID]?.headers;
   const [apiKey, headers] = await Promise.all([
     resolveLmstudioRuntimeApiKey({
       config: params.config,
       agentDir: params.agentDir,
-      allowMissingAuth: true,
       env: params.env,
+      headers: providerHeaders,
     }),
     resolveLmstudioProviderHeaders({
       config: params.config,
       env: params.env,
-      headers: params.providerHeaders,
+      headers: providerHeaders,
     }),
   ]);
   return { apiKey, headers };
@@ -177,21 +179,40 @@ export async function resolveLmstudioRequestContext(params: {
 export async function resolveLmstudioRuntimeApiKey(params: {
   config?: OpenClawConfig;
   agentDir?: string;
-  allowMissingAuth?: boolean;
   env?: NodeJS.ProcessEnv;
+  headers?: unknown;
 }): Promise<string | undefined> {
   const config = params.config;
   if (!config) {
     return undefined;
   }
+  const providerHeaders =
+    params.headers ?? config.models?.providers?.[LMSTUDIO_PROVIDER_ID]?.headers;
+  const hasAuthorizationHeader = hasLmstudioAuthorizationHeader(providerHeaders);
   let configuredApiKeyPromise: Promise<string | undefined> | undefined;
   const getConfiguredApiKey = async () => {
     configuredApiKeyPromise ??= resolveLmstudioConfiguredApiKey({
       config,
       env: params.env,
-      allowLocalFallback: true,
     });
     return await configuredApiKeyPromise;
+  };
+  const resolveConfiguredApiKeyOrThrow = async () => {
+    const configuredApiKey = await getConfiguredApiKey();
+    if (configuredApiKey) {
+      return configuredApiKey;
+    }
+    if (hasAuthorizationHeader) {
+      return undefined;
+    }
+    const envMarker = `\${${LMSTUDIO_DEFAULT_API_KEY_ENV_VAR}}`;
+    throw new Error(
+      [
+        "LM Studio API key is required.",
+        `Set models.providers.lmstudio.apiKey (for example "${envMarker}")`,
+        'or run "openclaw models auth lmstudio".',
+      ].join(" "),
+    );
   };
   let resolved: Awaited<ReturnType<typeof resolveApiKeyForProvider>>;
   try {
@@ -200,23 +221,16 @@ export async function resolveLmstudioRuntimeApiKey(params: {
       cfg: config,
       agentDir: params.agentDir,
     });
-  } catch (error) {
-    const configuredApiKey = await getConfiguredApiKey();
-    if (configuredApiKey) {
-      return configuredApiKey;
-    }
-    if (params.allowMissingAuth) {
-      return undefined;
-    }
-    throw error;
+  } catch {
+    return await resolveConfiguredApiKeyOrThrow();
   }
   // Normalize empty/whitespace keys to undefined for callers.
   const resolvedApiKey = resolved.apiKey?.trim();
   if (!resolvedApiKey || resolvedApiKey.length === 0) {
-    return (await getConfiguredApiKey()) ?? LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER;
+    return await resolveConfiguredApiKeyOrThrow();
   }
   if (isNonSecretApiKeyMarker(resolvedApiKey)) {
-    return (await getConfiguredApiKey()) ?? LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER;
+    return await resolveConfiguredApiKeyOrThrow();
   }
   return resolvedApiKey;
 }

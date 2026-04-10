@@ -26,11 +26,15 @@ export function resolveLmstudioProviderAuthMode(
 ): ModelProviderConfig["auth"] | undefined {
   const normalized = normalizeOptionalSecretInput(apiKey);
   if (normalized !== undefined) {
-    return normalized &&
-      normalized !== LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER &&
-      normalized !== CUSTOM_LOCAL_AUTH_MARKER
-      ? "api-key"
-      : undefined;
+    const trimmed = normalized.trim();
+    if (
+      !trimmed ||
+      trimmed === LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER ||
+      trimmed === CUSTOM_LOCAL_AUTH_MARKER
+    ) {
+      return undefined;
+    }
+    return "api-key";
   }
   return hasConfiguredSecretInput(apiKey) ? "api-key" : undefined;
 }
@@ -47,14 +51,8 @@ export function shouldUseLmstudioSyntheticAuth(
   providerConfig: ModelProviderConfig | undefined,
 ): boolean {
   const hasModels = Array.isArray(providerConfig?.models) && providerConfig.models.length > 0;
-  if (!hasModels) {
-    return false;
-  }
-  if (providerConfig?.auth === "api-key") {
-    return false;
-  }
-  if (resolveLmstudioProviderAuthMode(providerConfig?.apiKey)) {
-    return false;
-  }
-  return !hasLmstudioAuthorizationHeader(providerConfig?.headers);
+  // Runtime synthetic auth is independent from explicit Authorization headers.
+  // LM Studio can authenticate entirely through models.providers.lmstudio.headers.Authorization,
+  // and removing the provider-owned marker lets core fall back to generic local no-auth behavior.
+  return hasModels && !resolveLmstudioProviderAuthMode(providerConfig?.apiKey);
 }

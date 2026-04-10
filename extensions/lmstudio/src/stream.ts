@@ -2,6 +2,7 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { LMSTUDIO_PROVIDER_ID } from "./defaults.js";
 import { ensureLmstudioModelLoaded } from "./models.fetch.js";
 import { resolveLmstudioInferenceBase } from "./models.js";
@@ -23,6 +24,15 @@ function normalizeLmstudioModelKey(modelId: string): string {
 }
 
 function resolveRequestedContextLength(model: StreamModel): number | undefined {
+  const withContextTokens = model as StreamModel & { contextTokens?: unknown };
+  const contextTokens =
+    typeof withContextTokens.contextTokens === "number" &&
+    Number.isFinite(withContextTokens.contextTokens)
+      ? Math.floor(withContextTokens.contextTokens)
+      : undefined;
+  if (contextTokens && contextTokens > 0) {
+    return contextTokens;
+  }
   const contextWindow =
     typeof model.contextWindow === "number" && Number.isFinite(model.contextWindow)
       ? Math.floor(model.contextWindow)
@@ -48,6 +58,22 @@ function createPreloadKey(params: {
   return `${params.baseUrl}::${params.modelKey}::${params.requestedContextLength ?? "default"}`;
 }
 
+function buildLmstudioPreloadSsrFPolicy(baseUrl: string): SsrFPolicy | undefined {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+    return { allowedHostnames: [parsed.hostname] };
+  } catch {
+    return undefined;
+  }
+}
+
 async function ensureLmstudioModelLoadedBestEffort(params: {
   baseUrl: string;
   modelKey: string;
@@ -71,6 +97,7 @@ async function ensureLmstudioModelLoadedBestEffort(params: {
     baseUrl: params.baseUrl,
     apiKey: runtimeApiKey,
     headers,
+    ssrfPolicy: buildLmstudioPreloadSsrFPolicy(params.baseUrl),
     modelKey: params.modelKey,
     requestedContextLength: params.requestedContextLength,
   });

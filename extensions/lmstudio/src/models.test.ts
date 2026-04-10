@@ -123,7 +123,8 @@ describe("lmstudio-models", () => {
       input: ["text", "image"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       compat: { supportsUsageInStreaming: true },
-      contextWindow: 64000,
+      contextWindow: 262144,
+      contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
       maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
     });
     expect(models[1]).toEqual({
@@ -134,6 +135,7 @@ describe("lmstudio-models", () => {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       compat: { supportsUsageInStreaming: true },
       contextWindow: SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+      contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
       maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
     });
   });

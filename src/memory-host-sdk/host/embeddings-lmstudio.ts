@@ -39,11 +39,18 @@ function normalizeLmstudioModel(model: string): string {
 async function resolveLmstudioApiKey(
   options: EmbeddingProviderOptions,
 ): Promise<string | undefined> {
-  return await resolveLmstudioRuntimeApiKey({
-    config: options.config,
-    agentDir: options.agentDir,
-    allowMissingAuth: true,
-  });
+  try {
+    return await resolveLmstudioRuntimeApiKey({
+      config: options.config,
+      agentDir: options.agentDir,
+    });
+  } catch (error) {
+    // Embeddings can target local LM Studio instances that do not require auth.
+    if (/LM Studio API key is required/i.test(formatErrorMessage(error))) {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 /** Creates the LM Studio embedding provider client and preloads the target model before return. */

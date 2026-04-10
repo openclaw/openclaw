@@ -2,9 +2,10 @@ import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
-import type {
-  ProviderAuthMethodNonInteractiveContext,
-  ProviderCatalogContext,
+import {
+  SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+  type ProviderAuthMethodNonInteractiveContext,
+  type ProviderCatalogContext,
 } from "openclaw/plugin-sdk/provider-setup";
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -236,7 +237,8 @@ describe("lmstudio setup", () => {
       models: [
         {
           id: "qwen3-8b-instruct",
-          contextWindow: 64000,
+          contextWindow: SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+          contextTokens: 64000,
         },
       ],
     });
@@ -340,7 +342,6 @@ describe("lmstudio setup", () => {
     expect(result?.models?.providers?.lmstudio).toMatchObject({
       baseUrl: "http://localhost:1234/v1",
       api: "openai-completions",
-      auth: "api-key",
       apiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
       models: [
         {
@@ -350,11 +351,65 @@ describe("lmstudio setup", () => {
     });
   });
 
+  it("non-interactive setup keeps Authorization header auth without writing a synthetic key", async () => {
+    const ctx = buildNonInteractiveContext({
+      config: {
+        models: {
+          providers: {
+            lmstudio: {
+              baseUrl: "http://localhost:1234/v1",
+              apiKey: "stale-config-key",
+              auth: "api-key",
+              api: "openai-completions",
+              headers: {
+                Authorization: "Bearer proxy-token",
+              },
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      customBaseUrl: "http://localhost:1234/api/v1/",
+      customApiKey: "",
+      customModelId: "qwen3-8b-instruct",
+      resolvedApiKey: null,
+    });
+
+    const result = await configureLmstudioNonInteractive(ctx);
+
+    expect(fetchLmstudioModelsMock).toHaveBeenCalledWith({
+      baseUrl: "http://localhost:1234/v1",
+      apiKey: undefined,
+      headers: {
+        Authorization: "Bearer proxy-token",
+      },
+      timeoutMs: 5000,
+    });
+    expect(configureSelfHostedNonInteractiveMock).not.toHaveBeenCalled();
+    expect(resolveAgentModelPrimaryValue(result?.agents?.defaults?.model)).toBe(
+      "lmstudio/qwen3-8b-instruct",
+    );
+    expect(result?.models?.providers?.lmstudio).toMatchObject({
+      baseUrl: "http://localhost:1234/v1",
+      api: "openai-completions",
+      headers: {
+        Authorization: "Bearer proxy-token",
+      },
+      models: [
+        {
+          id: "qwen3-8b-instruct",
+        },
+      ],
+    });
+    expect(result?.models?.providers?.lmstudio).not.toHaveProperty("apiKey");
+    expect(result?.models?.providers?.lmstudio).not.toHaveProperty("auth");
+  });
+
   it("non-interactive setup prefers --lmstudio-api-key over --custom-api-key", async () => {
     const ctx = buildNonInteractiveContext({
       customBaseUrl: "http://localhost:1234/api/v1/",
       customModelId: "qwen3-8b-instruct",
-      customApiKey: "legacy-custom-key",
+      customApiKey: "old-custom-key",
       lmstudioApiKey: "new-lmstudio-key",
     });
 
@@ -475,12 +530,14 @@ describe("lmstudio setup", () => {
     expect(result.configPatch?.models?.providers?.lmstudio?.models).toEqual([
       expect.objectContaining({
         id: "phi-4",
-        contextWindow: 4096,
+        contextWindow: 65536,
+        contextTokens: 4096,
         maxTokens: 4096,
       }),
       expect.objectContaining({
         id: "qwen3-8b-instruct",
-        contextWindow: 4096,
+        contextWindow: 32768,
+        contextTokens: 4096,
         maxTokens: 4096,
       }),
     ]);
@@ -599,35 +656,6 @@ describe("lmstudio setup", () => {
     });
   });
 
-  it("interactive setup replaces stale local auth markers when enabling api-key auth", async () => {
-    const config = {
-      models: {
-        providers: {
-          lmstudio: {
-            baseUrl: "http://localhost:1234/v1",
-            apiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
-            api: "openai-completions",
-            models: [],
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const promptText = vi
-      .fn()
-      .mockResolvedValueOnce("http://localhost:1234/api/v1/")
-      .mockResolvedValueOnce("lmstudio-test-key");
-
-    const result = await promptAndConfigureLmstudioInteractive({
-      config,
-      promptText,
-    });
-
-    expect(result.configPatch?.models?.providers?.lmstudio).toMatchObject({
-      auth: "api-key",
-      apiKey: LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
-    });
-  });
-
   it("interactive setup returns clear errors for unreachable/http-empty results", async () => {
     const cases = [
       {
@@ -678,15 +706,15 @@ describe("lmstudio setup", () => {
     {
       name: "keeps api-key auth backed by default env marker",
       providerPatch: {
-        auth: "api-key" as const,
+        auth: "api-key",
       },
       expectedProviderPatch: {
-        auth: "api-key" as const,
+        auth: "api-key",
         apiKey: LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
       },
     },
     {
-      name: "does not inject lmstudio-local when Authorization header is configured",
+      name: "does not inject api-key marker when Authorization header is configured",
       providerPatch: {
         headers: {
           Authorization: "Bearer custom-token",
@@ -792,6 +820,67 @@ describe("lmstudio setup", () => {
     expect(result?.provider.models?.map((model) => model.id)).toEqual(["qwen3-8b-instruct"]);
   });
 
+  it("discoverLmstudioProvider uses configured direct apiKey for discovery", async () => {
+    discoverLmstudioModelsMock.mockResolvedValueOnce([
+      createModel("qwen3-8b-instruct", "Qwen3 8B"),
+    ]);
+
+    await discoverLmstudioProvider(
+      buildDiscoveryContext({
+        config: {
+          models: {
+            providers: {
+              lmstudio: {
+                baseUrl: "http://localhost:1234/v1",
+                api: "openai-completions",
+                apiKey: "configured-direct-key",
+                models: [],
+              },
+            },
+          },
+        } as OpenClawConfig,
+      }),
+    );
+
+    expect(discoverLmstudioModelsMock).toHaveBeenCalledWith({
+      baseUrl: "http://localhost:1234/v1",
+      apiKey: "configured-direct-key",
+      headers: undefined,
+      quiet: false,
+    });
+  });
+
+  it("discoverLmstudioProvider prefers resolved discoveryApiKey over configured apiKey", async () => {
+    discoverLmstudioModelsMock.mockResolvedValueOnce([
+      createModel("qwen3-8b-instruct", "Qwen3 8B"),
+    ]);
+
+    await discoverLmstudioProvider(
+      buildDiscoveryContext({
+        discoveryApiKey: "resolved-discovery-key",
+        config: {
+          models: {
+            providers: {
+              lmstudio: {
+                baseUrl: "http://localhost:1234/v1",
+                api: "openai-completions",
+                apiKey: "configured-direct-key",
+                models: [],
+              },
+            },
+          },
+        } as OpenClawConfig,
+      }),
+    );
+
+    expect(discoverLmstudioModelsMock).toHaveBeenCalledWith({
+      baseUrl: "http://localhost:1234/v1",
+      apiKey: "resolved-discovery-key",
+      headers: undefined,
+      quiet: false,
+    });
+  });
+
   it("discoverLmstudioProvider rewrites stale api-key auth without a persisted key", async () => {
     const result = await discoverLmstudioProvider(
       buildDiscoveryContext({
@@ -830,7 +919,7 @@ describe("lmstudio setup", () => {
     expect(result).toBeNull();
   });
 
-  it("non-interactive setup replaces legacy local auth markers when enabling api-key auth", async () => {
+  it("non-interactive setup replaces local auth markers when enabling api-key auth", async () => {
     const ctx = buildNonInteractiveContext({
       config: {
         models: {

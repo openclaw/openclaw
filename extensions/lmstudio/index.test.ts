@@ -47,7 +47,7 @@ describe("lmstudio plugin", () => {
     });
   });
 
-  it("synthesizes keyless auth for remote configs without api-key auth", () => {
+  it("synthesizes placeholder auth for configured lmstudio models without API key auth", () => {
     const provider = registerProvider();
 
     expect(
@@ -67,7 +67,7 @@ describe("lmstudio plugin", () => {
     });
   });
 
-  it("does not synthesize keyless auth when explicit api-key auth is configured", () => {
+  it("still synthesizes placeholder auth when explicit api-key auth has no key", () => {
     const provider = registerProvider();
 
     expect(
@@ -78,10 +78,14 @@ describe("lmstudio plugin", () => {
           auth: "api-key",
         }),
       }),
-    ).toBeUndefined();
+    ).toEqual({
+      apiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
+      source: "models.providers.lmstudio (synthetic local key)",
+      mode: "api-key",
+    });
   });
 
-  it("does not synthesize keyless auth when an Authorization header is configured", () => {
+  it("keeps synthetic placeholder auth when Authorization header is configured", () => {
     const provider = registerProvider();
 
     expect(
@@ -94,10 +98,14 @@ describe("lmstudio plugin", () => {
           },
         }),
       }),
-    ).toBeUndefined();
+    ).toEqual({
+      apiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
+      source: "models.providers.lmstudio (synthetic local key)",
+      mode: "api-key",
+    });
   });
 
-  it("defers synthetic profile markers so real auth can take precedence", () => {
+  it("defers stored lmstudio-local profile auth so real credentials can win", () => {
     const provider = registerProvider();
 
     expect(
@@ -130,6 +138,7 @@ describe("lmstudio plugin", () => {
                 id: "qwen3-8b-instruct",
                 name: "Qwen 3 8B Instruct",
                 contextWindow: 32768,
+                contextTokens: 8192,
                 reasoning: true,
                 input: ["text", "image"],
               },
@@ -160,6 +169,7 @@ describe("lmstudio plugin", () => {
         name: "Qwen 3 8B Instruct",
         compat: { supportsUsageInStreaming: true },
         contextWindow: 32768,
+        contextTokens: 8192,
         reasoning: true,
         input: ["text", "image"],
       },
@@ -169,6 +179,7 @@ describe("lmstudio plugin", () => {
         name: "phi-4",
         compat: { supportsUsageInStreaming: true },
         contextWindow: undefined,
+        contextTokens: undefined,
         reasoning: undefined,
         input: undefined,
       },

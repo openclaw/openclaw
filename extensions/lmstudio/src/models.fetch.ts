@@ -165,6 +165,7 @@ export async function discoverLmstudioModels(
         cost: SELF_HOSTED_DEFAULT_COST,
         compat: { supportsUsageInStreaming: true },
         contextWindow: base.contextWindow,
+        contextTokens: base.contextTokens,
         maxTokens: base.maxTokens,
       };
     })

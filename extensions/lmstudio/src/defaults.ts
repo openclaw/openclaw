@@ -4,7 +4,6 @@ export const LMSTUDIO_DEFAULT_INFERENCE_BASE_URL = `${LMSTUDIO_DEFAULT_BASE_URL}
 export const LMSTUDIO_DEFAULT_EMBEDDING_MODEL = "text-embedding-nomic-embed-text-v1.5";
 export const LMSTUDIO_PROVIDER_LABEL = "LM Studio";
 export const LMSTUDIO_DEFAULT_API_KEY_ENV_VAR = "LM_API_TOKEN";
-// Dedicated LM Studio no-auth marker so remote LM Studio hosts can be treated as keyless when intended.
 export const LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER = "lmstudio-local";
 export const LMSTUDIO_MODEL_PLACEHOLDER = "model-key-from-api-v1-models";
 // Default context length sent when requesting LM Studio to load a model.

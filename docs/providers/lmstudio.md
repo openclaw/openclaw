@@ -38,7 +38,7 @@ If you are using the app, make sure you have JIT enabled for a smooth experience
 export LM_API_TOKEN="your-lm-studio-api-token"
 ```
 
-If you don't want to use LM Studio with Authentication, use any non-empty placeholder value:
+If LM Studio authentication is disabled, use any non-empty token value:
 
 ```bash
 export LM_API_TOKEN="placeholder-key"
@@ -90,8 +90,8 @@ openclaw onboard \
 `--custom-model-id` takes the model key as returned by LM Studio (e.g. `qwen/qwen3.5-9b`), without
 the `lmstudio/` provider prefix.
 
-If your LM Studio server does not require authentication, OpenClaw non-interactive onboarding still requires
-`--lmstudio-api-key` (or `LM_API_TOKEN` in env). For unauthenticated LM Studio servers, pass any non-empty value.
+Non-interactive onboarding requires `--lmstudio-api-key` (or `LM_API_TOKEN` in env).
+For unauthenticated LM Studio servers, any non-empty token value works.
 
 `--custom-api-key` remains supported for compatibility, but `--lmstudio-api-key` is preferred for LM Studio.
 
@@ -133,7 +133,7 @@ Interactive setup can prompt for an optional preferred load context length and a
 
 ### LM Studio not detected
 
-Make sure LM Studio is running and that you set `LM_API_TOKEN` (or any non-empty placeholder for unauthenticated servers):
+Make sure LM Studio is running and that you set `LM_API_TOKEN` (for unauthenticated servers, any non-empty token value works):
 
 ```bash
 # Start via desktop app, or headless:
@@ -152,7 +152,7 @@ If setup reports HTTP 401, verify your API key:
 
 - Check that `LM_API_TOKEN` matches the key configured in LM Studio.
 - For LM Studio auth setup details, see [LM Studio Authentication](https://lmstudio.ai/docs/developer/core/authentication).
-- If your server does not require authentication, use any non-empty placeholder value for `LM_API_TOKEN`.
+- If your server does not require authentication, use any non-empty token value for `LM_API_TOKEN`.
 
 ### Just-in-time model loading
 

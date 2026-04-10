@@ -34,6 +34,7 @@ function resolveLmstudioAugmentedCatalogEntries(config: OpenClawConfig | undefin
       name: entry.name ?? entry.id,
       compat: { supportsUsageInStreaming: true },
       contextWindow: entry.contextWindow,
+      contextTokens: entry.contextTokens,
       reasoning: entry.reasoning,
       input: entry.input,
     }),

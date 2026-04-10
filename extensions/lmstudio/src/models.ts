@@ -7,7 +7,7 @@ import {
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
-import { LMSTUDIO_DEFAULT_BASE_URL } from "./defaults.js";
+import { LMSTUDIO_DEFAULT_BASE_URL, LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
 
 export type LmstudioModelWire = {
   type?: "llm" | "embedding";
@@ -37,6 +37,7 @@ type LmstudioConfiguredCatalogEntry = {
   id: string;
   name?: string;
   contextWindow?: number;
+  contextTokens?: number;
   reasoning?: boolean;
   input?: ("text" | "image" | "document")[];
 };
@@ -172,6 +173,10 @@ export function normalizeLmstudioConfiguredCatalogEntry(
     typeof record.contextWindow === "number" && record.contextWindow > 0
       ? record.contextWindow
       : undefined;
+  const contextTokens =
+    typeof record.contextTokens === "number" && record.contextTokens > 0
+      ? record.contextTokens
+      : undefined;
   const reasoning = typeof record.reasoning === "boolean" ? record.reasoning : undefined;
   const input = Array.isArray(record.input)
     ? record.input.filter(
@@ -183,6 +188,7 @@ export function normalizeLmstudioConfiguredCatalogEntry(
     id,
     name,
     contextWindow,
+    contextTokens,
     reasoning,
     input: input && input.length > 0 ? input : undefined,
   };
@@ -243,6 +249,7 @@ export type LmstudioModelBase = {
   input: ModelDefinitionConfig["input"];
   cost: ModelDefinitionConfig["cost"];
   contextWindow: number;
+  contextTokens: number;
   maxTokens: number;
 };
 
@@ -263,13 +270,16 @@ export function mapLmstudioWireEntry(entry: LmstudioModelWire): LmstudioModelBas
     return null;
   }
   const loadedContextWindow = resolveLoadedContextWindow(entry);
-  const contextWindow =
-    loadedContextWindow ??
-    (entry.max_context_length !== undefined &&
+  const advertisedContextWindow =
+    entry.max_context_length !== undefined &&
     Number.isFinite(entry.max_context_length) &&
     entry.max_context_length > 0
-      ? entry.max_context_length
-      : SELF_HOSTED_DEFAULT_CONTEXT_WINDOW);
+      ? Math.floor(entry.max_context_length)
+      : null;
+  const contextWindow = advertisedContextWindow ?? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW;
+  // Keep native/advertised context window metadata in catalog, but use a practical
+  // default target for model loading unless callers explicitly override it.
+  const contextTokens = Math.min(contextWindow, LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH);
   const rawDisplayName = entry.display_name?.trim();
   return {
     id,
@@ -284,6 +294,7 @@ export function mapLmstudioWireEntry(entry: LmstudioModelWire): LmstudioModelBas
     input: entry.capabilities?.vision ? ["text", "image"] : ["text"],
     cost: SELF_HOSTED_DEFAULT_COST,
     contextWindow,
+    contextTokens,
     maxTokens: Math.max(1, Math.min(contextWindow, SELF_HOSTED_DEFAULT_MAX_TOKENS)),
   };
 }
@@ -297,7 +308,7 @@ export function mapLmstudioWireModelsToConfig(
   models: LmstudioModelWire[],
 ): ModelDefinitionConfig[] {
   return models
-    .map((entry) => {
+    .map((entry): ModelDefinitionConfig | null => {
       const base = mapLmstudioWireEntry(entry);
       if (!base) {
         return null;
@@ -309,6 +320,7 @@ export function mapLmstudioWireModelsToConfig(
         input: base.input,
         cost: base.cost,
         contextWindow: base.contextWindow,
+        contextTokens: base.contextTokens,
         maxTokens: base.maxTokens,
       };
     })

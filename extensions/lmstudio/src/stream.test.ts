@@ -11,8 +11,8 @@ const resolveLmstudioRuntimeApiKeyMock = vi.hoisted(() =>
   vi.fn(async (_params?: unknown) => undefined),
 );
 
-vi.mock("./models.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./models.js")>();
+vi.mock("./models.fetch.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./models.fetch.js")>();
   return {
     ...actual,
     ensureLmstudioModelLoaded: (params: unknown) => ensureLmstudioModelLoadedMock(params),
@@ -97,6 +97,51 @@ describe("lmstudio stream wrapper", () => {
         modelKey: "qwen3-8b-instruct",
         requestedContextLength: 131072,
         apiKey: "lmstudio-token",
+        ssrfPolicy: { allowedHostnames: ["lmstudio.internal"] },
+      }),
+    );
+  });
+
+  it("prefers model contextTokens over contextWindow for preload requests", async () => {
+    const baseStream = buildDoneStreamFn();
+    const wrapped = wrapLmstudioInferencePreload({
+      provider: "lmstudio",
+      modelId: "qwen3-8b-instruct",
+      config: {
+        models: {
+          providers: {
+            lmstudio: {
+              baseUrl: "http://lmstudio.internal:1234/v1",
+              models: [],
+            },
+          },
+        },
+      },
+      streamFn: baseStream,
+    } as never);
+
+    const stream = wrapped(
+      {
+        provider: "lmstudio",
+        api: "openai-completions",
+        id: "lmstudio/qwen3-8b-instruct",
+        contextWindow: 131072,
+        contextTokens: 64000,
+      } as never,
+      { messages: [] } as never,
+      { apiKey: "lmstudio-token" } as never,
+    );
+    const events = await collectEvents(stream);
+
+    expect(events).toEqual([expect.objectContaining({ type: "done" })]);
+    expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(1);
+    expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: "http://lmstudio.internal:1234/v1",
+        modelKey: "qwen3-8b-instruct",
+        requestedContextLength: 64000,
+        apiKey: "lmstudio-token",
+        ssrfPolicy: { allowedHostnames: ["lmstudio.internal"] },
       }),
     );
   });

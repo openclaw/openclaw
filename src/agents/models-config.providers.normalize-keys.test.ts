@@ -8,11 +8,17 @@ import { normalizeProviders } from "./models-config.providers.normalize.js";
 import { resolveApiKeyFromProfiles } from "./models-config.providers.secret-helpers.js";
 import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
 
-vi.mock("./models-config.providers.policy.runtime.js", () => ({
-  applyProviderNativeStreamingUsagePolicy: () => undefined,
-  normalizeProviderConfigPolicy: () => undefined,
-  resolveProviderConfigApiKeyPolicy: () => undefined,
-}));
+vi.mock("./models-config.providers.policy.runtime.js", async () => {
+  const { normalizeLmstudioProviderConfig } = await vi.importActual<
+    typeof import("../plugin-sdk/lmstudio-runtime.js")
+  >("../plugin-sdk/lmstudio-runtime.js");
+  return {
+    applyProviderNativeStreamingUsagePolicy: () => undefined,
+    normalizeProviderConfigPolicy: (providerKey: string, provider: unknown) =>
+      providerKey === "lmstudio" ? normalizeLmstudioProviderConfig(provider as never) : undefined,
+    resolveProviderConfigApiKeyPolicy: () => undefined,
+  };
+});
 
 describe("normalizeProviders", () => {
   const createModel = (

@@ -36,7 +36,7 @@ export {
   resolveLmstudioServerBase,
 } from "./lmstudio-runtime.js";
 
-type FacadeModule = typeof import("../../extensions/lmstudio/api.js");
+type FacadeModule = typeof import("@openclaw/lmstudio/api.js");
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 
 function loadFacadeModule(): FacadeModule {

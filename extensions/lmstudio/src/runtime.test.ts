@@ -44,7 +44,7 @@ describe("lmstudio-runtime", () => {
     resolveApiKeyForProviderMock.mockReset();
   });
 
-  it("falls back to keyless marker for blank runtime auth", async () => {
+  it("throws when runtime auth resolves to blank and no configured key exists", async () => {
     resolveApiKeyForProviderMock.mockResolvedValueOnce({
       apiKey: "   ",
       source: "profile:lmstudio:default",
@@ -53,50 +53,90 @@ describe("lmstudio-runtime", () => {
 
     await expect(
       resolveLmstudioRuntimeApiKey({
-        config: {} as OpenClawConfig,
+        config: buildLmstudioConfig({ auth: "api-key" }),
+      }),
+    ).rejects.toThrow(/LM Studio API key is required/i);
+  });
+
+  it("falls back to configured env marker key when profile resolution fails", async () => {
+    resolveApiKeyForProviderMock.mockRejectedValueOnce(
+      new Error('No API key found for provider "lmstudio". Auth store: /tmp/auth-profiles.json.'),
+    );
+
+    await expect(
+      resolveLmstudioRuntimeApiKey({
+        config: buildLmstudioConfig({
+          auth: "api-key",
+          apiKey: "${LM_API_TOKEN}",
+        }),
+        env: {
+          LM_API_TOKEN: "template-lmstudio-key",
+        },
+      }),
+    ).resolves.toBe("template-lmstudio-key");
+  });
+
+  it("accepts synthesized lmstudio-local for non-explicit auth mode", async () => {
+    resolveApiKeyForProviderMock.mockResolvedValueOnce({
+      apiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
+      source: "models.providers.lmstudio (synthetic local key)",
+      mode: "api-key",
+    });
+
+    await expect(
+      resolveLmstudioRuntimeApiKey({
+        config: buildLmstudioConfig(),
       }),
     ).resolves.toBe(LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER);
   });
 
-  it.each([
-    {
-      name: "profile lookup has no key",
-      mock: () =>
-        resolveApiKeyForProviderMock.mockRejectedValue(
-          new Error(
-            'No API key found for provider "lmstudio". Auth store: /tmp/auth-profiles.json.',
-          ),
-        ),
-    },
-    {
-      name: "resolved key is synthetic local marker",
-      mock: () =>
-        resolveApiKeyForProviderMock.mockResolvedValueOnce({
-          apiKey: "custom-local",
-          source: "models.providers.lmstudio (synthetic local key)",
-          mode: "api-key",
-        }),
-    },
-  ])(
-    "treats missing/synthetic auth as lmstudio-local in explicit api-key mode ($name)",
-    async ({ mock }) => {
-      mock();
+  it("accepts synthesized lmstudio-local for explicit api-key mode", async () => {
+    resolveApiKeyForProviderMock.mockResolvedValueOnce({
+      apiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
+      source: "models.providers.lmstudio (synthetic local key)",
+      mode: "api-key",
+    });
 
-      await expect(
-        resolveLmstudioRuntimeApiKey({
-          config: buildLmstudioConfig({ auth: "api-key" }),
-          allowMissingAuth: true,
-        }),
-      ).resolves.toBe(LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER);
+    await expect(
+      resolveLmstudioRuntimeApiKey({
+        config: buildLmstudioConfig({ auth: "api-key" }),
+      }),
+    ).resolves.toBe(LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER);
+  });
 
-      await expect(
-        resolveLmstudioConfiguredApiKey({
-          config: buildLmstudioConfig({ auth: "api-key" }),
-          allowLocalFallback: true,
+  it("allows header-only runtime auth when Authorization is configured", async () => {
+    resolveApiKeyForProviderMock.mockRejectedValueOnce(
+      new Error('No API key found for provider "lmstudio". Auth store: /tmp/auth-profiles.json.'),
+    );
+
+    await expect(
+      resolveLmstudioRuntimeApiKey({
+        config: buildLmstudioConfig({
+          headers: {
+            Authorization: "Bearer proxy-token",
+          },
         }),
-      ).resolves.toBe(LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER);
-    },
-  );
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("throws when explicit api-key mode cannot resolve any key", async () => {
+    resolveApiKeyForProviderMock.mockRejectedValue(
+      new Error('No API key found for provider "lmstudio". Auth store: /tmp/auth-profiles.json.'),
+    );
+
+    await expect(
+      resolveLmstudioRuntimeApiKey({
+        config: buildLmstudioConfig({ auth: "api-key" }),
+      }),
+    ).rejects.toThrow(/LM Studio API key is required/i);
+
+    await expect(
+      resolveLmstudioConfiguredApiKey({
+        config: buildLmstudioConfig({ auth: "api-key" }),
+      }),
+    ).resolves.toBeUndefined();
+  });
 
   it("resolves SecretRef api key and headers", async () => {
     const headerRef = {

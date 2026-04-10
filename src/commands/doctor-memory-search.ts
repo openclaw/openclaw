@@ -316,13 +316,15 @@ export async function noteMemorySearchHealth(
       return;
     }
     if (resolved.provider === "lmstudio") {
-      const gatewayProbeWarning = buildGatewayProbeWarning(opts?.gatewayMemoryProbe);
-      if (!gatewayProbeWarning) {
+      if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
         return;
       }
+      const gatewayProbeWarning = buildGatewayProbeWarning(opts?.gatewayMemoryProbe);
       note(
         [
-          'Memory search provider "lmstudio" is configured, but the gateway reports embeddings are not ready.',
+          gatewayProbeWarning
+            ? 'Memory search provider "lmstudio" is configured, but the gateway reports embeddings are not ready.'
+            : 'Memory search provider "lmstudio" is configured, but the gateway could not confirm embeddings are ready.',
           gatewayProbeWarning,
           `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
         ]
