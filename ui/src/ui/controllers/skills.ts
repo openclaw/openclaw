@@ -70,12 +70,7 @@ function setSkillMessage(state: SkillsState, key: string, message: SkillMessage)
   state.skillMessages = { ...state.skillMessages, [key]: message };
 }
 
-function getErrorMessage(err: unknown) {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  return String(err);
-}
+const getErrorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 async function runStaleAwareRequest<T>(
   isCurrent: () => boolean,
@@ -84,22 +79,19 @@ async function runStaleAwareRequest<T>(
   onError: (err: unknown) => void,
   onFinally: () => void,
 ) {
-  let current = false;
   try {
     const result = await request();
-    current = isCurrent();
-    if (current) {
-      onSuccess(result);
+    if (!isCurrent()) {
+      return;
     }
+    onSuccess(result);
   } catch (err) {
-    current = isCurrent();
-    if (current) {
-      onError(err);
+    if (!isCurrent()) {
+      return;
     }
+    onError(err);
   }
-  if (current) {
-    onFinally();
-  }
+  onFinally();
 }
 
 export function setClawHubSearchQuery(state: SkillsState, query: string) {
