@@ -12,6 +12,7 @@ import type {
 import type { MemorySearchConfig } from "./types.tools.js";
 
 export type AgentContextInjection = "always" | "continuation-skip";
+export type EmbeddedPiExecutionContract = "default" | "strict-agentic";
 
 export type AgentModelEntryConfig = {
   alias?: string;
@@ -222,6 +223,12 @@ export type AgentDefaultsConfig = {
      * - trusted: trust project settings as-is
      */
     projectSettingsPolicy?: "trusted" | "sanitize" | "ignore";
+    /**
+     * Embedded Pi execution contract:
+     * - default: keep the standard runner behavior
+     * - strict-agentic: on OpenAI/OpenAI Codex GPT-5-family runs, keep acting until hitting a real blocker
+     */
+    executionContract?: EmbeddedPiExecutionContract;
   };
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;

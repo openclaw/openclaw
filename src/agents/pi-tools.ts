@@ -556,6 +556,7 @@ export function createOpenClawCodingTools(options?: {
       currentThreadTs: options?.currentThreadTs,
       currentMessageId: options?.currentMessageId,
       modelProvider: options?.modelProvider,
+      modelId: options?.modelId,
       replyToMode: options?.replyToMode,
       hasRepliedRef: options?.hasRepliedRef,
       modelHasVision: options?.modelHasVision,
