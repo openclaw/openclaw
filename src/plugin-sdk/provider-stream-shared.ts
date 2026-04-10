@@ -131,7 +131,9 @@ export {
 export { applyAnthropicEphemeralCacheControlMarkers } from "../agents/pi-embedded-runner/anthropic-cache-control-payload.js";
 export {
   createBedrockNoCacheWrapper,
+  createBedrockServiceTierWrapper,
   isAnthropicBedrockModel,
+  resolveBedrockServiceTier,
 } from "../agents/pi-embedded-runner/bedrock-stream-wrappers.js";
 export {
   createMoonshotThinkingWrapper,
