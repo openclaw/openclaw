@@ -6,6 +6,8 @@ const DEFAULT_REQUIRED_DISCOVERY_REFS = [
   "repo/extensions/qa-lab/src/suite.ts",
   "repo/docs/help/testing.md",
 ] as const;
+const MAX_REQUIRED_DISCOVERY_REFS = DEFAULT_REQUIRED_DISCOVERY_REFS.length;
+const MAX_REQUIRED_DISCOVERY_REF_LENGTH = 256;
 
 let cachedRequiredDiscoveryRefsLower: string[] | undefined;
 
@@ -16,7 +18,12 @@ function sanitizeRequiredDiscoveryRefs(requiredFiles: unknown): string[] {
   return requiredFiles
     .filter((value): value is string => typeof value === "string")
     .map((value) => value.trim())
-    .filter((value) => value.length > 0);
+    .filter(
+      (value) =>
+        value.length > 0 &&
+        value.length <= MAX_REQUIRED_DISCOVERY_REF_LENGTH,
+    )
+    .slice(0, MAX_REQUIRED_DISCOVERY_REFS);
 }
 
 function readRequiredDiscoveryRefs() {
