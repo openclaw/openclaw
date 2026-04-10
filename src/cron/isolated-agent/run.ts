@@ -581,6 +581,11 @@ async function finalizeCronRun(params: {
   const skipHeartbeatDelivery =
     prepared.deliveryRequested &&
     isHeartbeatOnlyResponse(payloads, resolveHeartbeatAckMaxChars(prepared.agentCfg));
+  // Skip delivery for *repeated* cron errors to avoid spamming the user.
+  // First failure is delivered normally; subsequent consecutive failures are
+  // suppressed until a successful run resets the state. (TES-908)
+  const previousRunAlsoFailed = prepared.input.job.state?.lastStatus === "error";
+  const skipTransientErrorDelivery = hasFatalErrorPayload && previousRunAlsoFailed;
   const skipMessagingToolDelivery =
     (prepared.input.deliveryContract ?? "cron-owned") === "shared" &&
     prepared.deliveryRequested &&
@@ -607,6 +612,7 @@ async function finalizeCronRun(params: {
     deliveryRequested: prepared.deliveryRequested,
     skipHeartbeatDelivery,
     skipMessagingToolDelivery,
+    skipTransientErrorDelivery,
     deliveryBestEffort: resolveCronDeliveryBestEffort(prepared.input.job),
     deliveryPayloadHasStructuredContent,
     deliveryPayloads,
