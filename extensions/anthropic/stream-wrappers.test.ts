@@ -238,7 +238,7 @@ describe("createAnthropicAdvisorToolWrapper", () => {
       base,
       params.advisorModel ?? "claude-sonnet-4-6",
     );
-    wrapper(
+    void wrapper(
       { provider: "anthropic", api: "anthropic-messages", id: "claude-sonnet-4-6" } as never,
       {} as never,
       { apiKey: "sk-ant-api03-test-key" } as never,
@@ -280,7 +280,7 @@ describe("createAnthropicAdvisorToolWrapper", () => {
       return {} as never;
     };
     const wrapper = createAnthropicAdvisorToolWrapper(base, "claude-sonnet-4-6");
-    wrapper(
+    void wrapper(
       { provider: "anthropic", api: "anthropic-messages", id: "claude-sonnet-4-6" } as never,
       {} as never,
       { apiKey: "sk-ant-api03-test-key" } as never,
@@ -309,7 +309,7 @@ describe("advisor wrapper composition", () => {
       extraParams: { advisor: { enabled: true, model: "claude-haiku-4-5" } },
     } as never);
 
-    wrapped?.(
+    void wrapped?.(
       { provider: "anthropic", api: "anthropic-messages", id: "claude-sonnet-4-6" } as never,
       {} as never,
       { apiKey: "sk-ant-api03-test-key" } as never,
@@ -339,7 +339,7 @@ describe("advisor wrapper composition", () => {
       extraParams: {},
     } as never);
 
-    wrapped?.(
+    void wrapped?.(
       { provider: "anthropic", api: "anthropic-messages", id: "claude-sonnet-4-6" } as never,
       {} as never,
       { apiKey: "sk-ant-api03-test-key" } as never,
@@ -368,7 +368,7 @@ describe("advisor wrapper composition", () => {
       extraParams: { advisor: true },
     } as never);
 
-    wrapped?.(
+    void wrapped?.(
       { provider: "anthropic", api: "anthropic-messages", id: "claude-sonnet-4-6" } as never,
       {} as never,
       { apiKey: "sk-ant-api03-test-key" } as never,
@@ -396,7 +396,7 @@ describe("advisor wrapper composition", () => {
       extraParams: { advisor: { enabled: true, model: "gpt-4" } },
     } as never);
 
-    wrapped?.(
+    void wrapped?.(
       { provider: "anthropic", api: "anthropic-messages", id: "claude-sonnet-4-6" } as never,
       {} as never,
       { apiKey: "sk-ant-api03-test-key" } as never,
