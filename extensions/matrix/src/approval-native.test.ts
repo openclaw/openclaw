@@ -22,7 +22,7 @@ function buildConfig(
   } as OpenClawConfig;
 }
 
-describe("matrix native approval adapter", () => {
+describe("matrix approval capability", () => {
   it("describes the correct Matrix exec-approval setup path", () => {
     const text = matrixApprovalCapability.describeExecApprovalSetup?.({
       channel: "matrix",

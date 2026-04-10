@@ -18,11 +18,15 @@ vi.mock("./matrix-migration.runtime.js", async () => {
   );
   return {
     ...actual,
-    hasActionableMatrixMigration: vi.fn(() => false),
-    hasPendingMatrixMigration: vi.fn(() => false),
     maybeCreateMatrixMigrationSnapshot: vi.fn(),
     autoMigrateLegacyMatrixState: vi.fn(async () => ({ changes: [], warnings: [] })),
     autoPrepareLegacyMatrixCrypto: vi.fn(async () => ({ changes: [], warnings: [] })),
+    resolveMatrixMigrationStatus: vi.fn(() => ({
+      legacyState: null,
+      legacyCrypto: { warnings: [], plans: [] },
+      pending: false,
+      actionable: false,
+    })),
   };
 });
 
@@ -93,7 +97,12 @@ describe("matrix doctor", () => {
 
   it("surfaces matrix sequence warnings and repair changes", async () => {
     const runtimeApi = await import("./matrix-migration.runtime.js");
-    vi.mocked(runtimeApi.hasActionableMatrixMigration).mockReturnValue(true);
+    vi.mocked(runtimeApi.resolveMatrixMigrationStatus).mockReturnValue({
+      legacyState: null,
+      legacyCrypto: { warnings: [], plans: [] },
+      pending: true,
+      actionable: true,
+    });
     vi.mocked(runtimeApi.maybeCreateMatrixMigrationSnapshot).mockResolvedValue({
       archivePath: "/tmp/matrix-backup.tgz",
       created: true,
