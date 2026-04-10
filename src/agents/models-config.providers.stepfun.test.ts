@@ -32,7 +32,7 @@ describe("StepFun provider catalog", () => {
     );
   });
 
-  it("falls back to international endpoints for untagged StepFun auth profiles", async () => {
+  it("falls back to global endpoints for untagged StepFun auth profiles", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
 
     upsertAuthProfile({

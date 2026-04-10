@@ -172,7 +172,7 @@ What you set:
     More detail: [MiniMax](/providers/minimax).
   </Accordion>
   <Accordion title="StepFun">
-    Config is auto-written for StepFun standard or Step Plan on China or international endpoints.
+    Config is auto-written for StepFun standard or Step Plan on China or global endpoints.
     Standard currently includes `step-3.5-flash`, and Step Plan also includes `step-3.5-flash-2603`.
     More detail: [StepFun](/providers/stepfun).
   </Accordion>
