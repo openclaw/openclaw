@@ -68,6 +68,7 @@
   "github-copilot-token",
   "cli-runtime",
   "cli-backend",
+  "agent-harness",
   "hook-runtime",
   "host-runtime",
   "process-runtime",
