@@ -18,7 +18,7 @@ export type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 
 export { type ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
-import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
+export { loadOutboundMediaFromUrl } from "./outbound-media.runtime.js";
 export {
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
@@ -57,39 +57,4 @@ export async function monitorWebChannel(
 ): ReturnType<MonitorWebChannel> {
   const { monitorWebChannel } = await loadChannelRuntime();
   return await monitorWebChannel(...args);
-}
-
-export async function loadOutboundMediaFromUrl(
-  mediaUrl: string,
-  options: {
-    maxBytes?: number;
-    mediaAccess?: {
-      localRoots?: readonly string[];
-      readFile?: (filePath: string) => Promise<Buffer>;
-    };
-    mediaLocalRoots?: readonly string[];
-    mediaReadFile?: (filePath: string) => Promise<Buffer>;
-  } = {},
-) {
-  const readFile = options.mediaAccess?.readFile ?? options.mediaReadFile;
-  const localRoots =
-    options.mediaAccess?.localRoots?.length && options.mediaAccess.localRoots.length > 0
-      ? options.mediaAccess.localRoots
-      : options.mediaLocalRoots && options.mediaLocalRoots.length > 0
-        ? options.mediaLocalRoots
-        : undefined;
-  return await loadWebMedia(
-    mediaUrl,
-    readFile
-      ? {
-          ...(options.maxBytes !== undefined ? { maxBytes: options.maxBytes } : {}),
-          localRoots: "any",
-          readFile,
-          hostReadCapability: true,
-        }
-      : {
-          ...(options.maxBytes !== undefined ? { maxBytes: options.maxBytes } : {}),
-          ...(localRoots ? { localRoots } : {}),
-        },
-  );
 }

@@ -3,6 +3,7 @@ import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import {
   approveDevicePairing,
+  formatDevicePairingForbiddenMessage,
   listDevicePairing,
   summarizeDeviceTokens,
   type PairedDevice as InfraPairedDevice,
@@ -173,7 +174,7 @@ async function approvePairingWithFallback(
       return null;
     }
     if (approved.status === "forbidden") {
-      throw new Error(`missing scope: ${approved.missingScope}`, { cause: error });
+      throw new Error(formatDevicePairingForbiddenMessage(approved), { cause: error });
     }
     return {
       requestId,

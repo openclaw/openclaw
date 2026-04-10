@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { typedCases } from "../test-utils/typed-cases.js";
-import { buildSubagentSystemPrompt } from "./subagent-announce.js";
+import { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import { buildAgentSystemPrompt, buildRuntimeLine } from "./system-prompt.js";
 
@@ -249,6 +249,17 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).not.toContain("## Skills");
+  });
+
+  it("avoids the Claude subscription classifier wording in reply tag guidance", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toContain("## Reply Tags");
+    expect(prompt).toContain("[[reply_to_current]]");
+    expect(prompt).not.toContain("Tags are stripped before sending");
+    expect(prompt).toContain("Tags are removed before sending");
   });
 
   it("omits the heartbeat section when no heartbeat prompt is provided", () => {

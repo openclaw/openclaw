@@ -7,7 +7,7 @@ import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/te
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { asRecord } from "../record-shared.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
-import type { BrowserTab } from "./client.js";
+import type { BrowserTab } from "./client.types.js";
 import { BrowserProfileUnavailableError, BrowserTabNotFoundError } from "./errors.js";
 
 type ChromeMcpStructuredPage = {

@@ -7,7 +7,7 @@
     "@buape/carbon": "0.15.0",
     "@discordjs/voice": "^0.19.2",
     "@snazzah/davey": "^0.1.11",
-    "discord-api-types": "^0.38.44",
+    "discord-api-types": "^0.38.45",
     "https-proxy-agent": "^9.0.0",
     "opusscript": "^0.1.1"
   },

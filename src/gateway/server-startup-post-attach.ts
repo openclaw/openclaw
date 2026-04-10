@@ -21,8 +21,8 @@ import { resolveStateDir } from "../config/paths.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
 import {
-  clearInternalHooks,
   createInternalHookEvent,
+  setInternalHooksEnabled,
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
 import { loadInternalHooks } from "../hooks/loader.js";
@@ -145,7 +145,7 @@ export async function startGatewaySidecars(params: {
   }
 
   try {
-    clearInternalHooks();
+    setInternalHooksEnabled(params.cfg.hooks?.internal?.enabled !== false);
     const loadedCount = await loadInternalHooks(params.cfg, params.defaultWorkspaceDir);
     if (loadedCount > 0) {
       params.logHooks.info(
