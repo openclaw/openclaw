@@ -693,13 +693,6 @@ export const dispatchTelegramMessage = async ({
             }
           }
           if (segments.length > 0) {
-            if (reply.hasMedia) {
-              // Text-bearing payloads still need their media delivery after the
-              // lane text path consumes the visible text. Otherwise mixed
-              // tool/media replies such as Telegram TTS outputs can finalize a
-              // text preview but silently drop the actual attachment.
-              await sendPayload({ ...payload, text: undefined });
-            }
             return;
           }
           if (split.suppressedReasoningOnly) {

@@ -638,17 +638,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
-    expect(editMessageTelegram).toHaveBeenCalledWith(
-      123,
-      999,
-      "Generated audio reply.",
-      expect.any(Object),
-    );
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [
           expect.objectContaining({
-            text: undefined,
+            text: "Generated audio reply.",
             mediaUrl: "/tmp/reply.opus",
             audioAsVoice: true,
           }),
