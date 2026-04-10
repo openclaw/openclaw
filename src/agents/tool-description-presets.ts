@@ -7,6 +7,10 @@ export const SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY =
   "Read sanitized message history for a visible session.";
 export const SESSIONS_SEND_TOOL_DISPLAY_SUMMARY = "Send a message to another visible session.";
 export const SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY = "Spawn sub-agent or ACP sessions.";
+export const SESSIONS_DELEGATE_TOOL_DISPLAY_SUMMARY =
+  "Delegate a task to a sub-agent and wait for the result.";
+export const SESSIONS_DELEGATE_BATCH_TOOL_DISPLAY_SUMMARY =
+  "Fan out multiple tasks to sub-agents in parallel and collect results.";
 export const SESSION_STATUS_TOOL_DISPLAY_SUMMARY = "Show session status, usage, and model state.";
 export const UPDATE_PLAN_TOOL_DISPLAY_SUMMARY = "Track a short structured work plan.";
 
@@ -37,6 +41,21 @@ export function describeSessionsSpawnTool(): string {
     '`mode="run"` is one-shot and `mode="session"` is persistent or thread-bound.',
     "Subagents inherit the parent workspace directory automatically.",
     "Use this when the work should happen in a fresh child session instead of the current one.",
+  ].join(" ");
+}
+
+export function describeSessionsDelegateTool(): string {
+  return [
+    "Spawn an isolated sub-agent session, block until it completes, and return its output as a tool result.",
+    "Unlike sessions_spawn, this tool does NOT use auto-announce. The child's final reply is returned directly.",
+    "Use this for synchronous delegation where you need the result before continuing.",
+  ].join(" ");
+}
+
+export function describeSessionsDelegateBatchTool(): string {
+  return [
+    "Spawn multiple isolated sub-agent sessions in parallel, wait for all to complete, and return collected results.",
+    "Each task runs in its own session. Use failureMode='partial' (default) to get completed results even if some tasks fail.",
   ].join(" ");
 }
 

@@ -25,6 +25,10 @@ import { createMusicGenerateTool } from "./tools/music-generate-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
+import {
+  createSessionsDelegateBatchTool,
+  createSessionsDelegateTool,
+} from "./tools/sessions-delegate-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
@@ -272,6 +276,32 @@ export function createOpenClawTools(
       onYield: options?.onYield,
     }),
     createSessionsSpawnTool({
+      agentSessionKey: options?.agentSessionKey,
+      agentChannel: options?.agentChannel,
+      agentAccountId: options?.agentAccountId,
+      agentTo: options?.agentTo,
+      agentThreadId: options?.agentThreadId,
+      agentGroupId: options?.agentGroupId,
+      agentGroupChannel: options?.agentGroupChannel,
+      agentGroupSpace: options?.agentGroupSpace,
+      sandboxed: options?.sandboxed,
+      requesterAgentIdOverride: options?.requesterAgentIdOverride,
+      workspaceDir: spawnWorkspaceDir,
+    }),
+    createSessionsDelegateTool({
+      agentSessionKey: options?.agentSessionKey,
+      agentChannel: options?.agentChannel,
+      agentAccountId: options?.agentAccountId,
+      agentTo: options?.agentTo,
+      agentThreadId: options?.agentThreadId,
+      agentGroupId: options?.agentGroupId,
+      agentGroupChannel: options?.agentGroupChannel,
+      agentGroupSpace: options?.agentGroupSpace,
+      sandboxed: options?.sandboxed,
+      requesterAgentIdOverride: options?.requesterAgentIdOverride,
+      workspaceDir: spawnWorkspaceDir,
+    }),
+    createSessionsDelegateBatchTool({
       agentSessionKey: options?.agentSessionKey,
       agentChannel: options?.agentChannel,
       agentAccountId: options?.agentAccountId,

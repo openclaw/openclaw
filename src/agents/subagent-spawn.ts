@@ -696,6 +696,24 @@ export async function spawnSubagentDirect(
     };
   }
 
+  // Call prepareSubagentSpawn context engine hook (if defined).
+  let subagentSpawnPreparationRollback: (() => void | Promise<void>) | undefined;
+  try {
+    const runtime = await import("./subagent-registry.runtime.js");
+    runtime.ensureContextEnginesInitialized();
+    const engine = await runtime.resolveContextEngine(cfg);
+    if (engine.prepareSubagentSpawn) {
+      const preparation = await engine.prepareSubagentSpawn({
+        parentSessionKey: requesterInternalKey,
+        childSessionKey,
+        ttlMs: runTimeoutSeconds ? runTimeoutSeconds * 1000 : undefined,
+      });
+      subagentSpawnPreparationRollback = preparation?.rollback;
+    }
+  } catch {
+    // Best-effort; do not block spawn on context engine failures.
+  }
+
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
   try {
@@ -735,6 +753,14 @@ export async function spawnSubagentDirect(
       childRunId = runId;
     }
   } catch (err) {
+    // Roll back context engine preparation on spawn failure.
+    if (subagentSpawnPreparationRollback) {
+      try {
+        await subagentSpawnPreparationRollback();
+      } catch {
+        // Best-effort rollback only.
+      }
+    }
     if (attachmentAbsDir) {
       try {
         await fs.rm(attachmentAbsDir, { recursive: true, force: true });
