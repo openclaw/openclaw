@@ -550,11 +550,14 @@ function isSandboxBlockedErrorMessage(raw: string): boolean {
   return Boolean(formatExecDeniedUserMessage(raw)) || SANDBOX_BLOCKED_RE.test(raw);
 }
 
-function isSchemaErrorMessage(raw: string): boolean {
+function isSchemaErrorMessage(raw: string, provider?: string): boolean {
   if (!raw || isReplayInvalidErrorMessage(raw) || isContextOverflowError(raw)) {
     return false;
   }
-  return classifyFailoverReason(raw) === "format" || matchesFormatErrorPattern(raw);
+  return (
+    classifyFailoverReason(raw, provider ? { provider } : undefined) === "format" ||
+    matchesFormatErrorPattern(raw)
+  );
 }
 
 function isTimeoutTransportErrorMessage(raw: string, status?: number): boolean {
@@ -954,7 +957,7 @@ export function classifyProviderRuntimeFailureKind(
   if (message && isReplayInvalidErrorMessage(message)) {
     return "replay_invalid";
   }
-  if (message && isSchemaErrorMessage(message)) {
+  if (message && isSchemaErrorMessage(message, normalizedSignal.provider)) {
     return "schema";
   }
   if (

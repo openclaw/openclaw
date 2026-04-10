@@ -1134,6 +1134,15 @@ describe("classifyProviderRuntimeFailureKind", () => {
     ).not.toBe("auth_scope");
   });
 
+  it("keeps provider-scoped upstream 400s out of schema classification", () => {
+    expect(
+      classifyProviderRuntimeFailureKind({
+        provider: "openrouter",
+        message: "400 Provider returned error",
+      }),
+    ).toBe("timeout");
+  });
+
   it("classifies OAuth refresh failures", () => {
     expect(
       classifyProviderRuntimeFailureKind(

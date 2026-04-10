@@ -252,6 +252,15 @@ describe("formatAssistantErrorText", () => {
     expect(formatted).not.toContain("Re-run OpenAI/Codex login");
   });
 
+  it("does not misdiagnose provider-scoped upstream 400s as schema failures", () => {
+    const msg = makeAssistantError("400 Provider returned error");
+    const formatted = formatAssistantErrorText(msg, { provider: "openrouter" });
+
+    expect(formatted).not.toBe(
+      "LLM request failed: provider rejected the request schema or tool payload.",
+    );
+  });
+
   it("returns an HTML-403 auth message for HTML provider auth failures", () => {
     const msg = makeAssistantError("403 <!DOCTYPE html><html><body>Access denied</body></html>");
     expect(formatAssistantErrorText(msg)).toBe(
