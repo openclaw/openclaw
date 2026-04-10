@@ -38,6 +38,7 @@ export function handleAgentStart(ctx: EmbeddedPiSubscribeContext) {
 export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
   const lastAssistant = ctx.state.lastAssistant;
   const isError = isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error";
+  let lifecycleErrorText: string | undefined;
 
   if (isError && lastAssistant) {
     const friendlyError = formatAssistantErrorText(lastAssistant, {
@@ -54,6 +55,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
     const observedError = buildApiErrorObservationFields(rawError);
     const safeErrorText =
       buildTextObservationFields(errorText).textPreview ?? "LLM request failed.";
+    lifecycleErrorText = safeErrorText;
     const safeRunId = sanitizeForConsole(ctx.params.runId) ?? "-";
     const safeModel = sanitizeForConsole(lastAssistant.model) ?? "unknown";
     const safeProvider = sanitizeForConsole(lastAssistant.provider) ?? "unknown";
@@ -71,24 +73,30 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
       ...observedError,
       consoleMessage: `embedded run agent end: runId=${safeRunId} isError=true model=${safeModel} provider=${safeProvider} error=${safeErrorText}${rawErrorConsoleSuffix}`,
     });
-    emitAgentEvent({
-      runId: ctx.params.runId,
-      stream: "lifecycle",
-      data: {
-        phase: "error",
-        error: safeErrorText,
-        endedAt: Date.now(),
-      },
-    });
-    void ctx.params.onAgentEvent?.({
-      stream: "lifecycle",
-      data: {
-        phase: "error",
-        error: safeErrorText,
-      },
-    });
   } else {
     ctx.log.debug(`embedded run agent end: runId=${ctx.params.runId} isError=${isError}`);
+  }
+
+  const emitLifecycleTerminal = () => {
+    if (isError) {
+      emitAgentEvent({
+        runId: ctx.params.runId,
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          error: lifecycleErrorText ?? "LLM request failed.",
+          endedAt: Date.now(),
+        },
+      });
+      void ctx.params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          error: lifecycleErrorText ?? "LLM request failed.",
+        },
+      });
+      return;
+    }
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "lifecycle",
@@ -101,7 +109,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
       stream: "lifecycle",
       data: { phase: "end" },
     });
-  }
+  };
 
   const finalizeAgentEnd = () => {
     ctx.state.blockState.thinking = false;
@@ -140,11 +148,14 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
   const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();
   finalizeAgentEnd();
   if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
-    return flushBlockReplyBufferResult.then(() => flushPendingMediaAndChannel());
+    return flushBlockReplyBufferResult
+      .then(() => flushPendingMediaAndChannel())
+      .then(() => emitLifecycleTerminal());
   }
 
   const flushPendingMediaAndChannelResult = flushPendingMediaAndChannel();
   if (isPromiseLike<void>(flushPendingMediaAndChannelResult)) {
-    return flushPendingMediaAndChannelResult;
+    return flushPendingMediaAndChannelResult.then(() => emitLifecycleTerminal());
   }
+  emitLifecycleTerminal();
 }

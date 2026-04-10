@@ -224,4 +224,63 @@ describe("handleAgentEnd", () => {
     resolveChannelFlush?.();
     await endPromise;
   });
+
+  it("emits lifecycle end after async channel flush completes", async () => {
+    let resolveChannelFlush: (() => void) | undefined;
+    const onAgentEvent = vi.fn();
+    const onBlockReplyFlush = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveChannelFlush = resolve;
+        }),
+    );
+    const ctx = createContext(undefined, { onAgentEvent, onBlockReplyFlush });
+
+    const endPromise = handleAgentEnd(ctx);
+
+    expect(onAgentEvent).not.toHaveBeenCalled();
+
+    resolveChannelFlush?.();
+    await endPromise;
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+  });
+
+  it("emits lifecycle error after async channel flush completes", async () => {
+    let resolveChannelFlush: (() => void) | undefined;
+    const onAgentEvent = vi.fn();
+    const onBlockReplyFlush = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveChannelFlush = resolve;
+        }),
+    );
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: "connection refused",
+        content: [{ type: "text", text: "" }],
+      },
+      { onAgentEvent, onBlockReplyFlush },
+    );
+
+    const endPromise = handleAgentEnd(ctx);
+
+    expect(onAgentEvent).not.toHaveBeenCalled();
+
+    resolveChannelFlush?.();
+    await endPromise;
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        error: "LLM request failed: connection refused by the provider endpoint.",
+      },
+    });
+  });
 });

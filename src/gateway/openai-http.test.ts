@@ -1166,54 +1166,6 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
   });
 
   it(
-    "bounds usage-enabled stream finalization when usage never arrives",
-    { timeout: 10_000 },
-    async () => {
-      const port = enabledPort;
-      let serverAbortSignal: AbortSignal | undefined;
-
-      agentCommand.mockClear();
-      agentCommand.mockImplementationOnce(
-        (opts: unknown) =>
-          new Promise<undefined>((resolve) => {
-            const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
-            const signal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
-            serverAbortSignal = signal;
-            emitAgentEvent({ runId, stream: "assistant", data: { delta: "hello" } });
-            emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
-            if (signal?.aborted) {
-              resolve(undefined);
-              return;
-            }
-            signal?.addEventListener("abort", () => resolve(undefined), { once: true });
-          }),
-      );
-
-      const res = await postChatCompletions(port, {
-        stream: true,
-        stream_options: { include_usage: true },
-        model: "openclaw",
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(200);
-
-      const text = await res.text();
-      const data = parseSseDataLines(text);
-      expect(data[data.length - 1]).toBe("[DONE]");
-      const jsonChunks = data
-        .filter((d) => d !== "[DONE]")
-        .map((d) => JSON.parse(d) as Record<string, unknown>);
-      const usageChunk = jsonChunks.find((chunk) => "usage" in chunk);
-      expect(usageChunk?.usage).toEqual({
-        prompt_tokens: 0,
-        completion_tokens: 0,
-        total_tokens: 0,
-      });
-      expect(serverAbortSignal?.aborted).toBe(true);
-    },
-  );
-
-  it(
     "cleans up usage-enabled stream when client disconnects before usage arrives",
     { timeout: 15_000 },
     async () => {

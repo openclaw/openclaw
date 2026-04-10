@@ -68,7 +68,6 @@ const DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES = 20 * 1024 * 1024;
 const IMAGE_ONLY_USER_MESSAGE = "User sent image(s) with no text.";
 const DEFAULT_OPENAI_MAX_IMAGE_PARTS = 8;
 const DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024;
-const STREAM_USAGE_FINALIZE_GRACE_MS = 2_000;
 const DEFAULT_OPENAI_IMAGE_LIMITS: InputImageLimits = {
   allowUrl: false,
   allowedMimes: new Set(DEFAULT_INPUT_IMAGE_MIMES),
@@ -648,36 +647,6 @@ export async function handleOpenAiHttpRequest(
   let finalizeRequested = false;
   let closed = false;
   let stopWatchingDisconnect = () => {};
-  let finalizeTimer: ReturnType<typeof setTimeout> | undefined;
-
-  const clearFinalizeTimer = () => {
-    if (!finalizeTimer) {
-      return;
-    }
-    clearTimeout(finalizeTimer);
-    finalizeTimer = undefined;
-  };
-
-  const armFinalizeTimer = () => {
-    if (!streamIncludeUsage || finalUsage || finalizeTimer || closed) {
-      return;
-    }
-    finalizeTimer = setTimeout(() => {
-      finalizeTimer = undefined;
-      if (closed || finalUsage) {
-        return;
-      }
-      finalUsage = {
-        prompt_tokens: 0,
-        completion_tokens: 0,
-        total_tokens: 0,
-      };
-      if (!abortController.signal.aborted) {
-        abortController.abort();
-      }
-      maybeFinalize();
-    }, STREAM_USAGE_FINALIZE_GRACE_MS);
-  };
 
   const maybeFinalize = () => {
     if (closed || !finalizeRequested) {
@@ -687,7 +656,6 @@ export async function handleOpenAiHttpRequest(
       return;
     }
     closed = true;
-    clearFinalizeTimer();
     stopWatchingDisconnect();
     unsubscribe();
     if (!wroteStopChunk) {
@@ -703,7 +671,6 @@ export async function handleOpenAiHttpRequest(
 
   const requestFinalize = () => {
     finalizeRequested = true;
-    armFinalizeTimer();
     maybeFinalize();
   };
 
@@ -746,7 +713,6 @@ export async function handleOpenAiHttpRequest(
 
   stopWatchingDisconnect = watchClientDisconnect(req, res, abortController, () => {
     closed = true;
-    clearFinalizeTimer();
     unsubscribe();
   });
 
