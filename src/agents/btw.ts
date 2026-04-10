@@ -83,13 +83,48 @@ function buildBtwQuestionPrompt(question: string, inFlightPrompt?: string): stri
   return lines.join("\n");
 }
 
+const BTW_TOOL_BLOCK_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
+
+function sanitizeBtwAssistantMessage(
+  message: Extract<Message, { role: "assistant" }>,
+): Extract<Message, { role: "assistant" }> | undefined {
+  const originalContent = Array.isArray(message.content) ? message.content : [];
+  const content = originalContent.filter((block) => {
+    if (!block || typeof block !== "object") {
+      return true;
+    }
+    return !BTW_TOOL_BLOCK_TYPES.has((block as { type?: unknown }).type as string);
+  });
+  if (content.length === originalContent.length) {
+    return message;
+  }
+  if (content.length === 0) {
+    return undefined;
+  }
+  return {
+    ...message,
+    content,
+  };
+}
+
 function toSimpleContextMessages(messages: unknown[]): Message[] {
-  const contextMessages = messages.filter((message): message is Message => {
+  const contextMessages = messages.flatMap((message): Message[] => {
     if (!message || typeof message !== "object") {
-      return false;
+      return [];
     }
     const role = (message as { role?: unknown }).role;
-    return role === "user" || role === "assistant";
+    if (role === "user") {
+      return [message as Extract<Message, { role: "user" }>];
+    }
+    if (role !== "assistant") {
+      return [];
+    }
+    // BTW is a no-tools path, so strip replay-only tool calls from assistant
+    // context before handing history to strict providers like Bedrock.
+    const sanitizedMessage = sanitizeBtwAssistantMessage(
+      message as Extract<Message, { role: "assistant" }>,
+    );
+    return sanitizedMessage ? [sanitizedMessage] : [];
   });
   return stripToolResultDetails(
     contextMessages as Parameters<typeof stripToolResultDetails>[0],
