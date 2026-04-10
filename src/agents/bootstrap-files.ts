@@ -466,7 +466,7 @@ export async function resolveEffectiveAgentsBootstrapFileForRun(params: {
   };
 }
 
-export async function resolveBootstrapFilesForRun(params: {
+export async function resolveBootstrapFilesWithSignatureForRun(params: {
   workspaceDir: string;
   config?: OpenClawConfig;
   sessionKey?: string;
@@ -477,7 +477,10 @@ export async function resolveBootstrapFilesForRun(params: {
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
-}): Promise<WorkspaceBootstrapFile[]> {
+}): Promise<{
+  bootstrapFiles: WorkspaceBootstrapFile[];
+  bootstrapSignature: string;
+}> {
   const excludeHeartbeatBootstrapFile = shouldExcludeHeartbeatBootstrapFile(params);
   const sessionKey = params.sessionKey ?? params.sessionId;
   const rawFiles = params.sessionKey
@@ -486,15 +489,15 @@ export async function resolveBootstrapFilesForRun(params: {
         sessionKey: params.sessionKey,
       })
     : await loadWorkspaceBootstrapFiles(params.workspaceDir);
-  const bootstrapFiles = applyContextModeFilter({
+  const filteredBootstrapFiles = applyContextModeFilter({
     files: filterBootstrapFilesForSession(rawFiles, sessionKey),
     contextMode: params.contextMode,
     runKind: params.runKind,
   });
-  let bootstrapFilesWithAgentsOverride = bootstrapFiles;
-  if (bootstrapFiles.some((file) => file.name === DEFAULT_AGENTS_FILENAME)) {
+  let bootstrapFilesWithAgentsOverride = filteredBootstrapFiles;
+  if (filteredBootstrapFiles.some((file) => file.name === DEFAULT_AGENTS_FILENAME)) {
     const selectedAgentsFile = await resolveEffectiveAgentsBootstrapFileForRun(params);
-    bootstrapFilesWithAgentsOverride = bootstrapFiles.map((file) =>
+    bootstrapFilesWithAgentsOverride = filteredBootstrapFiles.map((file) =>
       file.name === DEFAULT_AGENTS_FILENAME ? selectedAgentsFile.bootstrapFile : file,
     );
   }
@@ -509,10 +512,31 @@ export async function resolveBootstrapFilesForRun(params: {
     modelProviderId: params.modelProviderId,
     modelId: params.modelId,
   });
-  return sanitizeBootstrapFiles(
+  const bootstrapFiles = sanitizeBootstrapFiles(
     filterHeartbeatBootstrapFile(updated, excludeHeartbeatBootstrapFile),
     params.warn,
   );
+  const selectedAgentsFile =
+    bootstrapFiles.find((file) => file.name === DEFAULT_AGENTS_FILENAME)?.path ?? "";
+  return {
+    bootstrapFiles,
+    bootstrapSignature: buildBootstrapSignature(selectedAgentsFile),
+  };
+}
+
+export async function resolveBootstrapFilesForRun(params: {
+  workspaceDir: string;
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  sessionId?: string;
+  agentId?: string;
+  modelProviderId?: string;
+  modelId?: string;
+  warn?: (message: string) => void;
+  contextMode?: BootstrapContextMode;
+  runKind?: BootstrapContextRunKind;
+}): Promise<WorkspaceBootstrapFile[]> {
+  return (await resolveBootstrapFilesWithSignatureForRun(params)).bootstrapFiles;
 }
 
 export async function resolveBootstrapContextForRun(params: {
@@ -531,17 +555,17 @@ export async function resolveBootstrapContextForRun(params: {
   contextFiles: EmbeddedContextFile[];
   bootstrapSignature: string;
 }> {
-  const bootstrapFiles = await resolveBootstrapFilesForRun(params);
+  const { bootstrapFiles, bootstrapSignature } = await resolveBootstrapFilesWithSignatureForRun(
+    params,
+  );
   const contextFiles = buildBootstrapContextFiles(bootstrapFiles, {
     maxChars: resolveBootstrapMaxChars(params.config),
     totalMaxChars: resolveBootstrapTotalMaxChars(params.config),
     warn: params.warn,
   });
-  const selectedAgentsFile =
-    bootstrapFiles.find((file) => file.name === DEFAULT_AGENTS_FILENAME)?.path ?? "";
   return {
     bootstrapFiles,
     contextFiles,
-    bootstrapSignature: buildBootstrapSignature(selectedAgentsFile),
+    bootstrapSignature,
   };
 }
