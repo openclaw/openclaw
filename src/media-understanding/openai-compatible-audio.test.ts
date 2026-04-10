@@ -12,7 +12,11 @@ function decodeBody(body: BodyInit | null | undefined): string {
   if (body instanceof Uint8Array || Buffer.isBuffer(body)) {
     return Buffer.from(body).toString("utf8");
   }
-  return String(body);
+  if (typeof body === "string") {
+    return body;
+  }
+  // FormData, Blob, URLSearchParams, ReadableStream — not expected in these tests
+  return "[non-string body]";
 }
 
 installPinnedHostnameTestHooks();
