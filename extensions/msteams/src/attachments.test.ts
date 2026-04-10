@@ -614,8 +614,8 @@ describe("msteams attachments", () => {
         expectAttachmentMediaLength(media, 1);
         expect(media[0]?.path).toBe(SAVED_PDF_PATH);
         // The only host that should be fetched is graph.microsoft.com.
-        const calledUrls = fetchMock.mock.calls.map(([input]) =>
-          typeof input === "string" ? input : String(input),
+        const calledUrls = (fetchMock.mock.calls as Array<[RequestInfo | URL, RequestInit?]>).map(
+          ([input]) => (typeof input === "string" ? input : String(input)),
         );
         expect(calledUrls.length).toBeGreaterThan(0);
         for (const url of calledUrls) {
@@ -642,9 +642,10 @@ describe("msteams attachments", () => {
         );
 
         expectAttachmentMediaLength(media, 1);
-        const calledUrls = fetchMock.mock.calls.map(([input]) =>
-          typeof input === "string" ? input : String(input),
-        );
+        const calledUrls = (fetchMock.mock.calls as unknown[]).map((call) => {
+          const input = (call as [RequestInfo | URL])[0];
+          return typeof input === "string" ? input : String(input);
+        });
         // Should have hit the original host, NOT graph shares.
         expect(calledUrls.some((url) => url === directUrl)).toBe(true);
         expect(calledUrls.some((url) => url.startsWith(GRAPH_SHARES_URL_PREFIX))).toBe(false);

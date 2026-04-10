@@ -80,12 +80,14 @@ const mocks = vi.hoisted(() => {
         };
       },
     ),
-    readConfigFileSnapshot: vi.fn(async () => ({
+    readConfigFileSnapshot: vi.fn<
+      () => Promise<{ path: string; hash: string; config: OpenClawConfig }>
+    >(async () => ({
       path: "/tmp/openclaw.json",
       hash: "config-hash-1",
       config: configState,
     })),
-    readExecApprovalsSnapshot: vi.fn(() => ({
+    readExecApprovalsSnapshot: vi.fn<() => ExecApprovalsSnapshot>(() => ({
       path: "/tmp/exec-approvals.json",
       exists: true,
       raw: "{}",
@@ -286,10 +288,10 @@ describe("exec-policy CLI", () => {
       }),
       0,
     );
-    const [{ effectivePolicy }] = mocks.defaultRuntime.writeJson.mock.calls.at(-1) as [Record<
-      string,
-      unknown
-    >, number];
+    const [{ effectivePolicy }] = mocks.defaultRuntime.writeJson.mock.calls.at(-1) as [
+      Record<string, unknown>,
+      number,
+    ];
     expect((effectivePolicy as { scopes: Record<string, unknown>[] }).scopes[0]).not.toHaveProperty(
       "allowedDecisions",
     );
@@ -356,6 +358,7 @@ describe("exec-policy CLI", () => {
     });
     mocks.readConfigFileSnapshot.mockImplementationOnce(async () => ({
       path: "/tmp/openclaw.json\u001B[2J\nforged",
+      hash: "config-hash-1",
       config: mocks.getConfig(),
     }));
     mocks.readExecApprovalsSnapshot.mockImplementationOnce(() => ({
@@ -444,24 +447,23 @@ describe("exec-policy CLI", () => {
   it("rolls back approvals if the config write fails after approvals save", async () => {
     const originalApprovals = structuredClone(mocks.getApprovals());
     const originalRaw = JSON.stringify(originalApprovals, null, 2);
-    const originalSnapshot = {
+    const originalSnapshot: ExecApprovalsSnapshot = {
       path: "/tmp/exec-approvals.json",
       exists: true,
       raw: originalRaw,
       hash: "approvals-hash",
       file: originalApprovals,
-    } as ExecApprovalsSnapshot as ReturnType<typeof mocks.readExecApprovalsSnapshot>;
+    };
     mocks.readExecApprovalsSnapshot
       .mockImplementationOnce(() => originalSnapshot)
       .mockImplementationOnce(
-        () =>
-          ({
-            path: "/tmp/exec-approvals.json",
-            exists: true,
-            raw: JSON.stringify(mocks.getApprovals(), null, 2),
-            hash: hashApprovalsFile(mocks.getApprovals()),
-            file: structuredClone(mocks.getApprovals()),
-          }) as ExecApprovalsSnapshot as ReturnType<typeof mocks.readExecApprovalsSnapshot>,
+        (): ExecApprovalsSnapshot => ({
+          path: "/tmp/exec-approvals.json",
+          exists: true,
+          raw: JSON.stringify(mocks.getApprovals(), null, 2),
+          hash: hashApprovalsFile(mocks.getApprovals()),
+          file: structuredClone(mocks.getApprovals()),
+        }),
       );
     mocks.replaceConfigFile.mockImplementationOnce(async () => {
       throw new Error("config write failed");
@@ -477,24 +479,23 @@ describe("exec-policy CLI", () => {
   });
 
   it("removes a newly-written approvals file when config replacement fails and the original file was missing", async () => {
-    const missingSnapshot = {
+    const missingSnapshot: ExecApprovalsSnapshot = {
       path: "/tmp/missing-exec-approvals.json",
       exists: false,
       raw: null,
       hash: "approvals-hash",
       file: { version: 1, agents: {} },
-    } as ExecApprovalsSnapshot as ReturnType<typeof mocks.readExecApprovalsSnapshot>;
+    };
     mocks.readExecApprovalsSnapshot
       .mockImplementationOnce(() => missingSnapshot)
       .mockImplementationOnce(
-        () =>
-          ({
-            path: "/tmp/missing-exec-approvals.json",
-            exists: true,
-            raw: JSON.stringify(mocks.getApprovals(), null, 2),
-            hash: hashApprovalsFile(mocks.getApprovals()),
-            file: structuredClone(mocks.getApprovals()),
-          }) as ExecApprovalsSnapshot as ReturnType<typeof mocks.readExecApprovalsSnapshot>,
+        (): ExecApprovalsSnapshot => ({
+          path: "/tmp/missing-exec-approvals.json",
+          exists: true,
+          raw: JSON.stringify(mocks.getApprovals(), null, 2),
+          hash: hashApprovalsFile(mocks.getApprovals()),
+          file: structuredClone(mocks.getApprovals()),
+        }),
       );
     mocks.replaceConfigFile.mockImplementationOnce(async () => {
       throw new Error("config write failed");
@@ -526,13 +527,13 @@ describe("exec-policy CLI", () => {
       },
       agents: {},
     };
-    const concurrentSnapshot = {
+    const concurrentSnapshot: ExecApprovalsSnapshot = {
       path: "/tmp/exec-approvals.json",
       exists: true,
       raw: JSON.stringify(concurrentFile, null, 2),
       hash: "concurrent-write-hash",
       file: concurrentFile,
-    } as ExecApprovalsSnapshot as ReturnType<typeof mocks.readExecApprovalsSnapshot>;
+    };
     let snapshotReadCount = 0;
     mocks.readExecApprovalsSnapshot.mockImplementation(() => {
       snapshotReadCount += 1;

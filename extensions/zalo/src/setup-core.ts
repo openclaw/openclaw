@@ -9,6 +9,7 @@ import {
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
 import { resolveDefaultZaloAccountId, resolveZaloAccount } from "./accounts.js";
+import { promptZaloAllowFrom } from "./setup-allow-from.js";
 
 const channel = "zalo" as const;
 
@@ -109,13 +110,8 @@ export const zaloDmPolicy: ChannelSetupDmPolicy = {
       },
     };
   },
-  promptAllowFrom: async (params) =>
-    (await loadZaloSetupWizard()).dmPolicy?.promptAllowFrom?.(params) ?? params.cfg,
+  promptAllowFrom: promptZaloAllowFrom,
 };
-
-async function loadZaloSetupWizard(): Promise<ChannelSetupWizard> {
-  return (await import("./setup-surface.js")).zaloSetupWizard;
-}
 
 export function createZaloSetupWizardProxy(
   loadWizard: () => Promise<ChannelSetupWizard>,

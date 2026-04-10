@@ -1,5 +1,3 @@
-import type { OpenClawConfig as RuntimeApiOpenClawConfig } from "openclaw/plugin-sdk/core";
-
 export {
   DEFAULT_ACCOUNT_ID,
   getChatChannelMeta,
@@ -31,8 +29,4 @@ export type { IMessageProbe } from "./src/probe.js";
 export { sendMessageIMessage } from "./src/send.js";
 export { setIMessageRuntime } from "./src/runtime.js";
 export { chunkTextForOutbound } from "./src/channel-api.js";
-
-export type IMessageAccountConfig = Omit<
-  NonNullable<NonNullable<RuntimeApiOpenClawConfig["channels"]>["imessage"]>,
-  "accounts" | "defaultAccount"
->;
+export type { IMessageAccountConfig } from "./src/account-types.js";
