@@ -5,6 +5,7 @@ import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
 } from "../../agents/agent-scope.js";
+import { mergeIdentityMarkdownContent } from "../../agents/identity-file.js";
 import { resolveAgentIdentity } from "../../agents/identity.js";
 import {
   DEFAULT_AGENTS_FILENAME,
@@ -524,17 +525,6 @@ async function writeWorkspaceFileOrRespond(params: {
   return true;
 }
 
-function buildIdentityLines(params: IdentityConfig): string {
-  return [
-    "",
-    ...(params.name ? [`- Name: ${params.name}`] : []),
-    ...(params.theme ? [`- Theme: ${params.theme}`] : []),
-    ...(params.emoji ? [`- Emoji: ${params.emoji}`] : []),
-    ...(params.avatar ? [`- Avatar: ${params.avatar}`] : []),
-    "",
-  ].join("\n");
-}
-
 function normalizeIdentityForFile(
   identity: IdentityConfig | undefined,
 ): IdentityConfig | undefined {
@@ -551,6 +541,43 @@ function normalizeIdentityForFile(
     return undefined;
   }
   return resolved;
+}
+
+async function readWorkspaceFileContent(
+  workspaceDir: string,
+  name: string,
+): Promise<string | undefined> {
+  const resolvedPath = await agentsHandlerDeps.resolveAgentWorkspaceFilePath({
+    workspaceDir,
+    name,
+    allowMissing: true,
+  });
+  if (resolvedPath.kind !== "ready") {
+    return undefined;
+  }
+  try {
+    const safeRead = await agentsHandlerDeps.readLocalFileSafely({ filePath: resolvedPath.ioPath });
+    return safeRead.buffer.toString("utf-8");
+  } catch (err) {
+    if (err instanceof SafeOpenError && err.code === "not-found") {
+      return undefined;
+    }
+    return undefined;
+  }
+}
+
+async function buildIdentityMarkdownForWrite(params: {
+  workspaceDir: string;
+  identity: IdentityConfig;
+  fallbackWorkspaceDir?: string;
+}): Promise<string> {
+  const baseContent =
+    (params.fallbackWorkspaceDir
+      ? await readWorkspaceFileContent(params.fallbackWorkspaceDir, DEFAULT_IDENTITY_FILENAME)
+      : undefined) ??
+    (await readWorkspaceFileContent(params.workspaceDir, DEFAULT_IDENTITY_FILENAME));
+
+  return mergeIdentityMarkdownContent(baseContent, params.identity);
 }
 
 export const agentsHandlers: GatewayRequestHandlers = {
@@ -640,12 +667,16 @@ export const agentsHandlers: GatewayRequestHandlers = {
 
     const persistedIdentity = normalizeIdentityForFile(resolveAgentIdentity(nextConfig, agentId));
     if (persistedIdentity) {
+      const identityContent = await buildIdentityMarkdownForWrite({
+        workspaceDir,
+        identity: persistedIdentity,
+      });
       if (
         !(await writeWorkspaceFileOrRespond({
           respond,
           workspaceDir,
           name: DEFAULT_IDENTITY_FILENAME,
-          content: buildIdentityLines(persistedIdentity),
+          content: identityContent,
         }))
       ) {
         return;
@@ -707,12 +738,22 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const persistedIdentity = normalizeIdentityForFile(resolveAgentIdentity(nextConfig, agentId));
     if (persistedIdentity && (workspaceDir || hasIdentityFields)) {
       const identityWorkspaceDir = resolveAgentWorkspaceDir(nextConfig, agentId);
+      const previousWorkspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+      const fallbackWorkspaceDir =
+        workspaceDir && identityWorkspaceDir !== previousWorkspaceDir
+          ? previousWorkspaceDir
+          : undefined;
+      const identityContent = await buildIdentityMarkdownForWrite({
+        workspaceDir: identityWorkspaceDir,
+        identity: persistedIdentity,
+        fallbackWorkspaceDir,
+      });
       if (
         !(await writeWorkspaceFileOrRespond({
           respond,
           workspaceDir: identityWorkspaceDir,
           name: DEFAULT_IDENTITY_FILENAME,
-          content: buildIdentityLines(persistedIdentity),
+          content: identityContent,
         }))
       ) {
         return;
