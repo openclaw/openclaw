@@ -284,11 +284,11 @@ type ResolvedGatewayCallContext = {
 
 function resolveGatewayCallContext(opts: CallGatewayBaseOptions): ResolvedGatewayCallContext {
   const explicitUrl = trimToUndefined(opts.url);
-  const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
-  const cliUrlOverride = explicitUrl;
-  const envUrlOverride = cliUrlOverride
+  const envUrlOverride = explicitUrl
     ? undefined
     : trimToUndefined(process.env.OPENCLAW_GATEWAY_URL);
+  const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
+  const cliUrlOverride = explicitUrl;
   const urlOverride = cliUrlOverride ?? envUrlOverride;
   const urlOverrideSource = cliUrlOverride ? "cli" : envUrlOverride ? "env" : undefined;
   const canSkipConfigLoad = canSkipGatewayConfigLoad({
@@ -962,7 +962,14 @@ export async function callGatewayCli<T = Record<string, unknown>>(
   opts: CallGatewayCliOptions,
 ): Promise<T> {
   const scopes = Array.isArray(opts.scopes) ? opts.scopes : CLI_DEFAULT_OPERATOR_SCOPES;
-  return await callGatewayWithScopes(opts, scopes);
+  return await callGatewayWithScopes(
+    {
+      ...opts,
+      clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
+      mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
+    },
+    scopes,
+  );
 }
 
 export async function callGatewayLeastPrivilege<T = Record<string, unknown>>(

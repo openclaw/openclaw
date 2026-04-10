@@ -305,6 +305,22 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.token).toBe("test-token");
   });
 
+  it("falls back when env url override and explicit auth are provided", async () => {
+    loadConfig.mockImplementation(() => {
+      throw new Error("loadConfig failure should not block env override auth");
+    });
+    process.env.OPENCLAW_GATEWAY_URL = "ws://127.0.0.1:18800";
+
+    await callGatewayCli({
+      method: "health",
+      token: "test-token",
+    });
+
+    expect(loadConfig).toHaveBeenCalledTimes(1);
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18800");
+    expect(lastClientOptions?.token).toBe("test-token");
+  });
+
   it("keeps device identity enabled for local loopback shared-token auth", async () => {
     setLocalLoopbackGatewayConfig();
 
@@ -518,6 +534,50 @@ describe("callGateway url resolution", () => {
       mode: GATEWAY_CLIENT_MODES.CLI,
       clientName: GATEWAY_CLIENT_NAMES.CLI,
     });
+
+    expect(sawYieldBeforeStart).toBe(true);
+  });
+
+  it("yields one event-loop turn before starting callGatewayCli pairing requests", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    let preConnectYieldRan = false;
+    let sawYieldBeforeStart = false;
+    setImmediate(() => {
+      preConnectYieldRan = true;
+    });
+
+    __testing.setDepsForTests({
+      createGatewayClient: (opts) =>
+        ({
+          async request(
+            method: string,
+            params: unknown,
+            requestOpts?: { expectFinal?: boolean; timeoutMs?: number | null },
+          ) {
+            lastRequestOptions = { method, params, opts: requestOpts };
+            return { ok: true };
+          },
+          start() {
+            sawYieldBeforeStart = preConnectYieldRan;
+            void opts.onHelloOk?.({
+              features: {
+                methods: helloMethods ?? [],
+                events: [],
+              },
+            } as unknown as Parameters<NonNullable<typeof opts.onHelloOk>>[0]);
+          },
+          stop() {},
+        }) as never,
+      loadConfig: loadConfig as unknown as () => OpenClawConfig,
+      loadOrCreateDeviceIdentity: () => deviceIdentityState.value,
+      resolveGatewayPort: resolveGatewayPort as unknown as (
+        cfg?: OpenClawConfig,
+        env?: NodeJS.ProcessEnv,
+      ) => number,
+    });
+
+    await callGatewayCli({ method: "device.pair.list" });
 
     expect(sawYieldBeforeStart).toBe(true);
   });
