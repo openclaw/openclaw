@@ -78,6 +78,7 @@ Docs: https://docs.openclaw.ai
 - Agents/sessions: preserve announce `threadId` when `sessions.list` fallback rehydrates agent-to-agent announce targets so final announce messages stay in the originating thread/topic. (#63506) Thanks @SnowSky1.
 - iMessage/self-chat: remember ambiguous `sender === chat_identifier` outbound rows with missing `destination_caller_id` in self-chat dedupe state so the later reflected inbound copy still drops instead of re-entering inbound handling when the echo cache misses. Thanks @neeravmakwana.
 - Claude CLI: stop marking spawned Claude Code runs as host-managed so they keep using normal CLI subscription behavior. (#64023) Thanks @Alex-Alaniz.
+- Agents/failover: classify OpenRouter `404 No endpoints found for <model>` responses as `model_not_found` so fallback chains continue past retired OpenRouter candidates. (#61472) Thanks @MonkeyLeeT.
 
 ## 2026.4.9
 
