@@ -116,12 +116,7 @@ export function resolveConversationDeliveryTarget(params: {
   const isThreadChild =
     conversationId && parentConversationId && parentConversationId !== conversationId;
   if (channel && isThreadChild) {
-    if (
-      channel === "matrix" ||
-      channel === "slack" ||
-      channel === "mattermost" ||
-      channel === "telegram"
-    ) {
+    if (channel === "slack" || channel === "mattermost" || channel === "telegram") {
       return {
         to: formatConversationTarget({
           channel,
