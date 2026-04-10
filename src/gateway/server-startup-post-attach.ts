@@ -63,7 +63,8 @@ async function prewarmConfiguredPrimaryModel(params: {
   if (isCliProvider(provider, params.cfg)) {
     return;
   }
-  if (resolveEmbeddedAgentRuntime() !== "auto") {
+  const runtime = resolveEmbeddedAgentRuntime();
+  if (runtime !== "auto" && runtime !== "pi") {
     return;
   }
   if (selectAgentHarness({ provider, modelId: model }).id !== "pi") {
