@@ -1,4 +1,5 @@
 import type { GatewayBrowserClient } from "../gateway.ts";
+import { stripAnsi } from "../ansi.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type { LogEntry, LogLevel } from "../types.ts";
 import {
@@ -48,8 +49,9 @@ function normalizeLevel(value: unknown): LogLevel | null {
 }
 
 export function parseLogLine(line: string): LogEntry {
+  const sanitizedLine = stripAnsi(line);
   if (!line.trim()) {
-    return { raw: line, message: line };
+    return { raw: line, message: sanitizedLine };
   }
   try {
     const obj = JSON.parse(line) as Record<string, unknown>;
@@ -63,15 +65,16 @@ export function parseLogLine(line: string): LogEntry {
 
     const contextCandidate =
       typeof obj["0"] === "string" ? obj["0"] : typeof meta?.name === "string" ? meta?.name : null;
-    const contextObj = parseMaybeJsonString(contextCandidate);
+    const sanitizedContextCandidate = contextCandidate ? stripAnsi(contextCandidate) : contextCandidate;
+    const contextObj = parseMaybeJsonString(sanitizedContextCandidate);
     let subsystem =
       typeof contextObj?.subsystem === "string"
         ? contextObj.subsystem
         : typeof contextObj?.module === "string"
           ? contextObj.module
           : null;
-    if (!subsystem && contextCandidate && contextCandidate.length < 120) {
-      subsystem = contextCandidate;
+    if (!subsystem && sanitizedContextCandidate && sanitizedContextCandidate.length < 120) {
+      subsystem = sanitizedContextCandidate;
     }
 
     const message =
@@ -89,12 +92,12 @@ export function parseLogLine(line: string): LogEntry {
       raw: line,
       time,
       level,
-      subsystem,
-      message,
+      subsystem: subsystem ? stripAnsi(subsystem) : subsystem,
+      message: stripAnsi(message),
       meta: meta ?? undefined,
     };
   } catch {
-    return { raw: line, message: line };
+    return { raw: line, message: sanitizedLine };
   }
 }
 
