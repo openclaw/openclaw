@@ -689,7 +689,7 @@ describe("spawnAcpDirect", () => {
     expectAgentGatewayCall({
       deliver: true,
       channel: "matrix",
-      to: "room:!Room:Example.org",
+      to: "channel:!Room:Example.org",
       threadId: "child-thread",
     });
   });
@@ -751,7 +751,7 @@ describe("spawnAcpDirect", () => {
     expectAgentGatewayCall({
       deliver: true,
       channel: "matrix",
-      to: "room:!Room:Example.org",
+      to: "channel:!Room:Example.org",
       threadId: "child-thread",
     });
   });
