@@ -239,6 +239,7 @@ export function getLogger(): TsLogger<LogObj> {
   const cachedLogger = loggingState.cachedLogger as TsLogger<LogObj> | null;
   const cachedSettings = loggingState.cachedSettings as ResolvedSettings | null;
   if (!cachedLogger || settingsChanged(cachedSettings, settings)) {
+    loggingState.loggerGeneration++;
     loggingState.cachedLogger = buildLogger(settings);
     loggingState.cachedSettings = settings;
   }

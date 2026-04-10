@@ -16,4 +16,5 @@ export const loggingState = {
     warn: typeof console.warn;
     error: typeof console.error;
   } | null,
+  loggerGeneration: 0,
 };

@@ -310,8 +310,13 @@ function logToFile(
 
 export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   let fileLogger: TsLogger<LogObj> | null = null;
+  let capturedGeneration = loggingState.loggerGeneration;
 
   const emitLog = (level: LogLevel, message: string, meta?: Record<string, unknown>) => {
+    if (loggingState.loggerGeneration !== capturedGeneration) {
+      fileLogger = null;
+      capturedGeneration = loggingState.loggerGeneration;
+    }
     const consoleSettings = getConsoleSettings();
     const consoleEnabled =
       shouldLogToConsole(level, { level: consoleSettings.level }) &&
@@ -397,6 +402,10 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       emitLog("fatal", message, meta);
     },
     raw(message) {
+      if (loggingState.loggerGeneration !== capturedGeneration) {
+        fileLogger = null;
+        capturedGeneration = loggingState.loggerGeneration;
+      }
       if (isFileLogLevelEnabled("info")) {
         if (!fileLogger) {
           fileLogger = getChildLogger({ subsystem });
