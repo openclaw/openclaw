@@ -30,6 +30,82 @@ describe("cleanSchemaForGemini", () => {
     expect(cleaned.properties).toEqual({});
   });
 
+  it("filters required fields that are not in properties", () => {
+    const cleaned = cleanSchemaForGemini({
+      type: "object",
+      properties: {
+        action: { type: "string" },
+        amount: { type: "number" },
+      },
+      required: ["action", "amount", "token"],
+    }) as { required?: string[] };
+
+    expect(cleaned.required).toEqual(["action", "amount"]);
+  });
+
+  it("preserves required when all fields exist in properties", () => {
+    const cleaned = cleanSchemaForGemini({
+      type: "object",
+      properties: {
+        action: { type: "string" },
+        amount: { type: "number" },
+      },
+      required: ["action", "amount"],
+    }) as { required?: string[] };
+
+    expect(cleaned.required).toEqual(["action", "amount"]);
+  });
+
+  it("removes required entirely when no fields match properties", () => {
+    const cleaned = cleanSchemaForGemini({
+      type: "object",
+      properties: {
+        action: { type: "string" },
+      },
+      required: ["missing_a", "missing_b"],
+    }) as { required?: string[] };
+
+    expect(cleaned.required).toBeUndefined();
+  });
+
+  it("leaves required as-is when properties is absent", () => {
+    const cleaned = cleanSchemaForGemini({
+      type: "object",
+      required: ["a", "b"],
+    }) as { required?: string[] };
+
+    expect(cleaned.required).toEqual(["a", "b"]);
+  });
+
+  it("filters required in nested object properties", () => {
+    const cleaned = cleanSchemaForGemini({
+      type: "object",
+      properties: {
+        config: {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+          },
+          required: ["name", "ghost"],
+        },
+      },
+    }) as { properties?: { config?: { required?: string[] } } };
+
+    expect(cleaned.properties?.config?.required).toEqual(["name"]);
+  });
+
+  it("does not treat inherited keys as declared properties", () => {
+    const cleaned = cleanSchemaForGemini({
+      type: "object",
+      properties: {
+        name: { type: "string" },
+      },
+      required: ["toString", "name"],
+    }) as { required?: string[] };
+
+    expect(cleaned.required).toEqual(["name"]);
+  });
+
   it("coerces nested null properties while preserving valid siblings", () => {
     const cleaned = cleanSchemaForGemini({
       type: "object",
