@@ -85,23 +85,31 @@ export async function readPostCompactionContext(
   });
   const agentsPath = bootstrapFile.path;
   const agentsLabel = path.basename(agentsPath) || "AGENTS.md";
+  const cachedContent = bootstrapFile.content;
 
   try {
-    const opened = await openBoundaryFile({
-      absolutePath: agentsPath,
-      rootPath: workspaceDir,
-      boundaryLabel: "workspace root",
-    });
-    if (!opened.ok) {
+    const content =
+      cachedContent ??
+      (await (async () => {
+        const opened = await openBoundaryFile({
+          absolutePath: agentsPath,
+          rootPath: workspaceDir,
+          boundaryLabel: "workspace root",
+        });
+        if (!opened.ok) {
+          return null;
+        }
+        return (() => {
+          try {
+            return fs.readFileSync(opened.fd, "utf-8");
+          } finally {
+            fs.closeSync(opened.fd);
+          }
+        })();
+      })());
+    if (content === null) {
       return null;
     }
-    const content = (() => {
-      try {
-        return fs.readFileSync(opened.fd, "utf-8");
-      } finally {
-        fs.closeSync(opened.fd);
-      }
-    })();
 
     // Extract configured sections from the effective AGENTS source (default: Session Startup + Red Lines).
     // An explicit empty array disables post-compaction context injection entirely.
