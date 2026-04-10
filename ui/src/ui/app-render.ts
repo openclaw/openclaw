@@ -1785,6 +1785,7 @@ export function renderApp(state: AppViewState) {
                   lastActiveSessionKey: next,
                 });
                 void state.loadAssistantIdentity();
+                void state.loadMeContext();
                 void loadChatHistory(state);
                 void refreshChatAvatar(state);
               },
@@ -1861,6 +1862,7 @@ export function renderApp(state: AppViewState) {
                 });
                 void loadChatHistory(state);
                 void state.loadAssistantIdentity();
+                void state.loadMeContext();
               },
               onNavigateToAgent: () => {
                 state.agentsSelectedId = resolvedAgentId;
@@ -1882,6 +1884,16 @@ export function renderApp(state: AppViewState) {
               assistantName: state.assistantName,
               assistantAvatar: state.assistantAvatar,
               basePath: state.basePath ?? "",
+              meContextLoading: state.meContextLoading,
+              meContextError: state.meContextError,
+              currentUser: state.currentUser,
+              visibleScopes: state.visibleScopes,
+              selectedScope: state.selectedScope,
+              selectedPrivacyMode: state.selectedPrivacyMode,
+              launchableSessionTypes: state.launchableSessionTypes,
+              currentSessionType: state.currentSessionType,
+              onLoadMeContext: () => void state.loadMeContext(),
+              onScopeChange: (scopeId: string) => state.selectMeContextScope(scopeId),
             })
           : nothing}
         ${renderConfigTabForActiveTab()}

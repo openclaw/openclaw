@@ -23,6 +23,9 @@ vi.mock("./controllers/agents.ts", () => ({
 vi.mock("./controllers/assistant-identity.ts", () => ({
   loadAssistantIdentity: vi.fn(),
 }));
+vi.mock("./controllers/me-context.ts", () => ({
+  loadMeContext: vi.fn(),
+}));
 vi.mock("./controllers/chat.ts", () => ({
   loadChatHistory: vi.fn(),
   handleChatEvent: vi.fn(() => "idle"),

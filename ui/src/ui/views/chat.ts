@@ -2,6 +2,11 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import type {
+  ControlUiMeContextResponse,
+  PrivacyMode,
+  ScopeRef,
+} from "../../../../src/gateway/control-ui-contract.js";
+import type {
   CompactionStatus as CompactionIndicatorStatus,
   FallbackStatus as FallbackIndicatorStatus,
 } from "../app-tool-stream.ts";
@@ -98,6 +103,16 @@ export type ChatProps = {
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
   basePath?: string;
+  meContextLoading?: boolean;
+  meContextError?: string | null;
+  currentUser?: ControlUiMeContextResponse["user"] | null;
+  visibleScopes?: ScopeRef[];
+  selectedScope?: ScopeRef | null;
+  selectedPrivacyMode?: PrivacyMode | null;
+  launchableSessionTypes?: ControlUiMeContextResponse["launchableSessionTypes"];
+  currentSessionType?: ControlUiMeContextResponse["currentSessionType"] | null;
+  onLoadMeContext?: () => void;
+  onScopeChange?: (scopeId: string) => void;
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
@@ -628,6 +643,71 @@ const WELCOME_SUGGESTIONS = [
   "Help me configure a channel",
   "Check system health",
 ];
+
+function renderPrivacyBadgeLabel(mode: PrivacyMode | null | undefined): string {
+  switch (mode) {
+    case "group_shared":
+      return "Group shared";
+    case "global_shared":
+      return "Global shared";
+    case "admin":
+      return "Admin";
+    default:
+      return "Private";
+  }
+}
+
+function renderContextBar(props: ChatProps): TemplateResult | typeof nothing {
+  if (props.meContextLoading) {
+    return html`<div class="chat-context-bar"><span class="pill">Loading context…</span></div>`;
+  }
+  if (props.meContextError) {
+    return html`<div class="chat-context-bar">
+      <span class="pill danger">${props.meContextError}</span>
+    </div>`;
+  }
+  const user = props.currentUser;
+  const selectedScope = props.selectedScope;
+  const visibleScopes = props.visibleScopes ?? [];
+  if (!user || !selectedScope) {
+    return nothing;
+  }
+  const launchable = props.launchableSessionTypes ?? [];
+  return html`
+    <div class="chat-context-bar">
+      <div class="chat-context-bar__summary">
+        <span class="pill">${user.displayName}</span>
+        <span class="pill">${user.roleLabel}</span>
+        <span class="pill">${selectedScope.label}</span>
+        <span class="pill"
+          >${renderPrivacyBadgeLabel(props.selectedPrivacyMode ?? selectedScope.privacyMode)}</span
+        >
+        ${props.currentSessionType
+          ? html`<span class="pill">${props.currentSessionType}</span>`
+          : launchable[0]
+            ? html`<span class="pill">${launchable[0]}</span>`
+            : nothing}
+      </div>
+      ${visibleScopes.length > 0 && props.onScopeChange
+        ? html`
+            <label class="chat-context-bar__scope-select">
+              <span>Scope</span>
+              <select
+                .value=${selectedScope.id}
+                @change=${(event: Event) => {
+                  props.onScopeChange?.((event.target as HTMLSelectElement).value);
+                }}
+              >
+                ${visibleScopes.map(
+                  (scope) => html`<option value=${scope.id}>${scope.label}</option>`,
+                )}
+              </select>
+            </label>
+          `
+        : nothing}
+    </div>
+  `;
+}
 
 function renderWelcomeState(props: ChatProps): TemplateResult {
   const name = props.assistantName || "Assistant";
@@ -1164,6 +1244,7 @@ export function renderChat(props: ChatProps) {
     >
       ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
       ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
+      ${renderContextBar(props)}
       ${props.focusMode
         ? html`
             <button

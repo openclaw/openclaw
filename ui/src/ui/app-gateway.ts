@@ -33,6 +33,7 @@ import {
   removeExecApproval,
 } from "./controllers/exec-approval.ts";
 import { loadHealthState } from "./controllers/health.ts";
+import { loadMeContext } from "./controllers/me-context.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadSessions, subscribeSessions } from "./controllers/sessions.ts";
 import {
@@ -250,6 +251,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       }
       void subscribeSessions(host as unknown as OpenClawApp);
       void loadAssistantIdentity(host as unknown as OpenClawApp);
+      void loadMeContext(host as unknown as OpenClawApp);
       void loadAgents(host as unknown as OpenClawApp);
       void loadHealthState(host as unknown as OpenClawApp);
       void loadNodes(host as unknown as OpenClawApp, { quiet: true });
