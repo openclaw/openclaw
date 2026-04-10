@@ -53,6 +53,20 @@ export interface UsageStats {
   detail: string;
 }
 
+export interface ModelInfo {
+  slug: string;
+  displayName: string;
+  contextWindow: number | null;
+  reasoning: boolean;
+  visible: boolean;
+}
+
+export interface CliCapabilities {
+  subcommands: string[];
+  helpHash: string;
+  lastChecked: string;
+}
+
 export interface RuntimeInfo {
   name: string;
   binary: string;
@@ -64,6 +78,8 @@ export interface RuntimeInfo {
   structuredOutput: boolean;
   auth: AuthStatus;
   usage: UsageStats;
+  models: ModelInfo[];
+  capabilities: CliCapabilities | null;
   notes: string;
 }
 
@@ -85,6 +101,7 @@ interface KnownRuntime {
   structuredOutput: boolean;
   authProbe: () => AuthStatus;
   usageProbe: () => UsageStats;
+  modelProbe: () => ModelInfo[];
   notes: string;
 }
 
@@ -390,6 +407,112 @@ function noUsageProbe(): UsageStats {
   return NO_USAGE;
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Model availability probing
+// ──────────────────────────────────────────────────────────────────────────
+
+function probeClaudeModels(): ModelInfo[] {
+  // Claude Code doesn't expose a model list command, but we know the available
+  // models from the subscription tier (detected in auth probe)
+  const credPath = path.join(homedir(), ".claude", ".credentials.json");
+  const data = readJsonSafe(credPath);
+  const oauth = (data?.claudeAiOauth as Record<string, unknown>) ?? {};
+  const sub = (oauth.subscriptionType as string) ?? "free";
+
+  const baseModels: ModelInfo[] = [
+    {
+      slug: "claude-sonnet-4-6",
+      displayName: "Sonnet 4.6",
+      contextWindow: 200000,
+      reasoning: true,
+      visible: true,
+    },
+    {
+      slug: "claude-haiku-4-5",
+      displayName: "Haiku 4.5",
+      contextWindow: 200000,
+      reasoning: true,
+      visible: true,
+    },
+  ];
+  if (sub === "max" || sub === "pro") {
+    baseModels.unshift({
+      slug: "claude-opus-4-6",
+      displayName: "Opus 4.6",
+      contextWindow: 1000000,
+      reasoning: true,
+      visible: true,
+    });
+  }
+  return baseModels;
+}
+
+function probeCodexModels(): ModelInfo[] {
+  const cachePath = path.join(homedir(), ".codex", "models_cache.json");
+  const data = readJsonSafe(cachePath);
+  if (!data) {
+    return [];
+  }
+  const models = (data.models as Array<Record<string, unknown>>) ?? [];
+  return models
+    .filter((m) => (m.visibility as string) !== "hide")
+    .map((m) => ({
+      slug: (m.slug as string) ?? "unknown",
+      displayName: (m.display_name as string) ?? (m.slug as string) ?? "unknown",
+      contextWindow: (m.context_window as number) ?? null,
+      reasoning:
+        Array.isArray(m.supported_reasoning_levels) && m.supported_reasoning_levels.length > 0,
+      visible: true,
+    }));
+}
+
+function noModelProbe(): ModelInfo[] {
+  return [];
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// CLI capability indexing
+// ──────────────────────────────────────────────────────────────────────────
+
+function probeCli(binary: string): CliCapabilities | null {
+  try {
+    const helpOutput = execSync(`${binary} --help 2>&1`, { encoding: "utf-8", timeout: 10000 });
+    // Extract subcommand names from help output
+    const lines = helpOutput.split("\n");
+    const subcommands: string[] = [];
+    let inCommands = false;
+    for (const line of lines) {
+      if (/commands?:/i.test(line)) {
+        inCommands = true;
+        continue;
+      }
+      if (inCommands) {
+        // Most CLIs indent subcommands with 2+ spaces
+        const match = line.match(/^\s{2,}(\S+)/);
+        if (match) {
+          subcommands.push(match[1]);
+        } else if (line.trim() === "" || /^[A-Z]/i.test(line.trim())) {
+          // Empty line or new section header ends the commands block
+          if (subcommands.length > 0) {
+            inCommands = false;
+          }
+        }
+      }
+    }
+    // Simple hash for change detection
+    const sorted = subcommands.toSorted();
+    const hash = sorted.join(",");
+    const hashCode = Array.from(hash).reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0);
+    return {
+      subcommands,
+      helpHash: String(hashCode.toString(16)),
+      lastChecked: new Date().toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function alwaysAvailableAuth(): AuthStatus {
   return {
     authenticated: true,
@@ -416,6 +539,7 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     structuredOutput: true,
     authProbe: alwaysAvailableAuth,
     usageProbe: noUsageProbe,
+    modelProbe: noModelProbe,
     notes:
       "Native OpenClaw agent loop — no external tool needed. Always available when Gateway is running.",
   },
@@ -428,6 +552,7 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     structuredOutput: true,
     authProbe: probeClaudeAuth,
     usageProbe: probeClaudeUsage,
+    modelProbe: probeClaudeModels,
     notes:
       "Anthropic CLI. Supports --output-format stream-json for structured output. Requires Anthropic API key or OAuth.",
   },
@@ -440,6 +565,7 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     structuredOutput: true,
     authProbe: probeCodexAuth,
     usageProbe: probeCodexUsage,
+    modelProbe: probeCodexModels,
     notes:
       "OpenAI CLI. Supports --json structured output mode. Requires OpenAI API key or ChatGPT OAuth.",
   },
@@ -452,6 +578,7 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     structuredOutput: true,
     authProbe: probeGeminiAuth,
     usageProbe: noUsageProbe,
+    modelProbe: noModelProbe,
     notes: "Google CLI. Supports structured output. Requires Google API credentials.",
   },
   {
@@ -463,6 +590,7 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     structuredOutput: false,
     authProbe: noAuthProbe,
     usageProbe: noUsageProbe,
+    modelProbe: noModelProbe,
     notes: "AI pair programming tool. Interactive TUI only — driven via PTY/tmux.",
   },
   {
@@ -474,6 +602,7 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     structuredOutput: false,
     authProbe: noAuthProbe,
     usageProbe: noUsageProbe,
+    modelProbe: noModelProbe,
     notes: "Cursor editor CLI. Interactive — driven via PTY/tmux if CLI mode available.",
   },
   {
@@ -485,6 +614,7 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     structuredOutput: false,
     authProbe: probeGhCopilotAuth,
     usageProbe: noUsageProbe,
+    modelProbe: noModelProbe,
     notes: "GitHub Copilot via `gh copilot`. Requires GitHub CLI + Copilot extension.",
   },
   {
@@ -496,6 +626,7 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     structuredOutput: true,
     authProbe: noAuthProbe,
     usageProbe: noUsageProbe,
+    modelProbe: noModelProbe,
     notes: "Open-source coding agent. Supports structured output mode.",
   },
 ];
@@ -534,6 +665,8 @@ export function discoverRuntimes(opts?: { includeUsage?: boolean }): RuntimeInfo
     const version = found ? getVersion(known.binary, known.versionFlag) : null;
     const auth = found ? known.authProbe() : UNKNOWN_AUTH;
     const usage = found && opts?.includeUsage ? known.usageProbe() : NO_USAGE;
+    const models = found && opts?.includeUsage ? known.modelProbe() : [];
+    const capabilities = found && opts?.includeUsage ? probeCli(known.binary) : null;
     return {
       name: known.name,
       binary: known.binary,
@@ -545,6 +678,8 @@ export function discoverRuntimes(opts?: { includeUsage?: boolean }): RuntimeInfo
       structuredOutput: known.structuredOutput,
       auth,
       usage,
+      models,
+      capabilities,
       notes: known.notes,
     };
   });
@@ -607,6 +742,13 @@ export function formatRuntimes(runtimes: RuntimeInfo[]): string {
           `       plan: ${rt.auth.subscription}${rt.auth.rateLimitTier ? ` / ${rt.auth.rateLimitTier}` : ""}`,
         );
       }
+      if (rt.models.length > 0) {
+        const modelNames = rt.models.map((m) => {
+          const ctx = m.contextWindow ? ` (${(m.contextWindow / 1000).toFixed(0)}K ctx)` : "";
+          return `${m.displayName}${ctx}`;
+        });
+        lines.push(`       models: ${modelNames.join(", ")}`);
+      }
       if (rt.usage.available) {
         lines.push(`       usage: ${rt.usage.detail}`);
         if (rt.usage.dailyBreakdown.length > 0) {
@@ -625,6 +767,11 @@ export function formatRuntimes(runtimes: RuntimeInfo[]): string {
             lines.push(`         ${parts.join("  ")}`);
           }
         }
+      }
+      if (rt.capabilities) {
+        lines.push(
+          `       commands: ${rt.capabilities.subcommands.length} subcommands (${rt.capabilities.subcommands.slice(0, 8).join(", ")}${rt.capabilities.subcommands.length > 8 ? ", ..." : ""})`,
+        );
       }
       lines.push("");
     }
