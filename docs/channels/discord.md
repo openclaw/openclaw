@@ -1081,6 +1081,7 @@ Auto-join example:
 Notes:
 
 - `voice.tts` overrides `messages.tts` for voice playback only.
+- `voice.model` can be set to override the LLM model used for VC responses (e.g. `openai-codex/gpt-5.4`). Leave unset to inherit the route's default model.
 - Voice transcript turns derive owner status from Discord `allowFrom` (or `dm.allowFrom`); non-owner speakers cannot access owner-only tools (for example `gateway` and `cron`).
 - Voice is enabled by default; set `channels.discord.voice.enabled=false` to disable it.
 - `voice.daveEncryption` and `voice.decryptionFailureTolerance` pass through to `@discordjs/voice` join options.

@@ -3055,6 +3055,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         label: "Discord Voice Enabled",
         help: "Enable Discord voice channel conversations (default: true). Omit channels.discord.voice to keep voice support disabled for the account.",
       },
+      "voice.model": {
+        label: "Discord Voice LLM Model",
+        help: "Optional override for the LLM model used by voice sessions (for example openai-codex/gpt-5.4). Leave unset to inherit the route/session default model.",
+      },
       "voice.autoJoin": {
         label: "Discord Voice Auto-Join",
         help: "Voice channels to auto-join on startup (list of guildId/channelId entries).",

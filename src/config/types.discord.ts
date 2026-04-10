@@ -128,6 +128,8 @@ export type DiscordVoiceAutoJoinConfig = {
 export type DiscordVoiceConfig = {
   /** Enable Discord voice channel conversations (default: true). */
   enabled?: boolean;
+  /** Model used by the LLM for Discord voice sessions (default: main agent model). */
+  model?: string;
   /** Voice channels to auto-join on startup. */
   autoJoin?: DiscordVoiceAutoJoinConfig[];
   /** Enable/disable DAVE end-to-end encryption (default: true; Discord may require this). */
