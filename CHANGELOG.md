@@ -120,6 +120,8 @@ Docs: https://docs.openclaw.ai
 - Gateway/restart sentinel: route restart notices only from stored canonical delivery metadata and skip outbound guessing from lossy session keys, avoiding misdelivery on case-sensitive channels like Matrix. (#64391) Thanks @gumadeiras.
 
 - Cron/isolated agent: run scheduled agent turns as non-owner senders so owner-only tools stay unavailable during cron execution. (#63878)
+- Voice Call/realtime: reject oversized realtime WebSocket frames before bridge setup so large pre-start payloads cannot crash the gateway. (#63890) Thanks @mmaps.
+
 ## 2026.4.9
 
 ### Changes
