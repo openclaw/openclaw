@@ -215,6 +215,38 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it("returns an explicit re-authentication message for OAuth refresh failures", () => {
+    const msg = makeAssistantError(
+      "OAuth token refresh failed for openai-codex: invalid_grant. Please try again or re-authenticate.",
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Authentication refresh failed. Re-authenticate this provider and try again.",
+    );
+  });
+
+  it("returns a missing-scope message for OpenAI Codex scope failures", () => {
+    const msg = makeAssistantError(
+      '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write model.request"}}',
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Authentication is missing the required OpenAI Codex scopes. Re-run OpenAI/Codex login and try again.",
+    );
+  });
+
+  it("returns an HTML-403 auth message for HTML provider auth failures", () => {
+    const msg = makeAssistantError("403 <!DOCTYPE html><html><body>Access denied</body></html>");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Authentication failed with an HTML 403 response from the provider. Re-authenticate and verify your provider account access.",
+    );
+  });
+
+  it("returns a proxy-specific message for proxy misroutes", () => {
+    const msg = makeAssistantError("407 Proxy Authentication Required");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM request failed: proxy or tunnel configuration blocked the provider request.",
+    );
+  });
+
   it("sanitizes invalid streaming event order errors", () => {
     const msg = makeAssistantError(
       'Unexpected event order, got message_start before receiving "message_stop"',

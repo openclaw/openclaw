@@ -68,6 +68,7 @@ describe("handleAgentEnd", () => {
       event: "embedded_run_agent_end",
       runId: "run-1",
       error: "LLM request failed: connection refused by the provider endpoint.",
+      providerRuntimeFailureKind: "timeout",
       rawErrorPreview: "connection refused",
       consoleMessage:
         "embedded run agent end: runId=run-1 isError=true model=unknown provider=unknown error=LLM request failed: connection refused by the provider endpoint. rawError=connection refused",
@@ -101,6 +102,7 @@ describe("handleAgentEnd", () => {
       runId: "run-1",
       error: "The AI service is temporarily overloaded. Please try again in a moment.",
       failoverReason: "overloaded",
+      providerRuntimeFailureKind: "timeout",
       providerErrorType: "overloaded_error",
       consoleMessage:
         'embedded run agent end: runId=run-1 isError=true model=claude-test provider=anthropic error=The AI service is temporarily overloaded. Please try again in a moment. rawError={"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
@@ -157,6 +159,26 @@ describe("handleAgentEnd", () => {
         phase: "error",
         error: "x-api-key: ***",
       },
+    });
+  });
+
+  it("logs runtime failure kind for missing-scope auth errors", async () => {
+    const ctx = createContext({
+      role: "assistant",
+      stopReason: "error",
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      errorMessage:
+        '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write"}}',
+      content: [{ type: "text", text: "" }],
+    });
+
+    await handleAgentEnd(ctx);
+
+    expect(vi.mocked(ctx.log.warn).mock.calls[0]?.[1]).toMatchObject({
+      failoverReason: "auth",
+      providerRuntimeFailureKind: "auth_scope",
+      httpCode: "401",
     });
   });
 
