@@ -77,7 +77,40 @@ describe("buildEmbeddedSandboxInfo", () => {
       workspaceAccess: "none",
       agentWorkspaceMount: undefined,
       hostBrowserAllowed: false,
-      elevated: { allowed: true, defaultLevel: "on" },
+      elevated: {
+        allowed: true,
+        defaultLevel: "on",
+        fullAccessAvailable: true,
+      },
+    });
+  });
+
+  it("keeps full-access unavailability truth when provided", () => {
+    const sandbox = createSandboxContext();
+
+    expect(
+      buildEmbeddedSandboxInfo(sandbox, {
+        enabled: true,
+        allowed: true,
+        defaultLevel: "full",
+        fullAccessAvailable: false,
+        fullAccessBlockedReason: "runtime",
+      }),
+    ).toEqual({
+      enabled: true,
+      workspaceDir: "/tmp/openclaw-sandbox",
+      containerWorkspaceDir: "/workspace",
+      workspaceAccess: "none",
+      agentWorkspaceMount: undefined,
+      browserBridgeUrl: "http://localhost:9222",
+      browserNoVncUrl: "http://localhost:6080",
+      hostBrowserAllowed: true,
+      elevated: {
+        allowed: true,
+        defaultLevel: "full",
+        fullAccessAvailable: false,
+        fullAccessBlockedReason: "runtime",
+      },
     });
   });
 });

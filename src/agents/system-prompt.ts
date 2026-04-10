@@ -12,7 +12,10 @@ import {
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
-import type { EmbeddedSandboxInfo } from "./pi-embedded-runner/types.js";
+import type {
+  EmbeddedFullAccessBlockedReason,
+  EmbeddedSandboxInfo,
+} from "./pi-embedded-runner/types.js";
 import {
   normalizePromptCapabilityIds,
   normalizeStructuredPromptSection,
@@ -336,6 +339,19 @@ function buildExecApprovalPromptGuidance(params: {
   return "When exec returns approval-pending, include the concrete /approve command from tool output as plain chat text for the user, and do not ask for a different or rotated code.";
 }
 
+function formatFullAccessBlockedReason(reason?: EmbeddedFullAccessBlockedReason): string {
+  if (reason === "host-policy") {
+    return "host policy";
+  }
+  if (reason === "channel") {
+    return "channel constraints";
+  }
+  if (reason === "sandbox") {
+    return "sandbox constraints";
+  }
+  return "runtime constraints";
+}
+
 export function buildAgentSystemPrompt(params: {
   workspaceDir: string;
   defaultThinkLevel?: ThinkLevel;
@@ -470,6 +486,11 @@ export function buildAgentSystemPrompt(params: {
   const sanitizedSandboxContainerWorkspace = sandboxContainerWorkspace
     ? sanitizeForPromptLiteral(sandboxContainerWorkspace)
     : "";
+  const elevated = params.sandboxInfo?.elevated;
+  const fullAccessBlockedReasonLabel =
+    elevated?.fullAccessAvailable === false
+      ? formatFullAccessBlockedReason(elevated.fullAccessBlockedReason)
+      : undefined;
   const displayWorkspaceDir =
     params.sandboxInfo?.enabled && sanitizedSandboxContainerWorkspace
       ? sanitizedSandboxContainerWorkspace
@@ -652,17 +673,35 @@ export function buildAgentSystemPrompt(params: {
             : params.sandboxInfo.hostBrowserAllowed === false
               ? "Host browser control: blocked."
               : "",
-          params.sandboxInfo.elevated?.allowed
+          elevated?.allowed
             ? "Elevated exec is available for this session."
-            : "",
-          params.sandboxInfo.elevated?.allowed
+            : elevated
+              ? "Elevated exec is unavailable for this session."
+              : "",
+          elevated?.allowed && elevated.fullAccessAvailable
             ? "User can toggle with /elevated on|off|ask|full."
             : "",
-          params.sandboxInfo.elevated?.allowed
+          elevated?.allowed && !elevated.fullAccessAvailable
+            ? "User can toggle with /elevated on|off|ask."
+            : "",
+          elevated?.allowed && elevated.fullAccessAvailable
             ? "You may also send /elevated on|off|ask|full when needed."
             : "",
-          params.sandboxInfo.elevated?.allowed
-            ? `Current elevated level: ${params.sandboxInfo.elevated.defaultLevel} (ask runs exec on host with approvals; full auto-approves).`
+          elevated?.allowed && !elevated.fullAccessAvailable
+            ? "You may also send /elevated on|off|ask when needed."
+            : "",
+          elevated?.fullAccessAvailable === false
+            ? `Auto-approved /elevated full is unavailable here (${fullAccessBlockedReasonLabel}).`
+            : "",
+          elevated?.allowed && elevated.fullAccessAvailable
+            ? `Current elevated level: ${elevated.defaultLevel} (ask runs exec on host with approvals; full auto-approves).`
+            : elevated?.allowed
+              ? `Current elevated level: ${elevated.defaultLevel} (full auto-approval unavailable here; use ask/on instead).`
+              : elevated
+                ? "Current elevated level: off (elevated exec unavailable)."
+                : "",
+          elevated && !elevated.allowed
+            ? "Do not tell the user to switch to /elevated full in this session."
             : "",
         ]
           .filter(Boolean)

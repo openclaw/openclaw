@@ -2,6 +2,9 @@ import crypto from "node:crypto";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
+import { resolveEmbeddedFullAccessState } from "../../agents/pi-embedded-runner/sandbox-info.js";
+import type { EmbeddedFullAccessBlockedReason } from "../../agents/pi-embedded-runner/types.js";
+import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
@@ -53,6 +56,8 @@ type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node"
 export function buildExecOverridePromptHint(params: {
   execOverrides?: ExecOverrides;
   elevatedLevel: ElevatedLevel;
+  fullAccessAvailable?: boolean;
+  fullAccessBlockedReason?: EmbeddedFullAccessBlockedReason;
 }): string | undefined {
   const exec = params.execOverrides;
   if (!exec && params.elevatedLevel === "off") {
@@ -69,12 +74,19 @@ export function buildExecOverridePromptHint(params: {
       ? `Current session exec defaults: ${parts.join(" ")}.`
       : "Current session exec defaults: inherited from configured agent/global defaults.";
   const elevatedLine = `Current elevated level: ${params.elevatedLevel}.`;
+  const fullAccessLine =
+    params.fullAccessAvailable === false
+      ? `Auto-approved /elevated full is unavailable here (${params.fullAccessBlockedReason ?? "runtime"}). Use ask/on instead and do not ask the user to switch to /elevated full.`
+      : undefined;
   return [
     "## Current Exec Session State",
     execLine,
     elevatedLine,
+    fullAccessLine,
     "If the user asks to run a command, use the current exec state above. Do not assume a prior denial still applies after `/exec` or `/elevated` changed.",
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 let piEmbeddedRuntimePromise: Promise<typeof import("../../agents/pi-embedded.runtime.js")> | null =
@@ -213,6 +225,17 @@ export async function runPreparedReply(
     cfg,
     isFastTestEnv: process.env.OPENCLAW_TEST_FAST === "1",
   });
+  const fullAccessState = resolveEmbeddedFullAccessState({
+    sandboxEnabled: resolveSandboxRuntimeStatus({
+      cfg,
+      sessionKey: ctx.SessionKey,
+    }).sandboxed,
+    execElevated: {
+      enabled: elevatedEnabled,
+      allowed: elevatedAllowed,
+      defaultLevel: resolvedElevatedLevel ?? "off",
+    },
+  });
   let currentSystemSent = systemSent;
 
   const isFirstTurnInSession = isNewSession || !currentSystemSent;
@@ -261,6 +284,8 @@ export async function runPreparedReply(
     buildExecOverridePromptHint({
       execOverrides,
       elevatedLevel: resolvedElevatedLevel,
+      fullAccessAvailable: fullAccessState.available,
+      fullAccessBlockedReason: fullAccessState.blockedReason,
     }),
   ].filter(Boolean);
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
@@ -609,6 +634,10 @@ export async function runPreparedReply(
         enabled: elevatedEnabled,
         allowed: elevatedAllowed,
         defaultLevel: resolvedElevatedLevel ?? "off",
+        fullAccessAvailable: fullAccessState.available,
+        ...(fullAccessState.blockedReason
+          ? { fullAccessBlockedReason: fullAccessState.blockedReason }
+          : {}),
       },
       timeoutMs,
       blockReplyBreak: resolvedBlockStreamingBreak,
