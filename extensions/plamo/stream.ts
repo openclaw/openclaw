@@ -33,7 +33,7 @@ const PLAMO_TOOL_REQUEST_BLOCK_RE = new RegExp(
 );
 const PLAMO_TOOL_REQUESTS_BLOCK_RE = new RegExp(
   `${escapeRegExp(PLAMO_BEGIN_TOOL_REQUESTS)}(.*?)${escapeRegExp(PLAMO_END_TOOL_REQUESTS)}`,
-  "s",
+  "gs",
 );
 
 type ParsedPlamoToolCall = {
@@ -896,25 +896,29 @@ export function parsePlamoToolCalls(text: string): ParsedPlamoToolCall[] {
     return [];
   }
 
-  const toolRequestsMatch = PLAMO_TOOL_REQUESTS_BLOCK_RE.exec(text);
-  const searchText = toolRequestsMatch?.[1] ?? text;
+  const wrapperBlocks = [...text.matchAll(PLAMO_TOOL_REQUESTS_BLOCK_RE)].map(
+    (match) => match[1] ?? "",
+  );
+  const searchTexts = wrapperBlocks.length > 0 ? wrapperBlocks : [text];
   const toolCalls: ParsedPlamoToolCall[] = [];
 
-  for (const match of searchText.matchAll(PLAMO_TOOL_REQUEST_BLOCK_RE)) {
-    const block = match[1] ?? "";
-    const name = extractTaggedText(block, PLAMO_BEGIN_TOOL_NAME, PLAMO_END_TOOL_NAME)?.trim();
-    const rawArguments = extractToolArguments(block);
-    if (!name || rawArguments === null) {
-      continue;
+  for (const searchText of searchTexts) {
+    for (const match of searchText.matchAll(PLAMO_TOOL_REQUEST_BLOCK_RE)) {
+      const block = match[1] ?? "";
+      const name = extractTaggedText(block, PLAMO_BEGIN_TOOL_NAME, PLAMO_END_TOOL_NAME)?.trim();
+      const rawArguments = extractToolArguments(block);
+      if (!name || rawArguments === null) {
+        continue;
+      }
+      const argumentsObject = parseToolArguments(rawArguments);
+      if (!argumentsObject) {
+        continue;
+      }
+      toolCalls.push({
+        name,
+        arguments: argumentsObject,
+      });
     }
-    const argumentsObject = parseToolArguments(rawArguments);
-    if (!argumentsObject) {
-      continue;
-    }
-    toolCalls.push({
-      name,
-      arguments: argumentsObject,
-    });
   }
 
   return toolCalls;

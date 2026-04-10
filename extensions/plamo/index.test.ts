@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveProviderPluginChoice } from "../../src/plugins/provider-wizard.js";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import plamoPlugin from "./index.js";
+import { normalizePlamoToolMarkupInMessage } from "./stream.js";
 
 type FakeWrappedStream = {
   result: () => Promise<unknown>;
@@ -794,5 +795,44 @@ describe("plamo provider plugin", () => {
     );
     expect(result).toBe(doneMessage);
     expect(doneMessage).toMatchObject({ stopReason: "toolUse" });
+  });
+
+  it("parses tool calls from every tool_requests wrapper in assistant text", () => {
+    const firstToolMarkup =
+      "<|plamo:begin_tool_requests:plamo|>" +
+      "<|plamo:begin_tool_request:plamo|>" +
+      "<|plamo:begin_tool_name:plamo|>read<|plamo:end_tool_name:plamo|>" +
+      '<|plamo:begin_tool_arguments:plamo|><|plamo:msg|>{"path":"README.md"}' +
+      "<|plamo:end_tool_arguments:plamo|>" +
+      "<|plamo:end_tool_request:plamo|>" +
+      "<|plamo:end_tool_requests:plamo|>";
+    const secondToolMarkup =
+      "<|plamo:begin_tool_requests:plamo|>" +
+      "<|plamo:begin_tool_request:plamo|>" +
+      "<|plamo:begin_tool_name:plamo|>write<|plamo:end_tool_name:plamo|>" +
+      '<|plamo:begin_tool_arguments:plamo|><|plamo:msg|>{"path":"notes.txt","content":"ok"}' +
+      "<|plamo:end_tool_arguments:plamo|>" +
+      "<|plamo:end_tool_request:plamo|>" +
+      "<|plamo:end_tool_requests:plamo|>";
+
+    const message = {
+      role: "assistant",
+      stopReason: "stop",
+      content: [{ type: "text", text: `${firstToolMarkup}${secondToolMarkup}` }],
+    };
+
+    normalizePlamoToolMarkupInMessage(message);
+
+    expect(message).toMatchObject({
+      stopReason: "toolUse",
+      content: [
+        { type: "toolCall", name: "read", arguments: { path: "README.md" } },
+        {
+          type: "toolCall",
+          name: "write",
+          arguments: { path: "notes.txt", content: "ok" },
+        },
+      ],
+    });
   });
 });
