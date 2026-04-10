@@ -1070,4 +1070,45 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(lookupFn).toHaveBeenCalledOnce();
     await result.release();
   });
+
+  it("preserves FormData Content-Type when routing through runtime fetch with dispatcher", async () => {
+    const runtimeFetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      const ct = init?.headers instanceof Headers
+        ? init.headers.get("content-type")
+        : undefined;
+      // The Content-Type must include the multipart boundary
+      expect(ct).toBeDefined();
+      expect(ct).toContain("multipart/form-data");
+      expect(ct).toContain("boundary=");
+      return okResponse();
+    });
+
+    const originalGlobalFetch = globalThis.fetch;
+    (globalThis as Record<string, unknown>).fetch = (() => {
+      throw new Error("global fetch should not be called");
+    }) as unknown as typeof fetch;
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: class { constructor(readonly options: unknown) {} },
+      EnvHttpProxyAgent: class { constructor(readonly options: unknown) {} },
+      ProxyAgent: class { constructor(readonly options: unknown) {} },
+      fetch: runtimeFetch,
+    };
+
+    try {
+      const form = new FormData();
+      form.append("file", new Blob(["audio-data"], { type: "audio/ogg" }), "test.ogg");
+      form.append("model", "whisper-large-v3-turbo");
+
+      const result = await fetchWithSsrFGuard({
+        url: "https://api.example.com/audio/transcriptions",
+        init: { method: "POST", body: form },
+        lookupFn: createPublicLookup(),
+      });
+
+      expect(runtimeFetch).toHaveBeenCalledTimes(1);
+      await result.release();
+    } finally {
+      (globalThis as Record<string, unknown>).fetch = originalGlobalFetch;
+    }
+  });
 });

@@ -346,6 +346,23 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       // because the default global fetch path will not honor per-request
       // dispatchers.
       const shouldUseRuntimeFetch = Boolean(dispatcher) && !supportsDispatcherInit;
+
+      // undici's fetch does not auto-set the Content-Type header (including the
+      // multipart boundary) when the request body is FormData and a custom
+      // dispatcher is attached.  Work around by letting a temporary Request
+      // resolve the correct header, then forwarding the serialized blob.
+      if (shouldUseRuntimeFetch && init.body instanceof FormData) {
+        const tmp = new Request("http://localhost", { method: init.method ?? "POST", body: init.body });
+        const ct = tmp.headers.get("content-type");
+        if (ct) {
+          const h = new Headers(init.headers);
+          if (!h.has("content-type")) {
+            h.set("content-type", ct);
+          }
+          init = { ...init, headers: h, body: await tmp.blob() };
+        }
+      }
+
       const response = shouldUseRuntimeFetch
         ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
         : await defaultFetch(parsedUrl.toString(), init);
