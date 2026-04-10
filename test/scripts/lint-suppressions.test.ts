@@ -88,7 +88,6 @@ describe("production lint suppressions", () => {
       "src/agents/tools/common.ts|typescript/no-explicit-any|1",
       "src/channels/plugins/types.plugin.ts|typescript/no-explicit-any|1",
       "src/config/types.channels.ts|@typescript-eslint/no-explicit-any|1",
-      "src/plugins/loader.ts|no-unused-vars|1",
       "src/test-utils/vitest-mock-fn.ts|typescript/no-explicit-any|1",
       "ui/src/ui/views/overview-log-tail.ts|no-control-regex|1",
     ]);
