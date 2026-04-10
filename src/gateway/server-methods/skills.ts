@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import {
   listAgentIds,
   resolveAgentWorkspaceDir,
@@ -10,14 +12,18 @@ import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { CONFIG_DIR } from "../../utils.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
   validateSkillsBinsParams,
+  validateSkillsDownloadParams,
   validateSkillsInstallParams,
+  validateSkillsRemoveParams,
   validateSkillsStatusParams,
   validateSkillsUpdateParams,
 } from "../protocol/index.js";
@@ -200,5 +206,162 @@ export const skillsHandlers: GatewayRequestHandlers = {
     };
     await writeConfigFile(nextConfig);
     respond(true, { ok: true, skillKey: p.skillKey, config: current }, undefined);
+  },
+  "skills.download": async ({ params, respond }) => {
+    if (!validateSkillsDownloadParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid skills.download params: ${formatValidationErrors(validateSkillsDownloadParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const p = params as {
+      slug: string;
+      version?: string;
+      registryUrl?: string;
+      force?: boolean;
+    };
+    const SAFE_SLUG = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
+    if (!SAFE_SLUG.test(p.slug) || p.slug.includes("..")) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `invalid slug: "${p.slug}"`),
+      );
+      return;
+    }
+    const skillsDir = path.join(CONFIG_DIR, "skills");
+    const targetDir = path.join(skillsDir, p.slug);
+    if (fs.existsSync(targetDir) && !p.force) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `skill "${p.slug}" already installed at ${targetDir}. Use force: true to overwrite.`,
+        ),
+      );
+      return;
+    }
+    const argv = ["npx", "clawhub", "install", p.slug, "--no-input"];
+    if (p.version) {
+      argv.push("--version", p.version);
+    }
+    if (p.force) {
+      argv.push("--force");
+    }
+    if (p.registryUrl) {
+      argv.push("--registry", p.registryUrl);
+    }
+    try {
+      const result = await runCommandWithTimeout(argv, {
+        timeoutMs: 60_000,
+        cwd: CONFIG_DIR,
+      });
+      if (result.code !== 0) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            `clawhub install failed (exit ${result.code}): ${result.stderr.trim() || result.stdout.trim()}`,
+          ),
+        );
+        return;
+      }
+      // Enable the skill in config by default.
+      const cfg = loadConfig();
+      const skills = cfg.skills ? { ...cfg.skills } : {};
+      const entries = skills.entries ? { ...skills.entries } : {};
+      if (!entries[p.slug]) {
+        entries[p.slug] = { enabled: true };
+        skills.entries = entries;
+        await writeConfigFile({ ...cfg, skills });
+      }
+      respond(
+        true,
+        {
+          ok: true,
+          slug: p.slug,
+          version: p.version || "latest",
+          path: targetDir,
+          stdout: result.stdout.trim(),
+        },
+        undefined,
+      );
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `skills.download failed: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      );
+    }
+  },
+  "skills.remove": async ({ params, respond }) => {
+    if (!validateSkillsRemoveParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid skills.remove params: ${formatValidationErrors(validateSkillsRemoveParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const p = params as { skillKey: string; force?: boolean };
+    const SAFE_KEY = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
+    if (!SAFE_KEY.test(p.skillKey) || p.skillKey.includes("..")) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `invalid skillKey: "${p.skillKey}"`),
+      );
+      return;
+    }
+    const skillsDir = path.join(CONFIG_DIR, "skills");
+    const targetDir = path.join(skillsDir, p.skillKey);
+    const resolved = path.resolve(targetDir);
+    if (!resolved.startsWith(path.resolve(skillsDir) + path.sep)) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "path traversal detected"));
+      return;
+    }
+    if (!fs.existsSync(targetDir)) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `skill "${p.skillKey}" not found`),
+      );
+      return;
+    }
+    try {
+      fs.rmSync(targetDir, { recursive: true, force: true });
+      // Clean up config entry.
+      const cfg = loadConfig();
+      const skills = cfg.skills ? { ...cfg.skills } : {};
+      const entries = skills.entries ? { ...skills.entries } : {};
+      if (entries[p.skillKey]) {
+        delete entries[p.skillKey];
+        skills.entries = entries;
+        await writeConfigFile({ ...cfg, skills });
+      }
+      respond(true, { ok: true, skillKey: p.skillKey }, undefined);
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `skills.remove failed: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      );
+    }
   },
 };

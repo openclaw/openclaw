@@ -29,7 +29,9 @@ import type {
   ModelsListResultSchema,
   SkillsBinsParamsSchema,
   SkillsBinsResultSchema,
+  SkillsDownloadParamsSchema,
   SkillsInstallParamsSchema,
+  SkillsRemoveParamsSchema,
   SkillsStatusParamsSchema,
   SkillsUpdateParamsSchema,
   ToolCatalogEntrySchema,
@@ -225,7 +227,9 @@ export type ToolCatalogGroup = Static<typeof ToolCatalogGroupSchema>;
 export type ToolsCatalogResult = Static<typeof ToolsCatalogResultSchema>;
 export type SkillsBinsParams = Static<typeof SkillsBinsParamsSchema>;
 export type SkillsBinsResult = Static<typeof SkillsBinsResultSchema>;
+export type SkillsDownloadParams = Static<typeof SkillsDownloadParamsSchema>;
 export type SkillsInstallParams = Static<typeof SkillsInstallParamsSchema>;
+export type SkillsRemoveParams = Static<typeof SkillsRemoveParamsSchema>;
 export type SkillsUpdateParams = Static<typeof SkillsUpdateParamsSchema>;
 export type CronJob = Static<typeof CronJobSchema>;
 export type CronListParams = Static<typeof CronListParamsSchema>;

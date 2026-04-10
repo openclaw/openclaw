@@ -189,8 +189,12 @@ import {
   type SkillsBinsParams,
   SkillsBinsParamsSchema,
   type SkillsBinsResult,
+  type SkillsDownloadParams,
+  SkillsDownloadParamsSchema,
   type SkillsInstallParams,
   SkillsInstallParamsSchema,
+  type SkillsRemoveParams,
+  SkillsRemoveParamsSchema,
   type SkillsStatusParams,
   SkillsStatusParamsSchema,
   type SkillsUpdateParams,
@@ -327,6 +331,10 @@ export const validateSkillsBinsParams = ajv.compile<SkillsBinsParams>(SkillsBins
 export const validateSkillsInstallParams =
   ajv.compile<SkillsInstallParams>(SkillsInstallParamsSchema);
 export const validateSkillsUpdateParams = ajv.compile<SkillsUpdateParams>(SkillsUpdateParamsSchema);
+export const validateSkillsDownloadParams = ajv.compile<SkillsDownloadParams>(
+  SkillsDownloadParamsSchema,
+);
+export const validateSkillsRemoveParams = ajv.compile<SkillsRemoveParams>(SkillsRemoveParamsSchema);
 export const validateCronListParams = ajv.compile<CronListParams>(CronListParamsSchema);
 export const validateCronStatusParams = ajv.compile<CronStatusParams>(CronStatusParamsSchema);
 export const validateCronAddParams = ajv.compile<CronAddParams>(CronAddParamsSchema);
