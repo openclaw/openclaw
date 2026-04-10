@@ -694,7 +694,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.pendingToolAudioAsVoice = false;
     state.deterministicApprovalPromptPending = false;
     state.deterministicApprovalPromptSent = false;
-    state.replayInvalid = params.initialReplayInvalid === true;
+    state.replayInvalid = state.replayInvalid || params.initialReplayInvalid === true;
     state.livenessState = "working";
     resetAssistantMessageState(0);
   };

@@ -549,4 +549,39 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(lifecycleError).toBeDefined();
     expect(lifecycleError?.data?.error).toContain("API rate limit reached");
   });
+
+  it("preserves replay-invalid lifecycle truth across compaction retries after mutating tools", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run-replay-invalid-compaction",
+      onAgentEvent,
+      sessionKey: "test-session",
+    });
+
+    emitToolRun({
+      emit,
+      toolName: "edit",
+      toolCallId: "edit-1",
+      args: {
+        file_path: "/tmp/demo.txt",
+        old_string: "before",
+        new_string: "after",
+      },
+      isError: false,
+      result: { ok: true },
+    });
+    emit({ type: "auto_compaction_end", willRetry: true, result: { summary: "compacted" } });
+    emit({ type: "agent_end" });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toContainEqual(
+      expect.objectContaining({
+        phase: "end",
+        replayInvalid: true,
+      }),
+    );
+  });
 });
