@@ -91,7 +91,10 @@ function resolveProviderModel(
     "openai";
 
   const model =
-    readString(params.model) ?? readString(pluginCfg.defaultModel) ?? parsedPrimary.model ?? "gpt-5.4";
+    readString(params.model) ??
+    readString(pluginCfg.defaultModel) ??
+    parsedPrimary.model ??
+    "gpt-5.4";
 
   return { provider, model };
 }

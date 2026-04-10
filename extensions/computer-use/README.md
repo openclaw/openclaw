@@ -21,6 +21,50 @@ agents, workflows, and subagents coordinate computer-use jobs.
 - `confirm`: approve or reject a blocked task
 - `cancel`: stop a running task
 
+## Tiny demo
+
+The plugin is intentionally executor-agnostic, so this PR does not ship a full
+desktop runner. The smallest working flow is:
+
+1. Configure the plugin with a fixed `executorBaseUrl`.
+2. Run any HTTP service that implements the four task endpoints below.
+3. Call the `computer-use` tool with `action: "start"`.
+4. Poll with `status`, then use `confirm` or `cancel` when needed.
+
+Minimal tool-call sequence:
+
+```json
+{ "action": "start", "task": "Open example.com and report the page title" }
+```
+
+Example follow-up calls after the executor returns `taskId: "task_123"`:
+
+```json
+{ "action": "status", "taskId": "task_123" }
+{ "action": "confirm", "taskId": "task_123", "allow": true }
+{ "action": "cancel", "taskId": "task_123" }
+```
+
+Minimal executor stub shape:
+
+```ts
+app.post("/v1/tasks", (_req, res) => {
+  res.json({ taskId: "task_123", status: "blocked", needsConfirmation: true });
+});
+
+app.get("/v1/tasks/:taskId", (req, res) => {
+  res.json({ taskId: req.params.taskId, status: "blocked" });
+});
+
+app.post("/v1/tasks/:taskId/confirm", (req, res) => {
+  res.json({ taskId: req.params.taskId, status: req.body.allow ? "running" : "rejected" });
+});
+
+app.post("/v1/tasks/:taskId/cancel", (req, res) => {
+  res.json({ taskId: req.params.taskId, status: "cancelled" });
+});
+```
+
 ## Example config
 
 ```json5
