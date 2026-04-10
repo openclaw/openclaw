@@ -205,11 +205,7 @@ function escapeZshDoubleQuotedDescription(description: string): string {
     .replace(/\\/g, "\\\\")
     .replace(/"/g, '\\"')
     .replace(/\$/g, "\\$")
-    .replace(/`/g, "\\`")
-    .replace(/\$/g, "\\$")
-    .replace(/`/g, "\\`")
-    .replace(/\[/g, "\\[")
-    .replace(/\]/g, "\\]");
+    .replaceAll("`", "\\`")
     .replace(/\[/g, "\\[")
     .replace(/\]/g, "\\]");
 }
