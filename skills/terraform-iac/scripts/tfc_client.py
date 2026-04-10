@@ -1509,11 +1509,12 @@ resource "aws_organizations_account" "audit" {{
         if not landing_zone_name:
             print("❌ Landing zone name cannot be empty")
             sys.exit(1)
+        if not validate_landing_zone_name(landing_zone_name):
+            print("❌ Landing zone name must be 3-63 chars and use only lowercase letters, numbers, and hyphens.")
+            sys.exit(1)
         if landing_zone_name != name.lower().replace(" ", "-").replace("_", "-"):
             print(f"  ℹ️  Normalized landing zone name to '{landing_zone_name}' before deriving the trail bucket")
         name = landing_zone_name
-        if not validate_azure_rg_name(name):
-            pass
         trail_bucket = f"{name}-org-trail-logs"
         errors = validate_s3_bucket_name(trail_bucket)
         if errors:
@@ -2616,9 +2617,15 @@ Best practice:
 ────────────────────────────────────────────────────────""")
 
     name   = prompt("Trail name (e.g. marsmovers-audit-trail)")
-    if not validate_landing_zone_name(name):
+    normalized_name = name.strip().lower().replace(" ", "-").replace("_", "-")
+    if not normalized_name:
+        print("  ❌ Trail name cannot be empty")
+        sys.exit(1)
+    name_errors = validate_landing_zone_name(normalized_name)
+    if name_errors:
         print("  ❌ Trail name must be a valid landing-zone style name: lowercase letters, numbers, and hyphens only, 3-63 chars.")
         sys.exit(1)
+    name = normalized_name
     region = prompt("AWS region", default="us-east-1")
     env    = prompt("Environment", default="prod", choices=["dev", "staging", "prod"])
 
@@ -2639,18 +2646,27 @@ Best practice:
     bucket_choice = prompt("Create a new bucket or use existing?", default="new", choices=["new", "existing"])
     if bucket_choice == "existing":
         bucket_name = prompt("Existing S3 bucket name")
-        if not validate_s3_bucket_name(bucket_name):
+        bucket_errors = validate_s3_bucket_name(bucket_name)
+        if bucket_errors:
             print(f"  ❌ Invalid S3 bucket name: {bucket_name}")
+            for e in bucket_errors:
+                print(f"   - {e}")
             sys.exit(1)
         bucket_block = ""
         bucket_policy_block = ""
         bucket_ref = f'"{bucket_name}"'
     else:
         bucket_name = f"{name}-logs-{region}".lower().replace("_", "-")
-        errors = validate_s3_bucket_name(bucket_name)
-        if errors:
+        bucket_errors = validate_s3_bucket_name(bucket_name)
+        if bucket_errors:
             print(f"  ⚠️  Auto-generated bucket name '{bucket_name}' is invalid, enter manually:")
             bucket_name = prompt("S3 bucket name for trail logs")
+            bucket_errors = validate_s3_bucket_name(bucket_name)
+            if bucket_errors:
+                print(f"  ❌ Invalid S3 bucket name: {bucket_name}")
+                for e in bucket_errors:
+                    print(f"   - {e}")
+                sys.exit(1)
         else:
             print(f"  ℹ️  Will create bucket: {bucket_name}")
         bucket_ref = "aws_s3_bucket.trail_logs.id"
