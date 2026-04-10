@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
@@ -20,6 +20,7 @@ import {
 import type { ChatCommandDefinition } from "./commands-registry.types.js";
 
 beforeEach(() => {
+  vi.doUnmock("../channels/plugins/index.js");
   setActivePluginRegistry(createTestRegistry([]));
 });
 
@@ -99,6 +100,9 @@ describe("commands registry", () => {
       { skillCommands },
     );
     expect(commands.find((spec) => spec.nativeName === "demo_skill")).toBeTruthy();
+    expect(commands.find((spec) => spec.nativeName === "demo_skill")).toMatchObject({
+      category: "tools",
+    });
 
     const native = listNativeCommandSpecsForConfig(
       { commands: { config: false, plugins: false, debug: false, native: true } },
@@ -107,24 +111,24 @@ describe("commands registry", () => {
     expect(native.find((spec) => spec.name === "demo_skill")).toBeTruthy();
   });
 
-  it("keeps default native names when the channel plugin does not override them", () => {
+  it("applies discord native command overrides", () => {
     const native = listNativeCommandSpecsForConfig(
       { commands: { native: true } },
       { provider: "discord" },
     );
-    expect(native.find((spec) => spec.name === "tts")).toBeTruthy();
-    expect(findCommandByNativeName("tts", "discord")?.key).toBe("tts");
-    expect(findCommandByNativeName("voice", "discord")).toBeUndefined();
+    expect(native.find((spec) => spec.name === "voice")).toBeTruthy();
+    expect(findCommandByNativeName("voice", "discord")?.key).toBe("tts");
+    expect(findCommandByNativeName("tts", "discord")).toBeUndefined();
   });
 
-  it("keeps status unchanged for slack without a channel override", () => {
+  it("applies slack native command overrides", () => {
     const native = listNativeCommandSpecsForConfig(
       { commands: { native: true } },
       { provider: "slack" },
     );
-    expect(native.find((spec) => spec.name === "status")).toBeTruthy();
-    expect(findCommandByNativeName("status", "slack")?.key).toBe("status");
-    expect(findCommandByNativeName("agentstatus", "slack")).toBeUndefined();
+    expect(native.find((spec) => spec.name === "agentstatus")).toBeTruthy();
+    expect(findCommandByNativeName("agentstatus", "slack")?.key).toBe("status");
+    expect(findCommandByNativeName("status", "slack")).toBeUndefined();
   });
 
   it("keeps discord native command specs within slash-command limits", () => {

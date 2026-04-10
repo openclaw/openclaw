@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveRuntimePluginRegistryMock =
   vi.fn<typeof import("./loader.js").resolveRuntimePluginRegistry>();
@@ -116,15 +116,13 @@ async function expectCloseMemoryRuntimeCase(params: {
 }
 
 describe("memory runtime auto-enable loading", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({
       getActiveMemorySearchManager,
       resolveActiveMemoryBackendConfig,
       closeActiveMemorySearchManagers,
     } = await import("./memory-runtime.js"));
-  });
-
-  beforeEach(() => {
     resolveRuntimePluginRegistryMock.mockReset();
     applyPluginAutoEnableMock.mockReset();
     getMemoryRuntimeMock.mockReset();

@@ -21,6 +21,7 @@ import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfmpeg } from "../media/ffmpeg-exec.js";
 import { runExec } from "../process/exec.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import {
   CLI_OUTPUT_MAX_BUFFER,
@@ -226,7 +227,7 @@ async function resolveCliMediaPath(params: {
     return params.mediaPath;
   }
 
-  const ext = path.extname(params.mediaPath).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(params.mediaPath));
   if (ext === ".wav") {
     return params.mediaPath;
   }
@@ -370,6 +371,20 @@ function resolveEntryRunOptions(params: {
     maxChars,
   );
   return { maxBytes, maxChars, timeoutMs, prompt };
+}
+
+function resolveAudioRequestOverrides(config: MediaUnderstandingConfig | undefined): {
+  prompt?: string;
+  language?: string;
+} {
+  const overrides = (config ?? {}) as MediaUnderstandingConfig & {
+    _requestPromptOverride?: string;
+    _requestLanguageOverride?: string;
+  };
+  return {
+    prompt: overrides._requestPromptOverride,
+    language: overrides._requestLanguageOverride,
+  };
 }
 
 async function resolveProviderExecutionAuth(params: {
@@ -530,6 +545,7 @@ export async function runProviderEntry(params: {
       throw new Error(`Audio transcription provider "${providerId}" not available.`);
     }
     const transcribeAudio = provider.transcribeAudio;
+    const requestOverrides = resolveAudioRequestOverrides(params.config);
     const media = await params.cache.getBuffer({
       attachmentIndex: params.attachmentIndex,
       maxBytes,
@@ -569,8 +585,12 @@ export async function runProviderEntry(params: {
           headers,
           request,
           model,
-          language: entry.language ?? params.config?.language ?? cfg.tools?.media?.audio?.language,
-          prompt,
+          language:
+            requestOverrides.language ??
+            entry.language ??
+            params.config?.language ??
+            cfg.tools?.media?.audio?.language,
+          prompt: requestOverrides.prompt ?? prompt,
           query: providerQuery,
           timeoutMs,
           fetchFn,
@@ -651,6 +671,7 @@ export async function runCliEntry(params: {
   if (!command) {
     throw new Error(`CLI entry missing command for ${capability}`);
   }
+  const requestOverrides = resolveAudioRequestOverrides(params.config);
   const { maxBytes, maxChars, timeoutMs, prompt } = resolveEntryRunOptions({
     capability,
     entry,
@@ -683,7 +704,8 @@ export async function runCliEntry(params: {
     MediaDir: path.dirname(mediaPath),
     OutputDir: outputDir,
     OutputBase: outputBase,
-    Prompt: prompt,
+    Prompt: requestOverrides.prompt ?? prompt,
+    ...(requestOverrides.language ? { Language: requestOverrides.language } : {}),
     MaxChars: maxChars,
   };
   const argv = [command, ...args].map((part, index) =>

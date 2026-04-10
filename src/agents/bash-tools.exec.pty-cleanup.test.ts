@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
 let resetProcessRegistryForTests: typeof import("./bash-process-registry.js").resetProcessRegistryForTests;
 
@@ -10,10 +10,13 @@ vi.mock("@lydell/node-pty", () => ({
   spawn: (...args: unknown[]) => ptySpawnMock(...args),
 }));
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
   ({ createExecTool } = await import("./bash-tools.exec.js"));
   ({ resetProcessRegistryForTests } = await import("./bash-process-registry.js"));
+});
+
+beforeEach(() => {
+  ptySpawnMock.mockReset();
 });
 
 afterEach(() => {

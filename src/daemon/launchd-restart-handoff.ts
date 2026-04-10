@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { formatErrorMessage } from "../infra/errors.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveGatewayLaunchAgentLabel } from "./constants.js";
 
 export type LaunchdRestartHandoffMode = "kickstart" | "start-after-exit";
@@ -27,7 +28,7 @@ function resolveGuiDomain(): string {
 }
 
 function resolveLaunchAgentLabel(env?: Record<string, string | undefined>): string {
-  const envLabel = env?.OPENCLAW_LAUNCHD_LABEL?.trim();
+  const envLabel = normalizeOptionalString(env?.OPENCLAW_LAUNCHD_LABEL);
   if (envLabel) {
     return envLabel;
   }
@@ -39,7 +40,7 @@ export function resolveLaunchdRestartTarget(
 ): LaunchdRestartTarget {
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel(env);
-  const home = env.HOME?.trim() || os.homedir();
+  const home = normalizeOptionalString(env.HOME) || os.homedir();
   const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
   return {
     domain,
@@ -54,11 +55,13 @@ export function isCurrentProcessLaunchdServiceLabel(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   const launchdLabel =
-    env.LAUNCH_JOB_LABEL?.trim() || env.LAUNCH_JOB_NAME?.trim() || env.XPC_SERVICE_NAME?.trim();
+    normalizeOptionalString(env.LAUNCH_JOB_LABEL) ||
+    normalizeOptionalString(env.LAUNCH_JOB_NAME) ||
+    normalizeOptionalString(env.XPC_SERVICE_NAME);
   if (launchdLabel) {
     return launchdLabel === label;
   }
-  const configuredLabel = env.OPENCLAW_LAUNCHD_LABEL?.trim();
+  const configuredLabel = normalizeOptionalString(env.OPENCLAW_LAUNCHD_LABEL);
   return Boolean(configuredLabel && configuredLabel === label);
 }
 

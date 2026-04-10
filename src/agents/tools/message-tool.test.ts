@@ -8,10 +8,13 @@ import {
   createMessageToolCardSchema,
 } from "../../plugin-sdk/channel-actions.js";
 type CreateMessageTool = typeof import("./message-tool.js").createMessageTool;
+type ResetPluginRuntimeStateForTest =
+  typeof import("../../plugins/runtime.js").resetPluginRuntimeStateForTest;
 type SetActivePluginRegistry = typeof import("../../plugins/runtime.js").setActivePluginRegistry;
 type CreateTestRegistry = typeof import("../../test-utils/channel-plugins.js").createTestRegistry;
 
 let createMessageTool: CreateMessageTool;
+let resetPluginRuntimeStateForTest: ResetPluginRuntimeStateForTest;
 let setActivePluginRegistry: SetActivePluginRegistry;
 let createTestRegistry: CreateTestRegistry;
 
@@ -177,12 +180,14 @@ function getActionEnum(properties: Record<string, unknown>) {
 }
 
 beforeAll(async () => {
-  ({ setActivePluginRegistry } = await import("../../plugins/runtime.js"));
+  ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } =
+    await import("../../plugins/runtime.js"));
   ({ createTestRegistry } = await import("../../test-utils/channel-plugins.js"));
   ({ createMessageTool } = await import("./message-tool.js"));
 });
 
 beforeEach(() => {
+  resetPluginRuntimeStateForTest();
   mocks.runMessageAction.mockReset();
   mocks.loadConfig.mockReset().mockReturnValue({});
   mocks.resolveCommandSecretRefsViaGateway.mockReset().mockImplementation(async ({ config }) => ({
@@ -255,6 +260,7 @@ async function executeSend(params: {
         params?: Record<string, unknown>;
         sandboxRoot?: string;
         requesterSenderId?: string;
+        senderIsOwner?: boolean;
       }
     | undefined;
 }
@@ -291,7 +297,7 @@ describe("message tool secret scoping", () => {
       message: "hi",
     });
 
-    const secretResolveCall = mocks.resolveCommandSecretRefsViaGateway.mock.calls[0]?.[0] as {
+    const secretResolveCall = mocks.resolveCommandSecretRefsViaGateway.mock.calls.at(-1)?.[0] as {
       targetIds?: Set<string>;
       allowedPaths?: Set<string>;
     };
@@ -795,6 +801,52 @@ describe("message tool schema scoping", () => {
       }),
     );
   });
+
+  it("forwards senderIsOwner into plugin action discovery", () => {
+    const seenContexts: Record<string, unknown>[] = [];
+    const ownerAwarePlugin = createChannelPlugin({
+      id: "matrix",
+      label: "Matrix",
+      docsPath: "/channels/matrix",
+      blurb: "Matrix owner-aware plugin.",
+      describeMessageTool: (ctx) => {
+        seenContexts.push(ctx);
+        return {
+          actions: ctx.senderIsOwner === false ? ["send"] : ["send", "set-profile"],
+        };
+      },
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "matrix", source: "test", plugin: ownerAwarePlugin }]),
+    );
+
+    const ownerTool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "matrix",
+      senderIsOwner: true,
+    });
+    const nonOwnerTool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "matrix",
+      senderIsOwner: false,
+    });
+
+    expect(getActionEnum(getToolProperties(ownerTool))).toContain("set-profile");
+    expect(getActionEnum(getToolProperties(nonOwnerTool))).not.toContain("set-profile");
+    expect(seenContexts).toContainEqual(expect.objectContaining({ senderIsOwner: true }));
+    expect(seenContexts).toContainEqual(expect.objectContaining({ senderIsOwner: false }));
+  });
+
+  it("keeps core send and broadcast actions in unscoped schemas", () => {
+    const tool = createMessageTool({
+      config: {} as never,
+    });
+
+    expect(getActionEnum(getToolProperties(tool))).toEqual(
+      expect.arrayContaining(["send", "broadcast"]),
+    );
+  });
 });
 
 describe("message tool description", () => {
@@ -998,6 +1050,14 @@ describe("message tool description", () => {
     expect(tool.description).toContain("Supports actions:");
     expect(tool.description).toContain('Use action="read" with threadId');
   });
+
+  it("includes broadcast in the generic fallback description", () => {
+    const tool = createMessageTool({
+      config: {} as never,
+    });
+
+    expect(tool.description).toContain("Supports actions: send, broadcast.");
+  });
 });
 
 describe("message tool reasoning tag sanitization", () => {
@@ -1076,5 +1136,19 @@ describe("message tool sandbox passthrough", () => {
     });
 
     expect(call?.requesterSenderId).toBe("1234567890");
+  });
+
+  it("forwards senderIsOwner to runMessageAction", async () => {
+    mockSendResult({ to: "discord:123" });
+
+    const call = await executeSend({
+      toolOptions: { senderIsOwner: false },
+      action: {
+        target: "discord:123",
+        message: "hi",
+      },
+    });
+
+    expect(call?.senderIsOwner).toBe(false);
   });
 });

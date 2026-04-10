@@ -42,6 +42,21 @@ If you see:
 `HTTP 429: rate_limit_error: Extra usage is required for long context requests`,
 go to [/gateway/troubleshooting#anthropic-429-extra-usage-required-for-long-context](/gateway/troubleshooting#anthropic-429-extra-usage-required-for-long-context).
 
+## Local OpenAI-compatible backend works directly but fails in OpenClaw
+
+If your local or self-hosted `/v1` backend answers small direct
+`/v1/chat/completions` probes but fails on `openclaw infer model run` or normal
+agent turns:
+
+1. If the error mentions `messages[].content` expecting a string, set
+   `models.providers.<provider>.models[].compat.requiresStringContent: true`.
+2. If the backend still fails only on OpenClaw agent turns, set
+   `models.providers.<provider>.models[].compat.supportsTools: false` and retry.
+3. If tiny direct calls still work but larger OpenClaw prompts crash the
+   backend, treat the remaining issue as an upstream model/server limitation and
+   continue in the deep runbook:
+   [/gateway/troubleshooting#local-openai-compatible-backend-passes-direct-probes-but-agent-runs-fail](/gateway/troubleshooting#local-openai-compatible-backend-passes-direct-probes-but-agent-runs-fail)
+
 ## Plugin install fails with missing openclaw extensions
 
 If install fails with `package.json missing openclaw.extensions`, the plugin package

@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { asRecord, readString } from "../config-record-shared.js";
 import { debugLog, debugError, debugWarn } from "./debug-log.js";
 import { detectFfmpeg, isWindows } from "./platform.js";
@@ -116,7 +117,7 @@ export function isVoiceAttachment(att: { content_type?: string; filename?: strin
   if (att.content_type === "voice" || att.content_type?.startsWith("audio/")) {
     return true;
   }
-  const ext = att.filename ? path.extname(att.filename).toLowerCase() : "";
+  const ext = att.filename ? normalizeLowercaseStringOrEmpty(path.extname(att.filename)) : "";
   return [".amr", ".silk", ".slk", ".slac"].includes(ext);
 }
 
@@ -138,7 +139,7 @@ export function isAudioFile(filePath: string, mimeType?: string): boolean {
       return true;
     }
   }
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
   return [
     ".silk",
     ".slk",
@@ -174,10 +175,10 @@ const QQ_NATIVE_VOICE_EXTS = new Set([".silk", ".slk", ".amr", ".wav", ".mp3"]);
  */
 export function shouldTranscodeVoice(filePath: string, mimeType?: string): boolean {
   // Prefer MIME when it is available.
-  if (mimeType && QQ_NATIVE_VOICE_MIMES.has(mimeType.toLowerCase())) {
+  if (mimeType && QQ_NATIVE_VOICE_MIMES.has(normalizeLowercaseStringOrEmpty(mimeType))) {
     return false;
   }
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
   if (QQ_NATIVE_VOICE_EXTS.has(ext)) {
     return false;
   }
@@ -509,7 +510,7 @@ export async function audioFileToSilkBase64(
     return null;
   }
 
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
 
   const uploadFormats = directUploadFormats
     ? normalizeFormats(directUploadFormats)
@@ -808,7 +809,7 @@ async function wasmDecodeMp3ToPCM(buf: Buffer, targetRate: number): Promise<Buff
 /** Normalize file extensions to lowercased dotted form. */
 function normalizeFormats(formats: string[]): string[] {
   return formats.map((f) => {
-    const lower = f.toLowerCase().trim();
+    const lower = normalizeLowercaseStringOrEmpty(f);
     return lower.startsWith(".") ? lower : `.${lower}`;
   });
 }

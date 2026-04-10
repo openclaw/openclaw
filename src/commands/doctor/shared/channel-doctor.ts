@@ -1,5 +1,8 @@
-import { listBundledChannelPlugins } from "../../../channels/plugins/bundled.js";
-import { listChannelPlugins } from "../../../channels/plugins/registry.js";
+import {
+  getBundledChannelPlugin,
+  listBundledChannelPlugins,
+} from "../../../channels/plugins/bundled.js";
+import { getChannelPlugin, listChannelPlugins } from "../../../channels/plugins/registry.js";
 import type {
   ChannelDoctorAdapter,
   ChannelDoctorConfigMutation,
@@ -12,6 +15,19 @@ type ChannelDoctorEntry = {
   channelId: string;
   doctor: ChannelDoctorAdapter;
 };
+
+function collectConfiguredChannelIds(cfg: OpenClawConfig): string[] {
+  const channels =
+    cfg.channels && typeof cfg.channels === "object" && !Array.isArray(cfg.channels)
+      ? cfg.channels
+      : null;
+  if (!channels) {
+    return [];
+  }
+  return Object.keys(channels)
+    .filter((channelId) => channelId !== "defaults")
+    .toSorted();
+}
 
 function safeListActiveChannelPlugins() {
   try {
@@ -29,9 +45,25 @@ function safeListBundledChannelPlugins() {
   }
 }
 
-function listChannelDoctorEntries(): ChannelDoctorEntry[] {
+function listChannelDoctorEntries(channelIds?: readonly string[]): ChannelDoctorEntry[] {
   const byId = new Map<string, ChannelDoctorEntry>();
-  for (const plugin of [...safeListActiveChannelPlugins(), ...safeListBundledChannelPlugins()]) {
+  const selectedIds = channelIds ? new Set(channelIds) : null;
+  const plugins = selectedIds
+    ? [...selectedIds].flatMap((id) => {
+        let activeOrBundledPlugin;
+        try {
+          activeOrBundledPlugin = getChannelPlugin(id);
+        } catch {
+          activeOrBundledPlugin = undefined;
+        }
+        if (activeOrBundledPlugin?.doctor) {
+          return [activeOrBundledPlugin];
+        }
+        const bundledPlugin = getBundledChannelPlugin(id);
+        return bundledPlugin ? [bundledPlugin] : [];
+      })
+    : [...safeListActiveChannelPlugins(), ...safeListBundledChannelPlugins()];
+  for (const plugin of plugins) {
     if (!plugin.doctor) {
       continue;
     }
@@ -64,9 +96,13 @@ export async function runChannelDoctorConfigSequences(params: {
 export function collectChannelDoctorCompatibilityMutations(
   cfg: OpenClawConfig,
 ): ChannelDoctorConfigMutation[] {
+  const channelIds = collectConfiguredChannelIds(cfg);
+  if (channelIds.length === 0) {
+    return [];
+  }
   const mutations: ChannelDoctorConfigMutation[] = [];
   let nextCfg = cfg;
-  for (const entry of listChannelDoctorEntries()) {
+  for (const entry of listChannelDoctorEntries(channelIds)) {
     const mutation = entry.doctor.normalizeCompatibilityConfig?.({ cfg: nextCfg });
     if (!mutation || mutation.changes.length === 0) {
       continue;

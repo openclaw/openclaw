@@ -2,6 +2,7 @@ import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/ind
 import type { ChannelDirectoryEntryKind, ChannelId } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getActivePluginChannelRegistryVersion } from "../../plugins/runtime.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 export function normalizeChannelTargetInput(raw: string): string {
   return raw.trim();
@@ -42,14 +43,13 @@ export function normalizeTargetForProvider(provider: string, raw?: string): stri
   if (!raw) {
     return undefined;
   }
-  const fallback = raw.trim() || undefined;
+  const fallback = normalizeOptionalString(raw);
   if (!fallback) {
     return undefined;
   }
   const providerId = normalizeChannelId(provider);
   const normalizer = providerId ? resolveTargetNormalizer(providerId) : undefined;
-  const normalized = normalizer?.(raw) ?? fallback;
-  return normalized || undefined;
+  return normalizeOptionalString(normalizer?.(raw) ?? fallback);
 }
 
 export type TargetResolveKindLike = ChannelDirectoryEntryKind | "channel";

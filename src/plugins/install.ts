@@ -8,6 +8,7 @@ import {
   unscopedPackageName,
 } from "../infra/install-safe-path.js";
 import { type NpmIntegrityDrift, type NpmSpecResolution } from "../infra/install-source-utils.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import type { InstallSecurityScanResult } from "./install-security-scan.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
@@ -358,6 +359,9 @@ async function installPluginDirectoryIntoExtensions(params: {
   hasDeps: boolean;
   depsLogMessage: string;
   afterCopy?: (installedDir: string) => Promise<void>;
+  afterInstall?: (
+    installedDir: string,
+  ) => Promise<Extract<InstallPluginResult, { ok: false }> | null>;
   nameEncoder?: (pluginId: string) => string;
 }): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
@@ -403,9 +407,24 @@ async function installPluginDirectoryIntoExtensions(params: {
     hasDeps: params.hasDeps,
     depsLogMessage: params.depsLogMessage,
     afterCopy: params.afterCopy,
+    afterInstall: async (installedDir) => {
+      const postInstallResult = await params.afterInstall?.(installedDir);
+      if (!postInstallResult) {
+        return { ok: true as const };
+      }
+      return {
+        ok: false as const,
+        error: postInstallResult.error,
+        ...(postInstallResult.code ? { code: postInstallResult.code } : {}),
+      };
+    },
   });
   if (!installRes.ok) {
-    return installRes;
+    return {
+      ok: false,
+      error: installRes.error,
+      ...(installRes.code ? { code: installRes.code as PluginInstallErrorCode } : {}),
+    };
   }
 
   return buildDirectoryInstallResult({
@@ -624,7 +643,7 @@ async function installPluginFromPackageDir(
   }
   const extensions = extensionsResult.entries;
 
-  const pkgName = typeof manifest.name === "string" ? manifest.name.trim() : "";
+  const pkgName = normalizeOptionalString(manifest.name) ?? "";
   const npmPluginId = pkgName || "plugin";
 
   // Prefer the canonical `id` from openclaw.plugin.json over the npm package name.
@@ -751,6 +770,16 @@ async function installPluginFromPackageDir(
         }
       }
     },
+    afterInstall: async (installedDir) =>
+      await runInstallSourceScan({
+        subject: `Plugin "${pluginId}"`,
+        scan: async () =>
+          await runtime.scanInstalledPackageDependencyTree({
+            logger,
+            packageDir: installedDir,
+            pluginId,
+          }),
+      }),
   });
 }
 

@@ -12,6 +12,7 @@ import { onAgentEvent } from "../infra/agent-events.js";
 import { captureEnv, withEnv } from "../test-utils/env.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import {
+  __testing,
   addSubagentRunForTests,
   clearSubagentRunSteerRestart,
   getLatestSubagentRunByChildSessionKey,
@@ -178,6 +179,9 @@ describe("subagent registry persistence", () => {
   };
 
   beforeEach(() => {
+    __testing.setDepsForTest({
+      runSubagentAnnounceFlow: announceSpy,
+    });
     vi.mocked(callGateway).mockReset();
     vi.mocked(callGateway).mockResolvedValue({
       status: "ok",
@@ -190,6 +194,7 @@ describe("subagent registry persistence", () => {
 
   afterEach(async () => {
     announceSpy.mockClear();
+    __testing.setDepsForTest();
     resetSubagentRegistryForTests({ persist: false });
     await drainSessionStoreLockQueuesForTest();
     clearSessionStoreCacheForTest();

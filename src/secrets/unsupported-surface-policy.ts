@@ -1,5 +1,4 @@
-import { getBootstrapChannelPlugin } from "../channels/plugins/bootstrap-registry.js";
-import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
+import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { isRecord } from "../utils.js";
 import { loadBundledChannelSecurityContractApi } from "./channel-contract-api.js";
 
@@ -14,10 +13,9 @@ const CORE_UNSUPPORTED_SECRETREF_SURFACE_PATTERNS = [
 function listBundledChannelIds(): string[] {
   return [
     ...new Set(
-      listBundledPluginMetadata({
-        includeChannelConfigs: false,
-        includeSyntheticChannelConfigs: false,
-      }).flatMap((entry) => entry.manifest.channels ?? []),
+      loadPluginManifestRegistry({})
+        .plugins.filter((entry) => entry.origin === "bundled")
+        .flatMap((entry) => entry.channels),
     ),
   ].toSorted((left, right) => left.localeCompare(right));
 }
@@ -26,11 +24,7 @@ function collectChannelUnsupportedSecretRefSurfacePatterns(): string[] {
   const patterns: string[] = [];
   for (const channelId of listBundledChannelIds()) {
     const contract = loadBundledChannelSecurityContractApi(channelId);
-    patterns.push(
-      ...(contract?.unsupportedSecretRefSurfacePatterns ??
-        getBootstrapChannelPlugin(channelId)?.secrets?.unsupportedSecretRefSurfacePatterns ??
-        []),
-    );
+    patterns.push(...(contract?.unsupportedSecretRefSurfacePatterns ?? []));
   }
   return patterns;
 }
@@ -96,11 +90,7 @@ export function collectUnsupportedSecretRefConfigCandidates(
   if (isRecord(raw.channels)) {
     for (const channelId of Object.keys(raw.channels)) {
       const contract = loadBundledChannelSecurityContractApi(channelId);
-      const channelCandidates =
-        contract?.collectUnsupportedSecretRefConfigCandidates?.(raw) ??
-        getBootstrapChannelPlugin(
-          channelId,
-        )?.secrets?.collectUnsupportedSecretRefConfigCandidates?.(raw);
+      const channelCandidates = contract?.collectUnsupportedSecretRefConfigCandidates?.(raw);
       if (!channelCandidates?.length) {
         continue;
       }

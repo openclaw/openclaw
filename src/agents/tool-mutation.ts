@@ -1,3 +1,7 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import { asRecord } from "./tool-display-record.js";
 
 const MUTATING_TOOL_NAMES = new Set([
@@ -59,23 +63,17 @@ export type ToolActionRef = {
 };
 
 function normalizeActionName(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value
-    .trim()
-    .toLowerCase()
-    .replace(/[\s-]+/g, "_");
+  const normalized = normalizeOptionalLowercaseString(value)?.replace(/[\s-]+/g, "_");
   return normalized || undefined;
 }
 
 function normalizeFingerprintValue(value: unknown): string | undefined {
   if (typeof value === "string") {
     const normalized = value.trim();
-    return normalized ? normalized.toLowerCase() : undefined;
+    return normalized ? normalizeLowercaseStringOrEmpty(normalized) : undefined;
   }
   if (typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
-    return String(value).toLowerCase();
+    return normalizeLowercaseStringOrEmpty(String(value));
   }
   return undefined;
 }
@@ -98,7 +96,7 @@ function appendFingerprintAlias(
 }
 
 export function isLikelyMutatingToolName(toolName: string): boolean {
-  const normalized = toolName.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(toolName);
   if (!normalized) {
     return false;
   }
@@ -111,7 +109,7 @@ export function isLikelyMutatingToolName(toolName: string): boolean {
 }
 
 export function isMutatingToolCall(toolName: string, args: unknown): boolean {
-  const normalized = toolName.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(toolName);
   const record = asRecord(args);
   const action = normalizeActionName(record?.action);
 
@@ -159,7 +157,7 @@ export function buildToolActionFingerprint(
   if (!isMutatingToolCall(toolName, args)) {
     return undefined;
   }
-  const normalizedTool = toolName.trim().toLowerCase();
+  const normalizedTool = normalizeLowercaseStringOrEmpty(toolName);
   const record = asRecord(args);
   const action = normalizeActionName(record?.action);
   const parts = [`tool=${normalizedTool}`];
@@ -191,7 +189,7 @@ export function buildToolActionFingerprint(
     appendFingerprintAlias(parts, record, "jobid", ["jobId", "job_id"]) || hasStableTarget;
   hasStableTarget = appendFingerprintAlias(parts, record, "id", ["id"]) || hasStableTarget;
   hasStableTarget = appendFingerprintAlias(parts, record, "model", ["model"]) || hasStableTarget;
-  const normalizedMeta = meta?.trim().replace(/\s+/g, " ").toLowerCase();
+  const normalizedMeta = normalizeOptionalLowercaseString(meta?.trim().replace(/\s+/g, " "));
   // Meta text often carries volatile details (for example "N chars").
   // Prefer stable arg-derived keys for matching; only fall back to meta
   // when no stable target key is available.

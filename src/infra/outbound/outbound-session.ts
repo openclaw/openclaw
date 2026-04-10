@@ -9,6 +9,7 @@ import {
 } from "../../config/sessions/inbound.runtime.js";
 import { buildAgentSessionKey, type RoutePeer } from "../../routing/resolve-route.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
 
 export type OutboundSessionRoute = {
@@ -39,8 +40,8 @@ function resolveOutboundChannelPlugin(channel: ChannelId) {
 
 function stripProviderPrefix(raw: string, channel: string): string {
   const trimmed = raw.trim();
-  const lower = trimmed.toLowerCase();
-  const prefix = `${channel.toLowerCase()}:`;
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
+  const prefix = `${normalizeLowercaseStringOrEmpty(channel)}:`;
   if (lower.startsWith(prefix)) {
     return trimmed.slice(prefix.length).trim();
   }

@@ -116,8 +116,10 @@ export function createCronPromptExecutor(params: {
             timeoutMs: params.timeoutMs,
             runId: params.cronSession.sessionEntry.sessionId,
             cliSessionId,
+            skillsSnapshot: params.skillsSnapshot,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
+            senderIsOwner: true,
           });
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,
@@ -130,7 +132,7 @@ export function createCronPromptExecutor(params: {
           agentId: params.agentId,
           trigger: "cron",
           allowGatewaySubagentBinding: true,
-          senderIsOwner: true,
+          senderIsOwner: false,
           messageChannel: params.messageChannel,
           agentAccountId: params.resolvedDelivery.accountId,
           sessionFile,
@@ -307,6 +309,8 @@ export async function executeCronRun(params: {
     } = resolveCronPayloadOutcome({
       payloads: interimPayloads,
       runLevelError: runResult.meta?.error,
+      finalAssistantVisibleText: runResult.meta?.finalAssistantVisibleText,
+      preferFinalAssistantVisibleText: params.resolvedDelivery.channel === "telegram",
     });
     const interimText = interimOutputText?.trim() ?? "";
     const shouldRetryInterimAck =

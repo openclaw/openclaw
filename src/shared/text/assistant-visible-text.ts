@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.js";
 import { findCodeRegions, isInsideCode } from "./code-regions.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
 import {
@@ -24,6 +25,8 @@ const TOOL_CALL_TAG_NAMES = new Set([
 ]);
 const TOOL_CALL_JSON_PAYLOAD_START_RE =
   /^(?:\s+[A-Za-z_:][-A-Za-z0-9_:.]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))*\s*(?:\r?\n\s*)?[[{]/;
+const TOOL_CALL_XML_PAYLOAD_START_RE =
+  /^\s*(?:\r?\n\s*)?<(?:function|invoke|parameters?|arguments?)\b/i;
 
 function endsInsideQuotedString(text: string, start: number, end: number): boolean {
   let quoteChar: "'" | '"' | null = null;
@@ -106,7 +109,8 @@ function findTagCloseIndex(text: string, start: number): number {
 }
 
 function looksLikeToolCallPayloadStart(text: string, start: number): boolean {
-  return TOOL_CALL_JSON_PAYLOAD_START_RE.test(text.slice(start));
+  const rest = text.slice(start);
+  return TOOL_CALL_JSON_PAYLOAD_START_RE.test(rest) || TOOL_CALL_XML_PAYLOAD_START_RE.test(rest);
 }
 
 function parseToolCallTagAt(text: string, start: number): ParsedToolCallTag | null {
@@ -133,7 +137,7 @@ function parseToolCallTagAt(text: string, start: number): ParsedToolCallTag | nu
     cursor += 1;
   }
 
-  const tagName = text.slice(nameStart, cursor).toLowerCase();
+  const tagName = normalizeLowercaseStringOrEmpty(text.slice(nameStart, cursor));
   if (!TOOL_CALL_TAG_NAMES.has(tagName) || !isToolCallBoundary(text[cursor])) {
     return null;
   }
@@ -211,10 +215,12 @@ export function stripToolCallXmlTags(text: string): string {
         idx = Math.max(idx, tag.end - 1);
         continue;
       }
-      if (
-        !tag.isClose &&
-        looksLikeToolCallPayloadStart(text, tag.isTruncated ? tag.contentStart : tag.end)
-      ) {
+      const payloadStart = tag.isTruncated ? tag.contentStart : tag.end;
+      const hasToolCallPayloadStart =
+        tag.tagName === "tool_call"
+          ? looksLikeToolCallPayloadStart(text, payloadStart)
+          : TOOL_CALL_JSON_PAYLOAD_START_RE.test(text.slice(payloadStart));
+      if (!tag.isClose && hasToolCallPayloadStart) {
         inToolCallBlock = true;
         toolCallContentStart = tag.end;
         toolCallBlockTagName = tag.tagName;
@@ -391,7 +397,7 @@ export function stripDowngradedToolCallText(text: string): string {
       while (index < input.length && (input[index] === " " || input[index] === "\t")) {
         index += 1;
       }
-      if (input.slice(index, index + 9).toLowerCase() === "arguments") {
+      if (normalizeLowercaseStringOrEmpty(input.slice(index, index + 9)) === "arguments") {
         index += 9;
         if (input[index] === ":") {
           index += 1;

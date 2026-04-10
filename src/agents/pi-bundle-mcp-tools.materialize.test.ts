@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupBundleMcpHarness,
   makeTempDir,
@@ -124,6 +124,7 @@ describe("createBundleMcpToolRuntime", () => {
   });
 
   it("loads configured SSE MCP tools via url", async () => {
+    vi.useRealTimers();
     const sseServer = await startSseProbeServer();
 
     try {

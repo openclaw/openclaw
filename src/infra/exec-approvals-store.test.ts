@@ -25,6 +25,7 @@ let recordAllowlistUse: ExecApprovalsModule["recordAllowlistUse"];
 let requestExecApprovalViaSocket: ExecApprovalsModule["requestExecApprovalViaSocket"];
 let resolveExecApprovalsPath: ExecApprovalsModule["resolveExecApprovalsPath"];
 let resolveExecApprovalsSocketPath: ExecApprovalsModule["resolveExecApprovalsSocketPath"];
+let saveExecApprovals: ExecApprovalsModule["saveExecApprovals"];
 
 const tempDirs: string[] = [];
 const originalOpenClawHome = process.env.OPENCLAW_HOME;
@@ -43,6 +44,7 @@ beforeAll(async () => {
     requestExecApprovalViaSocket,
     resolveExecApprovalsPath,
     resolveExecApprovalsSocketPath,
+    saveExecApprovals,
   } = await import("./exec-approvals.js"));
 });
 
@@ -154,6 +156,48 @@ describe("exec approvals store helpers", () => {
     expect(ensured.socket?.token).toMatch(/^[A-Za-z0-9_-]{32}$/);
     expect(raw.endsWith("\n")).toBe(true);
     expect(readApprovalsFile(dir).socket).toEqual(ensured.socket);
+  });
+
+  it("atomically replaces existing approvals files instead of mutating linked inodes", () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    const linkedPath = path.join(dir, "linked.json");
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(linkedPath, '{"sentinel":true}\n', "utf8");
+    fs.linkSync(linkedPath, approvalsPath);
+
+    saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} });
+
+    expect(fs.readFileSync(approvalsPath, "utf8")).toContain('"security": "full"');
+    expect(fs.readFileSync(linkedPath, "utf8")).toBe('{"sentinel":true}\n');
+    expect(fs.statSync(approvalsPath).ino).not.toBe(fs.statSync(linkedPath).ino);
+  });
+
+  it("refuses to write approvals through a symlink destination", () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    const targetPath = path.join(dir, "elsewhere.json");
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(targetPath, '{"sentinel":true}\n', "utf8");
+    fs.symlinkSync(targetPath, approvalsPath);
+
+    expect(() =>
+      saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
+    ).toThrow(/Refusing to write exec approvals via symlink/);
+    expect(fs.readFileSync(targetPath, "utf8")).toBe('{"sentinel":true}\n');
+  });
+
+  it("refuses to traverse a symlinked parent component in the approvals path", () => {
+    const realHome = makeTempDir();
+    const linkedHome = `${realHome}-link`;
+    tempDirs.push(realHome);
+    fs.symlinkSync(realHome, linkedHome);
+    process.env.OPENCLAW_HOME = linkedHome;
+
+    expect(() =>
+      saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
+    ).toThrow(/Refusing to traverse symlink in exec approvals path/);
+    expect(fs.existsSync(path.join(realHome, ".openclaw"))).toBe(false);
   });
 
   it("adds trimmed allowlist entries once and persists generated ids", () => {

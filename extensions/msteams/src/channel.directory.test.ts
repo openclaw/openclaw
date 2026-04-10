@@ -4,12 +4,12 @@ import {
   expectDirectorySurface,
 } from "../../../test/helpers/plugins/directory.js";
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
-import { msteamsPlugin } from "./channel.js";
+import { msteamsDirectoryAdapter } from "./directory.js";
 import { resolveMSTeamsOutboundSessionRoute } from "./session-route.js";
 
 function requireDirectorySelf(
-  directory: typeof msteamsPlugin.directory | null | undefined,
-): NonNullable<NonNullable<typeof msteamsPlugin.directory>["self"]> {
+  directory: typeof msteamsDirectoryAdapter | null | undefined,
+): NonNullable<(typeof msteamsDirectoryAdapter)["self"]> {
   if (!directory?.self) {
     throw new Error("expected msteams directory.self");
   }
@@ -18,7 +18,7 @@ function requireDirectorySelf(
 
 describe("msteams directory", () => {
   const runtimeEnv = createDirectoryTestRuntime() as RuntimeEnv;
-  const directorySelf = requireDirectorySelf(msteamsPlugin.directory);
+  const directorySelf = requireDirectorySelf(msteamsDirectoryAdapter);
 
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -68,7 +68,7 @@ describe("msteams directory", () => {
       },
     } as unknown as OpenClawConfig;
 
-    const directory = expectDirectorySurface(msteamsPlugin.directory);
+    const directory = expectDirectorySurface(msteamsDirectoryAdapter);
 
     await expect(
       directory.listPeers({
@@ -111,7 +111,7 @@ describe("msteams directory", () => {
       },
     } as unknown as OpenClawConfig;
 
-    const directory = expectDirectorySurface(msteamsPlugin.directory);
+    const directory = expectDirectorySurface(msteamsDirectoryAdapter);
 
     await expect(
       directory.listPeers({

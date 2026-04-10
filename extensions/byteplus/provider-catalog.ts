@@ -5,7 +5,7 @@ import {
   BYTEPLUS_CODING_BASE_URL,
   BYTEPLUS_CODING_MODEL_CATALOG,
   BYTEPLUS_MODEL_CATALOG,
-} from "./api.js";
+} from "./models.js";
 
 export function buildBytePlusProvider(): ModelProviderConfig {
   return {

@@ -115,6 +115,18 @@ const bundledHookEntries = buildBundledHookEntries();
 const bundledPluginRoot = (pluginId: string) => ["extensions", pluginId].join("/");
 const bundledPluginFile = (pluginId: string, relativePath: string) =>
   `${bundledPluginRoot(pluginId)}/${relativePath}`;
+const explicitNeverBundleDependencies = [
+  "@lancedb/lancedb",
+  "@matrix-org/matrix-sdk-crypto-nodejs",
+  "matrix-js-sdk",
+  ...bundledPluginRuntimeDependencies,
+].toSorted((left, right) => left.localeCompare(right));
+
+function shouldNeverBundleDependency(id: string): boolean {
+  return explicitNeverBundleDependencies.some((dependency) => {
+    return id === dependency || id.startsWith(`${dependency}/`);
+  });
+}
 
 function buildCoreDistEntries(): Record<string, string> {
   return {
@@ -129,8 +141,12 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
     "agents/pi-model-discovery-runtime": "src/agents/pi-model-discovery-runtime.ts",
     "commands/status.summary.runtime": "src/commands/status.summary.runtime.ts",
+    "infra/boundary-file-read": "src/infra/boundary-file-read.ts",
     "plugins/provider-discovery.runtime": "src/plugins/provider-discovery.runtime.ts",
     "plugins/provider-runtime.runtime": "src/plugins/provider-runtime.runtime.ts",
+    "plugins/public-surface-runtime": "src/plugins/public-surface-runtime.ts",
+    "plugins/sdk-alias": "src/plugins/sdk-alias.ts",
+    "facade-activation-check.runtime": "src/plugin-sdk/facade-activation-check.runtime.ts",
     extensionAPI: "src/extensionAPI.ts",
     "infra/warning-filter": "src/infra/warning-filter.ts",
     "telegram/audit": bundledPluginFile("telegram", "src/audit.ts"),
@@ -166,12 +182,7 @@ export default defineConfig([
     // and bundled hooks in one graph so runtime singletons are emitted once.
     entry: buildUnifiedDistEntries(),
     deps: {
-      neverBundle: [
-        "@lancedb/lancedb",
-        "@matrix-org/matrix-sdk-crypto-nodejs",
-        "matrix-js-sdk",
-        ...bundledPluginRuntimeDependencies,
-      ],
+      neverBundle: shouldNeverBundleDependency,
     },
   }),
 ]);

@@ -2,21 +2,25 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearActiveMcpLoopbackRuntime,
+  setActiveMcpLoopbackRuntime,
+} from "../gateway/mcp-http.loopback-runtime.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import {
   makeBootstrapWarn as realMakeBootstrapWarn,
   resolveBootstrapContextForRun as realResolveBootstrapContextForRun,
 } from "./bootstrap-files.js";
+import { runClaudeCliAgent } from "./cli-runner.js";
 import {
   createManagedRun,
   mockSuccessfulCliRun,
   restoreCliRunnerPrepareTestDeps,
-  setupCliRunnerTestModule,
-  SMALL_PNG_BASE64,
+  setupCliRunnerTestRegistry,
   supervisorSpawnMock,
 } from "./cli-runner.test-support.js";
-import { executePreparedCliRun } from "./cli-runner/execute.js";
+import { buildCliEnvAuthLog, executePreparedCliRun } from "./cli-runner/execute.js";
+import { buildSystemPrompt } from "./cli-runner/helpers.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 
@@ -32,7 +36,11 @@ function buildPreparedCliRunContext(params: {
   runId: string;
   prompt?: string;
   backend?: Partial<PreparedCliRunContext["preparedBackend"]["backend"]>;
+  config?: PreparedCliRunContext["params"]["config"];
+  skillsSnapshot?: PreparedCliRunContext["params"]["skillsSnapshot"];
+  workspaceDir?: string;
 }): PreparedCliRunContext {
+  const workspaceDir = params.workspaceDir ?? "/tmp";
   const baseBackend =
     params.provider === "claude-cli"
       ? {
@@ -41,6 +49,8 @@ function buildPreparedCliRunContext(params: {
           output: "jsonl" as const,
           input: "stdin" as const,
           modelArg: "--model",
+          sessionArg: "--session-id",
+          sessionMode: "always" as const,
           systemPromptArg: "--append-system-prompt",
           systemPromptWhen: "first" as const,
           serialize: true,
@@ -53,6 +63,9 @@ function buildPreparedCliRunContext(params: {
           input: "arg" as const,
           modelArg: "--model",
           sessionMode: "existing" as const,
+          systemPromptFileConfigArg: "-c",
+          systemPromptFileConfigKey: "model_instructions_file",
+          systemPromptWhen: "first" as const,
           serialize: true,
         };
   const backend = { ...baseBackend, ...params.backend };
@@ -60,15 +73,17 @@ function buildPreparedCliRunContext(params: {
     params: {
       sessionId: "s1",
       sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
+      workspaceDir,
+      config: params.config,
       prompt: params.prompt ?? "hi",
       provider: params.provider,
       model: params.model,
       timeoutMs: 1_000,
       runId: params.runId,
+      skillsSnapshot: params.skillsSnapshot,
     },
     started: Date.now(),
-    workspaceDir: "/tmp",
+    workspaceDir,
     backendResolved: {
       id: params.provider,
       config: backend,
@@ -86,6 +101,19 @@ function buildPreparedCliRunContext(params: {
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
     bootstrapPromptWarningLines: [],
   };
+}
+
+function createClaudeSuccessRun(sessionId: string) {
+  return createManagedRun({
+    reason: "exit",
+    exitCode: 0,
+    exitSignal: null,
+    durationMs: 50,
+    stdout: JSON.stringify({ message: "ok", session_id: sessionId }),
+    stderr: "",
+    timedOut: false,
+    noOutputTimedOut: false,
+  });
 }
 
 describe("runCliAgent spawn path", () => {
@@ -109,6 +137,7 @@ describe("runCliAgent spawn path", () => {
       output: "jsonl" as const,
       input: "stdin" as const,
       modelArg: "--model",
+      sessionArg: "--session-id",
       systemPromptArg: "--append-system-prompt",
       systemPromptWhen: "first" as const,
       serialize: true,
@@ -152,6 +181,27 @@ describe("runCliAgent spawn path", () => {
     expect(allArgs).toContain("You are a helpful assistant.");
   });
 
+  it("includes the OpenClaw skills prompt in CLI system prompts", () => {
+    const systemPrompt = buildSystemPrompt({
+      workspaceDir: "/tmp",
+      modelDisplay: "claude-cli/sonnet",
+      tools: [],
+      skillsPrompt: [
+        "<available_skills>",
+        "  <skill>",
+        "    <name>weather</name>",
+        "    <description>Use weather tools.</description>",
+        "    <location>/tmp/skills/weather/SKILL.md</location>",
+        "  </skill>",
+        "</available_skills>",
+      ].join("\n"),
+    });
+
+    expect(systemPrompt).toContain("## Skills (mandatory)");
+    expect(systemPrompt).toContain("<name>weather</name>");
+    expect(systemPrompt).toContain("/tmp/skills/weather/SKILL.md");
+  });
+
   it("pipes Claude prompts over stdin instead of argv", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
@@ -181,6 +231,208 @@ describe("runCliAgent spawn path", () => {
     };
     expect(input.input).toContain("Explain this diff");
     expect(input.argv).not.toContain("Explain this diff");
+  });
+
+  it("passes --session-id for new Claude sessions", async () => {
+    mockSuccessfulCliRun();
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-claude-session-id",
+      }),
+    );
+
+    const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
+      argv?: string[];
+      input?: string;
+      mode?: string;
+    };
+    expect(input.mode).toBe("child");
+    expect(input.argv).toContain("claude");
+    const sessionArgIndex = input.argv?.indexOf("--session-id") ?? -1;
+    expect(sessionArgIndex).toBeGreaterThanOrEqual(0);
+    expect(input.argv?.[sessionArgIndex + 1]?.trim()).toBeTruthy();
+    expect(input.input).toContain("hi");
+    expect(input.argv).not.toContain("hi");
+  });
+
+  it("passes OpenClaw skills to Claude as a session plugin", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-skills-"));
+    const skillDir = path.join(workspaceDir, "skills", "weather");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      [
+        "---",
+        "name: weather",
+        "description: Use weather tools for forecasts.",
+        "---",
+        "",
+        "Read forecast data before replying.",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    let pluginDir = "";
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { argv?: string[] };
+      const pluginArgIndex = input.argv?.indexOf("--plugin-dir") ?? -1;
+      expect(pluginArgIndex).toBeGreaterThanOrEqual(0);
+      pluginDir = input.argv?.[pluginArgIndex + 1] ?? "";
+      const manifest = JSON.parse(
+        await fs.readFile(path.join(pluginDir, ".claude-plugin", "plugin.json"), "utf-8"),
+      ) as { name?: string; skills?: string };
+      expect(manifest).toMatchObject({
+        name: "openclaw-skills",
+        skills: "./skills",
+      });
+      await expect(
+        fs.readFile(path.join(pluginDir, "skills", "weather", "SKILL.md"), "utf-8"),
+      ).resolves.toContain("Read forecast data before replying.");
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    try {
+      await executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "sonnet",
+          runId: "run-claude-skills-plugin",
+          workspaceDir,
+          skillsSnapshot: {
+            prompt: "",
+            skills: [{ name: "weather" }],
+            resolvedSkills: [
+              {
+                name: "weather",
+                description: "Use weather tools for forecasts.",
+                filePath: path.join(skillDir, "SKILL.md"),
+                baseDir: skillDir,
+                source: "test",
+                sourceInfo: {
+                  path: skillDir,
+                  source: "test",
+                  scope: "project",
+                  origin: "top-level",
+                  baseDir: skillDir,
+                },
+                disableModelInvocation: false,
+              },
+            ],
+          },
+        }),
+      );
+      await expect(fs.access(pluginDir)).rejects.toThrow();
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("injects skill env overrides into CLI child env and restores host env", async () => {
+    const previousEnvValue = process.env.CLI_SKILL_API_KEY;
+    delete process.env.CLI_SKILL_API_KEY;
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { env?: Record<string, string> };
+      expect(input.env?.CLI_SKILL_API_KEY).toBe("skill-secret");
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    try {
+      await executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "sonnet",
+          runId: "run-claude-skill-env",
+          config: {
+            skills: {
+              entries: {
+                envskill: { apiKey: "skill-secret" }, // pragma: allowlist secret
+              },
+            },
+          },
+          skillsSnapshot: {
+            prompt: "",
+            skills: [{ name: "envskill", primaryEnv: "CLI_SKILL_API_KEY" }],
+          },
+        }),
+      );
+      expect(process.env.CLI_SKILL_API_KEY).toBeUndefined();
+    } finally {
+      if (previousEnvValue === undefined) {
+        delete process.env.CLI_SKILL_API_KEY;
+      } else {
+        process.env.CLI_SKILL_API_KEY = previousEnvValue;
+      }
+    }
+  });
+
+  it("ignores legacy claudeSessionId on the compat wrapper", async () => {
+    setupCliRunnerTestRegistry();
+    supervisorSpawnMock.mockResolvedValueOnce(createClaudeSuccessRun("sid-wrapper"));
+
+    await runClaudeCliAgent({
+      sessionId: "openclaw-session",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      prompt: "hi",
+      model: "opus",
+      timeoutMs: 1_000,
+      runId: "run-claude-legacy-wrapper",
+      claudeSessionId: "c9d7b831-1c31-4d22-80b9-1e50ca207d4b",
+    });
+
+    const input = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[]; input?: string };
+    expect(input.argv).not.toContain("--resume");
+    expect(input.argv).not.toContain("c9d7b831-1c31-4d22-80b9-1e50ca207d4b");
+    expect(input.argv).toContain("--session-id");
+    expect(input.input).toContain("hi");
+  });
+
+  it("forwards senderIsOwner through the compat wrapper into bundle MCP env", async () => {
+    setupCliRunnerTestRegistry();
+    setActiveMcpLoopbackRuntime({ port: 23119, token: "loopback-token-123" });
+    try {
+      supervisorSpawnMock.mockResolvedValueOnce(createClaudeSuccessRun("sid-owner"));
+
+      await runClaudeCliAgent({
+        sessionId: "openclaw-session",
+        sessionKey: "agent:main:matrix:room:123",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        prompt: "hi",
+        model: "opus",
+        timeoutMs: 1_000,
+        runId: "run-claude-owner-wrapper",
+        senderIsOwner: false,
+      });
+
+      const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
+        env?: Record<string, string | undefined>;
+      };
+      expect(input.env?.OPENCLAW_MCP_SENDER_IS_OWNER).toBe("false");
+    } finally {
+      clearActiveMcpLoopbackRuntime("loopback-token-123");
+    }
   });
 
   it("runs CLI through supervisor and returns payload", async () => {
@@ -221,6 +473,39 @@ describe("runCliAgent spawn path", () => {
     expect(input.noOutputTimeoutMs).toBeGreaterThanOrEqual(1_000);
     expect(input.replaceExistingScope).toBe(true);
     expect(input.scopeKey).toContain("thread-123");
+  });
+
+  it("passes Codex system prompts through model_instructions_file", async () => {
+    let promptFileText = "";
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { argv?: string[] };
+      const configArgIndex = input.argv?.indexOf("-c") ?? -1;
+      expect(configArgIndex).toBeGreaterThanOrEqual(0);
+      const configArg = input.argv?.[configArgIndex + 1] ?? "";
+      const match = /^model_instructions_file="(.+)"$/.exec(configArg);
+      expect(match?.[1]).toBeTruthy();
+      promptFileText = await fs.readFile(match?.[1] ?? "", "utf-8");
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        runId: "run-codex-system-prompt-file",
+      }),
+    );
+
+    expect(promptFileText).toBe("You are a helpful assistant.");
   });
 
   it("cancels the managed CLI run when the abort signal fires", async () => {
@@ -357,6 +642,66 @@ describe("runCliAgent spawn path", () => {
     }
   });
 
+  it("surfaces nested Claude stream-json API errors instead of raw event output", async () => {
+    const message =
+      "Third-party apps now draw from your extra usage, not your plan limits. We've added a $200 credit to get you started. Claim it at claude.ai/settings/usage and keep going.";
+    const apiError = `API Error: 400 ${JSON.stringify({
+      type: "error",
+      error: {
+        type: "invalid_request_error",
+        message,
+      },
+      request_id: "req_011CZqHuXhFetYCnr8325DQc",
+    })}`;
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: [
+          JSON.stringify({ type: "system", subtype: "init", session_id: "session-api-error" }),
+          JSON.stringify({
+            type: "assistant",
+            message: {
+              model: "<synthetic>",
+              role: "assistant",
+              content: [{ type: "text", text: apiError }],
+            },
+            session_id: "session-api-error",
+            error: "unknown",
+          }),
+          JSON.stringify({
+            type: "result",
+            subtype: "success",
+            is_error: true,
+            result: apiError,
+            session_id: "session-api-error",
+          }),
+        ].join("\n"),
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const run = executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-claude-api-error",
+      }),
+    );
+
+    await expect(run).rejects.toMatchObject({
+      name: "FailoverError",
+      message,
+      reason: "billing",
+      status: 402,
+    });
+  });
+
   it("sanitizes dangerous backend env overrides before spawn", async () => {
     mockSuccessfulCliRun();
     await executePreparedCliRun(
@@ -412,6 +757,34 @@ describe("runCliAgent spawn path", () => {
     expect(input.env?.SAFE_CLEAR).toBeUndefined();
   });
 
+  it("can preserve selected clearEnv keys for live CLI backend probes", async () => {
+    try {
+      process.env.OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV = '["SAFE_CLEAR"]';
+      process.env.SAFE_CLEAR = "from-base";
+      mockSuccessfulCliRun();
+      await executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          runId: "run-clear-env-preserve",
+          backend: {
+            clearEnv: ["SAFE_CLEAR", "SAFE_DROP"],
+          },
+        }),
+        "thread-123",
+      );
+
+      const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
+        env?: Record<string, string | undefined>;
+      };
+      expect(input.env?.SAFE_CLEAR).toBe("from-base");
+      expect(input.env?.SAFE_DROP).toBeUndefined();
+    } finally {
+      delete process.env.OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV;
+      delete process.env.SAFE_CLEAR;
+    }
+  });
+
   it("keeps explicit backend env overrides even when clearEnv drops inherited values", async () => {
     process.env.SAFE_OVERRIDE = "from-base";
     mockSuccessfulCliRun();
@@ -436,8 +809,11 @@ describe("runCliAgent spawn path", () => {
     expect(input.env?.SAFE_OVERRIDE).toBe("from-override");
   });
 
-  it("clears claude-cli provider-routing, auth, and telemetry env while keeping host-managed hardening", async () => {
+  it("clears claude-cli provider-routing, auth, telemetry, and host-managed env", async () => {
     vi.stubEnv("ANTHROPIC_BASE_URL", "https://proxy.example.com/v1");
+    vi.stubEnv("ANTHROPIC_API_TOKEN", "env-api-token");
+    vi.stubEnv("ANTHROPIC_CUSTOM_HEADERS", "x-test-header: env");
+    vi.stubEnv("ANTHROPIC_OAUTH_TOKEN", "env-oauth-token");
     vi.stubEnv("CLAUDE_CODE_USE_BEDROCK", "1");
     vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "env-auth-token");
     vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "env-oauth-token");
@@ -448,6 +824,7 @@ describe("runCliAgent spawn path", () => {
     vi.stubEnv("OTEL_TRACES_EXPORTER", "none");
     vi.stubEnv("OTEL_EXPORTER_OTLP_PROTOCOL", "none");
     vi.stubEnv("OTEL_SDK_DISABLED", "true");
+    vi.stubEnv("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST", "1");
     mockSuccessfulCliRun();
 
     await executePreparedCliRun(
@@ -464,6 +841,9 @@ describe("runCliAgent spawn path", () => {
           },
           clearEnv: [
             "ANTHROPIC_BASE_URL",
+            "ANTHROPIC_API_TOKEN",
+            "ANTHROPIC_CUSTOM_HEADERS",
+            "ANTHROPIC_OAUTH_TOKEN",
             "CLAUDE_CODE_USE_BEDROCK",
             "ANTHROPIC_AUTH_TOKEN",
             "CLAUDE_CODE_OAUTH_TOKEN",
@@ -483,8 +863,11 @@ describe("runCliAgent spawn path", () => {
       env?: Record<string, string | undefined>;
     };
     expect(input.env?.SAFE_KEEP).toBe("ok");
-    expect(input.env?.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe("1");
+    expect(input.env?.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
     expect(input.env?.ANTHROPIC_BASE_URL).toBe("https://override.example.com/v1");
+    expect(input.env?.ANTHROPIC_API_TOKEN).toBeUndefined();
+    expect(input.env?.ANTHROPIC_CUSTOM_HEADERS).toBeUndefined();
+    expect(input.env?.ANTHROPIC_OAUTH_TOKEN).toBeUndefined();
     expect(input.env?.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
     expect(input.env?.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
     expect(input.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe("override-oauth-token");
@@ -495,6 +878,29 @@ describe("runCliAgent spawn path", () => {
     expect(input.env?.OTEL_TRACES_EXPORTER).toBeUndefined();
     expect(input.env?.OTEL_EXPORTER_OTLP_PROTOCOL).toBeUndefined();
     expect(input.env?.OTEL_SDK_DISABLED).toBeUndefined();
+  });
+
+  it("formats CLI auth env diagnostics as key names without secret values", () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-host");
+    vi.stubEnv("ANTHROPIC_API_TOKEN", "token-host");
+    vi.stubEnv("OPENAI_API_KEY", "sk-openai-host");
+
+    const log = buildCliEnvAuthLog({
+      ANTHROPIC_API_TOKEN: "token-child",
+      CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
+      OPENAI_API_KEY: "sk-openai-child",
+    });
+
+    expect(log).toMatch(/host=.*ANTHROPIC_API_KEY/);
+    expect(log).toMatch(/host=.*ANTHROPIC_API_TOKEN/);
+    expect(log).toMatch(/host=.*OPENAI_API_KEY/);
+    expect(log).toMatch(/child=.*ANTHROPIC_API_TOKEN/);
+    expect(log).toMatch(/child=.*CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST/);
+    expect(log).toMatch(/child=.*OPENAI_API_KEY/);
+    expect(log).toMatch(/cleared=.*ANTHROPIC_API_KEY/);
+    expect(log).not.toContain("sk-ant-host");
+    expect(log).not.toContain("token-child");
+    expect(log).not.toContain("sk-openai-child");
   });
 
   it("prepends bootstrap warnings to the CLI prompt body", async () => {
@@ -535,21 +941,8 @@ describe("runCliAgent spawn path", () => {
   });
 
   it("loads workspace bootstrap files into the Claude CLI system prompt", async () => {
-    const runCliAgent = await setupCliRunnerTestModule();
     const workspaceDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-cli-bootstrap-context-"),
-    );
-    supervisorSpawnMock.mockResolvedValueOnce(
-      createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "ok",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      }),
     );
 
     await fs.writeFile(
@@ -572,28 +965,19 @@ describe("runCliAgent spawn path", () => {
     });
 
     try {
-      await runCliAgent({
-        sessionId: "s1",
-        sessionFile: "/tmp/session.jsonl",
+      const { contextFiles } = await realResolveBootstrapContextForRun({
         workspaceDir,
-        prompt: "BOOTSTRAP_CAPTURE_CHECK",
-        provider: "claude-cli",
-        model: "sonnet",
-        timeoutMs: 1_000,
-        runId: "run-bootstrap-context",
       });
-
-      const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
-        argv?: string[];
-        input?: string;
-      };
-      const allArgs = (input.argv ?? []).join("\n");
+      const allArgs = buildSystemPrompt({
+        workspaceDir,
+        modelDisplay: "claude-cli/sonnet",
+        contextFiles,
+        tools: [],
+      });
       const agentsPath = path.join(workspaceDir, "AGENTS.md");
       const soulPath = path.join(workspaceDir, "SOUL.md");
       const identityPath = path.join(workspaceDir, "IDENTITY.md");
       const userPath = path.join(workspaceDir, "USER.md");
-      expect(input.input).toContain("BOOTSTRAP_CAPTURE_CHECK");
-      expect(allArgs).toContain("--append-system-prompt");
       expect(allArgs).toContain("# Project Context");
       expect(allArgs).toContain(`## ${agentsPath}`);
       expect(allArgs).toContain("Read SOUL.md and IDENTITY.md before replying.");
@@ -610,139 +994,5 @@ describe("runCliAgent spawn path", () => {
       await fs.rm(workspaceDir, { recursive: true, force: true });
       restoreCliRunnerPrepareTestDeps();
     }
-  });
-
-  it("hydrates prompt media refs into CLI image args", async () => {
-    const runCliAgent = await setupCliRunnerTestModule();
-    supervisorSpawnMock.mockResolvedValueOnce(
-      createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "ok",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      }),
-    );
-
-    const tempDir = await fs.mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-prompt-image-"),
-    );
-    const sourceImage = path.join(tempDir, "bb-image.png");
-    await fs.writeFile(sourceImage, Buffer.from(SMALL_PNG_BASE64, "base64"));
-
-    try {
-      await runCliAgent({
-        sessionId: "s1",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: tempDir,
-        prompt: `[media attached: ${sourceImage} (image/png)]\n\n<media:image>`,
-        provider: "codex-cli",
-        model: "gpt-5.4",
-        timeoutMs: 1_000,
-        runId: "run-prompt-image",
-      });
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-
-    const input = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[] };
-    const argv = input.argv ?? [];
-    const imageArgIndex = argv.indexOf("--image");
-    expect(imageArgIndex).toBeGreaterThanOrEqual(0);
-    expect(argv[imageArgIndex + 1]).toContain("openclaw-cli-images");
-    expect(argv[imageArgIndex + 1]).not.toBe(sourceImage);
-  });
-
-  it("appends hydrated prompt media refs for stdin backends", async () => {
-    const runCliAgent = await setupCliRunnerTestModule();
-    supervisorSpawnMock.mockResolvedValueOnce(
-      createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "ok",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      }),
-    );
-
-    const tempDir = await fs.mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-prompt-image-generic-"),
-    );
-    const sourceImage = path.join(tempDir, "claude-image.png");
-    await fs.writeFile(sourceImage, Buffer.from(SMALL_PNG_BASE64, "base64"));
-
-    try {
-      await runCliAgent({
-        sessionId: "s1",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: tempDir,
-        prompt: `[media attached: ${sourceImage} (image/png)]\n\n<media:image>`,
-        provider: "claude-cli",
-        model: "claude-opus-4-1",
-        timeoutMs: 1_000,
-        runId: "run-prompt-image-generic",
-      });
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-
-    const input = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[]; input?: string };
-    const argv = input.argv ?? [];
-    expect(argv).not.toContain("--image");
-    const promptCarrier = [input.input ?? "", ...argv].join("\n");
-    const appendedPath = promptCarrier
-      .split("\n")
-      .find((value) => value.includes("openclaw-cli-images"));
-    expect(appendedPath).toBeDefined();
-    expect(appendedPath).not.toBe(sourceImage);
-    expect(promptCarrier).toContain(appendedPath ?? "");
-  });
-
-  it("prefers explicit images over prompt refs", async () => {
-    const runCliAgent = await setupCliRunnerTestModule();
-    supervisorSpawnMock.mockResolvedValueOnce(
-      createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "ok",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      }),
-    );
-
-    const tempDir = await fs.mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-explicit-images-"),
-    );
-    const sourceImage = path.join(tempDir, "ignored-prompt-image.png");
-    await fs.writeFile(sourceImage, Buffer.from(SMALL_PNG_BASE64, "base64"));
-
-    try {
-      await runCliAgent({
-        sessionId: "s1",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: tempDir,
-        prompt: `[media attached: ${sourceImage} (image/png)]\n\n<media:image>`,
-        images: [{ type: "image", data: SMALL_PNG_BASE64, mimeType: "image/png" }],
-        provider: "codex-cli",
-        model: "gpt-5.4",
-        timeoutMs: 1_000,
-        runId: "run-explicit-image-precedence",
-      });
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-
-    const input = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[] };
-    const argv = input.argv ?? [];
-    expect(argv.filter((arg) => arg === "--image")).toHaveLength(1);
   });
 });

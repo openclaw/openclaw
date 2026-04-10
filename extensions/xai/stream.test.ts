@@ -14,10 +14,12 @@ type XaiTestPayload = Record<string, unknown> & {
   tools?: Array<{ type?: string; function?: Record<string, unknown> }>;
   input?: unknown[];
 };
+type XaiStreamApi = Extract<Api, "openai-completions" | "openai-responses">;
+
 function captureWrappedModelId(params: {
   modelId: string;
   fastMode: boolean;
-  api?: Extract<Api, "openai-completions" | "openai-responses">;
+  api?: XaiStreamApi;
 }): string {
   let capturedModelId = "";
   const baseStreamFn: StreamFn = (model) => {
@@ -37,6 +39,33 @@ function captureWrappedModelId(params: {
   );
 
   return capturedModelId;
+}
+
+function runXaiToolPayloadWrapper(params: {
+  payload: Record<string, unknown>;
+  api?: XaiStreamApi;
+  modelId?: string;
+  input?: string[];
+}) {
+  const baseStreamFn: StreamFn = (_model, _context, options) => {
+    options?.onPayload?.(params.payload, {} as Model<XaiStreamApi>);
+    return {} as ReturnType<StreamFn>;
+  };
+  const wrapped = createXaiToolPayloadCompatibilityWrapper(baseStreamFn);
+  const api = params.api ?? "openai-responses";
+
+  void wrapped(
+    {
+      api,
+      provider: "xai",
+      id:
+        params.modelId ??
+        (api === "openai-completions" ? "grok-4-1-fast-reasoning" : "grok-4-fast"),
+      ...(params.input ? { input: params.input } : {}),
+    } as Model<XaiStreamApi>,
+    { messages: [] } as Context,
+    {},
+  );
 }
 
 describe("xai stream wrappers", () => {
@@ -128,21 +157,7 @@ describe("xai stream wrappers", () => {
         },
       ],
     };
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      options?.onPayload?.(payload, {} as Model<"openai-completions">);
-      return {} as ReturnType<StreamFn>;
-    };
-    const wrapped = createXaiToolPayloadCompatibilityWrapper(baseStreamFn);
-
-    void wrapped(
-      {
-        api: "openai-completions",
-        provider: "xai",
-        id: "grok-4-1-fast-reasoning",
-      } as Model<"openai-completions">,
-      { messages: [] } as Context,
-      {},
-    );
+    runXaiToolPayloadWrapper({ payload, api: "openai-completions" });
 
     expect(payload).not.toHaveProperty("reasoning");
     expect(payload).not.toHaveProperty("reasoningEffort");
@@ -156,21 +171,7 @@ describe("xai stream wrappers", () => {
       reasoningEffort: "high",
       reasoning_effort: "high",
     };
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      options?.onPayload?.(payload, {} as Model<"openai-responses">);
-      return {} as ReturnType<StreamFn>;
-    };
-    const wrapped = createXaiToolPayloadCompatibilityWrapper(baseStreamFn);
-
-    void wrapped(
-      {
-        api: "openai-responses",
-        provider: "xai",
-        id: "grok-4-fast",
-      } as Model<"openai-responses">,
-      { messages: [] } as Context,
-      {},
-    );
+    runXaiToolPayloadWrapper({ payload });
 
     expect(payload).not.toHaveProperty("reasoning");
     expect(payload).not.toHaveProperty("reasoningEffort");
@@ -194,22 +195,7 @@ describe("xai stream wrappers", () => {
         },
       ],
     };
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      options?.onPayload?.(payload, {} as Model<"openai-responses">);
-      return {} as ReturnType<StreamFn>;
-    };
-    const wrapped = createXaiToolPayloadCompatibilityWrapper(baseStreamFn);
-
-    void wrapped(
-      {
-        api: "openai-responses",
-        provider: "xai",
-        id: "grok-4-fast",
-        input: ["text", "image"],
-      } as Model<"openai-responses">,
-      { messages: [] } as Context,
-      {},
-    );
+    runXaiToolPayloadWrapper({ payload, input: ["text", "image"] });
 
     expect(payload.input).toEqual([
       {
@@ -252,22 +238,7 @@ describe("xai stream wrappers", () => {
         },
       ],
     };
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      options?.onPayload?.(payload, {} as Model<"openai-responses">);
-      return {} as ReturnType<StreamFn>;
-    };
-    const wrapped = createXaiToolPayloadCompatibilityWrapper(baseStreamFn);
-
-    void wrapped(
-      {
-        api: "openai-responses",
-        provider: "xai",
-        id: "grok-4-fast",
-        input: ["text", "image"],
-      } as Model<"openai-responses">,
-      { messages: [] } as Context,
-      {},
-    );
+    runXaiToolPayloadWrapper({ payload, input: ["text", "image"] });
 
     expect(payload.input).toEqual([
       {
@@ -322,22 +293,7 @@ describe("xai stream wrappers", () => {
         },
       ],
     };
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      options?.onPayload?.(payload, {} as Model<"openai-responses">);
-      return {} as ReturnType<StreamFn>;
-    };
-    const wrapped = createXaiToolPayloadCompatibilityWrapper(baseStreamFn);
-
-    void wrapped(
-      {
-        api: "openai-responses",
-        provider: "xai",
-        id: "grok-4-fast",
-        input: ["text", "image"],
-      } as Model<"openai-responses">,
-      { messages: [] } as Context,
-      {},
-    );
+    runXaiToolPayloadWrapper({ payload, input: ["text", "image"] });
 
     expect(payload.input).toEqual([
       {
@@ -386,22 +342,7 @@ describe("xai stream wrappers", () => {
         },
       ],
     };
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      options?.onPayload?.(payload, {} as Model<"openai-responses">);
-      return {} as ReturnType<StreamFn>;
-    };
-    const wrapped = createXaiToolPayloadCompatibilityWrapper(baseStreamFn);
-
-    void wrapped(
-      {
-        api: "openai-responses",
-        provider: "xai",
-        id: "grok-4-fast",
-        input: ["text"],
-      } as Model<"openai-responses">,
-      { messages: [] } as Context,
-      {},
-    );
+    runXaiToolPayloadWrapper({ payload, input: ["text"] });
 
     expect(payload.input).toEqual([
       {

@@ -36,6 +36,7 @@ export type EmbeddedPiRunMeta = {
   agentMeta?: EmbeddedPiAgentMeta;
   aborted?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
+  finalAssistantVisibleText?: string;
   error?: {
     kind:
       | "context_overflow"
@@ -98,7 +99,6 @@ export type EmbeddedSandboxInfo = {
   workspaceAccess?: "none" | "ro" | "rw";
   agentWorkspaceMount?: string;
   browserBridgeUrl?: string;
-  browserNoVncUrl?: string;
   hostBrowserAllowed?: boolean;
   elevated?: {
     allowed: boolean;

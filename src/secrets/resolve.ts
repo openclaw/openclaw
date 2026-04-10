@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ExecSecretProviderConfig,
   FileSecretProviderConfig,
@@ -9,6 +9,7 @@ import type {
   SecretRef,
   SecretRefSource,
 } from "../config/types.secrets.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { inspectPathPermissions, safeStat } from "../security/audit-fs.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { resolveUserPath } from "../utils.js";
@@ -21,12 +22,8 @@ import {
   resolveDefaultSecretProviderAlias,
   secretRefKey,
 } from "./ref-contract.js";
-import {
-  describeUnknownError,
-  isNonEmptyString,
-  isRecord,
-  normalizePositiveInt,
-} from "./shared.js";
+import type { SecretRefResolveCache } from "./resolve-types.js";
+import { isNonEmptyString, isRecord, normalizePositiveInt } from "./shared.js";
 
 const DEFAULT_PROVIDER_CONCURRENCY = 4;
 const DEFAULT_MAX_REFS_PER_PROVIDER = 512;
@@ -38,10 +35,7 @@ const DEFAULT_EXEC_MAX_OUTPUT_BYTES = 1024 * 1024;
 const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\[^\\]+\\[^\\]+/;
 
-export type SecretRefResolveCache = {
-  resolvedByRefKey?: Map<string, Promise<unknown>>;
-  filePayloadByProvider?: Map<string, Promise<unknown>>;
-};
+export type { SecretRefResolveCache } from "./resolve-types.js";
 
 type ResolveSecretRefOptions = {
   config: OpenClawConfig;
@@ -140,7 +134,7 @@ function throwUnknownProviderResolutionError(params: {
   throw providerResolutionError({
     source: params.source,
     provider: params.provider,
-    message: describeUnknownError(params.err),
+    message: formatErrorMessage(params.err),
     cause: params.err,
   });
 }
@@ -419,7 +413,7 @@ async function resolveFileRefs(params: {
         source: "file",
         provider: params.providerName,
         refId: ref.id,
-        message: describeUnknownError(err),
+        message: formatErrorMessage(err),
         cause: err,
       });
     }

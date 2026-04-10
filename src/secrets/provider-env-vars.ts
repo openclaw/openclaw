@@ -1,7 +1,10 @@
+import { resolveProviderAuthAliasMap } from "../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
+  anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
+  openai: ["OPENAI_API_KEY"],
   voyage: ["VOYAGE_API_KEY"],
   cerebras: ["CEREBRAS_API_KEY"],
   "anthropic-openai": ["ANTHROPIC_API_KEY"],
@@ -12,10 +15,11 @@ const CORE_PROVIDER_SETUP_ENV_VAR_OVERRIDES = {
   "minimax-cn": ["MINIMAX_API_KEY"],
 } as const;
 
-type ProviderEnvVarLookupParams = {
+export type ProviderEnvVarLookupParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  includeUntrustedWorkspacePlugins?: boolean;
 };
 
 function appendUniqueEnvVarCandidates(
@@ -56,6 +60,15 @@ function resolveManifestProviderAuthEnvVarCandidates(
       ([left], [right]) => left.localeCompare(right),
     )) {
       appendUniqueEnvVarCandidates(candidates, providerId, keys);
+    }
+  }
+  const aliases = resolveProviderAuthAliasMap(params);
+  for (const [alias, target] of Object.entries(aliases).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    const keys = candidates[target];
+    if (keys) {
+      appendUniqueEnvVarCandidates(candidates, alias, keys);
     }
   }
   return candidates;

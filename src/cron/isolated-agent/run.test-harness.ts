@@ -2,6 +2,7 @@ import { vi, type Mock } from "vitest";
 import { resolveFastModeState as resolveFastModeStateImpl } from "../../agents/fast-mode.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 type CronSessionEntry = {
   sessionId: string;
@@ -27,15 +28,14 @@ function createMock(): Mock {
 }
 
 function normalizeModelSelectionForTest(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed || undefined;
+  const direct = normalizeOptionalString(value);
+  if (direct) {
+    return direct;
   }
   if (!value || typeof value !== "object") {
     return undefined;
   }
-  const primary = (value as { primary?: unknown }).primary;
-  return typeof primary === "string" && primary.trim() ? primary.trim() : undefined;
+  return normalizeOptionalString((value as { primary?: unknown }).primary);
 }
 
 export const buildWorkspaceSkillSnapshotMock = createMock();

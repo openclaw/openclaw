@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { SsrFPolicy } from "../../runtime-api.js";
 import type { MatrixClient } from "../sdk.js";
 import { resolveValidatedMatrixHomeserverUrl } from "./config.js";
@@ -49,8 +50,8 @@ export async function createMatrixClient(params: {
   const homeserver = await resolveValidatedMatrixHomeserverUrl(params.homeserver, {
     dangerouslyAllowPrivateNetwork: params.allowPrivateNetwork,
   });
-  const userId = params.userId?.trim() || "unknown";
-  const matrixClientUserId = params.userId?.trim() || undefined;
+  const matrixClientUserId = normalizeOptionalString(params.userId);
+  const userId = matrixClientUserId ?? "unknown";
   const persistStorage = params.persistStorage !== false;
   const storagePaths = persistStorage
     ? resolveMatrixStoragePaths({

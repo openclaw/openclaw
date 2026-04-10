@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
-import { resolveMatrixAccountStorageRoot } from "../plugin-sdk/matrix.js";
+import { resolveMatrixAccountStorageRoot } from "../plugin-sdk/matrix-helper.js";
 import * as noteModule from "../terminal/note.js";
 import { setChannelPluginRegistryForTests } from "./channel-test-registry.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
@@ -1700,103 +1700,6 @@ describe("doctor config flow", () => {
     expect(cfg.session?.threadBindings?.ttlHours).toBeUndefined();
     expect(cfg.channels?.discord?.threadBindings?.ttlHours).toBeUndefined();
     expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings?.ttlHours).toBeUndefined();
-  });
-
-  it("warns clearly about legacy tts provider config and points to doctor --fix", async () => {
-    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
-    try {
-      await runDoctorConfigWithInput({
-        config: {
-          messages: {
-            tts: {
-              elevenlabs: {
-                voiceId: "voice-1",
-              },
-            },
-          },
-          channels: {
-            discord: {
-              voice: {
-                tts: {
-                  openai: {
-                    voice: "alloy",
-                  },
-                },
-              },
-              accounts: {
-                main: {
-                  voice: {
-                    tts: {
-                      edge: {
-                        voice: "en-US-AvaNeural",
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          },
-          plugins: {
-            entries: {
-              "voice-call": {
-                config: {
-                  tts: {
-                    openai: {
-                      voice: "alloy",
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-        run: loadAndMaybeMigrateDoctorConfig,
-      });
-
-      expect(
-        noteSpy.mock.calls.some(
-          ([message, title]) =>
-            title === "Legacy config keys detected" &&
-            String(message).includes("messages.tts:") &&
-            String(message).includes("messages.tts.providers.<provider>"),
-        ),
-      ).toBe(true);
-      expect(
-        noteSpy.mock.calls.some(
-          ([message, title]) =>
-            title === "Legacy config keys detected" &&
-            String(message).includes("channels.discord.voice.tts:") &&
-            String(message).includes("channels.discord.voice.tts.providers.<provider>"),
-        ),
-      ).toBe(true);
-      expect(
-        noteSpy.mock.calls.some(
-          ([message, title]) =>
-            title === "Legacy config keys detected" &&
-            String(message).includes("channels.discord.accounts:") &&
-            String(message).includes(
-              "channels.discord.accounts.<id>.voice.tts.providers.<provider>",
-            ),
-        ),
-      ).toBe(true);
-      expect(
-        noteSpy.mock.calls.some(
-          ([message, title]) =>
-            title === "Legacy config keys detected" &&
-            String(message).includes("plugins.entries:") &&
-            String(message).includes("plugins.entries.voice-call.config.tts.providers.<provider>"),
-        ),
-      ).toBe(true);
-      expect(
-        noteSpy.mock.calls.some(
-          ([message, title]) =>
-            title === "Doctor" &&
-            String(message).includes('Run "openclaw doctor --fix" to migrate legacy config keys.'),
-        ),
-      ).toBe(true);
-    } finally {
-      noteSpy.mockRestore();
-    }
   });
 
   it("warns clearly about legacy talk config and points to doctor --fix", async () => {

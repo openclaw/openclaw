@@ -48,9 +48,12 @@ describe("group runtime loading", () => {
 
   it("loads the group runtime only when requireMention resolution needs it", async () => {
     const groupsRuntimeLoads = vi.fn();
-    vi.doMock("./groups.runtime.js", async () => {
+    vi.doMock("./groups.runtime.js", () => {
       groupsRuntimeLoads();
-      return await vi.importActual<typeof import("./groups.runtime.js")>("./groups.runtime.js");
+      return {
+        getChannelPlugin: () => undefined,
+        normalizeChannelId: (channelId?: string) => channelId?.trim().toLowerCase(),
+      };
     });
     const groups = await import("./groups.js");
 

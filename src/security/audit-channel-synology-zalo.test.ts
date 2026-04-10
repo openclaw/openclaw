@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import {
+  collectSynologyChatSecurityAuditFindings,
+  collectZalouserSecurityAuditFindings,
+} from "../../test/helpers/channels/security-audit-contract.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { collectSynologyChatSecurityAuditFindings } from "../plugin-sdk/synology-chat.js";
-import { collectZalouserSecurityAuditFindings } from "../plugin-sdk/zalouser.js";
 import { withChannelSecurityStateDir } from "./audit-channel-security.test-helpers.js";
 import { collectChannelSecurityFindings } from "./audit-channel.js";
 

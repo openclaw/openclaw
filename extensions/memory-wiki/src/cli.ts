@@ -240,7 +240,9 @@ export async function runWikiStatus(params: {
   stdout?: Pick<NodeJS.WriteStream, "write">;
 }) {
   await syncMemoryWikiImportedSources({ config: params.config, appConfig: params.appConfig });
-  const status = await resolveMemoryWikiStatus(params.config);
+  const status = await resolveMemoryWikiStatus(params.config, {
+    appConfig: params.appConfig,
+  });
   writeOutput(
     params.json ? JSON.stringify(status, null, 2) : renderMemoryWikiStatus(status),
     params.stdout,
@@ -255,7 +257,11 @@ export async function runWikiDoctor(params: {
   stdout?: Pick<NodeJS.WriteStream, "write">;
 }) {
   await syncMemoryWikiImportedSources({ config: params.config, appConfig: params.appConfig });
-  const report = buildMemoryWikiDoctorReport(await resolveMemoryWikiStatus(params.config));
+  const report = buildMemoryWikiDoctorReport(
+    await resolveMemoryWikiStatus(params.config, {
+      appConfig: params.appConfig,
+    }),
+  );
   if (!report.healthy) {
     process.exitCode = 1;
   }
@@ -738,10 +744,10 @@ export function registerWikiCli(
 
   const bridge = wiki
     .command("bridge")
-    .description("Import public memory-core artifacts into the wiki vault");
+    .description("Import public memory artifacts into the wiki vault");
   bridge
     .command("import")
-    .description("Sync bridge-backed memory-core artifacts into wiki source pages")
+    .description("Sync bridge-backed memory artifacts into wiki source pages")
     .option("--json", "Print JSON")
     .action(async (opts: WikiBridgeImportCommandOptions) => {
       await runWikiBridgeImport({ config, appConfig, json: opts.json });

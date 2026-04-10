@@ -45,6 +45,8 @@ export type BuildPluginApiParams = {
       | "onConversationBindingResolved"
       | "registerCommand"
       | "registerContextEngine"
+      | "registerCompactionProvider"
+      | "registerMemoryCapability"
       | "registerMemoryPromptSection"
       | "registerMemoryPromptSupplement"
       | "registerMemoryCorpusSupplement"
@@ -91,6 +93,8 @@ const noopOnConversationBindingResolved: OpenClawPluginApi["onConversationBindin
   () => {};
 const noopRegisterCommand: OpenClawPluginApi["registerCommand"] = () => {};
 const noopRegisterContextEngine: OpenClawPluginApi["registerContextEngine"] = () => {};
+const noopRegisterCompactionProvider: OpenClawPluginApi["registerCompactionProvider"] = () => {};
+const noopRegisterMemoryCapability: OpenClawPluginApi["registerMemoryCapability"] = () => {};
 const noopRegisterMemoryPromptSection: OpenClawPluginApi["registerMemoryPromptSection"] = () => {};
 const noopRegisterMemoryPromptSupplement: OpenClawPluginApi["registerMemoryPromptSupplement"] =
   () => {};
@@ -152,6 +156,9 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
       handlers.onConversationBindingResolved ?? noopOnConversationBindingResolved,
     registerCommand: handlers.registerCommand ?? noopRegisterCommand,
     registerContextEngine: handlers.registerContextEngine ?? noopRegisterContextEngine,
+    registerCompactionProvider:
+      handlers.registerCompactionProvider ?? noopRegisterCompactionProvider,
+    registerMemoryCapability: handlers.registerMemoryCapability ?? noopRegisterMemoryCapability,
     registerMemoryPromptSection:
       handlers.registerMemoryPromptSection ?? noopRegisterMemoryPromptSection,
     registerMemoryPromptSupplement:

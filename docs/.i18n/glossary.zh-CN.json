@@ -184,6 +184,14 @@
     "target": "Doctor"
   },
   {
+    "source": "Memory Wiki",
+    "target": "Memory Wiki"
+  },
+  {
+    "source": "wiki",
+    "target": "wiki"
+  },
+  {
     "source": "Polls",
     "target": "投票"
   },

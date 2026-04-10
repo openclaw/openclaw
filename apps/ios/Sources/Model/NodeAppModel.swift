@@ -120,6 +120,10 @@ final class NodeAppModel {
     // multiple pending requests and cause the onboarding UI to "flip-flop".
     var gatewayPairingPaused: Bool = false
     var gatewayPairingRequestId: String?
+    private(set) var lastGatewayProblem: GatewayConnectionProblem?
+    var gatewayDisplayStatusText: String {
+        self.lastGatewayProblem?.statusText ?? self.gatewayStatusText
+    }
     var seamColorHex: String?
     private var mainSessionBaseKey: String = "main"
     var selectedAgentId: String?
@@ -1815,6 +1819,7 @@ extension NodeAppModel {
         self.gatewayAutoReconnectEnabled = false
         self.gatewayPairingPaused = false
         self.gatewayPairingRequestId = nil
+        self.lastGatewayProblem = nil
         self.nodeGatewayTask?.cancel()
         self.nodeGatewayTask = nil
         self.operatorGatewayTask?.cancel()
@@ -1848,6 +1853,7 @@ private extension NodeAppModel {
         self.gatewayAutoReconnectEnabled = true
         self.gatewayPairingPaused = false
         self.gatewayPairingRequestId = nil
+        self.lastGatewayProblem = nil
         self.nodeGatewayTask?.cancel()
         self.operatorGatewayTask?.cancel()
         self.gatewayHealthMonitor.stop()
@@ -1864,6 +1870,38 @@ private extension NodeAppModel {
         self.selectedAgentId = GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: stableID)
         self.homeCanvasRevision &+= 1
         self.apnsLastRegisteredTokenHex = nil
+    }
+
+    func clearGatewayConnectionProblem() {
+        self.lastGatewayProblem = nil
+        self.gatewayPairingPaused = false
+        self.gatewayPairingRequestId = nil
+    }
+
+    func applyGatewayConnectionProblem(_ problem: GatewayConnectionProblem) {
+        self.lastGatewayProblem = problem
+        self.gatewayStatusText = problem.statusText
+        self.gatewayServerName = nil
+        self.gatewayRemoteAddress = nil
+        self.gatewayConnected = false
+        self.showLocalCanvasOnDisconnect()
+        if problem.pauseReconnect {
+            self.gatewayAutoReconnectEnabled = false
+        }
+        if problem.needsPairingApproval {
+            self.gatewayPairingPaused = true
+            self.gatewayPairingRequestId = problem.requestId
+        } else {
+            self.gatewayPairingPaused = false
+            self.gatewayPairingRequestId = nil
+        }
+    }
+
+    func shouldKeepGatewayProblemStatus(forDisconnectReason reason: String) -> Bool {
+        guard let lastGatewayProblem else { return false }
+        return GatewayConnectionProblemMapper.shouldPreserve(
+            previousProblem: lastGatewayProblem,
+            overDisconnectReason: reason)
     }
 
     func shouldStartOperatorGatewayLoop(
@@ -2162,6 +2200,7 @@ private extension NodeAppModel {
                         onConnected: { [weak self] in
                             guard let self else { return }
                             await MainActor.run {
+                                self.clearGatewayConnectionProblem()
                                 self.gatewayStatusText = "Connected"
                                 self.gatewayServerName = url.host ?? "gateway"
                                 self.gatewayConnected = true
@@ -2218,7 +2257,13 @@ private extension NodeAppModel {
                         onDisconnected: { [weak self] reason in
                             guard let self else { return }
                             await MainActor.run {
-                                self.gatewayStatusText = "Disconnected: \(reason)"
+                                if self.shouldKeepGatewayProblemStatus(forDisconnectReason: reason),
+                                   let lastGatewayProblem = self.lastGatewayProblem
+                                {
+                                    self.gatewayStatusText = lastGatewayProblem.statusText
+                                } else {
+                                    self.gatewayStatusText = "Disconnected: \(reason)"
+                                }
                                 self.gatewayServerName = nil
                                 self.gatewayRemoteAddress = nil
                                 self.gatewayConnected = false
@@ -2257,50 +2302,25 @@ private extension NodeAppModel {
                     }
 
                     attempt += 1
-                    await MainActor.run {
-                        self.gatewayStatusText = "Gateway error: \(error.localizedDescription)"
-                        self.gatewayServerName = nil
-                        self.gatewayRemoteAddress = nil
-                        self.gatewayConnected = false
-                        self.showLocalCanvasOnDisconnect()
+                    let problem = await MainActor.run {
+                        let nextProblem = GatewayConnectionProblemMapper.map(
+                            error: error,
+                            preserving: self.lastGatewayProblem)
+                        if let nextProblem {
+                            self.applyGatewayConnectionProblem(nextProblem)
+                        } else {
+                            self.lastGatewayProblem = nil
+                            self.gatewayStatusText = "Gateway error: \(error.localizedDescription)"
+                            self.gatewayServerName = nil
+                            self.gatewayRemoteAddress = nil
+                            self.gatewayConnected = false
+                            self.showLocalCanvasOnDisconnect()
+                        }
+                        return nextProblem
                     }
                     GatewayDiagnostics.log("gateway connect error: \(error.localizedDescription)")
 
-                    // If auth is missing/rejected, pause reconnect churn until the user intervenes.
-                    // Reconnect loops only spam the same failing handshake and make onboarding noisy.
-                    let lower = error.localizedDescription.lowercased()
-                    if lower.contains("unauthorized") || lower.contains("gateway token missing") {
-                        await MainActor.run {
-                            self.gatewayAutoReconnectEnabled = false
-                        }
-                    }
-
-                    // If pairing is required, stop reconnect churn. The user must approve the request
-                    // on the gateway before another connect attempt will succeed, and retry loops can
-                    // generate multiple pending requests.
-                    if lower.contains("not_paired") || lower.contains("pairing required") {
-                        let requestId: String? = {
-                            // GatewayResponseError for connect decorates the message with `(requestId: ...)`.
-                            // Keep this resilient since other layers may wrap the text.
-                            let text = error.localizedDescription
-                            guard let start = text.range(of: "(requestId: ")?.upperBound else { return nil }
-                            guard let end = text[start...].firstIndex(of: ")") else { return nil }
-                            let raw = String(text[start..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
-                            return raw.isEmpty ? nil : raw
-                        }()
-                        await MainActor.run {
-                            self.gatewayAutoReconnectEnabled = false
-                            self.gatewayPairingPaused = true
-                            self.gatewayPairingRequestId = requestId
-                            if let requestId, !requestId.isEmpty {
-                                self.gatewayStatusText =
-                                    "Pairing required (requestId: \(requestId)). "
-                                        + "Approve on gateway and return to OpenClaw."
-                            } else {
-                                self.gatewayStatusText =
-                                    "Pairing required. Approve on gateway and return to OpenClaw."
-                            }
-                        }
+                    if problem?.needsPairingApproval == true {
                         // Hard stop the underlying WebSocket watchdog reconnects so the UI stays stable and
                         // we don't generate multiple pending requests while waiting for approval.
                         pausedForPairingApproval = true
@@ -2309,6 +2329,10 @@ private extension NodeAppModel {
                         await self.operatorGateway.disconnect()
                         await self.nodeGateway.disconnect()
                         break
+                    }
+
+                    if problem?.pauseReconnect == true {
+                        continue
                     }
 
                     let sleepSeconds = min(8.0, 0.5 * pow(1.7, Double(attempt)))
@@ -2322,6 +2346,7 @@ private extension NodeAppModel {
             }
 
             await MainActor.run {
+                self.lastGatewayProblem = nil
                 self.gatewayStatusText = "Offline"
                 self.gatewayServerName = nil
                 self.gatewayRemoteAddress = nil

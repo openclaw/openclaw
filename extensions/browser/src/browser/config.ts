@@ -1,4 +1,8 @@
 import {
+  normalizeOptionalString,
+  normalizeOptionalTrimmedStringList,
+} from "openclaw/plugin-sdk/text-runtime";
+import {
   type BrowserConfig,
   type BrowserProfileConfig,
   type OpenClawConfig,
@@ -112,15 +116,7 @@ function resolveCdpPortRangeStart(
   return start;
 }
 
-function normalizeStringList(raw: string[] | undefined): string[] | undefined {
-  if (!Array.isArray(raw) || raw.length === 0) {
-    return undefined;
-  }
-  const values = raw
-    .map((value) => value.trim())
-    .filter((value): value is string => value.length > 0);
-  return values.length > 0 ? values : undefined;
-}
+const normalizeStringList = normalizeOptionalTrimmedStringList;
 
 function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | undefined {
   const rawPolicy = cfg?.ssrfPolicy as
@@ -133,9 +129,7 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
   const hasExplicitPrivateSetting =
     allowPrivateNetwork !== undefined || dangerouslyAllowPrivateNetwork !== undefined;
   const resolvedAllowPrivateNetwork =
-    dangerouslyAllowPrivateNetwork === true ||
-    allowPrivateNetwork === true ||
-    !hasExplicitPrivateSetting;
+    dangerouslyAllowPrivateNetwork === true || allowPrivateNetwork === true;
 
   if (
     !resolvedAllowPrivateNetwork &&
@@ -143,7 +137,9 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
     !allowedHostnames &&
     !hostnameAllowlist
   ) {
-    return undefined;
+    // Keep the default policy object present so CDP guards still enforce
+    // fail-closed private-network checks on unconfigured installs.
+    return {};
   }
 
   return {
@@ -238,8 +234,8 @@ export function resolveBrowserConfig(
   const headless = cfg?.headless === true;
   const noSandbox = cfg?.noSandbox === true;
   const attachOnly = cfg?.attachOnly === true;
-  const executablePath = cfg?.executablePath?.trim() || undefined;
-  const defaultProfileFromConfig = cfg?.defaultProfile?.trim() || undefined;
+  const executablePath = normalizeOptionalString(cfg?.executablePath);
+  const defaultProfileFromConfig = normalizeOptionalString(cfg?.defaultProfile);
 
   const legacyCdpPort = rawCdpUrl ? cdpInfo.port : undefined;
   const isWsUrl = cdpInfo.parsed.protocol === "ws:" || cdpInfo.parsed.protocol === "wss:";
