@@ -67,45 +67,27 @@ function inferRegionFromProfileId(profileId: string | undefined): StepFunRegion 
 }
 
 function inferLatestConfiguredRegion(ctx: ProviderCatalogContext): StepFunRegion | undefined {
-  const configuredProfiles = ctx.config.auth?.profiles;
-  if (!configuredProfiles || typeof configuredProfiles !== "object") {
+  const configuredOrder = ctx.config.auth?.order;
+  if (!configuredOrder || typeof configuredOrder !== "object") {
+    // Without explicit ordering, defer to other inference methods
+    // (env vars, profile ID patterns, etc.) which have clearer semantics
     return undefined;
   }
 
-  const normalizedProviderIds = new Set(STEPFUN_PROVIDER_IDS.map((id) => id.toLowerCase()));
-  const configuredOrder = ctx.config.auth?.order;
-  if (configuredOrder && typeof configuredOrder === "object") {
-    for (const providerId of STEPFUN_PROVIDER_IDS) {
-      const matchingOrder = Object.entries(configuredOrder).find(
-        ([key]) => key.trim().toLowerCase() === providerId,
-      )?.[1];
-      if (!Array.isArray(matchingOrder)) {
-        continue;
-      }
-      for (const profileId of matchingOrder) {
-        const region = inferRegionFromProfileId(typeof profileId === "string" ? profileId : "");
-        if (region) {
-          return region;
-        }
-      }
+  // Use auth.order to find the most recently configured StepFun profile
+  for (const providerId of STEPFUN_PROVIDER_IDS) {
+    const matchingOrder = Object.entries(configuredOrder).find(
+      ([key]) => key.trim().toLowerCase() === providerId,
+    )?.[1];
+    if (!Array.isArray(matchingOrder)) {
+      continue;
     }
-  }
-
-  const matchingProfileIds = Object.entries(configuredProfiles)
-    .filter(([, profile]) => {
-      const provider =
-        profile && typeof profile === "object" && typeof profile.provider === "string"
-          ? profile.provider.trim().toLowerCase()
-          : "";
-      return normalizedProviderIds.has(provider);
-    })
-    .map(([profileId]) => profileId)
-    .toReversed();
-
-  for (const profileId of matchingProfileIds) {
-    const region = inferRegionFromProfileId(profileId);
-    if (region) {
-      return region;
+    // auth.order is an array where later entries are more recent
+    for (const profileId of matchingOrder) {
+      const region = inferRegionFromProfileId(typeof profileId === "string" ? profileId : "");
+      if (region) {
+        return region;
+      }
     }
   }
 
