@@ -6,7 +6,11 @@ import { openBoundaryFile } from "../infra/boundary-file-read.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
-import { normalizeOptionalLowercaseString, readStringValue } from "../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  readStringValue,
+} from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveWorkspaceTemplateDir } from "./workspace-templates.js";
 
@@ -49,6 +53,11 @@ const workspaceFileCache = new Map<string, { content: string; identity: string }
 type WorkspaceGuardedReadResult =
   | { ok: true; content: string }
   | { ok: false; reason: "path" | "validation" | "io"; error?: unknown };
+
+type WorkspaceGuardedReadFailureReason = Extract<
+  WorkspaceGuardedReadResult,
+  { ok: false }
+>["reason"];
 
 function workspaceFileIdentity(stat: syncFs.Stats, canonicalPath: string): string {
   return `${canonicalPath}|${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
@@ -146,7 +155,7 @@ export type WorkspaceBootstrapFile = {
   path: string;
   content?: string;
   missing: boolean;
-  unavailableReason?: WorkspaceGuardedReadResult["reason"];
+  unavailableReason?: WorkspaceGuardedReadFailureReason;
 };
 
 export type ExtraBootstrapLoadDiagnosticCode =
@@ -491,7 +500,12 @@ export async function loadWorkspaceBootstrapFileFromPath(params: {
   name: WorkspaceBootstrapFileName;
 }): Promise<WorkspaceBootstrapFile> {
   const resolvedDir = resolveUserPath(params.workspaceDir);
-  const resolvedPath = path.resolve(params.filePath);
+  const normalizedFilePath = normalizeOptionalString(params.filePath) ?? params.filePath;
+  const resolvedPath = normalizedFilePath.startsWith("~")
+    ? resolveUserPath(normalizedFilePath)
+    : path.isAbsolute(normalizedFilePath)
+      ? path.resolve(normalizedFilePath)
+      : path.resolve(resolvedDir, normalizedFilePath);
   const loaded = await readWorkspaceFileWithGuards({
     filePath: resolvedPath,
     workspaceDir: resolvedDir,

@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { isPathWithinRoot } from "../shared/avatar-policy.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { resolveUserPath } from "../utils.js";
 import { resolveAgentConfig, resolveSessionAgentIds } from "./agent-scope.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
@@ -241,6 +242,29 @@ function formatUnavailableBootstrapFileReason(
   }
 }
 
+function formatModelMapConfigLabel(baseLabel: string, modelRefKey: string): string {
+  return `${baseLabel}[${JSON.stringify(modelRefKey)}]`;
+}
+
+function uniqueResolvedPathCandidates(
+  candidates: Array<{ label: string; resolvedPath: string } | null>,
+): Array<{ label: string; resolvedPath: string }> {
+  const seen = new Set<string>();
+  const resolved: Array<{ label: string; resolvedPath: string }> = [];
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+    const key = `${candidate.label}|${candidate.resolvedPath}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    resolved.push(candidate);
+  }
+  return resolved;
+}
+
 function resolveConfiguredAgentsPath(params: {
   workspaceDir: string;
   configuredPath: string | undefined;
@@ -251,8 +275,10 @@ function resolveConfiguredAgentsPath(params: {
   if (!configuredPath) {
     return null;
   }
-  const resolvedWorkspaceDir = path.resolve(params.workspaceDir);
-  const resolvedPath = path.resolve(resolvedWorkspaceDir, configuredPath);
+  const resolvedWorkspaceDir = resolveUserPath(params.workspaceDir);
+  const resolvedPath = configuredPath.startsWith("~")
+    ? resolveUserPath(configuredPath)
+    : path.resolve(resolvedWorkspaceDir, configuredPath);
   if (!isPathWithinRoot(resolvedWorkspaceDir, resolvedPath)) {
     params.warn?.(
       `${params.label} must stay within the workspace root; ignoring ${JSON.stringify(configuredPath)}`,
@@ -272,7 +298,7 @@ export async function resolveEffectiveAgentsBootstrapFileForRun(params: {
   modelId?: string;
   warn?: (message: string) => void;
 }): Promise<ResolvedAgentsBootstrapFile> {
-  const resolvedWorkspaceDir = path.resolve(params.workspaceDir);
+  const resolvedWorkspaceDir = resolveUserPath(params.workspaceDir);
   const runRole = resolveAgentsBootstrapRunRole(params);
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey ?? params.sessionId,
@@ -290,10 +316,10 @@ export async function resolveEffectiveAgentsBootstrapFileForRun(params: {
       : agentConfig?.agentsFile !== undefined
         ? `agents.list.${sessionAgentId}.agentsFile`
         : "agents.defaults.agentsFile";
-  const baseConfiguredPath =
-    runRole === "subagent"
-      ? (agentConfig?.subagents?.agentsFile ?? defaultConfig?.subagents?.agentsFile)
-      : (agentConfig?.agentsFile ?? defaultConfig?.agentsFile);
+  const agentBaseConfiguredPath =
+    runRole === "subagent" ? agentConfig?.subagents?.agentsFile : agentConfig?.agentsFile;
+  const defaultBaseConfiguredPath =
+    runRole === "subagent" ? defaultConfig?.subagents?.agentsFile : defaultConfig?.agentsFile;
   const modelRefKey =
     params.modelProviderId && params.modelId
       ? modelKey(params.modelProviderId, params.modelId)
@@ -310,17 +336,22 @@ export async function resolveEffectiveAgentsBootstrapFileForRun(params: {
       : modelRefKey
         ? defaultConfig?.agentsFilesByModel?.[modelRefKey]
         : undefined;
-  const modelConfiguredPath = agentModelConfiguredPath ?? defaultModelConfiguredPath;
   const modelConfiguredPathLabel =
     modelRefKey === undefined
       ? undefined
       : runRole === "subagent"
         ? agentModelConfiguredPath !== undefined
-          ? `agents.list.${sessionAgentId}.subagents.agentsFilesByModel.${modelRefKey}`
-          : `agents.defaults.subagents.agentsFilesByModel.${modelRefKey}`
+          ? formatModelMapConfigLabel(
+              `agents.list.${sessionAgentId}.subagents.agentsFilesByModel`,
+              modelRefKey,
+            )
+          : formatModelMapConfigLabel("agents.defaults.subagents.agentsFilesByModel", modelRefKey)
         : agentModelConfiguredPath !== undefined
-          ? `agents.list.${sessionAgentId}.agentsFilesByModel.${modelRefKey}`
-          : `agents.defaults.agentsFilesByModel.${modelRefKey}`;
+          ? formatModelMapConfigLabel(
+              `agents.list.${sessionAgentId}.agentsFilesByModel`,
+              modelRefKey,
+            )
+          : formatModelMapConfigLabel("agents.defaults.agentsFilesByModel", modelRefKey);
   const defaultAgentsPath = path.join(resolvedWorkspaceDir, DEFAULT_AGENTS_FILENAME);
 
   const loadSelectedFile = async (selectedPath: string) =>
@@ -330,19 +361,34 @@ export async function resolveEffectiveAgentsBootstrapFileForRun(params: {
       name: DEFAULT_AGENTS_FILENAME,
     });
 
-  const resolvedBasePath =
-    resolveConfiguredAgentsPath({
+  const resolveCandidatePath = (
+    configuredPath: string | undefined,
+    label: string,
+  ): { label: string; resolvedPath: string } | null => {
+    const resolvedPath = resolveConfiguredAgentsPath({
       workspaceDir: resolvedWorkspaceDir,
-      configuredPath: baseConfiguredPath,
-      label: baseConfiguredPathLabel,
+      configuredPath,
+      label,
       warn: params.warn,
-    }) ?? defaultAgentsPath;
+    });
+    return resolvedPath ? { label, resolvedPath } : null;
+  };
+
+  const baseCandidates = uniqueResolvedPathCandidates([
+    resolveCandidatePath(agentBaseConfiguredPath, baseConfiguredPathLabel),
+    resolveCandidatePath(
+      defaultBaseConfiguredPath,
+      runRole === "subagent"
+        ? "agents.defaults.subagents.agentsFile"
+        : "agents.defaults.agentsFile",
+    ),
+  ]);
 
   const tryLoadPath = async (
-    selectedPath: string,
+    candidate: { label: string; resolvedPath: string },
     warningMessage?: string,
   ): Promise<WorkspaceBootstrapFile | null> => {
-    const loaded = await loadSelectedFile(selectedPath);
+    const loaded = await loadSelectedFile(candidate.resolvedPath);
     if (!loaded.missing) {
       return loaded;
     }
@@ -355,33 +401,61 @@ export async function resolveEffectiveAgentsBootstrapFileForRun(params: {
   };
 
   let resolvedFile: WorkspaceBootstrapFile | null = null;
-  if (modelConfiguredPath && modelRefKey) {
-    const resolvedModelPath = resolveConfiguredAgentsPath({
-      workspaceDir: resolvedWorkspaceDir,
-      configuredPath: modelConfiguredPath,
-      label:
-        modelConfiguredPathLabel ??
-        (runRole === "subagent"
-          ? `agents.defaults.subagents.agentsFilesByModel.${modelRefKey}`
-          : `agents.defaults.agentsFilesByModel.${modelRefKey}`),
-      warn: params.warn,
-    });
-    if (resolvedModelPath) {
-      resolvedFile = await tryLoadPath(
-        resolvedModelPath,
-        `configured AGENTS file for model ${modelRefKey} could not be loaded at ${resolvedModelPath}; falling back`,
-      );
+  const modelCandidates =
+    modelRefKey === undefined
+      ? []
+      : uniqueResolvedPathCandidates([
+          resolveCandidatePath(
+            agentModelConfiguredPath,
+            runRole === "subagent"
+              ? formatModelMapConfigLabel(
+                  `agents.list.${sessionAgentId}.subagents.agentsFilesByModel`,
+                  modelRefKey,
+                )
+              : formatModelMapConfigLabel(
+                  `agents.list.${sessionAgentId}.agentsFilesByModel`,
+                  modelRefKey,
+                ),
+          ),
+          agentModelConfiguredPath !== undefined
+            ? resolveCandidatePath(
+                defaultModelConfiguredPath,
+                runRole === "subagent"
+                  ? formatModelMapConfigLabel(
+                      "agents.defaults.subagents.agentsFilesByModel",
+                      modelRefKey,
+                    )
+                  : formatModelMapConfigLabel("agents.defaults.agentsFilesByModel", modelRefKey),
+              )
+            : resolveCandidatePath(defaultModelConfiguredPath, modelConfiguredPathLabel ?? ""),
+        ]);
+
+  for (const candidate of modelCandidates) {
+    resolvedFile = await tryLoadPath(
+      candidate,
+      `configured AGENTS file from ${candidate.label} could not be loaded at ${candidate.resolvedPath}; falling back`,
+    );
+    if (resolvedFile) {
+      break;
     }
   }
 
   if (!resolvedFile) {
-    resolvedFile =
-      (await tryLoadPath(
-        resolvedBasePath,
-        resolvedBasePath !== defaultAgentsPath
-          ? `configured AGENTS file could not be loaded at ${resolvedBasePath}; falling back to ${DEFAULT_AGENTS_FILENAME}`
+    for (const candidate of baseCandidates) {
+      resolvedFile = await tryLoadPath(
+        candidate,
+        candidate.resolvedPath !== defaultAgentsPath
+          ? `configured AGENTS file from ${candidate.label} could not be loaded at ${candidate.resolvedPath}; falling back`
           : undefined,
-      )) ?? (await loadSelectedFile(defaultAgentsPath));
+      );
+      if (resolvedFile) {
+        break;
+      }
+    }
+  }
+
+  if (!resolvedFile) {
+    resolvedFile = await loadSelectedFile(defaultAgentsPath);
   }
 
   return {
