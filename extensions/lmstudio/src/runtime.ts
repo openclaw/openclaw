@@ -1,5 +1,4 @@
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/config-runtime";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
@@ -147,6 +146,32 @@ export async function resolveLmstudioProviderHeaders(params: {
 }
 
 /**
+ * Resolves LM Studio API key and provider headers in parallel.
+ * Use this as the standard auth setup step before discovery or model load calls.
+ */
+export async function resolveLmstudioRequestContext(params: {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  env?: NodeJS.ProcessEnv;
+  providerHeaders?: unknown;
+}): Promise<{ apiKey: string | undefined; headers: Record<string, string> | undefined }> {
+  const [apiKey, headers] = await Promise.all([
+    resolveLmstudioRuntimeApiKey({
+      config: params.config,
+      agentDir: params.agentDir,
+      allowMissingAuth: true,
+      env: params.env,
+    }),
+    resolveLmstudioProviderHeaders({
+      config: params.config,
+      env: params.env,
+      headers: params.providerHeaders,
+    }),
+  ]);
+  return { apiKey, headers };
+}
+
+/**
  * Resolves LM Studio runtime API key from config.
  */
 export async function resolveLmstudioRuntimeApiKey(params: {
@@ -180,10 +205,7 @@ export async function resolveLmstudioRuntimeApiKey(params: {
     if (configuredApiKey) {
       return configuredApiKey;
     }
-    if (
-      params.allowMissingAuth &&
-      formatErrorMessage(error).includes(`No API key found for provider "${LMSTUDIO_PROVIDER_ID}"`)
-    ) {
+    if (params.allowMissingAuth) {
       return undefined;
     }
     throw error;

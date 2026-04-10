@@ -1022,8 +1022,6 @@ export type ProviderModelSelectedContext = {
   workspaceDir?: string;
 };
 
-export type ProviderExplicitModelSelectedContext = ProviderModelSelectedContext;
-
 export type ProviderResolveSyntheticAuthContext = {
   config?: OpenClawConfig;
   provider: string;
@@ -1593,15 +1591,6 @@ export type ProviderPlugin = {
   shouldDeferSyntheticProfileAuth?: (
     ctx: ProviderDeferSyntheticProfileAuthContext,
   ) => boolean | undefined;
-  /**
-   * Called during interactive setup after the user explicitly selects a default
-   * model. Unlike `onModelSelected` (which runs for any model resolution),
-   * this fires only on explicit user selection and may return a modified config
-   * (e.g. to prompt for context window or model-specific settings).
-   */
-  onExplicitModelSelected?: (
-    ctx: ProviderExplicitModelSelectedContext,
-  ) => Promise<OpenClawConfig | null | undefined> | OpenClawConfig | null | undefined;
   onModelSelected?: (ctx: ProviderModelSelectedContext) => Promise<void>;
 };
 

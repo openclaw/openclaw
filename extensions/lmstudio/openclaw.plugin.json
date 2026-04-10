@@ -1,5 +1,6 @@
 {
   "id": "lmstudio",
+  "enabledByDefault": true,
   "providers": ["lmstudio"],
   "providerAuthEnvVars": {
     "lmstudio": ["LM_API_TOKEN"]

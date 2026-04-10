@@ -32,10 +32,9 @@ import {
   LMSTUDIO_DEFAULT_MODEL_ID,
   LMSTUDIO_PROVIDER_ID as PROVIDER_ID,
 } from "./defaults.js";
+import { discoverLmstudioModels, fetchLmstudioModels } from "./models.fetch.js";
 import {
-  discoverLmstudioModels,
-  fetchLmstudioModels,
-  mapLmstudioWireEntry,
+  mapLmstudioWireModelsToConfig,
   type LmstudioModelWire,
   resolveLmstudioInferenceBase,
 } from "./models.js";
@@ -44,7 +43,7 @@ import {
   resolveLmstudioProviderAuthMode,
   shouldUseLmstudioApiKeyPlaceholder,
 } from "./provider-auth.js";
-import { resolveLmstudioProviderHeaders, resolveLmstudioRuntimeApiKey } from "./runtime.js";
+import { resolveLmstudioProviderHeaders, resolveLmstudioRequestContext } from "./runtime.js";
 
 type ProviderPromptText = (params: {
   message: string;
@@ -55,6 +54,12 @@ type ProviderPromptText = (params: {
 
 type ProviderPromptNote = (message: string, title?: string) => Promise<void> | void;
 type LmstudioDiscoveryResult = Awaited<ReturnType<typeof fetchLmstudioModels>>;
+type LmstudioSetupDiscovery = {
+  discovery: LmstudioDiscoveryResult;
+  models: ModelDefinitionConfig[];
+  defaultModel: string | undefined;
+  defaultModelId: string | undefined;
+};
 
 function resolvePositiveInteger(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -72,48 +77,24 @@ function resolvePositiveInteger(value: unknown): number | undefined {
   return Number.isFinite(normalized) && normalized > 0 ? normalized : undefined;
 }
 
-function resolveRequestedContextWindowOrThrow(value: unknown): number | undefined {
-  if (value === undefined || value === null || (typeof value === "string" && !value.trim())) {
-    return undefined;
-  }
-  const resolved = resolvePositiveInteger(value);
-  if (!resolved) {
-    throw new Error("Invalid --custom-context-window. Use a positive integer token count.");
-  }
-  return resolved;
-}
-
-function omitAuthorizationHeader(
-  headers: ModelProviderConfig["headers"] | undefined,
-): ModelProviderConfig["headers"] | undefined {
-  if (!headers) {
-    return undefined;
-  }
-  let next: NonNullable<ModelProviderConfig["headers"]> | undefined;
-  for (const [headerName, headerValue] of Object.entries(headers)) {
-    if (headerName.trim().toLowerCase() === "authorization") {
-      continue;
-    }
-    (next ??= {})[headerName] = headerValue;
-  }
-  return next;
-}
-
-function markAuthorizationHeaderRemovalForPatch(
-  headers: ModelProviderConfig["headers"] | undefined,
-): Record<string, string | undefined> | undefined {
-  if (!headers) {
-    return undefined;
-  }
-  let next: Record<string, string | undefined> | undefined;
-  for (const [headerName, headerValue] of Object.entries(headers)) {
-    if (headerName.trim().toLowerCase() === "authorization") {
-      (next ??= {})[headerName] = undefined;
-      continue;
-    }
-    (next ??= {})[headerName] = headerValue;
-  }
-  return next;
+function buildLmstudioSetupProviderConfig(params: {
+  existingProvider: ModelProviderConfig | undefined;
+  sharedProvider?: ModelProviderConfig;
+  baseUrl: string;
+  apiKey?: ModelProviderConfig["apiKey"];
+  headers: ModelProviderConfig["headers"] | undefined;
+  models: ModelDefinitionConfig[];
+}): ModelProviderConfig {
+  return {
+    ...params.existingProvider,
+    ...params.sharedProvider,
+    baseUrl: params.baseUrl,
+    api: params.sharedProvider?.api ?? params.existingProvider?.api ?? "openai-completions",
+    auth: "api-key",
+    ...(params.apiKey !== undefined ? { apiKey: params.apiKey } : {}),
+    headers: params.headers,
+    models: params.models,
+  };
 }
 
 function resolveLmstudioModelAdvertisedContextLimit(entry: LmstudioModelWire): number | undefined {
@@ -135,78 +116,35 @@ function applyModelContextWindowOverride(
   };
 }
 
-function applyRequestedContextWindow(params: {
+function applyRequestedContextWindowToAllModels(params: {
   models: ModelDefinitionConfig[];
-  modelId: string;
+  discoveryModels: LmstudioModelWire[];
   requestedContextWindow?: number;
-  contextLimit?: number;
-}): {
-  models: ModelDefinitionConfig[];
-  effectiveContextWindow?: number;
-  clamped: boolean;
-} {
-  if (!params.requestedContextWindow) {
-    return {
-      models: params.models,
-      effectiveContextWindow: undefined,
-      clamped: false,
-    };
+}): ModelDefinitionConfig[] {
+  const requestedContextWindow = params.requestedContextWindow;
+  if (!requestedContextWindow) {
+    return params.models;
   }
-  const effectiveContextWindow = params.contextLimit
-    ? Math.min(params.requestedContextWindow, params.contextLimit)
-    : params.requestedContextWindow;
-  const clamped = effectiveContextWindow < params.requestedContextWindow;
-  return {
-    models: params.models.map((model) =>
-      model.id === params.modelId
-        ? applyModelContextWindowOverride(model, effectiveContextWindow)
-        : model,
+  const contextLimitByModelId = new Map(
+    params.discoveryModels
+      .map((entry) => {
+        const modelId = entry.key?.trim();
+        if (!modelId) {
+          return null;
+        }
+        return [modelId, resolveLmstudioModelAdvertisedContextLimit(entry)] as const;
+      })
+      .filter((entry): entry is readonly [string, number | undefined] => Boolean(entry)),
+  );
+  return params.models.map((model) =>
+    applyModelContextWindowOverride(
+      model,
+      Math.min(
+        requestedContextWindow,
+        contextLimitByModelId.get(model.id) ?? requestedContextWindow,
+      ),
     ),
-    effectiveContextWindow,
-    clamped,
-  };
-}
-
-async function resolveLmstudioInteractiveContextLimit(params: {
-  config: OpenClawConfig;
-  provider: ModelProviderConfig;
-  modelId: string;
-}): Promise<number | undefined> {
-  const baseUrl = typeof params.provider.baseUrl === "string" ? params.provider.baseUrl.trim() : "";
-  if (!baseUrl) {
-    return undefined;
-  }
-  try {
-    const [apiKey, headers] = await Promise.all([
-      resolveLmstudioRuntimeApiKey({
-        config: params.config,
-        env: process.env,
-        allowMissingAuth: true,
-      }),
-      resolveLmstudioProviderHeaders({
-        config: params.config,
-        env: process.env,
-        headers: params.provider.headers,
-      }),
-    ]);
-    const discovery = await fetchLmstudioModels({
-      baseUrl,
-      apiKey,
-      ...(headers ? { headers } : {}),
-      timeoutMs: 5000,
-    });
-    if (!discovery.reachable || (discovery.status !== undefined && discovery.status >= 400)) {
-      return undefined;
-    }
-    const selectedWireModel = discovery.models.find(
-      (entry) => entry.key?.trim() === params.modelId,
-    );
-    return selectedWireModel
-      ? resolveLmstudioModelAdvertisedContextLimit(selectedWireModel)
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  );
 }
 
 function resolveLmstudioDiscoveryFailure(params: {
@@ -300,30 +238,6 @@ function mergeDiscoveredModels(params: {
   return merged;
 }
 
-/**
- * Maps LM Studio discovery payload to provider catalog entries.
- * Uses simple display names (no runtime tags) since these entries are persisted to config.
- */
-function mapFetchedLmstudioModelsToCatalog(models: LmstudioModelWire[]): ModelDefinitionConfig[] {
-  return models
-    .map((entry) => {
-      const base = mapLmstudioWireEntry(entry);
-      if (!base) {
-        return null;
-      }
-      return {
-        id: base.id,
-        name: base.displayName,
-        reasoning: base.reasoning,
-        input: base.input,
-        cost: base.cost,
-        contextWindow: base.contextWindow,
-        maxTokens: base.maxTokens,
-      };
-    })
-    .filter((entry): entry is ModelDefinitionConfig => entry !== null);
-}
-
 async function discoverLmstudioProviderCatalog(params: {
   baseUrl?: string;
   apiKey?: string;
@@ -358,26 +272,48 @@ function mergeDiscoveredLmstudioAllowlistEntries(params: {
   );
 }
 
-function selectDiscoveredLmstudioDefaultModel(
+function selectDefaultLmstudioModelId(
   discoveredModels: ModelDefinitionConfig[],
 ): string | undefined {
-  const discoveredIds = discoveredModels.map((model) => model.id.trim()).filter(Boolean);
-  if (discoveredIds.length === 0) {
+  const ids = discoveredModels.map((model) => model.id.trim()).filter(Boolean);
+  if (ids.length === 0) {
     return undefined;
   }
-  const preferredModelId = discoveredIds.includes(LMSTUDIO_DEFAULT_MODEL_ID)
-    ? LMSTUDIO_DEFAULT_MODEL_ID
-    : discoveredIds[0];
-  return `${PROVIDER_ID}/${preferredModelId}`;
+  return ids.includes(LMSTUDIO_DEFAULT_MODEL_ID) ? LMSTUDIO_DEFAULT_MODEL_ID : ids[0];
 }
 
-function resolveDiscoveredLmstudioDefaultModelId(
-  discoveredModels: ModelDefinitionConfig[],
-): string | undefined {
-  const modelRef = selectDiscoveredLmstudioDefaultModel(discoveredModels);
-  return modelRef?.startsWith(`${PROVIDER_ID}/`)
-    ? modelRef.slice(`${PROVIDER_ID}/`.length)
-    : undefined;
+async function discoverLmstudioSetupModels(params: {
+  baseUrl: string;
+  apiKey: string;
+  headers?: Record<string, string>;
+  timeoutMs?: number;
+}): Promise<
+  | { value: LmstudioSetupDiscovery }
+  | { failure: NonNullable<ReturnType<typeof resolveLmstudioDiscoveryFailure>> }
+> {
+  const discovery = await fetchLmstudioModels({
+    baseUrl: params.baseUrl,
+    apiKey: params.apiKey,
+    ...(params.headers ? { headers: params.headers } : {}),
+    timeoutMs: params.timeoutMs ?? 5000,
+  });
+  const failure = resolveLmstudioDiscoveryFailure({
+    baseUrl: params.baseUrl,
+    discovery,
+  });
+  if (failure) {
+    return { failure };
+  }
+  const models = mapLmstudioWireModelsToConfig(discovery.models);
+  const defaultModelId = selectDefaultLmstudioModelId(models);
+  return {
+    value: {
+      discovery,
+      models,
+      defaultModel: defaultModelId ? `${PROVIDER_ID}/${defaultModelId}` : undefined,
+      defaultModelId,
+    },
+  };
 }
 
 async function resolveExplicitLmstudioSecretRefDiscoveryApiKey(params: {
@@ -469,35 +405,48 @@ export async function promptAndConfigureLmstudioInteractive(params: {
         key: apiKey,
       };
   const existingProvider = params.config.models?.providers?.[PROVIDER_ID];
-  // A fresh interactive setup run is explicit API-key intent, so drop any stale
-  // Authorization header from saved config while preserving other custom headers.
-  const persistedHeaders = omitAuthorizationHeader(existingProvider?.headers);
-  const patchHeaders = markAuthorizationHeaderRemovalForPatch(existingProvider?.headers);
+  // Auth setup updates auth/profile/provider model fields but does not mutate
+  // user-provided header overrides. Runtime request assembly is the source of truth for auth.
+  const persistedHeaders = existingProvider?.headers;
   const resolvedHeaders = await resolveLmstudioProviderHeaders({
     config: params.config,
     env: process.env,
     headers: persistedHeaders,
   });
-  const discovery = await fetchLmstudioModels({
+  const setupDiscovery = await discoverLmstudioSetupModels({
     baseUrl,
     apiKey,
     ...(resolvedHeaders ? { headers: resolvedHeaders } : {}),
     timeoutMs: 5000,
   });
-  const discoveryFailure = resolveLmstudioDiscoveryFailure({
-    baseUrl,
-    discovery,
-  });
-  if (discoveryFailure) {
-    await note?.(discoveryFailure.noteLines.join("\n"), "LM Studio");
-    throw new WizardCancelledError(discoveryFailure.reason);
+  if ("failure" in setupDiscovery) {
+    await note?.(setupDiscovery.failure.noteLines.join("\n"), "LM Studio");
+    throw new WizardCancelledError(setupDiscovery.failure.reason);
   }
-  const discoveredModels = mapFetchedLmstudioModelsToCatalog(discovery.models);
+  let discoveredModels = setupDiscovery.value.models;
+  if (params.prompter) {
+    const requestedRaw = await params.prompter.text({
+      message: "Preferred context length to load LM Studio models with (optional)",
+      placeholder: "e.g. 32768 (leave blank to skip)",
+      validate: (value) =>
+        value?.trim()
+          ? resolvePositiveInteger(value)
+            ? undefined
+            : "Enter a positive integer token count"
+          : undefined,
+    });
+    const requestedContextWindow = resolvePositiveInteger(requestedRaw);
+    discoveredModels = applyRequestedContextWindowToAllModels({
+      models: discoveredModels,
+      discoveryModels: setupDiscovery.value.discovery.models,
+      requestedContextWindow,
+    });
+  }
   const allowlistEntries = mergeDiscoveredLmstudioAllowlistEntries({
     existing: params.config.agents?.defaults?.models,
     discoveredModels,
   });
-  const defaultModel = selectDiscoveredLmstudioDefaultModel(discoveredModels);
+  const defaultModel = setupDiscovery.value.defaultModel;
   const persistedApiKey =
     resolvePersistedLmstudioApiKey({
       currentApiKey: existingProvider?.apiKey,
@@ -525,86 +474,17 @@ export async function promptAndConfigureLmstudioInteractive(params: {
         // Respect existing global mode; self-hosted provider setup should merge by default.
         mode: params.config.models?.mode ?? "merge",
         providers: {
-          [PROVIDER_ID]: {
-            ...existingProvider,
+          [PROVIDER_ID]: buildLmstudioSetupProviderConfig({
+            existingProvider,
             baseUrl,
-            api: existingProvider?.api ?? "openai-completions",
-            auth: "api-key",
             apiKey: persistedApiKey,
-            headers: patchHeaders,
+            headers: persistedHeaders,
             models: discoveredModels,
-          },
+          }),
         },
       },
     },
     defaultModel,
-  };
-}
-
-export async function promptLmstudioContextWindowForSelectedModel(params: {
-  config: OpenClawConfig;
-  model: string;
-  prompter: WizardPrompter;
-}): Promise<OpenClawConfig> {
-  const modelRef = params.model.trim();
-  if (!modelRef.startsWith("lmstudio/")) {
-    return params.config;
-  }
-  const modelId = modelRef.slice("lmstudio/".length).trim();
-  if (!modelId) {
-    return params.config;
-  }
-  const provider = params.config.models?.providers?.[PROVIDER_ID];
-  if (!provider) {
-    return params.config;
-  }
-  const models = Array.isArray(provider.models) ? provider.models : [];
-  const selected = models.find((entry) => entry.id === modelId);
-  if (!selected) {
-    await params.prompter.note(
-      `LM Studio model "${modelId}" is not listed in models.providers.lmstudio.models. Run model discovery first, then set context length.`,
-      "LM Studio",
-    );
-    return params.config;
-  }
-  const requestedRaw = await params.prompter.text({
-    message: "Context length to load the model with",
-    initialValue:
-      typeof selected?.contextWindow === "number" ? String(selected.contextWindow) : undefined,
-    placeholder: "e.g. 32768",
-    validate: (value) =>
-      value?.trim()
-        ? resolvePositiveInteger(value)
-          ? undefined
-          : "Enter a positive integer token count"
-        : undefined,
-  });
-  const requested = resolvePositiveInteger(requestedRaw);
-  if (!requested) {
-    return params.config;
-  }
-  const contextApplied = applyRequestedContextWindow({
-    models,
-    modelId,
-    requestedContextWindow: requested,
-    contextLimit: await resolveLmstudioInteractiveContextLimit({
-      config: params.config,
-      provider,
-      modelId,
-    }),
-  });
-  return {
-    ...params.config,
-    models: {
-      ...params.config.models,
-      providers: {
-        ...params.config.models?.providers,
-        [PROVIDER_ID]: {
-          ...provider,
-          models: contextApplied.models,
-        },
-      },
-    },
   };
 }
 
@@ -635,16 +515,6 @@ export async function configureLmstudioNonInteractive(
       modelPlaceholder: LMSTUDIO_MODEL_PLACEHOLDER,
     });
   const requestedModelId = normalizeOptionalSecretInput(normalizedCtx.opts.customModelId);
-  let requestedContextWindow: number | undefined;
-  try {
-    requestedContextWindow = resolveRequestedContextWindowOrThrow(
-      normalizedCtx.opts.customContextWindow,
-    );
-  } catch (error) {
-    normalizedCtx.runtime.error(error instanceof Error ? error.message : String(error));
-    normalizedCtx.runtime.exit(1);
-    return null;
-  }
   const resolved = await normalizedCtx.resolveApiKey({
     provider: PROVIDER_ID,
     flagValue:
@@ -664,32 +534,27 @@ export async function configureLmstudioNonInteractive(
   };
 
   const existingProvider = normalizedCtx.config.models?.providers?.[PROVIDER_ID];
-  const persistedHeaders = resolved
-    ? omitAuthorizationHeader(existingProvider?.headers)
-    : existingProvider?.headers;
+  // Auth setup updates auth/profile/provider model fields but does not mutate
+  // user-provided header overrides. Runtime request assembly is the source of truth for auth.
+  const persistedHeaders = existingProvider?.headers;
   const resolvedHeaders = await resolveLmstudioProviderHeaders({
     config: normalizedCtx.config,
     env: process.env,
     headers: persistedHeaders,
   });
-  const discovery = await fetchLmstudioModels({
+  const setupDiscovery = await discoverLmstudioSetupModels({
     baseUrl,
     apiKey: resolvedOrSynthetic.key,
     ...(resolvedHeaders ? { headers: resolvedHeaders } : {}),
     timeoutMs: 5000,
   });
-  const discoveryFailure = resolveLmstudioDiscoveryFailure({
-    baseUrl,
-    discovery,
-  });
-  if (discoveryFailure) {
-    normalizedCtx.runtime.error(discoveryFailure.noteLines.join("\n"));
+  if ("failure" in setupDiscovery) {
+    normalizedCtx.runtime.error(setupDiscovery.failure.noteLines.join("\n"));
     normalizedCtx.runtime.exit(1);
     return null;
   }
-  const discoveredModels = mapFetchedLmstudioModelsToCatalog(discovery.models);
-  const selectedModelId =
-    requestedModelId ?? resolveDiscoveredLmstudioDefaultModelId(discoveredModels);
+  const discoveredModels = setupDiscovery.value.models;
+  const selectedModelId = requestedModelId ?? setupDiscovery.value.defaultModelId;
   const selectedModel = selectedModelId
     ? discoveredModels.find((model) => model.id === selectedModelId)
     : undefined;
@@ -709,15 +574,6 @@ export async function configureLmstudioNonInteractive(
     normalizedCtx.runtime.exit(1);
     return null;
   }
-  const selectedWireModel = discovery.models.find((model) => model.key?.trim() === selectedModelId);
-  const contextApplied = applyRequestedContextWindow({
-    models: discoveredModels,
-    modelId: selectedModelId,
-    requestedContextWindow,
-    contextLimit: selectedWireModel
-      ? resolveLmstudioModelAdvertisedContextLimit(selectedWireModel)
-      : undefined,
-  });
 
   // Delegate to the shared helper even when modelId is set so that onboarding
   // state and credential storage are handled consistently. The pre-resolved key
@@ -734,6 +590,7 @@ export async function configureLmstudioNonInteractive(
   if (!configured) {
     return null;
   }
+  const sharedProvider = configured.models?.providers?.[PROVIDER_ID];
   const resolvedSyntheticLocalKey = resolvedOrSynthetic.key === LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER;
   const persistedApiKey = resolvePersistedLmstudioApiKey({
     // If this run resolved to keyless local mode, avoid preserving stale env markers.
@@ -753,18 +610,14 @@ export async function configureLmstudioNonInteractive(
       ...configured.models,
       providers: {
         ...configured.models?.providers,
-        // Preserve compatible auth config while refreshing LM Studio transport + model catalog.
-        // When setup establishes API-key auth, stale Authorization headers are removed.
-        [PROVIDER_ID]: {
-          ...existingProvider,
-          ...configured.models?.providers?.[PROVIDER_ID],
-          ...(persistedApiKey !== undefined ? { apiKey: persistedApiKey } : {}),
-          headers: persistedHeaders,
+        [PROVIDER_ID]: buildLmstudioSetupProviderConfig({
+          existingProvider,
+          sharedProvider,
           baseUrl,
-          api: configured.models?.providers?.[PROVIDER_ID]?.api ?? "openai-completions",
-          auth: "api-key",
-          models: contextApplied.models,
-        },
+          apiKey: persistedApiKey,
+          headers: persistedHeaders,
+          models: discoveredModels,
+        }),
       },
     },
   };
@@ -776,12 +629,11 @@ export async function discoverLmstudioProvider(ctx: ProviderCatalogContext): Pro
 } | null> {
   const explicit = ctx.config.models?.providers?.[PROVIDER_ID];
   const explicitAuth = explicit?.auth;
-  const explicitWithoutHeaders = explicit
-    ? (() => {
-        const { headers: _headers, auth: _auth, ...rest } = explicit;
-        return rest;
-      })()
-    : undefined;
+  let explicitWithoutHeaders: Omit<ModelProviderConfig, "headers" | "auth"> | undefined;
+  if (explicit) {
+    const { headers: _headers, auth: _auth, ...rest } = explicit;
+    explicitWithoutHeaders = rest;
+  }
   const hasExplicitModels = Array.isArray(explicit?.models) && explicit.models.length > 0;
   const { apiKey, discoveryApiKey } = ctx.resolveProviderApiKey(PROVIDER_ID);
   const explicitSecretRefDiscoveryApiKey = await resolveExplicitLmstudioSecretRefDiscoveryApiKey({
@@ -858,16 +710,11 @@ export async function prepareLmstudioDynamicModels(
   ctx: ProviderPrepareDynamicModelContext,
 ): Promise<ProviderRuntimeModel[]> {
   const baseUrl = resolveLmstudioInferenceBase(ctx.providerConfig?.baseUrl);
-  const apiKey = await resolveLmstudioRuntimeApiKey({
+  const { apiKey, headers } = await resolveLmstudioRequestContext({
     config: ctx.config,
     agentDir: ctx.agentDir,
-    allowMissingAuth: true,
     env: process.env,
-  });
-  const headers = await resolveLmstudioProviderHeaders({
-    config: ctx.config,
-    env: process.env,
-    headers: ctx.providerConfig?.headers,
+    providerHeaders: ctx.providerConfig?.headers,
   });
   const discoveredModels = await discoverLmstudioModels({
     baseUrl,

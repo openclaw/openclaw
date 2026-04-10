@@ -13,8 +13,6 @@ type ResolveProviderPluginChoice =
   typeof import("../plugins/provider-auth-choice.runtime.js").resolveProviderPluginChoice;
 type ResolvePluginProvidersRuntime =
   typeof import("../plugins/provider-auth-choice.runtime.js").resolvePluginProviders;
-type RunProviderExplicitModelSelectedHook =
-  typeof import("../plugins/provider-auth-choice.runtime.js").runProviderExplicitModelSelectedHook;
 type PromptDefaultModel = typeof import("../commands/model-picker.js").promptDefaultModel;
 
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ profiles: {} })));
@@ -26,9 +24,6 @@ const resolveProviderPluginChoice = vi.hoisted(() =>
 );
 const resolvePluginProvidersRuntime = vi.hoisted(() =>
   vi.fn<ResolvePluginProvidersRuntime>(() => []),
-);
-const runProviderExplicitModelSelectedHook = vi.hoisted(() =>
-  vi.fn<RunProviderExplicitModelSelectedHook>(async ({ config }) => config),
 );
 const warnIfModelConfigLooksOff = vi.hoisted(() => vi.fn(async () => {}));
 const applyPrimaryModel = vi.hoisted(() => vi.fn((cfg) => cfg));
@@ -149,7 +144,6 @@ vi.mock("../commands/auth-choice.js", () => ({
 vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
   resolveProviderPluginChoice,
   resolvePluginProviders: resolvePluginProvidersRuntime,
-  runProviderExplicitModelSelectedHook,
 }));
 
 vi.mock("../commands/model-picker.js", () => ({
@@ -494,122 +488,6 @@ describe("runSetupWizard", () => {
     expect(promptDefaultModel).toHaveBeenCalledWith(
       expect.objectContaining({
         allowKeep: false,
-      }),
-    );
-  });
-
-  it("does not run explicit-model hook when model picker keeps current model", async () => {
-    runProviderExplicitModelSelectedHook.mockClear();
-    resolveProviderPluginChoice.mockReturnValue({
-      provider: {
-        id: "lmstudio",
-        label: "LM Studio",
-        auth: [],
-        wizard: {
-          setup: {
-            modelSelection: {
-              promptWhenAuthChoiceProvided: true,
-              allowKeepCurrent: true,
-            },
-          },
-        },
-      },
-      method: {
-        id: "local",
-        label: "LM Studio",
-        kind: "custom",
-        run: vi.fn(async () => ({ profiles: [] })),
-      },
-      wizard: {
-        modelSelection: {
-          promptWhenAuthChoiceProvided: true,
-          allowKeepCurrent: true,
-        },
-      },
-    });
-    applyAuthChoice.mockImplementationOnce(async (args) => ({
-      config: {
-        ...args.config,
-        agents: {
-          defaults: {
-            model: "lmstudio/current-model",
-          },
-        },
-      },
-    }));
-    promptDefaultModel.mockResolvedValueOnce({});
-
-    const prompter = buildWizardPrompter({});
-    const runtime = createRuntime();
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        authChoice: "lmstudio",
-        installDaemon: false,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
-      },
-      runtime,
-      prompter,
-    );
-
-    expect(runProviderExplicitModelSelectedHook).not.toHaveBeenCalled();
-  });
-
-  it("runs explicit-model hook when model picker selects a model", async () => {
-    runProviderExplicitModelSelectedHook.mockClear();
-    resolveProviderPluginChoice.mockReturnValue({
-      provider: {
-        id: "lmstudio",
-        label: "LM Studio",
-        auth: [],
-        wizard: {
-          setup: {
-            modelSelection: {
-              promptWhenAuthChoiceProvided: true,
-              allowKeepCurrent: true,
-            },
-          },
-        },
-      },
-      method: {
-        id: "local",
-        label: "LM Studio",
-        kind: "custom",
-        run: vi.fn(async () => ({ profiles: [] })),
-      },
-      wizard: {
-        modelSelection: {
-          promptWhenAuthChoiceProvided: true,
-          allowKeepCurrent: true,
-        },
-      },
-    });
-    promptDefaultModel.mockResolvedValueOnce({ model: "lmstudio/new-model" });
-
-    const prompter = buildWizardPrompter({});
-    const runtime = createRuntime();
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        authChoice: "lmstudio",
-        installDaemon: false,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
-      },
-      runtime,
-      prompter,
-    );
-
-    expect(runProviderExplicitModelSelectedHook).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: "lmstudio/new-model",
       }),
     );
   });

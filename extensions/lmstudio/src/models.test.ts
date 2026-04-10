@@ -4,11 +4,10 @@ import {
 } from "openclaw/plugin-sdk/provider-setup";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
+import { discoverLmstudioModels, ensureLmstudioModelLoaded } from "./models.fetch.js";
 import {
-  discoverLmstudioModels,
-  ensureLmstudioModelLoaded,
-  resolveLmstudioReasoningCapability,
   resolveLmstudioInferenceBase,
+  resolveLmstudioReasoningCapability,
   resolveLmstudioServerBase,
 } from "./models.js";
 

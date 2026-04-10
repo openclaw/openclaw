@@ -3,8 +3,9 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { LMSTUDIO_PROVIDER_ID } from "./defaults.js";
-import { ensureLmstudioModelLoaded, resolveLmstudioInferenceBase } from "./models.js";
-import { resolveLmstudioProviderHeaders, resolveLmstudioRuntimeApiKey } from "./runtime.js";
+import { ensureLmstudioModelLoaded } from "./models.fetch.js";
+import { resolveLmstudioInferenceBase } from "./models.js";
+import { resolveLmstudioRequestContext } from "./runtime.js";
 
 const log = createSubsystemLogger("extensions/lmstudio/stream");
 
@@ -56,22 +57,15 @@ async function ensureLmstudioModelLoadedBestEffort(params: {
   modelHeaders?: Record<string, string>;
 }): Promise<void> {
   const providerConfig = params.ctx.config?.models?.providers?.[LMSTUDIO_PROVIDER_ID];
-  const headersInput: Record<string, unknown> = {
-    ...providerConfig?.headers,
-    ...params.modelHeaders,
-  };
-  const headers = await resolveLmstudioProviderHeaders({
+  const { headers, apiKey: configuredApiKey } = await resolveLmstudioRequestContext({
     config: params.ctx.config,
-    headers: headersInput,
+    agentDir: params.ctx.agentDir,
+    providerHeaders: { ...providerConfig?.headers, ...params.modelHeaders },
   });
   const runtimeApiKey =
     typeof params.options?.apiKey === "string" && params.options.apiKey.trim().length > 0
       ? params.options.apiKey
-      : await resolveLmstudioRuntimeApiKey({
-          config: params.ctx.config,
-          agentDir: params.ctx.agentDir,
-          allowMissingAuth: true,
-        });
+      : configuredApiKey;
 
   await ensureLmstudioModelLoaded({
     baseUrl: params.baseUrl,

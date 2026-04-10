@@ -60,7 +60,6 @@ export type OnboardOptions = OnboardDynamicProviderOptions & {
   customApiKey?: string;
   lmstudioApiKey?: string;
   customModelId?: string;
-  customContextWindow?: number;
   customProviderId?: string;
   customCompatibility?: "openai" | "anthropic";
   gatewayPort?: number;

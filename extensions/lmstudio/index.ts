@@ -17,7 +17,6 @@ import {
   normalizeLmstudioProviderConfig,
 } from "./src/models.js";
 import { shouldUseLmstudioSyntheticAuth } from "./src/provider-auth.js";
-import { promptLmstudioContextWindowForSelectedModel } from "./src/setup.js";
 import { wrapLmstudioInferencePreload } from "./src/stream.js";
 
 const PROVIDER_ID = "lmstudio";
@@ -110,12 +109,6 @@ export default definePluginEntry({
           .get(ctx.providerConfig?.baseUrl ?? "")
           ?.find((model) => model.id === ctx.modelId),
       augmentModelCatalog: (ctx) => resolveLmstudioAugmentedCatalogEntries(ctx.config),
-      onExplicitModelSelected: async ({ config, model, prompter }) =>
-        await promptLmstudioContextWindowForSelectedModel({
-          config,
-          model,
-          prompter,
-        }),
       wrapStreamFn: wrapLmstudioInferencePreload,
       wizard: {
         setup: {

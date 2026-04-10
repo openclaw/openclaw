@@ -187,6 +187,9 @@ describe("lmstudio stream wrapper", () => {
         throw new Error("LM Studio preload resolver not initialized");
       }
     });
+    if (!resolvePreload) {
+      throw new Error("LM Studio preload resolver not initialized");
+    }
     resolvePreload();
     const [firstEvents, secondEvents] = await Promise.all([firstPromise, secondPromise]);
 

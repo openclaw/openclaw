@@ -14,10 +14,7 @@ const DEFAULT_OLLAMA_EMBEDDING_MODEL = "nomic-embed-text";
 const DEFAULT_LMSTUDIO_EMBEDDING_MODEL = "text-embedding-nomic-embed-text-v1.5";
 
 vi.mock("./embeddings.js", () => ({
-  resolveEmbeddingProviderFallbackModel: (
-    providerId: string,
-    fallbackSourceModel: string,
-  ) =>
+  resolveEmbeddingProviderFallbackModel: (providerId: string, fallbackSourceModel: string) =>
     providerId === "ollama"
       ? DEFAULT_OLLAMA_EMBEDDING_MODEL
       : providerId === "lmstudio"
@@ -52,10 +49,7 @@ function createSettings(params: {
 }): ResolvedMemorySearchConfig {
   return {
     provider: params.provider,
-    model:
-      params.provider === "mistral"
-        ? "mistral/mistral-embed"
-        : "text-embedding-3-small",
+    model: params.provider === "mistral" ? "mistral/mistral-embed" : "text-embedding-3-small",
     fallback: params.fallback ?? "none",
     remote: undefined,
     outputDimensionality: undefined,

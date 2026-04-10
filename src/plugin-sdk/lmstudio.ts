@@ -51,11 +51,6 @@ export const promptAndConfigureLmstudioInteractive: FacadeModule["promptAndConfi
     loadFacadeModule().promptAndConfigureLmstudioInteractive(
       ...args,
     )) as FacadeModule["promptAndConfigureLmstudioInteractive"];
-export const promptLmstudioContextWindowForSelectedModel: FacadeModule["promptLmstudioContextWindowForSelectedModel"] =
-  ((...args) =>
-    loadFacadeModule().promptLmstudioContextWindowForSelectedModel(
-      ...args,
-    )) as FacadeModule["promptLmstudioContextWindowForSelectedModel"];
 export const configureLmstudioNonInteractive: FacadeModule["configureLmstudioNonInteractive"] = ((
   ...args
 ) =>

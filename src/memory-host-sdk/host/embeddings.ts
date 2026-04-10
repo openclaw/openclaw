@@ -63,9 +63,9 @@ export type EmbeddingProviderResult = {
   gemini?: GeminiEmbeddingClient;
   voyage?: VoyageEmbeddingClient;
   mistral?: MistralEmbeddingClient;
+  ollama?: OllamaEmbeddingClient;
   bedrock?: BedrockEmbeddingClient;
   lmstudio?: LmstudioEmbeddingClient;
-  ollama?: OllamaEmbeddingClient;
 };
 
 export const DEFAULT_LOCAL_MODEL =

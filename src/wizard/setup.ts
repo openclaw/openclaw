@@ -560,17 +560,6 @@ export async function runSetupWizard(
     if (modelSelection.model) {
       nextConfig = applyPrimaryModel(nextConfig, modelSelection.model);
     }
-    if (modelSelection.model) {
-      const { runProviderExplicitModelSelectedHook } =
-        await import("../plugins/provider-auth-choice.runtime.js");
-      nextConfig = await runProviderExplicitModelSelectedHook({
-        config: nextConfig,
-        model: modelSelection.model,
-        prompter,
-        workspaceDir,
-        env: process.env,
-      });
-    }
   }
 
   await warnIfModelConfigLooksOff(nextConfig, prompter);

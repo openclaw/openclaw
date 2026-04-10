@@ -9,17 +9,12 @@ import type {
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  applyProviderAuthConfigPatch,
-  mergeConfigPatch,
-} from "../../../src/commands/provider-auth-helpers.js";
-import {
   LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
   LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
 } from "./defaults.js";
 import {
   configureLmstudioNonInteractive,
   discoverLmstudioProvider,
-  promptLmstudioContextWindowForSelectedModel,
   promptAndConfigureLmstudioInteractive,
 } from "./setup.js";
 
@@ -27,14 +22,11 @@ const fetchLmstudioModelsMock = vi.hoisted(() => vi.fn());
 const discoverLmstudioModelsMock = vi.hoisted(() => vi.fn());
 const configureSelfHostedNonInteractiveMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./models.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./models.js")>();
-  return {
-    ...actual,
-    fetchLmstudioModels: (...args: unknown[]) => fetchLmstudioModelsMock(...args),
-    discoverLmstudioModels: (...args: unknown[]) => discoverLmstudioModelsMock(...args),
-  };
-});
+vi.mock("./models.fetch.js", () => ({
+  fetchLmstudioModels: (...args: unknown[]) => fetchLmstudioModelsMock(...args),
+  discoverLmstudioModels: (...args: unknown[]) => discoverLmstudioModelsMock(...args),
+  ensureLmstudioModelLoaded: vi.fn(),
+}));
 
 vi.mock("openclaw/plugin-sdk/provider-setup", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-setup")>();
@@ -100,7 +92,6 @@ function buildNonInteractiveContext(params?: {
   customApiKey?: string;
   lmstudioApiKey?: string;
   customModelId?: string;
-  customContextWindow?: number | string;
   resolvedApiKey?: string | null;
 }): ProviderAuthMethodNonInteractiveContext & {
   runtime: {
@@ -132,7 +123,6 @@ function buildNonInteractiveContext(params?: {
       customApiKey: params?.customApiKey ?? "lmstudio-test-key",
       lmstudioApiKey: params?.lmstudioApiKey,
       customModelId: params?.customModelId,
-      customContextWindow: params?.customContextWindow,
     } as ProviderAuthMethodNonInteractiveContext["opts"],
     runtime: { error, exit, log },
     resolveApiKey,
@@ -140,13 +130,14 @@ function buildNonInteractiveContext(params?: {
   };
 }
 
-function createWizardPrompterHarness(textValue = "32768"): {
+function createQueuedWizardPrompterHarness(textValues: string[]): {
   prompter: WizardPrompter;
   note: ReturnType<typeof vi.fn>;
   text: ReturnType<typeof vi.fn>;
 } {
+  const queue = [...textValues];
   const note = vi.fn(async (_message: string, _title?: string) => {});
-  const text = vi.fn(async () => textValue);
+  const text = vi.fn(async () => queue.shift() ?? "");
   const prompter: WizardPrompter = {
     intro: async () => {},
     outro: async () => {},
@@ -186,42 +177,26 @@ describe("lmstudio setup", () => {
       ],
     });
     discoverLmstudioModelsMock.mockResolvedValue([createModel("qwen3-8b-instruct", "Qwen3 8B")]);
-    configureSelfHostedNonInteractiveMock.mockImplementation(async (args: unknown) => {
-      const params = args as {
+    configureSelfHostedNonInteractiveMock.mockImplementation(
+      async ({
+        providerId,
+        ctx,
+      }: {
         providerId: string;
         ctx: ProviderAuthMethodNonInteractiveContext;
-      };
-      const providerId = params.providerId;
-      const customModelId =
-        typeof params.ctx.opts.customModelId === "string"
-          ? params.ctx.opts.customModelId.trim()
-          : "";
-      const modelId = customModelId || "qwen3-8b-instruct";
-      const customBaseUrl =
-        typeof params.ctx.opts.customBaseUrl === "string"
-          ? params.ctx.opts.customBaseUrl
-          : undefined;
-      return {
-        agents: {
-          defaults: {
-            model: {
-              primary: `${providerId}/${modelId}`,
+      }) => {
+        const modelId =
+          String(ctx.opts.customModelId ?? "qwen3-8b-instruct").trim() || "qwen3-8b-instruct";
+        return {
+          agents: { defaults: { model: { primary: `${providerId}/${modelId}` } } },
+          models: {
+            providers: {
+              [providerId]: { api: "openai-completions", auth: "api-key", apiKey: "LM_API_TOKEN" },
             },
           },
-        },
-        models: {
-          providers: {
-            [providerId]: {
-              baseUrl: customBaseUrl ?? "http://localhost:1234/v1",
-              api: "openai-completions",
-              auth: "api-key",
-              apiKey: "LM_API_TOKEN",
-              models: [createModel(modelId, "Qwen3 8B")],
-            },
-          },
-        },
-      };
-    });
+        };
+      },
+    );
   });
 
   it("non-interactive setup discovers catalog and writes LM Studio provider config", async () => {
@@ -270,7 +245,7 @@ describe("lmstudio setup", () => {
     );
   });
 
-  it("non-interactive setup drops stale Authorization headers when CLI auth is provided", async () => {
+  it("non-interactive setup preserves existing custom headers when CLI auth is provided", async () => {
     const ctx = buildNonInteractiveContext({
       config: {
         models: {
@@ -298,40 +273,15 @@ describe("lmstudio setup", () => {
       auth: "api-key",
       apiKey: LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
       headers: {
+        Authorization: "Bearer stale-token",
         "X-Proxy-Auth": "proxy-token",
       },
     });
-    expect(result?.models?.providers?.lmstudio?.headers).not.toHaveProperty("Authorization");
-  });
-
-  it("non-interactive setup clamps maxTokens when --custom-context-window lowers context", async () => {
-    const ctx = buildNonInteractiveContext({
-      customBaseUrl: "http://localhost:1234/api/v1/",
-      customModelId: "qwen3-8b-instruct",
-      customContextWindow: 4096,
-    });
-    fetchLmstudioModelsMock.mockResolvedValueOnce({
-      reachable: true,
-      status: 200,
-      models: [
-        {
-          type: "llm",
-          key: "qwen3-8b-instruct",
-          max_context_length: 131072,
-          loaded_instances: [{ id: "inst-1", config: { context_length: 64000 } }],
-        },
-      ],
-    });
-
-    const result = await configureLmstudioNonInteractive(ctx);
-    expect(result?.models?.providers?.lmstudio?.models?.[0]?.contextWindow).toBe(4096);
-    expect(result?.models?.providers?.lmstudio?.models?.[0]?.maxTokens).toBe(4096);
   });
 
   it("non-interactive setup auto-selects a discovered LM Studio model when none is provided", async () => {
     const ctx = buildNonInteractiveContext({
       customBaseUrl: "http://localhost:1234/api/v1/",
-      customContextWindow: 32768,
     });
     fetchLmstudioModelsMock.mockResolvedValueOnce({
       reachable: true,
@@ -365,24 +315,12 @@ describe("lmstudio setup", () => {
     expect(result?.models?.providers?.lmstudio?.models).toEqual([
       expect.objectContaining({
         id: "phi-4",
-        contextWindow: 32768,
+        contextWindow: 65536,
       }),
       expect.objectContaining({
         id: "qwen3-8b-instruct",
       }),
     ]);
-  });
-
-  it("non-interactive setup rejects invalid --custom-context-window", async () => {
-    const ctx = buildNonInteractiveContext({
-      customContextWindow: "nope",
-    });
-
-    await expect(configureLmstudioNonInteractive(ctx)).resolves.toBeNull();
-    expect(ctx.runtime.error).toHaveBeenCalledWith(
-      "Invalid --custom-context-window. Use a positive integer token count.",
-    );
-    expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
   });
 
   it("non-interactive setup synthesizes lmstudio-local when API key is missing", async () => {
@@ -484,20 +422,13 @@ describe("lmstudio setup", () => {
       config: buildConfig(),
       promptText,
     });
-    const mergedConfig = mergeConfigPatch(buildConfig(), result.configPatch);
 
     expect(result.configPatch?.models?.mode).toBe("merge");
-    expect(mergedConfig).toMatchObject({
-      models: {
-        providers: {
-          lmstudio: {
-            baseUrl: "http://localhost:1234/v1",
-            api: "openai-completions",
-            auth: "api-key",
-            apiKey: "LM_API_TOKEN",
-          },
-        },
-      },
+    expect(result.configPatch?.models?.providers?.lmstudio).toMatchObject({
+      baseUrl: "http://localhost:1234/v1",
+      api: "openai-completions",
+      auth: "api-key",
+      apiKey: "LM_API_TOKEN",
     });
     expect(result.defaultModel).toBe("lmstudio/qwen3-8b-instruct");
     expect(result.profiles[0]).toMatchObject({
@@ -508,6 +439,51 @@ describe("lmstudio setup", () => {
         key: "lmstudio-test-key",
       },
     });
+  });
+
+  it("interactive setup applies an optional preferred context length to all discovered LM Studio models", async () => {
+    fetchLmstudioModelsMock.mockResolvedValueOnce({
+      reachable: true,
+      status: 200,
+      models: [
+        {
+          type: "llm",
+          key: "phi-4",
+          display_name: "Phi 4",
+          max_context_length: 65536,
+        },
+        {
+          type: "llm",
+          key: "qwen3-8b-instruct",
+          display_name: "Qwen3 8B",
+          max_context_length: 32768,
+        },
+      ],
+    });
+    const { prompter, text } = createQueuedWizardPrompterHarness([
+      "http://localhost:1234/api/v1/",
+      "lmstudio-test-key",
+      "4096",
+    ]);
+
+    const result = await promptAndConfigureLmstudioInteractive({
+      config: buildConfig(),
+      prompter,
+    });
+
+    expect(text).toHaveBeenCalledTimes(3);
+    expect(result.configPatch?.models?.providers?.lmstudio?.models).toEqual([
+      expect.objectContaining({
+        id: "phi-4",
+        contextWindow: 4096,
+        maxTokens: 4096,
+      }),
+      expect.objectContaining({
+        id: "qwen3-8b-instruct",
+        contextWindow: 4096,
+        maxTokens: 4096,
+      }),
+    ]);
   });
 
   it("interactive setup overwrites existing config apiKey during re-auth", async () => {
@@ -533,13 +509,11 @@ describe("lmstudio setup", () => {
       config,
       promptText,
     });
-    const mergedConfig = mergeConfigPatch(config, result.configPatch);
-
-    expect(mergedConfig.models?.providers?.lmstudio).toMatchObject({
+    expect(result.configPatch?.models?.providers?.lmstudio).toMatchObject({
       auth: "api-key",
       apiKey: LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
     });
-    expect(mergedConfig.models?.providers?.lmstudio?.apiKey).not.toBe("stale-config-key");
+    expect(result.configPatch?.models?.providers?.lmstudio?.apiKey).not.toBe("stale-config-key");
     expect(result.profiles[0]).toMatchObject({
       profileId: "lmstudio:default",
       credential: {
@@ -550,7 +524,7 @@ describe("lmstudio setup", () => {
     });
   });
 
-  it("interactive setup drops stale Authorization headers but keeps other custom headers", async () => {
+  it("interactive setup preserves existing custom headers when switching to api-key auth", async () => {
     const config = {
       models: {
         providers: {
@@ -576,16 +550,14 @@ describe("lmstudio setup", () => {
       config,
       promptText,
     });
-    const mergedConfig = mergeConfigPatch(config, result.configPatch);
-
-    expect(mergedConfig.models?.providers?.lmstudio).toMatchObject({
+    expect(result.configPatch?.models?.providers?.lmstudio).toMatchObject({
       auth: "api-key",
       apiKey: "LM_API_TOKEN",
       headers: {
+        Authorization: "Bearer stale-token",
         "X-Proxy-Auth": "proxy-token",
       },
     });
-    expect(mergedConfig.models?.providers?.lmstudio?.headers).not.toHaveProperty("Authorization");
   });
 
   it("interactive setup preserves existing agent model allowlist entries", async () => {
@@ -619,9 +591,7 @@ describe("lmstudio setup", () => {
       config,
       promptText,
     });
-    const appliedConfig = applyProviderAuthConfigPatch(config, result.configPatch);
-
-    expect(appliedConfig.agents?.defaults?.models).toEqual({
+    expect(result.configPatch?.agents?.defaults?.models).toEqual({
       "anthropic/claude-sonnet-4-6": {
         alias: "Sonnet",
       },
@@ -651,9 +621,8 @@ describe("lmstudio setup", () => {
       config,
       promptText,
     });
-    const mergedConfig = mergeConfigPatch(config, result.configPatch);
 
-    expect(mergedConfig.models?.providers?.lmstudio).toMatchObject({
+    expect(result.configPatch?.models?.providers?.lmstudio).toMatchObject({
       auth: "api-key",
       apiKey: LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
     });
@@ -885,101 +854,5 @@ describe("lmstudio setup", () => {
       auth: "api-key",
       apiKey: LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
     });
-  });
-
-  it("skips context-window prompt when explicit LM Studio model is not in provider models", async () => {
-    const cfg = {
-      models: {
-        providers: {
-          lmstudio: {
-            baseUrl: "http://localhost:1234/v1",
-            api: "openai-completions",
-            models: [createModel("qwen3-8b-instruct", "Qwen3 8B")],
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const { prompter, note, text } = createWizardPrompterHarness("65536");
-
-    const result = await promptLmstudioContextWindowForSelectedModel({
-      config: cfg,
-      model: "lmstudio/manual-only-model",
-      prompter,
-    });
-
-    expect(result).toBe(cfg);
-    expect(text).not.toHaveBeenCalled();
-    expect(note).toHaveBeenCalledWith(
-      'LM Studio model "manual-only-model" is not listed in models.providers.lmstudio.models. Run model discovery first, then set context length.',
-      "LM Studio",
-    );
-  });
-
-  it("updates context window when explicit LM Studio model exists in provider models", async () => {
-    const cfg = {
-      models: {
-        providers: {
-          lmstudio: {
-            baseUrl: "http://localhost:1234/v1",
-            api: "openai-completions",
-            models: [createModel("qwen3-8b-instruct", "Qwen3 8B")],
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const { prompter, note } = createWizardPrompterHarness("4096");
-
-    const result = await promptLmstudioContextWindowForSelectedModel({
-      config: cfg,
-      model: "lmstudio/qwen3-8b-instruct",
-      prompter,
-    });
-
-    expect(note).not.toHaveBeenCalled();
-    expect(result.models?.providers?.lmstudio?.models?.[0]?.contextWindow).toBe(4096);
-    expect(result.models?.providers?.lmstudio?.models?.[0]?.maxTokens).toBe(4096);
-  });
-
-  it("clamps interactive context overrides to the advertised LM Studio max", async () => {
-    fetchLmstudioModelsMock.mockResolvedValueOnce({
-      reachable: true,
-      status: 200,
-      models: [
-        {
-          type: "llm",
-          key: "qwen3-8b-instruct",
-          max_context_length: 32768,
-          loaded_instances: [{ config: { context_length: 4096 } }],
-        },
-      ],
-    });
-    const cfg = {
-      models: {
-        providers: {
-          lmstudio: {
-            baseUrl: "http://localhost:1234/v1",
-            api: "openai-completions",
-            models: [
-              {
-                ...createModel("qwen3-8b-instruct", "Qwen3 8B"),
-                contextWindow: 4096,
-                maxTokens: 4096,
-              },
-            ],
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const { prompter, note } = createWizardPrompterHarness("65536");
-
-    const result = await promptLmstudioContextWindowForSelectedModel({
-      config: cfg,
-      model: "lmstudio/qwen3-8b-instruct",
-      prompter,
-    });
-
-    expect(note).not.toHaveBeenCalled();
-    expect(result.models?.providers?.lmstudio?.models?.[0]?.contextWindow).toBe(32768);
-    expect(result.models?.providers?.lmstudio?.models?.[0]?.maxTokens).toBe(4096);
   });
 });

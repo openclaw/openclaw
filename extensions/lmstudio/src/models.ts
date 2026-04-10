@@ -1,4 +1,3 @@
-import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
@@ -8,11 +7,7 @@ import {
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
-import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
-import { LMSTUDIO_DEFAULT_BASE_URL, LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
-import { buildLmstudioAuthHeaders } from "./runtime.js";
-
-const log = createSubsystemLogger("extensions/lmstudio/models");
+import { LMSTUDIO_DEFAULT_BASE_URL } from "./defaults.js";
 
 export type LmstudioModelWire = {
   type?: "llm" | "embedding";
@@ -38,27 +33,12 @@ type LmstudioReasoningCapabilityWire = {
   default?: unknown;
 };
 
-type LmstudioModelsResponseWire = {
-  models?: LmstudioModelWire[];
-};
-
 type LmstudioConfiguredCatalogEntry = {
   id: string;
   name?: string;
   contextWindow?: number;
   reasoning?: boolean;
   input?: ("text" | "image" | "document")[];
-};
-
-type LmstudioLoadResponse = {
-  status?: string;
-};
-
-type FetchLmstudioModelsResult = {
-  reachable: boolean;
-  status?: number;
-  models: LmstudioModelWire[];
-  error?: unknown;
 };
 
 function normalizeReasoningOption(value: unknown): string | null {
@@ -182,13 +162,7 @@ export function normalizeLmstudioConfiguredCatalogEntry(
   if (!entry || typeof entry !== "object") {
     return null;
   }
-  const record = entry as {
-    id?: unknown;
-    name?: unknown;
-    contextWindow?: unknown;
-    reasoning?: unknown;
-    input?: unknown;
-  };
+  const record = entry as Record<string, unknown>;
   if (typeof record.id !== "string" || record.id.trim().length === 0) {
     return null;
   }
@@ -225,88 +199,7 @@ export function normalizeLmstudioConfiguredCatalogEntries(
     .filter((entry): entry is LmstudioConfiguredCatalogEntry => entry !== null);
 }
 
-async function fetchLmstudioEndpoint(params: {
-  url: string;
-  init?: RequestInit;
-  timeoutMs: number;
-  fetchImpl?: typeof fetch;
-  ssrfPolicy?: SsrFPolicy;
-  auditContext: string;
-}): Promise<{ response: Response; release: () => Promise<void> }> {
-  if (params.ssrfPolicy) {
-    return await fetchWithSsrFGuard({
-      url: params.url,
-      init: params.init,
-      timeoutMs: params.timeoutMs,
-      fetchImpl: params.fetchImpl,
-      policy: params.ssrfPolicy,
-      auditContext: params.auditContext,
-    });
-  }
-  const fetchFn = params.fetchImpl ?? fetch;
-  return {
-    response: await fetchFn(params.url, {
-      ...params.init,
-      signal: AbortSignal.timeout(params.timeoutMs),
-    }),
-    release: async () => {},
-  };
-}
-
-/** Fetches /api/v1/models and reports transport reachability separately from HTTP status. */
-export async function fetchLmstudioModels(params: {
-  baseUrl?: string;
-  apiKey?: string;
-  headers?: Record<string, string>;
-  ssrfPolicy?: SsrFPolicy;
-  timeoutMs?: number;
-  /** Injectable fetch implementation; defaults to the global fetch. */
-  fetchImpl?: typeof fetch;
-}): Promise<FetchLmstudioModelsResult> {
-  const baseUrl = resolveLmstudioServerBase(params.baseUrl);
-  const timeoutMs = params.timeoutMs ?? 5000;
-  try {
-    const { response, release } = await fetchLmstudioEndpoint({
-      url: `${baseUrl}/api/v1/models`,
-      init: {
-        headers: buildLmstudioAuthHeaders({
-          apiKey: params.apiKey,
-          headers: params.headers,
-        }),
-      },
-      timeoutMs,
-      fetchImpl: params.fetchImpl,
-      ssrfPolicy: params.ssrfPolicy,
-      auditContext: "lmstudio-model-discovery",
-    });
-    try {
-      if (!response.ok) {
-        return {
-          reachable: true,
-          status: response.status,
-          models: [],
-        };
-      }
-      // External service payload is untrusted JSON; parse with a permissive wire type.
-      const payload = (await response.json()) as LmstudioModelsResponseWire;
-      return {
-        reachable: true,
-        status: response.status,
-        models: Array.isArray(payload.models) ? payload.models : [],
-      };
-    } finally {
-      await release();
-    }
-  } catch (error) {
-    return {
-      reachable: false,
-      models: [],
-      error,
-    };
-  }
-}
-
-function buildLmstudioModelName(model: {
+export function buildLmstudioModelName(model: {
   displayName: string;
   format: "gguf" | "mlx" | null;
   vision: boolean;
@@ -395,158 +288,29 @@ export function mapLmstudioWireEntry(entry: LmstudioModelWire): LmstudioModelBas
   };
 }
 
-type DiscoverLmstudioModelsParams = {
-  baseUrl: string;
-  apiKey: string;
-  headers?: Record<string, string>;
-  quiet: boolean;
-  /** Injectable fetch implementation; defaults to the global fetch. */
-  fetchImpl?: typeof fetch;
-};
-
-/** Discovers LLM models from LM Studio and maps them to OpenClaw model definitions. */
-export async function discoverLmstudioModels(
-  params: DiscoverLmstudioModelsParams,
-): Promise<ModelDefinitionConfig[]> {
-  const fetched = await fetchLmstudioModels({
-    baseUrl: params.baseUrl,
-    apiKey: params.apiKey,
-    headers: params.headers,
-    fetchImpl: params.fetchImpl,
-  });
-  const quiet = params.quiet;
-  if (!fetched.reachable) {
-    if (!quiet) {
-      log.debug(`Failed to discover LM Studio models: ${String(fetched.error)}`);
-    }
-    return [];
-  }
-  if (fetched.status !== undefined && fetched.status >= 400) {
-    if (!quiet) {
-      log.debug(`Failed to discover LM Studio models: ${fetched.status}`);
-    }
-    return [];
-  }
-  const models = fetched.models;
-  if (models.length === 0) {
-    if (!quiet) {
-      log.debug("No LM Studio models found on local instance");
-    }
-    return [];
-  }
-
+/**
+ * Maps LM Studio wire models to config entries using plain display names.
+ * Use this for config persistence where runtime format/state tags are not needed.
+ * For runtime discovery with enriched names, use discoverLmstudioModels from models.fetch.ts.
+ */
+export function mapLmstudioWireModelsToConfig(
+  models: LmstudioModelWire[],
+): ModelDefinitionConfig[] {
   return models
-    .map((entry): ModelDefinitionConfig | null => {
+    .map((entry) => {
       const base = mapLmstudioWireEntry(entry);
       if (!base) {
         return null;
       }
       return {
         id: base.id,
-        // Runtime display: include format/vision/tool-use/loaded tags in the name.
-        name: buildLmstudioModelName(base),
+        name: base.displayName,
         reasoning: base.reasoning,
         input: base.input,
         cost: base.cost,
-        compat: { supportsUsageInStreaming: true },
         contextWindow: base.contextWindow,
         maxTokens: base.maxTokens,
       };
     })
     .filter((entry): entry is ModelDefinitionConfig => entry !== null);
-}
-
-/** Ensures a model is loaded in LM Studio before first real inference/embedding call. */
-export async function ensureLmstudioModelLoaded(params: {
-  baseUrl?: string;
-  apiKey?: string;
-  headers?: Record<string, string>;
-  ssrfPolicy?: SsrFPolicy;
-  modelKey: string;
-  requestedContextLength?: number;
-  timeoutMs?: number;
-  /** Injectable fetch implementation; defaults to the global fetch. */
-  fetchImpl?: typeof fetch;
-}): Promise<void> {
-  const modelKey = params.modelKey.trim();
-  if (!modelKey) {
-    throw new Error("LM Studio model key is required");
-  }
-
-  const timeoutMs = params.timeoutMs ?? 30_000;
-  const baseUrl = resolveLmstudioServerBase(params.baseUrl);
-  const preflight = await fetchLmstudioModels({
-    baseUrl,
-    apiKey: params.apiKey,
-    headers: params.headers,
-    ssrfPolicy: params.ssrfPolicy,
-    timeoutMs,
-    fetchImpl: params.fetchImpl,
-  });
-  if (!preflight.reachable) {
-    throw new Error(`LM Studio model discovery failed: ${String(preflight.error)}`);
-  }
-  if (preflight.status !== undefined && preflight.status >= 400) {
-    throw new Error(`LM Studio model discovery failed (${preflight.status})`);
-  }
-  const matchingModel = preflight.models.find((entry) => entry.key?.trim() === modelKey);
-  const loadedContextWindow = matchingModel ? resolveLoadedContextWindow(matchingModel) : null;
-  const advertisedContextLimit =
-    matchingModel?.max_context_length !== undefined &&
-    Number.isFinite(matchingModel.max_context_length) &&
-    matchingModel.max_context_length > 0
-      ? Math.floor(matchingModel.max_context_length)
-      : null;
-  const requestedContextLength =
-    params.requestedContextLength !== undefined &&
-    Number.isFinite(params.requestedContextLength) &&
-    params.requestedContextLength > 0
-      ? Math.floor(params.requestedContextLength)
-      : null;
-  const contextLengthForLoad =
-    advertisedContextLimit === null
-      ? (requestedContextLength ?? LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH)
-      : Math.min(
-          requestedContextLength ?? LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
-          advertisedContextLimit,
-        );
-  if (
-    loadedContextWindow !== null &&
-    (requestedContextLength === null || loadedContextWindow >= contextLengthForLoad)
-  ) {
-    return;
-  }
-
-  const { response, release } = await fetchLmstudioEndpoint({
-    url: `${baseUrl}/api/v1/models/load`,
-    init: {
-      method: "POST",
-      headers: buildLmstudioAuthHeaders({
-        apiKey: params.apiKey,
-        headers: params.headers,
-        json: true,
-      }),
-      body: JSON.stringify({
-        model: modelKey,
-        // Ask LM Studio to load with our default target, capped to the model's own limit.
-        context_length: contextLengthForLoad,
-      }),
-    },
-    timeoutMs,
-    fetchImpl: params.fetchImpl,
-    ssrfPolicy: params.ssrfPolicy,
-    auditContext: "lmstudio-model-load",
-  });
-  try {
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`LM Studio model load failed (${response.status})${body ? `: ${body}` : ""}`);
-    }
-    const payload = (await response.json()) as LmstudioLoadResponse;
-    if (typeof payload.status === "string" && payload.status.toLowerCase() !== "loaded") {
-      throw new Error(`LM Studio model load returned unexpected status: ${payload.status}`);
-    }
-  } finally {
-    await release();
-  }
 }

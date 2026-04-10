@@ -14,7 +14,10 @@ export {
   discoverLmstudioModels,
   ensureLmstudioModelLoaded,
   fetchLmstudioModels,
+} from "./src/models.fetch.js";
+export {
   mapLmstudioWireEntry,
+  mapLmstudioWireModelsToConfig,
   normalizeLmstudioProviderConfig,
   resolveLoadedContextWindow,
   resolveLmstudioInferenceBase,
@@ -27,5 +30,6 @@ export {
   buildLmstudioAuthHeaders,
   resolveLmstudioConfiguredApiKey,
   resolveLmstudioProviderHeaders,
+  resolveLmstudioRequestContext,
   resolveLmstudioRuntimeApiKey,
 } from "./src/runtime.js";

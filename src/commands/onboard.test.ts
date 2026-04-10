@@ -158,24 +158,6 @@ describe("setupWizardCommand", () => {
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
   });
 
-  it("fails fast for invalid --custom-context-window", async () => {
-    const runtime = makeRuntime();
-
-    await setupWizardCommand(
-      {
-        customContextWindow: Number.NaN,
-      },
-      runtime,
-    );
-
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Invalid --custom-context-window. Use a positive integer token count.",
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
-    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
-  });
-
   it("keeps onboardCommand as an alias for setupWizardCommand", () => {
     expect(onboardCommand).toBe(setupWizardCommand);
   });

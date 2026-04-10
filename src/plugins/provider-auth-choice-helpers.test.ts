@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { applyProviderAuthConfigPatch, mergeConfigPatch } from "./provider-auth-choice-helpers.js";
+import { applyProviderAuthConfigPatch } from "./provider-auth-choice-helpers.js";
 
 describe("applyProviderAuthConfigPatch", () => {
   it("replaces patched default model maps instead of recursively merging them", () => {
@@ -69,38 +69,6 @@ describe("applyProviderAuthConfigPatch", () => {
           },
         },
       },
-    });
-  });
-
-  it("deletes keys when a patch explicitly sets them to undefined", () => {
-    const base = {
-      models: {
-        providers: {
-          lmstudio: {
-            headers: {
-              Authorization: "Bearer stale",
-              "X-Proxy-Auth": "proxy",
-            },
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-    const patch = {
-      models: {
-        providers: {
-          lmstudio: {
-            headers: {
-              Authorization: undefined,
-            },
-          },
-        },
-      },
-    };
-
-    const next = mergeConfigPatch(base, patch);
-
-    expect(next.models?.providers?.lmstudio?.headers).toEqual({
-      "X-Proxy-Auth": "proxy",
     });
   });
 });

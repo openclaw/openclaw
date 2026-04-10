@@ -84,8 +84,7 @@ openclaw onboard \
   --auth-choice lmstudio \
   --custom-base-url http://localhost:1234/v1 \
   --lmstudio-api-key "$LM_API_TOKEN" \
-  --custom-model-id qwen/qwen3.5-9b \
-  --custom-context-window 32768
+  --custom-model-id qwen/qwen3.5-9b
 ```
 
 `--custom-model-id` takes the model key as returned by LM Studio (e.g. `qwen/qwen3.5-9b`), without
@@ -98,11 +97,8 @@ If your LM Studio server does not require authentication, OpenClaw non-interacti
 
 This writes `models.providers.lmstudio`, sets the default model to
 `lmstudio/<custom-model-id>`, and writes the `lmstudio:default` auth profile.
-If `--custom-context-window` is set, OpenClaw stores that value as the selected model's
-`contextWindow` and uses it as the requested LM Studio load context at inference time
-(clamped to the model's advertised max when needed).
 
-Interactive setup prompts for an optional context window value after the explicit default-model selection step.
+Interactive setup can prompt for an optional preferred load context length and applies it across the discovered LM Studio models it saves into config.
 
 ## Configuration
 
