@@ -11,7 +11,14 @@ const mocks = vi.hoisted(() => ({
   applyAgentConfig: vi.fn((_cfg: unknown, _opts: unknown) => ({})),
   pruneAgentConfig: vi.fn(() => ({ config: {}, removedBindings: 0 })),
   writeConfigFile: vi.fn(async () => {}),
-  ensureAgentWorkspace: vi.fn(async () => {}),
+  ensureAgentWorkspace: vi.fn(
+    async (params?: { dir?: string }): Promise<{ dir: string; identityPathCreated: boolean }> => ({
+      dir: params?.dir
+        ? `/resolved${params.dir.startsWith("/") ? "" : "/"}${params.dir}`
+        : "/resolved/workspace",
+      identityPathCreated: false,
+    }),
+  ),
   isWorkspaceSetupCompleted: vi.fn(async () => false),
   resolveAgentDir: vi.fn((_cfg?: unknown, _agentId?: string) => "/agents/test-agent"),
   resolveAgentWorkspaceDir: vi.fn((_cfg?: unknown, _agentId?: string) => "/workspace/test-agent"),
@@ -380,6 +387,7 @@ describe("agents.create", () => {
     const callOrder: string[] = [];
     mocks.ensureAgentWorkspace.mockImplementation(async () => {
       callOrder.push("ensureAgentWorkspace");
+      return { dir: "/resolved/tmp/ws", identityPathCreated: false };
     });
     mocks.writeConfigFile.mockImplementation(async () => {
       callOrder.push("writeConfigFile");
@@ -508,6 +516,44 @@ describe("agents.create", () => {
       expect.objectContaining({ message: expect.stringContaining("unsafe workspace file") }),
     );
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("does not persist config when IDENTITY.md read fails", async () => {
+    agentsTesting.setDepsForTests({
+      resolveAgentWorkspaceFilePath: async ({ workspaceDir, name }) => {
+        const ioPath = `${workspaceDir}/${name}`;
+        if (workspaceDir === "/resolved/tmp/ws") {
+          return {
+            kind: "ready",
+            requestPath: ioPath,
+            ioPath,
+            workspaceReal: workspaceDir,
+          };
+        }
+        return {
+          kind: "missing",
+          requestPath: ioPath,
+          ioPath,
+          workspaceReal: workspaceDir,
+        };
+      },
+      readLocalFileSafely: async () => {
+        throw createErrnoError("EACCES");
+      },
+    });
+    mocks.ensureAgentWorkspace.mockResolvedValueOnce({
+      dir: "/resolved/tmp/ws",
+      identityPathCreated: false,
+    });
+
+    const { promise } = makeCall("agents.create", {
+      name: "Unreadable Identity",
+      workspace: "/tmp/ws",
+    });
+
+    await expect(promise).rejects.toMatchObject({ code: "EACCES" });
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(mocks.writeFileWithinRoot).not.toHaveBeenCalled();
   });
 
   it("passes model to applyAgentConfig when provided", async () => {
@@ -677,10 +723,17 @@ describe("agents.update", () => {
   });
 
   it("syncs existing identity into a new workspace even without identity params", async () => {
+    mocks.ensureAgentWorkspace.mockResolvedValueOnce({
+      dir: "/resolved/new/workspace",
+      identityPathCreated: true,
+    });
     agentsTesting.setDepsForTests({
       resolveAgentWorkspaceFilePath: async ({ workspaceDir, name }) => {
         const ioPath = `${workspaceDir}/${name}`;
-        if (workspaceDir === "/workspace/test-agent") {
+        if (
+          workspaceDir === "/workspace/test-agent" ||
+          workspaceDir === "/resolved/new/workspace"
+        ) {
           return {
             kind: "ready",
             requestPath: ioPath,
@@ -717,6 +770,25 @@ describe("agents.update", () => {
             stat: makeFileStat(),
           };
         }
+        if (filePath === "/resolved/new/workspace/IDENTITY.md") {
+          return {
+            buffer: Buffer.from(
+              [
+                "# IDENTITY.md - Agent Identity",
+                "",
+                "- **Name:** C-3PO (Clawd's Third Protocol Observer)",
+                "- **Creature:** Flustered Protocol Droid",
+                "",
+                "## Role",
+                "",
+                "Debug agent for `--dev` mode.",
+                "",
+              ].join("\n"),
+            ),
+            realPath: filePath,
+            stat: makeFileStat(),
+          };
+        }
         throw createEnoentError();
       },
     });
@@ -740,9 +812,18 @@ describe("agents.update", () => {
         data: expect.stringContaining("## Role"),
       }),
     );
+    expect(mocks.writeFileWithinRoot).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.stringContaining("Flustered Protocol Droid"),
+      }),
+    );
   });
 
   it("preserves an existing destination identity file when workspace changes", async () => {
+    mocks.ensureAgentWorkspace.mockResolvedValueOnce({
+      dir: "/resolved/new/workspace",
+      identityPathCreated: false,
+    });
     agentsTesting.setDepsForTests({
       resolveAgentWorkspaceFilePath: async ({ workspaceDir, name }) => {
         const ioPath = `${workspaceDir}/${name}`;

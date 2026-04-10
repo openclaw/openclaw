@@ -562,7 +562,7 @@ async function readWorkspaceFileContent(
     if (err instanceof SafeOpenError && err.code === "not-found") {
       return undefined;
     }
-    return undefined;
+    throw err;
   }
 }
 
@@ -570,12 +570,26 @@ async function buildIdentityMarkdownForWrite(params: {
   workspaceDir: string;
   identity: IdentityConfig;
   fallbackWorkspaceDir?: string;
+  preferFallbackWorkspaceContent?: boolean;
 }): Promise<string> {
-  const baseContent =
-    (await readWorkspaceFileContent(params.workspaceDir, DEFAULT_IDENTITY_FILENAME)) ??
-    (params.fallbackWorkspaceDir
-      ? await readWorkspaceFileContent(params.fallbackWorkspaceDir, DEFAULT_IDENTITY_FILENAME)
-      : undefined);
+  let baseContent: string | undefined;
+  if (params.preferFallbackWorkspaceContent && params.fallbackWorkspaceDir) {
+    baseContent = await readWorkspaceFileContent(
+      params.fallbackWorkspaceDir,
+      DEFAULT_IDENTITY_FILENAME,
+    );
+    if (baseContent === undefined) {
+      baseContent = await readWorkspaceFileContent(params.workspaceDir, DEFAULT_IDENTITY_FILENAME);
+    }
+  } else {
+    baseContent = await readWorkspaceFileContent(params.workspaceDir, DEFAULT_IDENTITY_FILENAME);
+    if (baseContent === undefined && params.fallbackWorkspaceDir) {
+      baseContent = await readWorkspaceFileContent(
+        params.fallbackWorkspaceDir,
+        DEFAULT_IDENTITY_FILENAME,
+      );
+    }
+  }
 
   return mergeIdentityMarkdownContent(baseContent, params.identity);
 }
@@ -730,9 +744,13 @@ export const agentsHandlers: GatewayRequestHandlers = {
       ...(identity ? { identity } : {}),
     });
 
+    let ensuredWorkspace: Awaited<ReturnType<typeof ensureAgentWorkspace>> | undefined;
     if (workspaceDir) {
       const skipBootstrap = Boolean(nextConfig.agents?.defaults?.skipBootstrap);
-      await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: !skipBootstrap });
+      ensuredWorkspace = await ensureAgentWorkspace({
+        dir: workspaceDir,
+        ensureBootstrapFiles: !skipBootstrap,
+      });
     }
 
     const persistedIdentity = normalizeIdentityForFile(resolveAgentIdentity(nextConfig, agentId));
@@ -747,6 +765,8 @@ export const agentsHandlers: GatewayRequestHandlers = {
         workspaceDir: identityWorkspaceDir,
         identity: persistedIdentity,
         fallbackWorkspaceDir,
+        preferFallbackWorkspaceContent:
+          Boolean(fallbackWorkspaceDir) && ensuredWorkspace?.identityPathCreated === true,
       });
       if (
         !(await writeWorkspaceFileOrRespond({
