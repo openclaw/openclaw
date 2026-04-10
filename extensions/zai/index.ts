@@ -90,6 +90,9 @@ function collectExistingZaiApiKeys(store: AuthProfileStore): Set<string> {
   const existing = new Set<string>();
   for (const profileId of listStoredZaiApiKeyProfileIds(store)) {
     const credential = store.profiles[profileId];
+    if (credential?.type !== "api_key") {
+      continue;
+    }
     const key = normalizeOptionalSecretInput(credential.key);
     if (key) {
       existing.add(key);
