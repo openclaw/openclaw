@@ -90,14 +90,29 @@ function listStoredZaiApiKeyProfileIds(store: AuthProfileStore): string[] {
   });
 }
 
-function collectExistingZaiApiKeys(store: AuthProfileStore): Set<string> {
+function resolveStoredZaiApiKey(params: {
+  credential: AuthProfileStore["profiles"][string];
+  env: NodeJS.ProcessEnv;
+}): string | undefined {
+  const { credential, env } = params;
+  if (credential?.type !== "api_key") {
+    return undefined;
+  }
+  const inlineKey = normalizeOptionalSecretInput(credential.key);
+  if (inlineKey) {
+    return inlineKey;
+  }
+  if (credential.keyRef?.source === "env" && typeof credential.keyRef.id === "string") {
+    return normalizeOptionalSecretInput(env[credential.keyRef.id]);
+  }
+  return undefined;
+}
+
+function collectExistingZaiApiKeys(store: AuthProfileStore, env: NodeJS.ProcessEnv): Set<string> {
   const existing = new Set<string>();
   for (const profileId of listStoredZaiApiKeyProfileIds(store)) {
     const credential = store.profiles[profileId];
-    if (credential?.type !== "api_key") {
-      continue;
-    }
-    const key = normalizeOptionalSecretInput(credential.key);
+    const key = resolveStoredZaiApiKey({ credential, env });
     if (key) {
       existing.add(key);
     }
@@ -109,7 +124,7 @@ function collectZaiRotationApiKeys(params: {
   env: NodeJS.ProcessEnv;
   store: AuthProfileStore;
 }): string[] {
-  const seen = collectExistingZaiApiKeys(params.store);
+  const seen = collectExistingZaiApiKeys(params.store, params.env);
   const apiKeys: string[] = [];
   const add = (value?: string) => {
     const resolved = normalizeOptionalSecretInput(value);
@@ -374,7 +389,14 @@ export default definePluginEntry({
       label: "Z.AI",
       aliases: ["z-ai", "z.ai"],
       docsPath: "/providers/models",
-      envVars: ["ZAI_API_KEY", "Z_AI_API_KEY"],
+      envVars: [
+        "ZAI_API_KEY",
+        "ZAI_API_KEYS",
+        "ZAI_API_KEY_1",
+        "ZAI_API_KEY_2",
+        "Z_AI_API_KEY",
+        "OPENCLAW_LIVE_ZAI_KEY",
+      ],
       auth: [
         buildZaiApiKeyMethod({
           id: "api-key",

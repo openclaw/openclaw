@@ -63,5 +63,36 @@ describe("provider env vars", () => {
     expect(getProviderEnvVars("openai")).toEqual(["OPENAI_API_KEY"]);
     expect(getProviderEnvVars("anthropic")).toEqual(["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]);
     expect(getProviderEnvVars("fal")).toEqual(["FAL_KEY", "FAL_API_KEY"]);
+    expect(getProviderEnvVars("zai")).toEqual([
+      "ZAI_API_KEY",
+      "ZAI_API_KEYS",
+      "ZAI_API_KEY_1",
+      "ZAI_API_KEY_2",
+      "Z_AI_API_KEY",
+      "OPENCLAW_LIVE_ZAI_KEY",
+    ]);
+  });
+
+  it("includes Z.AI rotation env vars in auth and secret scrub lists", () => {
+    expect(listKnownProviderAuthEnvVarNames()).toEqual(
+      expect.arrayContaining([
+        "ZAI_API_KEY",
+        "ZAI_API_KEYS",
+        "ZAI_API_KEY_1",
+        "ZAI_API_KEY_2",
+        "Z_AI_API_KEY",
+        "OPENCLAW_LIVE_ZAI_KEY",
+      ]),
+    );
+    expect(listKnownSecretEnvVarNames()).toEqual(
+      expect.arrayContaining([
+        "ZAI_API_KEY",
+        "ZAI_API_KEYS",
+        "ZAI_API_KEY_1",
+        "ZAI_API_KEY_2",
+        "Z_AI_API_KEY",
+        "OPENCLAW_LIVE_ZAI_KEY",
+      ]),
+    );
   });
 });
