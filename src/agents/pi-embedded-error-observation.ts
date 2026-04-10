@@ -104,7 +104,10 @@ function buildObservationFingerprint(params: {
   return getApiErrorPayloadFingerprint(params.raw);
 }
 
-export function buildApiErrorObservationFields(rawError?: string): {
+export function buildApiErrorObservationFields(
+  rawError?: string,
+  opts?: { provider?: string },
+): {
   rawErrorPreview?: string;
   rawErrorHash?: string;
   rawErrorFingerprint?: string;
@@ -146,6 +149,7 @@ export function buildApiErrorObservationFields(rawError?: string): {
       providerRuntimeFailureKind: classifyProviderRuntimeFailureKind({
         status: parsed?.httpCode ? Number(parsed.httpCode) : undefined,
         message: trimmed,
+        provider: opts?.provider,
       }),
       providerErrorType: parsed?.type,
       providerErrorMessagePreview: truncateForObservation(
@@ -159,7 +163,10 @@ export function buildApiErrorObservationFields(rawError?: string): {
   }
 }
 
-export function buildTextObservationFields(text?: string): {
+export function buildTextObservationFields(
+  text?: string,
+  opts?: { provider?: string },
+): {
   textPreview?: string;
   textHash?: string;
   textFingerprint?: string;
@@ -169,7 +176,7 @@ export function buildTextObservationFields(text?: string): {
   providerErrorMessagePreview?: string;
   requestIdHash?: string;
 } {
-  const observed = buildApiErrorObservationFields(text);
+  const observed = buildApiErrorObservationFields(text, opts);
   return {
     textPreview: observed.rawErrorPreview,
     textHash: observed.rawErrorHash,

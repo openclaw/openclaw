@@ -60,9 +60,13 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
       provider: lastAssistant.provider,
     });
     const errorText = (friendlyError || lastAssistant.errorMessage || "LLM request failed.").trim();
-    const observedError = buildApiErrorObservationFields(rawError);
+    const observedError = buildApiErrorObservationFields(rawError, {
+      provider: lastAssistant.provider,
+    });
     const safeErrorText =
-      buildTextObservationFields(errorText).textPreview ?? "LLM request failed.";
+      buildTextObservationFields(errorText, {
+        provider: lastAssistant.provider,
+      }).textPreview ?? "LLM request failed.";
     lifecycleErrorText = safeErrorText;
     const safeRunId = sanitizeForConsole(ctx.params.runId) ?? "-";
     const safeModel = sanitizeForConsole(lastAssistant.model) ?? "unknown";

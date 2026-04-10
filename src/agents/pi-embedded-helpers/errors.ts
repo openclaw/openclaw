@@ -502,8 +502,20 @@ function isHtmlErrorResponse(raw: string, status?: number): boolean {
   return HTML_BODY_RE.test(rest) && HTML_CLOSE_RE.test(rest);
 }
 
-function isAuthScopeErrorMessage(raw: string, status?: number): boolean {
+function isOpenAICodexScopeContext(raw: string, provider?: string): boolean {
+  const normalizedProvider = normalizeLowercaseStringOrEmpty(provider);
+  return (
+    normalizedProvider === "openai-codex" ||
+    /\bopenai\s+codex\b/i.test(raw) ||
+    /\bcodex\b.*\bscopes?\b/i.test(raw)
+  );
+}
+
+function isAuthScopeErrorMessage(raw: string, status?: number, provider?: string): boolean {
   if (!raw) {
+    return false;
+  }
+  if (!isOpenAICodexScopeContext(raw, provider)) {
     return false;
   }
   const inferred =
@@ -916,7 +928,7 @@ export function classifyProviderRuntimeFailureKind(
   if (message && classifyOAuthRefreshFailure(message)) {
     return "auth_refresh";
   }
-  if (message && isAuthScopeErrorMessage(message, status)) {
+  if (message && isAuthScopeErrorMessage(message, status, normalizedSignal.provider)) {
     return "auth_scope";
   }
   if (message && status === 403 && isHtmlErrorResponse(message, status)) {
