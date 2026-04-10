@@ -39,6 +39,7 @@ import {
 import { runSetupWizard } from "../wizard/setup.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
+import { isLoopbackHost } from "./net.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
 import { createChannelManager } from "./server-channels.js";
 import { createGatewayCloseHandler, runGatewayClosePrelude } from "./server-close.js";
@@ -125,6 +126,28 @@ const gatewayRuntime = runtimeForLogger(log);
 const canvasRuntime = runtimeForLogger(logCanvas);
 
 type AuthRateLimitConfig = Parameters<typeof createAuthRateLimiter>[0];
+
+function resolveGatewayAuthRateLimitConfig(params: {
+  bindHost: string;
+  resolvedAuth: { mode: "none" | "token" | "password" | "trusted-proxy" };
+  configuredRateLimit: AuthRateLimitConfig | undefined;
+}): AuthRateLimitConfig | undefined {
+  if (params.configuredRateLimit) {
+    return params.configuredRateLimit;
+  }
+  if (isLoopbackHost(params.bindHost)) {
+    return undefined;
+  }
+  if (params.resolvedAuth.mode !== "token" && params.resolvedAuth.mode !== "password") {
+    return undefined;
+  }
+  return {
+    maxAttempts: 10,
+    windowMs: 60_000,
+    lockoutMs: 300_000,
+    exemptLoopback: true,
+  } satisfies AuthRateLimitConfig;
+}
 
 function createGatewayAuthRateLimiters(rateLimitConfig: AuthRateLimitConfig | undefined): {
   rateLimiter?: AuthRateLimiter;
@@ -372,7 +395,11 @@ export async function startGatewayServer(
   const canvasHostEnabled = runtimeConfig.canvasHostEnabled;
 
   // Create auth rate limiters used by connect/auth flows.
-  const rateLimitConfig = cfgAtStart.gateway?.auth?.rateLimit;
+  const rateLimitConfig = resolveGatewayAuthRateLimitConfig({
+    bindHost,
+    resolvedAuth,
+    configuredRateLimit: cfgAtStart.gateway?.auth?.rateLimit,
+  });
   const { rateLimiter: authRateLimiter, browserRateLimiter: browserAuthRateLimiter } =
     createGatewayAuthRateLimiters(rateLimitConfig);
 

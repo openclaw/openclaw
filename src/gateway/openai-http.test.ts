@@ -757,6 +757,54 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     );
   });
 
+  it("returns 429 for repeated failed auth on non-loopback shared-token binds by default", async () => {
+    await writeGatewayConfig({
+      gateway: {
+        trustedProxies: ["127.0.0.1"],
+      },
+    });
+    testState.gatewayBind = "lan";
+    testState.gatewayAuth = { mode: "token", token: "secret" } as any;
+    testState.gatewayControlUi = { allowedOrigins: ["https://control.example.com"] } as any;
+    await withGatewayServer(
+      async ({ port }) => {
+        const headers = {
+          "content-type": "application/json",
+          authorization: "Bearer wrong",
+          "x-forwarded-for": "203.0.113.10",
+        };
+        const body = {
+          model: "openclaw",
+          messages: [{ role: "user", content: "hi" }],
+        };
+
+        for (let attempt = 0; attempt < 10; attempt += 1) {
+          const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+          });
+          expect(res.status).toBe(401);
+        }
+
+        const locked = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+        });
+        expect(locked.status).toBe(429);
+        expect(locked.headers.get("retry-after")).toBeTruthy();
+      },
+      {
+        serverOptions: {
+          host: "0.0.0.0",
+          controlUiEnabled: false,
+          openAiChatCompletionsEnabled: true,
+        },
+      },
+    );
+  });
+
   it("streams SSE chunks when stream=true", async () => {
     const port = enabledPort;
     try {

@@ -44,7 +44,7 @@ Notes:
 - When `gateway.auth.mode="trusted-proxy"`, the HTTP request must come from a
   configured non-loopback trusted proxy source; same-host loopback proxies do
   not satisfy this mode.
-- If `gateway.auth.rateLimit` is configured and too many auth failures occur, the endpoint returns `429` with `Retry-After`.
+- On non-loopback shared-secret gateway binds, repeated auth failures are rate-limited by default and return `429` with `Retry-After`. `gateway.auth.rateLimit` still overrides the policy explicitly.
 
 ## Security boundary (important)
 
