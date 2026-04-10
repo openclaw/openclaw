@@ -123,6 +123,18 @@ export function registerOctoCli(program: Command) {
       process.exit(code);
     });
 
+  // ── runtimes ────────────────────────────────────────────────────────────
+
+  octo
+    .command("runtimes")
+    .description("Discover available agentic coding tools on this machine")
+    .option("--json", "Output as JSON")
+    .action(async (opts) => {
+      const { runOctoRuntimes } = await import("./runtimes.js");
+      const code = runOctoRuntimes(opts);
+      process.exit(code);
+    });
+
   // ── mission ─────────────────────────────────────────────────────────────
 
   const mission = octo.command("mission").description("Manage Octopus missions");
