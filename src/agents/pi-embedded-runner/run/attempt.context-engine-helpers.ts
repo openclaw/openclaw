@@ -199,6 +199,9 @@ export async function finalizeAttemptContextEngineTurn(params: {
   }) => Promise<unknown>;
   sessionManager: unknown;
   warn: (message: string) => void;
+  /** When true, skip the afterTurn/ingest calls because the loop hook already
+   *  handled per-iteration ingestion during the tool loop. Maintenance still runs. */
+  skipAfterTurn?: boolean;
 }) {
   if (!params.contextEngine) {
     return { postTurnFinalizationSucceeded: true };
@@ -206,46 +209,48 @@ export async function finalizeAttemptContextEngineTurn(params: {
 
   let postTurnFinalizationSucceeded = true;
 
-  if (typeof params.contextEngine.afterTurn === "function") {
-    try {
-      await params.contextEngine.afterTurn({
-        sessionId: params.sessionIdUsed,
-        sessionKey: params.sessionKey,
-        sessionFile: params.sessionFile,
-        messages: params.messagesSnapshot,
-        prePromptMessageCount: params.prePromptMessageCount,
-        tokenBudget: params.tokenBudget,
-        runtimeContext: params.runtimeContext,
-      });
-    } catch (afterTurnErr) {
-      postTurnFinalizationSucceeded = false;
-      params.warn(`context engine afterTurn failed: ${String(afterTurnErr)}`);
-    }
-  } else {
-    const newMessages = params.messagesSnapshot.slice(params.prePromptMessageCount);
-    if (newMessages.length > 0) {
-      if (typeof params.contextEngine.ingestBatch === "function") {
-        try {
-          await params.contextEngine.ingestBatch({
-            sessionId: params.sessionIdUsed,
-            sessionKey: params.sessionKey,
-            messages: newMessages,
-          });
-        } catch (ingestErr) {
-          postTurnFinalizationSucceeded = false;
-          params.warn(`context engine ingest failed: ${String(ingestErr)}`);
-        }
-      } else {
-        for (const msg of newMessages) {
+  if (!params.skipAfterTurn) {
+    if (typeof params.contextEngine.afterTurn === "function") {
+      try {
+        await params.contextEngine.afterTurn({
+          sessionId: params.sessionIdUsed,
+          sessionKey: params.sessionKey,
+          sessionFile: params.sessionFile,
+          messages: params.messagesSnapshot,
+          prePromptMessageCount: params.prePromptMessageCount,
+          tokenBudget: params.tokenBudget,
+          runtimeContext: params.runtimeContext,
+        });
+      } catch (afterTurnErr) {
+        postTurnFinalizationSucceeded = false;
+        params.warn(`context engine afterTurn failed: ${String(afterTurnErr)}`);
+      }
+    } else {
+      const newMessages = params.messagesSnapshot.slice(params.prePromptMessageCount);
+      if (newMessages.length > 0) {
+        if (typeof params.contextEngine.ingestBatch === "function") {
           try {
-            await params.contextEngine.ingest?.({
+            await params.contextEngine.ingestBatch({
               sessionId: params.sessionIdUsed,
               sessionKey: params.sessionKey,
-              message: msg,
+              messages: newMessages,
             });
           } catch (ingestErr) {
             postTurnFinalizationSucceeded = false;
             params.warn(`context engine ingest failed: ${String(ingestErr)}`);
+          }
+        } else {
+          for (const msg of newMessages) {
+            try {
+              await params.contextEngine.ingest?.({
+                sessionId: params.sessionIdUsed,
+                sessionKey: params.sessionKey,
+                message: msg,
+              });
+            } catch (ingestErr) {
+              postTurnFinalizationSucceeded = false;
+              params.warn(`context engine ingest failed: ${String(ingestErr)}`);
+            }
           }
         }
       }

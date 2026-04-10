@@ -295,270 +295,204 @@ describe("installContextEngineLoopHook", () => {
   const tokenBudget = 4096;
   const modelId = "test-model";
 
-  it("forwards new messages to engine.afterTurn with prePromptMessageCount=0 on first call", async () => {
+  function installHook(
+    agent: ReturnType<typeof makeGuardableAgent>,
+    engine: MockedEngine,
+  ): () => void {
+    return installContextEngineLoopHook({
+      agent,
+      contextEngine: engine,
+      sessionId,
+      sessionKey,
+      sessionFile,
+      tokenBudget,
+      modelId,
+    });
+  }
+
+  it("returns early on the first call without calling afterTurn or assemble", async () => {
     const agent = makeGuardableAgent();
     const engine = makeMockEngine();
-    installContextEngineLoopHook({
-      agent,
-      contextEngine: engine,
-      sessionId,
-      sessionKey,
-      sessionFile,
-      tokenBudget,
-      modelId,
-    });
-
-    const messages = [makeUser("first"), makeToolResult("call_1", "result")];
-    await callTransform(agent, messages);
-
-    expect(engine.afterTurn).toHaveBeenCalledTimes(1);
-    expect(engine.afterTurn.mock.calls[0]?.[0]).toMatchObject({
-      sessionId,
-      sessionKey,
-      sessionFile,
-      messages,
-      prePromptMessageCount: 0,
-      tokenBudget,
-    });
-  });
-
-  it("advances prePromptMessageCount on subsequent calls based on the previous high-water mark", async () => {
-    const agent = makeGuardableAgent();
-    const engine = makeMockEngine();
-    installContextEngineLoopHook({
-      agent,
-      contextEngine: engine,
-      sessionId,
-      sessionKey,
-      sessionFile,
-      tokenBudget,
-      modelId,
-    });
-
-    const firstBatch = [makeUser("first"), makeToolResult("call_1", "result")];
-    await callTransform(agent, firstBatch);
-
-    const secondBatch = [
-      makeUser("first"),
-      makeToolResult("call_1", "result"),
-      makeUser("second"),
-      makeToolResult("call_2", "result two"),
-    ];
-    await callTransform(agent, secondBatch);
-
-    expect(engine.afterTurn).toHaveBeenCalledTimes(2);
-    expect(engine.afterTurn.mock.calls[1]?.[0]).toMatchObject({
-      prePromptMessageCount: 2,
-      messages: secondBatch,
-    });
-  });
-
-  it("does not call engine.afterTurn when no new messages have been appended", async () => {
-    const agent = makeGuardableAgent();
-    const engine = makeMockEngine();
-    installContextEngineLoopHook({
-      agent,
-      contextEngine: engine,
-      sessionId,
-      sessionKey,
-      sessionFile,
-      tokenBudget,
-      modelId,
-    });
-
-    const messages = [makeUser("first"), makeToolResult("call_1", "result")];
-    await callTransform(agent, messages);
-    await callTransform(agent, messages);
-
-    expect(engine.afterTurn).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns the engine's assembled view when its length differs from the source", async () => {
-    const agent = makeGuardableAgent();
-    const compactedView = [makeUser("compacted")];
-    const engine = makeMockEngine({
-      assemble: async () => ({ messages: compactedView, estimatedTokens: 0 }),
-    });
-    installContextEngineLoopHook({
-      agent,
-      contextEngine: engine,
-      sessionId,
-      sessionKey,
-      sessionFile,
-      tokenBudget,
-      modelId,
-    });
-
-    const sourceMessages = [
-      makeUser("first"),
-      makeToolResult("call_1", "result"),
-      makeToolResult("call_2", "result two"),
-    ];
-    const transformed = await callTransform(agent, sourceMessages);
-
-    expect(transformed).toBe(compactedView);
-    expect(transformed).not.toBe(sourceMessages);
-  });
-
-  it("returns the source messages when the engine's assembled view has the same length", async () => {
-    const agent = makeGuardableAgent();
-    const engine = makeMockEngine();
-    installContextEngineLoopHook({
-      agent,
-      contextEngine: engine,
-      sessionId,
-      sessionKey,
-      sessionFile,
-      tokenBudget,
-      modelId,
-    });
-
-    const sourceMessages = [makeUser("first"), makeToolResult("call_1", "result")];
-    const transformed = await callTransform(agent, sourceMessages);
-
-    expect(transformed).toBe(sourceMessages);
-  });
-
-  it("does not mutate the source messages array even when the engine returns a different view", async () => {
-    const agent = makeGuardableAgent();
-    const compactedView = [makeUser("compacted")];
-    const engine = makeMockEngine({
-      assemble: async () => ({ messages: compactedView, estimatedTokens: 0 }),
-    });
-    installContextEngineLoopHook({
-      agent,
-      contextEngine: engine,
-      sessionId,
-      sessionKey,
-      sessionFile,
-      tokenBudget,
-      modelId,
-    });
-
-    const sourceMessages = [makeUser("first"), makeToolResult("call_1", "result")];
-    const sourceCopy = [...sourceMessages];
-    await callTransform(agent, sourceMessages);
-
-    expect(sourceMessages).toEqual(sourceCopy);
-    expect(sourceMessages).toHaveLength(2);
-  });
-
-  it("skips the afterTurn call when the engine does not implement it", async () => {
-    const agent = makeGuardableAgent();
-    const engine = makeMockEngine({ omitAfterTurn: true });
-    installContextEngineLoopHook({
-      agent,
-      contextEngine: engine,
-      sessionId,
-      sessionKey,
-      sessionFile,
-      tokenBudget,
-      modelId,
-    });
+    installHook(agent, engine);
 
     const messages = [makeUser("first"), makeToolResult("call_1", "result")];
     const transformed = await callTransform(agent, messages);
 
     expect(transformed).toBe(messages);
+    expect(engine.afterTurn).not.toHaveBeenCalled();
+    expect(engine.assemble).not.toHaveBeenCalled();
+  });
+
+  it("calls afterTurn and assemble when new messages are appended after the first call", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installHook(agent, engine);
+
+    const initial = [makeUser("first"), makeToolResult("call_1", "result")];
+    await callTransform(agent, initial);
+
+    const withNew = [...initial, makeUser("second"), makeToolResult("call_2", "r2")];
+    await callTransform(agent, withNew);
+
+    expect(engine.afterTurn).toHaveBeenCalledTimes(1);
+    expect(engine.afterTurn.mock.calls[0]?.[0]).toMatchObject({
+      prePromptMessageCount: 2,
+      messages: withNew,
+    });
     expect(engine.assemble).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps calling assemble on subsequent iterations when engine lacks afterTurn but new messages arrive", async () => {
+  it("advances the fence across multiple iterations", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installHook(agent, engine);
+
+    const batch0 = [makeUser("h1"), makeToolResult("c1", "r1")];
+    await callTransform(agent, batch0);
+
+    const batch1 = [...batch0, makeUser("h2"), makeToolResult("c2", "r2")];
+    await callTransform(agent, batch1);
+
+    const batch2 = [...batch1, makeUser("h3"), makeToolResult("c3", "r3")];
+    await callTransform(agent, batch2);
+
+    expect(engine.afterTurn).toHaveBeenCalledTimes(2);
+    expect(engine.afterTurn.mock.calls[0]?.[0]?.prePromptMessageCount).toBe(2);
+    expect(engine.afterTurn.mock.calls[1]?.[0]?.prePromptMessageCount).toBe(4);
+  });
+
+  it("skips afterTurn and assemble when messages have not changed", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installHook(agent, engine);
+
+    const messages = [makeUser("first"), makeToolResult("call_1", "result")];
+    await callTransform(agent, messages);
+    await callTransform(agent, messages);
+    await callTransform(agent, messages);
+
+    expect(engine.afterTurn).not.toHaveBeenCalled();
+    expect(engine.assemble).not.toHaveBeenCalled();
+  });
+
+  it("returns the assembled view when its length differs from the source", async () => {
+    const agent = makeGuardableAgent();
+    const compactedView = [makeUser("compacted")];
+    const engine = makeMockEngine({
+      assemble: async () => ({ messages: compactedView, estimatedTokens: 0 }),
+    });
+    installHook(agent, engine);
+
+    const initial = [makeUser("first"), makeToolResult("call_1", "r")];
+    await callTransform(agent, initial);
+
+    const withNew = [...initial, makeToolResult("call_2", "r2")];
+    const transformed = await callTransform(agent, withNew);
+
+    expect(transformed).toBe(compactedView);
+  });
+
+  it("returns the source messages when the assembled view has the same length", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installHook(agent, engine);
+
+    const initial = [makeUser("first"), makeToolResult("call_1", "result")];
+    await callTransform(agent, initial);
+
+    const withNew = [...initial, makeUser("second"), makeToolResult("call_2", "r2")];
+    const transformed = await callTransform(agent, withNew);
+
+    expect(transformed).toBe(withNew);
+  });
+
+  it("does not mutate the source messages array", async () => {
+    const agent = makeGuardableAgent();
+    const compactedView = [makeUser("compacted")];
+    const engine = makeMockEngine({
+      assemble: async () => ({ messages: compactedView, estimatedTokens: 0 }),
+    });
+    installHook(agent, engine);
+
+    const initial = [makeUser("first"), makeToolResult("call_1", "result")];
+    await callTransform(agent, initial);
+
+    const sourceMessages = [...initial, makeUser("second"), makeToolResult("call_2", "r2")];
+    const sourceCopy = [...sourceMessages];
+    await callTransform(agent, sourceMessages);
+
+    expect(sourceMessages).toEqual(sourceCopy);
+  });
+
+  it("still calls assemble when engine lacks afterTurn but new messages arrive", async () => {
     const agent = makeGuardableAgent();
     const engine = makeMockEngine({ omitAfterTurn: true });
-    installContextEngineLoopHook({
-      agent,
-      contextEngine: engine,
-      sessionId,
-      sessionKey,
-      sessionFile,
-      tokenBudget,
-      modelId,
-    });
+    installHook(agent, engine);
 
-    const batch1 = [makeUser("first"), makeToolResult("call_1", "r1")];
+    const batch0 = [makeUser("first"), makeToolResult("call_1", "r1")];
+    await callTransform(agent, batch0);
+
+    const batch1 = [...batch0, makeUser("second"), makeToolResult("call_2", "r2")];
     await callTransform(agent, batch1);
-    expect(engine.assemble).toHaveBeenCalledTimes(1);
 
-    const batch2 = [...batch1, makeUser("second"), makeToolResult("call_2", "r2")];
+    const batch2 = [...batch1, makeUser("third"), makeToolResult("call_3", "r3")];
     await callTransform(agent, batch2);
-    expect(engine.assemble).toHaveBeenCalledTimes(2);
 
-    const batch3 = [...batch2, makeUser("third"), makeToolResult("call_3", "r3")];
-    await callTransform(agent, batch3);
-    expect(engine.assemble).toHaveBeenCalledTimes(3);
+    expect(engine.assemble).toHaveBeenCalledTimes(2);
   });
 
-  it("falls through to the source messages when engine.afterTurn throws", async () => {
+  it("falls through to source messages when engine.afterTurn throws", async () => {
     const agent = makeGuardableAgent();
     const engine = makeMockEngine({
       afterTurn: async () => {
         throw new Error("engine afterTurn boom");
       },
     });
-    installContextEngineLoopHook({
-      agent,
-      contextEngine: engine,
-      sessionId,
-      sessionKey,
-      sessionFile,
-      tokenBudget,
-      modelId,
-    });
+    installHook(agent, engine);
 
-    const messages = [makeUser("first"), makeToolResult("call_1", "result")];
-    const transformed = await callTransform(agent, messages);
+    const initial = [makeUser("first"), makeToolResult("call_1", "result")];
+    await callTransform(agent, initial);
 
-    expect(transformed).toBe(messages);
+    const withNew = [...initial, makeUser("second"), makeToolResult("call_2", "r2")];
+    const transformed = await callTransform(agent, withNew);
+
+    expect(transformed).toBe(withNew);
   });
 
-  it("falls through to the source messages when engine.assemble throws", async () => {
+  it("falls through to source messages when engine.assemble throws", async () => {
     const agent = makeGuardableAgent();
     const engine = makeMockEngine({
       assemble: async () => {
         throw new Error("engine assemble boom");
       },
     });
-    installContextEngineLoopHook({
-      agent,
-      contextEngine: engine,
-      sessionId,
-      sessionKey,
-      sessionFile,
-      tokenBudget,
-      modelId,
-    });
+    installHook(agent, engine);
 
-    const messages = [makeUser("first"), makeToolResult("call_1", "result")];
-    const transformed = await callTransform(agent, messages);
+    const initial = [makeUser("first"), makeToolResult("call_1", "result")];
+    await callTransform(agent, initial);
 
-    expect(transformed).toBe(messages);
+    const withNew = [...initial, makeUser("second"), makeToolResult("call_2", "r2")];
+    const transformed = await callTransform(agent, withNew);
+
+    expect(transformed).toBe(withNew);
   });
 
-  it("invokes any pre-existing transformContext before passing the result to the engine", async () => {
+  it("invokes any pre-existing transformContext before the engine sees messages", async () => {
     const upstream = vi.fn(async (messages: AgentMessage[]) => [...messages, makeUser("appended")]);
     const agent = makeGuardableAgent(upstream);
     const compactedView = [makeUser("compacted")];
     const engine = makeMockEngine({
-      assemble: async (params) => {
-        expect(params.messages).toHaveLength(2);
-        return { messages: compactedView, estimatedTokens: 0 };
-      },
+      assemble: async () => ({ messages: compactedView, estimatedTokens: 0 }),
     });
-    installContextEngineLoopHook({
-      agent,
-      contextEngine: engine,
-      sessionId,
-      sessionKey,
-      sessionFile,
-      tokenBudget,
-      modelId,
-    });
+    installHook(agent, engine);
 
-    const sourceMessages = [makeUser("first")];
-    const transformed = await callTransform(agent, sourceMessages);
-
+    // First call: upstream runs (1 msg -> 2 msgs), fence set to 2, returns early
+    await callTransform(agent, [makeUser("first")]);
     expect(upstream).toHaveBeenCalledTimes(1);
+
+    // Second call: upstream runs (2 msgs -> 3 msgs), hasNewMessages = true, assemble fires
+    const transformed = await callTransform(agent, [makeUser("first"), makeUser("second")]);
+    expect(upstream).toHaveBeenCalledTimes(2);
     expect(transformed).toBe(compactedView);
   });
 
@@ -566,178 +500,31 @@ describe("installContextEngineLoopHook", () => {
     const upstream = vi.fn(async (messages: AgentMessage[]) => messages);
     const agent = makeGuardableAgent(upstream);
     const engine = makeMockEngine();
-    const dispose = installContextEngineLoopHook({
-      agent,
-      contextEngine: engine,
-      sessionId,
-      sessionKey,
-      sessionFile,
-      tokenBudget,
-      modelId,
-    });
+    const dispose = installHook(agent, engine);
 
     dispose();
 
     expect(agent.transformContext).toBe(upstream);
   });
 
-  it("uses getPrePromptMessageCount as the initial fence so pre-attempt history is not reported as new", async () => {
+  it("returns the cached assembled view on unchanged iterations instead of raw source", async () => {
     const agent = makeGuardableAgent();
-    const engine = makeMockEngine();
-    let prePromptMessageCount = 5;
-    installContextEngineLoopHook({
-      agent,
-      contextEngine: engine,
-      sessionId,
-      sessionKey,
-      sessionFile,
-      tokenBudget,
-      modelId,
-      getPrePromptMessageCount: () => prePromptMessageCount,
+    const compactedView = [makeUser("compacted")];
+    const engine = makeMockEngine({
+      assemble: async () => ({ messages: compactedView, estimatedTokens: 0 }),
     });
+    installHook(agent, engine);
 
-    const history = [
-      makeUser("h1"),
-      makeUser("h2"),
-      makeUser("h3"),
-      makeUser("h4"),
-      makeUser("h5"),
-    ];
-    const firstCallMessages = [...history, makeUser("user prompt"), makeToolResult("call_1", "r1")];
-    await callTransform(agent, firstCallMessages);
+    const initial = [makeUser("first"), makeToolResult("call_1", "r")];
+    await callTransform(agent, initial);
 
-    expect(engine.afterTurn).toHaveBeenCalledTimes(1);
-    expect(engine.afterTurn.mock.calls[0]?.[0]).toMatchObject({
-      prePromptMessageCount: 5,
-      messages: firstCallMessages,
-    });
-  });
+    const withNew = [...initial, makeToolResult("call_2", "r2")];
+    const firstResult = await callTransform(agent, withNew);
+    expect(firstResult).toBe(compactedView);
 
-  it("evaluates getPrePromptMessageCount lazily on the first call, not at install time", async () => {
-    const agent = makeGuardableAgent();
-    const engine = makeMockEngine();
-    let prePromptMessageCount = 0;
-    installContextEngineLoopHook({
-      agent,
-      contextEngine: engine,
-      sessionId,
-      sessionKey,
-      sessionFile,
-      tokenBudget,
-      modelId,
-      getPrePromptMessageCount: () => prePromptMessageCount,
-    });
-    // Caller updates the value between install and first transformContext call
-    // (mirrors the runtime where prePromptMessageCount is reassigned in the
-    // prompt-build phase after heartbeat filtering).
-    prePromptMessageCount = 3;
-
-    const messages = [
-      makeUser("h1"),
-      makeUser("h2"),
-      makeUser("h3"),
-      makeUser("user prompt"),
-      makeToolResult("call_1", "r1"),
-    ];
-    await callTransform(agent, messages);
-
-    expect(engine.afterTurn).toHaveBeenCalledTimes(1);
-    expect(engine.afterTurn.mock.calls[0]?.[0]?.prePromptMessageCount).toBe(3);
-  });
-
-  it("falls back to fence=0 when no getPrePromptMessageCount is supplied", async () => {
-    const agent = makeGuardableAgent();
-    const engine = makeMockEngine();
-    installContextEngineLoopHook({
-      agent,
-      contextEngine: engine,
-      sessionId,
-      sessionKey,
-      sessionFile,
-      tokenBudget,
-      modelId,
-    });
-
-    const messages = [makeUser("first"), makeToolResult("call_1", "result")];
-    await callTransform(agent, messages);
-
-    expect(engine.afterTurn).toHaveBeenCalledTimes(1);
-    expect(engine.afterTurn.mock.calls[0]?.[0]?.prePromptMessageCount).toBe(0);
-  });
-
-  it("calls assemble on the first iteration even when no afterTurn ingest happened", async () => {
-    const agent = makeGuardableAgent();
-    const engine = makeMockEngine();
-    installContextEngineLoopHook({
-      agent,
-      contextEngine: engine,
-      sessionId,
-      sessionKey,
-      sessionFile,
-      tokenBudget,
-      modelId,
-      // Fence equals current message count so afterTurn is skipped on first call
-      getPrePromptMessageCount: () => 2,
-    });
-
-    const messages = [makeUser("h1"), makeUser("h2")];
-    await callTransform(agent, messages);
-
-    expect(engine.afterTurn).not.toHaveBeenCalled();
+    // Retry with same messages: should return cached assembled view, not raw
+    const retryResult = await callTransform(agent, withNew);
+    expect(retryResult).toBe(compactedView);
     expect(engine.assemble).toHaveBeenCalledTimes(1);
-  });
-
-  it("skips assemble on subsequent iterations when no new messages have arrived", async () => {
-    const agent = makeGuardableAgent();
-    const engine = makeMockEngine();
-    installContextEngineLoopHook({
-      agent,
-      contextEngine: engine,
-      sessionId,
-      sessionKey,
-      sessionFile,
-      tokenBudget,
-      modelId,
-    });
-
-    const messages = [makeUser("first"), makeToolResult("call_1", "result")];
-    await callTransform(agent, messages);
-    await callTransform(agent, messages);
-    await callTransform(agent, messages);
-
-    // First call: afterTurn ingests delta and assemble runs.
-    // Second + third: nothing new, assemble must NOT be called again.
-    expect(engine.afterTurn).toHaveBeenCalledTimes(1);
-    expect(engine.assemble).toHaveBeenCalledTimes(1);
-  });
-
-  it("calls assemble again after a fresh afterTurn ingest on a later iteration", async () => {
-    const agent = makeGuardableAgent();
-    const engine = makeMockEngine();
-    installContextEngineLoopHook({
-      agent,
-      contextEngine: engine,
-      sessionId,
-      sessionKey,
-      sessionFile,
-      tokenBudget,
-      modelId,
-    });
-
-    const firstBatch = [makeUser("first"), makeToolResult("call_1", "result")];
-    await callTransform(agent, firstBatch);
-    await callTransform(agent, firstBatch);
-    expect(engine.assemble).toHaveBeenCalledTimes(1);
-
-    const secondBatch = [
-      makeUser("first"),
-      makeToolResult("call_1", "result"),
-      makeUser("second"),
-      makeToolResult("call_2", "result two"),
-    ];
-    await callTransform(agent, secondBatch);
-
-    expect(engine.afterTurn).toHaveBeenCalledTimes(2);
-    expect(engine.assemble).toHaveBeenCalledTimes(2);
   });
 });

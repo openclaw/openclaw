@@ -997,11 +997,7 @@ export async function runEmbeddedAttempt(
       queueYieldInterruptForSession = () => {
         queueSessionsYieldInterruptMessage(activeSession);
       };
-      // Hoisted so installContextEngineLoopHook can read the same fence value
-      // that finalizeAttemptContextEngineTurn uses at end-of-attempt. The
-      // initial value is reassigned in the prompt-build phase below, after
-      // any heartbeat message filtering.
-      let prePromptMessageCount = 0;
+      let loopHookActive = false;
       if (params.contextEngine?.info?.ownsCompaction !== true) {
         removeToolResultContextGuard = installToolResultContextGuard({
           agent: activeSession.agent,
@@ -1021,8 +1017,8 @@ export async function runEmbeddedAttempt(
           sessionFile: params.sessionFile,
           tokenBudget: params.contextTokenBudget,
           modelId: params.modelId,
-          getPrePromptMessageCount: () => prePromptMessageCount,
         });
+        loopHookActive = true;
       }
       const cacheTrace = createCacheTrace({
         cfg: params.config,
@@ -1668,7 +1664,7 @@ export async function runEmbeddedAttempt(
       let promptError: unknown = null;
       let preflightRecovery: EmbeddedRunAttemptResult["preflightRecovery"];
       let promptErrorSource: "prompt" | "compaction" | "precheck" | null = null;
-      prePromptMessageCount = activeSession.messages.length;
+      let prePromptMessageCount = activeSession.messages.length;
       let skipPromptSubmission = false;
       try {
         const promptStartedAt = Date.now();
@@ -2222,6 +2218,7 @@ export async function runEmbeddedAttempt(
             prePromptMessageCount,
             tokenBudget: params.contextTokenBudget,
             runtimeContext: afterTurnRuntimeContext,
+            skipAfterTurn: loopHookActive,
             runMaintenance: async (contextParams) =>
               await runContextEngineMaintenance({
                 contextEngine: contextParams.contextEngine as never,
