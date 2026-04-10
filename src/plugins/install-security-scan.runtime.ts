@@ -390,6 +390,35 @@ async function scanManifestDependencyDenylist(params: {
   targetLabel: string;
 }): Promise<InstallSecurityScanResult | undefined> {
   const traversalResult = await collectPackageManifestPaths(params.packageDir);
+  if (traversalResult.blockedDirectoryFinding) {
+    const reason = buildBlockedDependencyDirectoryReason({
+      dependencyName: traversalResult.blockedDirectoryFinding.dependencyName,
+      directoryRelativePath: traversalResult.blockedDirectoryFinding.directoryRelativePath,
+      targetLabel: params.targetLabel,
+    });
+    params.logger.warn?.(`WARNING: ${reason}`);
+    return {
+      blocked: {
+        code: "security_scan_blocked",
+        reason,
+      },
+    };
+  }
+  if (traversalResult.blockedFileFinding) {
+    const reason = buildBlockedDependencyFileReason({
+      dependencyName: traversalResult.blockedFileFinding.dependencyName,
+      fileRelativePath: traversalResult.blockedFileFinding.fileRelativePath,
+      targetLabel: params.targetLabel,
+    });
+    params.logger.warn?.(`WARNING: ${reason}`);
+    return {
+      blocked: {
+        code: "security_scan_blocked",
+        reason,
+      },
+    };
+  }
+
   const packageManifestPaths = traversalResult.packageManifestPaths;
   for (const manifestPath of packageManifestPaths) {
     let manifest: PackageManifest;
@@ -409,34 +438,6 @@ async function scanManifestDependencyDenylist(params: {
       findings: blockedDependencies,
       manifestPackageName: manifest.name,
       manifestRelativePath,
-      targetLabel: params.targetLabel,
-    });
-    params.logger.warn?.(`WARNING: ${reason}`);
-    return {
-      blocked: {
-        code: "security_scan_blocked",
-        reason,
-      },
-    };
-  }
-  if (traversalResult.blockedDirectoryFinding) {
-    const reason = buildBlockedDependencyDirectoryReason({
-      dependencyName: traversalResult.blockedDirectoryFinding.dependencyName,
-      directoryRelativePath: traversalResult.blockedDirectoryFinding.directoryRelativePath,
-      targetLabel: params.targetLabel,
-    });
-    params.logger.warn?.(`WARNING: ${reason}`);
-    return {
-      blocked: {
-        code: "security_scan_blocked",
-        reason,
-      },
-    };
-  }
-  if (traversalResult.blockedFileFinding) {
-    const reason = buildBlockedDependencyFileReason({
-      dependencyName: traversalResult.blockedFileFinding.dependencyName,
-      fileRelativePath: traversalResult.blockedFileFinding.fileRelativePath,
       targetLabel: params.targetLabel,
     });
     params.logger.warn?.(`WARNING: ${reason}`);
