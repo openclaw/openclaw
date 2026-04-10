@@ -1089,6 +1089,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     env,
     cfg,
     normalized,
+    activationSourceConfig,
     activationSource,
     autoEnabledReasons,
     onlyPluginIds,
@@ -1099,6 +1100,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     cacheKey,
     runtimeSubagentMode,
   } = resolvePluginLoadCacheContext(options);
+  void activationSourceConfig;
   const logger = options.logger ?? defaultLogger();
   const validateOnly = options.mode === "validate";
   const onlyPluginIdSet = onlyPluginIds ? new Set(onlyPluginIds) : null;
