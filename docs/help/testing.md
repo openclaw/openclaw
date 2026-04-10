@@ -438,6 +438,9 @@ Docker notes:
 - Docker enables the image and MCP/tool probes by default. Set
   `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=0` or
   `OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=0` when you need a narrower debug run.
+- Docker also exports `OPENCLAW_AGENT_HARNESS_FALLBACK=none`, matching the live
+  test config so `openai-codex/*` or PI fallback cannot hide a Codex harness
+  regression.
 
 ### Recommended live recipes
 
