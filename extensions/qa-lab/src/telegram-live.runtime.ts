@@ -95,7 +95,8 @@ function isTelegramQaCanaryError(error: unknown): error is TelegramQaCanaryError
     (typeof error === "object" &&
       error !== null &&
       typeof (error as { phase?: unknown }).phase === "string" &&
-      typeof (error as { context?: unknown }).context === "object")
+      typeof (error as { context?: unknown }).context === "object" &&
+      (error as { context?: unknown }).context !== null)
   );
 }
 
@@ -306,8 +307,9 @@ async function getBotIdentity(token: string) {
 }
 
 async function flushTelegramUpdates(token: string) {
+  const startedAt = Date.now();
   let offset = 0;
-  while (true) {
+  while (Date.now() - startedAt < 15_000) {
     const updates = await callTelegramApi<TelegramUpdate[]>(token, "getUpdates", {
       offset,
       timeout: 0,
@@ -318,6 +320,7 @@ async function flushTelegramUpdates(token: string) {
     }
     offset = (updates.at(-1)?.update_id ?? offset) + 1;
   }
+  return offset;
 }
 
 async function sendGroupMessage(token: string, groupId: string, text: string) {
@@ -580,7 +583,7 @@ export async function runTelegramQaLive(params: {
   await fs.mkdir(outputDir, { recursive: true });
 
   const runtimeEnv = resolveTelegramQaRuntimeEnv();
-  const providerMode = normalizeQaProviderMode(params.providerMode ?? "mock-openai");
+  const providerMode = normalizeQaProviderMode(params.providerMode ?? "live-frontier");
   const primaryModel = params.primaryModel?.trim() || defaultQaModelForMode(providerMode);
   const alternateModel = params.alternateModel?.trim() || defaultQaModelForMode(providerMode, true);
   const sutAccountId = params.sutAccountId?.trim() || "sut";

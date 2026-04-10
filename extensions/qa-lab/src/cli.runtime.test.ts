@@ -185,6 +185,20 @@ describe("qa cli runtime", () => {
     });
   });
 
+  it("defaults telegram qa runs onto the live provider lane", async () => {
+    await runQaTelegramCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      scenarioIds: ["telegram-help-command"],
+    });
+
+    expect(runTelegramQaLive).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoRoot: path.resolve("/tmp/openclaw-repo"),
+        providerMode: "live-frontier",
+      }),
+    );
+  });
+
   it("normalizes legacy live-openai suite runs onto the frontier provider mode", async () => {
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",

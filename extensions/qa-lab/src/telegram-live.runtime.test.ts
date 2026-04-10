@@ -151,4 +151,25 @@ describe("telegram live qa runtime", () => {
       "Confirm the SUT bot is present in the target private group and can receive /help@BotUsername commands there.",
     );
   });
+
+  it("treats null canary context as a non-canary error", () => {
+    const error = new Error("boom");
+    error.name = "TelegramQaCanaryError";
+    Object.assign(error, {
+      phase: "sut_reply_timeout",
+      context: null,
+    });
+
+    const message = __testing.canaryFailureMessage({
+      error,
+      groupId: "-100123",
+      driverBotId: 42,
+      driverUsername: "driver_bot",
+      sutBotId: 88,
+      sutUsername: "sut_bot",
+    });
+
+    expect(message).toContain("Phase: unknown");
+    expect(message).toContain("boom");
+  });
 });

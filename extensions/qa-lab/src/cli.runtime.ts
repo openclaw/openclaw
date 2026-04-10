@@ -292,10 +292,12 @@ export async function runQaTelegramCommand(opts: {
   sutAccountId?: string;
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
+  const providerMode: QaProviderMode =
+    opts.providerMode === undefined ? "live-frontier" : normalizeQaProviderMode(opts.providerMode);
   const result = await runTelegramQaLive({
     repoRoot,
     outputDir: opts.outputDir ? path.resolve(repoRoot, opts.outputDir) : undefined,
-    providerMode: opts.providerMode,
+    providerMode,
     primaryModel: opts.primaryModel,
     alternateModel: opts.alternateModel,
     fastMode: opts.fastMode,
