@@ -1012,7 +1012,6 @@ describe("thread binding lifecycle", () => {
         channel: "discord",
         accountId: "default",
         conversationId: "thread-created-parent-normalized",
-        parentConversationId: "1491611525914558667",
       },
     });
     expect(hoisted.createThreadDiscord).toHaveBeenCalledWith(
