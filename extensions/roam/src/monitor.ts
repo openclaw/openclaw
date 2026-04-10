@@ -16,8 +16,8 @@ import type { CoreConfig, RoamBotIdentity, RoamInboundMessage, RoamWebhookEvent 
 const DEFAULT_API_BASE = "https://api.ro.am";
 const DEFAULT_WEBHOOK_PATH_PREFIX = "/roam-webhook";
 
-function resolveApiBase(cfg?: CoreConfig): string {
-  const override = cfg?.channels?.roam?.apiBaseUrl?.replace(/\/+$/, "");
+function resolveApiBase(cfg?: CoreConfig, accountApiBaseUrl?: string): string {
+  const override = (accountApiBaseUrl ?? cfg?.channels?.roam?.apiBaseUrl)?.replace(/\/+$/, "");
   return override ? `${override}/v1` : `${DEFAULT_API_BASE}/v1`;
 }
 
@@ -199,8 +199,9 @@ async function subscribeRoamWebhooks(params: {
   apiKey: string;
   webhookUrl: string;
   cfg?: CoreConfig;
+  accountApiBaseUrl?: string;
 }): Promise<void> {
-  const apiBase = resolveApiBase(params.cfg);
+  const apiBase = resolveApiBase(params.cfg, params.accountApiBaseUrl);
   const response = await fetch(`${apiBase}/webhook.subscribe`, {
     method: "POST",
     headers: {
@@ -220,8 +221,9 @@ async function unsubscribeRoamWebhooks(params: {
   apiKey: string;
   webhookUrl: string;
   cfg?: CoreConfig;
+  accountApiBaseUrl?: string;
 }): Promise<void> {
-  const apiBase = resolveApiBase(params.cfg);
+  const apiBase = resolveApiBase(params.cfg, params.accountApiBaseUrl);
   await fetch(`${apiBase}/webhook.unsubscribe`, {
     method: "POST",
     headers: {
@@ -238,8 +240,9 @@ async function unsubscribeRoamWebhooks(params: {
 async function fetchRoamBotIdentity(
   apiKey: string,
   cfg?: CoreConfig,
+  accountApiBaseUrl?: string,
 ): Promise<RoamBotIdentity | null> {
-  const apiBase = resolveApiBase(cfg);
+  const apiBase = resolveApiBase(cfg, accountApiBaseUrl);
   try {
     const response = await fetch(`${apiBase}/token.info`, {
       method: "GET",
@@ -287,6 +290,7 @@ export async function monitorRoamProvider(opts: RoamMonitorOptions): Promise<{ s
 
   // Each account gets a unique webhook path to avoid cross-account routing.
   // Default: /roam-webhook (for the default account) or /roam-webhook-<accountId>.
+  // When webhookUrl is set, derive the local route path from its pathname.
   const defaultPath =
     account.accountId === "default"
       ? DEFAULT_WEBHOOK_PATH_PREFIX
@@ -294,6 +298,7 @@ export async function monitorRoamProvider(opts: RoamMonitorOptions): Promise<{ s
   const webhookPath =
     resolveWebhookPath({
       webhookPath: account.config.webhookPath,
+      webhookUrl: account.config.webhookUrl,
       defaultPath,
     }) ?? defaultPath;
 
@@ -303,7 +308,8 @@ export async function monitorRoamProvider(opts: RoamMonitorOptions): Promise<{ s
   });
 
   // Fetch bot persona identity for self-message filtering
-  const botIdentity = await fetchRoamBotIdentity(account.apiKey, cfg);
+  const accountApiBaseUrl = account.config.apiBaseUrl;
+  const botIdentity = await fetchRoamBotIdentity(account.apiKey, cfg, accountApiBaseUrl);
   if (botIdentity) {
     account.botIdentity = botIdentity;
     logger.info(`[${account.accountId}] Roam bot persona: ${botIdentity.name} (${botIdentity.id})`);
@@ -329,7 +335,7 @@ export async function monitorRoamProvider(opts: RoamMonitorOptions): Promise<{ s
 
   if (webhookUrl) {
     try {
-      await subscribeRoamWebhooks({ apiKey: account.apiKey, webhookUrl, cfg });
+      await subscribeRoamWebhooks({ apiKey: account.apiKey, webhookUrl, cfg, accountApiBaseUrl });
       logger.info(`[${account.accountId}] Roam webhooks subscribed at ${webhookUrl}`);
     } catch (err) {
       logger.warn(
@@ -346,7 +352,9 @@ export async function monitorRoamProvider(opts: RoamMonitorOptions): Promise<{ s
     unregister();
     // Best-effort unsubscribe on shutdown
     if (webhookUrl) {
-      unsubscribeRoamWebhooks({ apiKey: account.apiKey, webhookUrl, cfg }).catch(() => {});
+      unsubscribeRoamWebhooks({ apiKey: account.apiKey, webhookUrl, cfg, accountApiBaseUrl }).catch(
+        () => {},
+      );
     }
   };
 

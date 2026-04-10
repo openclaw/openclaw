@@ -32,7 +32,7 @@ vi.mock("./runtime.js", () => ({
   getRoamRuntime: () => ({
     config: { loadConfig: () => ({}) },
     logging: {
-      getChildLogger: (opts?: unknown) => mockLogger,
+      getChildLogger: (_opts?: unknown) => mockLogger,
     },
     channel: {
       activity: { record: mockActivityRecord },
@@ -48,8 +48,23 @@ vi.mock("../runtime-api.js", () => ({
   createWebhookInFlightLimiter: () => ({ acquire: vi.fn(), release: vi.fn() }),
   readJsonWebhookBodyOrReject: vi.fn(),
   registerWebhookTargetWithPluginRoute: () => ({ unregister: mockRegisterUnregister }),
-  resolveWebhookPath: (opts: { webhookPath?: string; defaultPath: string }) =>
-    opts.webhookPath ?? opts.defaultPath,
+  resolveWebhookPath: (opts: {
+    webhookPath?: string;
+    webhookUrl?: string;
+    defaultPath: string;
+  }) => {
+    if (opts.webhookPath) {
+      return opts.webhookPath;
+    }
+    if (opts.webhookUrl) {
+      try {
+        return new URL(opts.webhookUrl).pathname;
+      } catch {
+        return opts.defaultPath;
+      }
+    }
+    return opts.defaultPath;
+  },
   withResolvedWebhookRequestPipeline: vi.fn(),
 }));
 
@@ -270,5 +285,44 @@ describe("monitorRoamProvider", () => {
     );
     expect(tokenInfoCall).toBeDefined();
     expect(tokenInfoCall![0]).toBe("https://api.roam.dev/v1/token.info");
+  });
+
+  it("uses per-account apiBaseUrl over top-level config", async () => {
+    const cfg = {
+      channels: { roam: { apiBaseUrl: "https://api.toplevel.dev" } },
+    } as CoreConfig;
+    mockResolveRoamAccount.mockReturnValue(
+      defaultAccount({ config: { apiBaseUrl: "https://api.account.dev" } }),
+    );
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({}) });
+
+    const { stop } = await monitorRoamProvider({ config: cfg });
+    stop();
+
+    const tokenInfoCall = mockFetch.mock.calls.find(([url]: string[]) =>
+      url.includes("token.info"),
+    );
+    expect(tokenInfoCall![0]).toBe("https://api.account.dev/v1/token.info");
+  });
+
+  it("uses per-account apiBaseUrl for webhook subscription", async () => {
+    mockResolveRoamAccount.mockReturnValue(
+      defaultAccount({
+        config: {
+          webhookUrl: "https://example.com/hook",
+          apiBaseUrl: "https://api.account.dev",
+        },
+      }),
+    );
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({}) });
+
+    const { stop } = await monitorRoamProvider({});
+    stop();
+
+    const subscribeCall = mockFetch.mock.calls.find(([url]: string[]) =>
+      url.includes("webhook.subscribe"),
+    );
+    expect(subscribeCall).toBeDefined();
+    expect(subscribeCall![0]).toBe("https://api.account.dev/v1/webhook.subscribe");
   });
 });

@@ -12,8 +12,9 @@ type RoamSendOpts = {
 
 const DEFAULT_API_BASE = "https://api.ro.am";
 
-function resolveApiBase(cfg?: CoreConfig): string {
-  const override = cfg?.channels?.roam?.apiBaseUrl?.replace(/\/+$/, "");
+function resolveApiBase(cfg?: CoreConfig, accountApiBaseUrl?: string): string {
+  // Per-account apiBaseUrl takes precedence over top-level config.
+  const override = (accountApiBaseUrl ?? cfg?.channels?.roam?.apiBaseUrl)?.replace(/\/+$/, "");
   return override ? `${override}/v1` : `${DEFAULT_API_BASE}/v1`;
 }
 
@@ -79,7 +80,7 @@ export async function sendMessageRoam(
     body.threadKey = opts.threadKey.slice(0, 64);
   }
 
-  const apiBase = resolveApiBase(cfg);
+  const apiBase = resolveApiBase(cfg, account.config.apiBaseUrl);
 
   const response = await fetch(`${apiBase}/chat.post`, {
     method: "POST",
@@ -143,9 +144,9 @@ export async function sendTypingRoam(
   chatId: string,
   opts: Omit<RoamSendOpts, "threadKey"> = {},
 ): Promise<void> {
-  const { cfg, apiKey } = resolveRoamSendContext(opts);
+  const { cfg, account, apiKey } = resolveRoamSendContext(opts);
   const normalizedChatId = normalizeChatId(chatId);
-  const apiBase = resolveApiBase(cfg);
+  const apiBase = resolveApiBase(cfg, account.config.apiBaseUrl);
 
   await fetch(`${apiBase}/chat.typing`, {
     method: "POST",

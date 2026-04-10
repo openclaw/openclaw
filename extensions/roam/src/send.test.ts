@@ -146,6 +146,18 @@ describe("sendMessageRoam", () => {
     const [url] = mockFetch.mock.calls[0];
     expect(url).toBe("https://api.roam.dev/v1/chat.post");
   });
+
+  it("uses per-account apiBaseUrl over top-level config", async () => {
+    mockResolveRoamAccount.mockReturnValue(
+      defaultAccount({ config: { apiBaseUrl: "https://api.account.dev" } }),
+    );
+    await sendMessageRoam("chat-1", "hello", {
+      cfg: { channels: { roam: { apiBaseUrl: "https://api.toplevel.dev" } } },
+    });
+
+    const [url] = mockFetch.mock.calls[0];
+    expect(url).toBe("https://api.account.dev/v1/chat.post");
+  });
 });
 
 describe("sendTypingRoam", () => {
