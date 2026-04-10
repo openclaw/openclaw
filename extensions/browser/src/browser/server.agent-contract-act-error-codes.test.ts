@@ -4,7 +4,10 @@ import {
   postJson,
   startServerAndBase,
 } from "./server.agent-contract.test-harness.js";
-import { setBrowserControlServerEvaluateEnabled } from "./server.control-server.test-harness.js";
+import {
+  setBrowserControlServerEvaluateEnabled,
+  setBrowserControlServerProfiles,
+} from "./server.control-server.test-harness.js";
 
 type ActErrorResponse = {
   error?: string;
@@ -17,6 +20,18 @@ describe("browser control server", () => {
   const slowTimeoutMs = process.platform === "win32" ? 40_000 : 20_000;
 
   it(
+    "returns ACT_KIND_REQUIRED when kind is missing",
+    async () => {
+      const base = await startServerAndBase();
+      const response = await postJson<ActErrorResponse>(`${base}/act`, {});
+
+      expect(response.code).toBe("ACT_KIND_REQUIRED");
+      expect(response.error).toContain("kind is required");
+    },
+    slowTimeoutMs,
+  );
+
+  it(
     "returns ACT_INVALID_REQUEST for malformed action payloads",
     async () => {
       const base = await startServerAndBase();
@@ -27,6 +42,28 @@ describe("browser control server", () => {
 
       expect(response.code).toBe("ACT_INVALID_REQUEST");
       expect(response.error).toContain("click requires ref or selector");
+    },
+    slowTimeoutMs,
+  );
+
+  it(
+    "returns ACT_EXISTING_SESSION_UNSUPPORTED for unsupported existing-session actions",
+    async () => {
+      setBrowserControlServerProfiles({
+        openclaw: {
+          color: "#FF4500",
+          driver: "existing-session",
+        },
+      });
+
+      const base = await startServerAndBase();
+      const response = await postJson<ActErrorResponse>(`${base}/act`, {
+        kind: "batch",
+        actions: [{ kind: "press", key: "Enter" }],
+      });
+
+      expect(response.code).toBe("ACT_EXISTING_SESSION_UNSUPPORTED");
+      expect(response.error).toContain("batch");
     },
     slowTimeoutMs,
   );
