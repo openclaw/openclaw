@@ -122,12 +122,23 @@ export async function downloadBlueBubblesAttachment(
         : trustedHostname && (allowPrivateNetworkConfig !== false || !trustedHostnameIsPrivate)
           ? { allowedHostnames: [trustedHostname] }
           : undefined,
-      fetchImpl: async (input, init) =>
-        await blueBubblesFetchWithTimeout(
+      // Strip the SSRF guard's pinned dispatcher from the init object before
+      // delegating to blueBubblesFetchWithTimeout. The guard creates an undici
+      // Agent that may be incompatible with the fetch implementation used by
+      // the BlueBubbles timeout wrapper (Node's built-in fetch). Passing the
+      // dispatcher through causes "invalid onRequestStart method" errors when
+      // the bundled undici major version differs from Node's built-in one.
+      fetchImpl: async (input, init) => {
+        const { dispatcher: _d, ...safeInit } = (init as Record<string, unknown>) ?? {};
+        return await blueBubblesFetchWithTimeout(
           resolveRequestUrl(input),
-          { ...init, method: init?.method ?? "GET" },
+          {
+            ...safeInit,
+            method: ((safeInit as Record<string, unknown>)?.method as string) ?? "GET",
+          } as RequestInit,
           opts.timeoutMs,
-        ),
+        );
+      },
     });
     return {
       buffer: new Uint8Array(fetched.buffer),
