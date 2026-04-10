@@ -121,6 +121,22 @@ export function overlayExternalAuthProfiles(
   return next;
 }
 
+export function listRuntimeOnlyExternalAuthProfileIds(params: {
+  store: AuthProfileStore;
+  agentDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): string[] {
+  return Array.from(
+    resolveExternalAuthProfileMap({
+      store: params.store,
+      agentDir: params.agentDir,
+      env: params.env,
+    }).entries(),
+  )
+    .filter(([, profile]) => profile.persistence !== "persisted")
+    .map(([profileId]) => profileId);
+}
+
 export function shouldPersistExternalAuthProfile(params: {
   store: AuthProfileStore;
   profileId: string;

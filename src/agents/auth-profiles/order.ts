@@ -5,6 +5,7 @@ import {
   evaluateStoredCredentialEligibility,
   type AuthCredentialReasonCode,
 } from "./credential-state.js";
+import { listRuntimeOnlyExternalAuthProfileIds } from "./external-auth.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profiles.js";
 import type { AuthProfileStore } from "./types.js";
 import {
@@ -89,9 +90,19 @@ export function resolveAuthProfileOrder(params: {
         )
         .map(([profileId]) => profileId)
     : [];
+  const providerStoreProfiles = listProfilesForProvider(store, provider);
+  const runtimeOnlyExternalProfiles =
+    explicitOrder || explicitProfiles.length > 0
+      ? listRuntimeOnlyExternalAuthProfileIds({ store }).filter((profileId) =>
+          providerStoreProfiles.includes(profileId),
+        )
+      : [];
+  const baseCandidates =
+    explicitOrder ?? (explicitProfiles.length > 0 ? explicitProfiles : providerStoreProfiles);
   const baseOrder =
-    explicitOrder ??
-    (explicitProfiles.length > 0 ? explicitProfiles : listProfilesForProvider(store, provider));
+    runtimeOnlyExternalProfiles.length > 0
+      ? dedupeProfileIds([...baseCandidates, ...runtimeOnlyExternalProfiles])
+      : baseCandidates;
   if (baseOrder.length === 0) {
     return [];
   }
