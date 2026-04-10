@@ -288,6 +288,36 @@ describe("resolveBootstrapFilesForRun", () => {
     expect(warnings[0]).toContain("agents.list.coder.agentsFile");
   });
 
+  it("deduplicates same-path fallback warnings across config labels", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "default rules", "utf8");
+    const warnings: string[] = [];
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: {
+        agents: {
+          defaults: {
+            agentsFile: "AGENTS.missing.md",
+          },
+          list: [
+            {
+              id: "coder",
+              agentsFile: "AGENTS.missing.md",
+            },
+          ],
+        },
+      },
+      sessionKey: "agent:coder:main",
+      warn: (message) => warnings.push(message),
+    });
+
+    const agentsFile = files.find((file) => file.name === "AGENTS.md");
+    expect(agentsFile?.path).toBe(path.join(workspaceDir, "AGENTS.md"));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("AGENTS.missing.md");
+  });
+
   it("falls back to the default model override when a per-agent model override cannot be loaded", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "default rules", "utf8");
@@ -509,7 +539,7 @@ describe("resolveBootstrapContextForRun", () => {
     expect(files.some((file) => file.name === "HEARTBEAT.md")).toBe(true);
   });
 
-  it("records bootstrap signatures from hook-adjusted AGENTS paths", async () => {
+  it("records workspace-relative bootstrap signatures from hook-adjusted AGENTS paths", async () => {
     registerInternalHook("agent:bootstrap", (event) => {
       const context = event.context as AgentBootstrapHookContext;
       context.bootstrapFiles = context.bootstrapFiles.map((file) =>
@@ -530,8 +560,7 @@ describe("resolveBootstrapContextForRun", () => {
 
     const result = await resolveBootstrapContextForRun({ workspaceDir });
 
-    const expectedPath = path.join(workspaceDir, "AGENTS.hook.md").replace(/\\/g, "/");
-    expect(result.bootstrapSignature).toBe(`agents:${expectedPath}`);
+    expect(result.bootstrapSignature).toBe("agents:AGENTS.hook.md");
   });
 });
 

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveEffectiveAgentsBootstrapFileForRun } from "../../agents/bootstrap-files.js";
+import { resolveBootstrapFilesWithSignatureForRun } from "../../agents/bootstrap-files.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -76,7 +76,7 @@ export async function readPostCompactionContext(
   },
 ): Promise<string | null> {
   const resolvedWorkspaceDir = resolveUserPath(workspaceDir);
-  const { bootstrapFile } = await resolveEffectiveAgentsBootstrapFileForRun({
+  const { bootstrapFiles } = await resolveBootstrapFilesWithSignatureForRun({
     workspaceDir: resolvedWorkspaceDir,
     config: cfg,
     sessionKey: runContext?.sessionKey,
@@ -85,6 +85,10 @@ export async function readPostCompactionContext(
     modelProviderId: runContext?.modelProviderId,
     modelId: runContext?.modelId,
   });
+  const bootstrapFile = bootstrapFiles.find((file) => file.name === "AGENTS.md");
+  if (!bootstrapFile) {
+    return null;
+  }
   const agentsPath = bootstrapFile.path;
   const agentsLabel = path.basename(agentsPath) || "AGENTS.md";
   const cachedContent = bootstrapFile.content;

@@ -7,10 +7,15 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  clearInternalHooks,
+  registerInternalHook,
+  type AgentBootstrapHookContext,
+} from "../../hooks/internal-hooks.js";
+import { resolveEffectiveHomeDir } from "../../infra/home-dir.js";
+import {
   clearCompactionProviders,
   registerCompactionProvider,
 } from "../../plugins/compaction-provider.js";
-import { resolveEffectiveHomeDir } from "../../infra/home-dir.js";
 import * as compactionModule from "../compaction.js";
 import { buildEmbeddedExtensionFactories } from "../pi-embedded-runner/extensions.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
@@ -60,11 +65,13 @@ const {
 
 beforeEach(() => {
   __testing.setSummarizeInStagesForTest(mockSummarizeInStages);
+  clearInternalHooks();
 });
 
 afterEach(() => {
   __testing.setSummarizeInStagesForTest();
   clearCompactionProviders();
+  clearInternalHooks();
 });
 
 function stubSessionManager(): ExtensionContext["sessionManager"] {
@@ -2045,6 +2052,40 @@ describe("readWorkspaceContextForSummary", () => {
 
       expect(result).toContain("subagent rules");
       expect(result).toContain("stay narrow");
+      expect(result).not.toContain("main rules");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses hook-adjusted AGENTS sources for safeguard workspace summaries", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
+    try {
+      fs.writeFileSync(path.join(root, "AGENTS.md"), "## Session Startup\nmain rules\n");
+      fs.writeFileSync(
+        path.join(root, "AGENTS.hook.md"),
+        "## Session Startup\nhook rules\n\n## Red Lines\nfollow hook rules\n",
+      );
+      registerInternalHook("agent:bootstrap", (event) => {
+        const context = event.context as AgentBootstrapHookContext;
+        context.bootstrapFiles = context.bootstrapFiles.map((file) =>
+          file.name === "AGENTS.md"
+            ? {
+                ...file,
+                path: path.join(context.workspaceDir, "AGENTS.hook.md"),
+                content: fs.readFileSync(path.join(context.workspaceDir, "AGENTS.hook.md"), "utf8"),
+                missing: false,
+              }
+            : file,
+        );
+      });
+
+      const result = await readWorkspaceContextForSummary({
+        workspaceDir: root,
+      });
+
+      expect(result).toContain("hook rules");
+      expect(result).toContain("follow hook rules");
       expect(result).not.toContain("main rules");
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
