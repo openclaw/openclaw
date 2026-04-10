@@ -64,17 +64,26 @@ export function shouldUseRootHelpFastPath(argv: string[]): boolean {
   return resolveCliArgvInvocation(argv).isRootHelpInvocation;
 }
 
-async function isBundledPluginCliRootCommand(
-  pluginId: string,
+async function resolveBundledPluginCliRootCommand(
+  commandName: string,
   config?: OpenClawConfig,
-): Promise<boolean> {
+): Promise<string | null> {
+  const normalizedCommandName = normalizeLowercaseStringOrEmpty(commandName);
+  if (!normalizedCommandName) {
+    return null;
+  }
+
   const pluginRegistry = loadPluginManifestRegistry({ config });
-  const hasBundledPluginId = pluginRegistry.plugins.some(
-    (plugin) =>
-      plugin.origin === "bundled" && normalizeLowercaseStringOrEmpty(plugin.id) === pluginId,
+  const bundledPluginIds = Array.from(
+    new Set(
+      pluginRegistry.plugins
+        .filter((plugin) => plugin.origin === "bundled")
+        .map((plugin) => normalizeLowercaseStringOrEmpty(plugin.id))
+        .filter(Boolean),
+    ),
   );
-  if (!hasBundledPluginId) {
-    return false;
+  if (bundledPluginIds.length === 0) {
+    return null;
   }
 
   const {
@@ -82,21 +91,20 @@ async function isBundledPluginCliRootCommand(
     loadPluginCliMetadataRegistryWithContext,
     resolvePluginCliLoadContext,
   } = await import("../plugins/cli-registry-loader.js");
-  const detectedAllow = new Set(config?.plugins?.allow ?? []);
-  detectedAllow.add(pluginId);
+  const detectionEntries = { ...config?.plugins?.entries };
+  for (const pluginId of bundledPluginIds) {
+    detectionEntries[pluginId] = {
+      ...config?.plugins?.entries?.[pluginId],
+      enabled: true,
+    };
+  }
   const detectionConfig: OpenClawConfig = {
     ...config,
     plugins: {
       ...config?.plugins,
       ...(config?.plugins?.enabled === false ? { enabled: true } : {}),
-      allow: [...detectedAllow],
-      entries: {
-        ...config?.plugins?.entries,
-        [pluginId]: {
-          ...config?.plugins?.entries?.[pluginId],
-          enabled: true,
-        },
-      },
+      allow: bundledPluginIds,
+      entries: detectionEntries,
     },
   };
   const context = resolvePluginCliLoadContext({
@@ -104,18 +112,41 @@ async function isBundledPluginCliRootCommand(
     logger: createPluginCliLogger(),
   });
   const { registry } = await loadPluginCliMetadataRegistryWithContext(context);
-  return registry.cliRegistrars.some(
-    (entry) =>
-      normalizeLowercaseStringOrEmpty(entry.pluginId) === pluginId &&
-      entry.commands.some((name) => normalizeLowercaseStringOrEmpty(name) === pluginId),
-  );
+  const matchedPluginId =
+    registry.cliRegistrars.find(
+      (entry) =>
+        bundledPluginIds.includes(normalizeLowercaseStringOrEmpty(entry.pluginId)) &&
+        entry.commands.some(
+          (name) => normalizeLowercaseStringOrEmpty(name) === normalizedCommandName,
+        ),
+    )?.pluginId ?? null;
+  return matchedPluginId ? normalizeLowercaseStringOrEmpty(matchedPluginId) : null;
+}
+
+async function resolveMissingBundledPluginCliRoot(
+  commandName: string,
+  config?: OpenClawConfig,
+): Promise<string | null> {
+  try {
+    return await resolveBundledPluginCliRootCommand(commandName, config);
+  } catch {
+    // Unknown-command handling should degrade gracefully if metadata probing fails.
+    return null;
+  }
 }
 
 export async function resolveMissingPluginCommandMessage(
-  pluginId: string,
+  commandName: string,
   config?: OpenClawConfig,
 ): Promise<string | null> {
-  const normalizedPluginId = normalizeLowercaseStringOrEmpty(pluginId);
+  const normalizedCommandName = normalizeLowercaseStringOrEmpty(commandName);
+  if (!normalizedCommandName) {
+    return null;
+  }
+  const normalizedPluginId = await resolveMissingBundledPluginCliRoot(
+    normalizedCommandName,
+    config,
+  );
   if (!normalizedPluginId) {
     return null;
   }
@@ -131,19 +162,16 @@ export async function resolveMissingPluginCommandMessage(
   if (!blockedByAllowlist && !explicitlyDisabled) {
     return null;
   }
-  if (!(await isBundledPluginCliRootCommand(normalizedPluginId, config))) {
-    return null;
-  }
   if (blockedByAllowlist) {
     return (
-      `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
-      `\`plugins.allow\` excludes "${normalizedPluginId}". Add "${normalizedPluginId}" to ` +
+      `The \`openclaw ${normalizedCommandName}\` command is unavailable because ` +
+      `\`plugins.allow\` excludes plugin "${normalizedPluginId}". Add "${normalizedPluginId}" to ` +
       `\`plugins.allow\` if you want that bundled plugin CLI surface.`
     );
   }
   if (explicitlyDisabled) {
     return (
-      `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
+      `The \`openclaw ${normalizedCommandName}\` command is unavailable because ` +
       `\`plugins.entries.${normalizedPluginId}.enabled=false\`. Re-enable that entry if you want ` +
       "the bundled plugin CLI surface."
     );
