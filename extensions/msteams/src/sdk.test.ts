@@ -234,7 +234,7 @@ describe("createBotFrameworkJwtValidator", () => {
 
   it("validates a token with STS Windows issuer", async () => {
     jwtState.decodedPayload = {
-      iss: "https://sts.windows.net/d6d49420-f39b-4df7-a1dc-d59a935871db/",
+      iss: `https://sts.windows.net/${creds.tenantId}/`,
     };
 
     const validator = await createBotFrameworkJwtValidator(creds);
@@ -243,7 +243,7 @@ describe("createBotFrameworkJwtValidator", () => {
     expect(jwtState.verifyCalls).toHaveLength(1);
     const opts = jwtState.verifyCalls[0]?.options as Record<string, unknown>;
     expect(opts.issuer as string[]).toContain(
-      "https://sts.windows.net/d6d49420-f39b-4df7-a1dc-d59a935871db/",
+      `https://sts.windows.net/${creds.tenantId}/`,
     );
   });
 
