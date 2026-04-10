@@ -168,6 +168,7 @@ export async function sendSlackMessage(
     mediaLocalRoots?: readonly string[];
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
     threadTs?: string;
+    replyBroadcast?: boolean;
     uploadFileName?: string;
     uploadTitle?: string;
     blocks?: (Block | KnownBlock)[];
@@ -182,6 +183,7 @@ export async function sendSlackMessage(
     mediaReadFile: opts.mediaReadFile,
     client: opts.client,
     threadTs: opts.threadTs,
+    replyBroadcast: opts.replyBroadcast,
     ...(opts.uploadFileName ? { uploadFileName: opts.uploadFileName } : {}),
     ...(opts.uploadTitle ? { uploadTitle: opts.uploadTitle } : {}),
     blocks: opts.blocks,
