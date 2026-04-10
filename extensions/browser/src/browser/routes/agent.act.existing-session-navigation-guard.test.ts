@@ -134,7 +134,7 @@ describe("existing-session interaction navigation guard", () => {
     expect(chromeMcpMocks.pressChromeMcpKey).toHaveBeenCalledWith(
       expect.objectContaining({ key: "Enter" }),
     );
-    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledTimes(4);
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledTimes(6);
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ url: "https://example.com" }),
@@ -149,6 +149,14 @@ describe("existing-session interaction navigation guard", () => {
     );
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenNthCalledWith(
       4,
+      expect.objectContaining({ url: "https://example.com" }),
+    );
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenNthCalledWith(
+      5,
+      expect.objectContaining({ url: "https://example.com" }),
+    );
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenNthCalledWith(
+      6,
       expect.objectContaining({ url: "https://example.com" }),
     );
   });
@@ -259,6 +267,37 @@ describe("existing-session interaction navigation guard", () => {
     );
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenNthCalledWith(
       3,
+      expect.objectContaining({ url: "https://safe-redirect.com" }),
+    );
+  });
+
+  it("keeps probing through the full window before declaring navigation stable", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript
+      .mockResolvedValueOnce("result" as never) // action evaluate result
+      .mockResolvedValueOnce("https://example.com" as never) // location probe 1
+      .mockResolvedValueOnce("https://example.com" as never) // location probe 2
+      .mockResolvedValueOnce("https://safe-redirect.com" as never) // location probe 3
+      .mockResolvedValueOnce("https://safe-redirect.com" as never); // follow-up confirms late redirect
+
+    const response = await runAction({ kind: "evaluate", fn: "() => 1" });
+
+    expect(response.statusCode).toBe(200);
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledTimes(5);
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledTimes(4);
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ url: "https://example.com" }),
+    );
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ url: "https://example.com" }),
+    );
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ url: "https://safe-redirect.com" }),
+    );
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenNthCalledWith(
+      4,
       expect.objectContaining({ url: "https://safe-redirect.com" }),
     );
   });

@@ -78,6 +78,7 @@ async function assertExistingSessionPostInteractionNavigationAllowed(params: {
   }
 
   let lastObservedUrl: string | undefined;
+  let sawStableAllowedUrl = false;
   for (const delayMs of EXISTING_SESSION_INTERACTION_NAVIGATION_RECHECK_DELAYS_MS) {
     if (delayMs > 0) {
       await sleep(delayMs);
@@ -93,9 +94,15 @@ async function assertExistingSessionPostInteractionNavigationAllowed(params: {
       ...ssrfPolicyOpts,
     });
     if (currentUrl === lastObservedUrl) {
-      return;
+      sawStableAllowedUrl = true;
+    } else {
+      sawStableAllowedUrl = false;
     }
     lastObservedUrl = currentUrl;
+  }
+
+  if (sawStableAllowedUrl) {
+    return;
   }
 
   // If the loop exhausted without confirming stability but we did observe
