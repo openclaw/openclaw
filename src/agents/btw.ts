@@ -256,7 +256,10 @@ export async function runBtwSideQuestion(
     profileId: authProfileId,
     agentDir: params.agentDir,
   });
-  const apiKey = requireApiKey(apiKeyInfo, model.provider);
+  const apiKey =
+    apiKeyInfo.mode === "aws-sdk" && !apiKeyInfo.apiKey
+      ? undefined
+      : requireApiKey(apiKeyInfo, model.provider);
 
   const chunker =
     params.opts?.onBlockReply && params.blockReplyChunking

@@ -312,6 +312,37 @@ describe("runBtwSideQuestion", () => {
     expect(result).toBeUndefined();
   });
 
+  it("allows Bedrock /btw runs to proceed without a static api key in aws-sdk mode", async () => {
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "amazon-bedrock",
+      id: "us.anthropic.claude-sonnet-4-5-v1:0",
+      api: "anthropic-messages",
+    });
+    getApiKeyForModelMock.mockResolvedValue({
+      apiKey: undefined,
+      mode: "aws-sdk",
+      source: "aws-sdk default chain",
+    });
+    streamSimpleMock.mockReturnValue(makeAsyncEvents([createDoneEvent("Bedrock answer.")]));
+
+    const result = await runBtwSideQuestion({
+      cfg: {} as never,
+      agentDir: DEFAULT_AGENT_DIR,
+      provider: "amazon-bedrock",
+      model: "us.anthropic.claude-sonnet-4-5-v1:0",
+      question: DEFAULT_QUESTION,
+      sessionEntry: createSessionEntry(),
+      resolvedReasoningLevel: DEFAULT_REASONING_LEVEL,
+      opts: {},
+      isNewSession: false,
+    });
+
+    expect(result).toEqual({ text: "Bedrock answer." });
+    expect(requireApiKeyMock).not.toHaveBeenCalled();
+    const [, , options] = streamSimpleMock.mock.calls.at(-1) ?? [];
+    expect((options as { apiKey?: string } | undefined)?.apiKey).toBeUndefined();
+  });
+
   it("forces provider reasoning off even when the session think level is adaptive", async () => {
     streamSimpleMock.mockImplementation((_model, _input, options?: { reasoning?: unknown }) => {
       return options?.reasoning === undefined
