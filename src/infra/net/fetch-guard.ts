@@ -351,6 +351,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       // multipart boundary) when the request body is FormData and a custom
       // dispatcher is attached.  Work around by letting a temporary Request
       // resolve the correct header, then forwarding the serialized blob.
+      let resolvedInit: DispatcherAwareRequestInit = init;
       if (shouldUseRuntimeFetch && init.body instanceof FormData) {
         const tmp = new Request("http://localhost", { method: init.method ?? "POST", body: init.body });
         const ct = tmp.headers.get("content-type");
@@ -359,13 +360,13 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
           if (!h.has("content-type")) {
             h.set("content-type", ct);
           }
-          init = { ...init, headers: h, body: await tmp.blob() };
+          resolvedInit = { ...init, headers: h, body: await tmp.blob() };
         }
       }
 
       const response = shouldUseRuntimeFetch
-        ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
-        : await defaultFetch(parsedUrl.toString(), init);
+        ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), resolvedInit)
+        : await defaultFetch(parsedUrl.toString(), resolvedInit);
 
       if (isRedirectStatus(response.status)) {
         const location = response.headers.get("location");
