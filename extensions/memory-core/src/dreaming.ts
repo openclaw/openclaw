@@ -787,7 +787,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       if (ctx.trigger !== "heartbeat") {
         return undefined;
       }
-      const config = await reconcileManagedDreamingCron({
+      const { config } = await reconcileManagedDreamingCron({
         reason: "runtime",
       });
       return await runShortTermDreamingPromotionIfTriggered({
