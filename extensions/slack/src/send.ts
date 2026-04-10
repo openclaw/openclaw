@@ -409,13 +409,14 @@ export async function sendMessageSlack(
       lastMessageId = response.ts ?? lastMessageId;
     }
   } else {
-    for (const chunk of resolvedChunks.length ? resolvedChunks : [""]) {
+    for (let i = 0; i < (resolvedChunks.length || 1); i++) {
+      const chunk = resolvedChunks[i] ?? "";
       const response = await postSlackMessageBestEffort({
         client,
         channelId,
         text: chunk,
         threadTs: opts.threadTs,
-        replyBroadcast: opts.replyBroadcast,
+        replyBroadcast: opts.replyBroadcast && i === 0,
         identity: opts.identity,
       });
       lastMessageId = response.ts ?? lastMessageId;
