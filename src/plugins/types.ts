@@ -379,6 +379,14 @@ export type ProviderResolveDynamicModelContext = {
  */
 export type ProviderPrepareDynamicModelContext = ProviderResolveDynamicModelContext;
 
+export type ProviderPreferRuntimeResolvedModelContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  provider: string;
+  modelId: string;
+};
+
 /**
  * Last-chance rewrite hook for provider-owned transport normalization.
  *
@@ -866,6 +874,7 @@ export type ProviderBuildUnknownModelHintContext = {
   env: NodeJS.ProcessEnv;
   provider: string;
   modelId: string;
+  baseUrl?: string;
 };
 
 /**
@@ -882,6 +891,7 @@ export type ProviderBuiltInModelSuppressionContext = {
   env: NodeJS.ProcessEnv;
   provider: string;
   modelId: string;
+  baseUrl?: string;
 };
 
 export type ProviderBuiltInModelSuppressionResult = {
@@ -1138,6 +1148,12 @@ export type ProviderPlugin = {
    * completes, `resolveDynamicModel` is called again.
    */
   prepareDynamicModel?: (ctx: ProviderPrepareDynamicModelContext) => Promise<void>;
+  /**
+   * Lets a provider plugin opt exact configured models into a runtime
+   * metadata comparison pass before the embedded runner returns the explicit
+   * entry unchanged.
+   */
+  preferRuntimeResolvedModel?: (ctx: ProviderPreferRuntimeResolvedModelContext) => boolean;
   /**
    * Provider-owned transport normalization.
    *

@@ -25,7 +25,7 @@ afterEach(async () => {
 });
 
 describe("gateway pre-auth hardening", () => {
-  it("rejects upgrades before websocket handlers attach without consuming pre-auth budget", async () => {
+  it("rejects upgrades before websocket handlers attach (pre-auth budget enforced, then released)", async () => {
     const clients = new Set<GatewayWsClient>();
     const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
     const httpServer = createGatewayHttpServer({

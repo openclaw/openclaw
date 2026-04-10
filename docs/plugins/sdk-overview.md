@@ -135,7 +135,8 @@ explicitly promotes one as public.
     | `plugin-sdk/provider-http` | Generic provider HTTP/endpoint capability helpers |
     | `plugin-sdk/provider-web-fetch-contract` | Narrow web-fetch config/selection contract helpers such as `enablePluginInConfig` and `WebFetchProviderPlugin` |
     | `plugin-sdk/provider-web-fetch` | Web-fetch provider registration/cache helpers |
-    | `plugin-sdk/provider-web-search-contract` | Narrow web-search config/credential contract helpers such as `enablePluginInConfig`, `resolveProviderWebSearchPluginConfig`, and scoped credential setters/getters |
+    | `plugin-sdk/provider-web-search-config-contract` | Narrow web-search config/credential helpers for providers that do not need plugin-enable wiring |
+    | `plugin-sdk/provider-web-search-contract` | Narrow web-search config/credential contract helpers such as `createWebSearchProviderContractFields`, `enablePluginInConfig`, `resolveProviderWebSearchPluginConfig`, and scoped credential setters/getters |
     | `plugin-sdk/provider-web-search` | Web-search provider registration/cache/runtime helpers |
     | `plugin-sdk/provider-tools` | `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks`, Gemini schema cleanup + diagnostics, and xAI compat helpers such as `resolveXaiModelCompatPatch` / `applyXaiModelCompat` |
     | `plugin-sdk/provider-usage` | `fetchClaudeUsage` and similar |
@@ -148,6 +149,7 @@ explicitly promotes one as public.
     | Subpath | Key exports |
     | --- | --- |
     | `plugin-sdk/command-auth` | `resolveControlCommandGate`, command registry helpers, sender-authorization helpers |
+    | `plugin-sdk/command-status` | Command/help message builders such as `buildCommandsMessagePaginated` and `buildHelpMessage` |
     | `plugin-sdk/approval-auth-runtime` | Approver resolution and same-chat action-auth helpers |
     | `plugin-sdk/approval-client-runtime` | Native exec approval profile/filter helpers |
     | `plugin-sdk/approval-delivery-runtime` | Native approval capability/delivery adapters |
@@ -200,6 +202,7 @@ explicitly promotes one as public.
     | `plugin-sdk/request-url` | Extract string URLs from fetch/request-like inputs |
     | `plugin-sdk/run-command` | Timed command runner with normalized stdout/stderr results |
     | `plugin-sdk/param-readers` | Common tool/CLI param readers |
+    | `plugin-sdk/tool-payload` | Extract normalized payloads from tool result objects |
     | `plugin-sdk/tool-send` | Extract canonical send target fields from tool args |
     | `plugin-sdk/temp-path` | Shared temp-download path helpers |
     | `plugin-sdk/logging-core` | Subsystem logger and redaction helpers |
@@ -387,13 +390,13 @@ AI CLI backend such as `codex-cli`.
 
 ### Exclusive slots
 
-| Method                                     | What it registers                     |
-| ------------------------------------------ | ------------------------------------- |
-| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time) |
-| `api.registerMemoryCapability(capability)` | Unified memory capability             |
-| `api.registerMemoryPromptSection(builder)` | Memory prompt section builder         |
-| `api.registerMemoryFlushPlan(resolver)`    | Memory flush plan resolver            |
-| `api.registerMemoryRuntime(runtime)`       | Memory runtime adapter                |
+| Method                                     | What it registers                                                                                                                                         |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). The `assemble()` callback receives `availableTools` and `citationsMode` so the engine can tailor prompt additions. |
+| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                 |
+| `api.registerMemoryPromptSection(builder)` | Memory prompt section builder                                                                                                                             |
+| `api.registerMemoryFlushPlan(resolver)`    | Memory flush plan resolver                                                                                                                                |
+| `api.registerMemoryRuntime(runtime)`       | Memory runtime adapter                                                                                                                                    |
 
 ### Memory embedding adapters
 

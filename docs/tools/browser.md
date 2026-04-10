@@ -576,6 +576,27 @@ Notes:
 - If `gateway.auth.mode` is `none` or `trusted-proxy`, these loopback browser
   routes do not inherit those identity-bearing modes; keep them loopback-only.
 
+### `/act` error contract
+
+`POST /act` uses a structured error response for route-level validation and
+policy failures:
+
+```json
+{ "error": "<message>", "code": "ACT_*" }
+```
+
+Current `code` values:
+
+- `ACT_KIND_REQUIRED` (HTTP 400): `kind` is missing or unrecognized.
+- `ACT_INVALID_REQUEST` (HTTP 400): action payload failed normalization or validation.
+- `ACT_SELECTOR_UNSUPPORTED` (HTTP 400): `selector` was used with an unsupported action kind.
+- `ACT_EVALUATE_DISABLED` (HTTP 403): `evaluate` (or `wait --fn`) is disabled by config.
+- `ACT_TARGET_ID_MISMATCH` (HTTP 403): top-level or batched `targetId` conflicts with request target.
+- `ACT_EXISTING_SESSION_UNSUPPORTED` (HTTP 501): action is not supported for existing-session profiles.
+
+Other runtime failures may still return `{ "error": "<message>" }` without a
+`code` field.
+
 ### Playwright requirement
 
 Some features (navigate/act/AI snapshot/role snapshot, element screenshots,

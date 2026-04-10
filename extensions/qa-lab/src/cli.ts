@@ -23,9 +23,32 @@ async function runQaSuite(opts: {
   alternateModel?: string;
   fastMode?: boolean;
   scenarioIds?: string[];
+  runner?: string;
+  image?: string;
+  cpus?: number;
+  memory?: string;
+  disk?: string;
 }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaSuiteCommand(opts);
+}
+
+async function runQaCharacterEval(opts: {
+  repoRoot?: string;
+  outputDir?: string;
+  model?: string[];
+  scenario?: string;
+  fast?: boolean;
+  thinking?: string;
+  modelThinking?: string[];
+  judgeModel?: string[];
+  judgeTimeoutMs?: number;
+  blindJudgeModels?: boolean;
+  concurrency?: number;
+  judgeConcurrency?: number;
+}) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaCharacterEvalCommand(opts);
 }
 
 async function runQaManualLane(opts: {
@@ -120,6 +143,7 @@ export function registerQaLabCli(program: Command) {
     .description("Run repo-backed QA scenarios against the QA gateway lane")
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--output-dir <path>", "Suite artifact directory")
+    .option("--runner <kind>", "Execution runner: host or multipass", "host")
     .option(
       "--provider-mode <mode>",
       "Provider mode: mock-openai or live-frontier (legacy live-openai still works)",
@@ -129,25 +153,99 @@ export function registerQaLabCli(program: Command) {
     .option("--alt-model <ref>", "Alternate provider/model ref")
     .option("--scenario <id>", "Run only the named QA scenario (repeatable)", collectString, [])
     .option("--fast", "Enable provider fast mode where supported", false)
+    .option("--image <alias>", "Multipass image alias")
+    .option("--cpus <count>", "Multipass vCPU count", (value: string) => Number(value))
+    .option("--memory <size>", "Multipass memory size")
+    .option("--disk <size>", "Multipass disk size")
     .action(
       async (opts: {
         repoRoot?: string;
         outputDir?: string;
+        runner?: string;
         providerMode?: QaProviderModeInput;
         model?: string;
         altModel?: string;
         scenario?: string[];
         fast?: boolean;
+        image?: string;
+        cpus?: number;
+        memory?: string;
+        disk?: string;
       }) => {
         await runQaSuite({
           repoRoot: opts.repoRoot,
           outputDir: opts.outputDir,
+          runner: opts.runner,
           providerMode: opts.providerMode,
           primaryModel: opts.model,
           alternateModel: opts.altModel,
           fastMode: opts.fast,
           scenarioIds: opts.scenario,
+          image: opts.image,
+          cpus: opts.cpus,
+          memory: opts.memory,
+          disk: opts.disk,
         });
+      },
+    );
+
+  qa.command("character-eval")
+    .description("Run the character QA scenario across live models and write a judged report")
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+    .option("--output-dir <path>", "Character eval artifact directory")
+    .option(
+      "--model <ref[,option]>",
+      "Provider/model ref to evaluate; options: thinking=<level>, fast, no-fast, fast=<bool>",
+      collectString,
+      [],
+    )
+    .option("--scenario <id>", "Character scenario id", "character-vibes-gollum")
+    .option("--fast", "Enable provider fast mode for all candidate runs")
+    .option(
+      "--thinking <level>",
+      "Candidate thinking default: off|minimal|low|medium|high|xhigh|adaptive",
+    )
+    .option(
+      "--model-thinking <ref=level>",
+      "Deprecated: candidate thinking override for one model ref (repeatable)",
+      collectString,
+      [],
+    )
+    .option(
+      "--judge-model <ref[,option]>",
+      "Judge provider/model ref; options: thinking=<level>, fast, no-fast, fast=<bool> (repeatable)",
+      collectString,
+      [],
+    )
+    .option("--judge-timeout-ms <ms>", "Override judge wait timeout", (value: string) =>
+      Number(value),
+    )
+    .option(
+      "--blind-judge-models",
+      "Hide candidate model refs from judge prompts; reports still map rankings back to real refs",
+    )
+    .option("--concurrency <count>", "Candidate model run concurrency", (value: string) =>
+      Number(value),
+    )
+    .option("--judge-concurrency <count>", "Judge model run concurrency", (value: string) =>
+      Number(value),
+    )
+    .action(
+      async (opts: {
+        repoRoot?: string;
+        outputDir?: string;
+        model?: string[];
+        scenario?: string;
+        fast?: boolean;
+        thinking?: string;
+        modelThinking?: string[];
+        judgeModel?: string[];
+        judgeTimeoutMs?: number;
+        blindJudgeModels?: boolean;
+        concurrency?: number;
+        judgeConcurrency?: number;
+      }) => {
+        await runQaCharacterEval(opts);
       },
     );
 

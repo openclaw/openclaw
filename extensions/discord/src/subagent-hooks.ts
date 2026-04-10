@@ -1,4 +1,4 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-plugin-common";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalStringifiedId,

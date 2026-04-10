@@ -1,4 +1,9 @@
 export {
+  downloadMSTeamsBotFrameworkAttachment,
+  downloadMSTeamsBotFrameworkAttachments,
+  isBotFrameworkPersonalChatId,
+} from "./attachments/bot-framework.js";
+export {
   downloadMSTeamsAttachments,
   /** @deprecated Use `downloadMSTeamsAttachments` instead. */
   downloadMSTeamsImageAttachments,
@@ -6,6 +11,7 @@ export {
 export { buildMSTeamsGraphMessageUrls, downloadMSTeamsGraphMedia } from "./attachments/graph.js";
 export {
   buildMSTeamsAttachmentPlaceholder,
+  extractMSTeamsHtmlAttachmentIds,
   summarizeMSTeamsHtmlAttachments,
 } from "./attachments/html.js";
 export { buildMSTeamsMediaPayload } from "./attachments/payload.js";

@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { writeJsonFileAtomically as writeJsonFileAtomicallyImpl } from "openclaw/plugin-sdk/json-store";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { resolveConfiguredMatrixAccountIds } from "./account-selection.js";
+import { isMatrixLegacyCryptoInspectorAvailable } from "./legacy-crypto-inspector-availability.js";
 import { formatMatrixErrorMessage } from "./matrix/errors.js";
 import {
   resolveLegacyMatrixFlatStoreTarget,
@@ -107,10 +108,6 @@ type MatrixStoredRecoveryKey = {
     name?: string;
   };
 };
-
-function isMatrixLegacyCryptoInspectorAvailable(): boolean {
-  return true;
-}
 
 async function loadMatrixLegacyCryptoInspector(): Promise<MatrixLegacyCryptoInspector> {
   const module = await import("./matrix/legacy-crypto-inspector.js");
@@ -351,6 +348,18 @@ export async function autoPrepareLegacyMatrixCrypto(params: {
   const writeJsonFileAtomically =
     params.deps?.writeJsonFileAtomically ?? writeJsonFileAtomicallyImpl;
   if (detection.plans.length === 0) {
+    if (warnings.length > 0) {
+      params.log?.warn?.(
+        `matrix: legacy encrypted-state warnings:\n${warnings.map((entry) => `- ${entry}`).join("\n")}`,
+      );
+    }
+    return {
+      migrated: false,
+      changes,
+      warnings,
+    };
+  }
+  if (!params.deps?.inspectLegacyStore && !isMatrixLegacyCryptoInspectorAvailable()) {
     if (warnings.length > 0) {
       params.log?.warn?.(
         `matrix: legacy encrypted-state warnings:\n${warnings.map((entry) => `- ${entry}`).join("\n")}`,

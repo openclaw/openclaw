@@ -6,7 +6,7 @@ import { rawDataToString } from "../infra/ws.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { getDirectAgentForCdp, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import { CDP_HTTP_REQUEST_TIMEOUT_MS, CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-timeouts.js";
-import { resolveBrowserRateLimitMessage } from "./client-fetch.js";
+import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
 
 export { isLoopbackHost };
 

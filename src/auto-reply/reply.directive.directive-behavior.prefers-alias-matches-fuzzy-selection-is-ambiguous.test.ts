@@ -16,8 +16,8 @@ import {
   withTempHome,
 } from "./reply.directive.directive-behavior.e2e-harness.js";
 import { runEmbeddedPiAgentMock } from "./reply.directive.directive-behavior.e2e-mocks.js";
-import { withFullRuntimeReplyConfig } from "./reply/get-reply-fast-path.js";
 import { getReplyFromConfig } from "./reply.js";
+import { withFullRuntimeReplyConfig } from "./reply/get-reply-fast-path.js";
 
 function makeModelDefinition(id: string, name: string): ModelDefinitionConfig {
   return {

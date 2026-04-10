@@ -43,6 +43,26 @@ function assertSlackFileUrl(rawUrl: string): URL {
   return parsed;
 }
 
+function createSlackAuthHeaders(token: string): HeadersInit {
+  return { Authorization: `Bearer ${token}` };
+}
+
+function createSlackMediaRequest(
+  url: string,
+  token: string,
+): {
+  url: string;
+  requestInit: RequestInit;
+} {
+  const parsed = assertSlackFileUrl(url);
+  return {
+    url: parsed.href,
+    // Let the shared guarded-fetch redirect logic preserve auth on same-origin
+    // Slack hops and strip it once the redirect crosses origins.
+    requestInit: { headers: createSlackAuthHeaders(token) },
+  };
+}
+
 function isMockedFetch(fetchImpl: typeof fetch | undefined): boolean {
   if (typeof fetchImpl !== "function") {
     return false;
@@ -50,68 +70,53 @@ function isMockedFetch(fetchImpl: typeof fetch | undefined): boolean {
   return typeof (fetchImpl as typeof fetch & { mock?: unknown }).mock === "object";
 }
 
-function createSlackMediaFetch(token: string): FetchLike {
-  let includeAuth = true;
+function createSlackMediaFetch(): FetchLike {
   return async (input, init) => {
     const url = resolveRequestUrl(input);
     if (!url) {
       throw new Error("Unsupported fetch input: expected string, URL, or Request");
     }
-    const { headers: initHeaders, redirect: _redirect, ...rest } = init ?? {};
-    const headers = new Headers(initHeaders);
+    const parsed = assertSlackFileUrl(url);
     const fetchImpl =
       "dispatcher" in (init ?? {}) && !isMockedFetch(globalThis.fetch)
         ? fetchWithRuntimeDispatcher
         : globalThis.fetch;
-
-    if (includeAuth) {
-      includeAuth = false;
-      const parsed = assertSlackFileUrl(url);
-      headers.set("Authorization", `Bearer ${token}`);
-      return fetchImpl(parsed.href, { ...rest, headers, redirect: "manual" });
-    }
-
-    headers.delete("Authorization");
-    return fetchImpl(url, { ...rest, headers, redirect: "manual" });
+    return fetchImpl(parsed.href, { ...init, redirect: "manual" });
   };
 }
 
 /**
- * Fetches a URL with Authorization header, handling cross-origin redirects.
- * Node.js fetch strips Authorization headers on cross-origin redirects for security.
- * Slack's file URLs redirect to CDN domains with pre-signed URLs that don't need the
- * Authorization header, so we handle the initial auth request manually.
+ * Fetches a URL with Authorization header while keeping same-origin redirects
+ * authenticated and dropping auth once the redirect crosses origins.
  */
 export async function fetchWithSlackAuth(url: string, token: string): Promise<Response> {
   const parsed = assertSlackFileUrl(url);
+  const authHeaders = createSlackAuthHeaders(token);
 
-  // Initial request with auth and manual redirect handling
   const initialRes = await fetch(parsed.href, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: authHeaders,
     redirect: "manual",
   });
 
-  // If not a redirect, return the response directly
   if (initialRes.status < 300 || initialRes.status >= 400) {
     return initialRes;
   }
 
-  // Handle redirect - the redirected URL should be pre-signed and not need auth
   const redirectUrl = initialRes.headers.get("location");
   if (!redirectUrl) {
     return initialRes;
   }
 
-  // Resolve relative URLs against the original
   const resolvedUrl = new URL(redirectUrl, parsed.href);
-
-  // Only follow safe protocols (we do NOT include Authorization on redirects).
   if (resolvedUrl.protocol !== "https:") {
     return initialRes;
   }
-
-  // Follow the redirect without the Authorization header
-  // (Slack's CDN URLs are pre-signed and don't need it)
+  if (resolvedUrl.origin === parsed.origin) {
+    return fetch(resolvedUrl.toString(), {
+      headers: authHeaders,
+      redirect: "follow",
+    });
+  }
   return fetch(resolvedUrl.toString(), { redirect: "follow" });
 }
 
@@ -223,13 +228,12 @@ export async function resolveSlackMedia(params: {
         return null;
       }
       try {
-        // Note: fetchRemoteMedia calls fetchImpl(url) with the URL string today and
-        // handles size limits internally. Provide a fetcher that uses auth once, then lets
-        // the redirect chain continue without credentials.
-        const fetchImpl = createSlackMediaFetch(params.token);
+        const { url: slackUrl, requestInit } = createSlackMediaRequest(url, params.token);
+        const fetchImpl = createSlackMediaFetch();
         const fetched = await fetchRemoteMedia({
-          url,
+          url: slackUrl,
           fetchImpl,
+          requestInit,
           filePathHint: file.name,
           maxBytes: params.maxBytes,
           ssrfPolicy: SLACK_MEDIA_SSRF_POLICY,
@@ -307,10 +311,12 @@ export async function resolveSlackAttachmentContent(params: {
     const imageUrl = resolveForwardedAttachmentImageUrl(att);
     if (imageUrl) {
       try {
-        const fetchImpl = createSlackMediaFetch(params.token);
+        const { url: slackUrl, requestInit } = createSlackMediaRequest(imageUrl, params.token);
+        const fetchImpl = createSlackMediaFetch();
         const fetched = await fetchRemoteMedia({
-          url: imageUrl,
+          url: slackUrl,
           fetchImpl,
+          requestInit,
           maxBytes: params.maxBytes,
           ssrfPolicy: SLACK_MEDIA_SSRF_POLICY,
         });
