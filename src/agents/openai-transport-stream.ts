@@ -298,7 +298,10 @@ function convertResponsesMessages(
             id: itemId,
             call_id: callId,
             name: block.name,
-            arguments: JSON.stringify(block.arguments),
+            arguments:
+              typeof block.arguments === "string"
+                ? block.arguments
+                : JSON.stringify(block.arguments ?? {}),
           });
         }
       }
