@@ -20,7 +20,8 @@
   ],
   "contracts": {
     "memoryEmbeddingProviders": ["ollama"],
-    "webSearchProviders": ["ollama"]
+    "webSearchProviders": ["ollama"],
+    "mediaUnderstandingProviders": ["ollama"]
   },
   "configSchema": {
     "type": "object",
