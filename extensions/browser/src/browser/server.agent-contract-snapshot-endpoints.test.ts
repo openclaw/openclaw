@@ -103,6 +103,8 @@ describe("browser control server", () => {
         },
       }),
     );
+    const [clickArgs] = pwMocks.clickViaPlaywright.mock.calls[0] ?? [];
+    expect((clickArgs as { doubleClick?: boolean }).doubleClick).toBeUndefined();
 
     const clickSelector = await realFetch(`${base}/act`, {
       method: "POST",
@@ -122,6 +124,8 @@ describe("browser control server", () => {
         },
       }),
     );
+    const [clickSelectorArgs] = pwMocks.clickViaPlaywright.mock.calls[1] ?? [];
+    expect((clickSelectorArgs as { doubleClick?: boolean }).doubleClick).toBeUndefined();
 
     const type = await postJson<{ ok: boolean }>(`${base}/act`, {
       kind: "type",
@@ -141,6 +145,9 @@ describe("browser control server", () => {
         },
       }),
     );
+    const [typeArgs] = pwMocks.typeViaPlaywright.mock.calls[0] ?? [];
+    expect((typeArgs as { submit?: boolean }).submit).toBeUndefined();
+    expect((typeArgs as { slowly?: boolean }).slowly).toBeUndefined();
 
     const press = await postJson<{ ok: boolean }>(`${base}/act`, {
       kind: "press",
@@ -157,6 +164,8 @@ describe("browser control server", () => {
         },
       }),
     );
+    const [pressArgs] = pwMocks.pressKeyViaPlaywright.mock.calls[0] ?? [];
+    expect((pressArgs as { delayMs?: number }).delayMs).toBeUndefined();
 
     const hover = await postJson<{ ok: boolean }>(`${base}/act`, {
       kind: "hover",
@@ -170,6 +179,8 @@ describe("browser control server", () => {
         ref: "2",
       }),
     );
+    const [hoverArgs] = pwMocks.hoverViaPlaywright.mock.calls[0] ?? [];
+    expect((hoverArgs as { timeoutMs?: number }).timeoutMs).toBeUndefined();
 
     const scroll = await postJson<{ ok: boolean }>(`${base}/act`, {
       kind: "scrollIntoView",
@@ -183,6 +194,8 @@ describe("browser control server", () => {
         ref: "2",
       }),
     );
+    const [scrollArgs] = pwMocks.scrollIntoViewViaPlaywright.mock.calls[0] ?? [];
+    expect((scrollArgs as { timeoutMs?: number }).timeoutMs).toBeUndefined();
 
     const drag = await postJson<{ ok: boolean }>(`${base}/act`, {
       kind: "drag",
@@ -198,5 +211,7 @@ describe("browser control server", () => {
         endRef: "4",
       }),
     );
+    const [dragArgs] = pwMocks.dragViaPlaywright.mock.calls[0] ?? [];
+    expect((dragArgs as { timeoutMs?: number }).timeoutMs).toBeUndefined();
   });
 });

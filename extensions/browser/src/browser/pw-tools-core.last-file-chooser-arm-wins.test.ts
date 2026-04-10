@@ -176,4 +176,25 @@ describe("pw-tools-core", () => {
       timeout: 120_000,
     });
   });
+
+  it("clamps interaction timeoutMs to 60000 for click steps", async () => {
+    const click = vi.fn(async () => {});
+    const page = {
+      url: vi.fn(() => "https://example.com"),
+      locator: vi.fn(() => ({ click })),
+    };
+    setPwToolsCoreCurrentPage(page);
+
+    await mod.clickViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      selector: "#main",
+      timeoutMs: 999_999,
+    });
+
+    expect(click).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeout: 60_000,
+      }),
+    );
+  });
 });
