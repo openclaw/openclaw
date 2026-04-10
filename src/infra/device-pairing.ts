@@ -189,16 +189,9 @@ export function listEffectivePairedDeviceRoles(
     const approvedRoles = new Set(listApprovedPairedDeviceRoles(device));
     return activeTokenRoles.filter((role) => approvedRoles.has(role));
   }
-  // Only fall back to legacy role fields when the tokens map is absent
-  // or has no entries at all (empty object from a fresh pairing record).
-  // When token entries exist but are all revoked, the revocation is
-  // authoritative — do not re-grant roles from sticky historical fields.
-  if (device.tokens && Object.keys(device.tokens).length > 0) {
-    return [];
-  }
-  // Legacy fallback: when no token map exists yet, treat the approved pairing
-  // roles as effective until token issuance has happened.
-  return listApprovedPairedDeviceRoles(device);
+  // Token entries are authoritative. Tokenless legacy records fail closed so
+  // sticky historical role fields cannot retain access after token migration.
+  return [];
 }
 
 export function hasEffectivePairedDeviceRole(
@@ -413,6 +406,25 @@ function scopesWithinApprovedDeviceBaseline(params: {
   });
 }
 
+function resolveScopeOutsideRequestedRoles(params: {
+  requestedRoles: readonly string[];
+  requestedScopes: readonly string[];
+}): string | null {
+  for (const scope of params.requestedScopes) {
+    const matchesRequestedRole = params.requestedRoles.some((role) =>
+      roleScopesAllow({
+        role,
+        requestedScopes: [scope],
+        allowedScopes: [scope],
+      }),
+    );
+    if (!matchesRequestedRole) {
+      return scope;
+    }
+  }
+  return null;
+}
+
 export async function listDevicePairing(baseDir?: string): Promise<DevicePairingList> {
   const state = await loadState(baseDir);
   const pending = Object.values(state.pendingById).toSorted((a, b) => b.ts - a.ts);
@@ -522,7 +534,15 @@ export async function approveDevicePairing(
       return null;
     }
     const requestedRoles = mergeRoles(pending.roles, pending.role) ?? [];
-    const requestedOperatorScopes = normalizeDeviceAuthScopes(pending.scopes).filter((scope) =>
+    const requestedScopes = normalizeDeviceAuthScopes(pending.scopes);
+    const roleMismatchScope = resolveScopeOutsideRequestedRoles({
+      requestedRoles,
+      requestedScopes,
+    });
+    if (roleMismatchScope) {
+      return { status: "forbidden", missingScope: roleMismatchScope };
+    }
+    const requestedOperatorScopes = requestedScopes.filter((scope) =>
       scope.startsWith(OPERATOR_SCOPE_PREFIX),
     );
     if (requestedOperatorScopes.length > 0) {

@@ -284,6 +284,53 @@ describe("device pairing tokens", () => {
     ).resolves.toEqual({ ok: true });
   });
 
+  test.each([
+    {
+      name: "node custom scope",
+      roles: ["node"],
+      scopes: ["vault.admin"],
+      missingScope: "vault.admin",
+      callerScopes: [],
+    },
+    {
+      name: "operator custom scope",
+      roles: ["operator"],
+      scopes: ["vault.admin"],
+      missingScope: "vault.admin",
+      callerScopes: ["operator.pairing"],
+    },
+    {
+      name: "node requesting operator scope",
+      roles: ["node"],
+      scopes: ["operator.read"],
+      missingScope: "operator.read",
+      callerScopes: ["operator.read"],
+    },
+  ])("rejects requested scopes outside requested roles: $name", async (params) => {
+    const baseDir = await makeDevicePairingDir();
+    const request = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        roles: params.roles,
+        scopes: params.scopes,
+      },
+      baseDir,
+    );
+
+    await expect(
+      approveDevicePairing(
+        request.request.requestId,
+        { callerScopes: params.callerScopes },
+        baseDir,
+      ),
+    ).resolves.toEqual({
+      status: "forbidden",
+      missingScope: params.missingScope,
+    });
+    await expect(getPairedDevice("device-1", baseDir)).resolves.toBeNull();
+  });
+
   test("preserves existing non-operator scopes during operator-only mixed-role repairs", async () => {
     const baseDir = await makeDevicePairingDir();
     const initial = await requestDevicePairing(
@@ -831,7 +878,7 @@ describe("device pairing tokens", () => {
     expect(hasEffectivePairedDeviceRole(paired, "node")).toBe(false);
   });
 
-  test("falls back to legacy role fields when tokens map is empty", async () => {
+  test("fails closed for tokenless legacy role fields", async () => {
     const device: PairedDevice = {
       deviceId: "device-fallback",
       publicKey: "pk-fallback",
@@ -841,9 +888,9 @@ describe("device pairing tokens", () => {
       createdAtMs: Date.now(),
       approvedAtMs: Date.now(),
     };
-    expect(listEffectivePairedDeviceRoles(device)).toEqual(["node", "operator"]);
-    expect(hasEffectivePairedDeviceRole(device, "node")).toBe(true);
-    expect(hasEffectivePairedDeviceRole(device, "operator")).toBe(true);
+    expect(listEffectivePairedDeviceRoles(device)).toEqual([]);
+    expect(hasEffectivePairedDeviceRole(device, "node")).toBe(false);
+    expect(hasEffectivePairedDeviceRole(device, "operator")).toBe(false);
   });
 
   test("filters active token roles to the approved pairing role set", async () => {

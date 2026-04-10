@@ -173,9 +173,9 @@ function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
 }
 
 function resolveDreamingNextCycle(
-  status: { phases: Record<string, { enabled: boolean; nextRunAtMs?: number }> } | null,
+  status: { phases?: Record<string, { enabled: boolean; nextRunAtMs?: number }> } | null,
 ): string | null {
-  if (!status) {
+  if (!status?.phases) {
     return null;
   }
   const nextRunAtMs = Object.values(status.phases)
@@ -1935,9 +1935,8 @@ export function renderApp(state: AppViewState) {
               groundedSignalCount: state.dreamingStatus?.groundedSignalCount ?? 0,
               totalSignalCount: state.dreamingStatus?.totalSignalCount ?? 0,
               promotedCount: state.dreamingStatus?.promotedToday ?? 0,
-              phaseSignalCount: state.dreamingStatus?.phaseSignalCount ?? 0,
+              phases: state.dreamingStatus?.phases ?? undefined,
               shortTermEntries: state.dreamingStatus?.shortTermEntries ?? [],
-              signalEntries: state.dreamingStatus?.signalEntries ?? [],
               promotedEntries: state.dreamingStatus?.promotedEntries ?? [],
               dreamingOf: null,
               nextCycle: dreamingNextCycle,
@@ -1955,7 +1954,6 @@ export function renderApp(state: AppViewState) {
               onBackfillDiary: () => backfillDreamDiary(state),
               onResetDiary: () => resetDreamDiary(state),
               onResetGroundedShortTerm: () => resetGroundedShortTerm(state),
-              onToggleEnabled: applyDreamingEnabled,
               onRequestUpdate: requestHostUpdate,
             })
           : nothing}
