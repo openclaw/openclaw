@@ -267,7 +267,13 @@ describe("isDangerousHostInheritedEnvVarName", () => {
     expect(isDangerousHostInheritedEnvVarName("TF_VAR_admin_cidr")).toBe(false);
     expect(isDangerousHostInheritedEnvVarName("AWS_CONTAINER_CREDENTIALS_FULL_URI")).toBe(true);
     expect(isDangerousHostInheritedEnvVarName("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")).toBe(true);
-    expect(isDangerousHostInheritedEnvVarName("KUBECONFIG")).toBe(true);
+    expect(isDangerousHostInheritedEnvVarName("KUBECONFIG")).toBe(false);
+    expect(isDangerousHostInheritedEnvVarName("GOOGLE_APPLICATION_CREDENTIALS")).toBe(false);
+    expect(isDangerousHostInheritedEnvVarName("AWS_SHARED_CREDENTIALS_FILE")).toBe(false);
+    expect(isDangerousHostInheritedEnvVarName("AWS_WEB_IDENTITY_TOKEN_FILE")).toBe(false);
+    expect(isDangerousHostInheritedEnvVarName("AWS_CONFIG_FILE")).toBe(false);
+    expect(isDangerousHostInheritedEnvVarName("AZURE_AUTH_LOCATION")).toBe(false);
+    expect(isDangerousHostInheritedEnvVarName("SSH_AUTH_SOCK")).toBe(false);
     expect(isDangerousHostInheritedEnvVarName("GIT_CONFIG_GLOBAL")).toBe(false);
     expect(isDangerousHostInheritedEnvVarName("NPM_CONFIG_USERCONFIG")).toBe(false);
     expect(isDangerousHostInheritedEnvVarName("CARGO_REGISTRIES_CRATES_IO_INDEX")).toBe(false);
@@ -311,6 +317,7 @@ describe("sanitizeHostExecEnv", () => {
         AWS_WEB_IDENTITY_TOKEN_FILE: "/tmp/aws-web-token",
         AZURE_AUTH_LOCATION: "/tmp/azure-auth.json",
         AWS_CONFIG_FILE: "/tmp/aws-config",
+        SSH_AUTH_SOCK: "/tmp/trusted-ssh-agent.sock",
         CARGO_HOME: "/tmp/cargo",
         HELM_HOME: "/tmp/helm",
         HTTP_PROXY: "http://proxy.example.test:8080",
@@ -326,6 +333,13 @@ describe("sanitizeHostExecEnv", () => {
     expect(env).toEqual({
       OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
       PATH: "/usr/bin:/bin",
+      AWS_CONFIG_FILE: "/tmp/aws-config",
+      KUBECONFIG: "/tmp/kubeconfig",
+      GOOGLE_APPLICATION_CREDENTIALS: "/tmp/gcp.json",
+      AWS_SHARED_CREDENTIALS_FILE: "/tmp/aws-credentials",
+      AWS_WEB_IDENTITY_TOKEN_FILE: "/tmp/aws-web-token",
+      AZURE_AUTH_LOCATION: "/tmp/azure-auth.json",
+      SSH_AUTH_SOCK: "/tmp/trusted-ssh-agent.sock",
       HTTP_PROXY: "http://proxy.example.test:8080",
       HTTPS_PROXY: "http://proxy.example.test:8443",
       SSL_CERT_FILE: "/tmp/evil-cert.pem",
@@ -523,6 +537,13 @@ describe("sanitizeHostExecEnv", () => {
       baseEnv: {
         PATH: "/usr/bin:/bin",
         HTTPS_PROXY: "http://trusted-proxy.example.test:8443",
+        KUBECONFIG: "/tmp/trusted-kubeconfig",
+        GOOGLE_APPLICATION_CREDENTIALS: "/tmp/trusted-gcp.json",
+        AWS_SHARED_CREDENTIALS_FILE: "/tmp/trusted-aws-credentials",
+        AWS_WEB_IDENTITY_TOKEN_FILE: "/tmp/trusted-aws-web-token",
+        AWS_CONFIG_FILE: "/tmp/trusted-aws-config",
+        AZURE_AUTH_LOCATION: "/tmp/trusted-azure-auth.json",
+        SSH_AUTH_SOCK: "/tmp/trusted-ssh-agent.sock",
         VIMINIT: ":!touch /tmp/pwned",
         EXINIT: "silent !touch /tmp/pwned",
         LUA_INIT_5_4: "os.execute('touch /tmp/pwned')",
@@ -546,6 +567,13 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.LUA_INIT_5_4).toBeUndefined();
     expect(env.HOSTALIASES).toBeUndefined();
     expect(env.HTTPS_PROXY).toBe("http://trusted-proxy.example.test:8443");
+    expect(env.KUBECONFIG).toBe("/tmp/trusted-kubeconfig");
+    expect(env.GOOGLE_APPLICATION_CREDENTIALS).toBe("/tmp/trusted-gcp.json");
+    expect(env.AWS_SHARED_CREDENTIALS_FILE).toBe("/tmp/trusted-aws-credentials");
+    expect(env.AWS_WEB_IDENTITY_TOKEN_FILE).toBe("/tmp/trusted-aws-web-token");
+    expect(env.AWS_CONFIG_FILE).toBe("/tmp/trusted-aws-config");
+    expect(env.AZURE_AUTH_LOCATION).toBe("/tmp/trusted-azure-auth.json");
+    expect(env.SSH_AUTH_SOCK).toBe("/tmp/trusted-ssh-agent.sock");
     expect(env.AWS_CONTAINER_CREDENTIALS_FULL_URI).toBeUndefined();
     expect(env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI).toBeUndefined();
     expect(env.CONFIG_SITE).toBeUndefined();
