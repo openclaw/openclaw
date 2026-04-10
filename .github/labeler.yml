@@ -357,6 +357,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/xiaomi/**"
+"extensions: yep":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/yep/**"
 "extensions: fal":
   - changed-files:
       - any-glob-to-any-file:

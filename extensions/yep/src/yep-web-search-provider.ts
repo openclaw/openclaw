@@ -196,7 +196,7 @@ function createYepSchema() {
     ),
     search_mode: Type.Optional(
       Type.String({
-        description: "Search mode: 'fast' or 'balanced' (default). Balanced combines speed and relevance.",
+        description: "Search mode: 'fast', 'balanced' (default), or 'advanced'. Balanced combines speed and relevance; advanced uses deeper ranking.",
       }),
     ),
     language: Type.Optional(
@@ -284,13 +284,13 @@ function createYepToolDefinition(
       }
       const yepType = (rawType ?? "basic") as "basic" | "highlights";
       const rawSearchMode = readStringParam(params, "search_mode");
-      if (rawSearchMode && rawSearchMode !== "fast" && rawSearchMode !== "balanced") {
+      if (rawSearchMode && rawSearchMode !== "fast" && rawSearchMode !== "balanced" && rawSearchMode !== "advanced") {
         return {
           error: "invalid_search_mode",
-          message: "search_mode must be 'fast' or 'balanced'.",
+          message: "search_mode must be 'fast', 'balanced', or 'advanced'.",
         };
       }
-      const searchMode = rawSearchMode as "fast" | "balanced" | undefined;
+      const searchMode = rawSearchMode as "fast" | "balanced" | "advanced" | undefined;
       const rawLanguage = readStringParam(params, "language");
       const language = normalizeYepLanguage(rawLanguage);
       if (rawLanguage && !language) {
