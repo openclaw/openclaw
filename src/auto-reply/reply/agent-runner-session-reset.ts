@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { disposeSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   resolveAgentIdFromSessionKey,
@@ -21,6 +22,7 @@ const deps = {
   generateSecureUuid,
   updateSessionStore,
   refreshQueuedFollowupSession,
+  disposeSessionMcpRuntime,
   error: (message: string) => defaultRuntime.error(message),
 };
 
@@ -29,6 +31,7 @@ export function setAgentRunnerSessionResetTestDeps(overrides?: Partial<typeof de
     generateSecureUuid,
     updateSessionStore,
     refreshQueuedFollowupSession,
+    disposeSessionMcpRuntime,
     error: (message: string) => defaultRuntime.error(message),
     ...overrides,
   });
@@ -104,6 +107,15 @@ export async function resetReplyRunSession(params: {
   params.onActiveSessionEntry(nextEntry);
   params.onNewSession(nextSessionId, nextSessionFile);
   deps.error(params.options.buildLogMessage(nextSessionId));
+  // Rotation leaves the old session id orphaned in the bundle MCP runtime
+  // cache. Release it in the background so its stdio children don't
+  // accumulate in the gateway, without stalling the retry path on a slow
+  // or hung MCP shutdown.
+  void deps.disposeSessionMcpRuntime(prevEntry.sessionId).catch((err) => {
+    deps.error(
+      `Failed to dispose bundle MCP runtime for reset session ${prevEntry.sessionId} (${params.options.failureLabel}): ${String(err)}`,
+    );
+  });
   if (params.options.cleanupTranscripts && prevSessionId) {
     const transcriptCandidates = new Set<string>();
     const resolved = resolveSessionFilePath(
