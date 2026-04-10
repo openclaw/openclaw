@@ -1,9 +1,4 @@
 import { describe, expect, it } from "vitest";
-import falPlugin from "../../extensions/fal/index.js";
-import googlePlugin from "../../extensions/google/index.js";
-import minimaxPlugin from "../../extensions/minimax/index.js";
-import openaiPlugin from "../../extensions/openai/index.js";
-import vydraPlugin from "../../extensions/vydra/index.js";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -17,6 +12,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { getShellEnvAppliedKeys, loadShellEnvFallback } from "../infra/shell-env.js";
 import { encodePngRgba, fillPixel } from "../media/png-encode.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+import { loadBundledPluginPublicSurfaceSync } from "../test-utils/bundled-plugin-public-surface.js";
 import {
   DEFAULT_LIVE_IMAGE_MODELS,
   parseCaseFilter,
@@ -42,6 +38,10 @@ type LiveProviderCase = {
   providerId: string;
 };
 
+type BundledProviderEntryModule = {
+  default: LiveProviderCase["plugin"];
+};
+
 type LiveImageCase = {
   id: string;
   providerId: string;
@@ -52,28 +52,40 @@ type LiveImageCase = {
   inputImages?: Array<{ buffer: Buffer; mimeType: string; fileName?: string }>;
 };
 
+function loadBundledProviderPlugin(pluginId: string): LiveProviderCase["plugin"] {
+  return loadBundledPluginPublicSurfaceSync<BundledProviderEntryModule>({
+    pluginId,
+    artifactBasename: "index.js",
+  }).default;
+}
+
 const PROVIDER_CASES: LiveProviderCase[] = [
-  { plugin: falPlugin, pluginId: "fal", pluginName: "fal Provider", providerId: "fal" },
   {
-    plugin: googlePlugin,
+    plugin: loadBundledProviderPlugin("fal"),
+    pluginId: "fal",
+    pluginName: "fal Provider",
+    providerId: "fal",
+  },
+  {
+    plugin: loadBundledProviderPlugin("google"),
     pluginId: "google",
     pluginName: "Google Provider",
     providerId: "google",
   },
   {
-    plugin: minimaxPlugin,
+    plugin: loadBundledProviderPlugin("minimax"),
     pluginId: "minimax",
     pluginName: "MiniMax Provider",
     providerId: "minimax",
   },
   {
-    plugin: openaiPlugin,
+    plugin: loadBundledProviderPlugin("openai"),
     pluginId: "openai",
     pluginName: "OpenAI Provider",
     providerId: "openai",
   },
   {
-    plugin: vydraPlugin,
+    plugin: loadBundledProviderPlugin("vydra"),
     pluginId: "vydra",
     pluginName: "Vydra Provider",
     providerId: "vydra",

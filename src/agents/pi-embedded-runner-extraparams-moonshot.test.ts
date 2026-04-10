@@ -1,7 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createConfiguredOllamaCompatStreamWrapper } from "../../extensions/ollama/api.ts";
+import { createConfiguredOllamaCompatStreamWrapper } from "../plugin-sdk/ollama-runtime.js";
 import { __testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
 import { applyExtraParamsToAgent } from "./pi-embedded-runner/extra-params.js";
 import {

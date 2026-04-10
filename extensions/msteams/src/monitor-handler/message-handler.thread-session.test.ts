@@ -101,6 +101,7 @@ describe("msteams thread session isolation", () => {
       textLimit: 4000,
       mediaMaxBytes: 1024 * 1024,
       conversationStore: {
+        get: vi.fn(async () => null),
         upsert: vi.fn(async () => undefined),
       } as unknown as MSTeamsMessageHandlerDeps["conversationStore"],
       pollStore: {

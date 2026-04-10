@@ -55,13 +55,15 @@ function buildManagedResponse(response: Response, release: () => Promise<void>):
 }
 
 function resolveModelRequestPolicy(model: Model<Api>) {
+  const request = getModelProviderRequestTransport(model);
   return resolveProviderRequestPolicyConfig({
     provider: model.provider,
     api: model.api,
     baseUrl: model.baseUrl,
     capability: "llm",
     transport: "stream",
-    request: getModelProviderRequestTransport(model),
+    request,
+    allowPrivateNetwork: request?.allowPrivateNetwork === true,
   });
 }
 
