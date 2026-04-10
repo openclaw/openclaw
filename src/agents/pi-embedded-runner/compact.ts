@@ -112,6 +112,7 @@ import {
   compactWithSafetyTimeout,
   resolveCompactionTimeoutMs,
 } from "./compaction-safety-timeout.js";
+import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
 import { applyExtraParamsToAgent } from "./extra-params.js";
@@ -1326,9 +1327,7 @@ export async function compactEmbeddedPiSession(
             extraSystemPrompt: params.extraSystemPrompt,
             ownerNumbers: params.ownerNumbers,
           }),
-          ...(await import("./context-engine-capabilities.js").then((m) =>
-            m.resolveContextEngineCapabilities(),
-          )),
+          ...(await resolveContextEngineCapabilities()),
         };
         // Engine-owned compaction doesn't load the transcript at this level, so
         // message counts are unavailable.  We pass sessionFile so hook subscribers

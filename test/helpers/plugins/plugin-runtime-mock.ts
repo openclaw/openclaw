@@ -410,9 +410,6 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     llm: {
       complete: vi.fn(),
     },
-    sandbox: {
-      exec: vi.fn(),
-    },
   };
 
   return mergeDeep(base, overrides);

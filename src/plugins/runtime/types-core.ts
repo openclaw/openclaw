@@ -40,23 +40,6 @@ export type PluginLlmCompleteResult = {
   usage: { inputTokens: number; outputTokens: number };
 };
 
-// ── Plugin sandbox execution types ───────────────────────────────────
-
-export type PluginSandboxExecParams = {
-  command: string;
-  cwd?: string;
-  timeoutMs?: number;
-  signal?: AbortSignal;
-  /** Session key for sandbox backend resolution. Required when a sandbox backend is configured. */
-  sessionKey?: string;
-};
-
-export type PluginSandboxExecResult = {
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-};
-
 /** Core runtime helpers exposed to trusted native plugins. */
 export type PluginRuntimeCore = {
   version: string;
@@ -178,9 +161,5 @@ export type PluginRuntimeCore = {
   /** Single-shot LLM completion using the agent's auth and model configuration. */
   llm: {
     complete: (params: PluginLlmCompleteParams) => Promise<PluginLlmCompleteResult>;
-  };
-  /** Sandboxed shell execution using the agent's sandbox backend. */
-  sandbox: {
-    exec: (params: PluginSandboxExecParams) => Promise<PluginSandboxExecResult>;
   };
 };

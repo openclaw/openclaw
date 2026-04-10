@@ -14,7 +14,7 @@ let buildContextEngineMaintenanceRuntimeContext: typeof import("./context-engine
 let runContextEngineMaintenance: typeof import("./context-engine-maintenance.js").runContextEngineMaintenance;
 
 vi.mock("./context-engine-capabilities.js", () => ({
-  resolveContextEngineCapabilities: async () => ({ llm: undefined, sandbox: undefined }),
+  resolveContextEngineCapabilities: async () => ({ llm: undefined }),
 }));
 
 vi.mock("./transcript-rewrite.js", () => ({
