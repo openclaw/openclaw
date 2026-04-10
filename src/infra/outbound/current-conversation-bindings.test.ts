@@ -123,6 +123,39 @@ describe("generic current-conversation bindings", () => {
     });
   });
 
+  it("drops self-parent conversation refs when storing generic current bindings", async () => {
+    const bound = await bindGenericCurrentConversation({
+      targetSessionKey: "agent:codex:acp:telegram-dm",
+      targetKind: "session",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "6098642967",
+        parentConversationId: "6098642967",
+      },
+    });
+
+    expect(bound).toMatchObject({
+      bindingId: "generic:telegram\u241fdefault\u241f\u241f6098642967",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "6098642967",
+      },
+    });
+    expect(bound?.conversation.parentConversationId).toBeUndefined();
+    expect(
+      resolveGenericCurrentConversationBinding({
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "6098642967",
+      }),
+    ).toMatchObject({
+      bindingId: "generic:telegram\u241fdefault\u241f\u241f6098642967",
+      targetSessionKey: "agent:codex:acp:telegram-dm",
+    });
+  });
+
   it("removes persisted bindings on unbind", async () => {
     await bindGenericCurrentConversation({
       targetSessionKey: "agent:codex:acp:googlechat-room",

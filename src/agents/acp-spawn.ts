@@ -34,6 +34,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { callGateway } from "../gateway/call.js";
 import { areHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
 import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
+import { normalizeConversationTargetRef } from "../infra/outbound/session-binding-normalization.js";
 import {
   getSessionBindingService,
   isSessionBindingError,
@@ -289,13 +290,10 @@ function resolvePluginConversationRefForThreadBinding(params: {
   if (!conversationId) {
     return null;
   }
-  const parentConversationId = normalizeOptionalString(resolvedConversation?.parentConversationId);
-  return {
+  return normalizeConversationTargetRef({
     conversationId,
-    ...(parentConversationId && parentConversationId !== conversationId
-      ? { parentConversationId }
-      : {}),
-  };
+    parentConversationId: resolvedConversation?.parentConversationId,
+  });
 }
 
 function resolveSpawnMode(params: {
@@ -552,7 +550,7 @@ function resolveConversationRefForThreadBinding(params: {
         ](params)
       : undefined;
   if (compatibilityConversationId) {
-    return { conversationId: compatibilityConversationId };
+    return normalizeConversationTargetRef({ conversationId: compatibilityConversationId });
   }
   const parentConversationId = resolveConversationIdFromTargets({
     targets: [params.to],
@@ -562,14 +560,10 @@ function resolveConversationRefForThreadBinding(params: {
     targets: [params.to],
   });
   if (genericConversationId) {
-    return {
+    return normalizeConversationTargetRef({
       conversationId: genericConversationId,
-      ...(params.threadId != null &&
-      parentConversationId &&
-      parentConversationId !== genericConversationId
-        ? { parentConversationId }
-        : {}),
-    };
+      parentConversationId: params.threadId != null ? parentConversationId : undefined,
+    });
   }
   return null;
 }
