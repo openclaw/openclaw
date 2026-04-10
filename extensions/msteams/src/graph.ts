@@ -77,7 +77,9 @@ async function requestGraph(params: {
 }
 
 async function readOptionalGraphJson<T>(res: Response): Promise<T> {
-  if (res.status === 204 || res.headers.get("content-length") === "0") {
+  // Use optional chaining to stay resilient to partial test mocks that do not
+  // provide a status or Headers instance (they only shim `ok` + `json()`).
+  if (res.status === 204 || res.headers?.get?.("content-length") === "0") {
     return undefined as T;
   }
   return (await res.json()) as T;
@@ -171,7 +173,9 @@ export async function resolveGraphToken(
       clientId: creds.appId,
       clientSecret: creds.appPassword,
     });
-    if (delegated) return delegated;
+    if (delegated) {
+      return delegated;
+    }
     // Fall through to app-only token
   }
 
