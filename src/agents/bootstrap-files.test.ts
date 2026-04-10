@@ -150,6 +150,44 @@ describe("resolveBootstrapFilesForRun", () => {
     expect(agentsFile?.content).toBe("gpt subagent rules");
   });
 
+  it("prefers per-agent main AGENTS overrides over defaults", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "default rules", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.coder.md"), "coder rules", "utf8");
+    await fs.writeFile(
+      path.join(workspaceDir, "AGENTS.coder.gpt-5.4.md"),
+      "coder gpt rules",
+      "utf8",
+    );
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: {
+        agents: {
+          defaults: {
+            agentsFile: "AGENTS.md",
+          },
+          list: [
+            {
+              id: "coder",
+              agentsFile: "AGENTS.coder.md",
+              agentsFilesByModel: {
+                "openai/gpt-5.4": "AGENTS.coder.gpt-5.4.md",
+              },
+            },
+          ],
+        },
+      },
+      sessionKey: "agent:coder:main",
+      modelProviderId: "openai",
+      modelId: "gpt-5.4",
+    });
+
+    const agentsFile = files.find((file) => file.name === "AGENTS.md");
+    expect(agentsFile?.path).toBe(path.join(workspaceDir, "AGENTS.coder.gpt-5.4.md"));
+    expect(agentsFile?.content).toBe("coder gpt rules");
+  });
+
   it("falls back to AGENTS.md when a configured override escapes the workspace", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "default rules", "utf8");
@@ -172,6 +210,55 @@ describe("resolveBootstrapFilesForRun", () => {
     expect(agentsFile?.path).toBe(path.join(workspaceDir, "AGENTS.md"));
     expect(agentsFile?.content).toBe("default rules");
     expect(warnings[0]).toContain("must stay within the workspace root");
+  });
+
+  it("uses the per-agent config label in override warnings", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "default rules", "utf8");
+    const warnings: string[] = [];
+
+    await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: {
+        agents: {
+          list: [
+            {
+              id: "coder",
+              agentsFile: "../outside.md",
+            },
+          ],
+        },
+      },
+      sessionKey: "agent:coder:main",
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(warnings[0]).toContain("agents.list.coder.agentsFile");
+  });
+
+  it("preserves unavailable reasons in fallback warnings", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "default rules", "utf8");
+    await fs.mkdir(path.join(workspaceDir, "AGENTS.blocked.md"));
+    const warnings: string[] = [];
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: {
+        agents: {
+          defaults: {
+            agentsFile: "AGENTS.blocked.md",
+          },
+          list: [{ id: "main" }],
+        },
+      },
+      warn: (message) => warnings.push(message),
+    });
+
+    const agentsFile = files.find((file) => file.name === "AGENTS.md");
+    expect(agentsFile?.path).toBe(path.join(workspaceDir, "AGENTS.md"));
+    expect(warnings[0]).toContain("could not be loaded");
+    expect(warnings[0]).toContain("workspace validation");
   });
 
   it("passes resolved model identity into bootstrap hooks", async () => {
@@ -237,6 +324,29 @@ describe("resolveBootstrapContextForRun", () => {
     });
 
     expect(files).toEqual([]);
+  });
+
+  it("skips AGENTS override resolution when lightweight filtering removes AGENTS.md", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const warnings: string[] = [];
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      contextMode: "lightweight",
+      runKind: "cron",
+      config: {
+        agents: {
+          defaults: {
+            agentsFile: "../outside.md",
+          },
+          list: [{ id: "main" }],
+        },
+      },
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(files).toEqual([]);
+    expect(warnings).toEqual([]);
   });
 
   it("drops HEARTBEAT.md for non-heartbeat runs when the heartbeat prompt section is disabled", async () => {
@@ -305,6 +415,30 @@ describe("resolveBootstrapContextForRun", () => {
     });
 
     expect(files.some((file) => file.name === "HEARTBEAT.md")).toBe(true);
+  });
+
+  it("records bootstrap signatures from hook-adjusted AGENTS paths", async () => {
+    registerInternalHook("agent:bootstrap", (event) => {
+      const context = event.context as AgentBootstrapHookContext;
+      context.bootstrapFiles = context.bootstrapFiles.map((file) =>
+        file.name === "AGENTS.md"
+          ? {
+              ...file,
+              path: path.join(context.workspaceDir, "AGENTS.hook.md"),
+              content: "hook rules",
+              missing: false,
+            }
+          : file,
+      );
+    });
+
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "default rules", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.hook.md"), "hook rules", "utf8");
+
+    const result = await resolveBootstrapContextForRun({ workspaceDir });
+
+    expect(result.bootstrapSignature).toBe(`agents:${path.join(workspaceDir, "AGENTS.hook.md")}`);
   });
 });
 
@@ -393,6 +527,24 @@ describe("hasCompletedBootstrapTurn", () => {
       ].join("\n") + "\n",
       "utf8",
     );
+    expect(await hasCompletedBootstrapTurn(sessionFile, "agents:/tmp/AGENTS.new.md")).toBe(false);
+  });
+
+  it("returns false when a signature is expected but the recorded marker has none", async () => {
+    const sessionFile = path.join(tmpDir, "signature-missing.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({ type: "message", message: { role: "assistant", content: "hi" } }),
+        JSON.stringify({
+          type: "custom",
+          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+          data: { timestamp: 1 },
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
     expect(await hasCompletedBootstrapTurn(sessionFile, "agents:/tmp/AGENTS.new.md")).toBe(false);
   });
 

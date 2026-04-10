@@ -16,7 +16,7 @@ import {
 } from "./cli-runner.test-support.js";
 import { buildCliEnvAuthLog, executePreparedCliRun } from "./cli-runner/execute.js";
 import { buildSystemPrompt } from "./cli-runner/helpers.js";
-import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
+import { prepareCliRunContext, setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 
 beforeEach(() => {
@@ -961,5 +961,33 @@ describe("runCliAgent spawn path", () => {
       await fs.rm(workspaceDir, { recursive: true, force: true });
       restoreCliRunnerPrepareTestDeps();
     }
+  });
+
+  it("uses the normalized CLI model for bootstrap resolution", async () => {
+    const resolveBootstrapContextForRun = vi.fn(async () => ({
+      bootstrapFiles: [],
+      contextFiles: [],
+    }));
+
+    setCliRunnerPrepareTestDeps({
+      makeBootstrapWarn: () => () => {},
+      resolveBootstrapContextForRun,
+      resolveOpenClawDocsPath: async () => null,
+    });
+
+    await prepareCliRunContext({
+      sessionId: "s1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      prompt: "hi",
+      provider: "claude-cli",
+      model: "claude-sonnet-4-6",
+      timeoutMs: 1_000,
+      runId: "run-normalized-bootstrap-model",
+    });
+
+    expect(resolveBootstrapContextForRun).toHaveBeenCalledWith(
+      expect.objectContaining({ modelId: "sonnet" }),
+    );
   });
 });
