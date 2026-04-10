@@ -78,6 +78,7 @@ describe("handleAgentEnd", () => {
       data: {
         phase: "error",
         error: "LLM request failed: connection refused by the provider endpoint.",
+        livenessState: "blocked",
       },
     });
   });
@@ -189,6 +190,24 @@ describe("handleAgentEnd", () => {
 
     expect(ctx.log.warn).not.toHaveBeenCalled();
     expect(ctx.log.debug).toHaveBeenCalledWith("embedded run agent end: runId=run-1 isError=false");
+  });
+
+  it("surfaces replay-invalid paused lifecycle end state when present", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.state.replayInvalid = true;
+    ctx.state.livenessState = "paused";
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        livenessState: "paused",
+        replayInvalid: true,
+      },
+    });
   });
 
   it("flushes orphaned tool media as a media-only block reply", async () => {

@@ -101,6 +101,8 @@ import {
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
   STRICT_AGENTIC_BLOCKED_TEXT,
+  resolveReplayInvalidFlag,
+  resolveRunLivenessState,
 } from "./run/incomplete-turn.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
@@ -1099,6 +1101,10 @@ export async function runEmbeddedPiAgent(
               );
             }
             const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
+            attempt.setTerminalLifecycleMeta?.({
+              replayInvalid: resolveReplayInvalidFlag({ attempt }),
+              livenessState: "blocked",
+            });
             return {
               payloads: [
                 {
@@ -1120,6 +1126,8 @@ export async function runEmbeddedPiAgent(
                   lastTurnTotal,
                 }),
                 systemPromptReport: attempt.systemPromptReport,
+                replayInvalid: resolveReplayInvalidFlag({ attempt }),
+                livenessState: "blocked",
                 error: { kind, message: errorText },
               },
             };
@@ -1147,6 +1155,10 @@ export async function runEmbeddedPiAgent(
             }
             // Handle role ordering errors with a user-friendly message
             if (/incorrect role information|roles must alternate/i.test(errorText)) {
+              attempt.setTerminalLifecycleMeta?.({
+                replayInvalid: resolveReplayInvalidFlag({ attempt }),
+                livenessState: "blocked",
+              });
               return {
                 payloads: [
                   {
@@ -1168,6 +1180,8 @@ export async function runEmbeddedPiAgent(
                     lastTurnTotal,
                   }),
                   systemPromptReport: attempt.systemPromptReport,
+                  replayInvalid: resolveReplayInvalidFlag({ attempt }),
+                  livenessState: "blocked",
                   error: { kind: "role_ordering", message: errorText },
                 },
               };
@@ -1179,6 +1193,10 @@ export async function runEmbeddedPiAgent(
               const maxMbLabel =
                 typeof maxMb === "number" && Number.isFinite(maxMb) ? `${maxMb}` : null;
               const maxBytesHint = maxMbLabel ? ` (max ${maxMbLabel}MB)` : "";
+              attempt.setTerminalLifecycleMeta?.({
+                replayInvalid: resolveReplayInvalidFlag({ attempt }),
+                livenessState: "blocked",
+              });
               return {
                 payloads: [
                   {
@@ -1200,6 +1218,8 @@ export async function runEmbeddedPiAgent(
                     lastTurnTotal,
                   }),
                   systemPromptReport: attempt.systemPromptReport,
+                  replayInvalid: resolveReplayInvalidFlag({ attempt }),
+                  livenessState: "blocked",
                   error: { kind: "image_size", message: errorText },
                 },
               };
@@ -1496,6 +1516,17 @@ export async function runEmbeddedPiAgent(
                 aborted,
                 systemPromptReport: attempt.systemPromptReport,
                 finalAssistantVisibleText,
+                replayInvalid: resolveReplayInvalidFlag({
+                  attempt,
+                  incompleteTurnText: null,
+                }),
+                livenessState: resolveRunLivenessState({
+                  payloadCount: payloads.length,
+                  aborted,
+                  timedOut,
+                  attempt,
+                  incompleteTurnText: null,
+                }),
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
               didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
@@ -1616,6 +1647,17 @@ export async function runEmbeddedPiAgent(
                 aborted,
                 systemPromptReport: attempt.systemPromptReport,
                 finalAssistantVisibleText,
+                replayInvalid: resolveReplayInvalidFlag({
+                  attempt,
+                  incompleteTurnText,
+                }),
+                livenessState: resolveRunLivenessState({
+                  payloadCount: payloads.length,
+                  aborted,
+                  timedOut,
+                  attempt,
+                  incompleteTurnText,
+                }),
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
               didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
@@ -1650,6 +1692,17 @@ export async function runEmbeddedPiAgent(
               aborted,
               systemPromptReport: attempt.systemPromptReport,
               finalAssistantVisibleText,
+              replayInvalid: resolveReplayInvalidFlag({
+                attempt,
+                incompleteTurnText: null,
+              }),
+              livenessState: resolveRunLivenessState({
+                payloadCount: payloads.length,
+                aborted,
+                timedOut,
+                attempt,
+                incompleteTurnText: null,
+              }),
               // Handle client tool calls (OpenResponses hosted tools)
               // Propagate the LLM stop reason so callers (lifecycle events,
               // ACP bridge) can distinguish end_turn from max_tokens.

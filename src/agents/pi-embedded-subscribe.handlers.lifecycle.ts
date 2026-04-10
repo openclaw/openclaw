@@ -39,6 +39,9 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
   const lastAssistant = ctx.state.lastAssistant;
   const isError = isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error";
   let lifecycleErrorText: string | undefined;
+  const replayInvalid = ctx.state.replayInvalid === true ? true : undefined;
+  const livenessState =
+    ctx.state.livenessState === "working" && isError ? "blocked" : ctx.state.livenessState;
 
   if (isError && lastAssistant) {
     const friendlyError = formatAssistantErrorText(lastAssistant, {
@@ -89,6 +92,8 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
         data: {
           phase: "error",
           error: lifecycleErrorText ?? "LLM request failed.",
+          ...(livenessState ? { livenessState } : {}),
+          ...(replayInvalid ? { replayInvalid } : {}),
           endedAt: Date.now(),
         },
       });
@@ -97,6 +102,8 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
         data: {
           phase: "error",
           error: lifecycleErrorText ?? "LLM request failed.",
+          ...(livenessState ? { livenessState } : {}),
+          ...(replayInvalid ? { replayInvalid } : {}),
         },
       });
       return;
@@ -106,12 +113,18 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
       stream: "lifecycle",
       data: {
         phase: "end",
+        ...(livenessState ? { livenessState } : {}),
+        ...(replayInvalid ? { replayInvalid } : {}),
         endedAt: Date.now(),
       },
     });
     void ctx.params.onAgentEvent?.({
       stream: "lifecycle",
-      data: { phase: "end" },
+      data: {
+        phase: "end",
+        ...(livenessState ? { livenessState } : {}),
+        ...(replayInvalid ? { replayInvalid } : {}),
+      },
     });
   };
 

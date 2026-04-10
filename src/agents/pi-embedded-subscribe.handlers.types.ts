@@ -6,6 +6,7 @@ import type { HookRunner } from "../plugins/hooks.js";
 import type { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import type { MessagingToolSend } from "./pi-embedded-messaging.js";
 import type { BlockReplyPayload } from "./pi-embedded-payloads.js";
+import type { EmbeddedRunLivenessState } from "./pi-embedded-runner/types.js";
 import type {
   BlockReplyChunking,
   SubscribeEmbeddedPiSessionParams,
@@ -64,6 +65,8 @@ export type EmbeddedPiSubscribeState = {
   compactionRetryReject?: (reason?: unknown) => void;
   compactionRetryPromise: Promise<void> | null;
   unsubscribed: boolean;
+  replayInvalid?: boolean;
+  livenessState?: EmbeddedRunLivenessState;
 
   messagingToolSentTexts: string[];
   messagingToolSentTextsNormalized: string[];

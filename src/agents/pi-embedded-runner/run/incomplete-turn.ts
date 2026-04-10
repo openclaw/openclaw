@@ -1,6 +1,7 @@
 import type { EmbeddedPiExecutionContract } from "../../../config/types.agent-defaults.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
+import type { EmbeddedRunLivenessState } from "../types.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 type ReplayMetadataAttempt = Pick<
@@ -16,6 +17,8 @@ type IncompleteTurnAttempt = Pick<
   | "lastToolError"
   | "lastAssistant"
   | "replayMetadata"
+  | "promptErrorSource"
+  | "timedOutDuringCompaction"
 >;
 
 type PlanningOnlyAttempt = Pick<
@@ -30,6 +33,11 @@ type PlanningOnlyAttempt = Pick<
   | "itemLifecycle"
   | "replayMetadata"
   | "toolMetas"
+>;
+
+type RunLivenessAttempt = Pick<
+  EmbeddedRunAttemptResult,
+  "lastAssistant" | "promptErrorSource" | "replayMetadata" | "timedOutDuringCompaction"
 >;
 
 const PLANNING_ONLY_PROMISE_RE =
@@ -132,6 +140,43 @@ export function resolveIncompleteTurnPayloadText(params: {
   return params.attempt.replayMetadata.hadPotentialSideEffects
     ? "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying."
     : "⚠️ Agent couldn't generate a response. Please try again.";
+}
+
+export function resolveReplayInvalidFlag(params: {
+  attempt: RunLivenessAttempt;
+  incompleteTurnText?: string | null;
+}): boolean {
+  return (
+    !params.attempt.replayMetadata.replaySafe ||
+    params.attempt.promptErrorSource === "compaction" ||
+    params.attempt.timedOutDuringCompaction ||
+    Boolean(params.incompleteTurnText)
+  );
+}
+
+export function resolveRunLivenessState(params: {
+  payloadCount: number;
+  aborted: boolean;
+  timedOut: boolean;
+  attempt: RunLivenessAttempt;
+  incompleteTurnText?: string | null;
+}): EmbeddedRunLivenessState {
+  if (params.incompleteTurnText) {
+    return "abandoned";
+  }
+  if (
+    params.attempt.promptErrorSource === "compaction" ||
+    params.attempt.timedOutDuringCompaction
+  ) {
+    return "paused";
+  }
+  if ((params.aborted || params.timedOut) && params.payloadCount === 0) {
+    return "blocked";
+  }
+  if (params.attempt.lastAssistant?.stopReason === "error") {
+    return "blocked";
+  }
+  return "working";
 }
 
 function shouldApplyPlanningOnlyRetryGuard(params: {
