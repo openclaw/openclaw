@@ -12,7 +12,7 @@ import {
 } from "./protocol.js";
 import { createStdioTransport } from "./transport-stdio.js";
 import { createWebSocketTransport } from "./transport-websocket.js";
-import type { CodexAppServerTransport } from "./transport.js";
+import { closeCodexAppServerTransport, type CodexAppServerTransport } from "./transport.js";
 
 export const MIN_CODEX_APP_SERVER_VERSION = "0.118.0";
 
@@ -149,11 +149,13 @@ export class CodexAppServerClient {
   }
 
   close(): void {
+    if (this.closed) {
+      return;
+    }
     this.closed = true;
     this.lines.close();
-    if (!this.child.killed) {
-      this.child.kill?.();
-    }
+    this.rejectPendingRequests(new Error("codex app-server client is closed"));
+    closeCodexAppServerTransport(this.child);
   }
 
   private writeMessage(message: RpcRequest | RpcResponse): void {
@@ -245,6 +247,10 @@ export class CodexAppServerClient {
       return;
     }
     this.closed = true;
+    this.rejectPendingRequests(error);
+  }
+
+  private rejectPendingRequests(error: Error): void {
     for (const pending of this.pending.values()) {
       pending.reject(error);
     }
@@ -354,3 +360,7 @@ function formatExitValue(value: unknown): string {
   }
   return "unknown";
 }
+
+export const __testing = {
+  closeCodexAppServerTransport,
+} as const;

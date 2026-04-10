@@ -5,6 +5,7 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { disposeRegisteredAgentHarnesses } from "openclaw/plugin-sdk/agent-harness";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -1460,6 +1461,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
         watchUrl: lab.baseUrl,
       } satisfies QaSuiteResult;
     } finally {
+      await disposeRegisteredAgentHarnesses();
       if (ownsLab) {
         await lab.stop();
       }
@@ -1608,6 +1610,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     await gateway.stop({
       keepTemp,
     });
+    await disposeRegisteredAgentHarnesses();
     await mock?.stop();
     if (ownsLab) {
       await lab.stop();

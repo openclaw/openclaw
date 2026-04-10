@@ -5,22 +5,35 @@ import {
   type CodexAppServerStartOptions,
 } from "./config.js";
 
-let sharedClient: CodexAppServerClient | undefined;
-let sharedClientPromise: Promise<CodexAppServerClient> | undefined;
-let sharedClientKey: string | undefined;
+type SharedCodexAppServerClientState = {
+  client?: CodexAppServerClient;
+  promise?: Promise<CodexAppServerClient>;
+  key?: string;
+};
+
+const SHARED_CODEX_APP_SERVER_CLIENT_STATE = Symbol.for("openclaw.codexAppServerClientState");
+
+function getSharedCodexAppServerClientState(): SharedCodexAppServerClientState {
+  const globalState = globalThis as typeof globalThis & {
+    [SHARED_CODEX_APP_SERVER_CLIENT_STATE]?: SharedCodexAppServerClientState;
+  };
+  globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE] ??= {};
+  return globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE];
+}
 
 export async function getSharedCodexAppServerClient(options?: {
   startOptions?: CodexAppServerStartOptions;
 }): Promise<CodexAppServerClient> {
+  const state = getSharedCodexAppServerClientState();
   const startOptions = options?.startOptions ?? resolveCodexAppServerRuntimeOptions().start;
   const key = codexAppServerStartOptionsKey(startOptions);
-  if (sharedClientKey && sharedClientKey !== key) {
+  if (state.key && state.key !== key) {
     clearSharedCodexAppServerClient();
   }
-  sharedClientKey = key;
-  sharedClientPromise ??= (async () => {
+  state.key = key;
+  state.promise ??= (async () => {
     const client = CodexAppServerClient.start(startOptions);
-    sharedClient = client;
+    state.client = client;
     client.addCloseHandler(clearSharedClientIfCurrent);
     try {
       await client.initialize();
@@ -33,34 +46,37 @@ export async function getSharedCodexAppServerClient(options?: {
     }
   })();
   try {
-    return await sharedClientPromise;
+    return await state.promise;
   } catch (error) {
-    sharedClient = undefined;
-    sharedClientPromise = undefined;
-    sharedClientKey = undefined;
+    state.client = undefined;
+    state.promise = undefined;
+    state.key = undefined;
     throw error;
   }
 }
 
 export function resetSharedCodexAppServerClientForTests(): void {
-  sharedClient = undefined;
-  sharedClientPromise = undefined;
-  sharedClientKey = undefined;
+  const state = getSharedCodexAppServerClientState();
+  state.client = undefined;
+  state.promise = undefined;
+  state.key = undefined;
 }
 
 export function clearSharedCodexAppServerClient(): void {
-  const client = sharedClient;
-  sharedClient = undefined;
-  sharedClientPromise = undefined;
-  sharedClientKey = undefined;
+  const state = getSharedCodexAppServerClientState();
+  const client = state.client;
+  state.client = undefined;
+  state.promise = undefined;
+  state.key = undefined;
   client?.close();
 }
 
 function clearSharedClientIfCurrent(client: CodexAppServerClient): void {
-  if (sharedClient !== client) {
+  const state = getSharedCodexAppServerClientState();
+  if (state.client !== client) {
     return;
   }
-  sharedClient = undefined;
-  sharedClientPromise = undefined;
-  sharedClientKey = undefined;
+  state.client = undefined;
+  state.promise = undefined;
+  state.key = undefined;
 }

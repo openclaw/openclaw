@@ -35,6 +35,7 @@ describe("codex plugin", () => {
     expect(registerAgentHarness.mock.calls[0]?.[0]).toMatchObject({
       id: "codex",
       label: "Codex agent harness",
+      dispose: expect.any(Function),
     });
     expect(registerCommand.mock.calls[0]?.[0]).toMatchObject({
       name: "codex",

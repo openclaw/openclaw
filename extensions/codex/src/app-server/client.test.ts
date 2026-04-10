@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  __testing,
   CodexAppServerClient,
   CodexAppServerRpcError,
   MIN_CODEX_APP_SERVER_VERSION,
@@ -47,6 +48,7 @@ describe("CodexAppServerClient", () => {
   afterEach(() => {
     resetSharedCodexAppServerClientForTests();
     vi.restoreAllMocks();
+    vi.useRealTimers();
     for (const client of clients) {
       client.close();
     }
@@ -141,6 +143,30 @@ describe("CodexAppServerClient", () => {
     expect(harness.writes).toHaveLength(1);
   });
 
+  it("force-stops app-server transports that ignore the graceful signal", async () => {
+    vi.useFakeTimers();
+    const process = Object.assign(new EventEmitter(), {
+      stdin: {
+        write: vi.fn(),
+        end: vi.fn(),
+        destroy: vi.fn(),
+        unref: vi.fn(),
+      },
+      stdout: Object.assign(new PassThrough(), { unref: vi.fn() }),
+      stderr: Object.assign(new PassThrough(), { unref: vi.fn() }),
+      exitCode: null,
+      signalCode: null,
+      kill: vi.fn(),
+      unref: vi.fn(),
+    });
+
+    __testing.closeCodexAppServerTransport(process, { forceKillDelayMs: 25 });
+
+    expect(process.kill).toHaveBeenCalledWith("SIGTERM");
+    await vi.advanceTimersByTimeAsync(25);
+    expect(process.kill).toHaveBeenCalledWith("SIGKILL");
+    expect(process.unref).toHaveBeenCalledTimes(1);
+  });
   it("reads the Codex version from the app-server user agent", () => {
     expect(readCodexVersionFromUserAgent("openclaw/0.118.0 (macOS; test)")).toBe("0.118.0");
     expect(readCodexVersionFromUserAgent("codex_cli_rs/0.118.1-dev (linux; test)")).toBe(
