@@ -439,7 +439,12 @@ async function processResponsesStream(
       const item = event.item as Record<string, unknown>;
       if (item.type === "reasoning" && currentBlock?.type === "thinking") {
         const summary = Array.isArray(item.summary)
-          ? item.summary.map((part) => String((part as { text?: string }).text ?? "")).join("\n\n")
+          ? item.summary
+              .map((part) => {
+                const summaryPart = part as { text?: string };
+                return summaryPart.text ?? "";
+              })
+              .join("\n\n")
           : "";
         currentBlock.thinking = summary;
         currentBlock.thinkingSignature = JSON.stringify(item);
@@ -453,11 +458,12 @@ async function processResponsesStream(
       } else if (item.type === "message" && currentBlock?.type === "text") {
         const content = Array.isArray(item.content) ? item.content : [];
         currentBlock.text = content
-          .map((part) =>
-            (part as { type?: string; text?: string; refusal?: string }).type === "output_text"
-              ? String((part as { text?: string }).text ?? "")
-              : String((part as { refusal?: string }).refusal ?? ""),
-          )
+          .map((part) => {
+            const contentPart = part as { type?: string; text?: string; refusal?: string };
+            return contentPart.type === "output_text"
+              ? (contentPart.text ?? "")
+              : (contentPart.refusal ?? "");
+          })
           .join("");
         currentBlock.textSignature = encodeTextSignatureV1(
           stringifyUnknown(item.id),
