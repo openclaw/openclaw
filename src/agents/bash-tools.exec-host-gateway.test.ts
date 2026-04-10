@@ -1,5 +1,9 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+const formatJenniBridgeExecOutputMock = vi.hoisted(() =>
+  vi.fn<(value: string) => string | null>(() => null),
+);
+
 const INLINE_EVAL_HIT = {
   executable: "python3",
   normalizedExecutable: "python3",
@@ -9,7 +13,9 @@ const INLINE_EVAL_HIT = {
 
 const createAndRegisterDefaultExecApprovalRequestMock = vi.hoisted(() => vi.fn());
 const buildExecApprovalPendingToolResultMock = vi.hoisted(() => vi.fn());
-const buildExecApprovalFollowupTargetMock = vi.hoisted(() => vi.fn(() => null));
+const buildExecApprovalFollowupTargetMock = vi.hoisted(() =>
+  vi.fn<() => { approvalId: string } | null>(() => null),
+);
 const createExecApprovalDecisionStateMock = vi.hoisted(() =>
   vi.fn(
     (): {
@@ -126,6 +132,10 @@ vi.mock("../infra/exec-inline-eval.js", () => ({
   detectInterpreterInlineEvalArgv: detectInterpreterInlineEvalArgvMock,
 }));
 
+vi.mock("./bash-tools.exec-jenni-result.js", () => ({
+  formatJenniBridgeExecOutput: formatJenniBridgeExecOutputMock,
+}));
+
 let processGatewayAllowlist: typeof import("./bash-tools.exec-host-gateway.js").processGatewayAllowlist;
 
 describe("processGatewayAllowlist", () => {
@@ -170,6 +180,8 @@ describe("processGatewayAllowlist", () => {
     });
     runExecProcessMock.mockReset();
     sendExecApprovalFollowupResultMock.mockReset();
+    formatJenniBridgeExecOutputMock.mockReset();
+    formatJenniBridgeExecOutputMock.mockImplementation(() => null);
     enforceStrictInlineEvalApprovalBoundaryMock.mockReset();
     enforceStrictInlineEvalApprovalBoundaryMock.mockImplementation(
       (value: { approvedByAsk: boolean; deniedReason: string | null }) => value,
@@ -392,5 +404,68 @@ describe("processGatewayAllowlist", () => {
       );
     });
     expect(runExecProcessMock).not.toHaveBeenCalled();
+  });
+
+  it("formats Jenni bridge output in gateway followups", async () => {
+    buildExecApprovalFollowupTargetMock.mockReturnValue({ approvalId: "req-1" });
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    runExecProcessMock.mockResolvedValue({
+      session: { id: "session-1" },
+      promise: Promise.resolve({
+        aggregated: [
+          "DB_ID=48",
+          "JOB_ID=host.inspect.basic.20260410-064810",
+          "STATUS=success",
+          "LOG=host.inspect.basic.20260410-064810.log",
+        ].join("\n"),
+        exitCode: 0,
+        timedOut: false,
+      }),
+    });
+    formatJenniBridgeExecOutputMock.mockReturnValue(
+      [
+        "Jenni Admin job completed.",
+        "DB ID: 48",
+        "Job ID: host.inspect.basic.20260410-064810",
+        "Status: success",
+        "Log: host.inspect.basic.20260410-064810.log",
+      ].join("\n"),
+    );
+
+    const result = await processGatewayAllowlist({
+      command: "python app/bridge.py --spec app/jobs/host_inspection.yaml",
+      workdir: process.cwd(),
+      env: process.env as Record<string, string>,
+      pty: false,
+      defaultTimeoutSec: 30,
+      security: "allowlist",
+      ask: "always",
+      safeBins: new Set(),
+      safeBinProfiles: {},
+      warnings: [],
+      approvalRunningNoticeMs: 0,
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+    });
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
+        { approvalId: "req-1" },
+        [
+          "Exec finished (gateway id=req-1, session=session-1, code 0)",
+          "Jenni Admin job completed.",
+          "DB ID: 48",
+          "Job ID: host.inspect.basic.20260410-064810",
+          "Status: success",
+          "Log: host.inspect.basic.20260410-064810.log",
+        ].join("\n"),
+      );
+    });
   });
 });
