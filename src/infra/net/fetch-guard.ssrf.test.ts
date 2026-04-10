@@ -983,6 +983,66 @@ describe("fetchWithSsrFGuard hardening", () => {
     });
   });
 
+  it("normalizes multipart FormData before runtime dispatcher fetch preserves text fields", async () => {
+    class MockRuntimeFormData {
+      private readonly values: Array<[string, unknown, string | undefined]> = [];
+
+      append(name: string, value: unknown, filename?: string): void {
+        this.values.push([name, value, filename]);
+      }
+
+      entries(): IterableIterator<[string, unknown]> {
+        return this.values
+          .map(([name, value]) => [name, value] as [string, unknown])[Symbol.iterator]();
+      }
+
+      getAll(name: string): unknown[] {
+        return this.values.filter(([key]) => key === name).map(([, value]) => value);
+      }
+    }
+
+    const runtimeFetch = vi.fn(async () => okResponse());
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      FormData: MockRuntimeFormData,
+      fetch: runtimeFetch,
+    };
+
+    const form = new FormData();
+    form.append("model", "gpt-4o-transcribe");
+    form.append("language", "cs");
+    form.append("file", new File([new Uint8Array([1, 2, 3])], "voice.ogg", { type: "audio/ogg" }));
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.openai.com/v1/audio/transcriptions",
+      init: {
+        method: "POST",
+        headers: {
+          authorization: "Bearer test-key",
+          "content-type": "multipart/form-data; boundary=stale",
+          "content-length": "999",
+        },
+        body: form,
+      },
+      lookupFn: createPublicLookup(),
+      dispatcherPolicy: { mode: "direct" },
+    });
+
+    const [, init] = runtimeFetch.mock.calls[0] as [string, RequestInit];
+    const runtimeBody = init.body as unknown as MockRuntimeFormData;
+    expect(runtimeBody).toBeInstanceOf(MockRuntimeFormData);
+    expect(runtimeBody.getAll("model")).toEqual(["gpt-4o-transcribe"]);
+    expect(runtimeBody.getAll("language")).toEqual(["cs"]);
+    const headers = new Headers(init.headers);
+    expect(headers.get("authorization")).toBe("Bearer test-key");
+    expect(headers.has("content-type")).toBe(false);
+    expect(headers.has("content-length")).toBe(false);
+
+    await result.release();
+  });
+
   it("allows explicit proxy on localhost when allowPrivateProxy is true even with restrictive hostnameAllowlist", async () => {
     // Reproduces #61906: Telegram media downloads fail because the SSRF guard
     // checks the proxy hostname (localhost) against a target-scoped allowlist
