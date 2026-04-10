@@ -1,7 +1,7 @@
 // Octopus Orchestrator -- Adapter factory tests (M2-04)
 //
-// Tests the createAdapter factory function and the PtyTmuxAdapterStub's
-// spawn method via a mock TmuxManager.
+// Tests the createAdapter factory function and the PtyTmuxAdapter's
+// spawn method (with sentinel wrapper) via a mock TmuxManager.
 
 import { describe, expect, it } from "vitest";
 import { TmuxManager } from "../node-agent/tmux-manager.ts";
@@ -66,14 +66,10 @@ describe("createAdapter (M2-04)", () => {
     expect(adapter.type).toBe("pty_tmux");
   });
 
-  it("throws AdapterError(not_supported) for cli_exec", () => {
-    expect(() => createAdapter("cli_exec", makeDeps())).toThrow(AdapterError);
-    try {
-      createAdapter("cli_exec", makeDeps());
-    } catch (err) {
-      expect(err).toBeInstanceOf(AdapterError);
-      expect((err as AdapterError).code).toBe("not_supported");
-    }
+  it("creates a cli_exec adapter", () => {
+    const adapter = createAdapter("cli_exec", makeDeps());
+    expect(adapter).toBeDefined();
+    expect(adapter.type).toBe("cli_exec");
   });
 
   it("throws AdapterError(not_supported) for structured_subagent", () => {
@@ -97,8 +93,8 @@ describe("createAdapter (M2-04)", () => {
   });
 });
 
-describe("PtyTmuxAdapterStub.spawn (M2-04)", () => {
-  it("spawn calls TmuxManager.createSession with correct args", async () => {
+describe("PtyTmuxAdapter.spawn via factory", () => {
+  it("spawn calls TmuxManager.createSession with sentinel-wrapped command", async () => {
     const mockTmux = new MockTmuxManager();
     const adapter = createAdapter("pty_tmux", { tmuxManager: mockTmux });
     const spec = makeArmSpec();
@@ -107,7 +103,10 @@ describe("PtyTmuxAdapterStub.spawn (M2-04)", () => {
 
     expect(mockTmux.calls.length).toBe(1);
     expect(mockTmux.calls[0]?.name).toBe("octo-arm-test-arm-001");
-    expect(mockTmux.calls[0]?.cmd).toBe("sleep 60");
+    // Command should include sentinel wrapper
+    expect(mockTmux.calls[0]?.cmd).toContain("sleep 60");
+    expect(mockTmux.calls[0]?.cmd).toContain("echo $?");
+    expect(mockTmux.calls[0]?.cmd).toContain("test-arm-001.exit");
     expect(mockTmux.calls[0]?.cwd).toBe("/tmp");
 
     expect(ref.adapter_type).toBe("pty_tmux");
@@ -116,20 +115,9 @@ describe("PtyTmuxAdapterStub.spawn (M2-04)", () => {
     expect(ref.metadata?.tmux_session_name).toBe("octo-arm-test-arm-001");
   });
 
-  it("spawn with no args builds command without trailing space", async () => {
+  it("spawn without _arm_id falls back to idempotency_key (no sentinel)", async () => {
     const mockTmux = new MockTmuxManager();
     const adapter = createAdapter("pty_tmux", { tmuxManager: mockTmux });
-    const spec = makeArmSpec({
-      runtime_options: { command: "bash" },
-    });
-
-    await adapter.spawn(spec);
-
-    expect(mockTmux.calls[0]?.cmd).toBe("bash");
-  });
-
-  it("spawn throws AdapterError(spawn_failed) when _arm_id is missing", async () => {
-    const adapter = createAdapter("pty_tmux", makeDeps());
     const spec: ArmSpec = {
       spec_version: 1,
       mission_id: "m",
@@ -137,16 +125,18 @@ describe("PtyTmuxAdapterStub.spawn (M2-04)", () => {
       runtime_name: "bash",
       agent_id: "a",
       cwd: "/tmp",
-      idempotency_key: "k",
+      idempotency_key: "fallback-key",
       runtime_options: { command: "echo" },
     };
 
-    await expect(adapter.spawn(spec)).rejects.toThrow(AdapterError);
-    try {
-      await adapter.spawn(spec);
-    } catch (err) {
-      expect((err as AdapterError).code).toBe("spawn_failed");
-    }
+    const ref = await adapter.spawn(spec);
+
+    expect(mockTmux.calls.length).toBe(1);
+    // Falls back to idempotency_key for session name
+    expect(mockTmux.calls[0]?.name).toBe("octo-arm-fallback-key");
+    // No sentinel wrapper without _arm_id
+    expect(mockTmux.calls[0]?.cmd).toBe("echo");
+    expect(ref.session_id).toBe("octo-arm-fallback-key");
   });
 
   it("spawn propagates TmuxManager errors", async () => {
@@ -158,6 +148,6 @@ describe("PtyTmuxAdapterStub.spawn (M2-04)", () => {
     const adapter = createAdapter("pty_tmux", { tmuxManager: new FailingTmux() });
     const spec = makeArmSpec();
 
-    await expect(adapter.spawn(spec)).rejects.toThrow("tmux is broken");
+    await expect(adapter.spawn(spec)).rejects.toThrow("spawn failed");
   });
 });
