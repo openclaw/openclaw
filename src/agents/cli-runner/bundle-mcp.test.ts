@@ -198,6 +198,135 @@ describe("prepareCliBundleMcpConfig", () => {
     }
   });
 
+  it("keeps mcpConfigHash stable when only the loopback overlay port changes", async () => {
+    // Regression: the loopback MCP bridge binds to an OS-assigned ephemeral port
+    // on every gateway start. That port is embedded literally in the loopback
+    // server URL and used to be part of the hashed `mergedConfig`, which caused
+    // every persisted CLI session binding to be invalidated (`reason=mcp`) on
+    // every restart and wiped the agent's conversation memory. The hash must be
+    // computed from user-authored MCP state only.
+    const env = captureEnv(["HOME"]);
+    try {
+      const homeDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-home-");
+      const workspaceDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-workspace-");
+      process.env.HOME = homeDir;
+
+      await createBundleProbePlugin(homeDir);
+
+      const config: OpenClawConfig = {
+        plugins: { entries: { "bundle-probe": { enabled: true } } },
+      };
+
+      const makeLoopbackOverlay = (port: number) => ({
+        mcpServers: {
+          openclaw: {
+            type: "http" as const,
+            url: `http://127.0.0.1:${port}/mcp`,
+            headers: { Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}" },
+          },
+        },
+      });
+
+      const preparedFirst = await prepareCliBundleMcpConfig({
+        enabled: true,
+        mode: "claude-config-file",
+        backend: { command: "node", args: ["./fake-claude.mjs"] },
+        workspaceDir,
+        config,
+        additionalConfig: makeLoopbackOverlay(62949),
+      });
+      const preparedSecond = await prepareCliBundleMcpConfig({
+        enabled: true,
+        mode: "claude-config-file",
+        backend: { command: "node", args: ["./fake-claude.mjs"] },
+        workspaceDir,
+        config,
+        additionalConfig: makeLoopbackOverlay(51734),
+      });
+
+      expect(preparedFirst.mcpConfigHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(preparedFirst.mcpConfigHash).toBe(preparedSecond.mcpConfigHash);
+
+      // Written mcp.json must still reflect the *current* loopback port so the
+      // CLI process can actually reach the bridge — only session identity is
+      // port-agnostic.
+      const firstCfgPath =
+        preparedFirst.backend.args?.[
+          (preparedFirst.backend.args?.indexOf("--mcp-config") ?? -1) + 1
+        ];
+      const secondCfgPath =
+        preparedSecond.backend.args?.[
+          (preparedSecond.backend.args?.indexOf("--mcp-config") ?? -1) + 1
+        ];
+      const firstRaw = JSON.parse(await fs.readFile(firstCfgPath as string, "utf-8")) as {
+        mcpServers?: Record<string, { url?: string }>;
+      };
+      const secondRaw = JSON.parse(await fs.readFile(secondCfgPath as string, "utf-8")) as {
+        mcpServers?: Record<string, { url?: string }>;
+      };
+      expect(firstRaw.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:62949/mcp");
+      expect(secondRaw.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:51734/mcp");
+
+      await preparedFirst.cleanup?.();
+      await preparedSecond.cleanup?.();
+    } finally {
+      env.restore();
+    }
+  });
+
+  it("changes mcpConfigHash when a real user-authored MCP server is added", async () => {
+    // Guards against an over-broad fix: the hash must still invalidate the
+    // stored session when the user actually adds/removes a plugin MCP server,
+    // so the resumed Claude CLI sees the correct tool surface.
+    const env = captureEnv(["HOME"]);
+    try {
+      const homeDirBefore = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-home-before-");
+      const workspaceDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-workspace-");
+      process.env.HOME = homeDirBefore;
+
+      const loopback = {
+        mcpServers: {
+          openclaw: {
+            type: "http" as const,
+            url: "http://127.0.0.1:23119/mcp",
+            headers: { Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}" },
+          },
+        },
+      };
+
+      const preparedEmpty = await prepareCliBundleMcpConfig({
+        enabled: true,
+        mode: "claude-config-file",
+        backend: { command: "node", args: ["./fake-claude.mjs"] },
+        workspaceDir,
+        config: {},
+        additionalConfig: loopback,
+      });
+
+      const homeDirAfter = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-home-after-");
+      process.env.HOME = homeDirAfter;
+      await createBundleProbePlugin(homeDirAfter);
+
+      const preparedWithPlugin = await prepareCliBundleMcpConfig({
+        enabled: true,
+        mode: "claude-config-file",
+        backend: { command: "node", args: ["./fake-claude.mjs"] },
+        workspaceDir,
+        config: { plugins: { entries: { "bundle-probe": { enabled: true } } } },
+        additionalConfig: loopback,
+      });
+
+      expect(preparedEmpty.mcpConfigHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(preparedWithPlugin.mcpConfigHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(preparedEmpty.mcpConfigHash).not.toBe(preparedWithPlugin.mcpConfigHash);
+
+      await preparedEmpty.cleanup?.();
+      await preparedWithPlugin.cleanup?.();
+    } finally {
+      env.restore();
+    }
+  });
+
   it("preserves extra env values alongside generated MCP config", async () => {
     const workspaceDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-env-");
 

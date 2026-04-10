@@ -259,10 +259,12 @@ async function prepareModeSpecificBundleMcpConfig(params: {
   mode: CliBundleMcpMode;
   backend: CliBackendConfig;
   mergedConfig: BundleMcpConfig;
+  hashSource?: BundleMcpConfig;
   env?: Record<string, string>;
 }): Promise<PreparedCliBundleMcpConfig> {
   const serializedConfig = `${JSON.stringify(params.mergedConfig, null, 2)}\n`;
-  const mcpConfigHash = crypto.createHash("sha256").update(serializedConfig).digest("hex");
+  const serializedHashSource = `${JSON.stringify(params.hashSource ?? params.mergedConfig, null, 2)}\n`;
+  const mcpConfigHash = crypto.createHash("sha256").update(serializedHashSource).digest("hex");
 
   if (params.mode === "codex-config-overrides") {
     return {
@@ -348,6 +350,17 @@ export async function prepareCliBundleMcpConfig(params: {
     params.warn?.(`bundle MCP skipped for ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
   mergedConfig = applyMergePatch(mergedConfig, bundleConfig.config) as BundleMcpConfig;
+  // Snapshot user-authored MCP state for session-identity hashing *before* merging
+  // `additionalConfig`. `additionalConfig` carries gateway-internal runtime state
+  // (the loopback MCP bridge) whose URL embeds an ephemeral port assigned on every
+  // gateway start. Hashing it would invalidate every persisted CLI session binding
+  // on every restart, forcing `claude -p` fresh instead of `claude --resume` and
+  // wiping the agent's conversation memory. The loopback presence is still part of
+  // the config written to `mcp.json` and passed to the CLI — only the session
+  // identity hash is port-agnostic.
+  const hashSource: BundleMcpConfig = {
+    mcpServers: { ...mergedConfig.mcpServers },
+  };
   if (params.additionalConfig) {
     mergedConfig = applyMergePatch(mergedConfig, params.additionalConfig) as BundleMcpConfig;
   }
@@ -356,6 +369,7 @@ export async function prepareCliBundleMcpConfig(params: {
     mode,
     backend: params.backend,
     mergedConfig,
+    hashSource,
     env: params.env,
   });
 }
