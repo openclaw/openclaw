@@ -19,6 +19,7 @@ vi.mock("node:child_process", async () => {
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { parseSystemdExecStart } from "./systemd-unit.js";
 import {
+  deriveSystemctlSpawnEnv,
   isNonFatalSystemdInstallProbeError,
   isSystemdServiceEnabled,
   isSystemdUserServiceAvailable,
@@ -784,5 +785,114 @@ describe("systemd service control", () => {
         cb(null, "", "");
       });
     await assertRestartSuccess({ USER: "debian" });
+  });
+});
+
+describe("deriveSystemctlSpawnEnv (#63561)", () => {
+  const ORIGINAL_PLATFORM = Object.getOwnPropertyDescriptor(process, "platform");
+  const setPlatform = (value: NodeJS.Platform) => {
+    Object.defineProperty(process, "platform", { value, configurable: true });
+  };
+  const restorePlatform = () => {
+    if (ORIGINAL_PLATFORM) {
+      Object.defineProperty(process, "platform", ORIGINAL_PLATFORM);
+    }
+  };
+
+  it("returns baseEnv unchanged on non-Linux platforms", () => {
+    setPlatform("darwin");
+    try {
+      const baseEnv = { FOO: "bar" } as NodeJS.ProcessEnv;
+      expect(deriveSystemctlSpawnEnv(baseEnv)).toBe(baseEnv);
+    } finally {
+      restorePlatform();
+    }
+  });
+
+  it("returns baseEnv unchanged when both DBus env vars are already set", () => {
+    setPlatform("linux");
+    try {
+      const baseEnv = {
+        XDG_RUNTIME_DIR: "/run/user/1000",
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1000/bus",
+      } as NodeJS.ProcessEnv;
+      expect(deriveSystemctlSpawnEnv(baseEnv)).toBe(baseEnv);
+    } finally {
+      restorePlatform();
+    }
+  });
+
+  it("derives both env vars from getuid when neither is set", () => {
+    setPlatform("linux");
+    const originalGetuid = (process as { getuid?: () => number }).getuid;
+    Object.defineProperty(process, "getuid", {
+      value: () => 1001,
+      configurable: true,
+    });
+    try {
+      const baseEnv = { FOO: "bar" } as NodeJS.ProcessEnv;
+      const patched = deriveSystemctlSpawnEnv(baseEnv);
+      expect(patched).not.toBe(baseEnv);
+      expect(patched.XDG_RUNTIME_DIR).toBe("/run/user/1001");
+      expect(patched.DBUS_SESSION_BUS_ADDRESS).toBe("unix:path=/run/user/1001/bus");
+      // Original is not mutated.
+      expect(baseEnv.XDG_RUNTIME_DIR).toBeUndefined();
+      expect(baseEnv.DBUS_SESSION_BUS_ADDRESS).toBeUndefined();
+    } finally {
+      if (originalGetuid) {
+        Object.defineProperty(process, "getuid", {
+          value: originalGetuid,
+          configurable: true,
+        });
+      } else {
+        delete (process as { getuid?: () => number }).getuid;
+      }
+      restorePlatform();
+    }
+  });
+
+  it("preserves an existing XDG_RUNTIME_DIR when only DBUS_SESSION_BUS_ADDRESS is missing", () => {
+    setPlatform("linux");
+    const originalGetuid = (process as { getuid?: () => number }).getuid;
+    Object.defineProperty(process, "getuid", {
+      value: () => 1001,
+      configurable: true,
+    });
+    try {
+      const baseEnv = {
+        XDG_RUNTIME_DIR: "/custom/runtime",
+      } as NodeJS.ProcessEnv;
+      const patched = deriveSystemctlSpawnEnv(baseEnv);
+      expect(patched.XDG_RUNTIME_DIR).toBe("/custom/runtime");
+      expect(patched.DBUS_SESSION_BUS_ADDRESS).toBe("unix:path=/custom/runtime/bus");
+    } finally {
+      if (originalGetuid) {
+        Object.defineProperty(process, "getuid", {
+          value: originalGetuid,
+          configurable: true,
+        });
+      } else {
+        delete (process as { getuid?: () => number }).getuid;
+      }
+      restorePlatform();
+    }
+  });
+
+  it("returns baseEnv unchanged when getuid is unavailable", () => {
+    setPlatform("linux");
+    const originalGetuid = (process as { getuid?: () => number }).getuid;
+    delete (process as { getuid?: () => number }).getuid;
+    try {
+      const baseEnv = { FOO: "bar" } as NodeJS.ProcessEnv;
+      expect(deriveSystemctlSpawnEnv(baseEnv)).toBe(baseEnv);
+    } finally {
+      if (originalGetuid) {
+        Object.defineProperty(process, "getuid", {
+          value: originalGetuid,
+          configurable: true,
+        });
+      }
+      restorePlatform();
+    }
   });
 });

@@ -259,10 +259,57 @@ export function parseSystemdShow(output: string): SystemdServiceInfo {
   return info;
 }
 
+/**
+ * Build the env that will be passed to spawned `systemctl` invocations.
+ *
+ * Some launch contexts (npm global wrappers, certain shell wrappers, sudo
+ * variants) drop or never set `XDG_RUNTIME_DIR` / `DBUS_SESSION_BUS_ADDRESS`
+ * even though the user's systemd session bus is healthy and reachable from a
+ * normal shell. When that happens, `systemctl --user` falls back to
+ * "Failed to connect to bus: Permission denied" because the dbus client has
+ * no socket path to dial, even though the underlying user manager is fine.
+ *
+ * Conventionally `systemd --user` exposes its bus at `/run/user/$UID/bus`,
+ * so on Linux we derive both env vars from the current uid when they are
+ * missing. Existing values are always preserved — this only patches holes
+ * in the inherited env, never overrides what the caller already set.
+ */
+export function deriveSystemctlSpawnEnv(
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  if (process.platform !== "linux") {
+    return baseEnv;
+  }
+  const hasRuntimeDir = !!baseEnv.XDG_RUNTIME_DIR?.trim();
+  const hasBusAddress = !!baseEnv.DBUS_SESSION_BUS_ADDRESS?.trim();
+  if (hasRuntimeDir && hasBusAddress) {
+    return baseEnv;
+  }
+  const getuid = (process as { getuid?: () => number }).getuid;
+  if (typeof getuid !== "function") {
+    return baseEnv;
+  }
+  const uid = getuid.call(process);
+  if (typeof uid !== "number" || !Number.isFinite(uid) || uid < 0) {
+    return baseEnv;
+  }
+  const patched: NodeJS.ProcessEnv = { ...baseEnv };
+  const runtimeDir = hasRuntimeDir
+    ? (baseEnv.XDG_RUNTIME_DIR as string)
+    : `/run/user/${uid}`;
+  if (!hasRuntimeDir) {
+    patched.XDG_RUNTIME_DIR = runtimeDir;
+  }
+  if (!hasBusAddress) {
+    patched.DBUS_SESSION_BUS_ADDRESS = `unix:path=${runtimeDir}/bus`;
+  }
+  return patched;
+}
+
 async function execSystemctl(
   args: string[],
 ): Promise<{ stdout: string; stderr: string; code: number }> {
-  return await execFileUtf8("systemctl", args);
+  return await execFileUtf8("systemctl", args, { env: deriveSystemctlSpawnEnv() });
 }
 
 function readSystemctlDetail(result: { stdout: string; stderr: string }): string {
