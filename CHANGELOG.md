@@ -17,6 +17,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Discord: update Carbon version to v0.15.0. Thanks @thewilloftheshadow
 - fix(infra): expand host env security policy denylist [AI]. (#63277) Thanks @pgondhi987.
 - fix(agents): guard nodes tool outPath against workspace boundary [AI-assisted]. (#63551) Thanks @pgondhi987.
 - fix(qqbot): enforce media storage boundary for all outbound local file paths [AI]. (#63271) Thanks @pgondhi987.
