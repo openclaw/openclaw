@@ -677,6 +677,14 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         debug: vi.fn(),
       })),
     },
+    usage: {
+      resolveModelCostConfig: vi.fn(
+        () => undefined,
+      ) as unknown as PluginRuntime["usage"]["resolveModelCostConfig"],
+      estimateUsageCost: vi.fn(
+        () => undefined,
+      ) as unknown as PluginRuntime["usage"]["estimateUsageCost"],
+    },
     state: {
       resolveStateDir: vi.fn(() => "/tmp/openclaw"),
       openKeyedStore: vi.fn(() => {

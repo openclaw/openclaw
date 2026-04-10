@@ -229,6 +229,12 @@ export type PluginRuntimeCore = {
       opts?: { level?: LogLevel },
     ) => RuntimeLogger;
   };
+  usage: {
+    /** Resolve per-token pricing for a provider/model pair. Returns undefined when pricing is unknown. */
+    resolveModelCostConfig: typeof import("../../utils/usage-format.js").resolveModelCostConfig;
+    /** Estimate total cost in USD from token usage and a cost config. */
+    estimateUsageCost: typeof import("../../utils/usage-format.js").estimateUsageCost;
+  };
   state: {
     resolveStateDir: typeof import("../../config/paths.js").resolveStateDir;
     openKeyedStore: <T>(
