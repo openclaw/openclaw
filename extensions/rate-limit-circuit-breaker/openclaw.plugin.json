@@ -1,0 +1,26 @@
+{
+  "id": "rate-limit-circuit-breaker",
+  "name": "Rate Limit Circuit Breaker",
+  "description": "Prevents death loops in group chats when LLM API rate limits are hit. Suppresses repeated rate-limit error messages with exponential backoff to stop agents from triggering each other.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "maxConsecutiveErrors": {
+        "type": "number",
+        "description": "Number of consecutive rate-limit errors before the circuit breaker opens (suppresses further error messages). Default: 3",
+        "default": 3
+      },
+      "baseCooldownMs": {
+        "type": "number",
+        "description": "Base cooldown in milliseconds after the circuit breaker opens. Doubles with each subsequent trip (exponential backoff). Default: 60000 (60 seconds)",
+        "default": 60000
+      },
+      "maxCooldownMs": {
+        "type": "number",
+        "description": "Maximum cooldown in milliseconds (cap for exponential backoff). Default: 600000 (10 minutes)",
+        "default": 600000
+      }
+    }
+  }
+}

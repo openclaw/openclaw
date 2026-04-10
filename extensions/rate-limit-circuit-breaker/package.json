@@ -1,0 +1,17 @@
+{
+  "name": "@openclaw/rate-limit-circuit-breaker",
+  "version": "2026.4.10",
+  "description": "Prevents death loops in multi-agent group chats caused by LLM API rate limit errors",
+  "type": "module",
+  "dependencies": {},
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.0"
+  },
+  "exports": {
+    ".": "./index.ts"
+  }
+}
