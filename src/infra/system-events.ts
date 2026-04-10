@@ -173,6 +173,15 @@ export function drainWakeRequestedEvents(sessionKey: string): SystemEvent[] {
   return wakeEvents;
 }
 
+export function peekWakeRequestedEvents(sessionKey: string): SystemEvent[] {
+  const key = requireSessionKey(sessionKey);
+  const entry = getSessionQueue(key);
+  if (!entry || entry.queue.length === 0) {
+    return [];
+  }
+  return entry.queue.filter((event) => event.wakeRequested).map((event) => cloneSystemEvent(event));
+}
+
 export function drainSystemEvents(sessionKey: string): string[] {
   return drainSystemEventEntries(sessionKey).map((event) => event.text);
 }

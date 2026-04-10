@@ -510,8 +510,12 @@ async function resolveHeartbeatPreflight(params: {
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
   );
+  const hasWakeRequestedEvents = pendingEventEntries.some((event) => event.wakeRequested);
   const shouldInspectPendingEvents =
-    reasonFlags.isExecEventReason || reasonFlags.isCronEventReason || hasTaggedCronEvents;
+    reasonFlags.isExecEventReason ||
+    reasonFlags.isCronEventReason ||
+    hasTaggedCronEvents ||
+    hasWakeRequestedEvents;
   const shouldBypassFileGates =
     reasonFlags.isExecEventReason ||
     reasonFlags.isCronEventReason ||
