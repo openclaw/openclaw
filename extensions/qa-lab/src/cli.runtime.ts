@@ -331,6 +331,9 @@ export async function runQaParityReportCommand(opts: {
   process.stdout.write(`QA parity report: ${reportPath}\n`);
   process.stdout.write(`QA parity summary: ${summaryPath}\n`);
   process.stdout.write(`QA parity verdict: ${comparison.pass ? "pass" : "fail"}\n`);
+  if (!comparison.pass) {
+    process.exitCode = 1;
+  }
 }
 export async function runQaCharacterEvalCommand(opts: {
   repoRoot?: string;
