@@ -14,6 +14,7 @@ const getApiKeyForModelMock = vi.fn();
 const requireApiKeyMock = vi.fn();
 const resolveSessionAuthProfileOverrideMock = vi.fn();
 const getActiveEmbeddedRunSnapshotMock = vi.fn();
+const prepareProviderRuntimeAuthMock = vi.fn();
 const diagDebugMock = vi.fn();
 
 vi.mock("@mariozechner/pi-ai", async () => {
@@ -56,6 +57,10 @@ vi.mock("./model-auth.js", () => ({
 
 vi.mock("./pi-embedded-runner/runs.js", () => ({
   getActiveEmbeddedRunSnapshot: (...args: unknown[]) => getActiveEmbeddedRunSnapshotMock(...args),
+}));
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  prepareProviderRuntimeAuth: (...args: unknown[]) => prepareProviderRuntimeAuthMock(...args),
 }));
 
 vi.mock("./auth-profiles/session-override.js", () => ({
@@ -194,6 +199,7 @@ describe("runBtwSideQuestion", () => {
     requireApiKeyMock.mockReset();
     resolveSessionAuthProfileOverrideMock.mockReset();
     getActiveEmbeddedRunSnapshotMock.mockReset();
+    prepareProviderRuntimeAuthMock.mockReset();
     diagDebugMock.mockReset();
 
     buildSessionContextMock.mockReturnValue({
@@ -209,6 +215,7 @@ describe("runBtwSideQuestion", () => {
     requireApiKeyMock.mockReturnValue("secret");
     resolveSessionAuthProfileOverrideMock.mockResolvedValue("profile-1");
     getActiveEmbeddedRunSnapshotMock.mockReturnValue(undefined);
+    prepareProviderRuntimeAuthMock.mockResolvedValue(undefined);
   });
 
   it("streams blocks without persisting BTW data to disk", async () => {
@@ -295,6 +302,55 @@ describe("runBtwSideQuestion", () => {
     const result = await runSideQuestion();
 
     expect(result).toEqual({ text: "Final answer." });
+  });
+
+  it("applies provider runtime auth before streaming github-copilot BTW questions", async () => {
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "github-copilot",
+      id: "gpt-5.4",
+      api: "openai-responses",
+      baseUrl: "https://api.individual.githubcopilot.com",
+    });
+    getApiKeyForModelMock.mockResolvedValue({
+      apiKey: "github-token",
+      mode: "token",
+      source: "profile",
+      profileId: "github-copilot:github",
+    });
+    requireApiKeyMock.mockReturnValue("github-token");
+    prepareProviderRuntimeAuthMock.mockResolvedValue({
+      apiKey: "copilot-runtime-token",
+      baseUrl: "https://api.enterprise.githubcopilot.com",
+    });
+    mockDoneAnswer("Copilot answer.");
+
+    const result = await runSideQuestion({
+      provider: "github-copilot",
+      model: "gpt-5.4",
+    });
+
+    expect(result).toEqual({ text: "Copilot answer." });
+    expect(prepareProviderRuntimeAuthMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "github-copilot",
+        context: expect.objectContaining({
+          provider: "github-copilot",
+          modelId: "gpt-5.4",
+          apiKey: "github-token",
+          authMode: "token",
+          profileId: "profile-1",
+        }),
+      }),
+    );
+    expect(streamSimpleMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "github-copilot",
+        id: "gpt-5.4",
+        baseUrl: "https://api.enterprise.githubcopilot.com",
+      }),
+      expect.anything(),
+      expect.objectContaining({ apiKey: "copilot-runtime-token" }),
+    );
   });
 
   it("strips injected empty tools arrays from BTW payloads before sending", async () => {

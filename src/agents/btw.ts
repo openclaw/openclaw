@@ -17,7 +17,9 @@ import {
   type SessionEntry,
 } from "../config/sessions.js";
 import { diagnosticLogger as diag } from "../logging/diagnostic.js";
+import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { resolveSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import {
   resolveImageSanitizationLimits,
@@ -389,10 +391,45 @@ export async function runBtwSideQuestion(
     profileId: authProfileId,
     agentDir: params.agentDir,
   });
-  const apiKey =
+  let runtimeModel = model;
+  let apiKey =
     apiKeyInfo.mode === "aws-sdk" && !apiKeyInfo.apiKey
       ? undefined
       : requireApiKey(apiKeyInfo, model.provider);
+  if (apiKey) {
+    const sessionAgentId = resolveSessionAgentId({
+      sessionKey: params.sessionKey,
+      config: params.cfg,
+    });
+    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, sessionAgentId);
+    const preparedAuth = await prepareProviderRuntimeAuth({
+      provider: model.provider,
+      config: params.cfg,
+      workspaceDir,
+      env: process.env,
+      context: {
+        config: params.cfg,
+        agentDir: params.agentDir,
+        workspaceDir,
+        env: process.env,
+        provider: model.provider,
+        modelId: model.id,
+        model,
+        apiKey,
+        authMode: apiKeyInfo.mode,
+        profileId: authProfileId,
+      },
+    });
+    if (preparedAuth?.baseUrl) {
+      runtimeModel = {
+        ...runtimeModel,
+        baseUrl: preparedAuth.baseUrl,
+      };
+    }
+    if (preparedAuth?.apiKey) {
+      apiKey = preparedAuth.apiKey;
+    }
+  }
 
   const chunker =
     params.opts?.onBlockReply && params.blockReplyChunking
@@ -422,7 +459,7 @@ export async function runBtwSideQuestion(
 
   const stream = await streamWithPayloadPatch(
     streamSimple,
-    model,
+    runtimeModel,
     {
       systemPrompt: buildBtwSystemPrompt(),
       messages: [
