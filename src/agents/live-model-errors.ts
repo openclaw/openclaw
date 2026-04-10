@@ -31,9 +31,6 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
   if (/model/i.test(msg) && /does not exist/i.test(msg)) {
     return true;
   }
-  if (/does not exist or you do not have access/i.test(msg)) {
-    return true;
-  }
   if (/deprecated/i.test(msg) && /(upgrade|transition) to/i.test(msg)) {
     return true;
   }

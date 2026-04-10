@@ -24,6 +24,9 @@ describe("live model error helpers", () => {
         "404 The free model has been deprecated. Transition to qwen/qwen3.6-plus for continued paid access.",
       ),
     ).toBe(true);
+    expect(
+      isModelNotFoundErrorMessage("The deployment does not exist or you do not have access."),
+    ).toBe(false);
     expect(isModelNotFoundErrorMessage("request ended without sending any chunks")).toBe(false);
   });
 

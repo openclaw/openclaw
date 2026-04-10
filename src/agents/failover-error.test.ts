@@ -203,6 +203,14 @@ describe("failover-error", () => {
     ).toBe("model_not_found");
   });
 
+  it("does not classify generic access errors as model_not_found", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "The deployment does not exist or you do not have access.",
+      }),
+    ).toBeNull();
+  });
+
   it("keeps status-only 503s conservative unless the payload is clearly overloaded", () => {
     expect(
       resolveFailoverReasonFromError({
