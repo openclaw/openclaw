@@ -44,7 +44,7 @@ If you want OpenAI, ElevenLabs, MiniMax, or Mistral:
 
 Microsoft speech does **not** require an API key.
 
-If multiple providers are configured, the selected provider is used first and the others are fallback options.
+If multiple providers are configured, the selected provider is tried first. If it fails, OpenClaw automatically falls back through the remaining configured providers in `autoSelectOrder` (openai → mistral → elevenlabs → microsoft → minimax by default). There is no explicit fallback config; any provider that passes its `isConfigured` check is eligible.
 Auto-summary uses the configured `summaryModel` (or `agents.defaults.model.primary`),
 so that provider must also be authenticated if you enable summaries.
 
