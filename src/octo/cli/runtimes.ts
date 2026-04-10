@@ -32,6 +32,27 @@ export interface AuthStatus {
   detail: string;
 }
 
+export interface UsageStats {
+  available: boolean;
+  source: string;
+  todayMessages: number | null;
+  todaySessions: number | null;
+  todayTokens: number | null;
+  todayToolCalls: number | null;
+  last7dMessages: number | null;
+  last7dSessions: number | null;
+  last7dTokens: number | null;
+  dailyBreakdown: Array<{
+    date: string;
+    messages: number | null;
+    sessions: number | null;
+    tokens: number | null;
+    toolCalls: number | null;
+  }>;
+  lastUpdated: string | null;
+  detail: string;
+}
+
 export interface RuntimeInfo {
   name: string;
   binary: string;
@@ -42,11 +63,13 @@ export interface RuntimeInfo {
   weight: "lightest" | "light" | "heavy";
   structuredOutput: boolean;
   auth: AuthStatus;
+  usage: UsageStats;
   notes: string;
 }
 
 export interface RuntimesOptions {
   json?: boolean;
+  usage?: boolean;
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -61,6 +84,7 @@ interface KnownRuntime {
   weight: RuntimeInfo["weight"];
   structuredOutput: boolean;
   authProbe: () => AuthStatus;
+  usageProbe: () => UsageStats;
   notes: string;
 }
 
@@ -224,6 +248,148 @@ function noAuthProbe(): AuthStatus {
   return { ...UNKNOWN_AUTH, detail: "auth probing not implemented for this tool" };
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Usage probing — read local usage data (no API calls)
+// ──────────────────────────────────────────────────────────────────────────
+
+const NO_USAGE: UsageStats = {
+  available: false,
+  source: "none",
+  todayMessages: null,
+  todaySessions: null,
+  todayTokens: null,
+  todayToolCalls: null,
+  last7dMessages: null,
+  last7dSessions: null,
+  last7dTokens: null,
+  dailyBreakdown: [],
+  lastUpdated: null,
+  detail: "no local usage data available",
+};
+
+function todayStr(): string {
+  return new Date().toISOString().split("T")[0];
+}
+
+function last7dDates(): Set<string> {
+  const dates = new Set<string>();
+  const now = Date.now();
+  for (let i = 0; i < 7; i++) {
+    dates.add(new Date(now - i * 86400_000).toISOString().split("T")[0]);
+  }
+  return dates;
+}
+
+function probeClaudeUsage(): UsageStats {
+  const statsPath = path.join(homedir(), ".claude", "stats-cache.json");
+  const data = readJsonSafe(statsPath);
+  if (!data) {
+    return { ...NO_USAGE, detail: "no stats-cache.json at ~/.claude/" };
+  }
+  const days =
+    (data.dailyActivity as Array<{
+      date: string;
+      messageCount: number;
+      sessionCount: number;
+      toolCallCount: number;
+    }>) ?? [];
+  const lastUpdated = (data.lastComputedDate as string) ?? null;
+  const today = todayStr();
+  const recent7d = last7dDates();
+
+  const todayData = days.find((d) => d.date === today);
+  const last7d = days.filter((d) => recent7d.has(d.date));
+
+  const breakdown = last7d.map((d) => ({
+    date: d.date,
+    messages: d.messageCount,
+    sessions: d.sessionCount,
+    tokens: null as number | null,
+    toolCalls: d.toolCallCount,
+  }));
+
+  const sum7dMsgs = last7d.reduce((s, d) => s + d.messageCount, 0);
+  const sum7dSessions = last7d.reduce((s, d) => s + d.sessionCount, 0);
+
+  const stale = lastUpdated !== today ? ` (stale — last updated ${lastUpdated})` : "";
+  return {
+    available: true,
+    source: "~/.claude/stats-cache.json",
+    todayMessages: todayData?.messageCount ?? 0,
+    todaySessions: todayData?.sessionCount ?? 0,
+    todayTokens: null,
+    todayToolCalls: todayData?.toolCallCount ?? 0,
+    last7dMessages: sum7dMsgs,
+    last7dSessions: sum7dSessions,
+    last7dTokens: null,
+    dailyBreakdown: breakdown,
+    lastUpdated,
+    detail: `${last7d.length} days of data, ${sum7dMsgs} messages, ${sum7dSessions} sessions (7d)${stale}`,
+  };
+}
+
+function probeCodexUsage(): UsageStats {
+  const dbPath = path.join(homedir(), ".codex", "state_5.sqlite");
+  try {
+    // Use sqlite3 CLI to query — avoids native module dependency
+    const today = todayStr();
+    const result = execSync(
+      `sqlite3 "${dbPath}" "SELECT date(created_at, 'unixepoch') as day, SUM(tokens_used) as tokens, COUNT(*) as sessions FROM threads WHERE created_at > strftime('%s', 'now', '-30 days') GROUP BY day ORDER BY day DESC;"`,
+      { encoding: "utf-8", timeout: 5000 },
+    );
+    const rows = result.trim().split("\n").filter(Boolean);
+    let todayTokens = 0;
+    let todaySessions = 0;
+    let sum7dTokens = 0;
+    let sum7dSessions = 0;
+    const breakdown: UsageStats["dailyBreakdown"] = [];
+
+    for (const row of rows) {
+      const [day, tokens, sessions] = row.split("|");
+      const t = parseInt(tokens ?? "0", 10);
+      const s = parseInt(sessions ?? "0", 10);
+      sum7dTokens += t;
+      sum7dSessions += s;
+      if (day === today) {
+        todayTokens = t;
+        todaySessions = s;
+      }
+      breakdown.push({
+        date: day ?? "",
+        messages: null,
+        sessions: s,
+        tokens: t,
+        toolCalls: null,
+      });
+    }
+
+    return {
+      available: true,
+      source: "~/.codex/state_5.sqlite",
+      todayMessages: null,
+      todaySessions,
+      todayTokens,
+      todayToolCalls: null,
+      last7dMessages: null,
+      last7dSessions: sum7dSessions,
+      last7dTokens: sum7dTokens,
+      dailyBreakdown: breakdown,
+      lastUpdated: breakdown[0]?.date ?? null,
+      detail: `${breakdown.length} days of data, ${(sum7dTokens / 1_000_000).toFixed(1)}M tokens, ${sum7dSessions} sessions (30d)`,
+    };
+  } catch {
+    return {
+      ...NO_USAGE,
+      source: "~/.codex/state_5.sqlite",
+      detail: "could not query Codex SQLite database",
+    };
+  }
+}
+
+function noUsageProbe(): UsageStats {
+  return NO_USAGE;
+}
+
 function alwaysAvailableAuth(): AuthStatus {
   return {
     authenticated: true,
@@ -249,6 +415,7 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     weight: "lightest",
     structuredOutput: true,
     authProbe: alwaysAvailableAuth,
+    usageProbe: noUsageProbe,
     notes:
       "Native OpenClaw agent loop — no external tool needed. Always available when Gateway is running.",
   },
@@ -260,6 +427,7 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     weight: "light",
     structuredOutput: true,
     authProbe: probeClaudeAuth,
+    usageProbe: probeClaudeUsage,
     notes:
       "Anthropic CLI. Supports --output-format stream-json for structured output. Requires Anthropic API key or OAuth.",
   },
@@ -271,6 +439,7 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     weight: "light",
     structuredOutput: true,
     authProbe: probeCodexAuth,
+    usageProbe: probeCodexUsage,
     notes:
       "OpenAI CLI. Supports --json structured output mode. Requires OpenAI API key or ChatGPT OAuth.",
   },
@@ -282,6 +451,7 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     weight: "light",
     structuredOutput: true,
     authProbe: probeGeminiAuth,
+    usageProbe: noUsageProbe,
     notes: "Google CLI. Supports structured output. Requires Google API credentials.",
   },
   {
@@ -292,6 +462,7 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     weight: "heavy",
     structuredOutput: false,
     authProbe: noAuthProbe,
+    usageProbe: noUsageProbe,
     notes: "AI pair programming tool. Interactive TUI only — driven via PTY/tmux.",
   },
   {
@@ -302,6 +473,7 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     weight: "heavy",
     structuredOutput: false,
     authProbe: noAuthProbe,
+    usageProbe: noUsageProbe,
     notes: "Cursor editor CLI. Interactive — driven via PTY/tmux if CLI mode available.",
   },
   {
@@ -312,6 +484,7 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     weight: "heavy",
     structuredOutput: false,
     authProbe: probeGhCopilotAuth,
+    usageProbe: noUsageProbe,
     notes: "GitHub Copilot via `gh copilot`. Requires GitHub CLI + Copilot extension.",
   },
   {
@@ -322,6 +495,7 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     weight: "light",
     structuredOutput: true,
     authProbe: noAuthProbe,
+    usageProbe: noUsageProbe,
     notes: "Open-source coding agent. Supports structured output mode.",
   },
 ];
@@ -353,12 +527,13 @@ function getVersion(binary: string, versionFlag: string): string | null {
 }
 
 /** Discover all known runtimes on this machine. */
-export function discoverRuntimes(): RuntimeInfo[] {
+export function discoverRuntimes(opts?: { includeUsage?: boolean }): RuntimeInfo[] {
   return KNOWN_RUNTIMES.map((known) => {
     const binaryPath = findBinary(known.binary);
     const found = binaryPath !== null;
     const version = found ? getVersion(known.binary, known.versionFlag) : null;
     const auth = found ? known.authProbe() : UNKNOWN_AUTH;
+    const usage = found && opts?.includeUsage ? known.usageProbe() : NO_USAGE;
     return {
       name: known.name,
       binary: known.binary,
@@ -369,6 +544,7 @@ export function discoverRuntimes(): RuntimeInfo[] {
       weight: known.weight,
       structuredOutput: known.structuredOutput,
       auth,
+      usage,
       notes: known.notes,
     };
   });
@@ -430,6 +606,25 @@ export function formatRuntimes(runtimes: RuntimeInfo[]): string {
         lines.push(
           `       plan: ${rt.auth.subscription}${rt.auth.rateLimitTier ? ` / ${rt.auth.rateLimitTier}` : ""}`,
         );
+      }
+      if (rt.usage.available) {
+        lines.push(`       usage: ${rt.usage.detail}`);
+        if (rt.usage.dailyBreakdown.length > 0) {
+          lines.push("       recent:");
+          for (const day of rt.usage.dailyBreakdown.slice(0, 5)) {
+            const parts: string[] = [day.date];
+            if (day.tokens != null) {
+              parts.push(`${(day.tokens / 1_000_000).toFixed(1)}M tokens`);
+            }
+            if (day.messages != null) {
+              parts.push(`${day.messages} msgs`);
+            }
+            if (day.sessions != null) {
+              parts.push(`${day.sessions} sessions`);
+            }
+            lines.push(`         ${parts.join("  ")}`);
+          }
+        }
       }
       lines.push("");
     }
@@ -494,7 +689,7 @@ export function runOctoRuntimes(
   opts: RuntimesOptions,
   out: { write: (s: string) => void } = process.stdout,
 ): number {
-  const runtimes = discoverRuntimes();
+  const runtimes = discoverRuntimes({ includeUsage: opts.usage ?? false });
   const output = opts.json ? formatRuntimesJson(runtimes) : formatRuntimes(runtimes);
   out.write(output);
   return 0;
