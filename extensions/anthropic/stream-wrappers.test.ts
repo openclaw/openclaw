@@ -2,6 +2,7 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __testing,
+  createAnthropicAdvisorToolWrapper,
   createAnthropicBetaHeadersWrapper,
   createAnthropicFastModeWrapper,
   createAnthropicServiceTierWrapper,
@@ -214,5 +215,198 @@ describe("createAnthropicServiceTierWrapper", () => {
       api: "openai-completions",
     });
     expect(payload?.service_tier).toBeUndefined();
+  });
+});
+
+describe("createAnthropicAdvisorToolWrapper", () => {
+  function runAdvisorWrapper(params: { advisorModel?: string; existingTools?: unknown[] }): {
+    payload?: Record<string, unknown>;
+  } {
+    const captured: { payload?: Record<string, unknown> } = {};
+    const base: StreamFn = (model, _context, options) => {
+      if (options?.onPayload) {
+        const payload: Record<string, unknown> = {
+          tools: params.existingTools ?? [{ name: "Read", type: "custom" }],
+        };
+        options.onPayload(payload, model);
+        captured.payload = payload;
+      }
+      return {} as never;
+    };
+
+    const wrapper = createAnthropicAdvisorToolWrapper(
+      base,
+      params.advisorModel ?? "claude-sonnet-4-6",
+    );
+    wrapper(
+      { provider: "anthropic", api: "anthropic-messages", id: "claude-sonnet-4-6" } as never,
+      {} as never,
+      { apiKey: "sk-ant-api03-test-key" } as never,
+    );
+    return captured;
+  }
+
+  it("injects advisor tool definition into payload tools array", () => {
+    const { payload } = runAdvisorWrapper({});
+    const tools = payload?.tools as unknown[];
+    expect(tools).toBeDefined();
+    const advisorTool = tools.find(
+      (t: any) => t.type === "advisor_20260301" && t.name === "advisor",
+    );
+    expect(advisorTool).toBeDefined();
+    expect((advisorTool as any).model).toBe("claude-sonnet-4-6");
+  });
+
+  it("preserves existing tools when injecting advisor", () => {
+    const existingTools = [
+      { name: "Read", type: "custom" },
+      { name: "Write", type: "custom" },
+    ];
+    const { payload } = runAdvisorWrapper({ existingTools });
+    const tools = payload?.tools as unknown[];
+    expect(tools).toHaveLength(3);
+    expect(tools[0]).toEqual({ name: "Read", type: "custom" });
+    expect(tools[1]).toEqual({ name: "Write", type: "custom" });
+  });
+
+  it("creates tools array if none exists in payload", () => {
+    const captured: { payload?: Record<string, unknown> } = {};
+    const base: StreamFn = (model, _context, options) => {
+      if (options?.onPayload) {
+        const payload: Record<string, unknown> = {};
+        options.onPayload(payload, model);
+        captured.payload = payload;
+      }
+      return {} as never;
+    };
+    const wrapper = createAnthropicAdvisorToolWrapper(base, "claude-sonnet-4-6");
+    wrapper(
+      { provider: "anthropic", api: "anthropic-messages", id: "claude-sonnet-4-6" } as never,
+      {} as never,
+      { apiKey: "sk-ant-api03-test-key" } as never,
+    );
+    const tools = captured.payload?.tools as unknown[];
+    expect(tools).toHaveLength(1);
+  });
+});
+
+describe("advisor wrapper composition", () => {
+  it("composes advisor wrapper into provider stream chain", () => {
+    const captured: { headers?: Record<string, string>; payload?: Record<string, unknown> } = {};
+    const base: StreamFn = (model, _context, options) => {
+      captured.headers = options?.headers;
+      const payload: Record<string, unknown> = {
+        tools: [{ name: "Read", type: "custom" }],
+      };
+      options?.onPayload?.(payload as never, model as never);
+      captured.payload = payload;
+      return {} as never;
+    };
+
+    const wrapped = wrapAnthropicProviderStream({
+      streamFn: base,
+      modelId: "claude-sonnet-4-6",
+      extraParams: { advisor: { enabled: true, model: "claude-haiku-4-5" } },
+    } as never);
+
+    wrapped?.(
+      { provider: "anthropic", api: "anthropic-messages", id: "claude-sonnet-4-6" } as never,
+      {} as never,
+      { apiKey: "sk-ant-api03-test-key" } as never,
+    );
+
+    expect(captured.headers?.["anthropic-beta"]).toContain("advisor-tool-2026-03-01");
+    const tools = captured.payload?.tools as unknown[];
+    const advisorTool = tools?.find((t: any) => t.name === "advisor");
+    expect(advisorTool).toBeDefined();
+  });
+
+  it("does not inject advisor when not configured", () => {
+    const captured: { headers?: Record<string, string>; payload?: Record<string, unknown> } = {};
+    const base: StreamFn = (model, _context, options) => {
+      captured.headers = options?.headers;
+      const payload: Record<string, unknown> = {
+        tools: [{ name: "Read", type: "custom" }],
+      };
+      options?.onPayload?.(payload as never, model as never);
+      captured.payload = payload;
+      return {} as never;
+    };
+
+    const wrapped = wrapAnthropicProviderStream({
+      streamFn: base,
+      modelId: "claude-sonnet-4-6",
+      extraParams: {},
+    } as never);
+
+    wrapped?.(
+      { provider: "anthropic", api: "anthropic-messages", id: "claude-sonnet-4-6" } as never,
+      {} as never,
+      { apiKey: "sk-ant-api03-test-key" } as never,
+    );
+
+    const beta = captured.headers?.["anthropic-beta"] ?? "";
+    expect(beta).not.toContain("advisor-tool-2026-03-01");
+    const tools = captured.payload?.tools as unknown[];
+    const advisorTool = tools?.find((t: any) => t.name === "advisor");
+    expect(advisorTool).toBeUndefined();
+  });
+
+  it("enables advisor with shorthand boolean config", () => {
+    const captured: { headers?: Record<string, string>; payload?: Record<string, unknown> } = {};
+    const base: StreamFn = (model, _context, options) => {
+      captured.headers = options?.headers;
+      const payload: Record<string, unknown> = { tools: [] };
+      options?.onPayload?.(payload as never, model as never);
+      captured.payload = payload;
+      return {} as never;
+    };
+
+    const wrapped = wrapAnthropicProviderStream({
+      streamFn: base,
+      modelId: "claude-sonnet-4-6",
+      extraParams: { advisor: true },
+    } as never);
+
+    wrapped?.(
+      { provider: "anthropic", api: "anthropic-messages", id: "claude-sonnet-4-6" } as never,
+      {} as never,
+      { apiKey: "sk-ant-api03-test-key" } as never,
+    );
+
+    expect(captured.headers?.["anthropic-beta"]).toContain("advisor-tool-2026-03-01");
+    const tools = captured.payload?.tools as unknown[];
+    expect(tools?.find((t: any) => t.name === "advisor")).toBeDefined();
+  });
+
+  it("rejects non-Claude advisor model with warning", () => {
+    const warn = vi.spyOn(__testing.log, "warn").mockImplementation(() => undefined);
+    const captured: { headers?: Record<string, string>; payload?: Record<string, unknown> } = {};
+    const base: StreamFn = (model, _context, options) => {
+      captured.headers = options?.headers;
+      const payload: Record<string, unknown> = { tools: [] };
+      options?.onPayload?.(payload as never, model as never);
+      captured.payload = payload;
+      return {} as never;
+    };
+
+    const wrapped = wrapAnthropicProviderStream({
+      streamFn: base,
+      modelId: "claude-sonnet-4-6",
+      extraParams: { advisor: { enabled: true, model: "gpt-4" } },
+    } as never);
+
+    wrapped?.(
+      { provider: "anthropic", api: "anthropic-messages", id: "claude-sonnet-4-6" } as never,
+      {} as never,
+      { apiKey: "sk-ant-api03-test-key" } as never,
+    );
+
+    // Advisor should not be injected for non-Claude models
+    const beta = captured.headers?.["anthropic-beta"] ?? "";
+    expect(beta).not.toContain("advisor-tool-2026-03-01");
+    const tools = captured.payload?.tools as unknown[];
+    expect(tools?.find((t: any) => t.name === "advisor")).toBeUndefined();
+    expect(warn).toHaveBeenCalledOnce();
   });
 });
