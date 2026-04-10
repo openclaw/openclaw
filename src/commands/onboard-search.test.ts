@@ -377,6 +377,37 @@ describe("setupSearch", () => {
     expect(pluginWebSearchApiKey(result, "brave")).toBe("BSA-test-key");
   });
 
+  it("does not probe reusable auth for other providers before rendering the choice list", async () => {
+    global.fetch = vi.fn(async () => new Response("", { status: 400 })) as typeof fetch;
+    resolveApiKeyForProviderMock.mockResolvedValue({
+      apiKey: "aiml-profile-key",
+      source: "profile:aimlapi:default",
+      profileId: "aimlapi:default",
+      mode: "api-key",
+    });
+
+    const cfg: OpenClawConfig = {
+      auth: {
+        profiles: {
+          "aimlapi:default": {
+            provider: "aimlapi",
+            mode: "api_key",
+          },
+        },
+      },
+    };
+    const { prompter } = createPrompter({
+      selectValue: "brave",
+      textValue: "BSA-test-key",
+    });
+
+    const result = await setupSearch(cfg, runtime, prompter);
+
+    expect(result.tools?.web?.search?.provider).toBe("brave");
+    expect(resolveApiKeyForProviderMock).not.toHaveBeenCalled();
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
   it("sets provider and key for perplexity", async () => {
     const cfg: OpenClawConfig = {};
     const { prompter } = createPrompter({

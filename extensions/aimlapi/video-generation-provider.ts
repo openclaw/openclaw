@@ -15,16 +15,25 @@ import type {
 
 const AIMLAPI_VIDEO_API_BASE_URL = "https://api.aimlapi.com";
 const AIMLAPI_VIDEO_GENERATIONS_PATH = "/v2/video/generations";
-const AIMLAPI_DEFAULT_VIDEO_MODEL = "minimax/video-01";
+const AIMLAPI_DEFAULT_VIDEO_MODEL = "google/veo-3.1-t2v-fast";
 const DEFAULT_TIMEOUT_MS = 120_000;
-const POLL_INTERVAL_MS = 2_500;
-const MAX_POLL_ATTEMPTS = 120;
+const POLL_INTERVAL_MS = 10_000;
+const MAX_POLL_ATTEMPTS = 100;
+const AIMLAPI_SUPPORTED_VIDEO_DURATIONS = [4, 6, 8] as const;
+const AIMLAPI_SUPPORTED_VIDEO_ASPECT_RATIOS = ["16:9", "9:16"] as const;
+const AIMLAPI_SUPPORTED_VIDEO_RESOLUTIONS = ["720P", "1080P"] as const;
 
-type AimlapiVideoGenerationStatus = "queued" | "generating" | "completed" | "error";
+type AimlapiVideoGenerationStatus =
+  | "waiting"
+  | "active"
+  | "queued"
+  | "generating"
+  | "completed"
+  | "error";
 
 type AimlapiVideoGenerationResponse = {
   id?: string;
-  status?: AimlapiVideoGenerationStatus | string;
+  status?: string;
   video?: {
     url?: string;
   } | null;
@@ -48,13 +57,7 @@ function normalizeAimlapiVideoPublicModel(model: string | undefined): string {
 }
 
 function resolveAimlapiVideoApiModel(model: string | undefined): string {
-  const publicModel = normalizeAimlapiVideoPublicModel(model);
-  const slashIndex = publicModel.indexOf("/");
-  if (slashIndex < 0 || slashIndex === publicModel.length - 1) {
-    return publicModel;
-  }
-  // Public refs use aimlapi/<vendor>/<model>; AIMLAPI's API body expects just <model>.
-  return publicModel.slice(slashIndex + 1).trim();
+  return normalizeAimlapiVideoPublicModel(model);
 }
 
 function resolveAimlapiVideoStatus(
@@ -62,6 +65,8 @@ function resolveAimlapiVideoStatus(
 ): AimlapiVideoGenerationStatus | undefined {
   const status = payload.status?.trim().toLowerCase();
   if (
+    status === "waiting" ||
+    status === "active" ||
     status === "queued" ||
     status === "generating" ||
     status === "completed" ||
@@ -173,9 +178,19 @@ export function buildAimlapiVideoGenerationProvider(): VideoGenerationProvider {
         agentDir,
       }),
     capabilities: {
-      maxVideos: 1,
-      maxInputImages: 0,
-      maxInputVideos: 0,
+      generate: {
+        maxVideos: 1,
+        maxInputImages: 0,
+        maxInputVideos: 0,
+        maxDurationSeconds:
+          AIMLAPI_SUPPORTED_VIDEO_DURATIONS[AIMLAPI_SUPPORTED_VIDEO_DURATIONS.length - 1],
+        supportedDurationSeconds: AIMLAPI_SUPPORTED_VIDEO_DURATIONS,
+        aspectRatios: AIMLAPI_SUPPORTED_VIDEO_ASPECT_RATIOS,
+        resolutions: AIMLAPI_SUPPORTED_VIDEO_RESOLUTIONS,
+        supportsAspectRatio: true,
+        supportsResolution: true,
+        supportsAudio: true,
+      },
     },
     async generateVideo(req): Promise<VideoGenerationResult> {
       requireNoReferenceInputs(req);
@@ -204,12 +219,22 @@ export function buildAimlapiVideoGenerationProvider(): VideoGenerationProvider {
 
       const publicModel = normalizeAimlapiVideoPublicModel(req.model);
       const apiModel = resolveAimlapiVideoApiModel(req.model);
+      const resolution =
+        req.resolution === "720P"
+          ? "720p"
+          : req.resolution === "1080P"
+            ? "1080p"
+            : undefined;
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}${AIMLAPI_VIDEO_GENERATIONS_PATH}`,
         headers,
         body: {
           model: apiModel,
           prompt: req.prompt,
+          ...(req.aspectRatio ? { aspect_ratio: req.aspectRatio } : {}),
+          ...(typeof req.durationSeconds === "number" ? { duration: req.durationSeconds } : {}),
+          ...(resolution ? { resolution } : {}),
+          ...(typeof req.audio === "boolean" ? { generate_audio: req.audio } : {}),
         },
         timeoutMs: req.timeoutMs,
         fetchFn,

@@ -7,7 +7,7 @@ import { __testing as aimlapiWebSearchTesting } from "./src/aimlapi-web-search-p
 
 describe("AIMLAPI provider plugin", () => {
   it("normalizes tool schemas before sending the payload", async () => {
-    const provider = registerSingleProviderPlugin(aimlapiPlugin);
+    const provider = await registerSingleProviderPlugin(aimlapiPlugin);
     const wrapStreamFn = provider.wrapStreamFn;
     expect(wrapStreamFn).toBeTypeOf("function");
 
@@ -77,7 +77,7 @@ describe("AIMLAPI provider plugin", () => {
   });
 
   it("broadens unsupported tool_choice payloads before sending", async () => {
-    const provider = registerSingleProviderPlugin(aimlapiPlugin);
+    const provider = await registerSingleProviderPlugin(aimlapiPlugin);
     const wrapStreamFn = provider.wrapStreamFn;
     expect(wrapStreamFn).toBeTypeOf("function");
 
@@ -121,7 +121,7 @@ describe("AIMLAPI provider plugin", () => {
   });
 
   it("converts pinned tool_choice payloads to OpenAI function format", async () => {
-    const provider = registerSingleProviderPlugin(aimlapiPlugin);
+    const provider = await registerSingleProviderPlugin(aimlapiPlugin);
     const wrapStreamFn = provider.wrapStreamFn;
     expect(wrapStreamFn).toBeTypeOf("function");
 
@@ -168,7 +168,7 @@ describe("AIMLAPI provider plugin", () => {
   });
 
   it("removes AIMLAPI-unsupported schema keywords before sending", async () => {
-    const provider = registerSingleProviderPlugin(aimlapiPlugin);
+    const provider = await registerSingleProviderPlugin(aimlapiPlugin);
     const wrapStreamFn = provider.wrapStreamFn;
     expect(wrapStreamFn).toBeTypeOf("function");
 
@@ -227,7 +227,7 @@ describe("AIMLAPI provider plugin", () => {
   });
 
   it("rewrites assistant null content in outbound messages", async () => {
-    const provider = registerSingleProviderPlugin(aimlapiPlugin);
+    const provider = await registerSingleProviderPlugin(aimlapiPlugin);
     const wrapStreamFn = provider.wrapStreamFn;
     expect(wrapStreamFn).toBeTypeOf("function");
 
@@ -264,7 +264,7 @@ describe("AIMLAPI provider plugin", () => {
   });
 
   it("augments the model catalog from models.json without duplicating existing entries", async () => {
-    const provider = registerSingleProviderPlugin(aimlapiPlugin);
+    const provider = await registerSingleProviderPlugin(aimlapiPlugin);
     const augmentModelCatalog = provider.augmentModelCatalog;
     expect(augmentModelCatalog).toBeTypeOf("function");
 
@@ -315,16 +315,20 @@ describe("AIMLAPI provider plugin", () => {
     ]);
   });
 
-  it("registers the AIMLAPI web search provider with plugin-owned config paths", () => {
+  it("registers the AIMLAPI web search and video-generation providers", () => {
     const captured = createCapturedPluginRegistration();
     aimlapiPlugin.register(captured.api);
     const webSearchProvider = captured.webSearchProviders[0];
+    const videoGenerationProvider = captured.videoGenerationProviders[0];
 
     expect(webSearchProvider).toMatchObject({
       id: "aimlapi",
       credentialPath: "plugins.entries.aimlapi.config.webSearch.apiKey",
       envVars: ["AIMLAPI_API_KEY"],
       autoDetectOrder: 15,
+    });
+    expect(videoGenerationProvider).toMatchObject({
+      id: "aimlapi",
     });
   });
 
@@ -379,7 +383,7 @@ describe("AIMLAPI provider plugin", () => {
   });
 
   it("fails soft when the aimlapi catalog supplement is invalid", async () => {
-    const provider = registerSingleProviderPlugin(aimlapiPlugin);
+    const provider = await registerSingleProviderPlugin(aimlapiPlugin);
     const augmentModelCatalog = provider.augmentModelCatalog;
     expect(augmentModelCatalog).toBeTypeOf("function");
 

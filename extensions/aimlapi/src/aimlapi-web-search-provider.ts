@@ -314,7 +314,7 @@ function createAimlapiToolDefinition(
         };
       }
 
-      const params = args as Record<string, unknown>;
+      const params = args;
       const query = readStringParam(params, "query", { required: true });
       const freshness = readStringParam(params, "freshness");
       const dateAfter = readStringParam(params, "date_after");

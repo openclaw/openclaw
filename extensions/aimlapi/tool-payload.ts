@@ -29,7 +29,7 @@ const AIMLAPI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
 type ToolChoiceRecord = {
   type?: unknown;
   name?: unknown;
-  function?: { name?: unknown } | unknown;
+  function?: unknown;
 };
 
 function toRecord(value: unknown): Record<string, unknown> | null {

@@ -10,7 +10,7 @@ import {
 } from "../plugins/provider-discovery.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
-import type { ProviderConfig } from "./models-config.providers.js";
+import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 describe("Ollama auto-discovery", () => {
   let originalFetch: typeof globalThis.fetch;

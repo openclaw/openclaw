@@ -1308,6 +1308,10 @@ export async function runAgentTurnWithFallback(params: {
         failoverInfo.reason === "auth" ||
         failoverInfo.status === 401 ||
         isAuthErrorMessage(message);
+      const isAuthPermanentFailure =
+        failoverInfo.reason === "auth_permanent" ||
+        failoverInfo.status === 403 ||
+        (/\b403\b/.test(message) && /\bforbidden\b/i.test(message));
       const isAimlapiFailure =
         (isFailoverError(err) && err.provider === "aimlapi") ||
         message.toLowerCase().includes("aimlapi");
@@ -1387,6 +1391,15 @@ export async function runAgentTurnWithFallback(params: {
               "Do you already have a key? If not, open https://aimlapi.com/app/keys/,",
               "sign up/subscribe, then paste the key into the bot.",
             ].join("\n"),
+          },
+        };
+      }
+
+      if (isAuthPermanentFailure && !shouldSurfaceToControlUi) {
+        return {
+          kind: "final",
+          payload: {
+            text: sanitizeUserFacingText(message, { errorContext: true }),
           },
         };
       }

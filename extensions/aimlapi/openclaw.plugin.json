@@ -56,6 +56,7 @@
     }
   },
   "contracts": {
-    "webSearchProviders": ["aimlapi"]
+    "webSearchProviders": ["aimlapi"],
+    "videoGenerationProviders": ["aimlapi"]
   }
 }

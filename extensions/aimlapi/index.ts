@@ -6,6 +6,7 @@ import { augmentAimlapiModelCatalog } from "./model-catalog.js";
 import { AIMLAPI_DEFAULT_MODEL_REF, applyAimlapiConfig } from "./onboard.js";
 import { buildAimlapiProvider } from "./provider-catalog.js";
 import { createAimlapiWebSearchProvider } from "./src/aimlapi-web-search-provider.js";
+import { buildAimlapiVideoGenerationProvider } from "./video-generation-provider.js";
 import {
   normalizeAimlapiPayloadMessages,
   normalizeAimlapiPayloadTools,
@@ -86,5 +87,6 @@ export default definePluginEntry({
       wrapStreamFn: (ctx) => createAimlapiPayloadWrapper(ctx.streamFn),
     });
     api.registerWebSearchProvider(createAimlapiWebSearchProvider());
+    api.registerVideoGenerationProvider(buildAimlapiVideoGenerationProvider());
   },
 });

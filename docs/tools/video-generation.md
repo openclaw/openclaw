@@ -80,6 +80,7 @@ Duplicate prevention: if a video task is already `queued` or `running` for the c
 
 | Provider | Default model                   | Text | Image ref         | Video ref        | API key                                  |
 | -------- | ------------------------------- | ---- | ----------------- | ---------------- | ---------------------------------------- |
+| AIMLAPI  | `google/veo-3.1-t2v-fast`      | Yes  | No                | No               | `AIMLAPI_API_KEY`                        |
 | Alibaba  | `wan2.6-t2v`                    | Yes  | Yes (remote URL)  | Yes (remote URL) | `MODELSTUDIO_API_KEY`                    |
 | BytePlus | `seedance-1-0-lite-t2v-250428`  | Yes  | 1 image           | No               | `BYTEPLUS_API_KEY`                       |
 | ComfyUI  | `workflow`                      | Yes  | 1 image           | No               | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` |
@@ -205,6 +206,7 @@ entries.
 
 | Provider | Notes                                                                                                                                                       |
 | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AIMLAPI  | Uses `https://api.aimlapi.com/v2/video/generations`. Current bundled support is text-to-video only and defaults to `google/veo-3.1-t2v-fast`.                |
 | Alibaba  | Uses DashScope/Model Studio async endpoint. Reference images and videos must be remote `http(s)` URLs.                                                      |
 | BytePlus | Single image reference only.                                                                                                                                |
 | ComfyUI  | Workflow-driven local or cloud execution. Supports text-to-video and image-to-video through the configured graph.                                           |
@@ -306,6 +308,7 @@ openclaw config set agents.defaults.videoGenerationModel.primary "qwen/wan2.6-t2
 
 - [Tools Overview](/tools)
 - [Background Tasks](/automation/tasks) -- task tracking for async video generation
+- [AIMLAPI](/providers/aimlapi)
 - [Alibaba Model Studio](/providers/alibaba)
 - [BytePlus](/concepts/model-providers#byteplus-international)
 - [ComfyUI](/providers/comfy)

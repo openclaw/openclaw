@@ -1,29 +1,30 @@
 import { AIMLAPI_DEFAULT_MODEL_REF } from "./runtime-api.js";
 import {
-  applyAgentDefaultModelPrimary,
+  createModelCatalogPresetAppliers,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
+import {
+  AIMLAPI_BASE_URL,
+  buildAimlapiStaticCatalog,
+} from "./runtime-api.js";
 
 export { AIMLAPI_DEFAULT_MODEL_REF };
 
+const aimlapiPresetAppliers = createModelCatalogPresetAppliers({
+  primaryModelRef: AIMLAPI_DEFAULT_MODEL_REF,
+  resolveParams: () => ({
+    providerId: "aimlapi",
+    api: "openai-completions" as const,
+    baseUrl: AIMLAPI_BASE_URL,
+    catalogModels: buildAimlapiStaticCatalog(),
+    aliases: [{ modelRef: AIMLAPI_DEFAULT_MODEL_REF, alias: "AI/ML API" }],
+  }),
+});
+
 export function applyAimlapiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const models = { ...cfg.agents?.defaults?.models };
-  models[AIMLAPI_DEFAULT_MODEL_REF] = {
-    ...models[AIMLAPI_DEFAULT_MODEL_REF],
-    alias: models[AIMLAPI_DEFAULT_MODEL_REF]?.alias ?? "AI/ML API",
-  };
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-      },
-    },
-  };
+  return aimlapiPresetAppliers.applyProviderConfig(cfg);
 }
 
 export function applyAimlapiConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return applyAgentDefaultModelPrimary(applyAimlapiProviderConfig(cfg), AIMLAPI_DEFAULT_MODEL_REF);
+  return aimlapiPresetAppliers.applyConfig(cfg);
 }

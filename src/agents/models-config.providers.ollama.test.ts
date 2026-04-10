@@ -13,7 +13,7 @@ import type { ProviderPlugin } from "../plugins/types.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { OLLAMA_LOCAL_AUTH_MARKER } from "./model-auth-markers.js";
 import { resolveImplicitProviders } from "./models-config.providers.js";
-import type { ProviderConfig } from "./models-config.providers.js";
+import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 afterEach(() => {
   vi.unstubAllEnvs();

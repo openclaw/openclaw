@@ -339,21 +339,11 @@ export type SetupSearchOptions = {
   secretInputMode?: SecretInputMode;
 };
 
-async function resolveProviderReadiness(
+function resolveProviderLocalReadiness(
   config: OpenClawConfig,
-  entry: Pick<
-    PluginWebSearchProviderEntry,
-    | "id"
-    | "pluginId"
-    | "envVars"
-    | "requiresCredential"
-    | "hasReusableProviderAuthMetadata"
-    | "hasReusableProviderAuth"
-  >,
-): Promise<boolean> {
-  return (
-    providerHasLocalCredentialSignal(config, entry) || (await hasImplicitProviderAuth(config, entry))
-  );
+  entry: Pick<PluginWebSearchProviderEntry, "id" | "envVars" | "requiresCredential">,
+): boolean {
+  return providerHasLocalCredentialSignal(config, entry);
 }
 
 async function finalizeSearchProviderSetup(params: {
@@ -408,12 +398,7 @@ export async function runSearchSetupFlow(
 
   const existingProvider = config.tools?.web?.search?.provider;
   const providerReadiness = new Map<SearchProvider, boolean>(
-    await Promise.all(
-      providerOptions.map(async (entry) => [
-        entry.id,
-        await resolveProviderReadiness(config, entry),
-      ] as const),
-    ),
+    providerOptions.map((entry) => [entry.id, resolveProviderLocalReadiness(config, entry)]),
   );
 
   const options = providerOptions.map((entry) => {

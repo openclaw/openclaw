@@ -41,16 +41,22 @@ vi.mock("../../agents/bootstrap-budget.js", () => ({
   resolveBootstrapWarningSignaturesSeen: () => [],
 }));
 
-vi.mock("../../agents/pi-embedded-helpers.js", () => ({
-  BILLING_ERROR_USER_MESSAGE: "billing",
-  isCompactionFailureError: () => false,
-  isContextOverflowError: () => false,
-  isBillingErrorMessage: () => false,
-  isLikelyContextOverflowError: () => false,
-  isRateLimitErrorMessage: () => false,
-  isTransientHttpError: () => false,
-  sanitizeUserFacingText: (text?: string) => text ?? "",
-}));
+vi.mock("../../agents/pi-embedded-helpers.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/pi-embedded-helpers.js")>(
+    "../../agents/pi-embedded-helpers.js",
+  );
+  return {
+    ...actual,
+    BILLING_ERROR_USER_MESSAGE: "billing",
+    isCompactionFailureError: () => false,
+    isContextOverflowError: () => false,
+    isBillingErrorMessage: () => false,
+    isLikelyContextOverflowError: () => false,
+    isRateLimitErrorMessage: () => false,
+    isTransientHttpError: () => false,
+    sanitizeUserFacingText: (text?: string) => text ?? "",
+  };
+});
 
 vi.mock("../../config/sessions.js", () => ({
   resolveGroupSessionKey: vi.fn(() => null),
