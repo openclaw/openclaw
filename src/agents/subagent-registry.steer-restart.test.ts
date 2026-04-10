@@ -66,9 +66,14 @@ vi.mock("../config/sessions.js", () => {
 const announceSpy = vi.fn(async (_params: unknown) => true);
 const runSubagentEndedHookMock = vi.fn(async (_event?: unknown, _ctx?: unknown) => {});
 const emitSessionLifecycleEventMock = vi.fn();
+const ensureRuntimePluginsLoadedMock = vi.fn();
 vi.mock("./subagent-announce.js", () => ({
   captureSubagentCompletionReply: vi.fn(async () => undefined),
   runSubagentAnnounceFlow: announceSpy,
+}));
+
+vi.mock("./runtime-plugins.js", () => ({
+  ensureRuntimePluginsLoaded: ensureRuntimePluginsLoadedMock,
 }));
 
 vi.mock("../browser-lifecycle-cleanup.js", () => ({
@@ -107,6 +112,7 @@ describe("subagent registry steer restarts", () => {
 
   beforeEach(() => {
     lifecycleHandler = undefined;
+    ensureRuntimePluginsLoadedMock.mockReset();
     mod.resetSubagentRegistryForTests({ persist: false });
   });
 
@@ -579,6 +585,43 @@ describe("subagent registry steer restarts", () => {
           childSessionKey,
           requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
         },
+      );
+    });
+  });
+
+  it("still emits killed cleanup hooks when runtime plugin loading fails", async () => {
+    const childSessionKey = "agent:main:subagent:killed-plugin-load-error";
+
+    registerRun({
+      runId: "run-killed-plugin-load-error",
+      childSessionKey,
+      task: "kill me with plugin failure",
+    });
+
+    ensureRuntimePluginsLoadedMock.mockImplementationOnce(() => {
+      throw new Error("plugin registry failed");
+    });
+
+    expect(
+      mod.markSubagentRunTerminated({
+        childSessionKey,
+        reason: "manual kill",
+      }),
+    ).toBe(1);
+
+    await vi.waitFor(() => {
+      expect(runSubagentEndedHookMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          targetSessionKey: childSessionKey,
+          reason: "subagent-killed",
+          runId: "run-killed-plugin-load-error",
+          outcome: "killed",
+          error: "manual kill",
+        }),
+        expect.objectContaining({
+          runId: "run-killed-plugin-load-error",
+          childSessionKey,
+        }),
       );
     });
   });
