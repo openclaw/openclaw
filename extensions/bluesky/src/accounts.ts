@@ -94,6 +94,20 @@ export function resolveBlueskyAccount(
   };
 }
 
-export function resolveDefaultBlueskyAccountId(_cfg: Record<string, unknown>): string {
+export function resolveDefaultBlueskyAccountId(cfg: Record<string, unknown>): string {
+  const channelCfg = getChannelConfig(cfg);
+  // If there are no top-level credentials, the named accounts are the real config.
+  // Return the first named account so health/status picks a configured account as the default.
+  const hasTopLevel =
+    channelCfg?.handle?.trim() ||
+    process.env.BLUESKY_HANDLE ||
+    channelCfg?.appPassword ||
+    process.env.BLUESKY_APP_PASSWORD;
+  if (!hasTopLevel) {
+    const firstAccountId = Object.keys(channelCfg?.accounts ?? {})[0];
+    if (firstAccountId) {
+      return firstAccountId;
+    }
+  }
   return DEFAULT_ACCOUNT_ID;
 }
