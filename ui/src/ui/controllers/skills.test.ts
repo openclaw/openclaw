@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   installSkill,
+  loadClawHubDetail,
   saveSkillApiKey,
   searchClawHub,
   setClawHubSearchQuery,
@@ -153,6 +154,29 @@ describe("searchClawHub", () => {
     expect(state.clawhubSearchResults).toBeNull();
     expect(state.clawhubSearchError).toBeNull();
     expect(state.clawhubSearchLoading).toBe(false);
+  });
+});
+
+describe("loadClawHubDetail", () => {
+  it("ignores stale detail responses after slug changes", async () => {
+    const { state, request } = createState();
+    const queue = createDeferredRequestQueue(request);
+
+    const firstPending = loadClawHubDetail(state, "github");
+    const secondPending = loadClawHubDetail(state, "gitlab");
+
+    queue.resolveNext({
+      skill: { slug: "github", displayName: "GitHub", createdAt: 1, updatedAt: 2 },
+    });
+    await firstPending;
+
+    queue.resolveNext({
+      skill: { slug: "gitlab", displayName: "GitLab", createdAt: 3, updatedAt: 4 },
+    });
+    await secondPending;
+
+    expect(state.clawhubDetailLoading).toBe(false);
+    expect(state.clawhubDetail?.skill?.slug).toBe("gitlab");
   });
 });
 
