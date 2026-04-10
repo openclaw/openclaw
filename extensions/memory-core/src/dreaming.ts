@@ -182,10 +182,6 @@ function isLegacyPhaseDreamingJob(job: ManagedCronJobLike): boolean {
   return name === LEGACY_REM_SLEEP_CRON_NAME && payloadText === LEGACY_REM_SLEEP_EVENT_TEXT;
 }
 
-function compareOptionalStrings(a: string | undefined, b: string | undefined): boolean {
-  return a === b;
-}
-
 async function migrateLegacyPhaseDreamingCronJobs(params: {
   cron: CronServiceLike;
   legacyJobs: ManagedCronJobLike[];
@@ -225,10 +221,10 @@ function buildManagedDreamingPatch(
 ): ManagedCronJobPatch | null {
   const patch: ManagedCronJobPatch = {};
 
-  if (!compareOptionalStrings(normalizeTrimmedString(job.name), desired.name)) {
+  if (normalizeTrimmedString(job.name) !== desired.name) {
     patch.name = desired.name;
   }
-  if (!compareOptionalStrings(normalizeTrimmedString(job.description), desired.description)) {
+  if (normalizeTrimmedString(job.description) !== desired.description) {
     patch.description = desired.description;
   }
   if (job.enabled !== true) {
@@ -240,8 +236,8 @@ function buildManagedDreamingPatch(
   const scheduleTz = normalizeTrimmedString(job.schedule?.tz);
   if (
     scheduleKind !== "cron" ||
-    !compareOptionalStrings(scheduleExpr, desired.schedule.expr) ||
-    !compareOptionalStrings(scheduleTz, desired.schedule.tz)
+    scheduleExpr !== desired.schedule.expr ||
+    scheduleTz !== desired.schedule.tz
   ) {
     patch.schedule = desired.schedule;
   }
@@ -257,7 +253,7 @@ function buildManagedDreamingPatch(
 
   const payloadKind = normalizeLowercaseStringOrEmpty(normalizeTrimmedString(job.payload?.kind));
   const payloadText = normalizeTrimmedString(job.payload?.text);
-  if (payloadKind !== "systemevent" || !compareOptionalStrings(payloadText, desired.payload.text)) {
+  if (payloadKind !== "systemevent" || payloadText !== desired.payload.text) {
     patch.payload = desired.payload;
   }
 
