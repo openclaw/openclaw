@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 export type CodexAppServerTransportMode = "stdio" | "websocket";
 export type CodexAppServerApprovalPolicy = "never" | "on-request" | "on-failure" | "untrusted";
 export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
@@ -41,11 +43,47 @@ export type CodexPluginConfig = {
   };
 };
 
+const codexAppServerTransportSchema = z.enum(["stdio", "websocket"]);
+const codexAppServerApprovalPolicySchema = z.enum([
+  "never",
+  "on-request",
+  "on-failure",
+  "untrusted",
+]);
+const codexAppServerSandboxSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
+const codexAppServerApprovalsReviewerSchema = z.enum(["user", "guardian_subagent"]);
+
+const codexPluginConfigSchema = z
+  .object({
+    discovery: z
+      .object({
+        enabled: z.boolean().optional(),
+        timeoutMs: z.number().positive().optional(),
+      })
+      .strict()
+      .optional(),
+    appServer: z
+      .object({
+        transport: codexAppServerTransportSchema.optional(),
+        command: z.string().optional(),
+        args: z.union([z.array(z.string()), z.string()]).optional(),
+        url: z.string().optional(),
+        authToken: z.string().optional(),
+        headers: z.record(z.string(), z.string()).optional(),
+        requestTimeoutMs: z.number().positive().optional(),
+        approvalPolicy: codexAppServerApprovalPolicySchema.optional(),
+        sandbox: codexAppServerSandboxSchema.optional(),
+        approvalsReviewer: codexAppServerApprovalsReviewerSchema.optional(),
+        serviceTier: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
 export function readCodexPluginConfig(value: unknown): CodexPluginConfig {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-  return value as CodexPluginConfig;
+  const parsed = codexPluginConfigSchema.safeParse(value);
+  return parsed.success ? parsed.data : {};
 }
 
 export function resolveCodexAppServerRuntimeOptions(
