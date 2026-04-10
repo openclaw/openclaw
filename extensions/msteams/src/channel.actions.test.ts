@@ -332,6 +332,52 @@ describe("msteamsPlugin message actions", () => {
     });
   });
 
+  it("uses explicit pinnedMessageId over messageId for unpin actions", async () => {
+    await expectSuccessfulAction({
+      mockFn: unpinMessageMSTeamsMock,
+      mockResult: { ok: true },
+      action: "unpin",
+      actionParams: {
+        target: padded(targetChannelId),
+        pinnedMessageId: padded("pinned-resource-99"),
+        messageId: padded("msg-99"),
+      },
+      runtimeParams: {
+        to: targetChannelId,
+        pinnedMessageId: "pinned-resource-99",
+      },
+      details: okMSTeamsActionDetails("unpin"),
+    });
+  });
+
+  it("returns an error when unpin is called without pinnedMessageId or messageId", async () => {
+    await expectActionParamError(
+      "unpin",
+      { target: targetChannelId },
+      "Unpin requires a target (to) and pinnedMessageId.",
+    );
+  });
+
+  it("exposes pinnedMessageId in the tool schema", () => {
+    const discovery = msteamsPlugin.actions?.describeMessageTool?.({
+      cfg: {
+        channels: {
+          msteams: {
+            appId: "app-id",
+            appPassword: "secret",
+            tenantId: "tenant-id",
+          },
+        },
+      } as OpenClawConfig,
+    });
+    const schema = discovery?.schema;
+    expect(schema).toBeTruthy();
+    const properties = Array.isArray(schema)
+      ? schema[0]?.properties
+      : (schema as { properties: Record<string, unknown> })?.properties;
+    expect(properties).toHaveProperty("pinnedMessageId");
+  });
+
   it("reuses currentChannelId fallback for react actions", async () => {
     await expectSuccessfulAction({
       mockFn: reactMessageMSTeamsMock,
