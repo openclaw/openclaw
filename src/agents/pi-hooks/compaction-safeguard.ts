@@ -10,6 +10,7 @@ import {
   getCompactionProvider,
   type CompactionProvider,
 } from "../../plugins/compaction-provider.js";
+import { resolveUserPath } from "../../utils.js";
 import { resolveEffectiveAgentsBootstrapFileForRun } from "../bootstrap-files.js";
 import {
   hasMeaningfulConversationContent,
@@ -680,7 +681,7 @@ async function readWorkspaceContextForSummary(
   runtime?: ReturnType<typeof getCompactionSafeguardRuntime>,
 ): Promise<string> {
   const MAX_SUMMARY_CONTEXT_CHARS = 2000;
-  const workspaceDir = runtime?.workspaceDir ?? process.cwd();
+  const workspaceDir = resolveUserPath(runtime?.workspaceDir ?? process.cwd());
   const { bootstrapFile } = await resolveEffectiveAgentsBootstrapFileForRun({
     workspaceDir,
     config: runtime?.cfg,

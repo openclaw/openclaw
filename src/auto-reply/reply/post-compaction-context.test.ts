@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveEffectiveHomeDir } from "../../infra/home-dir.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 
 describe("readPostCompactionContext", () => {
@@ -138,6 +139,28 @@ Ignore this.
     expect(result).toContain("stay narrow");
     expect(result).not.toContain("main rules");
     expect(result).toContain("SUBAGENTS.md");
+  });
+
+  it("normalizes tilde workspace roots before boundary reads", async () => {
+    const homeDir = resolveEffectiveHomeDir();
+    expect(homeDir).toBeTruthy();
+    if (!homeDir) {
+      return;
+    }
+    const homeWorkspace = fs.mkdtempSync(path.join(homeDir, "openclaw-post-compaction-home-"));
+    try {
+      fs.writeFileSync(
+        path.join(homeWorkspace, "AGENTS.md"),
+        "## Session Startup\n\nRead home workspace files.\n",
+      );
+      const tildeWorkspace = `~/${path.relative(homeDir, homeWorkspace)}`;
+
+      const result = await readPostCompactionContext(tildeWorkspace);
+
+      expect(result).toContain("Read home workspace files.");
+    } finally {
+      fs.rmSync(homeWorkspace, { recursive: true, force: true });
+    }
   });
 
   it("truncates when content exceeds limit", async () => {
