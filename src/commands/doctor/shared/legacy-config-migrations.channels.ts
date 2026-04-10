@@ -4,6 +4,7 @@ import {
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
+import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 
 type StreamingMode = "off" | "partial" | "block" | "progress";
 type DiscordPreviewStreamMode = "off" | "partial" | "block";
@@ -15,11 +16,7 @@ function hasOwnKey(target: Record<string, unknown>, key: string): boolean {
 }
 
 function normalizeStreamingMode(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const normalized = value.trim().toLowerCase();
-  return normalized || null;
+  return normalizeOptionalLowercaseString(value) ?? null;
 }
 
 function parseStreamingMode(value: unknown): StreamingMode | null {

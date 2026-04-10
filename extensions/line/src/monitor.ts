@@ -97,6 +97,10 @@ export function getLineRuntimeState(accountId: string) {
   return runtimeState.get(`line:${accountId}`);
 }
 
+export function clearLineRuntimeStateForTests() {
+  runtimeState.clear();
+}
+
 function startLineLoadingKeepalive(params: {
   userId: string;
   accountId?: string;

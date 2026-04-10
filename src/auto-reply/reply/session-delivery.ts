@@ -1,7 +1,11 @@
 import type { SessionEntry } from "../../config/sessions.js";
 import { buildAgentMainSessionKey } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import {
   deliveryContextFromSession,
   deliveryContextKey,
@@ -24,7 +28,7 @@ function resolveSessionKeyChannelHint(sessionKey?: string): string | undefined {
   if (!parsed?.rest) {
     return undefined;
   }
-  const head = normalizeOptionalString(parsed.rest.split(":")[0])?.toLowerCase();
+  const head = normalizeOptionalLowercaseString(parsed.rest.split(":")[0]);
   if (!head || head === "main" || head === "cron" || head === "subagent" || head === "acp") {
     return undefined;
   }
@@ -34,9 +38,9 @@ function resolveSessionKeyChannelHint(sessionKey?: string): string | undefined {
 function isMainSessionKey(sessionKey?: string): boolean {
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed) {
-    return (sessionKey ?? "").trim().toLowerCase() === "main";
+    return normalizeLowercaseStringOrEmpty(sessionKey) === "main";
   }
-  return parsed.rest.trim().toLowerCase() === "main";
+  return normalizeLowercaseStringOrEmpty(parsed.rest) === "main";
 }
 
 const DIRECT_SESSION_MARKERS = new Set(["direct", "dm"]);
@@ -59,7 +63,7 @@ function hasStrictDirectSessionTail(parts: string[], markerIndex: number): boole
 }
 
 function isDirectSessionKey(sessionKey?: string): boolean {
-  const raw = (sessionKey ?? "").trim().toLowerCase();
+  const raw = normalizeLowercaseStringOrEmpty(sessionKey);
   if (!raw) {
     return false;
   }
@@ -93,6 +97,7 @@ export function resolveLastChannelRaw(params: {
   originatingChannelRaw?: string;
   persistedLastChannel?: string;
   sessionKey?: string;
+  isInterSession?: boolean;
 }): string | undefined {
   const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
   // WebChat should own reply routing for direct-session UI turns, but only when
@@ -105,6 +110,14 @@ export function resolveLastChannelRaw(params: {
   const sessionKeyChannelHint = resolveSessionKeyChannelHint(params.sessionKey);
   const hasEstablishedExternalRoute =
     isExternalRoutingChannel(persistedChannel) || isExternalRoutingChannel(sessionKeyChannelHint);
+  // Inter-session messages (sessions_send) always arrive with channel=webchat,
+  // but must never overwrite an already-established external delivery route.
+  // Without this guard, a sessions_send call resets lastChannel to webchat,
+  // causing subsequent Discord (or other external) deliveries to be lost.
+  // See: https://github.com/openclaw/openclaw/issues/54441
+  if (params.isInterSession && hasEstablishedExternalRoute) {
+    return persistedChannel || sessionKeyChannelHint;
+  }
   if (
     originatingChannel === INTERNAL_MESSAGE_CHANNEL &&
     !hasEstablishedExternalRoute &&
@@ -132,12 +145,20 @@ export function resolveLastToRaw(params: {
   persistedLastTo?: string;
   persistedLastChannel?: string;
   sessionKey?: string;
+  isInterSession?: boolean;
 }): string | undefined {
   const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
   const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
   const sessionKeyChannelHint = resolveSessionKeyChannelHint(params.sessionKey);
   const hasEstablishedExternalRouteForTo =
     isExternalRoutingChannel(persistedChannel) || isExternalRoutingChannel(sessionKeyChannelHint);
+  // Inter-session messages must not replace a persisted external `to` with
+  // webchat-scoped identifiers (e.g. session keys). Preserve the established
+  // external destination so deliveries continue routing to the correct channel.
+  // See: https://github.com/openclaw/openclaw/issues/54441
+  if (params.isInterSession && hasEstablishedExternalRouteForTo && params.persistedLastTo) {
+    return params.persistedLastTo;
+  }
   if (
     originatingChannel === INTERNAL_MESSAGE_CHANNEL &&
     !hasEstablishedExternalRouteForTo &&
@@ -175,7 +196,7 @@ export function maybeRetireLegacyMainDeliveryRoute(params: {
   const canonicalMainSessionKey = buildAgentMainSessionKey({
     agentId: params.agentId,
     mainKey: params.mainKey,
-  }).toLowerCase();
+  });
   if (params.sessionKey === canonicalMainSessionKey) {
     return undefined;
   }

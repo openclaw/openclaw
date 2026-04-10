@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 
 type AnthropicContentBlock = {
@@ -9,14 +10,6 @@ type AnthropicContentBlock = {
   toolUseId?: string;
   toolCallId?: string;
 };
-
-function trimNonEmptyString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
 
 function isToolCallBlock(block: AnthropicContentBlock): boolean {
   return block.type === "toolUse" || block.type === "toolCall" || block.type === "functionCall";
@@ -29,12 +22,12 @@ function isAbortedAssistantTurn(message: AgentMessage): boolean {
 
 function extractToolResultIdsFromRecord(record: Record<string, unknown>): string[] {
   const ids = [
-    trimNonEmptyString(record.toolUseId),
-    trimNonEmptyString(record.toolCallId),
-    trimNonEmptyString(record.tool_use_id),
-    trimNonEmptyString(record.tool_call_id),
-    trimNonEmptyString(record.callId),
-    trimNonEmptyString(record.call_id),
+    normalizeOptionalString(record.toolUseId),
+    normalizeOptionalString(record.toolCallId),
+    normalizeOptionalString(record.tool_use_id),
+    normalizeOptionalString(record.tool_call_id),
+    normalizeOptionalString(record.callId),
+    normalizeOptionalString(record.call_id),
   ].filter((value): value is string => typeof value === "string");
   return [...new Set(ids)];
 }
@@ -140,7 +133,7 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
       if (!isToolCallBlock(block)) {
         return true;
       }
-      const blockId = trimNonEmptyString(block.id);
+      const blockId = normalizeOptionalString(block.id);
       return blockId ? validToolUseIds.has(blockId) : false;
     });
 

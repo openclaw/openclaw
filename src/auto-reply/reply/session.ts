@@ -33,7 +33,9 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookSessionEndReason } from "../../plugins/types.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
+import { isInterSessionInputProvenance } from "../../sessions/input-provenance.js";
 import {
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
@@ -223,12 +225,16 @@ export async function initSessionState(params: {
     ctx.CommandSource === "native"
       ? normalizeOptionalString(ctx.CommandTargetSessionKey)
       : undefined;
+  // Native slash/menu commands can arrive on a transport-specific "slash session"
+  // while explicitly targeting an existing chat session. Honor that explicit target
+  // before any binding lookup so command-side mutations land on the intended session.
   const targetSessionKey =
+    commandTargetSessionKey ??
     resolveBoundConversationSessionKey({
       cfg,
       ctx,
       bindingContext: conversationBindingContext,
-    }) ?? commandTargetSessionKey;
+    });
   const sessionCtxForState =
     targetSessionKey && targetSessionKey !== ctx.SessionKey
       ? { ...ctx, SessionKey: targetSessionKey }
@@ -318,8 +324,8 @@ export async function initSessionState(params: {
     : triggerBodyNormalized;
   // Reset triggers are configured as lowercased commands (e.g. "/new"), but users may type
   // "/NEW" etc. Match case-insensitively while keeping the original casing for any stripped body.
-  const trimmedBodyLower = trimmedBody.toLowerCase();
-  const strippedForResetLower = strippedForReset.toLowerCase();
+  const trimmedBodyLower = normalizeLowercaseStringOrEmpty(trimmedBody);
+  const strippedForResetLower = normalizeLowercaseStringOrEmpty(strippedForReset);
   let matchedResetTriggerLower: string | undefined;
 
   for (const trigger of resetTriggers) {
@@ -329,7 +335,7 @@ export async function initSessionState(params: {
     if (!resetAuthorized) {
       break;
     }
-    const triggerLower = trigger.toLowerCase();
+    const triggerLower = normalizeLowercaseStringOrEmpty(trigger);
     if (trimmedBodyLower === triggerLower || strippedForResetLower === triggerLower) {
       isNewSession = true;
       bodyStripped = "";
@@ -471,10 +477,12 @@ export async function initSessionState(params: {
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
   // Track the originating channel/to for announce routing (subagent announce-back).
   const originatingChannelRaw = ctx.OriginatingChannel as string | undefined;
+  const isInterSession = isInterSessionInputProvenance(ctx.InputProvenance);
   const lastChannelRaw = resolveLastChannelRaw({
     originatingChannelRaw,
     persistedLastChannel: baseEntry?.lastChannel,
     sessionKey,
+    isInterSession,
   });
   const lastToRaw = resolveLastToRaw({
     originatingChannelRaw,
@@ -483,6 +491,7 @@ export async function initSessionState(params: {
     persistedLastTo: baseEntry?.lastTo,
     persistedLastChannel: baseEntry?.lastChannel,
     sessionKey,
+    isInterSession,
   });
   const lastAccountIdRaw = resolveSessionDefaultAccountId({
     cfg,
@@ -694,16 +703,16 @@ export async function initSessionState(params: {
   }
 
   const sessionCtx: TemplateContext = {
-    ...ctx,
+    ...sessionCtxForState,
     // Keep BodyStripped aligned with Body (best default for agent prompts).
     // RawBody is reserved for command/directive parsing and may omit context.
     BodyStripped: normalizeInboundTextNewlines(
       bodyStripped ??
-        ctx.BodyForAgent ??
-        ctx.Body ??
-        ctx.CommandBody ??
-        ctx.RawBody ??
-        ctx.BodyForCommands ??
+        sessionCtxForState.BodyForAgent ??
+        sessionCtxForState.Body ??
+        sessionCtxForState.CommandBody ??
+        sessionCtxForState.RawBody ??
+        sessionCtxForState.BodyForCommands ??
         "",
     ),
     SessionId: sessionId,

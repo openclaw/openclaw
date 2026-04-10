@@ -79,7 +79,11 @@ const discordApproveTestPlugin: ChannelPlugin = {
       nativeCommands: true,
     },
   }),
-  auth: discordNativeApprovalAdapterForTests.auth,
+  approvalCapability: {
+    authorizeActorAction: discordNativeApprovalAdapterForTests.auth.authorizeActorAction,
+    getActionAvailabilityState:
+      discordNativeApprovalAdapterForTests.auth.getActionAvailabilityState,
+  },
 };
 
 const slackApproveTestPlugin: ChannelPlugin = {
@@ -108,7 +112,7 @@ const signalApproveTestPlugin: ChannelPlugin = {
       nativeCommands: true,
     },
   }),
-  auth: createResolvedApproverActionAuthAdapter({
+  approvalCapability: createResolvedApproverActionAuthAdapter({
     channelLabel: "Signal",
     resolveApprovers: ({ cfg, accountId }) => {
       const signal = accountId ? cfg.channels?.signal?.accounts?.[accountId] : cfg.channels?.signal;
@@ -308,8 +312,9 @@ const telegramApproveTestPlugin: ChannelPlugin = {
         DEFAULT_ACCOUNT_ID,
     },
   }),
-  auth: telegramNativeApprovalAdapter.auth,
   approvalCapability: {
+    authorizeActorAction: telegramNativeApprovalAdapter.auth.authorizeActorAction,
+    getActionAvailabilityState: telegramNativeApprovalAdapter.auth.getActionAvailabilityState,
     resolveApproveCommandBehavior: ({ cfg, accountId, senderId, approvalKind }) => {
       if (approvalKind !== "exec") {
         return undefined;
@@ -608,7 +613,7 @@ describe("handleApproveCommand", () => {
           pluginId: "slack",
           plugin: {
             ...createChannelTestPluginBase({ id: "slack", label: "Slack" }),
-            auth: {
+            approvalCapability: {
               authorizeActorAction: () => ({ authorized: true }),
               getActionAvailabilityState: () => ({ kind: "disabled" }),
             },
@@ -798,7 +803,7 @@ describe("handleApproveCommand", () => {
           pluginId: "matrix",
           plugin: {
             ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
-            auth: {
+            approvalCapability: {
               authorizeActorAction: ({ approvalKind }: { approvalKind: "exec" | "plugin" }) =>
                 approvalKind === "plugin"
                   ? { authorized: true }

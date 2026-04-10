@@ -537,6 +537,8 @@ public struct AgentParams: Codable, Sendable {
     public let besteffortdeliver: Bool?
     public let lane: String?
     public let extrasystemprompt: String?
+    public let bootstrapcontextmode: AnyCodable?
+    public let bootstrapcontextrunkind: AnyCodable?
     public let internalevents: [[String: AnyCodable]]?
     public let inputprovenance: [String: AnyCodable]?
     public let idempotencykey: String
@@ -566,6 +568,8 @@ public struct AgentParams: Codable, Sendable {
         besteffortdeliver: Bool?,
         lane: String?,
         extrasystemprompt: String?,
+        bootstrapcontextmode: AnyCodable?,
+        bootstrapcontextrunkind: AnyCodable?,
         internalevents: [[String: AnyCodable]]?,
         inputprovenance: [String: AnyCodable]?,
         idempotencykey: String,
@@ -594,6 +598,8 @@ public struct AgentParams: Codable, Sendable {
         self.besteffortdeliver = besteffortdeliver
         self.lane = lane
         self.extrasystemprompt = extrasystemprompt
+        self.bootstrapcontextmode = bootstrapcontextmode
+        self.bootstrapcontextrunkind = bootstrapcontextrunkind
         self.internalevents = internalevents
         self.inputprovenance = inputprovenance
         self.idempotencykey = idempotencykey
@@ -624,6 +630,8 @@ public struct AgentParams: Codable, Sendable {
         case besteffortdeliver = "bestEffortDeliver"
         case lane
         case extrasystemprompt = "extraSystemPrompt"
+        case bootstrapcontextmode = "bootstrapContextMode"
+        case bootstrapcontextrunkind = "bootstrapContextRunKind"
         case internalevents = "internalEvents"
         case inputprovenance = "inputProvenance"
         case idempotencykey = "idempotencyKey"
@@ -2829,6 +2837,7 @@ public struct ModelChoice: Codable, Sendable {
     public let id: String
     public let name: String
     public let provider: String
+    public let alias: String?
     public let contextwindow: Int?
     public let reasoning: Bool?
 
@@ -2836,12 +2845,14 @@ public struct ModelChoice: Codable, Sendable {
         id: String,
         name: String,
         provider: String,
+        alias: String?,
         contextwindow: Int?,
         reasoning: Bool?)
     {
         self.id = id
         self.name = name
         self.provider = provider
+        self.alias = alias
         self.contextwindow = contextwindow
         self.reasoning = reasoning
     }
@@ -2850,6 +2861,7 @@ public struct ModelChoice: Codable, Sendable {
         case id
         case name
         case provider
+        case alias
         case contextwindow = "contextWindow"
         case reasoning
     }

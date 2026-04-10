@@ -25,7 +25,7 @@ vi.mock("./short-term-promotion.js", () => ({
 }));
 
 function asOpenClawConfig(config: Partial<OpenClawConfig>): OpenClawConfig {
-  return config as OpenClawConfig;
+  return config;
 }
 
 function createSearchTool(config: OpenClawConfig) {

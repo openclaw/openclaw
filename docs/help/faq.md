@@ -1816,8 +1816,8 @@ for usage/billing and raise limits as needed.
 
     - `config.schema.lookup`: inspect one config subtree with its shallow schema node, matched UI hint, and immediate child summaries before writing
     - `config.get`: fetch the current snapshot + hash
-    - `config.patch`: safe partial update (preferred for most RPC edits)
-    - `config.apply`: validate + replace the full config, then restart
+    - `config.patch`: safe partial update (preferred for most RPC edits); hot-reloads when possible and restarts when required
+    - `config.apply`: validate + replace the full config; hot-reloads when possible and restarts when required
     - The owner-only `gateway` runtime tool still refuses to rewrite `tools.exec.ask` / `tools.exec.security`; legacy `tools.bash.*` aliases normalize to the same protected exec paths
 
   </Accordion>
@@ -2254,7 +2254,7 @@ for usage/billing and raise limits as needed.
     Quickest setup:
 
     1. Install Ollama from `https://ollama.com/download`
-    2. Pull a local model such as `ollama pull glm-4.7-flash`
+    2. Pull a local model such as `ollama pull gemma4`
     3. If you want cloud models too, run `ollama signin`
     4. Run `openclaw onboard` and choose `Ollama`
     5. Pick `Local` or `Cloud + Local`

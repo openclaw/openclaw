@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { toBrowserErrorResponse } from "../errors.js";
 import type { PwAiModule } from "../pw-ai-module.js";
 import { getPwAiModule as getPwAiModuleBase } from "../pw-ai-module.js";
@@ -24,12 +25,12 @@ export function readBody(req: BrowserRequest): Record<string, unknown> {
 }
 
 export function resolveTargetIdFromBody(body: Record<string, unknown>): string | undefined {
-  const targetId = typeof body.targetId === "string" ? body.targetId.trim() : "";
+  const targetId = normalizeOptionalString(body.targetId) ?? "";
   return targetId || undefined;
 }
 
 export function resolveTargetIdFromQuery(query: Record<string, unknown>): string | undefined {
-  const targetId = typeof query.targetId === "string" ? query.targetId.trim() : "";
+  const targetId = normalizeOptionalString(query.targetId) ?? "";
   return targetId || undefined;
 }
 

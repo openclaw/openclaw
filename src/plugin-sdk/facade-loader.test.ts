@@ -5,6 +5,7 @@ import {
   listImportedBundledPluginFacadeIds,
   loadBundledPluginPublicSurfaceModuleSync,
   resetFacadeLoaderStateForTest,
+  setFacadeLoaderJitiFactoryForTest,
 } from "./facade-loader.js";
 import { listImportedBundledPluginFacadeIds as listImportedFacadeRuntimeIds } from "./facade-runtime.js";
 import { createPluginSdkTestHarness } from "./test-helpers.js";
@@ -12,6 +13,7 @@ import { createPluginSdkTestHarness } from "./test-helpers.js";
 const { createTempDirSync } = createPluginSdkTestHarness();
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const FACADE_LOADER_GLOBAL = "__openclawTestLoadBundledPluginPublicSurfaceModuleSync";
+type FacadeLoaderJitiFactory = NonNullable<Parameters<typeof setFacadeLoaderJitiFactoryForTest>[0]>;
 
 function createBundledPluginDir(prefix: string, marker: string): string {
   const rootDir = createTempDirSync(prefix);
@@ -68,6 +70,7 @@ function createCircularPluginDir(prefix: string): string {
 afterEach(() => {
   vi.restoreAllMocks();
   resetFacadeLoaderStateForTest();
+  setFacadeLoaderJitiFactoryForTest(undefined);
   delete (globalThis as typeof globalThis & Record<string, unknown>)[FACADE_LOADER_GLOBAL];
   if (originalBundledPluginsDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -113,6 +116,45 @@ describe("plugin-sdk facade loader", () => {
     expect(first.marker).toBe("identity-check");
     expect(listImportedBundledPluginFacadeIds()).toEqual(["demo"]);
     expect(listImportedFacadeRuntimeIds()).toEqual(["demo"]);
+  });
+
+  it("keeps Windows dist facade loads off Jiti native import", () => {
+    const dir = createTempDirSync("openclaw-facade-loader-windows-dist-");
+    const bundledPluginsDir = path.join(dir, "dist");
+    fs.mkdirSync(path.join(bundledPluginsDir, "demo"), { recursive: true });
+    fs.writeFileSync(
+      path.join(bundledPluginsDir, "demo", "api.js"),
+      'export const marker = "windows-dist-ok";\n',
+      "utf8",
+    );
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+
+    const createJitiCalls: Parameters<FacadeLoaderJitiFactory>[] = [];
+    setFacadeLoaderJitiFactoryForTest(((...args) => {
+      createJitiCalls.push(args);
+      return vi.fn(() => ({
+        marker: "windows-dist-ok",
+      })) as unknown as ReturnType<FacadeLoaderJitiFactory>;
+    }) as FacadeLoaderJitiFactory);
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    try {
+      expect(
+        loadBundledPluginPublicSurfaceModuleSync<{ marker: string }>({
+          dirName: "demo",
+          artifactBasename: "api.js",
+        }).marker,
+      ).toBe("windows-dist-ok");
+      expect(createJitiCalls).toHaveLength(1);
+      expect(createJitiCalls[0]?.[0]).toEqual(expect.any(String));
+      expect(createJitiCalls[0]?.[1]).toEqual(
+        expect.objectContaining({
+          tryNative: false,
+        }),
+      );
+    } finally {
+      platformSpy.mockRestore();
+    }
   });
 
   it("breaks circular facade re-entry during module evaluation", () => {

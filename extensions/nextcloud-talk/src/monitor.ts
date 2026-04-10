@@ -4,6 +4,7 @@ import {
   resolveLoggerBackedRuntime,
   safeParseJsonWithSchema,
 } from "openclaw/plugin-sdk/extension-shared";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { z } from "zod";
 import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
@@ -72,7 +73,7 @@ function formatError(err: unknown): string {
 
 function normalizeOrigin(value: string): string | null {
   try {
-    return new URL(value).origin.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(new URL(value).origin);
   } catch {
     return null;
   }

@@ -40,6 +40,19 @@ describe("timeout-triggered compaction", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         timedOut: true,
+        promptCache: {
+          retention: "short",
+          lastCallUsage: {
+            input: 150000,
+            cacheRead: 32000,
+            total: 182000,
+          },
+          observation: {
+            broke: false,
+            cacheRead: 32000,
+          },
+          lastCacheTouchAt: 1_700_000_000_000,
+        },
         lastAssistant: {
           usage: { input: 150000 },
         } as never,
@@ -67,6 +80,18 @@ describe("timeout-triggered compaction", () => {
         force: true,
         compactionTarget: "budget",
         runtimeContext: expect.objectContaining({
+          promptCache: expect.objectContaining({
+            retention: "short",
+            lastCallUsage: expect.objectContaining({
+              input: 150000,
+              cacheRead: 32000,
+            }),
+            observation: expect.objectContaining({
+              broke: false,
+              cacheRead: 32000,
+            }),
+            lastCacheTouchAt: 1_700_000_000_000,
+          }),
           trigger: "timeout_recovery",
           attempt: 1,
           maxAttempts: 2,
@@ -194,6 +219,25 @@ describe("timeout-triggered compaction", () => {
     expect(mockedCompactDirect).not.toHaveBeenCalled();
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("timed out");
+  });
+
+  it("points idle-timeout errors at the LLM idle timeout config key", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        timedOut: true,
+        idleTimedOut: true,
+        lastAssistant: {
+          usage: { input: 20000 },
+        } as never,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("agents.defaults.llm.idleTimeoutSeconds");
+    expect(result.payloads?.[0]?.text).not.toContain("agents.defaults.timeoutSeconds");
   });
 
   it("does not attempt compaction for low-context timeouts on later retries", async () => {

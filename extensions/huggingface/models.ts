@@ -1,4 +1,5 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 export const HUGGINGFACE_BASE_URL = "https://router.huggingface.co/v1";
 export const HUGGINGFACE_POLICY_SUFFIXES = ["cheapest", "fastest"] as const;
@@ -91,7 +92,7 @@ export function buildHuggingfaceModelDefinition(
 }
 
 function isReasoningModelHeuristic(modelId: string): boolean {
-  const lower = modelId.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(modelId);
   return (
     lower.includes("r1") ||
     lower.includes("reason") ||

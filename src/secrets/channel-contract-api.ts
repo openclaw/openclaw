@@ -1,7 +1,4 @@
-import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
-import { formatErrorMessage } from "../infra/errors.js";
-import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
 import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
@@ -24,40 +21,14 @@ type BundledChannelContractApi = {
   ) => UnsupportedSecretRefConfigCandidate[];
 };
 
-let bundledChannelDirNameByChannelId: Map<string, string> | null = null;
-
-function getBundledChannelDirName(channelId: string): string | undefined {
-  if (!bundledChannelDirNameByChannelId) {
-    bundledChannelDirNameByChannelId = new Map(
-      loadPluginManifestRegistry({})
-        .plugins.filter((entry) => entry.origin === "bundled")
-        .flatMap((entry) =>
-          entry.channels.map(
-            (candidateChannelId) =>
-              [
-                candidateChannelId,
-                entry.rootDir ? path.basename(entry.rootDir) : entry.id,
-              ] as const,
-          ),
-        ),
-    );
-  }
-  return bundledChannelDirNameByChannelId.get(channelId);
-}
-
 function loadBundledChannelPublicArtifact(
   channelId: string,
   artifactBasenames: readonly string[],
 ): BundledChannelContractApi | undefined {
-  const dirName = getBundledChannelDirName(channelId);
-  if (!dirName) {
-    return undefined;
-  }
-
   for (const artifactBasename of artifactBasenames) {
     try {
       return loadBundledPluginPublicArtifactModuleSync<BundledChannelContractApi>({
-        dirName,
+        dirName: channelId,
         artifactBasename,
       });
     } catch (error) {
@@ -68,14 +39,13 @@ function loadBundledChannelPublicArtifact(
         continue;
       }
       if (process.env.OPENCLAW_DEBUG_CHANNEL_CONTRACT_API === "1") {
-        const detail = formatErrorMessage(error);
+        const detail = error instanceof Error ? error.message : String(error);
         process.stderr.write(
-          `[channel-contract-api] failed to load ${channelId} via ${dirName}/${artifactBasename}: ${detail}\n`,
+          `[channel-contract-api] failed to load ${channelId}/${artifactBasename}: ${detail}\n`,
         );
       }
     }
   }
-
   return undefined;
 }
 

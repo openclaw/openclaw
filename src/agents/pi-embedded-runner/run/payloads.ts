@@ -6,7 +6,10 @@ import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../../auto-repl
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { isCronSessionKey } from "../../../routing/session-key.js";
-import { normalizeOptionalString } from "../../../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../../shared/string-coerce.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,
@@ -41,7 +44,7 @@ const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
 ] as const;
 
 function isRecoverableToolError(error: string | undefined): boolean {
-  const errorLower = (error ?? "").toLowerCase();
+  const errorLower = normalizeOptionalLowercaseString(error) ?? "";
   return RECOVERABLE_TOOL_ERROR_KEYWORDS.some((keyword) => errorLower.includes(keyword));
 }
 
@@ -74,7 +77,7 @@ function resolveToolErrorWarningPolicy(params: {
   sessionKey: string;
   verboseLevel?: VerboseLevel;
 }): ToolErrorWarningPolicy {
-  const normalizedToolName = params.lastToolError.toolName.trim().toLowerCase();
+  const normalizedToolName = normalizeOptionalLowercaseString(params.lastToolError.toolName) ?? "";
   const includeDetails = shouldIncludeToolErrorDetails(params);
   if (params.suppressToolErrorWarnings) {
     return { showWarning: false, includeDetails };

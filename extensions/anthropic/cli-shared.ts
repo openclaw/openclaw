@@ -1,4 +1,5 @@
 import type { CliBackendConfig } from "openclaw/plugin-sdk/cli-backend";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 
 export const CLAUDE_CLI_BACKEND_ID = "claude-cli";
 export const CLAUDE_CLI_DEFAULT_MODEL_REF = `${CLAUDE_CLI_BACKEND_ID}/claude-sonnet-4-6`;
@@ -92,7 +93,7 @@ const CLAUDE_SETTING_SOURCES_ARG = "--setting-sources";
 const CLAUDE_SAFE_SETTING_SOURCES = "user";
 
 export function isClaudeCliProvider(providerId: string): boolean {
-  return providerId.trim().toLowerCase() === CLAUDE_CLI_BACKEND_ID;
+  return normalizeOptionalLowercaseString(providerId) === CLAUDE_CLI_BACKEND_ID;
 }
 
 export function normalizeClaudePermissionArgs(args?: string[]): string[] | undefined {

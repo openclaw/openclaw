@@ -140,7 +140,8 @@ cli note
   it("runs wiki doctor and sets a non-zero exit code when warnings exist", async () => {
     const { rootDir, config } = await createCliVault({
       config: {
-        obsidian: { enabled: true, useOfficialCli: true },
+        vaultMode: "bridge",
+        bridge: { enabled: false },
       },
     });
     const program = new Command();

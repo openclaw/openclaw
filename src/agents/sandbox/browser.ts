@@ -12,7 +12,10 @@ import {
   type ResolvedBrowserConfig,
 } from "../../plugin-sdk/browser-profiles.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { computeSandboxBrowserConfigHash } from "./config-hash.js";
 import { resolveSandboxBrowserDockerCreateConfig } from "./config.js";
@@ -120,7 +123,7 @@ async function ensureDockerNetwork(
   validateNetworkMode(network, {
     allowContainerNamespaceJoin: opts?.allowContainerNamespaceJoin === true,
   });
-  const normalized = network.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(network) ?? "";
   if (!normalized || normalized === "bridge" || normalized === "none") {
     return;
   }

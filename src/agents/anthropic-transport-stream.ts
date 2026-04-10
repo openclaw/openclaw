@@ -10,6 +10,7 @@ import {
   type SimpleStreamOptions,
   type ThinkingLevel,
 } from "@mariozechner/pi-ai";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
@@ -47,7 +48,7 @@ const CLAUDE_CODE_TOOLS = [
   "WebSearch",
 ] as const;
 const CLAUDE_CODE_TOOL_LOOKUP = new Map(
-  CLAUDE_CODE_TOOLS.map((tool) => [tool.toLowerCase(), tool]),
+  CLAUDE_CODE_TOOLS.map((tool) => [normalizeLowercaseStringOrEmpty(tool), tool]),
 );
 
 type AnthropicTransportModel = Model<"anthropic-messages"> & {
@@ -154,13 +155,15 @@ function isAnthropicOAuthToken(apiKey: string): boolean {
 }
 
 function toClaudeCodeName(name: string): string {
-  return CLAUDE_CODE_TOOL_LOOKUP.get(name.toLowerCase()) ?? name;
+  return CLAUDE_CODE_TOOL_LOOKUP.get(normalizeLowercaseStringOrEmpty(name)) ?? name;
 }
 
 function fromClaudeCodeName(name: string, tools: Context["tools"] | undefined): string {
   if (tools && tools.length > 0) {
-    const lowerName = name.toLowerCase();
-    const matchedTool = tools.find((tool) => tool.name.toLowerCase() === lowerName);
+    const lowerName = normalizeLowercaseStringOrEmpty(name);
+    const matchedTool = tools.find(
+      (tool) => normalizeLowercaseStringOrEmpty(tool.name) === lowerName,
+    );
     if (matchedTool) {
       return matchedTool.name;
     }

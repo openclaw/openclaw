@@ -8,7 +8,7 @@ import {
 } from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { readStringValue } from "../../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString, readStringValue } from "../../shared/string-coerce.js";
 import {
   describeSessionsListTool,
   SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
@@ -75,9 +75,9 @@ export function createSessionsListTool(opts?: {
         sandboxed: opts?.sandboxed === true,
       });
 
-      const kindsRaw = readStringArrayParam(params, "kinds")?.map((value) =>
-        value.trim().toLowerCase(),
-      );
+      const kindsRaw = readStringArrayParam(params, "kinds")
+        ?.map((value) => normalizeOptionalLowercaseString(value))
+        .filter((value): value is string => Boolean(value));
       const allowedKindsList = (kindsRaw ?? []).filter((value) =>
         ["main", "group", "cron", "hook", "node", "other"].includes(value),
       );

@@ -131,6 +131,7 @@ export class AcpxRuntime implements AcpxRuntimeLike {
       .close({
         handle: input.handle,
         reason: input.reason,
+        discardPersistentState: input.discardPersistentState,
       })
       .then(() => {
         if (input.discardPersistentState) {

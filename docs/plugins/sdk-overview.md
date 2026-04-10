@@ -135,7 +135,8 @@ explicitly promotes one as public.
     | `plugin-sdk/provider-http` | Generic provider HTTP/endpoint capability helpers |
     | `plugin-sdk/provider-web-fetch-contract` | Narrow web-fetch config/selection contract helpers such as `enablePluginInConfig` and `WebFetchProviderPlugin` |
     | `plugin-sdk/provider-web-fetch` | Web-fetch provider registration/cache helpers |
-    | `plugin-sdk/provider-web-search-contract` | Narrow web-search config/credential contract helpers such as `enablePluginInConfig`, `resolveProviderWebSearchPluginConfig`, and scoped credential setters/getters |
+    | `plugin-sdk/provider-web-search-config-contract` | Narrow web-search config/credential helpers for providers that do not need plugin-enable wiring |
+    | `plugin-sdk/provider-web-search-contract` | Narrow web-search config/credential contract helpers such as `createWebSearchProviderContractFields`, `enablePluginInConfig`, `resolveProviderWebSearchPluginConfig`, and scoped credential setters/getters |
     | `plugin-sdk/provider-web-search` | Web-search provider registration/cache/runtime helpers |
     | `plugin-sdk/provider-tools` | `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks`, Gemini schema cleanup + diagnostics, and xAI compat helpers such as `resolveXaiModelCompatPatch` / `applyXaiModelCompat` |
     | `plugin-sdk/provider-usage` | `fetchClaudeUsage` and similar |
@@ -148,9 +149,13 @@ explicitly promotes one as public.
     | Subpath | Key exports |
     | --- | --- |
     | `plugin-sdk/command-auth` | `resolveControlCommandGate`, command registry helpers, sender-authorization helpers |
+    | `plugin-sdk/command-status` | Command/help message builders such as `buildCommandsMessagePaginated` and `buildHelpMessage` |
     | `plugin-sdk/approval-auth-runtime` | Approver resolution and same-chat action-auth helpers |
     | `plugin-sdk/approval-client-runtime` | Native exec approval profile/filter helpers |
     | `plugin-sdk/approval-delivery-runtime` | Native approval capability/delivery adapters |
+    | `plugin-sdk/approval-gateway-runtime` | Shared approval gateway-resolution helper |
+    | `plugin-sdk/approval-handler-adapter-runtime` | Lightweight native approval adapter loading helpers for hot channel entrypoints |
+    | `plugin-sdk/approval-handler-runtime` | Broader approval handler runtime helpers; prefer the narrower adapter/gateway seams when they are enough |
     | `plugin-sdk/approval-native-runtime` | Native approval target + account-binding helpers |
     | `plugin-sdk/approval-reply-runtime` | Exec/plugin approval reply payload helpers |
     | `plugin-sdk/command-auth-native` | Native command auth + native session-target helpers |
@@ -172,6 +177,7 @@ explicitly promotes one as public.
     | --- | --- |
     | `plugin-sdk/runtime` | Broad runtime/logging/backup/plugin-install helpers |
     | `plugin-sdk/runtime-env` | Narrow runtime env, logger, timeout, retry, and backoff helpers |
+    | `plugin-sdk/channel-runtime-context` | Generic channel runtime-context registration and lookup helpers |
     | `plugin-sdk/runtime-store` | `createPluginRuntimeStore` |
     | `plugin-sdk/plugin-runtime` | Shared plugin command/hook/http/interactive helpers |
     | `plugin-sdk/hook-runtime` | Shared webhook/internal hook pipeline helpers |
@@ -196,6 +202,7 @@ explicitly promotes one as public.
     | `plugin-sdk/request-url` | Extract string URLs from fetch/request-like inputs |
     | `plugin-sdk/run-command` | Timed command runner with normalized stdout/stderr results |
     | `plugin-sdk/param-readers` | Common tool/CLI param readers |
+    | `plugin-sdk/tool-payload` | Extract normalized payloads from tool result objects |
     | `plugin-sdk/tool-send` | Extract canonical send target fields from tool args |
     | `plugin-sdk/temp-path` | Shared temp-download path helpers |
     | `plugin-sdk/logging-core` | Subsystem logger and redaction helpers |
@@ -383,13 +390,13 @@ AI CLI backend such as `codex-cli`.
 
 ### Exclusive slots
 
-| Method                                     | What it registers                     |
-| ------------------------------------------ | ------------------------------------- |
-| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time) |
-| `api.registerMemoryCapability(capability)` | Unified memory capability             |
-| `api.registerMemoryPromptSection(builder)` | Memory prompt section builder         |
-| `api.registerMemoryFlushPlan(resolver)`    | Memory flush plan resolver            |
-| `api.registerMemoryRuntime(runtime)`       | Memory runtime adapter                |
+| Method                                     | What it registers                                                                                                                                         |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). The `assemble()` callback receives `availableTools` and `citationsMode` so the engine can tailor prompt additions. |
+| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                 |
+| `api.registerMemoryPromptSection(builder)` | Memory prompt section builder                                                                                                                             |
+| `api.registerMemoryFlushPlan(resolver)`    | Memory flush plan resolver                                                                                                                                |
+| `api.registerMemoryRuntime(runtime)`       | Memory runtime adapter                                                                                                                                    |
 
 ### Memory embedding adapters
 

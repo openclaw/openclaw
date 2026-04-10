@@ -1,5 +1,8 @@
 import type { MsgContext } from "../auto-reply/templating.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { normalizeChatType } from "./chat-type.js";
 
 function extractConversationId(from?: string): string | undefined {
@@ -60,7 +63,7 @@ export function resolveConversationLabel(ctx: MsgContext): string | undefined {
   if (base.includes(id)) {
     return base;
   }
-  if (base.toLowerCase().includes(" id:")) {
+  if (normalizeLowercaseStringOrEmpty(base).includes(" id:")) {
     return base;
   }
   if (base.startsWith("#") || base.startsWith("@")) {

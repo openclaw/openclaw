@@ -12,10 +12,56 @@ type PendingPromptHarness = {
   runId: string;
 };
 
-async function createPendingPromptHarness(): Promise<PendingPromptHarness> {
-  const sessionId = "session-1";
-  const sessionKey = "agent:main:main";
+const DEFAULT_SESSION_ID = "session-1";
+const DEFAULT_SESSION_KEY = "agent:main:main";
+const DEFAULT_PROMPT_TEXT = "hello";
 
+function createSessionAgentHarness(
+  request: GatewayClient["request"],
+  options: { sessionId?: string; sessionKey?: string; cwd?: string } = {},
+) {
+  const sessionId = options.sessionId ?? DEFAULT_SESSION_ID;
+  const sessionKey = options.sessionKey ?? DEFAULT_SESSION_KEY;
+  const sessionStore = createInMemorySessionStore();
+  sessionStore.createSession({
+    sessionId,
+    sessionKey,
+    cwd: options.cwd ?? "/tmp",
+  });
+  const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+    sessionStore,
+  });
+
+  return {
+    agent,
+    sessionId,
+    sessionKey,
+    sessionStore,
+  };
+}
+
+function promptAgent(
+  agent: AcpGatewayAgent,
+  sessionId = DEFAULT_SESSION_ID,
+  text = DEFAULT_PROMPT_TEXT,
+) {
+  return agent.prompt({
+    sessionId,
+    prompt: [{ type: "text", text }],
+    _meta: {},
+  } as unknown as PromptRequest);
+}
+
+function observeSettlement(promise: ReturnType<AcpGatewayAgent["prompt"]>) {
+  const settleSpy = vi.fn();
+  void promise.then(
+    (value) => settleSpy({ kind: "resolve", value }),
+    (error) => settleSpy({ kind: "reject", error }),
+  );
+  return settleSpy;
+}
+
+async function createPendingPromptHarness(): Promise<PendingPromptHarness> {
   let runId: string | undefined;
   const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
     if (method === "chat.send") {
@@ -25,23 +71,8 @@ async function createPendingPromptHarness(): Promise<PendingPromptHarness> {
     return {};
   }) as GatewayClient["request"];
 
-  const sessionStore = createInMemorySessionStore();
-  sessionStore.createSession({
-    sessionId,
-    sessionKey,
-    cwd: "/tmp",
-  });
-
-  const agent = new AcpGatewayAgent(
-    createAcpConnection(),
-    createAcpGateway(request as unknown as GatewayClient["request"]),
-    { sessionStore },
-  );
-  const promptPromise = agent.prompt({
-    sessionId,
-    prompt: [{ type: "text", text: "hello" }],
-    _meta: {},
-  } as unknown as PromptRequest);
+  const { agent, sessionId } = createSessionAgentHarness(request);
+  const promptPromise = promptAgent(agent, sessionId);
 
   await vi.waitFor(() => {
     expect(runId).toBeDefined();
@@ -111,11 +142,7 @@ describe("acp translator stop reason mapping", () => {
 
   it("keeps in-flight prompts pending across transient gateway disconnects", async () => {
     const { agent, promptPromise, runId } = await createPendingPromptHarness();
-    const settleSpy = vi.fn();
-    void promptPromise.then(
-      (value) => settleSpy({ kind: "resolve", value }),
-      (error) => settleSpy({ kind: "reject", error }),
-    );
+    const settleSpy = observeSettlement(promptPromise);
 
     agent.handleGatewayDisconnect("1006: connection lost");
     await Promise.resolve();
@@ -153,31 +180,15 @@ describe("acp translator stop reason mapping", () => {
   it("keeps pre-ack send disconnects inside the reconnect grace window", async () => {
     vi.useFakeTimers();
     try {
-      const sessionStore = createInMemorySessionStore();
-      sessionStore.createSession({
-        sessionId: "session-1",
-        sessionKey: "agent:main:main",
-        cwd: "/tmp",
-      });
       const request = vi.fn(async (method: string) => {
         if (method === "chat.send") {
           throw new Error("gateway closed (1006): connection lost");
         }
         return {};
       }) as GatewayClient["request"];
-      const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
-        sessionStore,
-      });
-      const promptPromise = agent.prompt({
-        sessionId: "session-1",
-        prompt: [{ type: "text", text: "hello" }],
-        _meta: {},
-      } as unknown as PromptRequest);
-      const settleSpy = vi.fn();
-      void promptPromise.then(
-        (value) => settleSpy({ kind: "resolve", value }),
-        (error) => settleSpy({ kind: "reject", error }),
-      );
+      const { agent, sessionId } = createSessionAgentHarness(request);
+      const promptPromise = promptAgent(agent, sessionId);
+      const settleSpy = observeSettlement(promptPromise);
 
       await Promise.resolve();
       expect(settleSpy).not.toHaveBeenCalled();
@@ -194,8 +205,6 @@ describe("acp translator stop reason mapping", () => {
   });
 
   it("reconciles a missed final event on reconnect via agent.wait", async () => {
-    const sessionId = "session-1";
-    const sessionKey = "agent:main:main";
     let runId: string | undefined;
     const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === "chat.send") {
@@ -207,20 +216,8 @@ describe("acp translator stop reason mapping", () => {
       }
       return {};
     }) as GatewayClient["request"];
-    const sessionStore = createInMemorySessionStore();
-    sessionStore.createSession({
-      sessionId,
-      sessionKey,
-      cwd: "/tmp",
-    });
-    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
-      sessionStore,
-    });
-    const promptPromise = agent.prompt({
-      sessionId,
-      prompt: [{ type: "text", text: "hello" }],
-      _meta: {},
-    } as unknown as PromptRequest);
+    const { agent, sessionId } = createSessionAgentHarness(request);
+    const promptPromise = promptAgent(agent, sessionId);
 
     await vi.waitFor(() => {
       expect(runId).toBeDefined();
@@ -243,8 +240,6 @@ describe("acp translator stop reason mapping", () => {
   it("rechecks accepted prompts at the disconnect deadline after reconnect timeout", async () => {
     vi.useFakeTimers();
     try {
-      const sessionId = "session-1";
-      const sessionKey = "agent:main:main";
       let waitCount = 0;
       const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
         if (method === "chat.send") {
@@ -260,25 +255,9 @@ describe("acp translator stop reason mapping", () => {
         }
         return {};
       }) as GatewayClient["request"];
-      const sessionStore = createInMemorySessionStore();
-      sessionStore.createSession({
-        sessionId,
-        sessionKey,
-        cwd: "/tmp",
-      });
-      const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
-        sessionStore,
-      });
-      const promptPromise = agent.prompt({
-        sessionId,
-        prompt: [{ type: "text", text: "hello" }],
-        _meta: {},
-      } as unknown as PromptRequest);
-      const settleSpy = vi.fn();
-      void promptPromise.then(
-        (value) => settleSpy({ kind: "resolve", value }),
-        (error) => settleSpy({ kind: "reject", error }),
-      );
+      const { agent, sessionId } = createSessionAgentHarness(request);
+      const promptPromise = promptAgent(agent, sessionId);
+      const settleSpy = observeSettlement(promptPromise);
 
       await Promise.resolve();
       agent.handleGatewayDisconnect("1006: connection lost");
@@ -298,8 +277,6 @@ describe("acp translator stop reason mapping", () => {
   it("keeps accepted prompts pending when the deadline recheck still reports timeout", async () => {
     vi.useFakeTimers();
     try {
-      const sessionId = "session-1";
-      const sessionKey = "agent:main:main";
       const request = vi.fn(async (method: string) => {
         if (method === "chat.send") {
           return {};
@@ -309,20 +286,8 @@ describe("acp translator stop reason mapping", () => {
         }
         return {};
       }) as GatewayClient["request"];
-      const sessionStore = createInMemorySessionStore();
-      sessionStore.createSession({
-        sessionId,
-        sessionKey,
-        cwd: "/tmp",
-      });
-      const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
-        sessionStore,
-      });
-      const promptPromise = agent.prompt({
-        sessionId,
-        prompt: [{ type: "text", text: "hello" }],
-        _meta: {},
-      } as unknown as PromptRequest);
+      const { agent, sessionId } = createSessionAgentHarness(request);
+      const promptPromise = promptAgent(agent, sessionId);
 
       await Promise.resolve();
       agent.handleGatewayDisconnect("1006: connection lost");
@@ -341,8 +306,6 @@ describe("acp translator stop reason mapping", () => {
   it("does not clear a newer disconnect deadline while reconnect reconciliation is still running", async () => {
     vi.useFakeTimers();
     try {
-      const sessionId = "session-1";
-      const sessionKey = "agent:main:main";
       let resolveAgentWait: ((value: { status: "timeout" }) => void) | undefined;
       let agentWaitCount = 0;
       const request = vi.fn(async (method: string) => {
@@ -360,25 +323,9 @@ describe("acp translator stop reason mapping", () => {
         }
         return {};
       }) as GatewayClient["request"];
-      const sessionStore = createInMemorySessionStore();
-      sessionStore.createSession({
-        sessionId,
-        sessionKey,
-        cwd: "/tmp",
-      });
-      const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
-        sessionStore,
-      });
-      const promptPromise = agent.prompt({
-        sessionId,
-        prompt: [{ type: "text", text: "hello" }],
-        _meta: {},
-      } as unknown as PromptRequest);
-      const settleSpy = vi.fn();
-      void promptPromise.then(
-        (value) => settleSpy({ kind: "resolve", value }),
-        (error) => settleSpy({ kind: "reject", error }),
-      );
+      const { agent, sessionId } = createSessionAgentHarness(request);
+      const promptPromise = promptAgent(agent, sessionId);
+      const settleSpy = observeSettlement(promptPromise);
 
       await Promise.resolve();
       agent.handleGatewayDisconnect("1006: first disconnect");
@@ -405,8 +352,6 @@ describe("acp translator stop reason mapping", () => {
   it("rejects pre-ack prompts when reconnect timeout still finds no run", async () => {
     vi.useFakeTimers();
     try {
-      const sessionId = "session-1";
-      const sessionKey = "agent:main:main";
       const request = vi.fn(async (method: string) => {
         if (method === "chat.send") {
           throw new Error("gateway closed (1006): connection lost");
@@ -416,20 +361,8 @@ describe("acp translator stop reason mapping", () => {
         }
         return {};
       }) as GatewayClient["request"];
-      const sessionStore = createInMemorySessionStore();
-      sessionStore.createSession({
-        sessionId,
-        sessionKey,
-        cwd: "/tmp",
-      });
-      const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
-        sessionStore,
-      });
-      const promptPromise = agent.prompt({
-        sessionId,
-        prompt: [{ type: "text", text: "hello" }],
-        _meta: {},
-      } as unknown as PromptRequest);
+      const { agent, sessionId } = createSessionAgentHarness(request);
+      const promptPromise = promptAgent(agent, sessionId);
       void promptPromise.catch(() => {});
 
       await Promise.resolve();
@@ -449,8 +382,6 @@ describe("acp translator stop reason mapping", () => {
   });
 
   it("rejects a superseded pre-ack prompt when a newer prompt has replaced the session entry", async () => {
-    const sessionId = "session-1";
-    const sessionKey = "agent:main:main";
     let promptCount = 0;
     const request = vi.fn(async (method: string) => {
       if (method !== "chat.send") {
@@ -462,28 +393,12 @@ describe("acp translator stop reason mapping", () => {
       }
       return {};
     }) as GatewayClient["request"];
-    const sessionStore = createInMemorySessionStore();
-    sessionStore.createSession({
-      sessionId,
-      sessionKey,
-      cwd: "/tmp",
-    });
-    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
-      sessionStore,
-    });
+    const { agent, sessionId } = createSessionAgentHarness(request);
 
-    const firstPrompt = agent.prompt({
-      sessionId,
-      prompt: [{ type: "text", text: "first" }],
-      _meta: {},
-    } as unknown as PromptRequest);
+    const firstPrompt = promptAgent(agent, sessionId, "first");
     await Promise.resolve();
 
-    const secondPrompt = agent.prompt({
-      sessionId,
-      prompt: [{ type: "text", text: "second" }],
-      _meta: {},
-    } as unknown as PromptRequest);
+    const secondPrompt = promptAgent(agent, sessionId, "second");
 
     await expect(firstPrompt).rejects.toThrow("gateway closed (1006): connection lost");
     await expect(Promise.race([secondPrompt, Promise.resolve("pending")])).resolves.toBe("pending");
@@ -492,8 +407,6 @@ describe("acp translator stop reason mapping", () => {
   it("rejects stale pre-ack prompts when a superseded send resolves late", async () => {
     vi.useFakeTimers();
     try {
-      const sessionId = "session-1";
-      const sessionKey = "agent:main:main";
       let firstSendResolve: (() => void) | undefined;
       let sendCount = 0;
       const request = vi.fn(async (method: string) => {
@@ -511,30 +424,14 @@ describe("acp translator stop reason mapping", () => {
         }
         return {};
       }) as GatewayClient["request"];
-      const sessionStore = createInMemorySessionStore();
-      sessionStore.createSession({
-        sessionId,
-        sessionKey,
-        cwd: "/tmp",
-      });
-      const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
-        sessionStore,
-      });
+      const { agent, sessionId } = createSessionAgentHarness(request);
 
-      const firstPrompt = agent.prompt({
-        sessionId,
-        prompt: [{ type: "text", text: "first" }],
-        _meta: {},
-      } as unknown as PromptRequest);
+      const firstPrompt = promptAgent(agent, sessionId, "first");
       void firstPrompt.catch(() => {});
       await Promise.resolve();
       expect(firstSendResolve).toBeDefined();
 
-      const secondPrompt = agent.prompt({
-        sessionId,
-        prompt: [{ type: "text", text: "second" }],
-        _meta: {},
-      } as unknown as PromptRequest);
+      const secondPrompt = promptAgent(agent, sessionId, "second");
       void secondPrompt.catch(() => {});
       await Promise.resolve();
       expect(sendCount).toBe(2);
@@ -598,11 +495,7 @@ describe("acp translator stop reason mapping", () => {
         prompt: [{ type: "text", text: "pre-ack" }],
         _meta: {},
       } as unknown as PromptRequest);
-      const acceptedSettleSpy = vi.fn();
-      void acceptedPrompt.then(
-        (value) => acceptedSettleSpy({ kind: "resolve", value }),
-        (error) => acceptedSettleSpy({ kind: "reject", error }),
-      );
+      observeSettlement(acceptedPrompt);
       void preAckPrompt.catch(() => {});
 
       await Promise.resolve();
@@ -624,8 +517,6 @@ describe("acp translator stop reason mapping", () => {
   });
 
   it("reconciles prompts started while the gateway is disconnected", async () => {
-    const sessionId = "session-1";
-    const sessionKey = "agent:main:main";
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {
         throw new Error("gateway closed (1006): connection lost");
@@ -635,27 +526,11 @@ describe("acp translator stop reason mapping", () => {
       }
       return {};
     }) as GatewayClient["request"];
-    const sessionStore = createInMemorySessionStore();
-    sessionStore.createSession({
-      sessionId,
-      sessionKey,
-      cwd: "/tmp",
-    });
-    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
-      sessionStore,
-    });
+    const { agent, sessionId } = createSessionAgentHarness(request);
 
     agent.handleGatewayDisconnect("1006: connection lost");
-    const promptPromise = agent.prompt({
-      sessionId,
-      prompt: [{ type: "text", text: "hello" }],
-      _meta: {},
-    } as unknown as PromptRequest);
-    const settleSpy = vi.fn();
-    void promptPromise.then(
-      (value) => settleSpy({ kind: "resolve", value }),
-      (error) => settleSpy({ kind: "reject", error }),
-    );
+    const promptPromise = promptAgent(agent, sessionId);
+    const settleSpy = observeSettlement(promptPromise);
     await Promise.resolve();
     agent.handleGatewayReconnect();
 
@@ -670,8 +545,6 @@ describe("acp translator stop reason mapping", () => {
   it("does not let a stale disconnect deadline reject a newer prompt on the same session", async () => {
     vi.useFakeTimers();
     try {
-      const sessionId = "session-1";
-      const sessionKey = "agent:main:main";
       let sendCount = 0;
       const requestMock = vi.fn(async (method: string, params?: Record<string, unknown>) => {
         if (method === "chat.send") {
@@ -687,21 +560,9 @@ describe("acp translator stop reason mapping", () => {
         return {};
       });
       const request = requestMock as GatewayClient["request"];
-      const sessionStore = createInMemorySessionStore();
-      sessionStore.createSession({
-        sessionId,
-        sessionKey,
-        cwd: "/tmp",
-      });
-      const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
-        sessionStore,
-      });
+      const { agent, sessionId } = createSessionAgentHarness(request);
 
-      const firstPrompt = agent.prompt({
-        sessionId,
-        prompt: [{ type: "text", text: "first" }],
-        _meta: {},
-      } as unknown as PromptRequest);
+      const firstPrompt = promptAgent(agent, sessionId, "first");
       void firstPrompt.catch(() => {});
       await Promise.resolve();
       const firstRunId = requestMock.mock.calls[0]?.[1]?.idempotencyKey as string;
@@ -710,11 +571,7 @@ describe("acp translator stop reason mapping", () => {
       agent.handleGatewayReconnect();
       await Promise.resolve();
 
-      const secondPrompt = agent.prompt({
-        sessionId,
-        prompt: [{ type: "text", text: "second" }],
-        _meta: {},
-      } as unknown as PromptRequest);
+      const secondPrompt = promptAgent(agent, sessionId, "second");
       await vi.advanceTimersByTimeAsync(5_000);
 
       await expect(Promise.race([secondPrompt, Promise.resolve("pending")])).resolves.toBe(

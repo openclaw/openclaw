@@ -3,7 +3,16 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
-type StageBundledPluginRuntimeDeps = (params?: { cwd?: string; repoRoot?: string }) => void;
+type StageRuntimeDepsInstallParams = {
+  packageJson: Record<string, unknown>;
+};
+
+type StageBundledPluginRuntimeDeps = (params?: {
+  cwd?: string;
+  repoRoot?: string;
+  installAttempts?: number;
+  installPluginRuntimeDepsImpl?: (params: StageRuntimeDepsInstallParams) => void;
+}) => void;
 
 async function loadStageBundledPluginRuntimeDeps(): Promise<StageBundledPluginRuntimeDeps> {
   const moduleUrl = new URL("../../scripts/stage-bundled-plugin-runtime-deps.mjs", import.meta.url);
@@ -39,7 +48,7 @@ describe("stageBundledPluginRuntimeDeps", () => {
       JSON.stringify(
         {
           name: "@openclaw/feishu",
-          version: "2026.4.6",
+          version: "2026.4.10",
           dependencies: {
             "@larksuiteoapi/node-sdk": "^1.60.0",
           },
@@ -111,7 +120,7 @@ describe("stageBundledPluginRuntimeDeps", () => {
       JSON.stringify(
         {
           name: "@openclaw/amazon-bedrock-provider",
-          version: "2026.4.6",
+          version: "2026.4.10",
           dependencies: {
             "@aws-sdk/client-bedrock": "3.1024.0",
           },

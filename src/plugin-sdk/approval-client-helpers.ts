@@ -4,7 +4,10 @@ import { matchesApprovalRequestFilters } from "../infra/approval-request-filters
 import { getExecApprovalReplyMetadata } from "../infra/exec-approval-reply.js";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import type { OpenClawConfig } from "./config-runtime.js";
 import { normalizeAccountId } from "./routing.js";
 
@@ -58,7 +61,7 @@ export function isChannelExecApprovalTargetRecipient(params: {
 }): boolean {
   const normalizeSenderId = params.normalizeSenderId ?? normalizeOptionalString;
   const normalizedSenderId = params.senderId ? normalizeSenderId(params.senderId) : undefined;
-  const normalizedChannel = params.channel.trim().toLowerCase();
+  const normalizedChannel = normalizeOptionalLowercaseString(params.channel);
   if (!normalizedSenderId || !isApprovalTargetsMode(params.cfg)) {
     return false;
   }
@@ -68,7 +71,7 @@ export function isChannelExecApprovalTargetRecipient(params: {
   }
   const normalizedAccountId = params.accountId ? normalizeAccountId(params.accountId) : undefined;
   return targets.some((target) => {
-    if (target.channel?.trim().toLowerCase() !== normalizedChannel) {
+    if (normalizeOptionalLowercaseString(target.channel) !== normalizedChannel) {
       return false;
     }
     if (

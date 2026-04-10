@@ -1,5 +1,6 @@
 import { withFetchPreconnect } from "openclaw/plugin-sdk/testing";
-import { afterEach, beforeAll, describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import { probeTelegram, resetTelegramProbeFetcherCacheForTests } from "./probe.js";
 
 const resolveTelegramFetch = vi.hoisted(() => vi.fn());
 const makeProxyFetch = vi.hoisted(() => vi.fn());
@@ -13,9 +14,6 @@ vi.mock("./fetch.js", () => ({
 vi.mock("./proxy.js", () => ({
   makeProxyFetch,
 }));
-
-let probeTelegram: typeof import("./probe.js").probeTelegram;
-let resetTelegramProbeFetcherCacheForTests: typeof import("./probe.js").resetTelegramProbeFetcherCacheForTests;
 
 describe("probeTelegram retry logic", () => {
   const token = "test-token";
@@ -70,10 +68,6 @@ describe("probeTelegram retry logic", () => {
     } else {
       delete (globalThis as { fetch?: typeof fetch }).fetch;
     }
-  });
-
-  beforeAll(async () => {
-    ({ probeTelegram, resetTelegramProbeFetcherCacheForTests } = await import("./probe.js"));
   });
 
   it.each([

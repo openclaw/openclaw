@@ -3,7 +3,10 @@ import path from "node:path";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { isMutatingToolCall } from "../agents/tool-mutation.js";
 import { resolveOwnerOnlyToolApprovalClass } from "../agents/tool-policy.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { asRecord } from "./record-shared.js";
 
 const SAFE_SEARCH_TOOL_IDS = new Set(["search", "web_search", "memory_search"]);
@@ -51,7 +54,7 @@ function readFirstStringValue(
 }
 
 function normalizeToolName(value: string): string | undefined {
-  const normalized = value.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(value);
   if (!normalized || normalized.length > 128) {
     return undefined;
   }

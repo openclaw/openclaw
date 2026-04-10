@@ -1,5 +1,10 @@
 import crypto from "node:crypto";
-import { normalizeOptionalString, stripMarkdown } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  stripMarkdown,
+} from "openclaw/plugin-sdk/text-runtime";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
 import {
   getCachedBlueBubblesPrivateApiStatus,
@@ -62,10 +67,10 @@ const EFFECT_MAP: Record<string, string> = {
 };
 
 function resolveEffectId(raw?: string): string | undefined {
-  if (!raw) {
+  const trimmed = normalizeOptionalLowercaseString(raw);
+  if (!trimmed) {
     return undefined;
   }
-  const trimmed = raw.trim().toLowerCase();
   if (EFFECT_MAP[trimmed]) {
     return EFFECT_MAP[trimmed];
   }
@@ -360,7 +365,7 @@ export async function createChatForHandle(params: {
     if (
       res.status === 400 ||
       res.status === 403 ||
-      errorText.toLowerCase().includes("private api")
+      normalizeLowercaseStringOrEmpty(errorText).includes("private api")
     ) {
       throw new Error(
         `BlueBubbles send failed: Cannot create new chat - Private API must be enabled. Original error: ${errorText || res.status}`,

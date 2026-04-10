@@ -7,6 +7,7 @@ import {
   EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS,
   EXTENSION_PACKAGE_BOUNDARY_EXCLUDE,
   EXTENSION_PACKAGE_BOUNDARY_INCLUDE,
+  EXTENSION_PACKAGE_BOUNDARY_XAI_PATHS,
   isOptInExtensionPackageBoundaryTsconfig,
   readExtensionPackageBoundaryPackageJson,
   readExtensionPackageBoundaryTsconfig,
@@ -72,6 +73,21 @@ describe("opt-in extension package boundaries", () => {
     }
   });
 
+  it("keeps xai as the only opt-in extension with custom path overrides", () => {
+    const optInExtensions = collectOptInExtensionPackageBoundaries(REPO_ROOT);
+    const extensionsWithCustomPaths = optInExtensions.filter((extensionName) => {
+      const tsconfig = readExtensionPackageBoundaryTsconfig(extensionName, REPO_ROOT);
+      return tsconfig.compilerOptions?.paths !== undefined;
+    });
+
+    expect(extensionsWithCustomPaths).toEqual(["xai"]);
+  });
+
+  it("keeps xai's boundary-specific path overrides derived from the shared package boundary map", () => {
+    const tsconfig = readExtensionPackageBoundaryTsconfig("xai", REPO_ROOT);
+    expect(tsconfig.compilerOptions?.paths).toEqual(EXTENSION_PACKAGE_BOUNDARY_XAI_PATHS);
+  });
+
   it("keeps plugin-sdk package types generated from the package build, not a hand-maintained types bridge", () => {
     const tsconfig = readJsonFile<TsConfigJson>("packages/plugin-sdk/tsconfig.json");
     expect(tsconfig.extends).toBe("../../tsconfig.json");
@@ -133,6 +149,12 @@ describe("opt-in extension package boundaries", () => {
     );
     expect(packageJson.exports?.["./provider-usage"]?.types).toBe(
       "./dist/src/plugin-sdk/provider-usage.d.ts",
+    );
+    expect(packageJson.exports?.["./provider-web-search-contract"]?.types).toBe(
+      "./dist/src/plugin-sdk/provider-web-search-contract.d.ts",
+    );
+    expect(packageJson.exports?.["./provider-web-search-config-contract"]?.types).toBe(
+      "./dist/src/plugin-sdk/provider-web-search-config-contract.d.ts",
     );
     expect(packageJson.exports?.["./runtime-doctor"]?.types).toBe(
       "./dist/src/plugin-sdk/runtime-doctor.d.ts",

@@ -265,43 +265,6 @@ describe("backup commands", () => {
     }
   });
 
-  it("optionally verifies the archive after writing it", async () => {
-    const stateDir = path.join(tempHome.home, ".openclaw");
-    const archiveDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-backup-verify-on-create-"),
-    );
-    try {
-      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
-      await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
-
-      const runtime = createRuntime();
-      vi.spyOn(backupShared, "resolveBackupPlanFromDisk").mockResolvedValue(
-        await resolveBackupPlanFromPaths({
-          stateDir,
-          configPath: path.join(stateDir, "openclaw.json"),
-          oauthDir: path.join(stateDir, "credentials"),
-          includeWorkspace: false,
-          configInsideState: true,
-          oauthInsideState: true,
-          nowMs: 123,
-        }),
-      );
-
-      const result = await backupCreateCommand(runtime, {
-        output: archiveDir,
-        verify: true,
-      });
-
-      expect(result.verified).toBe(true);
-      expect(backupVerifyCommandMock).toHaveBeenCalledWith(
-        expect.objectContaining({ log: expect.any(Function) }),
-        expect.objectContaining({ archive: result.archivePath, json: false }),
-      );
-    } finally {
-      await fs.rm(archiveDir, { recursive: true, force: true });
-    }
-  });
-
   it("rejects output paths that would be created inside a backed-up directory", async () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
     await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");

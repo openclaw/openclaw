@@ -32,7 +32,7 @@ describe("resolveApprovalCommandAuthorization", () => {
 
   it("delegates to the channel approval override when present", () => {
     getChannelPluginMock.mockReturnValue({
-      auth: {
+      approvalCapability: {
         authorizeActorAction: ({
           approvalKind,
         }: {
@@ -66,14 +66,12 @@ describe("resolveApprovalCommandAuthorization", () => {
     ).toEqual({ authorized: false, reason: "plugin denied", explicit: true });
   });
 
-  it("prefers approvalCapability over legacy auth wiring when present", () => {
+  it("uses approvalCapability as the canonical approval auth contract", () => {
+    const getActionAvailabilityState = vi.fn(() => ({ kind: "enabled" as const }));
     getChannelPluginMock.mockReturnValue({
-      auth: {
-        authorizeActorAction: () => ({ authorized: false, reason: "legacy denied" }),
-      },
       approvalCapability: {
         authorizeActorAction: () => ({ authorized: true }),
-        getActionAvailabilityState: () => ({ kind: "enabled" }),
+        getActionAvailabilityState,
       },
     });
 
@@ -85,13 +83,20 @@ describe("resolveApprovalCommandAuthorization", () => {
         kind: "exec",
       }),
     ).toEqual({ authorized: true, explicit: true });
+    expect(getActionAvailabilityState).toHaveBeenCalledWith({
+      cfg: {} as never,
+      accountId: undefined,
+      action: "approve",
+      approvalKind: "exec",
+    });
   });
 
   it("keeps disabled approval availability implicit even when same-chat auth returns allow", () => {
+    const getActionAvailabilityState = vi.fn(() => ({ kind: "disabled" as const }));
     getChannelPluginMock.mockReturnValue({
-      auth: {
+      approvalCapability: {
         authorizeActorAction: () => ({ authorized: true }),
-        getActionAvailabilityState: () => ({ kind: "disabled" }),
+        getActionAvailabilityState,
       },
     });
 
@@ -104,5 +109,11 @@ describe("resolveApprovalCommandAuthorization", () => {
         kind: "exec",
       }),
     ).toEqual({ authorized: true, explicit: false });
+    expect(getActionAvailabilityState).toHaveBeenCalledWith({
+      cfg: {} as never,
+      accountId: "work",
+      action: "approve",
+      approvalKind: "exec",
+    });
   });
 });

@@ -9,7 +9,10 @@ import {
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { shortenHomePath } from "../../utils.js";
 import { resolveSelectedAndActiveModel } from "../model-runtime.js";
 import type { ReplyPayload } from "../types.js";
@@ -35,7 +38,7 @@ function pushUniqueCatalogEntry(params: {
   fallbackNameToId: boolean;
 }) {
   const provider = normalizeProviderId(params.provider);
-  const id = String(params.id ?? "").trim();
+  const id = normalizeOptionalString(params.id) ?? "";
   if (!provider || !id) {
     return;
   }
@@ -80,7 +83,7 @@ function buildModelPickerCatalog(params: {
     };
 
     const pushRaw = (raw?: string) => {
-      const value = String(raw ?? "").trim();
+      const value = normalizeOptionalString(raw) ?? "";
       if (!value) {
         return;
       }
@@ -207,7 +210,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
   }
 
   const rawDirective = normalizeOptionalString(params.directives.rawModelDirective);
-  const directive = rawDirective?.toLowerCase();
+  const directive = rawDirective ? normalizeLowercaseStringOrEmpty(rawDirective) : undefined;
   const wantsStatus = directive === "status";
   const wantsSummary = !rawDirective;
   const wantsLegacyList = directive === "list";

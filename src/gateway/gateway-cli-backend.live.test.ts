@@ -16,8 +16,10 @@ import {
   matchesCliBackendReply,
   parseImageMode,
   parseJsonStringArray,
+  resolveCliModelSwitchProbeTarget,
   restoreCliBackendLiveEnv,
   shouldRunCliImageProbe,
+  shouldRunCliModelSwitchProbe,
   shouldRunCliMcpProbe,
   snapshotCliBackendLiveEnv,
   type SystemPromptReport,
@@ -81,11 +83,17 @@ describeLive("gateway live (cli backend)", () => {
       const backendResolved = resolveCliBackendConfig(providerId);
       const enableCliImageProbe = shouldRunCliImageProbe(providerId);
       const enableCliMcpProbe = shouldRunCliMcpProbe(providerId);
+      const enableCliModelSwitchProbe = shouldRunCliModelSwitchProbe(providerId, modelKey);
+      const modelSwitchTarget = enableCliModelSwitchProbe
+        ? resolveCliModelSwitchProbeTarget(providerId, modelKey)
+        : undefined;
       logCliBackendLiveStep("model-selected", {
         providerId,
         modelKey,
         enableCliImageProbe,
         enableCliMcpProbe,
+        enableCliModelSwitchProbe,
+        modelSwitchTarget,
       });
       const providerDefaults = backendResolved?.config;
 
@@ -173,7 +181,10 @@ describeLive("gateway live (cli backend)", () => {
             ...cfg.agents?.defaults,
             ...(bootstrapWorkspace ? { workspace: bootstrapWorkspace.workspaceRootDir } : {}),
             model: { primary: modelKey },
-            models: { [modelKey]: {} },
+            models: {
+              [modelKey]: {},
+              ...(modelSwitchTarget ? { [modelSwitchTarget]: {} } : {}),
+            },
             cliBackends: {
               ...existingBackends,
               [providerId]: {
@@ -216,6 +227,8 @@ describeLive("gateway live (cli backend)", () => {
       try {
         const sessionKey = "agent:dev:live-cli-backend";
         const nonce = randomBytes(3).toString("hex").toUpperCase();
+        const memoryNonce = randomBytes(3).toString("hex").toUpperCase();
+        const memoryToken = `CLI-MEM-${memoryNonce}`;
         logCliBackendLiveStep("agent-request:start", { sessionKey, nonce });
         const payload = await client.request(
           "agent",
@@ -225,7 +238,11 @@ describeLive("gateway live (cli backend)", () => {
             message:
               providerId === "codex-cli"
                 ? `Please include the token CLI-BACKEND-${nonce} in your reply.`
-                : `Reply with exactly: CLI backend OK ${nonce}.`,
+                : enableCliModelSwitchProbe
+                  ? `Reply with exactly: CLI backend OK ${nonce}.` +
+                    ` Also remember this session note for later: ${memoryToken}.` +
+                    " Do not include the note in your reply."
+                  : `Reply with exactly: CLI backend OK ${nonce}.`,
             deliver: false,
           },
           { expectFinal: true },
@@ -250,7 +267,49 @@ describeLive("gateway live (cli backend)", () => {
           ).toEqual(expect.arrayContaining(bootstrapWorkspace?.expectedInjectedFiles ?? []));
         }
 
-        if (CLI_RESUME) {
+        if (modelSwitchTarget) {
+          const switchNonce = randomBytes(3).toString("hex").toUpperCase();
+          logCliBackendLiveStep("agent-switch:start", {
+            sessionKey,
+            fromModel: modelKey,
+            toModel: modelSwitchTarget,
+            switchNonce,
+            memoryToken,
+          });
+          const patchPayload = await client.request("sessions.patch", {
+            key: sessionKey,
+            model: modelSwitchTarget,
+          });
+          if (!patchPayload || typeof patchPayload !== "object" || !("ok" in patchPayload)) {
+            throw new Error(
+              `sessions.patch failed for model switch: ${JSON.stringify(patchPayload)}`,
+            );
+          }
+          const switchPayload = await client.request(
+            "agent",
+            {
+              sessionKey,
+              idempotencyKey: `idem-${randomUUID()}`,
+              message:
+                "We just switched from Claude Sonnet to Claude Opus in the same session. " +
+                `What session note did I ask you to remember earlier? ` +
+                `Reply with exactly: CLI backend SWITCH OK ${switchNonce} <remembered-note>.`,
+              deliver: false,
+            },
+            { expectFinal: true },
+          );
+          if (switchPayload?.status !== "ok") {
+            throw new Error(`switch status=${String(switchPayload?.status)}`);
+          }
+          logCliBackendLiveStep("agent-switch:done", { status: switchPayload?.status });
+          const switchText = extractPayloadText(switchPayload?.result);
+          expect(
+            matchesCliBackendReply(
+              switchText,
+              `CLI backend SWITCH OK ${switchNonce} ${memoryToken}.`,
+            ),
+          ).toBe(true);
+        } else if (CLI_RESUME) {
           const resumeNonce = randomBytes(3).toString("hex").toUpperCase();
           logCliBackendLiveStep("agent-resume:start", { sessionKey, resumeNonce });
           const resumePayload = await client.request(

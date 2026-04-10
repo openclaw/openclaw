@@ -534,6 +534,59 @@ describe("openai transport stream", () => {
     expect(params.input?.[0]).toMatchObject({ role: "developer" });
   });
 
+  it("defaults OpenAI Responses reasoning effort to high when unset", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { reasoning?: unknown; include?: string[] };
+
+    expect(params.reasoning).toEqual({ effort: "high", summary: "auto" });
+    expect(params.include).toEqual(["reasoning.encrypted_content"]);
+  });
+
+  it("uses shared stream reasoning as OpenAI Responses effort", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoning: "high",
+      } as never,
+    ) as { reasoning?: unknown };
+
+    expect(params.reasoning).toEqual({ effort: "high", summary: "auto" });
+  });
+
   it.each([
     {
       label: "openai",
@@ -980,6 +1033,58 @@ describe("openai transport stream", () => {
     expect(params.messages?.[0]?.content).toBe("Stable prefix\nDynamic suffix");
   });
 
+  it("uses shared stream reasoning as OpenAI completions effort", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoning: "medium",
+      } as never,
+    ) as { reasoning_effort?: unknown };
+
+    expect(params.reasoning_effort).toBe("medium");
+  });
+
+  it("defaults OpenAI completions reasoning effort to high when unset", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { reasoning_effort?: unknown };
+
+    expect(params.reasoning_effort).toBe("high");
+  });
+
   it("uses system role and streaming usage compat for native Qwen completions providers", () => {
     const params = buildOpenAICompletionsParams(
       {
@@ -1077,6 +1182,41 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("stream_options");
     expect(params).not.toHaveProperty("store");
     expect(params.tools?.[0]?.function).not.toHaveProperty("strict");
+  });
+
+  it("flattens pure text content arrays for string-only completions backends when opted in", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "google/gemma-4-E2B-it",
+        name: "Gemma 4 E2B",
+        api: "openai-completions",
+        provider: "inferrs",
+        baseUrl: "http://127.0.0.1:8080/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 131072,
+        maxTokens: 4096,
+        compat: {
+          requiresStringContent: true,
+        } as Record<string, unknown>,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: "What is 2 + 2?" }],
+            timestamp: Date.now(),
+          },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { messages?: Array<{ role?: string; content?: unknown }> };
+
+    expect(params.messages?.[0]).toMatchObject({ role: "system", content: "system" });
+    expect(params.messages?.[1]).toMatchObject({ role: "user", content: "What is 2 + 2?" });
   });
 
   it("uses max_tokens for Chutes default-route completions providers without relying on baseUrl host sniffing", () => {

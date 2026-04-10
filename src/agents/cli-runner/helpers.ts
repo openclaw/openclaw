@@ -11,6 +11,10 @@ import type { CliBackendConfig } from "../../config/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { MAX_IMAGE_BYTES } from "../../media/constants.js";
 import { extensionForMime } from "../../media/mime.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../../shared/string-coerce.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
@@ -23,12 +27,13 @@ import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.
 import { buildSystemPromptParams } from "../system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
 import { sanitizeImageBlocks } from "../tool-images.js";
+import { formatTomlConfigOverride } from "./toml-inline.js";
 export { buildCliSupervisorScopeKey, resolveCliNoOutputTimeoutMs } from "./reliability.js";
 
 const CLI_RUN_QUEUE = new KeyedAsyncQueue();
 
 function isClaudeCliProvider(providerId: string): boolean {
-  return providerId.trim().toLowerCase() === "claude-cli";
+  return normalizeOptionalLowercaseString(providerId) === "claude-cli";
 }
 
 export function enqueueCliRun<T>(key: string, task: () => Promise<T>): Promise<T> {
@@ -125,7 +130,7 @@ export function normalizeCliModel(modelId: string, backend: CliBackendConfig): s
   if (direct) {
     return direct;
   }
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   const mapped = backend.modelAliases?.[lower];
   if (mapped) {
     return mapped;
@@ -149,7 +154,10 @@ export function resolveSystemPromptUsage(params: {
   if (when === "first" && !params.isNewSession) {
     return null;
   }
-  if (!params.backend.systemPromptArg?.trim()) {
+  if (
+    !params.backend.systemPromptArg?.trim() &&
+    !params.backend.systemPromptFileConfigKey?.trim()
+  ) {
     return null;
   }
   return systemPrompt;
@@ -276,6 +284,29 @@ export async function writeCliImages(params: {
   return { paths, cleanup };
 }
 
+export async function writeCliSystemPromptFile(params: {
+  backend: CliBackendConfig;
+  systemPrompt: string;
+}): Promise<{ filePath?: string; cleanup: () => Promise<void> }> {
+  if (!params.backend.systemPromptFileConfigKey?.trim()) {
+    return { cleanup: async () => {} };
+  }
+  const tempDir = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-system-prompt-"),
+  );
+  const filePath = path.join(tempDir, "system-prompt.md");
+  await fs.writeFile(filePath, stripSystemPromptCacheBoundary(params.systemPrompt), {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
+  return {
+    filePath,
+    cleanup: async () => {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    },
+  };
+}
+
 export async function prepareCliPromptImagePayload(params: {
   backend: CliBackendConfig;
   prompt: string;
@@ -324,6 +355,7 @@ export function buildCliArgs(params: {
   modelId: string;
   sessionId?: string;
   systemPrompt?: string | null;
+  systemPromptFilePath?: string;
   imagePaths?: string[];
   promptArg?: string;
   useResume: boolean;
@@ -332,7 +364,20 @@ export function buildCliArgs(params: {
   if (params.backend.modelArg && params.modelId) {
     args.push(params.backend.modelArg, params.modelId);
   }
-  if (!params.useResume && params.systemPrompt && params.backend.systemPromptArg) {
+  if (
+    !params.useResume &&
+    params.systemPrompt &&
+    params.systemPromptFilePath &&
+    params.backend.systemPromptFileConfigKey
+  ) {
+    args.push(
+      params.backend.systemPromptFileConfigArg ?? "-c",
+      formatTomlConfigOverride(
+        params.backend.systemPromptFileConfigKey,
+        params.systemPromptFilePath,
+      ),
+    );
+  } else if (!params.useResume && params.systemPrompt && params.backend.systemPromptArg) {
     args.push(params.backend.systemPromptArg, stripSystemPromptCacheBoundary(params.systemPrompt));
   }
   if (!params.useResume && params.sessionId) {

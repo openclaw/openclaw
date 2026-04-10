@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { resolveDefaultModelForAgent } from "./model-selection.js";
@@ -39,14 +40,6 @@ export type CodexNativeSearchPayloadPatchResult = {
   status: "payload_not_object" | "native_tool_already_present" | "injected";
 };
 
-function trimToUndefined(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
 function normalizeAllowedDomains(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
@@ -54,7 +47,7 @@ function normalizeAllowedDomains(value: unknown): string[] | undefined {
   const deduped = [
     ...new Set(
       value
-        .map((entry) => trimToUndefined(entry))
+        .map((entry) => normalizeOptionalString(entry))
         .filter((entry): entry is string => typeof entry === "string"),
     ),
   ];
@@ -77,10 +70,10 @@ function normalizeUserLocation(value: unknown): CodexNativeSearchUserLocation | 
     return undefined;
   }
   const location = {
-    country: trimToUndefined(value.country),
-    region: trimToUndefined(value.region),
-    city: trimToUndefined(value.city),
-    timezone: trimToUndefined(value.timezone),
+    country: normalizeOptionalString(value.country),
+    region: normalizeOptionalString(value.region),
+    city: normalizeOptionalString(value.city),
+    timezone: normalizeOptionalString(value.timezone),
   };
   return location.country || location.region || location.city || location.timezone
     ? location

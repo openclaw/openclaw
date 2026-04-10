@@ -6,10 +6,10 @@ import {
 } from "../../../test/helpers/plugins/setup-wizard.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import "./zalo-js.test-mocks.js";
-import { zalouserPlugin } from "./channel.js";
 import { zalouserSetupWizard } from "./setup-surface.js";
+import { zalouserSetupPlugin } from "./setup-test-helpers.js";
 
-const zalouserConfigure = createPluginSetupWizardConfigure(zalouserPlugin);
+const zalouserConfigure = createPluginSetupWizardConfigure(zalouserSetupPlugin);
 
 async function runSetup(params: {
   cfg?: OpenClawConfig;

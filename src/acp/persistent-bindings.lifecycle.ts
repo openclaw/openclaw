@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { getAcpSessionManager } from "./control-plane/manager.js";
 import { resolveConfiguredAcpBindingSpecBySessionKey } from "./persistent-bindings.resolve.js";
 import {
@@ -21,8 +22,10 @@ function sessionMatchesConfiguredBinding(params: {
     return false;
   }
 
-  const desiredAgent = (params.spec.acpAgentId ?? params.spec.agentId).trim().toLowerCase();
-  const currentAgent = (params.meta.agent ?? "").trim().toLowerCase();
+  const desiredAgent = normalizeLowercaseStringOrEmpty(
+    params.spec.acpAgentId ?? params.spec.agentId,
+  );
+  const currentAgent = normalizeLowercaseStringOrEmpty(params.meta.agent);
   if (!currentAgent || currentAgent !== desiredAgent) {
     return false;
   }
@@ -136,6 +139,7 @@ export async function resetAcpSessionInPlace(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   reason: "new" | "reset";
+  clearMeta?: boolean;
 }): Promise<{ ok: true } | { ok: false; skipped?: boolean; error?: string }> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -149,26 +153,14 @@ export async function resetAcpSessionInPlace(params: {
     cfg: params.cfg,
     sessionKey,
   })?.acp;
-  const configuredBinding =
-    !meta || !normalizeText(meta.agent)
-      ? resolveConfiguredAcpBindingSpecBySessionKey({
-          cfg: params.cfg,
-          sessionKey,
-        })
-      : null;
+  const configuredBinding = resolveConfiguredAcpBindingSpecBySessionKey({
+    cfg: params.cfg,
+    sessionKey,
+  });
+  const clearMeta = params.clearMeta ?? Boolean(configuredBinding);
   if (!meta) {
-    if (configuredBinding) {
-      const ensured = await ensureConfiguredAcpBindingSession({
-        cfg: params.cfg,
-        spec: configuredBinding,
-      });
-      if (ensured.ok) {
-        return { ok: true };
-      }
-      return {
-        ok: false,
-        error: ensured.error,
-      };
+    if (clearMeta) {
+      return { ok: true };
     }
     return {
       ok: false,
@@ -184,14 +176,11 @@ export async function resetAcpSessionInPlace(params: {
       sessionKey,
       reason: `${params.reason}-in-place-reset`,
       discardPersistentState: true,
-      clearMeta: false,
+      clearMeta,
       allowBackendUnavailable: true,
       requireAcpSession: false,
     });
 
-    // Bound ACP /new and /reset should return as soon as the previous
-    // runtime state is discarded. The fresh session can be recreated lazily
-    // on the next turn through the normal binding readiness path.
     return { ok: true };
   } catch (error) {
     const message = formatErrorMessage(error);

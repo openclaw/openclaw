@@ -1,5 +1,8 @@
 import { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   createChannelPairingController,
@@ -18,11 +21,11 @@ import type { GoogleChatCoreRuntime } from "./monitor-types.js";
 import type { GoogleChatAnnotation, GoogleChatMessage, GoogleChatSpace } from "./types.js";
 
 function normalizeUserId(raw?: string | null): string {
-  const trimmed = raw?.trim() ?? "";
+  const trimmed = normalizeOptionalString(raw) ?? "";
   if (!trimmed) {
     return "";
   }
-  return trimmed.replace(/^users\//i, "").toLowerCase();
+  return normalizeLowercaseStringOrEmpty(trimmed.replace(/^users\//i, ""));
 }
 
 function isEmailLike(value: string): boolean {
@@ -40,9 +43,9 @@ export function isSenderAllowed(
     return true;
   }
   const normalizedSenderId = normalizeUserId(senderId);
-  const normalizedEmail = senderEmail?.trim().toLowerCase() ?? "";
+  const normalizedEmail = normalizeLowercaseStringOrEmpty(senderEmail ?? "");
   return allowFrom.some((entry) => {
-    const normalized = String(entry).trim().toLowerCase();
+    const normalized = normalizeLowercaseStringOrEmpty(String(entry));
     if (!normalized) {
       return false;
     }
@@ -81,7 +84,7 @@ function resolveGroupConfig(params: {
     return { entry: undefined, allowlistConfigured: false, deprecatedNameMatch: false };
   }
   const entry = entries[groupId];
-  const normalizedGroupName = groupName?.trim().toLowerCase() ?? "";
+  const normalizedGroupName = normalizeLowercaseStringOrEmpty(groupName ?? "");
   const deprecatedNameMatch =
     !entry &&
     Boolean(
@@ -91,7 +94,9 @@ function resolveGroupConfig(params: {
         if (!trimmed || trimmed === "*" || /^spaces\//i.test(trimmed)) {
           return false;
         }
-        return trimmed === groupName || trimmed.toLowerCase() === normalizedGroupName;
+        return (
+          trimmed === groupName || normalizeLowercaseStringOrEmpty(trimmed) === normalizedGroupName
+        );
       }),
     );
   const fallback = entries["*"];
@@ -124,13 +129,16 @@ const warnedDeprecatedUsersEmailAllowFrom = new Set<string>();
 const warnedMutableGroupKeys = new Set<string>();
 
 function warnDeprecatedUsersEmailEntries(logVerbose: (message: string) => void, entries: string[]) {
-  const deprecated = entries.map((v) => String(v).trim()).filter((v) => /^users\/.+@.+/i.test(v));
+  const deprecated = entries
+    .map((v) => normalizeOptionalString(v))
+    .filter((v): v is string => Boolean(v))
+    .filter((v) => /^users\/.+@.+/i.test(v));
   if (deprecated.length === 0) {
     return;
   }
   const key = deprecated
-    .map((v) => v.toLowerCase())
-    .toSorted()
+    .map((v) => normalizeLowercaseStringOrEmpty(v))
+    .toSorted((a, b) => a.localeCompare(b))
     .join(",");
   if (warnedDeprecatedUsersEmailAllowFrom.has(key)) {
     return;
@@ -152,8 +160,8 @@ function warnMutableGroupKeysConfigured(
     return;
   }
   const warningKey = mutableKeys
-    .map((key) => key.toLowerCase())
-    .toSorted()
+    .map((key) => normalizeLowercaseStringOrEmpty(key))
+    .toSorted((a, b) => a.localeCompare(b))
     .join(",");
   if (warnedMutableGroupKeys.has(warningKey)) {
     return;

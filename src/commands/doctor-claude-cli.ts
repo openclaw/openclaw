@@ -14,7 +14,11 @@ import { readClaudeCliCredentialsCached } from "../agents/cli-credentials.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
-import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  resolvePrimaryStringValue,
+} from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
@@ -32,11 +36,11 @@ function usesClaudeCliModelSelection(cfg: OpenClawConfig): boolean {
   const primary = resolvePrimaryStringValue(
     cfg.agents?.defaults?.model as string | { primary?: string; fallbacks?: string[] } | undefined,
   );
-  if (primary?.trim().toLowerCase().startsWith(`${CLAUDE_CLI_PROVIDER}/`)) {
+  if (normalizeOptionalLowercaseString(primary)?.startsWith(`${CLAUDE_CLI_PROVIDER}/`)) {
     return true;
   }
   return Object.keys(cfg.agents?.defaults?.models ?? {}).some((key) =>
-    key.trim().toLowerCase().startsWith(`${CLAUDE_CLI_PROVIDER}/`),
+    normalizeOptionalLowercaseString(key)?.startsWith(`${CLAUDE_CLI_PROVIDER}/`),
   );
 }
 
@@ -45,7 +49,11 @@ function hasClaudeCliConfigSignals(cfg: OpenClawConfig): boolean {
     return true;
   }
   const backendConfig = cfg.agents?.defaults?.cliBackends ?? {};
-  if (Object.keys(backendConfig).some((key) => key.trim().toLowerCase() === CLAUDE_CLI_PROVIDER)) {
+  if (
+    Object.keys(backendConfig).some(
+      (key) => normalizeOptionalLowercaseString(key) === CLAUDE_CLI_PROVIDER,
+    )
+  ) {
     return true;
   }
   return Object.values(cfg.auth?.profiles ?? {}).some(
@@ -63,7 +71,7 @@ function hasClaudeCliStoreSignals(store: AuthProfileStore): boolean {
 function resolveClaudeCliCommand(cfg: OpenClawConfig): string {
   const configured = cfg.agents?.defaults?.cliBackends ?? {};
   for (const [key, entry] of Object.entries(configured)) {
-    if (key.trim().toLowerCase() !== CLAUDE_CLI_PROVIDER) {
+    if (normalizeOptionalLowercaseString(key) !== CLAUDE_CLI_PROVIDER) {
       continue;
     }
     const command = normalizeOptionalString(entry?.command);

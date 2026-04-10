@@ -50,6 +50,33 @@ import type { TypingController } from "./typing.js";
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
 
+export function buildExecOverridePromptHint(params: {
+  execOverrides?: ExecOverrides;
+  elevatedLevel: ElevatedLevel;
+}): string | undefined {
+  const exec = params.execOverrides;
+  if (!exec && params.elevatedLevel === "off") {
+    return undefined;
+  }
+  const parts = [
+    exec?.host ? `host=${exec.host}` : undefined,
+    exec?.security ? `security=${exec.security}` : undefined,
+    exec?.ask ? `ask=${exec.ask}` : undefined,
+    exec?.node ? `node=${exec.node}` : undefined,
+  ].filter(Boolean);
+  const execLine =
+    parts.length > 0
+      ? `Current session exec defaults: ${parts.join(" ")}.`
+      : "Current session exec defaults: inherited from configured agent/global defaults.";
+  const elevatedLine = `Current elevated level: ${params.elevatedLevel}.`;
+  return [
+    "## Current Exec Session State",
+    execLine,
+    elevatedLine,
+    "If the user asks to run a command, use the current exec state above. Do not assume a prior denial still applies after `/exec` or `/elevated` changed.",
+  ].join("\n");
+}
+
 let piEmbeddedRuntimePromise: Promise<typeof import("../../agents/pi-embedded.runtime.js")> | null =
   null;
 let agentRunnerRuntimePromise: Promise<typeof import("./agent-runner.runtime.js")> | null = null;
@@ -231,6 +258,10 @@ export async function runPreparedReply(
     groupChatContext,
     groupIntro,
     groupSystemPrompt,
+    buildExecOverridePromptHint({
+      execOverrides,
+      elevatedLevel: resolvedElevatedLevel,
+    }),
   ].filter(Boolean);
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).

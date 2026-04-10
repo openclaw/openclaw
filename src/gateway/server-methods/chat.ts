@@ -12,7 +12,6 @@ import {
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -25,7 +24,10 @@ import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveAssistantMessagePhase } from "../../shared/chat-message-content.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import {
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
@@ -51,6 +53,7 @@ import {
 } from "../chat-attachments.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
+import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -228,9 +231,9 @@ function resolveChatSendOriginatingRoute(params: {
     .filter(Boolean);
   const sessionScopeHead = sessionScopeParts[0];
   const sessionChannelHint = normalizeMessageChannel(sessionScopeHead);
-  const normalizedSessionScopeHead = (sessionScopeHead ?? "").trim().toLowerCase();
+  const normalizedSessionScopeHead = normalizeLowercaseStringOrEmpty(sessionScopeHead);
   const sessionPeerShapeCandidates = [sessionScopeParts[1], sessionScopeParts[2]]
-    .map((part) => (part ?? "").trim().toLowerCase())
+    .map((part) => normalizeLowercaseStringOrEmpty(part))
     .filter(Boolean);
   const isChannelAgnosticSessionScope = CHANNEL_AGNOSTIC_SESSION_SCOPES.has(
     normalizedSessionScopeHead,
@@ -247,7 +250,7 @@ function resolveChatSendOriginatingRoute(params: {
   const hasClientMetadata =
     (typeof params.client?.mode === "string" && params.client.mode.trim().length > 0) ||
     (typeof params.client?.id === "string" && params.client.id.trim().length > 0);
-  const configuredMainKey = (params.mainKey ?? "main").trim().toLowerCase();
+  const configuredMainKey = normalizeLowercaseStringOrEmpty(params.mainKey ?? "main");
   const isConfiguredMainSessionScope =
     normalizedSessionScopeHead.length > 0 && normalizedSessionScopeHead === configuredMainKey;
   const canInheritConfiguredMainRoute =
@@ -729,7 +732,7 @@ function shouldDropAssistantHistoryMessage(message: unknown): boolean {
     return true;
   }
   const text = extractAssistantTextForSilentCheck(message);
-  if (text === undefined || !isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+  if (text === undefined || !isSuppressedControlReplyText(text)) {
     return false;
   }
   return !hasAssistantNonTextContent(message);
@@ -742,14 +745,21 @@ export function sanitizeChatHistoryMessages(messages: unknown[], maxChars: numbe
   let changed = false;
   const next: unknown[] = [];
   for (const message of messages) {
-    // Drop assistant commentary-only entries and NO_REPLY-only entries, but
-    // keep mixed assistant entries that still carry non-text content.
+    // Drop raw control-token replies before any maxChars truncation can make
+    // an exact token look like partial user-visible text.
     if (shouldDropAssistantHistoryMessage(message)) {
       changed = true;
       continue;
     }
     const res = sanitizeChatHistoryMessage(message, maxChars);
     changed ||= res.changed;
+    // Drop assistant commentary-only entries and exact control replies, but
+    // keep mixed assistant entries that still carry non-text content. Run this
+    // again after sanitizing so display-only cleanup can still suppress stale tokens.
+    if (shouldDropAssistantHistoryMessage(res.message)) {
+      changed = true;
+      continue;
+    }
     next.push(res.message);
   }
   return changed ? next : messages;
@@ -1661,7 +1671,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         SenderId: clientInfo?.id,
         SenderName: clientInfo?.displayName,
         SenderUsername: clientInfo?.displayName,
-        GatewayClientScopes: client?.connect?.scopes,
+        GatewayClientScopes: client?.connect?.scopes ?? [],
       };
 
       const agentId = resolveSessionAgentId({

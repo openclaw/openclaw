@@ -15,7 +15,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { isSubagentSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
-import { abortEmbeddedPiRun } from "./pi-embedded.js";
+import { abortEmbeddedPiRun } from "./pi-embedded-runner/runs.js";
 import {
   readLatestAssistantReplySnapshot,
   waitForAgentRunAndReadUpdatedAssistantReply,

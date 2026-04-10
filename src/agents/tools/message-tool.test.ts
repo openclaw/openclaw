@@ -8,10 +8,13 @@ import {
   createMessageToolCardSchema,
 } from "../../plugin-sdk/channel-actions.js";
 type CreateMessageTool = typeof import("./message-tool.js").createMessageTool;
+type ResetPluginRuntimeStateForTest =
+  typeof import("../../plugins/runtime.js").resetPluginRuntimeStateForTest;
 type SetActivePluginRegistry = typeof import("../../plugins/runtime.js").setActivePluginRegistry;
 type CreateTestRegistry = typeof import("../../test-utils/channel-plugins.js").createTestRegistry;
 
 let createMessageTool: CreateMessageTool;
+let resetPluginRuntimeStateForTest: ResetPluginRuntimeStateForTest;
 let setActivePluginRegistry: SetActivePluginRegistry;
 let createTestRegistry: CreateTestRegistry;
 
@@ -177,12 +180,14 @@ function getActionEnum(properties: Record<string, unknown>) {
 }
 
 beforeAll(async () => {
-  ({ setActivePluginRegistry } = await import("../../plugins/runtime.js"));
+  ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } =
+    await import("../../plugins/runtime.js"));
   ({ createTestRegistry } = await import("../../test-utils/channel-plugins.js"));
   ({ createMessageTool } = await import("./message-tool.js"));
 });
 
 beforeEach(() => {
+  resetPluginRuntimeStateForTest();
   mocks.runMessageAction.mockReset();
   mocks.loadConfig.mockReset().mockReturnValue({});
   mocks.resolveCommandSecretRefsViaGateway.mockReset().mockImplementation(async ({ config }) => ({
@@ -291,7 +296,7 @@ describe("message tool secret scoping", () => {
       message: "hi",
     });
 
-    const secretResolveCall = mocks.resolveCommandSecretRefsViaGateway.mock.calls[0]?.[0] as {
+    const secretResolveCall = mocks.resolveCommandSecretRefsViaGateway.mock.calls.at(-1)?.[0] as {
       targetIds?: Set<string>;
       allowedPaths?: Set<string>;
     };

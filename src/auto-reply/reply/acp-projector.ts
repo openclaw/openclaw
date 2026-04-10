@@ -3,7 +3,10 @@ import { EmbeddedBlockChunker } from "../../agents/pi-embedded-block-chunker.js"
 import { formatToolSummary, resolveToolDisplay } from "../../agents/tool-display.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import type { ReplyPayload } from "../types.js";
 import {
   type AcpHiddenBoundarySeparator,
@@ -56,10 +59,7 @@ function hashText(text: string): string {
 }
 
 function normalizeToolStatus(status: string | undefined): string | undefined {
-  if (!status) {
-    return undefined;
-  }
-  const normalized = status.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(status);
   return normalized || undefined;
 }
 

@@ -20,6 +20,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import * as claudeCliAuth from "./cli-auth-seam.js";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import { buildAnthropicCliMigrationResult } from "./cli-migration.js";
@@ -192,7 +193,7 @@ function resolveAnthropic46ForwardCompatModel(params: {
   fallbackTemplateIds: readonly string[];
 }): ProviderRuntimeModel | undefined {
   const trimmedModelId = params.ctx.modelId.trim();
-  const lower = trimmedModelId.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmedModelId);
   const is46Model =
     lower === params.dashModelId ||
     lower === params.dotModelId ||
@@ -217,7 +218,7 @@ function resolveAnthropic46ForwardCompatModel(params: {
     templateIds,
     ctx: params.ctx,
     patch:
-      params.ctx.provider.trim().toLowerCase() === CLAUDE_CLI_BACKEND_ID
+      normalizeLowercaseStringOrEmpty(params.ctx.provider) === CLAUDE_CLI_BACKEND_ID
         ? { provider: CLAUDE_CLI_BACKEND_ID }
         : undefined,
   });
@@ -246,8 +247,18 @@ function resolveAnthropicForwardCompatModel(
   );
 }
 
+function shouldUseAnthropicAdaptiveThinkingDefault(modelId: string): boolean {
+  const lowerModelId = normalizeLowercaseStringOrEmpty(modelId);
+  return (
+    lowerModelId.startsWith(ANTHROPIC_OPUS_46_MODEL_ID) ||
+    lowerModelId.startsWith(ANTHROPIC_OPUS_46_DOT_MODEL_ID) ||
+    lowerModelId.startsWith(ANTHROPIC_SONNET_46_MODEL_ID) ||
+    lowerModelId.startsWith(ANTHROPIC_SONNET_46_DOT_MODEL_ID)
+  );
+}
+
 function matchesAnthropicModernModel(modelId: string): boolean {
-  const lower = modelId.trim().toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(modelId);
   return ANTHROPIC_MODERN_MODEL_PREFIXES.some((prefix) => lower.startsWith(prefix));
 }
 
@@ -459,7 +470,7 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
     applyConfigDefaults: ({ config, env }) => applyAnthropicConfigDefaults({ config, env }),
     resolveDynamicModel: (ctx) => resolveAnthropicForwardCompatModel(ctx),
     resolveSyntheticAuth: ({ provider }) =>
-      provider.trim().toLowerCase() === CLAUDE_CLI_BACKEND_ID
+      normalizeLowercaseStringOrEmpty(provider) === CLAUDE_CLI_BACKEND_ID
         ? resolveClaudeCliSyntheticAuth()
         : undefined,
     buildReplayPolicy: buildAnthropicReplayPolicy,
@@ -467,11 +478,7 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
     resolveReasoningOutputMode: () => "native",
     wrapStreamFn: wrapAnthropicProviderStream,
     resolveDefaultThinkingLevel: ({ modelId }) =>
-      matchesAnthropicModernModel(modelId) &&
-      (modelId.toLowerCase().startsWith(ANTHROPIC_OPUS_46_MODEL_ID) ||
-        modelId.toLowerCase().startsWith(ANTHROPIC_OPUS_46_DOT_MODEL_ID) ||
-        modelId.toLowerCase().startsWith(ANTHROPIC_SONNET_46_MODEL_ID) ||
-        modelId.toLowerCase().startsWith(ANTHROPIC_SONNET_46_DOT_MODEL_ID))
+      matchesAnthropicModernModel(modelId) && shouldUseAnthropicAdaptiveThinkingDefault(modelId)
         ? "adaptive"
         : undefined,
     resolveUsageAuth: async (ctx) => await ctx.resolveOAuthToken(),

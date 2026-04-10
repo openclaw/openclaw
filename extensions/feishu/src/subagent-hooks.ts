@@ -1,4 +1,7 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { buildFeishuConversationId, parseFeishuConversationId } from "./conversation-id.js";
 import { normalizeFeishuTarget } from "./targets.js";
@@ -274,7 +277,7 @@ export async function handleFeishuSubagentSpawning(
   if (!event.threadRequested) {
     return;
   }
-  const requesterChannel = event.requester?.channel?.trim().toLowerCase();
+  const requesterChannel = normalizeOptionalLowercaseString(event.requester?.channel);
   if (requesterChannel !== "feishu") {
     return;
   }
@@ -342,7 +345,7 @@ export function handleFeishuSubagentDeliveryTarget(event: FeishuSubagentDelivery
   if (!event.expectsCompletionMessage) {
     return;
   }
-  const requesterChannel = event.requesterOrigin?.channel?.trim().toLowerCase();
+  const requesterChannel = normalizeOptionalLowercaseString(event.requesterOrigin?.channel);
   if (requesterChannel !== "feishu") {
     return;
   }

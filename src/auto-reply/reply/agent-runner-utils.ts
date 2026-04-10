@@ -2,7 +2,9 @@ import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import { normalizeAnyChannelId, normalizeChannelId } from "../../channels/registry.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
+import { getAgentRuntimeCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
+import { getRuntimeConfigSnapshot, type OpenClawConfig } from "../../config/config.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -18,6 +20,24 @@ import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-r
 import type { FollowupRun } from "./queue.js";
 
 const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
+
+export function resolveQueuedReplyRuntimeConfig(config: OpenClawConfig): OpenClawConfig {
+  return (
+    (typeof getRuntimeConfigSnapshot === "function" ? getRuntimeConfigSnapshot() : null) ?? config
+  );
+}
+
+export async function resolveQueuedReplyExecutionConfig(
+  config: OpenClawConfig,
+): Promise<OpenClawConfig> {
+  const runtimeConfig = resolveQueuedReplyRuntimeConfig(config);
+  const { resolvedConfig } = await resolveCommandSecretRefsViaGateway({
+    config: runtimeConfig,
+    commandName: "reply",
+    targetIds: getAgentRuntimeCommandSecretTargetIds(),
+  });
+  return resolvedConfig ?? runtimeConfig;
+}
 
 /**
  * Build provider-specific threading context for tool auto-injection.
@@ -112,13 +132,14 @@ export const resolveEnforceFinalTag = (
   );
 
 export function resolveModelFallbackOptions(run: FollowupRun["run"]) {
+  const config = run.config;
   return {
-    cfg: run.config,
+    cfg: config,
     provider: run.provider,
     model: run.model,
     agentDir: run.agentDir,
     fallbacksOverride: resolveRunModelFallbacksOverride({
-      cfg: run.config,
+      cfg: config,
       agentId: run.agentId,
       sessionKey: run.sessionKey,
     }),
@@ -133,11 +154,12 @@ export function buildEmbeddedRunBaseParams(params: {
   authProfile: ReturnType<typeof resolveProviderScopedAuthProfile>;
   allowTransientCooldownProbe?: boolean;
 }) {
+  const config = params.run.config;
   return {
     sessionFile: params.run.sessionFile,
     workspaceDir: params.run.workspaceDir,
     agentDir: params.run.agentDir,
-    config: params.run.config,
+    config,
     skillsSnapshot: params.run.skillsSnapshot,
     ownerNumbers: params.run.ownerNumbers,
     inputProvenance: params.run.inputProvenance,
@@ -163,6 +185,7 @@ export function buildEmbeddedContextFromTemplate(params: {
   sessionCtx: TemplateContext;
   hasRepliedRef: { value: boolean } | undefined;
 }) {
+  const config = params.run.config;
   return {
     sessionId: params.run.sessionId,
     sessionKey: params.run.sessionKey,
@@ -180,7 +203,7 @@ export function buildEmbeddedContextFromTemplate(params: {
     // Provider threading context for tool auto-injection
     ...buildThreadingToolContext({
       sessionCtx: params.sessionCtx,
-      config: params.run.config,
+      config,
       hasRepliedRef: params.hasRepliedRef,
     }),
   };

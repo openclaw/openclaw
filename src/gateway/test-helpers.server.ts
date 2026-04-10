@@ -27,6 +27,7 @@ import {
   parseAgentSessionKey,
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
@@ -773,10 +774,12 @@ function resolveDefaultTestDeviceIdentityPath(params: {
   deviceFamily?: string;
   role: string;
 }) {
-  const safe =
-    `${params.clientId}-${params.clientMode}-${params.platform}-${params.deviceFamily ?? "none"}-${params.role}`
-      .replace(/[^a-zA-Z0-9._-]+/g, "_")
-      .toLowerCase();
+  const safe = normalizeLowercaseStringOrEmpty(
+    `${params.clientId}-${params.clientMode}-${params.platform}-${params.deviceFamily ?? "none"}-${params.role}`.replace(
+      /[^a-zA-Z0-9._-]+/g,
+      "_",
+    ),
+  );
   const suiteRoot = process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
   return path.join(suiteRoot, "test-device-identities", `${safe}.json`);
 }

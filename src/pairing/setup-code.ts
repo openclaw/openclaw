@@ -6,6 +6,7 @@ import { materializeGatewayAuthSecretRefs } from "../gateway/auth-config-utils.j
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
 import { isLoopbackHost, isSecureWebSocketUrl } from "../gateway/net.js";
 import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
+import { normalizeHostname } from "../infra/net/hostname.js";
 import {
   pickMatchingExternalInterfaceAddress,
   safeNetworkInterfaces,
@@ -19,7 +20,10 @@ import {
   isRfc1918Ipv4Address,
   parseCanonicalIpAddress,
 } from "../shared/net/ip.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { resolveTailnetHostWithRunner } from "../shared/tailscale-status.js";
 
 export type PairingSetupPayload = {
@@ -78,7 +82,7 @@ function describeSecureMobilePairingFix(source?: string): string {
 }
 
 function isPrivateLanHostname(host: string): boolean {
-  const normalized = host.trim().toLowerCase().replace(/\.+$/, "");
+  const normalized = normalizeHostname(host);
   if (!normalized) {
     return false;
   }
@@ -100,7 +104,7 @@ function isPrivateLanIpHost(host: string): boolean {
   if (!isIpv6Address(parsed)) {
     return false;
   }
-  const normalized = parsed.toString().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(parsed.toString());
   return (
     normalized.startsWith("fe80:") || normalized.startsWith("fc") || normalized.startsWith("fd")
   );

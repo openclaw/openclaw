@@ -254,6 +254,9 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.fetch.maxRedirects": "Web Fetch Max Redirects",
   "tools.web.fetch.userAgent": "Web Fetch User-Agent",
   "tools.web.fetch.readability": "Web Fetch Readability Extraction",
+  "tools.web.fetch.ssrfPolicy": "Web Fetch SSRF Policy",
+  "tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange":
+    "Web Fetch Allow RFC 2544 Benchmark Range",
   "gateway.controlUi.basePath": "Control UI Base Path",
   "gateway.controlUi.root": "Control UI Assets Root",
   "gateway.controlUi.allowedOrigins": "Control UI Allowed Origins",
@@ -512,6 +515,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.cliBackends": "CLI Backends",
   "agents.defaults.compaction": "Compaction",
   "agents.defaults.compaction.mode": "Compaction Mode",
+  "agents.defaults.compaction.provider": "Compaction Provider",
   "agents.defaults.compaction.reserveTokens": "Compaction Reserve Tokens",
   "agents.defaults.compaction.keepRecentTokens": "Compaction Keep Recent Tokens",
   "agents.defaults.compaction.reserveTokensFloor": "Compaction Reserve Token Floor",

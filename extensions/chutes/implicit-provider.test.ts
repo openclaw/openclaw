@@ -1,92 +1,29 @@
-import { mkdtempSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { resolveOAuthApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveImplicitProvidersForTest } from "../../src/agents/models-config.e2e-harness.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
+import plugin from "./index.js";
 import { CHUTES_BASE_URL } from "./models.js";
 
 const CHUTES_OAUTH_MARKER = resolveOAuthApiKeyMarker("chutes");
-const ORIGINAL_VITEST_ENV = process.env.VITEST;
-const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
 
-function createTempAgentDir() {
-  return mkdtempSync(join(tmpdir(), "openclaw-test-"));
+async function runChutesCatalog(params: { apiKey?: string; discoveryApiKey?: string }) {
+  const provider = await registerSingleProviderPlugin(plugin);
+  const result = await provider.catalog?.run({
+    config: {},
+    resolveProviderAuth: () => ({
+      apiKey: params.apiKey ?? "",
+      discoveryApiKey: params.discoveryApiKey,
+    }),
+  } as never);
+  return result ?? null;
 }
 
-type ChutesAuthProfiles = {
-  [profileId: string]:
-    | {
-        type: "api_key";
-        provider: "chutes";
-        key: string;
-      }
-    | {
-        type: "oauth";
-        provider: "chutes";
-        access: string;
-        refresh: string;
-        expires: number;
-      };
-};
-
-function createChutesApiKeyProfile(key = "chutes-live-api-key") {
-  return {
-    type: "api_key" as const,
-    provider: "chutes" as const,
-    key,
-  };
-}
-
-function createChutesOAuthProfile(access = "oauth-access-token") {
-  return {
-    type: "oauth" as const,
-    provider: "chutes" as const,
-    access,
-    refresh: "oauth-refresh-token",
-    expires: Date.now() + 60_000,
-  };
-}
-
-async function writeChutesAuthProfiles(agentDir: string, profiles: ChutesAuthProfiles) {
-  await writeFile(
-    join(agentDir, "auth-profiles.json"),
-    JSON.stringify(
-      {
-        version: 1,
-        profiles,
-      },
-      null,
-      2,
-    ),
-    "utf8",
-  );
-}
-
-async function resolveChutesProvidersForProfiles(
-  profiles: ChutesAuthProfiles,
-  env: NodeJS.ProcessEnv = {},
-) {
-  const agentDir = createTempAgentDir();
-  await writeChutesAuthProfiles(agentDir, profiles);
-  return resolveImplicitProvidersForTest({ agentDir, env });
-}
-
-function expectChutesApiKeyProvider(
-  providers: Awaited<ReturnType<typeof resolveImplicitProvidersForTest>>,
-  apiKey = "chutes-live-api-key",
-) {
-  expect(providers?.chutes?.baseUrl).toBe(CHUTES_BASE_URL);
-  expect(providers?.chutes?.apiKey).toBe(apiKey);
-  expect(providers?.chutes?.apiKey).not.toBe(CHUTES_OAUTH_MARKER);
-}
-
-function expectChutesOAuthMarkerProvider(
-  providers: Awaited<ReturnType<typeof resolveImplicitProvidersForTest>>,
-) {
-  expect(providers?.chutes?.baseUrl).toBe(CHUTES_BASE_URL);
-  expect(providers?.chutes?.apiKey).toBe(CHUTES_OAUTH_MARKER);
+async function runChutesCatalogProvider(params: { apiKey: string; discoveryApiKey?: string }) {
+  const result = await runChutesCatalog(params);
+  if (!result || !("provider" in result)) {
+    throw new Error("expected Chutes catalog to return one provider");
+  }
+  return result.provider;
 }
 
 async function withRealChutesDiscovery<T>(
@@ -114,71 +51,49 @@ async function withRealChutesDiscovery<T>(
 }
 
 describe("chutes implicit provider auth mode", () => {
-  beforeEach(() => {
-    process.env.VITEST = "true";
-    process.env.NODE_ENV = "test";
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
-  afterAll(() => {
-    process.env.VITEST = ORIGINAL_VITEST_ENV;
-    process.env.NODE_ENV = ORIGINAL_NODE_ENV;
+  it("publishes the env vars used by core api-key auto-detection", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(provider.envVars).toEqual(["CHUTES_API_KEY", "CHUTES_OAUTH_TOKEN"]);
   });
 
-  it("auto-loads bundled chutes discovery for env api keys", async () => {
-    const agentDir = createTempAgentDir();
-    const providers = await resolveImplicitProvidersForTest({
-      agentDir,
-      env: {
-        VITEST: "true",
-        NODE_ENV: "test",
-        CHUTES_API_KEY: "env-chutes-api-key",
-      } as NodeJS.ProcessEnv,
+  it("does not publish a provider when no API key is resolved", async () => {
+    await expect(runChutesCatalog({})).resolves.toBeNull();
+  });
+
+  it("keeps api-key resolved Chutes profiles on the API-key loader path", async () => {
+    const provider = await runChutesCatalogProvider({ apiKey: "chutes-live-api-key" });
+
+    expect(provider.baseUrl).toBe(CHUTES_BASE_URL);
+    expect(provider.apiKey).toBe("chutes-live-api-key");
+    expect(provider.apiKey).not.toBe(CHUTES_OAUTH_MARKER);
+  });
+
+  it("uses the OAuth marker only for oauth-backed Chutes profiles", async () => {
+    const provider = await runChutesCatalogProvider({
+      apiKey: CHUTES_OAUTH_MARKER,
+      discoveryApiKey: "oauth-access-token",
     });
 
-    expect(providers?.chutes?.baseUrl).toBe(CHUTES_BASE_URL);
-    expect(providers?.chutes?.apiKey).toBe("CHUTES_API_KEY");
+    expect(provider.baseUrl).toBe(CHUTES_BASE_URL);
+    expect(provider.apiKey).toBe(CHUTES_OAUTH_MARKER);
   });
 
-  it("keeps api_key-backed chutes profiles on the api-key loader path", async () => {
-    const providers = await resolveChutesProvidersForProfiles({
-      "chutes:default": createChutesApiKeyProfile(),
-    });
-    expectChutesApiKeyProvider(providers);
-  });
-
-  it("keeps api_key precedence when oauth profile is inserted first", async () => {
-    const providers = await resolveChutesProvidersForProfiles({
-      "chutes:oauth": createChutesOAuthProfile(),
-      "chutes:default": createChutesApiKeyProfile(),
-    });
-    expectChutesApiKeyProvider(providers);
-  });
-
-  it("keeps api_key precedence when api_key profile is inserted first", async () => {
-    const providers = await resolveChutesProvidersForProfiles({
-      "chutes:default": createChutesApiKeyProfile(),
-      "chutes:oauth": createChutesOAuthProfile(),
-    });
-    expectChutesApiKeyProvider(providers);
-  });
-
-  it("forwards oauth access token to chutes model discovery", async () => {
+  it("forwards oauth access token to Chutes model discovery", async () => {
     await withRealChutesDiscovery(async (fetchMock) => {
-      const providers = await resolveChutesProvidersForProfiles({
-        "chutes:default": createChutesOAuthProfile("my-chutes-access-token"),
+      await runChutesCatalogProvider({
+        apiKey: CHUTES_OAUTH_MARKER,
+        discoveryApiKey: "my-chutes-access-token",
       });
-      expectChutesOAuthMarkerProvider(providers);
+
       const chutesCalls = fetchMock.mock.calls.filter(([url]) => String(url).includes("chutes.ai"));
       expect(chutesCalls.length).toBeGreaterThan(0);
       const request = chutesCalls[0]?.[1] as { headers?: Record<string, string> } | undefined;
       expect(request?.headers?.Authorization).toBe("Bearer my-chutes-access-token");
     });
-  });
-
-  it("uses CHUTES_OAUTH_MARKER only for oauth-backed chutes profiles", async () => {
-    const providers = await resolveChutesProvidersForProfiles({
-      "chutes:default": createChutesOAuthProfile(),
-    });
-    expectChutesOAuthMarkerProvider(providers);
   });
 });

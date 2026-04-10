@@ -98,6 +98,9 @@ Gemini CLI JSON usage notes:
 | Video understanding    | Yes               |
 | Web search (Grounding) | Yes               |
 | Thinking/reasoning     | Yes (Gemini 3.1+) |
+| Gemma 4 models         | Yes               |
+
+Gemma 4 models (for example `gemma-4-26b-a4b-it`) support thinking mode. OpenClaw rewrites `thinkingBudget` to a supported Google `thinkingLevel` for Gemma 4. Setting thinking to `off` preserves thinking disabled instead of mapping to `MINIMAL`.
 
 ## Direct Gemini cache reuse
 

@@ -1,10 +1,9 @@
+import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../../glob-pattern.js";
 import type { ContextPruningToolMatch } from "./settings.js";
 
 function normalizeGlob(value: string) {
-  return String(value ?? "")
-    .trim()
-    .toLowerCase();
+  return normalizeLowercaseStringOrEmpty(String(value ?? ""));
 }
 
 export function makeToolPrunablePredicate(

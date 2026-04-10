@@ -34,6 +34,8 @@ export const listSpeechVoices: FacadeModule["listSpeechVoices"] =
   createLazyFacadeValue("listSpeechVoices");
 export const maybeApplyTtsToPayload: FacadeModule["maybeApplyTtsToPayload"] =
   createLazyFacadeValue("maybeApplyTtsToPayload");
+export const resolveExplicitTtsOverrides: FacadeModule["resolveExplicitTtsOverrides"] =
+  createLazyFacadeValue("resolveExplicitTtsOverrides");
 export const resolveTtsAutoMode: FacadeModule["resolveTtsAutoMode"] =
   createLazyFacadeValue("resolveTtsAutoMode");
 export const resolveTtsConfig: FacadeModule["resolveTtsConfig"] =

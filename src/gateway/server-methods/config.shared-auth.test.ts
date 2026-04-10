@@ -90,7 +90,7 @@ describe("config shared auth disconnects", () => {
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
   });
 
-  it("disconnects shared-auth clients after config.patch rotates the active token", async () => {
+  it("lets the config reloader own hybrid-mode auth restarts", async () => {
     const prevConfig: OpenClawConfig = {
       gateway: {
         auth: {
@@ -113,7 +113,7 @@ describe("config shared auth disconnects", () => {
     await configHandlers["config.patch"](options);
     await flushConfigHandlerMicrotasks();
 
-    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
     expect(disconnectClientsUsingSharedGatewayAuth).toHaveBeenCalledTimes(1);
   });
 
@@ -140,7 +140,32 @@ describe("config shared auth disconnects", () => {
     await configHandlers["config.patch"](options);
     await flushConfigHandlerMicrotasks();
 
-    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
     expect(disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
+  });
+
+  it("still schedules a direct restart for hot mode when the reloader cannot apply the change", async () => {
+    const prevConfig: OpenClawConfig = {
+      gateway: {
+        reload: {
+          mode: "hot",
+        },
+      },
+    };
+    readConfigFileSnapshotForWriteMock.mockResolvedValue(createConfigWriteSnapshot(prevConfig));
+
+    const { options } = createConfigHandlerHarness({
+      method: "config.patch",
+      params: {
+        baseHash: "base-hash",
+        raw: JSON.stringify({ gateway: { port: 19001 } }),
+        restartDelayMs: 1_000,
+      },
+    });
+
+    await configHandlers["config.patch"](options);
+    await flushConfigHandlerMicrotasks();
+
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
   });
 });

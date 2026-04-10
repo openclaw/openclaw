@@ -4,6 +4,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { messageCommand } from "./message.js";
 
 let testConfig: Record<string, unknown> = {};
+const applyPluginAutoEnable = vi.hoisted(() => vi.fn(({ config }) => ({ config, changes: [] })));
 
 const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
   vi.fn(async ({ config }: { config: unknown }) => ({
@@ -35,6 +36,10 @@ vi.mock("../cli/command-secret-gateway.js", () => ({
   resolveCommandSecretRefsViaGateway,
 }));
 
+vi.mock("../config/plugin-auto-enable.js", () => ({
+  applyPluginAutoEnable,
+}));
+
 vi.mock("../infra/outbound/message-action-runner.js", () => ({
   runMessageAction,
 }));
@@ -42,8 +47,67 @@ vi.mock("../infra/outbound/message-action-runner.js", () => ({
 describe("messageCommand agent routing", () => {
   beforeEach(() => {
     testConfig = {};
+    applyPluginAutoEnable.mockClear();
     resolveCommandSecretRefsViaGateway.mockClear();
     runMessageAction.mockClear();
+  });
+
+  it("passes resolved command config and scoped secret targets to the outbound runner", async () => {
+    const rawConfig = {
+      channels: {
+        telegram: {
+          token: { $secret: "vault://telegram/token" },
+        },
+      },
+    };
+    const resolvedConfig = {
+      channels: {
+        telegram: {
+          token: "12345:resolved-token",
+        },
+      },
+    };
+    testConfig = rawConfig;
+    resolveCommandSecretRefsViaGateway.mockResolvedValueOnce({
+      resolvedConfig,
+      diagnostics: [],
+    });
+
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+    await messageCommand(
+      {
+        action: "send",
+        channel: "telegram",
+        target: "123456",
+        message: "hi",
+        json: true,
+      },
+      {} as CliDeps,
+      runtime,
+    );
+
+    expect(resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: rawConfig,
+        commandName: "message",
+      }),
+    );
+    const call = resolveCommandSecretRefsViaGateway.mock.calls[0]?.[0] as {
+      targetIds?: Set<string>;
+    };
+    expect(call.targetIds).toBeInstanceOf(Set);
+    expect([...(call.targetIds ?? [])].every((id) => id.startsWith("channels.telegram."))).toBe(
+      true,
+    );
+    expect(runMessageAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: resolvedConfig,
+      }),
+    );
   });
 
   it("passes the resolved default agent id to the outbound runner", async () => {

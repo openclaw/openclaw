@@ -26,7 +26,7 @@ export async function probeMatrix(params: {
   accessToken: string;
   userId?: string;
   deviceId?: string;
-  timeoutMs: number;
+  timeoutMs?: number;
   accountId?: string | null;
   allowPrivateNetwork?: boolean;
   ssrfPolicy?: SsrFPolicy;

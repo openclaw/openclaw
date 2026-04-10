@@ -286,6 +286,26 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(onReplyStart).toHaveBeenCalledTimes(1);
   });
 
+  it("does not block delivery when reply lifecycle startup hangs", async () => {
+    const onReplyStart = vi.fn(
+      async () =>
+        await new Promise<void>(() => {
+          // Intentionally never resolve to simulate a stuck typing/reaction side effect.
+        }),
+    );
+    const coordinator = createCoordinator(onReplyStart);
+
+    const delivered = await Promise.race([
+      coordinator.deliver("final", { text: "hello" }).then(() => "delivered"),
+      new Promise<string>((resolve) => {
+        setTimeout(() => resolve("timed-out"), 50);
+      }),
+    ]);
+
+    expect(delivered).toBe("delivered");
+    expect(onReplyStart).toHaveBeenCalledTimes(1);
+  });
+
   it("does not start reply lifecycle for empty payload delivery", async () => {
     const onReplyStart = vi.fn(async () => {});
     const coordinator = createCoordinator(onReplyStart);

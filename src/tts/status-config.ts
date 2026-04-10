@@ -6,7 +6,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { CONFIG_DIR, resolveUserPath } from "../utils.js";
+import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { normalizeTtsAutoMode } from "./tts-auto-mode.js";
 
 const DEFAULT_TTS_MAX_LENGTH = 1500;
@@ -52,7 +52,7 @@ function resolveTtsPrefsPathValue(prefsPath: string | undefined): string {
   if (envPath) {
     return resolveUserPath(envPath);
   }
-  return path.join(CONFIG_DIR, "settings", "tts.json");
+  return path.join(resolveConfigDir(process.env), "settings", "tts.json");
 }
 
 function readPrefs(prefsPath: string): TtsUserPrefs {

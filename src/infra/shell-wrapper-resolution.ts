@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   MAX_DISPATCH_WRAPPER_DEPTH,
   hasDispatchEnvManipulation,
@@ -55,6 +56,48 @@ export type ShellWrapperCommand = {
   isWrapper: boolean;
   command: string | null;
 };
+
+function resolveShellWrapperSpecAndArgvInternal(
+  argv: string[],
+  depth: number,
+): { argv: string[]; wrapper: ShellWrapperSpec; payload: string } | null {
+  if (!isWithinDispatchClassificationDepth(depth)) {
+    return null;
+  }
+
+  const token0 = argv[0]?.trim();
+  if (!token0) {
+    return null;
+  }
+
+  const dispatchUnwrap = unwrapKnownDispatchWrapperInvocation(argv);
+  if (dispatchUnwrap.kind === "blocked") {
+    return null;
+  }
+  if (dispatchUnwrap.kind === "unwrapped") {
+    return resolveShellWrapperSpecAndArgvInternal(dispatchUnwrap.argv, depth + 1);
+  }
+
+  const shellMultiplexerUnwrap = unwrapKnownShellMultiplexerInvocation(argv);
+  if (shellMultiplexerUnwrap.kind === "blocked") {
+    return null;
+  }
+  if (shellMultiplexerUnwrap.kind === "unwrapped") {
+    return resolveShellWrapperSpecAndArgvInternal(shellMultiplexerUnwrap.argv, depth + 1);
+  }
+
+  const wrapper = findShellWrapperSpec(normalizeExecutableToken(token0));
+  if (!wrapper) {
+    return null;
+  }
+
+  const payload = extractShellWrapperPayload(argv, wrapper);
+  if (!payload) {
+    return null;
+  }
+
+  return { argv, wrapper, payload };
+}
 
 function isWithinDispatchClassificationDepth(depth: number): boolean {
   return depth <= MAX_DISPATCH_WRAPPER_DEPTH;
@@ -117,7 +160,7 @@ function extractPosixShellInlineCommand(argv: string[]): string | null {
 
 function extractCmdInlineCommand(argv: string[]): string | null {
   const idx = argv.findIndex((item) => {
-    const token = item.trim().toLowerCase();
+    const token = normalizeLowercaseStringOrEmpty(item);
     return token === "/c" || token === "/k";
   });
   if (idx === -1) {
@@ -213,42 +256,16 @@ function extractShellWrapperCommandInternal(
   rawCommand: string | null,
   depth: number,
 ): ShellWrapperCommand {
-  if (!isWithinDispatchClassificationDepth(depth)) {
+  const resolved = resolveShellWrapperSpecAndArgvInternal(argv, depth);
+  if (!resolved) {
     return { isWrapper: false, command: null };
   }
 
-  const token0 = argv[0]?.trim();
-  if (!token0) {
-    return { isWrapper: false, command: null };
-  }
+  return { isWrapper: true, command: rawCommand ?? resolved.payload };
+}
 
-  const dispatchUnwrap = unwrapKnownDispatchWrapperInvocation(argv);
-  if (dispatchUnwrap.kind === "blocked") {
-    return { isWrapper: false, command: null };
-  }
-  if (dispatchUnwrap.kind === "unwrapped") {
-    return extractShellWrapperCommandInternal(dispatchUnwrap.argv, rawCommand, depth + 1);
-  }
-
-  const shellMultiplexerUnwrap = unwrapKnownShellMultiplexerInvocation(argv);
-  if (shellMultiplexerUnwrap.kind === "blocked") {
-    return { isWrapper: false, command: null };
-  }
-  if (shellMultiplexerUnwrap.kind === "unwrapped") {
-    return extractShellWrapperCommandInternal(shellMultiplexerUnwrap.argv, rawCommand, depth + 1);
-  }
-
-  const wrapper = findShellWrapperSpec(normalizeExecutableToken(token0));
-  if (!wrapper) {
-    return { isWrapper: false, command: null };
-  }
-
-  const payload = extractShellWrapperPayload(argv, wrapper);
-  if (!payload) {
-    return { isWrapper: false, command: null };
-  }
-
-  return { isWrapper: true, command: rawCommand ?? payload };
+export function resolveShellWrapperTransportArgv(argv: string[]): string[] | null {
+  return resolveShellWrapperSpecAndArgvInternal(argv, 0)?.argv ?? null;
 }
 
 export function extractShellWrapperInlineCommand(argv: string[]): string | null {

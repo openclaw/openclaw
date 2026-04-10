@@ -42,7 +42,7 @@ import {
   DM_GROUP_ACCESS_REASON,
   resolvePinnedMainDmOwnerFromAllowlist,
 } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeE164, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   formatSignalPairingIdLine,
   formatSignalSenderDisplay,
@@ -416,7 +416,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     if (params.reaction.isRemove) {
       return true; // Ignore reaction removals
     }
-    const emojiLabel = params.reaction.emoji?.trim() || "emoji";
+    const emojiLabel = normalizeOptionalString(params.reaction.emoji) ?? "emoji";
     const senderName = params.envelope.sourceName ?? params.senderDisplay;
     logVerbose(`signal reaction: ${emojiLabel} from ${senderName}`);
     const groupId = params.reaction.groupInfo?.groupId ?? undefined;
@@ -546,7 +546,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         groupAllowFrom: deps.groupAllowFrom,
         sender,
       });
-    const quoteText = dataMessage?.quote?.text?.trim() ?? "";
+    const quoteText = normalizeOptionalString(dataMessage?.quote?.text) ?? "";
     const { contextVisibilityMode, quoteSenderAllowed, visibleQuoteText, visibleQuoteSender } =
       resolveSignalQuoteContext({
         cfg: deps.cfg,
