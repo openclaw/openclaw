@@ -180,14 +180,14 @@ describe("buildApiErrorObservationFields", () => {
     expect(observed.rawErrorPreview).toContain("custom");
   });
 
-  it("records runtime failure kind for missing-scope auth payloads", () => {
+  it("keeps provider-less missing-scope auth payloads out of the codex-specific scope lane", () => {
     const observed = buildApiErrorObservationFields(
       '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write"}}',
     );
 
     expect(observed).toMatchObject({
       httpCode: "401",
-      providerRuntimeFailureKind: "auth_scope",
+      providerRuntimeFailureKind: "unknown",
     });
   });
 });
