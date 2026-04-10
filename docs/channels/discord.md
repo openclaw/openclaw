@@ -1115,6 +1115,55 @@ Auto-join example:
 }
 ```
 
+#### Known-good starting defaults
+
+If you want to mirror a working baseline quickly, use the values below as a starter profile and tune as needed:
+
+```json5
+{
+  messages: {
+    tts: {
+      provider: "openai",
+      openai: {
+        model: "gpt-4o-mini-tts",
+        voice: "alloy",
+      },
+    },
+  },
+  tools: {
+    media: {
+      audio: {
+        enabled: true,
+        models: [{ provider: "openai", model: "gpt-4o-mini-transcribe" }],
+      },
+    },
+  },
+  channels: {
+    discord: {
+      voice: {
+        enabled: true,
+        model: "openai-codex/gpt-5.4",
+        daveEncryption: true,
+        decryptionFailureTolerance: 24,
+        tts: {
+          provider: "openai",
+          openai: {
+            voice: "alloy",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Required env keys for this baseline:
+
+- `OPENAI_API_KEY` (transcribe + response model + OpenAI TTS auth path when using OpenAI routes)
+- Codex OAuth profile auth (for `openai-codex/*` route) if you use `openai-codex/gpt-5.4`
+
+
+
 Notes:
 
 - `voice.tts` overrides `messages.tts` for voice playback only.
