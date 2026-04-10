@@ -176,12 +176,7 @@ function generateZshArgs(cmd: Command): string {
       const flags = opt.flags.split(/[ ,|]+/);
       const name = flags.find((f) => f.startsWith("--")) || flags[0];
       const short = flags.find((f) => f.startsWith("-") && !f.startsWith("--"));
-      const desc = opt.description
-        .replace(/\\/g, "\\\\")
-        .replace(/"/g, '\\"')
-        .replace(/'/g, "'\\''")
-        .replace(/\[/g, "\\[")
-        .replace(/\]/g, "\\]");
+      const desc = escapeZshDoubleQuotedDescription(opt.description);
       if (short) {
         return `"(${name} ${short})"{${name},${short}}"[${desc}]"`;
       }
@@ -203,6 +198,17 @@ function generateZshSubcmdList(cmd: Command): string {
     })
     .join(" ");
   return `"1: :_values 'command' ${list}"`;
+}
+
+function escapeZshDoubleQuotedDescription(description: string): string {
+  return description
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\$/g, "\\$")
+    .replace(/`/g, "\\`")
+    .replace(/'/g, "'\\''")
+    .replace(/\[/g, "\\[")
+    .replace(/\]/g, "\\]");
 }
 
 function generateZshSubcommands(program: Command, prefix: string): string {
