@@ -11,6 +11,7 @@ import {
   repairLaunchAgentBootstrap,
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
+  stopLaunchAgent,
 } from "./launchd.js";
 
 const state = vi.hoisted(() => ({
@@ -22,6 +23,15 @@ const state = vi.hoisted(() => ({
   bootstrapCode: 1,
   kickstartError: "",
   kickstartFailuresRemaining: 0,
+  disableError: "",
+  disableCode: 1,
+  stopError: "",
+  stopCode: 1,
+  bootoutError: "",
+  bootoutCode: 1,
+  serviceLoaded: true,
+  serviceRunning: true,
+  stopLeavesRunning: false,
   dirs: new Set<string>(),
   dirModes: new Map<string, number>(),
   files: new Map<string, string>(),
@@ -78,14 +88,56 @@ vi.mock("./exec-file.js", () => ({
         state.printNotLoadedRemaining -= 1;
         return { stdout: "", stderr: "Could not find service", code: 113 };
       }
-      return { stdout: state.printOutput, stderr: "", code: 0 };
+      if (!state.serviceLoaded) {
+        return { stdout: "", stderr: "Could not find service", code: 113 };
+      }
+      if (state.printOutput) {
+        return { stdout: state.printOutput, stderr: "", code: 0 };
+      }
+      if (!state.serviceRunning) {
+        return { stdout: ["state = waiting", "pid = 0"].join("\n"), stderr: "", code: 0 };
+      }
+      return { stdout: ["state = running", "pid = 4242"].join("\n"), stderr: "", code: 0 };
     }
-    if (call[0] === "bootstrap" && state.bootstrapError) {
-      return { stdout: "", stderr: state.bootstrapError, code: state.bootstrapCode };
+    if (call[0] === "disable" && state.disableError) {
+      return { stdout: "", stderr: state.disableError, code: state.disableCode };
     }
-    if (call[0] === "kickstart" && state.kickstartError && state.kickstartFailuresRemaining > 0) {
-      state.kickstartFailuresRemaining -= 1;
-      return { stdout: "", stderr: state.kickstartError, code: 1 };
+    if (call[0] === "stop") {
+      if (state.stopError) {
+        return { stdout: "", stderr: state.stopError, code: state.stopCode };
+      }
+      if (!state.stopLeavesRunning) {
+        state.serviceRunning = false;
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    }
+    if (call[0] === "bootout") {
+      if (state.bootoutError) {
+        return { stdout: "", stderr: state.bootoutError, code: state.bootoutCode };
+      }
+      state.serviceLoaded = false;
+      state.serviceRunning = false;
+      return { stdout: "", stderr: "", code: 0 };
+    }
+    if (call[0] === "enable") {
+      return { stdout: "", stderr: "", code: 0 };
+    }
+    if (call[0] === "bootstrap") {
+      if (state.bootstrapError) {
+        return { stdout: "", stderr: state.bootstrapError, code: state.bootstrapCode };
+      }
+      state.serviceLoaded = true;
+      state.serviceRunning = true;
+      return { stdout: "", stderr: "", code: 0 };
+    }
+    if (call[0] === "kickstart") {
+      if (state.kickstartError && state.kickstartFailuresRemaining > 0) {
+        state.kickstartFailuresRemaining -= 1;
+        return { stdout: "", stderr: state.kickstartError, code: 1 };
+      }
+      state.serviceLoaded = true;
+      state.serviceRunning = true;
+      return { stdout: "", stderr: "", code: 0 };
     }
     return { stdout: "", stderr: "", code: 0 };
   }),
@@ -162,6 +214,15 @@ beforeEach(() => {
   state.bootstrapCode = 1;
   state.kickstartError = "";
   state.kickstartFailuresRemaining = 0;
+  state.disableError = "";
+  state.disableCode = 1;
+  state.stopError = "";
+  state.stopCode = 1;
+  state.bootoutError = "";
+  state.bootoutCode = 1;
+  state.serviceLoaded = true;
+  state.serviceRunning = true;
+  state.stopLeavesRunning = false;
   state.dirs.clear();
   state.dirModes.clear();
   state.files.clear();
@@ -406,6 +467,58 @@ describe("launchd install", () => {
     expect(state.fileModes.get(plistPath)).toBe(0o644);
   });
 
+  it("stops LaunchAgent by disabling relaunch before stopping the process", async () => {
+    const env = createDefaultLaunchdEnv();
+    const stdout = new PassThrough();
+    let output = "";
+    stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+
+    await stopLaunchAgent({ env, stdout });
+
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const serviceId = `${domain}/ai.openclaw.gateway`;
+    expect(state.launchctlCalls).toContainEqual(["disable", serviceId]);
+    expect(state.launchctlCalls).toContainEqual(["stop", "ai.openclaw.gateway"]);
+    expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(false);
+    expect(output).toContain("Stopped LaunchAgent");
+  });
+
+  it("falls back to bootout when disable fails so stop remains authoritative", async () => {
+    const env = createDefaultLaunchdEnv();
+    const stdout = new PassThrough();
+    let output = "";
+    state.disableError = "Operation not permitted";
+    stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+
+    await stopLaunchAgent({ env, stdout });
+
+    expect(state.launchctlCalls.some((call) => call[0] === "stop")).toBe(false);
+    expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(true);
+    expect(output).toContain("Stopped LaunchAgent (degraded)");
+    expect(output).toContain("used bootout fallback");
+  });
+
+  it("falls back to bootout when stop does not fully stop the service", async () => {
+    const env = createDefaultLaunchdEnv();
+    const stdout = new PassThrough();
+    let output = "";
+    state.stopLeavesRunning = true;
+    stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+
+    await stopLaunchAgent({ env, stdout });
+
+    expect(state.launchctlCalls.some((call) => call[0] === "stop")).toBe(true);
+    expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(true);
+    expect(output).toContain("Stopped LaunchAgent (degraded)");
+    expect(output).toContain("did not fully stop the service");
+  });
+
   it("restarts LaunchAgent with kickstart and no bootout", async () => {
     const env = {
       ...createDefaultLaunchdEnv(),
@@ -421,6 +534,7 @@ describe("launchd install", () => {
     const serviceId = `${domain}/${label}`;
     expect(result).toEqual({ outcome: "completed" });
     expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(18789);
+    expect(state.launchctlCalls).toContainEqual(["enable", serviceId]);
     expect(state.launchctlCalls).toContainEqual(["kickstart", "-k", serviceId]);
     expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(false);
     expect(state.launchctlCalls.some((call) => call[0] === "bootstrap")).toBe(false);
@@ -484,7 +598,7 @@ describe("launchd install", () => {
       }),
     ).rejects.toThrow("launchctl kickstart failed: Input/output error");
 
-    expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(false);
+    expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(true);
     expect(state.launchctlCalls.some((call) => call[0] === "bootstrap")).toBe(false);
   });
 
@@ -517,7 +631,7 @@ describe("launchd install", () => {
       }),
     ).rejects.toThrow("launchctl kickstart failed: Input/output error");
 
-    expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(false);
+    expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(true);
     expect(state.launchctlCalls.some((call) => call[0] === "bootstrap")).toBe(false);
   });
 
