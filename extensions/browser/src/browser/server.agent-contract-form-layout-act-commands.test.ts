@@ -113,7 +113,16 @@ describe("browser control server", () => {
         height: 600,
       });
       expect(resizeZero.code).toBe("ACT_INVALID_REQUEST");
-      expect(resizeZero.error).toContain("resize requires width and height");
+      expect(resizeZero.error).toContain("resize requires positive width and height");
+      expect(pwMocks.resizeViewportViaPlaywright).toHaveBeenCalledTimes(1);
+
+      const resizeNegative = await postJson<{ error?: string; code?: string }>(`${base}/act`, {
+        kind: "resize",
+        width: -800,
+        height: 600,
+      });
+      expect(resizeNegative.code).toBe("ACT_INVALID_REQUEST");
+      expect(resizeNegative.error).toContain("resize requires positive width and height");
       expect(pwMocks.resizeViewportViaPlaywright).toHaveBeenCalledTimes(1);
 
       const wait = await postJson<{ ok: boolean }>(`${base}/act`, {

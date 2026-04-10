@@ -228,8 +228,8 @@ export function normalizeActRequest(
     case "resize": {
       const width = toNumber(body.width);
       const height = toNumber(body.height);
-      if (!width || !height) {
-        throw new Error("resize requires width and height");
+      if (width === undefined || height === undefined || width <= 0 || height <= 0) {
+        throw new Error("resize requires positive width and height");
       }
       const targetId = toStringOrEmpty(body.targetId) || undefined;
       return {

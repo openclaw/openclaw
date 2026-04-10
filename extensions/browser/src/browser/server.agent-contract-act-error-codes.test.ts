@@ -118,6 +118,21 @@ describe("browser control server", () => {
   );
 
   it(
+    "returns ACT_INVALID_REQUEST for malformed unsupported selector actions before selector gating",
+    async () => {
+      const base = await startServerAndBase();
+      const response = await postJson<ActErrorResponse>(`${base}/act`, {
+        kind: "press",
+        selector: "#submit",
+      });
+
+      expect(response.code).toBe("ACT_INVALID_REQUEST");
+      expect(response.error).toContain("press requires key");
+    },
+    slowTimeoutMs,
+  );
+
+  it(
     "returns ACT_EVALUATE_DISABLED when evaluate is blocked by config",
     async () => {
       setBrowserControlServerEvaluateEnabled(false);
