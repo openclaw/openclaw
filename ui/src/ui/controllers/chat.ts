@@ -248,7 +248,7 @@ export async function sendChatMessage(
           }
           return {
             type: "image",
-            mimeType: parsed.mimeType,
+            mimeType: att.mimeType || parsed.mimeType,
             content: parsed.content,
           };
         })

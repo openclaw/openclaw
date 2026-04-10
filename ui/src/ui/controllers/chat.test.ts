@@ -620,6 +620,39 @@ describe("abortChatRun", () => {
   });
 });
 
+describe("sendChatMessage", () => {
+  it("preserves fallback attachment mime types when serializing chat.send payloads", async () => {
+    const request = vi.fn().mockResolvedValue({});
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const runId = await sendChatMessage(state, "", [
+      {
+        id: "att-1",
+        mimeType: "image/png",
+        dataUrl: "data:application/octet-stream;base64,QUJD",
+      },
+    ]);
+
+    expect(runId).not.toBeNull();
+    expect(request).toHaveBeenCalledWith("chat.send", {
+      sessionKey: "main",
+      message: "",
+      deliver: false,
+      idempotencyKey: expect.any(String),
+      attachments: [
+        {
+          type: "image",
+          mimeType: "image/png",
+          content: "QUJD",
+        },
+      ],
+    });
+  });
+});
+
 describe("loadChatHistory", () => {
   it("filters assistant NO_REPLY messages and keeps user NO_REPLY messages", async () => {
     const request = vi.fn().mockResolvedValue({
