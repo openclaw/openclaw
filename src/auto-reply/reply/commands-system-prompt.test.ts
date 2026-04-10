@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const { createOpenClawCodingToolsMock } = vi.hoisted(() => ({
@@ -128,5 +129,19 @@ describe("resolveCommandsSystemPromptBundle", () => {
         senderE164: "+15551234567",
       }),
     );
+  });
+
+  it("uses the canonical target session for sandbox runtime resolution", async () => {
+    const params = makeParams();
+    params.ctx.SessionKey = "agent:main:telegram:slash-session";
+    params.sessionKey = "agent:main:telegram:direct:target-session";
+
+    const { resolveCommandsSystemPromptBundle } = await import("./commands-system-prompt.js");
+    await resolveCommandsSystemPromptBundle(params);
+
+    expect(vi.mocked(resolveSandboxRuntimeStatus)).toHaveBeenCalledWith({
+      cfg: params.cfg,
+      sessionKey: "agent:main:telegram:direct:target-session",
+    });
   });
 });
