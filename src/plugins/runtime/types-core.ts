@@ -33,6 +33,8 @@ export type PluginLlmCompleteParams = {
   maxTokens?: number;
   systemPrompt?: string;
   signal?: AbortSignal;
+  /** Agent whose model/credentials to use. Defaults to the config's default agent. */
+  agentId?: string;
 };
 
 export type PluginLlmCompleteResult = {
