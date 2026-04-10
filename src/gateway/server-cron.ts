@@ -505,18 +505,22 @@ export function buildGatewayCronService(params: {
           }
         }
 
-        // Ghost-run detection: main-session systemEvent jobs with
-        // wakeMode "next-heartbeat" return almost instantly because
-        // executeMainSessionCronJob only enqueues a system event and
-        // returns without waiting for the agent to process it.  If the
-        // gateway or agent session is unhealthy the event is silently
-        // dropped, yet the run is recorded as ok.  Warn when durationMs
-        // is suspiciously low so operators can identify silent failures.
+        // Ghost-run detection for main-session systemEvent jobs.
         //
-        // Note: recurring main-session jobs also return fast when the
-        // main lane is busy (requests-in-flight).  We accept this as a
-        // low-frequency false positive — the warning is non-blocking and
-        // the structured fields let operators triage.
+        // wakeMode "now" waits for runHeartbeatOnce to complete before
+        // returning.  A sub-threshold ok result means the heartbeat ran
+        // but found nothing to process — the enqueued system event was
+        // likely dropped silently, which is the ghost-run scenario.
+        //
+        // wakeMode "next-heartbeat" is excluded: it fires
+        // requestHeartbeatNow and returns immediately (fire-and-forget),
+        // so every healthy invocation completes in < 50 ms and a
+        // duration check would produce 100 % false positives.
+        //
+        // Recurring "now" jobs are excluded: when the main lane is busy
+        // (requests-in-flight) the timer returns early with status "ok"
+        // to avoid blocking the cron lane (#58833), which is a
+        // legitimate fast return, not a ghost run.
         if (
           evt.status === "ok" &&
           typeof evt.durationMs === "number" &&
@@ -524,7 +528,8 @@ export function buildGatewayCronService(params: {
           job &&
           job.sessionTarget === "main" &&
           job.payload.kind === "systemEvent" &&
-          job.wakeMode === "next-heartbeat"
+          job.wakeMode === "now" &&
+          job.schedule.kind === "at"
         ) {
           cronLogger.warn(
             {
@@ -533,6 +538,7 @@ export function buildGatewayCronService(params: {
               sessionTarget: job.sessionTarget,
               payloadKind: job.payload.kind,
               wakeMode: job.wakeMode,
+              scheduleKind: job.schedule.kind,
               ghostRunThresholdMs: GHOST_RUN_THRESHOLD_MS,
             },
             "cron: possible ghost run detected — job completed suspiciously fast; gateway may be unhealthy",
