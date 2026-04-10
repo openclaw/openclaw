@@ -41,27 +41,38 @@ export function applyMcpToolFilter<T extends { name: string }>(params: {
 
   // Defensive: bundle-provided MCP configs reach this function via a runtime
   // cast in pi-bundle-mcp-runtime.ts and are not always zod-validated, so
-  // allow/deny may be arbitrary runtime values (e.g. `true`, `{}`) despite
+  // allow/deny may be arbitrary runtime values (e.g. `true`, `{}`, `[]`) despite
   // the TypeScript type. Coerce non-array shapes to undefined and warn the
   // operator instead of letting `new Set(...)` throw on a non-iterable.
+  // Empty arrays are also rejected — an `allow: []` would silently hide every
+  // tool on the server with only an info log, the exact footgun Zod's `.min(1)`
+  // guards against on the user-config path.
   let allow: string[] | undefined;
   if (filter.allow !== undefined) {
-    if (Array.isArray(filter.allow)) {
-      allow = filter.allow;
-    } else {
+    if (!Array.isArray(filter.allow)) {
       logWarn(
         `bundle-mcp: server "${serverName}" tools.allow is not an array — ignoring`,
       );
+    } else if (filter.allow.length === 0) {
+      logWarn(
+        `bundle-mcp: server "${serverName}" tools.allow is empty — ignoring (use deny to remove specific tools)`,
+      );
+    } else {
+      allow = filter.allow;
     }
   }
   let deny: string[] | undefined;
   if (filter.deny !== undefined) {
-    if (Array.isArray(filter.deny)) {
-      deny = filter.deny;
-    } else {
+    if (!Array.isArray(filter.deny)) {
       logWarn(
         `bundle-mcp: server "${serverName}" tools.deny is not an array — ignoring`,
       );
+    } else if (filter.deny.length === 0) {
+      logWarn(
+        `bundle-mcp: server "${serverName}" tools.deny is empty — ignoring`,
+      );
+    } else {
+      deny = filter.deny;
     }
   }
   if (!allow && !deny) {

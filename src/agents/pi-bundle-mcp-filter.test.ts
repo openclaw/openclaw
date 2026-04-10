@@ -187,4 +187,50 @@ describe("applyMcpToolFilter", () => {
       'bundle-mcp: server "srv" tools.deny is not an array — ignoring',
     );
   });
+
+  it("rejects an empty allow (bundle path) and passes tools through unchanged with a warn", () => {
+    const warnSpy = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+    const tools = makeTools("alpha", "beta");
+    const result = applyMcpToolFilter({
+      serverName: "srv",
+      tools,
+      filter: { allow: [] as unknown as [string, ...string[]] },
+    });
+    // allow: [] must not silently hide every tool — bundle configs bypass Zod's .min(1)
+    expect(result).toBe(tools);
+    expect(warnSpy).toHaveBeenCalledWith(
+      'bundle-mcp: server "srv" tools.allow is empty — ignoring (use deny to remove specific tools)',
+    );
+  });
+
+  it("rejects an empty deny (bundle path) and passes tools through unchanged with a warn", () => {
+    const warnSpy = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+    const tools = makeTools("alpha", "beta");
+    const result = applyMcpToolFilter({
+      serverName: "srv",
+      tools,
+      filter: { deny: [] as unknown as [string, ...string[]] },
+    });
+    expect(result).toBe(tools);
+    expect(warnSpy).toHaveBeenCalledWith(
+      'bundle-mcp: server "srv" tools.deny is empty — ignoring',
+    );
+  });
+
+  it("applies a valid allow even when deny is an empty array", () => {
+    const warnSpy = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+    const tools = makeTools("alpha", "beta", "gamma");
+    const result = applyMcpToolFilter({
+      serverName: "srv",
+      tools,
+      filter: {
+        allow: ["alpha", "beta"],
+        deny: [] as unknown as [string, ...string[]],
+      },
+    });
+    expect(result.map((tool) => tool.name)).toEqual(["alpha", "beta"]);
+    expect(warnSpy).toHaveBeenCalledWith(
+      'bundle-mcp: server "srv" tools.deny is empty — ignoring',
+    );
+  });
 });
