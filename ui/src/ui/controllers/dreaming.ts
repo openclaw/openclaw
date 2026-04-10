@@ -72,7 +72,7 @@ export type DreamingStatus = {
   shortTermEntries: DreamingEntry[];
   signalEntries: DreamingEntry[];
   promotedEntries: DreamingEntry[];
-  phases: {
+  phases?: {
     light: LightDreamingStatus;
     deep: DeepDreamingStatus;
     rem: RemDreamingStatus;
@@ -241,6 +241,33 @@ function normalizeDreamingStatus(raw: unknown): DreamingStatus | null {
   const lightRecord = asRecord(phasesRecord?.light);
   const deepRecord = asRecord(phasesRecord?.deep);
   const remRecord = asRecord(phasesRecord?.rem);
+  const phases =
+    lightRecord && deepRecord && remRecord
+      ? {
+          light: {
+            ...normalizePhaseStatusBase(lightRecord),
+            lookbackDays: normalizeFiniteInt(lightRecord.lookbackDays, 0),
+            limit: normalizeFiniteInt(lightRecord.limit, 0),
+          },
+          deep: {
+            ...normalizePhaseStatusBase(deepRecord),
+            limit: normalizeFiniteInt(deepRecord.limit, 0),
+            minScore: normalizeFiniteScore(deepRecord.minScore, 0),
+            minRecallCount: normalizeFiniteInt(deepRecord.minRecallCount, 0),
+            minUniqueQueries: normalizeFiniteInt(deepRecord.minUniqueQueries, 0),
+            recencyHalfLifeDays: normalizeFiniteInt(deepRecord.recencyHalfLifeDays, 0),
+            ...(typeof deepRecord.maxAgeDays === "number" && Number.isFinite(deepRecord.maxAgeDays)
+              ? { maxAgeDays: normalizeFiniteInt(deepRecord.maxAgeDays, 0) }
+              : {}),
+          },
+          rem: {
+            ...normalizePhaseStatusBase(remRecord),
+            lookbackDays: normalizeFiniteInt(remRecord.lookbackDays, 0),
+            limit: normalizeFiniteInt(remRecord.limit, 0),
+            minPatternStrength: normalizeFiniteScore(remRecord.minPatternStrength, 0),
+          },
+        }
+      : undefined;
   const timezone = normalizeTrimmedString(record.timezone);
   const storePath = normalizeTrimmedString(record.storePath);
   const phaseSignalPath = normalizeTrimmedString(record.phaseSignalPath);
@@ -270,30 +297,7 @@ function normalizeDreamingStatus(raw: unknown): DreamingStatus | null {
     shortTermEntries: normalizeDreamingEntries(record.shortTermEntries),
     signalEntries: normalizeDreamingEntries(record.signalEntries),
     promotedEntries: normalizeDreamingEntries(record.promotedEntries),
-    phases: {
-      light: {
-        ...normalizePhaseStatusBase(lightRecord),
-        lookbackDays: normalizeFiniteInt(lightRecord?.lookbackDays, 0),
-        limit: normalizeFiniteInt(lightRecord?.limit, 0),
-      },
-      deep: {
-        ...normalizePhaseStatusBase(deepRecord),
-        limit: normalizeFiniteInt(deepRecord?.limit, 0),
-        minScore: normalizeFiniteScore(deepRecord?.minScore, 0),
-        minRecallCount: normalizeFiniteInt(deepRecord?.minRecallCount, 0),
-        minUniqueQueries: normalizeFiniteInt(deepRecord?.minUniqueQueries, 0),
-        recencyHalfLifeDays: normalizeFiniteInt(deepRecord?.recencyHalfLifeDays, 0),
-        ...(typeof deepRecord?.maxAgeDays === "number" && Number.isFinite(deepRecord.maxAgeDays)
-          ? { maxAgeDays: normalizeFiniteInt(deepRecord.maxAgeDays, 0) }
-          : {}),
-      },
-      rem: {
-        ...normalizePhaseStatusBase(remRecord),
-        lookbackDays: normalizeFiniteInt(remRecord?.lookbackDays, 0),
-        limit: normalizeFiniteInt(remRecord?.limit, 0),
-        minPatternStrength: normalizeFiniteScore(remRecord?.minPatternStrength, 0),
-      },
-    },
+    ...(phases ? { phases } : {}),
   };
 }
 

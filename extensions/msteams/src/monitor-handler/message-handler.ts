@@ -31,6 +31,7 @@ import {
   formatThreadContext,
   resolveTeamGroupId,
 } from "../graph-thread.js";
+import { resolveGraphChatId } from "../graph-upload.js";
 import {
   extractMSTeamsConversationMessageId,
   extractMSTeamsQuoteInfo,
@@ -74,7 +75,7 @@ function extractTextFromHtmlAttachments(attachments: MSTeamsAttachmentLike[]): s
   }
   return "";
 }
-import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
+import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
 import {
   isMSTeamsGroupAllowed,
   resolveMSTeamsAllowlistMatch,
@@ -526,12 +527,41 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         return;
       }
     }
-    const graphConversationId = translateMSTeamsDmConversationIdForGraph({
+    let graphConversationId = translateMSTeamsDmConversationIdForGraph({
       isDirectMessage,
       conversationId,
       aadObjectId: from.aadObjectId,
       appId,
     });
+
+    // For personal DMs the Bot Framework conversation ID (`a:...`) and the
+    // synthetic `19:{userId}_{appId}@unq.gbl.spaces` format produced by
+    // translateMSTeamsDmConversationIdForGraph are not always accepted by the
+    // Graph `/chats/{chatId}/messages` endpoint. Resolve the real Graph chat
+    // ID via the API (with conversation store caching) so the Graph media
+    // download fallback works when the direct Bot Framework download fails.
+    if (isDirectMessage && conversationId.startsWith("a:")) {
+      const cached = await conversationStore.get(conversationId);
+      if (cached?.graphChatId) {
+        graphConversationId = cached.graphChatId;
+      } else {
+        try {
+          const resolved = await resolveGraphChatId({
+            botFrameworkConversationId: conversationId,
+            userAadObjectId: from.aadObjectId ?? undefined,
+            tokenProvider,
+          });
+          if (resolved) {
+            graphConversationId = resolved;
+            conversationStore
+              .upsert(conversationId, { ...conversationRef, graphChatId: resolved })
+              .catch(() => {});
+          }
+        } catch {
+          log.debug?.("failed to resolve Graph chat ID for inbound media", { conversationId });
+        }
+      }
+    }
 
     const mediaList = await resolveMSTeamsInboundMedia({
       attachments,
@@ -543,6 +573,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       conversationType,
       conversationId: graphConversationId,
       conversationMessageId: conversationMessageId ?? undefined,
+      serviceUrl: activity.serviceUrl,
       activity: {
         id: activity.id,
         replyToId: activity.replyToId,

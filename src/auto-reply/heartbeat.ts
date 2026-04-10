@@ -21,9 +21,10 @@ export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
  * This allows skipping heartbeat API calls when no tasks are configured.
  *
  * A file is considered effectively empty if it contains only:
- * - Whitespace
- * - Comment lines (lines starting with #)
- * - Empty lines
+ * - Whitespace / empty lines
+ * - Markdown ATX headers (`#`, `##`, ...)
+ * - Markdown fence markers such as ``` or ```markdown
+ * - Empty list item stubs (`- `, `- [ ]`, `* `, `+ `)
  *
  * Note: A missing file returns false (not effectively empty) so the LLM can still
  * decide what to do. This function is only for when the file exists but has no content.
@@ -51,6 +52,11 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
     }
     // Skip empty markdown list items like "- [ ]" or "* [ ]" or just "- "
     if (/^[-*+]\s*(\[[\sXx]?\]\s*)?$/.test(trimmed)) {
+      continue;
+    }
+    // Ignore markdown fence markers that were added for doc rendering but do
+    // not carry task semantics in the workspace template body.
+    if (/^```[A-Za-z0-9_-]*$/.test(trimmed)) {
       continue;
     }
     // Found a non-empty, non-comment line - there's actionable content

@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { createPatternFileHelper } from "./helpers/pattern-file.js";
 import {
   createUnitVitestConfig,
   createUnitVitestConfigWithOptions,
   loadExtraExcludePatternsFromEnv,
   loadIncludePatternsFromEnv,
-} from "../vitest.unit.config.ts";
-import { createPatternFileHelper } from "./helpers/pattern-file.js";
+} from "./vitest/vitest.unit.config.ts";
 
 const patternFiles = createPatternFileHelper("openclaw-vitest-unit-config-");
 

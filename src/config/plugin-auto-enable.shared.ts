@@ -17,53 +17,16 @@ import { isRecord } from "../utils.js";
 import { isChannelConfigured } from "./channel-configured.js";
 import type { OpenClawConfig } from "./config.js";
 import { shouldSkipPreferredPluginAutoEnable } from "./plugin-auto-enable.prefer-over.js";
+import type {
+  PluginAutoEnableCandidate,
+  PluginAutoEnableResult,
+} from "./plugin-auto-enable.types.js";
 import { ensurePluginAllowlisted } from "./plugins-allowlist.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
-
-export type PluginAutoEnableCandidate =
-  | {
-      pluginId: string;
-      kind: "channel-configured";
-      channelId: string;
-    }
-  | {
-      pluginId: string;
-      kind: "provider-auth-configured";
-      providerId: string;
-    }
-  | {
-      pluginId: string;
-      kind: "provider-model-configured";
-      modelRef: string;
-    }
-  | {
-      pluginId: string;
-      kind: "web-fetch-provider-selected";
-      providerId: string;
-    }
-  | {
-      pluginId: string;
-      kind: "plugin-web-search-configured";
-    }
-  | {
-      pluginId: string;
-      kind: "plugin-web-fetch-configured";
-    }
-  | {
-      pluginId: string;
-      kind: "plugin-tool-configured";
-    }
-  | {
-      pluginId: string;
-      kind: "setup-auto-enable";
-      reason: string;
-    };
-
-export type PluginAutoEnableResult = {
-  config: OpenClawConfig;
-  changes: string[];
-  autoEnabledReasons: Record<string, string[]>;
-};
+export type {
+  PluginAutoEnableCandidate,
+  PluginAutoEnableResult,
+} from "./plugin-auto-enable.types.js";
 
 const EMPTY_PLUGIN_MANIFEST_REGISTRY: PluginManifestRegistry = {
   plugins: [],

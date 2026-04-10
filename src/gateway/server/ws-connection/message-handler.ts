@@ -161,6 +161,10 @@ export function attachGatewayWsMessageHandler(params: {
   upgradeReq: IncomingMessage;
   connId: string;
   remoteAddr?: string;
+  remotePort?: number;
+  localAddr?: string;
+  localPort?: number;
+  endpoint?: string;
   forwardedFor?: string;
   realIp?: string;
   requestHost?: string;
@@ -197,6 +201,10 @@ export function attachGatewayWsMessageHandler(params: {
     upgradeReq,
     connId,
     remoteAddr,
+    remotePort,
+    localAddr,
+    localPort,
+    endpoint,
     forwardedFor,
     realIp,
     requestHost,
@@ -248,6 +256,7 @@ export function attachGatewayWsMessageHandler(params: {
     trustedProxies,
     allowRealIpFallback,
   });
+  const peerLabel = endpoint ?? remoteAddr ?? "n/a";
 
   // If proxy headers are present but the remote address isn't trusted, don't treat
   // the connection as local. This prevents auth bypass when running behind a reverse
@@ -369,7 +378,7 @@ export function attachGatewayWsMessageHandler(params: {
             });
           } else {
             logWsControl.warn(
-              `invalid handshake conn=${connId} remote=${remoteAddr ?? "?"} fwd=${forwardedFor ?? "n/a"} origin=${requestOrigin ?? "n/a"} host=${requestHost ?? "n/a"} ua=${requestUserAgent ?? "n/a"}`,
+              `invalid handshake conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} fwd=${formatForLog(forwardedFor ?? "n/a")} origin=${formatForLog(requestOrigin ?? "n/a")} host=${formatForLog(requestHost ?? "n/a")} ua=${formatForLog(requestUserAgent ?? "n/a")}`,
             );
           }
           const closeReason = truncateCloseReason(handshakeError || "invalid handshake");
@@ -389,6 +398,10 @@ export function attachGatewayWsMessageHandler(params: {
           clientDisplayName: connectParams.client.displayName,
           mode: connectParams.client.mode,
           version: connectParams.client.version,
+          platform: connectParams.client.platform,
+          deviceFamily: connectParams.client.deviceFamily,
+          modelIdentifier: connectParams.client.modelIdentifier,
+          instanceId: connectParams.client.instanceId,
         };
         const markHandshakeFailure = (cause: string, meta?: Record<string, unknown>) => {
           setHandshakeState("failed");
@@ -529,9 +542,17 @@ export function attachGatewayWsMessageHandler(params: {
             authProvided,
             authReason: failedAuth.reason,
             allowTailscale: resolvedAuth.allowTailscale,
+            peer: peerLabel,
+            remoteAddr,
+            remotePort,
+            localAddr,
+            localPort,
+            role,
+            scopeCount: scopes.length,
+            hasDeviceIdentity: Boolean(device),
           });
           logWsControl.warn(
-            `unauthorized conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version} reason=${failedAuth.reason ?? "unknown"}`,
+            `unauthorized conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} client=${formatForLog(clientLabel)} ${connectParams.client.mode} v${formatForLog(connectParams.client.version)} role=${role} scopes=${scopes.length} auth=${authProvided} device=${device ? "yes" : "no"} platform=${formatForLog(connectParams.client.platform)} instance=${formatForLog(connectParams.client.instanceId ?? "n/a")} host=${formatForLog(requestHost ?? "n/a")} origin=${formatForLog(requestOrigin ?? "n/a")} ua=${formatForLog(requestUserAgent ?? "n/a")} reason=${failedAuth.reason ?? "unknown"}`,
           );
           const authMessage = formatGatewayAuthFailureMessage({
             authMode: resolvedAuth.mode,
@@ -816,8 +837,6 @@ export function attachGatewayWsMessageHandler(params: {
             displayName: connectParams.client.displayName,
             clientId: connectParams.client.id,
             clientMode: connectParams.client.mode,
-            role,
-            scopes,
             remoteIp: reportedClientIp,
           };
           const requirePairing = async (

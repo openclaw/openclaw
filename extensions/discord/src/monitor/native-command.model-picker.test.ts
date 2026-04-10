@@ -248,9 +248,9 @@ function createBoundThreadBindingManager(params: {
 
 function createDispatchSpy() {
   const dispatchSpy = vi
-    .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
+    .fn<typeof dispatcherModule.dispatchReplyWithDispatcher>()
     .mockResolvedValue({} as never);
-  nativeCommandTesting.setDispatchReplyWithDispatcher(dispatcherModule.dispatchReplyWithDispatcher);
+  nativeCommandTesting.setDispatchReplyWithDispatcher(dispatchSpy);
   return dispatchSpy;
 }
 

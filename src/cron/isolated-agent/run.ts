@@ -409,7 +409,6 @@ async function prepareCronRunContext(params: {
   } catch (err) {
     logWarn(`[cron:${input.job.id}] Failed to persist pre-run session entry: ${String(err)}`);
   }
-
   const authProfileId = await resolveSessionAuthProfileOverride({
     cfg: cfgWithAgentDefaults,
     provider,
@@ -418,7 +417,7 @@ async function prepareCronRunContext(params: {
     sessionStore: cronSession.store,
     sessionKey: agentSessionKey,
     storePath: cronSession.storePath,
-    isNewSession: cronSession.isNewSession,
+    isNewSession: cronSession.isNewSession && input.job.sessionTarget !== "isolated",
   });
   const liveSelection: CronLiveSelection = {
     provider,
@@ -563,6 +562,8 @@ async function finalizeCronRun(params: {
   } = resolveCronPayloadOutcome({
     payloads,
     runLevelError: finalRunResult.meta?.error,
+    finalAssistantVisibleText: finalRunResult.meta?.finalAssistantVisibleText,
+    preferFinalAssistantVisibleText: prepared.resolvedDelivery.channel === "telegram",
   });
   const resolveRunOutcome = (result?: { delivered?: boolean; deliveryAttempted?: boolean }) =>
     prepared.withRunSession({

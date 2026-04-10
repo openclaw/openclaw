@@ -17,6 +17,13 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtim
 import { handleQaBusRequest, writeError, writeJson } from "./bus-server.js";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
 import { createQaRunnerRuntime } from "./harness-runtime.js";
+import type {
+  QaLabLatestReport,
+  QaLabScenarioOutcome,
+  QaLabScenarioRun,
+  QaLabServerHandle,
+  QaLabServerStartParams,
+} from "./lab-server.types.js";
 import type { QaRunnerModelOption } from "./model-catalog.runtime.js";
 import {
   createIdleQaRunnerSnapshot,
@@ -27,14 +34,6 @@ import { qaChannelPlugin, setQaChannelRuntime, type OpenClawConfig } from "./run
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import { runQaSelfCheckAgainstState, type QaSelfCheckResult } from "./self-check.js";
 
-type QaLabLatestReport = {
-  outputPath: string;
-  markdown: string;
-  generatedAt: string;
-};
-
-export type { QaLabLatestReport };
-
 type QaLabBootstrapDefaults = {
   conversationKind: "direct" | "channel";
   conversationId: string;
@@ -42,39 +41,13 @@ type QaLabBootstrapDefaults = {
   senderName: string;
 };
 
-type QaLabRunStatus = "idle" | "running" | "completed";
-
-type QaLabScenarioStep = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  details?: string;
-};
-
-export type QaLabScenarioOutcome = {
-  id: string;
-  name: string;
-  status: "pending" | "running" | "pass" | "fail" | "skip";
-  details?: string;
-  steps?: QaLabScenarioStep[];
-  startedAt?: string;
-  finishedAt?: string;
-};
-
-export type QaLabScenarioRun = {
-  kind: "suite" | "self-check";
-  status: QaLabRunStatus;
-  startedAt?: string;
-  finishedAt?: string;
-  scenarios: QaLabScenarioOutcome[];
-  counts: {
-    total: number;
-    pending: number;
-    running: number;
-    passed: number;
-    failed: number;
-    skipped: number;
-  };
-};
+export type {
+  QaLabLatestReport,
+  QaLabScenarioOutcome,
+  QaLabScenarioRun,
+  QaLabServerHandle,
+  QaLabServerStartParams,
+} from "./lab-server.types.js";
 
 function countQaLabScenarioRun(scenarios: QaLabScenarioOutcome[]) {
   return {
@@ -463,21 +436,9 @@ async function startQaGatewayLoop(params: { state: QaBusState; baseUrl: string }
   };
 }
 
-export async function startQaLabServer(params?: {
-  repoRoot?: string;
-  host?: string;
-  port?: number;
-  outputPath?: string;
-  advertiseHost?: string;
-  advertisePort?: number;
-  controlUiUrl?: string;
-  controlUiToken?: string;
-  controlUiProxyTarget?: string;
-  uiDistDir?: string;
-  autoKickoffTarget?: string;
-  embeddedGateway?: string;
-  sendKickoffOnStart?: boolean;
-}) {
+export async function startQaLabServer(
+  params?: QaLabServerStartParams,
+): Promise<QaLabServerHandle> {
   const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
   const state = createQaBusState();
   let latestReport: QaLabLatestReport | null = null;
@@ -500,20 +461,7 @@ export async function startQaLabServer(params?: {
       }
     | undefined;
   const embeddedGatewayEnabled = params?.embeddedGateway !== "disabled";
-  let labHandle: {
-    baseUrl: string;
-    listenUrl: string;
-    state: QaBusState;
-    setControlUi: (next: {
-      controlUiUrl?: string | null;
-      controlUiToken?: string | null;
-      controlUiProxyTarget?: string | null;
-    }) => void;
-    setScenarioRun: (next: Omit<QaLabScenarioRun, "counts"> | null) => void;
-    setLatestReport: (next: QaLabLatestReport | null) => void;
-    runSelfCheck: () => Promise<QaSelfCheckResult>;
-    stop: () => Promise<void>;
-  } | null = null;
+  let labHandle: QaLabServerHandle | null = null;
 
   let publicBaseUrl = "";
   let runnerModelCatalogPromise: Promise<void> | null = null;
@@ -711,8 +659,8 @@ export async function startQaLabServer(params?: {
         };
         activeSuiteRun = (async () => {
           try {
-            const { runQaSuiteFromRuntime } = await import("./suite-launch.runtime.js");
-            const result = await runQaSuiteFromRuntime({
+            const { runQaSuite } = await import("./suite.js");
+            const result = await runQaSuite({
               lab: labHandle ?? undefined,
               outputDir: createQaRunOutputDir(repoRoot),
               providerMode: selection.providerMode,

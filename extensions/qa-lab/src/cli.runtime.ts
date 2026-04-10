@@ -2,9 +2,11 @@ import path from "node:path";
 import { runQaCharacterEval, type QaCharacterModelOptions } from "./character-eval.js";
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
 import { runQaDockerUp } from "./docker-up.runtime.js";
+import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import { startQaLabServer } from "./lab-server.js";
 import { runQaManualLane } from "./manual-lane.runtime.js";
 import { startQaMockOpenAiServer } from "./mock-openai-server.js";
+import { runQaMultipass } from "./multipass.runtime.js";
 import { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-gateway-config.js";
 import {
   defaultQaModelForMode,
@@ -12,7 +14,7 @@ import {
   type QaProviderMode,
   type QaProviderModeInput,
 } from "./run-config.js";
-import { runQaSuite } from "./suite.js";
+import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
 
 type InterruptibleServer = {
   baseUrl: string;
@@ -93,6 +95,17 @@ function parseQaPositiveIntegerOption(label: string, value: number | undefined) 
     throw new Error(`${label} must be a positive integer`);
   }
   return Math.floor(value);
+}
+
+function parseQaCliBackendAuthMode(value: string | undefined): QaCliBackendAuthMode | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === "auto" || normalized === "api-key" || normalized === "subscription") {
+    return normalized;
+  }
+  throw new Error("--cli-auth-mode must be one of auto, api-key, subscription");
 }
 
 function parseQaModelSpecs(label: string, entries: readonly string[] | undefined) {
@@ -193,22 +206,74 @@ export async function runQaLabSelfCheckCommand(opts: { repoRoot?: string; output
 export async function runQaSuiteCommand(opts: {
   repoRoot?: string;
   outputDir?: string;
+  runner?: string;
   providerMode?: QaProviderModeInput;
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
+  cliAuthMode?: string;
   scenarioIds?: string[];
+  concurrency?: number;
+  image?: string;
+  cpus?: number;
+  memory?: string;
+  disk?: string;
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
+  const runner = (opts.runner ?? "host").trim().toLowerCase();
+  if (runner !== "host" && runner !== "multipass") {
+    throw new Error(`--runner must be one of host or multipass, got "${opts.runner}".`);
+  }
   const providerMode = normalizeQaProviderMode(opts.providerMode);
-  const result = await runQaSuite({
+  const claudeCliAuthMode = parseQaCliBackendAuthMode(opts.cliAuthMode);
+  if (
+    runner === "host" &&
+    (opts.image !== undefined ||
+      opts.cpus !== undefined ||
+      opts.memory !== undefined ||
+      opts.disk !== undefined)
+  ) {
+    throw new Error("--image, --cpus, --memory, and --disk require --runner multipass.");
+  }
+  if (runner === "multipass" && opts.cliAuthMode !== undefined) {
+    throw new Error("--cli-auth-mode requires --runner host.");
+  }
+  if (runner === "multipass") {
+    const result = await runQaMultipass({
+      repoRoot,
+      outputDir: opts.outputDir ? path.resolve(repoRoot, opts.outputDir) : undefined,
+      providerMode,
+      primaryModel: opts.primaryModel,
+      alternateModel: opts.alternateModel,
+      fastMode: opts.fastMode,
+      scenarioIds: opts.scenarioIds,
+      ...(opts.concurrency !== undefined
+        ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
+        : {}),
+      image: opts.image,
+      cpus: parseQaPositiveIntegerOption("--cpus", opts.cpus),
+      memory: opts.memory,
+      disk: opts.disk,
+    });
+    process.stdout.write(`QA Multipass dir: ${result.outputDir}\n`);
+    process.stdout.write(`QA Multipass report: ${result.reportPath}\n`);
+    process.stdout.write(`QA Multipass summary: ${result.summaryPath}\n`);
+    process.stdout.write(`QA Multipass host log: ${result.hostLogPath}\n`);
+    process.stdout.write(`QA Multipass bootstrap log: ${result.bootstrapLogPath}\n`);
+    return;
+  }
+  const result = await runQaSuiteFromRuntime({
     repoRoot,
     outputDir: opts.outputDir ? path.resolve(repoRoot, opts.outputDir) : undefined,
     providerMode,
     primaryModel: opts.primaryModel,
     alternateModel: opts.alternateModel,
     fastMode: opts.fastMode,
+    ...(claudeCliAuthMode ? { claudeCliAuthMode } : {}),
     scenarioIds: opts.scenarioIds,
+    ...(opts.concurrency !== undefined
+      ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
+      : {}),
   });
   process.stdout.write(`QA suite watch: ${result.watchUrl}\n`);
   process.stdout.write(`QA suite report: ${result.reportPath}\n`);
