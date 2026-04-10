@@ -1,0 +1,24 @@
+diff --git a/dist/prompt-turn-CXMtXBl-.js b/dist/prompt-turn-CXMtXBl-.js
+index f400935a798295db77f6676f2f8142d7671c0701..affdca628a8872c481aa6c9067a8cfe01716fea3 100644
+--- a/dist/prompt-turn-CXMtXBl-.js
++++ b/dist/prompt-turn-CXMtXBl-.js
+@@ -3343,6 +3343,19 @@ async function runPromptTurn(params) {
+ 			source: "rpc"
+ 		};
+ 	} catch (error) {
++		const acp = extractAcpError(error);
++		const genericInternalDetails = acp && acp.data && typeof acp.data === "object" ? asRecord$1(acp.data)?.details : void 0;
++		const shouldSuppressNullFinalInternalError = Boolean(params.promptMessageId) && acp?.code === -32603 && /^Internal error(?::|$)/.test(acp.message) && !(typeof genericInternalDetails === "string" && genericInternalDetails.trim().length > 0);
++		if (shouldSuppressNullFinalInternalError) {
++			await params.client.waitForSessionUpdatesIdle?.({
++				idleMs: SESSION_REPLY_IDLE_MS,
++				timeoutMs: SESSION_REPLY_DRAIN_TIMEOUT_MS
++			}).catch(() => {});
++			return {
++				stopReason: "end_turn",
++				source: "session"
++			};
++		}
+ 		if (!(error instanceof TimeoutError) || !params.promptMessageId) throw error;
+ 		await params.client.waitForSessionUpdatesIdle?.({
+ 			idleMs: SESSION_REPLY_IDLE_MS,

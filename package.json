@@ -1472,6 +1472,9 @@
           "strip-ansi": "^7.2.0"
         }
       }
+    },
+    "patchedDependencies": {
+      "acpx@0.5.2": "patches/acpx@0.5.2.patch"
     }
   }
 }

@@ -27,6 +27,11 @@ overrides:
 
 packageExtensionsChecksum: sha256-n+P/SQo4Pf+dHYpYn1Y6wL4cJEVoVzZ835N0OEp4TM8=
 
+patchedDependencies:
+  acpx@0.5.2:
+    hash: 9338084c359862351961078d6522581492570f84c764686115e895bb87e71eac
+    path: patches/acpx@0.5.2.patch
+
 importers:
 
   .:
@@ -329,7 +334,7 @@ importers:
     dependencies:
       acpx:
         specifier: 0.5.2
-        version: 0.5.2
+        version: 0.5.2(patch_hash=9338084c359862351961078d6522581492570f84c764686115e895bb87e71eac)
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -10737,7 +10742,7 @@ snapshots:
 
   acorn@8.16.0: {}
 
-  acpx@0.5.2:
+  acpx@0.5.2(patch_hash=9338084c359862351961078d6522581492570f84c764686115e895bb87e71eac):
     dependencies:
       '@agentclientprotocol/sdk': 0.17.1(zod@4.3.6)
       commander: 14.0.3
