@@ -172,17 +172,17 @@ function applySkillConfigEnvOverrides(params: {
     }
   }
 
-  const resolvedApiKey =
-    normalizeResolvedSecretInputString({
-      value: skillConfig.apiKey,
-      path: `skills.entries.${skillKey}.apiKey`,
-    }) ?? "";
   const canInjectPrimaryEnv =
     normalizedPrimaryEnv &&
     (process.env[normalizedPrimaryEnv] === undefined ||
       activeSkillEnvEntries.has(normalizedPrimaryEnv));
-  if (canInjectPrimaryEnv && resolvedApiKey) {
-    if (!pendingOverrides[normalizedPrimaryEnv]) {
+  if (canInjectPrimaryEnv && !pendingOverrides[normalizedPrimaryEnv]) {
+    const resolvedApiKey =
+      normalizeResolvedSecretInputString({
+        value: skillConfig.apiKey,
+        path: `skills.entries.${skillKey}.apiKey`,
+      }) ?? "";
+    if (resolvedApiKey) {
       pendingOverrides[normalizedPrimaryEnv] = resolvedApiKey;
     }
   }

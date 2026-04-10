@@ -283,6 +283,7 @@ export const uk: TranslationMap = {
     tabs: {
       scene: "Сцена",
       diary: "Щоденник",
+      advanced: "Розширені",
     },
     header: {
       refresh: "Оновити",
@@ -301,6 +302,38 @@ export const uk: TranslationMap = {
       reset: "Скинути",
       clearGrounded: "Очистити заземлене",
       working: "Обробка…",
+    },
+    phase: {
+      light: "Легкий",
+      deep: "Глибокий",
+      rem: "REM",
+      off: "вимкнено",
+    },
+    advanced: {
+      eyebrow: "Огляд",
+      title: "Огляд щоденного журналу",
+      description:
+        "Перегляньте, що надійшло зі щоденного журналу, що очікує на підвищення та що було підвищено нещодавно.",
+      summaryFromDailyLog: "зі щоденного журналу",
+      summaryWaiting: "очікує",
+      summaryPromotedToday: "підвищено сьогодні",
+      stagedTitle: "Із щоденного журналу",
+      stagedDescription:
+        "Кандидати для повторного відтворення, взяті зі старіших записів щоденного журналу.",
+      shortTermTitle: "Очікують на підвищення",
+      shortTermDescription:
+        "Поточні короткострокові кандидати, які очікують переходу до справжньої пам’яті.",
+      sortRecent: "Найновіші",
+      sortSignals: "Найсильніша підтримка",
+      originDailyLog: "повторено",
+      originLive: "наживо",
+      originMixed: "змішано",
+      promotedTitle: "Нещодавні підвищення",
+      promotedDescription: "Елементи, які вже пройшли підвищення.",
+      emptyGrounded: "Зараз немає підготовлених записів відтворення з прив’язкою до джерела.",
+      emptyShortTerm: "Немає короткострокових записів для перегляду.",
+      emptyPromoted: "Немає нещодавніх підвищень для перегляду.",
+      updatedPrefix: "оновлено",
     },
     stats: {
       shortTerm: "Короткостроково",

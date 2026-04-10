@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { createAgentsVitestConfig } from "../vitest.agents.config.ts";
-import bundledConfig from "../vitest.bundled.config.ts";
-import { createCommandsLightVitestConfig } from "../vitest.commands-light.config.ts";
-import { createCommandsVitestConfig } from "../vitest.commands.config.ts";
-import baseConfig, { rootVitestProjects } from "../vitest.config.ts";
-import { createContractsVitestConfig } from "../vitest.contracts.config.ts";
-import { createGatewayVitestConfig } from "../vitest.gateway.config.ts";
-import { createPluginSdkLightVitestConfig } from "../vitest.plugin-sdk-light.config.ts";
-import { createUiVitestConfig } from "../vitest.ui.config.ts";
-import { createUnitFastVitestConfig } from "../vitest.unit-fast.config.ts";
-import { createUnitVitestConfig } from "../vitest.unit.config.ts";
+import { createAgentsVitestConfig } from "./vitest/vitest.agents.config.ts";
+import bundledConfig from "./vitest/vitest.bundled.config.ts";
+import { createCommandsLightVitestConfig } from "./vitest/vitest.commands-light.config.ts";
+import { createCommandsVitestConfig } from "./vitest/vitest.commands.config.ts";
+import baseConfig, { rootVitestProjects } from "./vitest/vitest.config.ts";
+import { createContractsVitestConfig } from "./vitest/vitest.contracts.config.ts";
+import { createGatewayVitestConfig } from "./vitest/vitest.gateway.config.ts";
+import { createPluginSdkLightVitestConfig } from "./vitest/vitest.plugin-sdk-light.config.ts";
+import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
+import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
+import { createUnitVitestConfig } from "./vitest/vitest.unit.config.ts";
 
 describe("projects vitest config", () => {
   it("defines the native root project list for all non-live Vitest lanes", () => {

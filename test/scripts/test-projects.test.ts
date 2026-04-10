@@ -18,7 +18,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it("keeps the broad changed run for Vitest wiring edits", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
-        "vitest.shared.config.ts",
+        "test/vitest/vitest.shared.config.ts",
         "src/utils/provider-utils.ts",
       ]),
     ).toBeNull();
@@ -39,7 +39,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
     expect(plans).toEqual([
       {
-        config: "vitest.unit.config.ts",
+        config: "test/vitest/vitest.unit.config.ts",
         forwardedArgs: [],
         includePatterns: ["packages/sdk/src/**/*.test.ts"],
         watchMode: false,
@@ -55,13 +55,13 @@ describe("scripts/test-projects changed-target routing", () => {
 
     expect(plans).toEqual([
       {
-        config: "vitest.unit-fast.config.ts",
+        config: "test/vitest/vitest.unit-fast.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/shared/string-normalization.test.ts"],
         watchMode: false,
       },
       {
-        config: "vitest.utils.config.ts",
+        config: "test/vitest/vitest.utils.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/utils/**/*.test.ts"],
         watchMode: false,
@@ -74,7 +74,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
     expect(plans).toEqual([
       {
-        config: "vitest.plugin-sdk-light.config.ts",
+        config: "test/vitest/vitest.plugin-sdk-light.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/plugin-sdk/temp-path.test.ts"],
         watchMode: false,
@@ -87,7 +87,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
     expect(plans).toEqual([
       {
-        config: "vitest.commands-light.config.ts",
+        config: "test/vitest/vitest.commands-light.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/commands/status-json-runtime.test.ts"],
         watchMode: false,
@@ -103,7 +103,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
     expect(plans).toEqual([
       {
-        config: "vitest.unit-fast.config.ts",
+        config: "test/vitest/vitest.unit-fast.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/commands/status-overview-values.test.ts"],
         watchMode: false,
@@ -118,7 +118,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
     expect(plans).toEqual([
       {
-        config: "vitest.unit-fast.config.ts",
+        config: "test/vitest/vitest.unit-fast.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/plugin-sdk/provider-entry.test.ts"],
         watchMode: false,
@@ -134,7 +134,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
     expect(plans).toEqual([
       {
-        config: "vitest.unit-fast.config.ts",
+        config: "test/vitest/vitest.unit-fast.config.ts",
         forwardedArgs: [],
         includePatterns: [
           "src/commands/status-overview-values.test.ts",
@@ -152,7 +152,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
     expect(plans).toEqual([
       {
-        config: "vitest.plugin-sdk.config.ts",
+        config: "test/vitest/vitest.plugin-sdk.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/plugin-sdk/**/*.test.ts"],
         watchMode: false,
@@ -167,7 +167,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
     expect(plans).toEqual([
       {
-        config: "vitest.commands.config.ts",
+        config: "test/vitest/vitest.commands.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/commands/**/*.test.ts"],
         watchMode: false,
@@ -184,7 +184,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
     expect(plans).toEqual([
       {
-        config: "vitest.e2e.config.ts",
+        config: "test/vitest/vitest.e2e.config.ts",
         forwardedArgs: [target],
         includePatterns: null,
         watchMode: false,
@@ -203,37 +203,37 @@ describe("scripts/test-projects full-suite sharding", () => {
     process.env.OPENCLAW_TEST_PROJECTS_SERIAL = "1";
     try {
       expect(buildFullSuiteVitestRunPlans([], process.cwd()).map((plan) => plan.config)).toEqual([
-        "vitest.full-core-unit-fast.config.ts",
-        "vitest.full-core-unit-src.config.ts",
-        "vitest.full-core-unit-security.config.ts",
-        "vitest.full-core-unit-ui.config.ts",
-        "vitest.full-core-unit-support.config.ts",
-        "vitest.full-core-support-boundary.config.ts",
-        "vitest.full-core-contracts.config.ts",
-        "vitest.full-core-bundled.config.ts",
-        "vitest.full-core-runtime.config.ts",
-        "vitest.full-agentic.config.ts",
-        "vitest.full-auto-reply.config.ts",
-        "vitest.extension-acpx.config.ts",
-        "vitest.extension-bluebubbles.config.ts",
-        "vitest.extension-channels.config.ts",
-        "vitest.extension-diffs.config.ts",
-        "vitest.extension-feishu.config.ts",
-        "vitest.extension-irc.config.ts",
-        "vitest.extension-mattermost.config.ts",
-        "vitest.extension-matrix.config.ts",
-        "vitest.extension-memory.config.ts",
-        "vitest.extension-messaging.config.ts",
-        "vitest.extension-msteams.config.ts",
-        "vitest.extension-providers.config.ts",
-        "vitest.extension-telegram.config.ts",
-        "vitest.extension-voice-call.config.ts",
-        "vitest.extension-whatsapp.config.ts",
-        "vitest.extension-zalo.config.ts",
-        "vitest.extension-browser.config.ts",
-        "vitest.extension-qa.config.ts",
-        "vitest.extension-media.config.ts",
-        "vitest.extension-misc.config.ts",
+        "test/vitest/vitest.full-core-unit-fast.config.ts",
+        "test/vitest/vitest.full-core-unit-src.config.ts",
+        "test/vitest/vitest.full-core-unit-security.config.ts",
+        "test/vitest/vitest.full-core-unit-ui.config.ts",
+        "test/vitest/vitest.full-core-unit-support.config.ts",
+        "test/vitest/vitest.full-core-support-boundary.config.ts",
+        "test/vitest/vitest.full-core-contracts.config.ts",
+        "test/vitest/vitest.full-core-bundled.config.ts",
+        "test/vitest/vitest.full-core-runtime.config.ts",
+        "test/vitest/vitest.full-agentic.config.ts",
+        "test/vitest/vitest.full-auto-reply.config.ts",
+        "test/vitest/vitest.extension-acpx.config.ts",
+        "test/vitest/vitest.extension-bluebubbles.config.ts",
+        "test/vitest/vitest.extension-channels.config.ts",
+        "test/vitest/vitest.extension-diffs.config.ts",
+        "test/vitest/vitest.extension-feishu.config.ts",
+        "test/vitest/vitest.extension-irc.config.ts",
+        "test/vitest/vitest.extension-mattermost.config.ts",
+        "test/vitest/vitest.extension-matrix.config.ts",
+        "test/vitest/vitest.extension-memory.config.ts",
+        "test/vitest/vitest.extension-messaging.config.ts",
+        "test/vitest/vitest.extension-msteams.config.ts",
+        "test/vitest/vitest.extension-providers.config.ts",
+        "test/vitest/vitest.extension-telegram.config.ts",
+        "test/vitest/vitest.extension-voice-call.config.ts",
+        "test/vitest/vitest.extension-whatsapp.config.ts",
+        "test/vitest/vitest.extension-zalo.config.ts",
+        "test/vitest/vitest.extension-browser.config.ts",
+        "test/vitest/vitest.extension-qa.config.ts",
+        "test/vitest/vitest.extension-media.config.ts",
+        "test/vitest/vitest.extension-misc.config.ts",
       ]);
     } finally {
       if (previousParallel === undefined) {
@@ -255,18 +255,22 @@ describe("scripts/test-projects full-suite sharding", () => {
     const previousSerial = process.env.OPENCLAW_TEST_PROJECTS_SERIAL;
     const previousCi = process.env.CI;
     const previousActions = process.env.GITHUB_ACTIONS;
+    const previousVitestMaxWorkers = process.env.OPENCLAW_VITEST_MAX_WORKERS;
+    const previousTestWorkers = process.env.OPENCLAW_TEST_WORKERS;
     delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
     delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
     delete process.env.OPENCLAW_TEST_PROJECTS_SERIAL;
     delete process.env.CI;
     delete process.env.GITHUB_ACTIONS;
+    delete process.env.OPENCLAW_VITEST_MAX_WORKERS;
+    delete process.env.OPENCLAW_TEST_WORKERS;
     try {
       const configs = buildFullSuiteVitestRunPlans([], process.cwd()).map((plan) => plan.config);
 
-      expect(configs).toContain("vitest.gateway.config.ts");
-      expect(configs).toContain("vitest.extension-telegram.config.ts");
-      expect(configs).not.toContain("vitest.full-agentic.config.ts");
-      expect(configs).not.toContain("vitest.full-core-unit-fast.config.ts");
+      expect(configs).toContain("test/vitest/vitest.gateway-server.config.ts");
+      expect(configs).toContain("test/vitest/vitest.extension-telegram.config.ts");
+      expect(configs).not.toContain("test/vitest/vitest.full-agentic.config.ts");
+      expect(configs).not.toContain("test/vitest/vitest.full-core-unit-fast.config.ts");
     } finally {
       if (previousLeafShards === undefined) {
         delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
@@ -293,6 +297,16 @@ describe("scripts/test-projects full-suite sharding", () => {
       } else {
         process.env.GITHUB_ACTIONS = previousActions;
       }
+      if (previousVitestMaxWorkers === undefined) {
+        delete process.env.OPENCLAW_VITEST_MAX_WORKERS;
+      } else {
+        process.env.OPENCLAW_VITEST_MAX_WORKERS = previousVitestMaxWorkers;
+      }
+      if (previousTestWorkers === undefined) {
+        delete process.env.OPENCLAW_TEST_WORKERS;
+      } else {
+        process.env.OPENCLAW_TEST_WORKERS = previousTestWorkers;
+      }
     }
   });
 
@@ -306,8 +320,8 @@ describe("scripts/test-projects full-suite sharding", () => {
     try {
       const configs = buildFullSuiteVitestRunPlans([], process.cwd()).map((plan) => plan.config);
 
-      expect(configs).not.toContain("vitest.full-extensions.config.ts");
-      expect(configs).toContain("vitest.full-auto-reply.config.ts");
+      expect(configs).not.toContain("test/vitest/vitest.full-extensions.config.ts");
+      expect(configs).toContain("test/vitest/vitest.full-auto-reply.config.ts");
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD;
@@ -342,64 +356,67 @@ describe("scripts/test-projects full-suite sharding", () => {
     }
 
     expect(plans.map((plan) => plan.config)).toEqual([
-      "vitest.unit-fast.config.ts",
-      "vitest.unit-src.config.ts",
-      "vitest.unit-security.config.ts",
-      "vitest.unit-ui.config.ts",
-      "vitest.unit-support.config.ts",
-      "vitest.boundary.config.ts",
-      "vitest.tooling.config.ts",
-      "vitest.contracts.config.ts",
-      "vitest.bundled.config.ts",
-      "vitest.infra.config.ts",
-      "vitest.hooks.config.ts",
-      "vitest.acp.config.ts",
-      "vitest.runtime-config.config.ts",
-      "vitest.secrets.config.ts",
-      "vitest.logging.config.ts",
-      "vitest.process.config.ts",
-      "vitest.cron.config.ts",
-      "vitest.media.config.ts",
-      "vitest.media-understanding.config.ts",
-      "vitest.shared-core.config.ts",
-      "vitest.tasks.config.ts",
-      "vitest.tui.config.ts",
-      "vitest.ui.config.ts",
-      "vitest.utils.config.ts",
-      "vitest.wizard.config.ts",
-      "vitest.gateway.config.ts",
-      "vitest.cli.config.ts",
-      "vitest.commands-light.config.ts",
-      "vitest.commands.config.ts",
-      "vitest.agents.config.ts",
-      "vitest.daemon.config.ts",
-      "vitest.plugin-sdk-light.config.ts",
-      "vitest.plugin-sdk.config.ts",
-      "vitest.plugins.config.ts",
-      "vitest.channels.config.ts",
-      "vitest.auto-reply-core.config.ts",
-      "vitest.auto-reply-top-level.config.ts",
-      "vitest.auto-reply-reply.config.ts",
-      "vitest.extension-acpx.config.ts",
-      "vitest.extension-bluebubbles.config.ts",
-      "vitest.extension-channels.config.ts",
-      "vitest.extension-diffs.config.ts",
-      "vitest.extension-feishu.config.ts",
-      "vitest.extension-irc.config.ts",
-      "vitest.extension-mattermost.config.ts",
-      "vitest.extension-matrix.config.ts",
-      "vitest.extension-memory.config.ts",
-      "vitest.extension-messaging.config.ts",
-      "vitest.extension-msteams.config.ts",
-      "vitest.extension-providers.config.ts",
-      "vitest.extension-telegram.config.ts",
-      "vitest.extension-voice-call.config.ts",
-      "vitest.extension-whatsapp.config.ts",
-      "vitest.extension-zalo.config.ts",
-      "vitest.extension-browser.config.ts",
-      "vitest.extension-qa.config.ts",
-      "vitest.extension-media.config.ts",
-      "vitest.extension-misc.config.ts",
+      "test/vitest/vitest.unit-fast.config.ts",
+      "test/vitest/vitest.unit-src.config.ts",
+      "test/vitest/vitest.unit-security.config.ts",
+      "test/vitest/vitest.unit-ui.config.ts",
+      "test/vitest/vitest.unit-support.config.ts",
+      "test/vitest/vitest.boundary.config.ts",
+      "test/vitest/vitest.tooling.config.ts",
+      "test/vitest/vitest.contracts.config.ts",
+      "test/vitest/vitest.bundled.config.ts",
+      "test/vitest/vitest.infra.config.ts",
+      "test/vitest/vitest.hooks.config.ts",
+      "test/vitest/vitest.acp.config.ts",
+      "test/vitest/vitest.runtime-config.config.ts",
+      "test/vitest/vitest.secrets.config.ts",
+      "test/vitest/vitest.logging.config.ts",
+      "test/vitest/vitest.process.config.ts",
+      "test/vitest/vitest.cron.config.ts",
+      "test/vitest/vitest.media.config.ts",
+      "test/vitest/vitest.media-understanding.config.ts",
+      "test/vitest/vitest.shared-core.config.ts",
+      "test/vitest/vitest.tasks.config.ts",
+      "test/vitest/vitest.tui.config.ts",
+      "test/vitest/vitest.ui.config.ts",
+      "test/vitest/vitest.utils.config.ts",
+      "test/vitest/vitest.wizard.config.ts",
+      "test/vitest/vitest.gateway-core.config.ts",
+      "test/vitest/vitest.gateway-client.config.ts",
+      "test/vitest/vitest.gateway-methods.config.ts",
+      "test/vitest/vitest.gateway-server.config.ts",
+      "test/vitest/vitest.cli.config.ts",
+      "test/vitest/vitest.commands-light.config.ts",
+      "test/vitest/vitest.commands.config.ts",
+      "test/vitest/vitest.agents.config.ts",
+      "test/vitest/vitest.daemon.config.ts",
+      "test/vitest/vitest.plugin-sdk-light.config.ts",
+      "test/vitest/vitest.plugin-sdk.config.ts",
+      "test/vitest/vitest.plugins.config.ts",
+      "test/vitest/vitest.channels.config.ts",
+      "test/vitest/vitest.auto-reply-core.config.ts",
+      "test/vitest/vitest.auto-reply-top-level.config.ts",
+      "test/vitest/vitest.auto-reply-reply.config.ts",
+      "test/vitest/vitest.extension-acpx.config.ts",
+      "test/vitest/vitest.extension-bluebubbles.config.ts",
+      "test/vitest/vitest.extension-channels.config.ts",
+      "test/vitest/vitest.extension-diffs.config.ts",
+      "test/vitest/vitest.extension-feishu.config.ts",
+      "test/vitest/vitest.extension-irc.config.ts",
+      "test/vitest/vitest.extension-mattermost.config.ts",
+      "test/vitest/vitest.extension-matrix.config.ts",
+      "test/vitest/vitest.extension-memory.config.ts",
+      "test/vitest/vitest.extension-messaging.config.ts",
+      "test/vitest/vitest.extension-msteams.config.ts",
+      "test/vitest/vitest.extension-providers.config.ts",
+      "test/vitest/vitest.extension-telegram.config.ts",
+      "test/vitest/vitest.extension-voice-call.config.ts",
+      "test/vitest/vitest.extension-whatsapp.config.ts",
+      "test/vitest/vitest.extension-zalo.config.ts",
+      "test/vitest/vitest.extension-browser.config.ts",
+      "test/vitest/vitest.extension-qa.config.ts",
+      "test/vitest/vitest.extension-media.config.ts",
+      "test/vitest/vitest.extension-misc.config.ts",
     ]);
     expect(plans).toEqual(
       plans.map((plan) => ({
@@ -419,9 +436,9 @@ describe("scripts/test-projects full-suite sharding", () => {
     try {
       const configs = buildFullSuiteVitestRunPlans([], process.cwd()).map((plan) => plan.config);
 
-      expect(configs).not.toContain("vitest.extensions.config.ts");
-      expect(configs).not.toContain("vitest.extension-providers.config.ts");
-      expect(configs).toContain("vitest.auto-reply-reply.config.ts");
+      expect(configs).not.toContain("test/vitest/vitest.extensions.config.ts");
+      expect(configs).not.toContain("test/vitest/vitest.extension-providers.config.ts");
+      expect(configs).toContain("test/vitest/vitest.auto-reply-reply.config.ts");
     } finally {
       if (previousLeafShards === undefined) {
         delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
@@ -444,8 +461,8 @@ describe("scripts/test-projects full-suite sharding", () => {
     try {
       const configs = buildFullSuiteVitestRunPlans([], process.cwd()).map((plan) => plan.config);
 
-      expect(configs).toContain("vitest.extension-telegram.config.ts");
-      expect(configs).not.toContain("vitest.full-extensions.config.ts");
+      expect(configs).toContain("test/vitest/vitest.extension-telegram.config.ts");
+      expect(configs).not.toContain("test/vitest/vitest.full-extensions.config.ts");
     } finally {
       if (previousLeafShards === undefined) {
         delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;

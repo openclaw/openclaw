@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   runQaManualLane,
-  runQaSuite,
+  runQaSuiteFromRuntime,
   runQaCharacterEval,
   runQaMultipass,
   startQaLabServer,
@@ -12,7 +12,7 @@ const {
   runQaDockerUp,
 } = vi.hoisted(() => ({
   runQaManualLane: vi.fn(),
-  runQaSuite: vi.fn(),
+  runQaSuiteFromRuntime: vi.fn(),
   runQaCharacterEval: vi.fn(),
   runQaMultipass: vi.fn(),
   startQaLabServer: vi.fn(),
@@ -25,8 +25,8 @@ vi.mock("./manual-lane.runtime.js", () => ({
   runQaManualLane,
 }));
 
-vi.mock("./suite.js", () => ({
-  runQaSuite,
+vi.mock("./suite-launch.runtime.js", () => ({
+  runQaSuiteFromRuntime,
 }));
 
 vi.mock("./character-eval.js", () => ({
@@ -65,7 +65,7 @@ describe("qa cli runtime", () => {
 
   beforeEach(() => {
     stdoutWrite = vi.spyOn(process.stdout, "write").mockReturnValue(true);
-    runQaSuite.mockReset();
+    runQaSuiteFromRuntime.mockReset();
     runQaCharacterEval.mockReset();
     runQaManualLane.mockReset();
     runQaMultipass.mockReset();
@@ -73,7 +73,7 @@ describe("qa cli runtime", () => {
     writeQaDockerHarnessFiles.mockReset();
     buildQaDockerHarnessImage.mockReset();
     runQaDockerUp.mockReset();
-    runQaSuite.mockResolvedValue({
+    runQaSuiteFromRuntime.mockResolvedValue({
       watchUrl: "http://127.0.0.1:43124",
       reportPath: "/tmp/report.md",
       summaryPath: "/tmp/summary.json",
@@ -135,7 +135,7 @@ describe("qa cli runtime", () => {
       scenarioIds: ["approval-turn-tool-followthrough"],
     });
 
-    expect(runQaSuite).toHaveBeenCalledWith({
+    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith({
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/frontier"),
       providerMode: "live-frontier",
@@ -153,10 +153,26 @@ describe("qa cli runtime", () => {
       scenarioIds: ["approval-turn-tool-followthrough"],
     });
 
-    expect(runQaSuite).toHaveBeenCalledWith(
+    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith(
       expect.objectContaining({
         repoRoot: path.resolve("/tmp/openclaw-repo"),
         providerMode: "live-frontier",
+      }),
+    );
+  });
+
+  it("passes host suite concurrency through", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      scenarioIds: ["channel-chat-baseline", "thread-follow-up"],
+      concurrency: 3,
+    });
+
+    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoRoot: path.resolve("/tmp/openclaw-repo"),
+        scenarioIds: ["channel-chat-baseline", "thread-follow-up"],
+        concurrency: 3,
       }),
     );
   });
@@ -291,6 +307,7 @@ describe("qa cli runtime", () => {
       runner: "multipass",
       providerMode: "mock-openai",
       scenarioIds: ["channel-chat-baseline"],
+      concurrency: 3,
       image: "lts",
       cpus: 2,
       memory: "4G",
@@ -305,12 +322,13 @@ describe("qa cli runtime", () => {
       alternateModel: undefined,
       fastMode: undefined,
       scenarioIds: ["channel-chat-baseline"],
+      concurrency: 3,
       image: "lts",
       cpus: 2,
       memory: "4G",
       disk: "24G",
     });
-    expect(runQaSuite).not.toHaveBeenCalled();
+    expect(runQaSuiteFromRuntime).not.toHaveBeenCalled();
   });
 
   it("passes live suite selection through to the multipass runner", async () => {

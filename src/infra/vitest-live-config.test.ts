@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { BUNDLED_PLUGIN_LIVE_TEST_GLOB } from "../../vitest.bundled-plugin-paths.ts";
-import liveConfig from "../../vitest.live.config.ts";
+import { BUNDLED_PLUGIN_LIVE_TEST_GLOB } from "../../test/vitest/vitest.bundled-plugin-paths.ts";
+import liveConfig from "../../test/vitest/vitest.live.config.ts";
 
 describe("live vitest config", () => {
   it("runs as a standalone config instead of inheriting unit projects", () => {
@@ -16,6 +16,7 @@ describe("live vitest config", () => {
   it("includes live test globs and runtime setup", () => {
     expect(liveConfig.test?.include).toEqual([
       "src/**/*.live.test.ts",
+      "test/**/*.live.test.ts",
       BUNDLED_PLUGIN_LIVE_TEST_GLOB,
     ]);
     expect(liveConfig.test?.setupFiles).toContain("test/setup-openclaw-runtime.ts");

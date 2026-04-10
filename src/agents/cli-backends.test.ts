@@ -6,7 +6,6 @@ import type { CliBundleMcpMode } from "../plugins/types.js";
 let createEmptyPluginRegistry: typeof import("../plugins/registry.js").createEmptyPluginRegistry;
 let resetPluginRuntimeStateForTest: typeof import("../plugins/runtime.js").resetPluginRuntimeStateForTest;
 let setActivePluginRegistry: typeof import("../plugins/runtime.js").setActivePluginRegistry;
-let normalizeClaudeBackendConfig: typeof import("./cli-backends.js").normalizeClaudeBackendConfig;
 let resolveCliBackendConfig: typeof import("./cli-backends.js").resolveCliBackendConfig;
 let resolveCliBackendLiveTest: typeof import("./cli-backends.js").resolveCliBackendLiveTest;
 
@@ -34,7 +33,7 @@ function createBackendEntry(params: {
             : params.id === "codex-cli"
               ? "codex-cli/gpt-5.4"
               : params.id === "google-gemini-cli"
-                ? "google-gemini-cli/gemini-3.1-pro-preview"
+                ? "google-gemini-cli/gemini-3-flash-preview"
                 : undefined,
         defaultImageProbe: true,
         defaultMcpProbe: true,
@@ -93,14 +92,71 @@ const NORMALIZED_CLAUDE_FALLBACK_RESUME_ARGS = [
   "bypassPermissions",
 ];
 
+function normalizeTestClaudeArgs(args?: string[]): string[] | undefined {
+  if (!args) {
+    return args;
+  }
+  const normalized: string[] = [];
+  let hasSettingSources = false;
+  let hasPermissionMode = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === "--dangerously-skip-permissions") {
+      continue;
+    }
+    if (arg === "--setting-sources") {
+      const maybeValue = args[i + 1];
+      if (maybeValue && !maybeValue.startsWith("-")) {
+        hasSettingSources = true;
+        normalized.push(arg, "user");
+        i += 1;
+      }
+      continue;
+    }
+    if (arg.startsWith("--setting-sources=")) {
+      hasSettingSources = true;
+      normalized.push("--setting-sources=user");
+      continue;
+    }
+    if (arg === "--permission-mode") {
+      const maybeValue = args[i + 1];
+      if (maybeValue && !maybeValue.startsWith("-")) {
+        hasPermissionMode = true;
+        normalized.push(arg, maybeValue);
+        i += 1;
+      }
+      continue;
+    }
+    if (arg.startsWith("--permission-mode=")) {
+      hasPermissionMode = true;
+    }
+    normalized.push(arg);
+  }
+  if (!hasSettingSources) {
+    normalized.push("--setting-sources", "user");
+  }
+  if (!hasPermissionMode) {
+    normalized.push("--permission-mode", "bypassPermissions");
+  }
+  return normalized;
+}
+
+function normalizeTestClaudeBackendConfig(config: CliBackendConfig): CliBackendConfig {
+  return {
+    ...config,
+    args: normalizeTestClaudeArgs(config.args),
+    resumeArgs: normalizeTestClaudeArgs(config.resumeArgs),
+  };
+}
+
 beforeAll(async () => {
   vi.doUnmock("../plugins/setup-registry.js");
   vi.doUnmock("../plugins/cli-backends.runtime.js");
+  vi.resetModules();
   ({ createEmptyPluginRegistry } = await import("../plugins/registry.js"));
   ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } =
     await import("../plugins/runtime.js"));
-  ({ normalizeClaudeBackendConfig, resolveCliBackendConfig, resolveCliBackendLiveTest } =
-    await import("./cli-backends.js"));
+  ({ resolveCliBackendConfig, resolveCliBackendLiveTest } = await import("./cli-backends.js"));
 });
 
 afterEach(() => {
@@ -139,14 +195,14 @@ beforeEach(() => {
         ],
         output: "jsonl",
         input: "stdin",
-        env: {
-          CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
-        },
         clearEnv: [
           "ANTHROPIC_API_KEY",
           "ANTHROPIC_API_KEY_OLD",
+          "ANTHROPIC_API_TOKEN",
           "ANTHROPIC_AUTH_TOKEN",
           "ANTHROPIC_BASE_URL",
+          "ANTHROPIC_CUSTOM_HEADERS",
+          "ANTHROPIC_OAUTH_TOKEN",
           "ANTHROPIC_UNIX_SOCKET",
           "CLAUDE_CONFIG_DIR",
           "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
@@ -164,7 +220,7 @@ beforeEach(() => {
           "CLAUDE_CODE_USE_VERTEX",
         ],
       },
-      normalizeConfig: normalizeClaudeBackendConfig,
+      normalizeConfig: normalizeTestClaudeBackendConfig,
     }),
     createBackendEntry({
       pluginId: "openai",
@@ -361,8 +417,11 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(resolved?.config.resumeArgs).toContain("user");
     expect(resolved?.config.resumeArgs).toContain("--permission-mode");
     expect(resolved?.config.resumeArgs).toContain("bypassPermissions");
-    expect(resolved?.config.env).toEqual({ CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1" });
+    expect(resolved?.config.env).not.toHaveProperty("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST");
+    expect(resolved?.config.clearEnv).toContain("ANTHROPIC_API_TOKEN");
     expect(resolved?.config.clearEnv).toContain("ANTHROPIC_BASE_URL");
+    expect(resolved?.config.clearEnv).toContain("ANTHROPIC_CUSTOM_HEADERS");
+    expect(resolved?.config.clearEnv).toContain("ANTHROPIC_OAUTH_TOKEN");
     expect(resolved?.config.clearEnv).toContain("CLAUDE_CONFIG_DIR");
     expect(resolved?.config.clearEnv).toContain("CLAUDE_CODE_OAUTH_TOKEN");
     expect(resolved?.config.clearEnv).toContain("CLAUDE_CODE_PLUGIN_CACHE_DIR");
@@ -574,11 +633,13 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
 
     expect(resolved).not.toBeNull();
     expect(resolved?.config.env).toEqual({
-      CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
       SAFE_CUSTOM: "ok",
       ANTHROPIC_BASE_URL: "https://evil.example.com/v1",
     });
     expect(resolved?.config.clearEnv).toContain("ANTHROPIC_BASE_URL");
+    expect(resolved?.config.clearEnv).toContain("ANTHROPIC_API_TOKEN");
+    expect(resolved?.config.clearEnv).toContain("ANTHROPIC_CUSTOM_HEADERS");
+    expect(resolved?.config.clearEnv).toContain("ANTHROPIC_OAUTH_TOKEN");
     expect(resolved?.config.clearEnv).toContain("CLAUDE_CONFIG_DIR");
     expect(resolved?.config.clearEnv).toContain("CLAUDE_CODE_OAUTH_TOKEN");
     expect(resolved?.config.clearEnv).toContain("CLAUDE_CODE_PLUGIN_CACHE_DIR");

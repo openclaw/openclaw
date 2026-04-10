@@ -193,13 +193,46 @@ describe("isHeartbeatContentEffectivelyEmpty", () => {
     expect(isHeartbeatContentEffectivelyEmpty("## Subheader\n### Another")).toBe(true);
   });
 
-  it("returns true for default template content (header + comment)", () => {
+  it("returns false when a template includes plain instructional prose", () => {
+    // Regression: this test used to be named "returns true for default template
+    // content" while asserting `false`, which obscured the real behavior. The
+    // heuristic does NOT skip plain-text instructional sentences because they
+    // are indistinguishable from actionable content.
     const defaultTemplate = `# HEARTBEAT.md
 
 Keep this file empty unless you want a tiny checklist. Keep it small.
-`;
-    // Note: The template has actual text content, so it's NOT effectively empty
+    `;
     expect(isHeartbeatContentEffectivelyEmpty(defaultTemplate)).toBe(false);
+  });
+
+  it("returns true for the current fenced heartbeat template body (#61690)", () => {
+    const content = `# HEARTBEAT.md Template
+
+\`\`\`markdown
+# Keep this file empty (or with only comments) to skip heartbeat API calls.
+
+# Add tasks below when you want the agent to check something periodically.
+\`\`\`
+`;
+    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
+  });
+
+  it("returns false when fenced heartbeat content includes a real task", () => {
+    const content = `\`\`\`markdown
+# Keep this file empty when you want to skip.
+
+- Check email
+\`\`\`
+`;
+    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(false);
+  });
+
+  it("returns false when a code fence wraps plain instructional prose", () => {
+    const content = `\`\`\`markdown
+Keep this file empty unless you want a tiny checklist.
+\`\`\`
+`;
+    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(false);
   });
 
   it("returns true for header with only empty lines", () => {

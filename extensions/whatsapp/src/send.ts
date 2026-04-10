@@ -12,7 +12,7 @@ import {
   resolveWhatsAppMediaMaxBytes,
 } from "./accounts.js";
 import { type ActiveWebSendOptions, requireActiveWebListener } from "./active-listener.js";
-import { loadOutboundMediaFromUrl } from "./runtime-api.js";
+import { loadOutboundMediaFromUrl } from "./outbound-media.runtime.js";
 import { markdownToWhatsApp, toWhatsappJid } from "./text-runtime.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");

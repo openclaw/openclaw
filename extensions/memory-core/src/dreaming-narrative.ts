@@ -1,6 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  extractErrorCode,
+  formatErrorMessage,
+  RequestScopedSubagentRuntimeError,
+  readErrorName,
+  SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
+} from "openclaw/plugin-sdk/error-runtime";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -72,6 +78,80 @@ const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
 const DIARY_START_MARKER = "<!-- openclaw:dreaming:diary:start -->";
 const DIARY_END_MARKER = "<!-- openclaw:dreaming:diary:end -->";
 const BACKFILL_ENTRY_MARKER = "openclaw:dreaming:backfill-entry";
+
+function isRequestScopedSubagentRuntimeError(err: unknown): boolean {
+  return (
+    err instanceof RequestScopedSubagentRuntimeError ||
+    (err instanceof Error &&
+      err.name === "RequestScopedSubagentRuntimeError" &&
+      extractErrorCode(err) === SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE)
+  );
+}
+
+function formatFallbackWriteFailure(err: unknown): string {
+  const code = extractErrorCode(err);
+  const name = readErrorName(err);
+  if (code && name) {
+    return `code=${code} name=${name}`;
+  }
+  if (code) {
+    return `code=${code}`;
+  }
+  if (name) {
+    return `name=${name}`;
+  }
+  return "unknown error";
+}
+
+function buildRequestScopedFallbackNarrative(data: NarrativePhaseData): string {
+  return (
+    data.snippets.map((value) => value.trim()).find((value) => value.length > 0) ??
+    (data.promotions ?? []).map((value) => value.trim()).find((value) => value.length > 0) ??
+    "A memory trace surfaced, but details were unavailable in this run."
+  );
+}
+
+async function startNarrativeRunOrFallback(params: {
+  subagent: SubagentSurface;
+  sessionKey: string;
+  message: string;
+  data: NarrativePhaseData;
+  workspaceDir: string;
+  nowMs: number;
+  timezone?: string;
+  logger: Logger;
+}): Promise<string | null> {
+  try {
+    const run = await params.subagent.run({
+      idempotencyKey: params.sessionKey,
+      sessionKey: params.sessionKey,
+      message: params.message,
+      extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,
+      deliver: false,
+    });
+    return run.runId;
+  } catch (runErr) {
+    if (!isRequestScopedSubagentRuntimeError(runErr)) {
+      throw runErr;
+    }
+    try {
+      await appendNarrativeEntry({
+        workspaceDir: params.workspaceDir,
+        narrative: buildRequestScopedFallbackNarrative(params.data),
+        nowMs: params.nowMs,
+        timezone: params.timezone,
+      });
+      params.logger.warn(
+        `memory-core: narrative generation used fallback for ${params.data.phase} phase because subagent runtime is request-scoped.`,
+      );
+    } catch (fallbackErr) {
+      params.logger.warn(
+        `memory-core: narrative fallback failed for ${params.data.phase} phase (${formatFallbackWriteFailure(fallbackErr)})`,
+      );
+    }
+    return null;
+  }
+}
 
 // ── Prompt building ────────────────────────────────────────────────────
 
@@ -449,13 +529,19 @@ export async function generateAndAppendDreamNarrative(params: {
   const message = buildNarrativePrompt(params.data);
 
   try {
-    const { runId } = await params.subagent.run({
-      idempotencyKey: sessionKey,
+    const runId = await startNarrativeRunOrFallback({
+      subagent: params.subagent,
       sessionKey,
       message,
-      extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,
-      deliver: false,
+      data: params.data,
+      workspaceDir: params.workspaceDir,
+      nowMs,
+      timezone: params.timezone,
+      logger: params.logger,
     });
+    if (!runId) {
+      return;
+    }
 
     const result = await params.subagent.waitForRun({
       runId,
