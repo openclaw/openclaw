@@ -9,7 +9,7 @@ import {
   type ExecTarget,
 } from "../infra/exec-approvals.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
-import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
+import { isDangerousHostInheritedEnvVarName } from "../infra/host-env-security.js";
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
@@ -72,7 +72,7 @@ export function sanitizeHostBaseEnv(env: Record<string, string>): Record<string,
       sanitized[key] = value;
       continue;
     }
-    if (isDangerousHostEnvVarName(upperKey)) {
+    if (isDangerousHostInheritedEnvVarName(upperKey)) {
       continue;
     }
     sanitized[key] = value;
@@ -86,7 +86,7 @@ export function validateHostEnv(env: Record<string, string>): void {
     const upperKey = key.toUpperCase();
 
     // 1. Block known dangerous variables (Fail Closed)
-    if (isDangerousHostEnvVarName(upperKey)) {
+    if (isDangerousHostInheritedEnvVarName(upperKey)) {
       throw new Error(
         `Security Violation: Environment variable '${key}' is forbidden during host execution.`,
       );

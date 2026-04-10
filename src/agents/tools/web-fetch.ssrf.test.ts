@@ -178,5 +178,4 @@ describe("web_fetch SSRF protection", () => {
     const stricterTool = await createWebFetchToolForTest({ cacheTtlMinutes: 1 });
     await expectBlockedUrl(stricterTool, url, /private|internal|blocked/i);
   });
-
 });

@@ -44,6 +44,7 @@ import {
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import {
   normalizeOptionalLowercaseString,
@@ -260,6 +261,13 @@ function normalizeTelegramConversationIdFallback(params: {
   }
   return /^-?\d+$/.test(normalized) ? normalized : undefined;
 }
+
+const threadBindingFallbackConversationResolvers = {
+  line: (params: { to?: string; groupId?: string }) =>
+    normalizeLineConversationIdFallback(params.groupId ?? params.to),
+  telegram: (params: { to?: string; threadId?: string | number; groupId?: string }) =>
+    normalizeTelegramConversationIdFallback(params),
+} as const;
 
 function resolveSpawnMode(params: {
   requestedMode?: SpawnAcpMode;
@@ -508,17 +516,14 @@ function resolveConversationIdForThreadBinding(params: {
   if (normalizeOptionalString(pluginResolvedConversationId)) {
     return normalizeOptionalString(pluginResolvedConversationId);
   }
-  if (channelKey === "line") {
-    const lineConversationId = normalizeLineConversationIdFallback(params.groupId ?? params.to);
-    if (lineConversationId) {
-      return lineConversationId;
-    }
-  }
-  if (channelKey === "telegram") {
-    const telegramConversationId = normalizeTelegramConversationIdFallback(params);
-    if (telegramConversationId) {
-      return telegramConversationId;
-    }
+  const compatibilityConversationId =
+    channelKey && Object.hasOwn(threadBindingFallbackConversationResolvers, channelKey)
+      ? threadBindingFallbackConversationResolvers[
+          channelKey as keyof typeof threadBindingFallbackConversationResolvers
+        ](params)
+      : undefined;
+  if (compatibilityConversationId) {
+    return compatibilityConversationId;
   }
   const genericConversationId = resolveConversationIdFromTargets({
     threadId: params.threadId,
@@ -1108,6 +1113,19 @@ export async function spawnAcpDirect(
           childSessionKey: sessionKey,
         })
       : undefined;
+  // Resolve parent session delivery context so system events route to the
+  // correct thread/topic instead of falling back to the main DM.
+  const parentDeliveryCtx =
+    effectiveStreamToParent && parentSessionKey
+      ? deliveryContextFromSession(
+          loadSessionStore(
+            resolveStorePath(cfg.session?.store, {
+              agentId: resolveAgentIdFromSessionKey(parentSessionKey),
+            }),
+          )[parentSessionKey],
+        )
+      : undefined;
+
   let parentRelay: AcpSpawnParentRelayHandle | undefined;
   if (effectiveStreamToParent && parentSessionKey) {
     // Register relay before dispatch so fast lifecycle failures are not missed.
@@ -1117,6 +1135,7 @@ export async function spawnAcpDirect(
       childSessionKey: sessionKey,
       agentId: targetAgentId,
       logPath: streamLogPath,
+      deliveryContext: parentDeliveryCtx,
       emitStartNotice: false,
     });
   }
@@ -1166,6 +1185,7 @@ export async function spawnAcpDirect(
         childSessionKey: sessionKey,
         agentId: targetAgentId,
         logPath: streamLogPath,
+        deliveryContext: parentDeliveryCtx,
         emitStartNotice: false,
       });
     }

@@ -25,7 +25,7 @@ import type {
   ExecApprovalDecision,
 } from "openclaw/plugin-sdk/infra-runtime";
 import { logDebug, logError, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { shouldHandleDiscordApprovalRequest } from "./approval-native.js";
+import { shouldHandleDiscordApprovalRequest } from "./approval-shared.js";
 import { isDiscordExecApprovalClientEnabled } from "./exec-approvals.js";
 import { createDiscordClient, stripUndefinedFields } from "./send.shared.js";
 import { DiscordUiContainer } from "./ui.js";

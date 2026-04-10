@@ -24,8 +24,8 @@ function expectedBundledMusicProviderPluginIds(): string[] {
 }
 
 describe("bundled media-generation provider capabilities", () => {
-  it("declares explicit mode support for every bundled video-generation provider", () => {
-    const entries = loadBundledVideoGenerationProviders();
+  it("declares explicit mode support for every bundled video-generation provider", async () => {
+    const entries = await loadBundledVideoGenerationProviders();
     expect(entries.map((entry) => entry.pluginId).toSorted()).toEqual(
       expectedBundledVideoProviderPluginIds(),
     );
@@ -66,8 +66,8 @@ describe("bundled media-generation provider capabilities", () => {
     }
   });
 
-  it("declares explicit generate/edit support for every bundled music-generation provider", () => {
-    const entries = loadBundledMusicGenerationProviders();
+  it("declares explicit generate/edit support for every bundled music-generation provider", async () => {
+    const entries = await loadBundledMusicGenerationProviders();
     expect(entries.map((entry) => entry.pluginId).toSorted()).toEqual(
       expectedBundledMusicProviderPluginIds(),
     );

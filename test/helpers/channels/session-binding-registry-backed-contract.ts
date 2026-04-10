@@ -1,14 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { bluebubblesPlugin } from "../../../extensions/bluebubbles/api.js";
-import {
-  discordPlugin,
-  discordThreadBindingTesting,
-} from "../../../extensions/discord/test-api.js";
-import { feishuPlugin, feishuThreadBindingTesting } from "../../../extensions/feishu/api.js";
-import { imessagePlugin } from "../../../extensions/imessage/api.js";
-import { matrixPlugin, setMatrixRuntime } from "../../../extensions/matrix/test-api.js";
-import { telegramPlugin } from "../../../extensions/telegram/api.js";
-import { resetTelegramThreadBindingsForTests } from "../../../extensions/telegram/test-api.js";
 import type { ChannelPlugin } from "../../../src/channels/plugins/types.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -22,8 +12,34 @@ import {
 import { resetPluginRuntimeStateForTest } from "../../../src/plugins/runtime.js";
 import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
 import type { PluginRuntime } from "../../../src/plugins/runtime/index.js";
+import {
+  loadBundledPluginApiSync,
+  loadBundledPluginTestApiSync,
+} from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../../../src/test-utils/channel-plugins.js";
 import { getSessionBindingContractRegistry } from "./registry-session-binding.js";
+
+type BluebubblesApiSurface = typeof import("@openclaw/bluebubbles/api.js");
+type DiscordTestApiSurface = typeof import("@openclaw/discord/test-api.js");
+type FeishuApiSurface = typeof import("@openclaw/feishu/api.js");
+type IMessageApiSurface = typeof import("@openclaw/imessage/api.js");
+type MatrixApiSurface = typeof import("@openclaw/matrix/api.js");
+type MatrixTestApiSurface = typeof import("@openclaw/matrix/test-api.js");
+type TelegramApiSurface = typeof import("@openclaw/telegram/api.js");
+type TelegramTestApiSurface = typeof import("@openclaw/telegram/test-api.js");
+
+const { bluebubblesPlugin } = loadBundledPluginApiSync<BluebubblesApiSurface>("bluebubbles");
+const { discordPlugin, discordThreadBindingTesting } =
+  loadBundledPluginTestApiSync<DiscordTestApiSurface>("discord");
+const { feishuPlugin, feishuThreadBindingTesting } =
+  loadBundledPluginApiSync<FeishuApiSurface>("feishu");
+const { imessagePlugin } = loadBundledPluginApiSync<IMessageApiSurface>("imessage");
+const { resetMatrixThreadBindingsForTests } = loadBundledPluginApiSync<MatrixApiSurface>("matrix");
+const { matrixPlugin, setMatrixRuntime } =
+  loadBundledPluginTestApiSync<MatrixTestApiSurface>("matrix");
+const { telegramPlugin } = loadBundledPluginApiSync<TelegramApiSurface>("telegram");
+const { resetTelegramThreadBindingsForTests } =
+  loadBundledPluginTestApiSync<TelegramTestApiSurface>("telegram");
 
 type DiscordThreadBindingTesting = {
   resetThreadBindingsForTests: () => void;
@@ -72,8 +88,7 @@ async function getFeishuThreadBindingTesting() {
 }
 
 async function getResetMatrixThreadBindingsForTests() {
-  const matrixApi = await import("../../../extensions/matrix/api.js");
-  return matrixApi.resetMatrixThreadBindingsForTests;
+  return resetMatrixThreadBindingsForTests;
 }
 
 function resolveSessionBindingContractRuntimeConfig(id: string) {

@@ -39,20 +39,7 @@ const readAgentMemoryFileMock = vi.fn(
   async (params: MemoryReadParams) => await readFileImpl(params),
 );
 
-const { memoryIndexModuleId, memoryToolsRuntimeModuleId } = vi.hoisted(() => ({
-  memoryIndexModuleId: "../../extensions/memory-core/src/memory/index.js",
-  memoryToolsRuntimeModuleId: "../../extensions/memory-core/src/tools.runtime.js",
-}));
-
-vi.mock(memoryIndexModuleId, () => ({
-  getMemorySearchManager: getMemorySearchManagerMock,
-}));
-
-vi.mock("../../src/memory-host-sdk/host/read-file.js", () => ({
-  readAgentMemoryFile: readAgentMemoryFileMock,
-}));
-
-vi.mock(memoryToolsRuntimeModuleId, () => ({
+vi.mock("./tools.runtime.js", () => ({
   resolveMemoryBackendConfig: ({
     cfg,
   }: {

@@ -37,6 +37,14 @@ const generated = `// Generated file. Do not edit directly.
 import Foundation
 
 enum HostEnvSecurityPolicy {
+    static let blockedInheritedKeys: Set<String> = [
+${renderSwiftStringArray(policy.blockedInheritedKeys)}
+    ]
+
+    static let blockedInheritedPrefixes: [String] = [
+${renderSwiftStringArray(policy.blockedInheritedPrefixes)}
+    ]
+
     static let blockedKeys: Set<String> = [
 ${renderSwiftStringArray(policy.blockedKeys)}
     ]

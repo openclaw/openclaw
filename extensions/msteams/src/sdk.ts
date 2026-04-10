@@ -428,72 +428,127 @@ export async function loadMSTeamsSdkWithAuth(creds: MSTeamsCredentials) {
 }
 
 /**
- * Create a Bot Framework JWT validator with strict multi-issuer support.
+ * Bot Framework issuer → JWKS mapping.
+ * During Microsoft's transition, inbound service tokens can be signed by either
+ * the legacy Bot Framework issuer or the Entra issuer. Each gets its own JWKS
+ * endpoint so we verify signatures with the correct key set.
+ */
+const BOT_FRAMEWORK_ISSUERS: ReadonlyArray<{
+  issuer: string | ((tenantId: string) => string);
+  jwksUri: string;
+}> = [
+  {
+    issuer: "https://api.botframework.com",
+    jwksUri: "https://login.botframework.com/v1/.well-known/keys",
+  },
+  {
+    issuer: (tenantId: string) => `https://login.microsoftonline.com/${tenantId}/v2.0`,
+    jwksUri: "https://login.microsoftonline.com/common/discovery/v2.0/keys",
+  },
+  {
+    issuer: "https://sts.windows.net/d6d49420-f39b-4df7-a1dc-d59a935871db/",
+    jwksUri: "https://login.microsoftonline.com/common/discovery/v2.0/keys",
+  },
+];
+
+/**
+ * Create a Bot Framework JWT validator using jsonwebtoken + jwks-rsa directly.
  *
- * During Microsoft's transition, inbound service tokens can be signed by either:
- * - Legacy Bot Framework issuer/JWKS
- * - Entra issuer/JWKS
+ * The @microsoft/teams.apps JwtValidator hardcodes audience to [clientId, api://clientId],
+ * which rejects valid Bot Framework tokens that carry aud: "https://api.botframework.com".
+ * This implementation uses jsonwebtoken directly with the correct audience list, matching
+ * the behavior of the legacy @microsoft/agents-hosting authorizeJWT middleware.
  *
- * Security invariants are preserved for both paths:
- * - signature verification (issuer-specific JWKS)
- * - audience validation (appId)
- * - issuer validation (strict allowlist)
- * - expiration validation (Teams SDK defaults)
+ * Security invariants:
+ * - signature verification via issuer-specific JWKS endpoints
+ * - audience validation: appId, api://appId, and https://api.botframework.com
+ * - issuer validation: strict allowlist (Bot Framework + tenant-scoped Entra)
+ * - expiration validation with 5-minute clock tolerance
  */
 export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials): Promise<{
-  validate: (authHeader: string, serviceUrl?: string) => Promise<boolean>;
+  validate: (authHeader: string) => Promise<boolean>;
 }> {
-  const { JwtValidator } =
-    await import("@microsoft/teams.apps/dist/middleware/auth/jwt-validator.js");
+  const jwt = await import("jsonwebtoken");
+  const { JwksClient } = await import("jwks-rsa");
 
-  const botFrameworkValidator = new JwtValidator({
-    clientId: creds.appId,
-    tenantId: creds.tenantId,
-    validateIssuer: { allowedIssuer: "https://api.botframework.com" },
-    jwksUriOptions: {
-      type: "uri",
-      uri: "https://login.botframework.com/v1/.well-known/keys",
-    },
-  });
+  const allowedAudiences: [string, ...string[]] = [
+    creds.appId,
+    `api://${creds.appId}`,
+    "https://api.botframework.com",
+  ];
 
-  const entraValidator = new JwtValidator({
-    clientId: creds.appId,
-    tenantId: creds.tenantId,
-    validateIssuer: { allowedTenantIds: [creds.tenantId] },
-    jwksUriOptions: {
-      type: "uri",
-      uri: "https://login.microsoftonline.com/common/discovery/v2.0/keys",
-    },
-  });
+  const allowedIssuers = BOT_FRAMEWORK_ISSUERS.map((entry) =>
+    typeof entry.issuer === "function" ? entry.issuer(creds.tenantId) : entry.issuer,
+  ) as [string, ...string[]];
 
-  async function validateWithFallback(
-    token: string,
-    overrides: { validateServiceUrl: { expectedServiceUrl: string } } | undefined,
-  ): Promise<boolean> {
-    for (const validator of [botFrameworkValidator, entraValidator]) {
-      try {
-        const result = await validator.validateAccessToken(token, overrides);
-        if (result != null) {
-          return true;
-        }
-      } catch {
-        continue;
-      }
+  // One JWKS client per distinct endpoint, cached for the validator lifetime.
+  const jwksClients = new Map<string, InstanceType<typeof JwksClient>>();
+  function getJwksClient(uri: string): InstanceType<typeof JwksClient> {
+    let client = jwksClients.get(uri);
+    if (!client) {
+      client = new JwksClient({
+        jwksUri: uri,
+        cache: true,
+        cacheMaxAge: 600_000,
+        rateLimit: true,
+      });
+      jwksClients.set(uri, client);
     }
-    return false;
+    return client;
+  }
+
+  /** Decode the token header without verification to determine the kid. */
+  function decodeHeader(token: string): { kid?: string } | null {
+    const decoded = jwt.decode(token, { complete: true });
+    return decoded && typeof decoded === "object" ? (decoded.header as { kid?: string }) : null;
+  }
+
+  /** Resolve the issuer entry for a token's issuer claim (pre-verification). */
+  function resolveIssuerEntry(issuerClaim: string | undefined) {
+    if (!issuerClaim) {
+      return undefined;
+    }
+    return BOT_FRAMEWORK_ISSUERS.find((entry) => {
+      const expected =
+        typeof entry.issuer === "function" ? entry.issuer(creds.tenantId) : entry.issuer;
+      return expected === issuerClaim;
+    });
   }
 
   return {
-    async validate(authHeader: string, serviceUrl?: string): Promise<boolean> {
+    async validate(authHeader: string, _serviceUrl?: string): Promise<boolean> {
       const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : authHeader;
       if (!token) {
         return false;
       }
 
-      const overrides = serviceUrl
-        ? ({ validateServiceUrl: { expectedServiceUrl: serviceUrl } } as const)
-        : undefined;
-      return await validateWithFallback(token, overrides);
+      // Decode without verification to extract issuer and kid for key lookup.
+      const header = decodeHeader(token);
+      const unverifiedPayload = jwt.decode(token) as { iss?: string } | null;
+      if (!header?.kid || !unverifiedPayload?.iss) {
+        return false;
+      }
+
+      // Resolve which JWKS endpoint to use based on the issuer claim.
+      const issuerEntry = resolveIssuerEntry(unverifiedPayload.iss);
+      if (!issuerEntry) {
+        return false;
+      }
+
+      const client = getJwksClient(issuerEntry.jwksUri);
+      try {
+        const signingKey = await client.getSigningKey(header.kid);
+        const publicKey = signingKey.getPublicKey();
+        jwt.verify(token, publicKey, {
+          audience: allowedAudiences,
+          issuer: allowedIssuers,
+          algorithms: ["RS256"],
+          clockTolerance: 300,
+        });
+        return true;
+      } catch {
+        return false;
+      }
     },
   };
 }

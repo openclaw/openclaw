@@ -2695,11 +2695,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       description:
                         "Optional TLS settings used when connecting directly to the upstream model endpoint.",
                     },
+                    allowPrivateNetwork: {
+                      type: "boolean",
+                      title: "Model Provider Request Allow Private Network",
+                      description:
+                        "When true, allow HTTPS to the model base URL when DNS resolves to private, CGNAT, or similar ranges, via the provider HTTP fetch guard (fetchWithSsrFGuard). OpenAI Responses WebSocket reuses request for headers/TLS but does not use that fetch SSRF path. Use only for operator-controlled self-hosted OpenAI-compatible endpoints (LAN, overlay, split DNS). Default is false.",
+                    },
                   },
                   additionalProperties: false,
                   title: "Model Provider Request Overrides",
                   description:
-                    "Optional request overrides for model-provider requests, including extra headers, auth overrides, proxy routing, and TLS client settings. Use these only when your upstream or enterprise network path requires transport customization.",
+                    "Optional request overrides for model-provider requests, including extra headers, auth overrides, proxy routing, TLS client settings, and optional allowPrivateNetwork for trusted self-hosted endpoints. Use these only when your upstream or enterprise network path requires transport customization.",
                 },
                 models: {
                   type: "array",
@@ -24833,7 +24839,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "models.providers.*.request": {
       label: "Model Provider Request Overrides",
-      help: "Optional request overrides for model-provider requests, including extra headers, auth overrides, proxy routing, and TLS client settings. Use these only when your upstream or enterprise network path requires transport customization.",
+      help: "Optional request overrides for model-provider requests, including extra headers, auth overrides, proxy routing, TLS client settings, and optional allowPrivateNetwork for trusted self-hosted endpoints. Use these only when your upstream or enterprise network path requires transport customization.",
       tags: ["models"],
     },
     "models.providers.*.request.headers": {
@@ -24965,6 +24971,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Model Provider Request TLS Skip Verify",
       help: "Skips upstream TLS certificate verification. Use only for controlled development environments.",
       tags: ["security", "models", "advanced"],
+    },
+    "models.providers.*.request.allowPrivateNetwork": {
+      label: "Model Provider Request Allow Private Network",
+      help: "When true, allow HTTPS to the model base URL when DNS resolves to private, CGNAT, or similar ranges, via the provider HTTP fetch guard (fetchWithSsrFGuard). OpenAI Responses WebSocket reuses request for headers/TLS but does not use that fetch SSRF path. Use only for operator-controlled self-hosted OpenAI-compatible endpoints (LAN, overlay, split DNS). Default is false.",
+      tags: ["access", "models"],
     },
     "models.providers.*.models": {
       label: "Model Provider Model List",

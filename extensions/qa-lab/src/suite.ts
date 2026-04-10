@@ -22,8 +22,12 @@ import {
 } from "./discovery-eval.js";
 import { extractQaToolPayload } from "./extract-tool-payload.js";
 import { startQaGatewayChild } from "./gateway-child.js";
-import { startQaLabServer } from "./lab-server.js";
-import type { QaLabLatestReport, QaLabScenarioOutcome } from "./lab-server.js";
+import type {
+  QaLabLatestReport,
+  QaLabScenarioOutcome,
+  QaLabServerHandle,
+  QaLabServerStartParams,
+} from "./lab-server.types.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 import { startQaMockOpenAiServer } from "./mock-openai-server.js";
 import {
@@ -53,7 +57,7 @@ type QaSuiteScenarioResult = {
 };
 
 type QaSuiteEnvironment = {
-  lab: Awaited<ReturnType<typeof startQaLabServer>>;
+  lab: QaLabServerHandle;
   mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | null;
   gateway: Awaited<ReturnType<typeof startQaGatewayChild>>;
   cfg: OpenClawConfig;
@@ -62,6 +66,13 @@ type QaSuiteEnvironment = {
   primaryModel: string;
   alternateModel: string;
 };
+
+async function startQaLabServerRuntime(
+  params?: QaLabServerStartParams,
+): Promise<QaLabServerHandle> {
+  const { startQaLabServer } = await import("./lab-server.js");
+  return await startQaLabServer(params);
+}
 
 const _QA_IMAGE_UNDERSTANDING_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAAAAAklEQVR4AewaftIAAAK4SURBVO3BAQEAMAwCIG//znsQgXfJBZjUALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsl9wFmNQAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwP4TIF+7ciPkoAAAAASUVORK5CYII=";
@@ -1169,7 +1180,7 @@ export async function runQaSuite(params?: {
   fastMode?: boolean;
   thinkingDefault?: QaThinkingLevel;
   scenarioIds?: string[];
-  lab?: Awaited<ReturnType<typeof startQaLabServer>>;
+  lab?: QaLabServerHandle;
 }) {
   const startedAt = new Date();
   const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
@@ -1189,7 +1200,7 @@ export async function runQaSuite(params?: {
   const ownsLab = !params?.lab;
   const lab =
     params?.lab ??
-    (await startQaLabServer({
+    (await startQaLabServerRuntime({
       repoRoot,
       host: "127.0.0.1",
       port: 0,

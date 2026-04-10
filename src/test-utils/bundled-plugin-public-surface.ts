@@ -33,6 +33,27 @@ export function loadBundledPluginPublicSurfaceSync<T extends object>(params: {
   });
 }
 
+export function loadBundledPluginApiSync<T extends object>(pluginId: string): T {
+  return loadBundledPluginPublicSurfaceSync<T>({
+    pluginId,
+    artifactBasename: "api.js",
+  });
+}
+
+export function loadBundledPluginContractApiSync<T extends object>(pluginId: string): T {
+  return loadBundledPluginPublicSurfaceSync<T>({
+    pluginId,
+    artifactBasename: "contract-api.js",
+  });
+}
+
+export function loadBundledPluginRuntimeApiSync<T extends object>(pluginId: string): T {
+  return loadBundledPluginPublicSurfaceSync<T>({
+    pluginId,
+    artifactBasename: "runtime-api.js",
+  });
+}
+
 export function loadBundledPluginTestApiSync<T extends object>(pluginId: string): T {
   return loadBundledPluginPublicSurfaceSync<T>({
     pluginId,
@@ -40,20 +61,29 @@ export function loadBundledPluginTestApiSync<T extends object>(pluginId: string)
   });
 }
 
+export function resolveBundledPluginPublicModulePath(params: {
+  pluginId: string;
+  artifactBasename: string;
+}): string {
+  const metadata = findBundledPluginMetadata(params.pluginId);
+  return path.resolve(
+    OPENCLAW_PACKAGE_ROOT,
+    "extensions",
+    metadata.dirName,
+    normalizeBundledPluginArtifactSubpath(params.artifactBasename),
+  );
+}
+
 export function resolveRelativeBundledPluginPublicModuleId(params: {
   fromModuleUrl: string;
   pluginId: string;
   artifactBasename: string;
 }): string {
-  const metadata = findBundledPluginMetadata(params.pluginId);
   const fromFilePath = fileURLToPath(params.fromModuleUrl);
-  const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
-  const targetPath = path.resolve(
-    OPENCLAW_PACKAGE_ROOT,
-    "extensions",
-    metadata.dirName,
-    artifactBasename,
-  );
+  const targetPath = resolveBundledPluginPublicModulePath({
+    pluginId: params.pluginId,
+    artifactBasename: params.artifactBasename,
+  });
   const relativePath = path
     .relative(path.dirname(fromFilePath), targetPath)
     .replaceAll(path.sep, "/");
