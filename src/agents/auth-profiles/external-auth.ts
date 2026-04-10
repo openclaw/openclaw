@@ -2,7 +2,12 @@ import type { ProviderExternalAuthProfile } from "../../plugins/provider-externa
 import { resolveExternalAuthProfilesWithPlugins } from "../../plugins/provider-runtime.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 
-type ExternalAuthProfileMap = Map<string, ProviderExternalAuthProfile>;
+type NormalizedExternalAuthProfile = ProviderExternalAuthProfile & {
+  persistence: "runtime-only" | "persisted";
+  selectionPriority: "default" | "highest";
+};
+
+type ExternalAuthProfileMap = Map<string, NormalizedExternalAuthProfile>;
 type ResolveExternalAuthProfiles = typeof resolveExternalAuthProfilesWithPlugins;
 
 let resolveExternalAuthProfilesForRuntime: ResolveExternalAuthProfiles | undefined;
@@ -18,13 +23,14 @@ export const __testing = {
 
 function normalizeExternalAuthProfile(
   profile: ProviderExternalAuthProfile,
-): ProviderExternalAuthProfile | null {
+): NormalizedExternalAuthProfile | null {
   if (!profile?.profileId || !profile.credential) {
     return null;
   }
   return {
     ...profile,
     persistence: profile.persistence ?? "runtime-only",
+    selectionPriority: profile.selectionPriority ?? "default",
   };
 }
 
@@ -126,6 +132,14 @@ export function listRuntimeOnlyExternalAuthProfileIds(params: {
   agentDir?: string;
   env?: NodeJS.ProcessEnv;
 }): string[] {
+  return listRuntimeOnlyExternalAuthProfiles(params).map((profile) => profile.profileId);
+}
+
+export function listRuntimeOnlyExternalAuthProfiles(params: {
+  store: AuthProfileStore;
+  agentDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): Array<{ profileId: string; selectionPriority: "default" | "highest" }> {
   return Array.from(
     resolveExternalAuthProfileMap({
       store: params.store,
@@ -134,7 +148,10 @@ export function listRuntimeOnlyExternalAuthProfileIds(params: {
     }).entries(),
   )
     .filter(([, profile]) => profile.persistence !== "persisted")
-    .map(([profileId]) => profileId);
+    .map(([profileId, profile]) => ({
+      profileId,
+      selectionPriority: profile.selectionPriority,
+    }));
 }
 
 export function shouldPersistExternalAuthProfile(params: {

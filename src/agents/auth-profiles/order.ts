@@ -5,7 +5,7 @@ import {
   evaluateStoredCredentialEligibility,
   type AuthCredentialReasonCode,
 } from "./credential-state.js";
-import { listRuntimeOnlyExternalAuthProfileIds } from "./external-auth.js";
+import { listRuntimeOnlyExternalAuthProfiles } from "./external-auth.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profiles.js";
 import type { AuthProfileStore } from "./types.js";
 import {
@@ -91,17 +91,24 @@ export function resolveAuthProfileOrder(params: {
         .map(([profileId]) => profileId)
     : [];
   const providerStoreProfiles = listProfilesForProvider(store, provider);
-  const runtimeOnlyExternalProfiles =
-    explicitOrder || explicitProfiles.length > 0
-      ? listRuntimeOnlyExternalAuthProfileIds({ store }).filter((profileId) =>
-          providerStoreProfiles.includes(profileId),
-        )
-      : [];
+  const runtimeOnlyExternalProfiles = listRuntimeOnlyExternalAuthProfiles({ store }).filter(
+    (profile) => providerStoreProfiles.includes(profile.profileId),
+  );
+  const highestPriorityExternalProfiles = runtimeOnlyExternalProfiles
+    .filter((profile) => profile.selectionPriority === "highest")
+    .map((profile) => profile.profileId);
+  const defaultPriorityExternalProfiles = runtimeOnlyExternalProfiles
+    .filter((profile) => profile.selectionPriority !== "highest")
+    .map((profile) => profile.profileId);
   const baseCandidates =
     explicitOrder ?? (explicitProfiles.length > 0 ? explicitProfiles : providerStoreProfiles);
   const baseOrder =
     runtimeOnlyExternalProfiles.length > 0
-      ? dedupeProfileIds([...baseCandidates, ...runtimeOnlyExternalProfiles])
+      ? dedupeProfileIds([
+          ...highestPriorityExternalProfiles,
+          ...baseCandidates,
+          ...defaultPriorityExternalProfiles,
+        ])
       : baseCandidates;
   if (baseOrder.length === 0) {
     return [];
@@ -151,7 +158,10 @@ export function resolveAuthProfileOrder(params: {
       .toSorted((a, b) => a.cooldownUntil - b.cooldownUntil)
       .map((entry) => entry.profileId);
 
-    const ordered = [...available, ...cooldownSorted];
+    const ordered = prioritizeProfiles(
+      [...available, ...cooldownSorted],
+      highestPriorityExternalProfiles,
+    );
 
     // Still put preferredProfile first if specified
     if (preferredProfile && ordered.includes(preferredProfile)) {
@@ -163,13 +173,26 @@ export function resolveAuthProfileOrder(params: {
   // Otherwise, use round-robin: sort by lastUsed (oldest first)
   // preferredProfile goes first if specified (for explicit user choice)
   // lastGood is NOT prioritized - that would defeat round-robin
-  const sorted = orderProfilesByMode(deduped, store);
+  const sorted = prioritizeProfiles(
+    orderProfilesByMode(deduped, store),
+    highestPriorityExternalProfiles,
+  );
 
   if (preferredProfile && sorted.includes(preferredProfile)) {
     return [preferredProfile, ...sorted.filter((e) => e !== preferredProfile)];
   }
 
   return sorted;
+}
+
+function prioritizeProfiles(order: string[], prioritized: string[]): string[] {
+  if (prioritized.length === 0 || order.length === 0) {
+    return order;
+  }
+  const prioritizedSet = new Set(prioritized);
+  const front = prioritized.filter((profileId) => order.includes(profileId));
+  const rest = order.filter((profileId) => !prioritizedSet.has(profileId));
+  return [...front, ...rest];
 }
 
 function orderProfilesByMode(order: string[], store: AuthProfileStore): string[] {

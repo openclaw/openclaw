@@ -32,6 +32,12 @@ export type ProviderExternalOAuthProfile = {
   profileId: string;
   credential: AuthProfileCredential;
   persistence?: "runtime-only" | "persisted";
+  /**
+   * Optional auth-selection priority for runtime overlays.
+   * Use `highest` for temporary live overrides that should run before
+   * configured/stored credentials without replacing them on disk.
+   */
+  selectionPriority?: "default" | "highest";
 };
 
 export type ProviderExternalAuthProfile = ProviderExternalOAuthProfile;

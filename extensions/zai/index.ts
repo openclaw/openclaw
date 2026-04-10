@@ -33,6 +33,7 @@ const PROVIDER_ID = "zai";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
 const PROFILE_ID = "zai:default";
 const ENV_ROTATION_PROFILE_ID_PREFIX = "zai:runtime-env";
+const LIVE_OVERRIDE_PROFILE_ID = "zai:runtime-live-override";
 const KEY_SPLIT_RE = /[\s,;]+/g;
 const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
   family: "openai-compatible",
@@ -79,7 +80,10 @@ function collectPrefixedApiKeys(env: NodeJS.ProcessEnv, prefix: string): string[
 
 function listStoredZaiApiKeyProfileIds(store: AuthProfileStore): string[] {
   return listProfilesForProvider(store, PROVIDER_ID).filter((profileId) => {
-    if (profileId.startsWith(`${ENV_ROTATION_PROFILE_ID_PREFIX}-`)) {
+    if (
+      profileId === LIVE_OVERRIDE_PROFILE_ID ||
+      profileId.startsWith(`${ENV_ROTATION_PROFILE_ID_PREFIX}-`)
+    ) {
       return false;
     }
     return store.profiles[profileId]?.type === "api_key";
@@ -128,17 +132,14 @@ function collectZaiRotationApiKeys(params: {
   return apiKeys;
 }
 
-function resolveZaiLiveOverrideProfileId(store: AuthProfileStore): string {
-  return listStoredZaiApiKeyProfileIds(store)[0] ?? PROFILE_ID;
-}
-
 function resolveZaiEnvRotationProfiles(ctx: { env: NodeJS.ProcessEnv; store: AuthProfileStore }) {
   const liveOverride = normalizeOptionalSecretInput(ctx.env.OPENCLAW_LIVE_ZAI_KEY);
   if (liveOverride) {
     return [
       {
-        profileId: resolveZaiLiveOverrideProfileId(ctx.store),
+        profileId: LIVE_OVERRIDE_PROFILE_ID,
         persistence: "runtime-only" as const,
+        selectionPriority: "highest" as const,
         credential: {
           type: "api_key" as const,
           provider: PROVIDER_ID,

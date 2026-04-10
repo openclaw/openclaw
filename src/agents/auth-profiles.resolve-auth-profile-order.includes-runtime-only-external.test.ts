@@ -2,13 +2,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAuthProfileOrder } from "./auth-profiles.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 
-const listRuntimeOnlyExternalAuthProfileIdsMock = vi.hoisted(() =>
-  vi.fn<(params: unknown) => string[]>(() => []),
+const listRuntimeOnlyExternalAuthProfilesMock = vi.hoisted(() =>
+  vi.fn<
+    (params: unknown) => Array<{ profileId: string; selectionPriority: "default" | "highest" }>
+  >(() => []),
 );
 
 vi.mock("./auth-profiles/external-auth.js", () => ({
-  listRuntimeOnlyExternalAuthProfileIds: (params: unknown) =>
-    listRuntimeOnlyExternalAuthProfileIdsMock(params),
+  listRuntimeOnlyExternalAuthProfiles: (params: unknown) =>
+    listRuntimeOnlyExternalAuthProfilesMock(params),
 }));
 
 function createStore(profiles: AuthProfileStore["profiles"]): AuthProfileStore {
@@ -20,11 +22,13 @@ function createStore(profiles: AuthProfileStore["profiles"]): AuthProfileStore {
 
 describe("resolveAuthProfileOrder runtime-only external profiles", () => {
   beforeEach(() => {
-    listRuntimeOnlyExternalAuthProfileIdsMock.mockReset();
+    listRuntimeOnlyExternalAuthProfilesMock.mockReset();
   });
 
   it("appends runtime-only external profiles after configured profile ids", () => {
-    listRuntimeOnlyExternalAuthProfileIdsMock.mockReturnValueOnce(["zai:runtime-env-1"]);
+    listRuntimeOnlyExternalAuthProfilesMock.mockReturnValueOnce([
+      { profileId: "zai:runtime-env-1", selectionPriority: "default" },
+    ]);
 
     const order = resolveAuthProfileOrder({
       cfg: {
@@ -56,7 +60,9 @@ describe("resolveAuthProfileOrder runtime-only external profiles", () => {
   });
 
   it("appends runtime-only external profiles after explicit order entries", () => {
-    listRuntimeOnlyExternalAuthProfileIdsMock.mockReturnValueOnce(["zai:runtime-env-1"]);
+    listRuntimeOnlyExternalAuthProfilesMock.mockReturnValueOnce([
+      { profileId: "zai:runtime-env-1", selectionPriority: "default" },
+    ]);
 
     const order = resolveAuthProfileOrder({
       cfg: {
@@ -97,5 +103,63 @@ describe("resolveAuthProfileOrder runtime-only external profiles", () => {
     });
 
     expect(order).toEqual(["zai:work", "zai:default", "zai:runtime-env-1"]);
+  });
+
+  it("prioritizes highest-priority runtime-only external profiles ahead of configured ids", () => {
+    listRuntimeOnlyExternalAuthProfilesMock.mockReturnValueOnce([
+      { profileId: "zai:runtime-live-override", selectionPriority: "highest" },
+    ]);
+
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          profiles: {
+            "zai:default": {
+              provider: "zai",
+              mode: "api_key",
+            },
+          },
+        },
+      },
+      store: createStore({
+        "zai:default": {
+          type: "api_key",
+          provider: "zai",
+          key: "sk-zai-default",
+        },
+        "zai:runtime-live-override": {
+          type: "api_key",
+          provider: "zai",
+          key: "sk-zai-live",
+        },
+      }),
+      provider: "zai",
+    });
+
+    expect(order).toEqual(["zai:runtime-live-override", "zai:default"]);
+  });
+
+  it("prioritizes highest-priority runtime-only external profiles without explicit config", () => {
+    listRuntimeOnlyExternalAuthProfilesMock.mockReturnValueOnce([
+      { profileId: "zai:runtime-live-override", selectionPriority: "highest" },
+    ]);
+
+    const order = resolveAuthProfileOrder({
+      store: createStore({
+        "zai:default": {
+          type: "api_key",
+          provider: "zai",
+          key: "sk-zai-default",
+        },
+        "zai:runtime-live-override": {
+          type: "api_key",
+          provider: "zai",
+          key: "sk-zai-live",
+        },
+      }),
+      provider: "zai",
+    });
+
+    expect(order).toEqual(["zai:runtime-live-override", "zai:default"]);
   });
 });

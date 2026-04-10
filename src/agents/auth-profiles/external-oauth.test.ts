@@ -230,7 +230,6 @@ describe("auth external oauth helpers", () => {
       profileId: "zai:runtime-live-override",
       credential: runtimeCredential,
     });
-
     expect(shouldPersistPersisted).toBe(true);
     expect(shouldPersistRuntime).toBe(false);
   });

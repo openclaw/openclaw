@@ -309,8 +309,9 @@ describe("zai provider plugin", () => {
 
     expect(profiles).toEqual([
       {
-        profileId: "zai:default",
+        profileId: "zai:runtime-live-override",
         persistence: "runtime-only",
+        selectionPriority: "highest",
         credential: {
           type: "api_key",
           provider: "zai",
