@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# git-hooks/pre-push
+# Deepnoa fork safety guard — blocks dangerous push patterns.
+# Placed in git-hooks/ (core.hooksPath = git-hooks) so all agents inherit it automatically.
+# Do NOT bypass with --no-verify without explicit human approval.
+#
+# Authored by: Sense Claude (claude/sense-prepush-hook)
+# Rules source: DEEPNOA_RULES.md, SENSE_WORKER_RULES.md, AGENTS.md
+
+set -euo pipefail
+
+remote="$1"
+# url="$2"  # available if needed
+
+PROTECTED_EXACT=("main")
+WARN_PREFIX=("merge/")
+
+error() { printf '\n[pre-push ERROR] %s\n\n' "$*" >&2; exit 1; }
+warn()  { printf '\n[pre-push WARN]  %s\n' "$*" >&2; }
+
+while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
+
+  # Branch deletion pushes — always allow
+  if [[ "$local_sha" == "0000000000000000000000000000000000000000" ]]; then
+    continue
+  fi
+
+  # Strip refs/heads/ prefix to get plain branch name
+  branch="${remote_ref#refs/heads/}"
+
+  # ── 1. Block direct push to main ─────────────────────────────────
+  for protected in "${PROTECTED_EXACT[@]}"; do
+    if [[ "$branch" == "$protected" ]]; then
+      error "Direct push to '${branch}' is prohibited.
+       Use: git checkout -b codex/<feature> or claude/sense-<feature>
+       Then: git push -u origin <branch>
+       Then: open a PR and merge via GitHub."
+    fi
+  done
+
+  # ── 2. Detect force-push (non-fast-forward onto existing ref) ────
+  if [[ "$remote_sha" != "0000000000000000000000000000000000000000" ]]; then
+    if ! git merge-base --is-ancestor "$remote_sha" "$local_sha" 2>/dev/null; then
+      error "Force-push detected to '${branch}' on remote '${remote}'.
+       Rewriting shared history is prohibited (DEEPNOA_RULES.md).
+       If intentional, get explicit human approval before bypassing."
+    fi
+  fi
+
+  # ── 3. Block push to upstream remote ─────────────────────────────
+  if [[ "$remote" == "upstream" ]]; then
+    error "Pushing to 'upstream' remote is prohibited.
+       upstream = https://github.com/openclaw/openclaw.git (read-only for Deepnoa fork)."
+  fi
+
+  # ── 4. Warn on merge/* branches (worktree coordination) ──────────
+  for prefix in "${WARN_PREFIX[@]}"; do
+    if [[ "$branch" == ${prefix}* ]]; then
+      warn "Pushing to '${branch}' — this is a worktree/merge coordination branch.
+       Confirm this push is intentional and not from an accidental worktree context."
+    fi
+  done
+
+done
+
+exit 0
