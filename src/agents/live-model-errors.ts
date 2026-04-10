@@ -1,7 +1,3 @@
-/**
- * Shared model-not-found heuristics used by live probes and runtime failover.
- * Keep this helper dependency-light so both paths can import it directly.
- */
 export function isModelNotFoundErrorMessage(raw: string): boolean {
   const msg = raw.trim();
   if (!msg) {
