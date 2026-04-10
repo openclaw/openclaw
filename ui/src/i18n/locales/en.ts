@@ -277,6 +277,7 @@ export const en: TranslationMap = {
     tabs: {
       scene: "Scene",
       diary: "Diary",
+      advanced: "Advanced",
     },
     header: {
       refresh: "Refresh",
@@ -301,6 +302,21 @@ export const en: TranslationMap = {
       deep: "Deep",
       rem: "Rem",
       off: "off",
+    },
+    advanced: {
+      eyebrow: "Operator Review",
+      title: "Grounded Replay + Promotion",
+      description:
+        "Inspect grounded replay output and use maintenance actions without cluttering the main Dreaming scene.",
+      stagedTitle: "Grounded Replay",
+      shortTermTitle: "Short-term Queue",
+      signalsTitle: "Signal Hotspots",
+      promotedTitle: "Recent Promotions",
+      emptyGrounded: "No staged grounded replay entries right now.",
+      emptyShortTerm: "No short-term entries to inspect.",
+      emptySignals: "No signal-rich entries to inspect.",
+      emptyPromoted: "No recent promotions to inspect.",
+      updatedPrefix: "updated",
     },
     stats: {
       shortTerm: "Short-term",

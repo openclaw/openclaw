@@ -415,13 +415,6 @@
   color: var(--ok-muted);
 }
 
-.dreams__actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 14px;
-}
-
 .dreams__status-dot {
   width: 6px;
   height: 6px;
@@ -455,6 +448,181 @@
 
 .dreams--idle .dreams__status-detail {
   color: var(--muted);
+}
+
+/* ===========================================
+   Dreaming Advanced – Operator Review
+   =========================================== */
+
+.dreams-advanced {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 24px 32px 40px;
+  flex: 1;
+  min-height: 320px;
+  min-width: 0;
+  overflow: auto;
+}
+
+.dreams-advanced__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.dreams-advanced__intro {
+  max-width: 720px;
+}
+
+.dreams-advanced__eyebrow {
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent-muted);
+  margin-bottom: 10px;
+}
+
+.dreams-advanced__title {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.1;
+  color: var(--text);
+}
+
+.dreams-advanced__description {
+  margin: 10px 0 0;
+  max-width: 60ch;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.dreams-advanced__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.dreams-advanced__summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.dreams-advanced__summary-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+  background: color-mix(in oklab, var(--panel) 88%, transparent);
+}
+
+.dreams-advanced__summary-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.dreams-advanced__summary-value {
+  font-size: 24px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.dreams-advanced__sections {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.dreams-advanced__section {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-radius: 16px;
+  border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+  background: color-mix(in oklab, var(--panel) 86%, transparent);
+  overflow: hidden;
+}
+
+.dreams-advanced__section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 62%, transparent);
+}
+
+.dreams-advanced__section-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.dreams-advanced__section-count {
+  min-width: 26px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in oklab, var(--accent-subtle) 85%, transparent);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.dreams-advanced__list {
+  display: flex;
+  flex-direction: column;
+}
+
+.dreams-advanced__item {
+  padding: 14px 16px;
+  border-top: 1px solid color-mix(in oklab, var(--border) 50%, transparent);
+}
+
+.dreams-advanced__item:first-child {
+  border-top: none;
+}
+
+.dreams-advanced__snippet {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.dreams-advanced__source,
+.dreams-advanced__meta,
+.dreams-advanced__empty {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--muted);
+  margin-top: 8px;
+}
+
+.dreams-advanced__source {
+  font-family: var(--mono);
+}
+
+.dreams-advanced__empty {
+  padding: 16px;
 }
 
 /* ===========================================
@@ -665,6 +833,15 @@
 @media (max-width: 880px) {
   .dreams {
     min-height: calc(100vh - 96px);
+  }
+
+  .dreams-advanced {
+    padding: 20px 16px 32px;
+  }
+
+  .dreams-advanced__summary,
+  .dreams-advanced__sections {
+    grid-template-columns: 1fr;
   }
 
   .dreams__phases {

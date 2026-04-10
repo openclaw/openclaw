@@ -7,12 +7,64 @@ import { renderDreaming, setDreamSubTab, type DreamingProps } from "./dreaming.t
 function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
   return {
     active: true,
+    shortTermCount: 47,
+    groundedSignalCount: 9,
+    totalSignalCount: 182,
     promotedCount: 12,
     phases: {
       light: { enabled: true, cron: "0 * * * *", nextRunAtMs: Date.parse("2026-04-05T11:30:00Z") },
       deep: { enabled: true, cron: "30 * * * *", nextRunAtMs: Date.parse("2026-04-05T12:00:00Z") },
       rem: { enabled: false, cron: "0 4 * * *" },
     },
+    shortTermEntries: [
+      {
+        key: "memory:memory/2026-04-05.md:1:2",
+        path: "memory/2026-04-05.md",
+        startLine: 1,
+        endLine: 2,
+        snippet: "Emma prefers shorter, lower-pressure check-ins.",
+        recallCount: 2,
+        dailyCount: 1,
+        groundedCount: 1,
+        totalSignalCount: 3,
+        lightHits: 1,
+        remHits: 1,
+        phaseHitCount: 2,
+      },
+    ],
+    signalEntries: [
+      {
+        key: "memory:memory/2026-04-05.md:1:2",
+        path: "memory/2026-04-05.md",
+        startLine: 1,
+        endLine: 2,
+        snippet: "Emma prefers shorter, lower-pressure check-ins.",
+        recallCount: 2,
+        dailyCount: 1,
+        groundedCount: 1,
+        totalSignalCount: 3,
+        lightHits: 1,
+        remHits: 1,
+        phaseHitCount: 2,
+      },
+    ],
+    promotedEntries: [
+      {
+        key: "memory:memory/2026-04-04.md:4:5",
+        path: "memory/2026-04-04.md",
+        startLine: 4,
+        endLine: 5,
+        snippet: "Use the Happy Together calendar for flights.",
+        recallCount: 3,
+        dailyCount: 2,
+        groundedCount: 4,
+        totalSignalCount: 9,
+        lightHits: 0,
+        remHits: 0,
+        phaseHitCount: 0,
+        promotedAt: "2026-04-05T04:00:00.000Z",
+      },
+    ],
     dreamingOf: null,
     nextCycle: "4:00 AM",
     timezone: "America/Los_Angeles",
@@ -29,6 +81,7 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
     onRefreshDiary: () => {},
     onBackfillDiary: () => {},
     onResetDiary: () => {},
+    onResetGroundedShortTerm: () => {},
     ...overrides,
   };
 }
@@ -73,13 +126,14 @@ describe("dreaming view", () => {
     expect(container.querySelector(".dreams__phase--off")?.textContent).toContain("off");
   });
 
-  it("renders scene backfill and reset controls", () => {
+  it("keeps maintenance controls out of the scene tab", () => {
     const container = renderInto(buildProps());
     const buttons = [...container.querySelectorAll("button")].map((node) =>
       node.textContent?.trim(),
     );
-    expect(buttons).toContain("Backfill");
-    expect(buttons).toContain("Reset");
+    expect(buttons).not.toContain("Backfill");
+    expect(buttons).not.toContain("Reset");
+    expect(buttons).not.toContain("Clear Grounded");
   });
 
   it("shows dream bubble when active", () => {
@@ -131,9 +185,10 @@ describe("dreaming view", () => {
   it("renders sub-tab navigation", () => {
     const container = renderInto(buildProps());
     const tabs = container.querySelectorAll(".dreams__tab");
-    expect(tabs.length).toBe(2);
+    expect(tabs.length).toBe(3);
     expect(tabs[0]?.textContent).toContain("Scene");
     expect(tabs[1]?.textContent).toContain("Diary");
+    expect(tabs[2]?.textContent).toContain("Advanced");
   });
 
   it("renders dream diary with parsed entry on diary tab", () => {
@@ -255,6 +310,25 @@ describe("dreaming view", () => {
     const container = renderInto(buildProps());
     expect(container.querySelector(".dreams-diary__page")).toBeNull();
     expect(container.querySelector(".dreams-diary__nav-btn")).toBeNull();
+    setDreamSubTab("scene");
+  });
+
+  it("renders operator actions and evidence lists on the advanced tab", () => {
+    setDreamSubTab("advanced");
+    const container = renderInto(buildProps());
+    expect(container.querySelector(".dreams-advanced__title")?.textContent).toContain(
+      "Grounded Replay",
+    );
+    const buttons = [...container.querySelectorAll("button")].map((node) =>
+      node.textContent?.trim(),
+    );
+    expect(buttons).toContain("Backfill");
+    expect(buttons).toContain("Reset");
+    expect(buttons).toContain("Clear Grounded");
+    expect(container.querySelector(".dreams-advanced__summary-value")?.textContent).toBe("47");
+    expect(container.querySelector(".dreams-advanced__item")?.textContent).toContain(
+      "Emma prefers shorter",
+    );
     setDreamSubTab("scene");
   });
 
