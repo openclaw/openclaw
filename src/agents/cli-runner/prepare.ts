@@ -15,7 +15,11 @@ import {
 } from "../bootstrap-files.js";
 import { resolveCliAuthEpoch } from "../cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
-import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
+import {
+  hashCliSessionText,
+  normalizeExtraSystemPromptForHash,
+  resolveCliSessionReuse,
+} from "../cli-session.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import {
   resolveBootstrapMaxChars,
@@ -75,7 +79,13 @@ export async function prepareCliRunContext(
     authProfileId: params.authProfileId,
   });
   const extraSystemPrompt = params.extraSystemPrompt?.trim() ?? "";
-  const extraSystemPromptHash = hashCliSessionText(extraSystemPrompt);
+  // Hash a normalized form so transport-volatile sections (the inbound-meta
+  // block in particular) do not invalidate the cached CLI session on every
+  // cross-channel turn. The unnormalized prompt is still sent to the CLI
+  // subprocess below.
+  const extraSystemPromptHash = hashCliSessionText(
+    normalizeExtraSystemPromptForHash(extraSystemPrompt),
+  );
   const modelId = (params.model ?? "default").trim() || "default";
   const normalizedModel = normalizeCliModel(modelId, backendResolved.config);
   const modelDisplay = `${params.provider}/${modelId}`;

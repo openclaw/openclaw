@@ -13,6 +13,39 @@ export function hashCliSessionText(value: string | undefined): string | undefine
   return crypto.createHash("sha256").update(trimmed).digest("hex");
 }
 
+// Matches the full "## Inbound Context (trusted metadata)" block that
+// `buildInboundMetaSystemPrompt` (src/auto-reply/reply/inbound-meta.ts) emits,
+// including the fenced JSON payload. The channel/provider/surface/chat_id
+// fields inside that JSON legitimately differ per transport (e.g. the same
+// session receiving an inbound via telegram vs. via the control UI's
+// chat.send), which would otherwise drift the `extraSystemPromptHash` and
+// force a full CLI session reset on every cross-channel turn. The block is
+// always regenerated fresh with the current turn's values, so ignoring it
+// for reuse-hash purposes does not hide any stale context from the CLI
+// subprocess.
+const INBOUND_META_BLOCK_RE =
+  /## Inbound Context \(trusted metadata\)[\s\S]*?```json[\s\S]*?```\n?/g;
+
+/**
+ * Normalize an `extraSystemPrompt` string before feeding it to
+ * `hashCliSessionText` for CLI session-reuse gating. Strips transport-volatile
+ * sections that should not invalidate the cached CLI session binding. The
+ * original string is still passed to the CLI subprocess unchanged; only the
+ * hash input is normalized.
+ */
+export function normalizeExtraSystemPromptForHash(value: string | undefined): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value.length === 0) {
+    return value;
+  }
+  return value
+    .replace(INBOUND_META_BLOCK_RE, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 export function getCliSessionBinding(
   entry: SessionEntry | undefined,
   provider: string,
