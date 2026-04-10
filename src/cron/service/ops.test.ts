@@ -443,7 +443,7 @@ describe("cron service ops seam coverage", () => {
     // Use a task run spy to remove the job in the gap between prepare and execute
     const createTaskSpy = vi
       .spyOn(taskExecutor, "createRunningTaskRun")
-      .mockImplementation((...args) => {
+      .mockImplementation(() => {
         // At this point, prepareManualRun has completed and we're about
         // to enter finishPreparedManualRun. Simulate an external writer that
         // removes the job directly from the persisted store.
