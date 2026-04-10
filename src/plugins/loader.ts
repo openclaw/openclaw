@@ -1097,7 +1097,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     env,
     cfg,
     normalized,
-    activationSourceConfig: _activationSourceConfig,
+    // oxlint-disable-next-line no-unused-vars -- referenced by build-injected diagnostic log
+    activationSourceConfig,
     activationSource,
     autoEnabledReasons,
     onlyPluginIds,
