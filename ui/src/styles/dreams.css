@@ -695,13 +695,12 @@
   min-width: 0;
   padding-bottom: 14px;
   margin-bottom: 10px;
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in oklab, var(--bg) 98%, transparent) 0%,
-      color-mix(in oklab, var(--bg) 94%, transparent) 72%,
-      color-mix(in oklab, var(--bg) 0%, transparent) 100%
-    );
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--bg) 98%, transparent) 0%,
+    color-mix(in oklab, var(--bg) 94%, transparent) 72%,
+    color-mix(in oklab, var(--bg) 0%, transparent) 100%
+  );
 }
 
 .dreams-diary__header {
@@ -815,7 +814,10 @@
   cursor: pointer;
   text-align: center;
   white-space: nowrap;
-  transition: border-color 140ms ease, color 140ms ease, background 140ms ease;
+  transition:
+    border-color 140ms ease,
+    color 140ms ease,
+    background 140ms ease;
 }
 
 .dreams-diary__day-chip:hover {
