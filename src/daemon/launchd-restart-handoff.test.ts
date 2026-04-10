@@ -67,15 +67,15 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
   });
 
   it("rejects invalid launchd labels before spawning the helper", () => {
-    expect(() =>
+    expect(() => {
       scheduleDetachedLaunchdRestartHandoff({
         env: {
           HOME: "/Users/test",
-          OPENCLAW_LAUNCHD_LABEL: "../evil/label",
+          OPENCLAW_LAUNCHD_LABEL: "../evil/\n\u001b[31mlabel\u001b[0m",
         },
         mode: "kickstart",
-      }),
-    ).toThrow("Invalid launchd label");
+      });
+    }).toThrow("Invalid launchd label: ../evil/label");
     expect(spawnMock).not.toHaveBeenCalled();
   });
 });
