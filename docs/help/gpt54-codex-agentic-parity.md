@@ -129,7 +129,7 @@ flowchart LR
 
 ## Scenario pack
 
-The first-wave parity pack currently covers four scenarios:
+The first-wave parity pack currently covers five scenarios:
 
 ### `approval-turn-tool-followthrough`
 
@@ -147,14 +147,19 @@ Checks that the model can read source and docs, synthesize findings, and continu
 
 Checks that mixed-mode tasks involving attachments remain actionable and do not collapse into vague narration.
 
+### `compaction-retry-mutating-tool`
+
+Checks that a task with a real mutating write keeps replay-unsafety explicit instead of quietly looking replay-safe if the run compacts, retries, or loses reply state under pressure.
+
 ## Scenario matrix
 
-| Scenario                           | What it tests                          | Good GPT-5.4 behavior                                                         | Failure signal                                                                |
-| ---------------------------------- | -------------------------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `approval-turn-tool-followthrough` | Short approval turns after a plan      | Starts the first concrete tool action immediately instead of restating intent | plan-only follow-up, no tool activity, or blocked turn without a real blocker |
-| `model-switch-tool-continuity`     | Runtime/model switching under tool use | Preserves task context and continues acting coherently                        | resets into commentary, loses tool context, or stops after switch             |
-| `source-docs-discovery-report`     | Source reading + synthesis + action    | Finds sources, uses tools, and produces a useful report without stalling      | thin summary, missing tool work, or incomplete-turn stop                      |
-| `image-understanding-attachment`   | Attachment-driven agentic work         | Interprets the attachment, connects it to tools, and continues the task       | vague narration, attachment ignored, or no concrete next action               |
+| Scenario                           | What it tests                           | Good GPT-5.4 behavior                                                          | Failure signal                                                                 |
+| ---------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| `approval-turn-tool-followthrough` | Short approval turns after a plan       | Starts the first concrete tool action immediately instead of restating intent  | plan-only follow-up, no tool activity, or blocked turn without a real blocker  |
+| `model-switch-tool-continuity`     | Runtime/model switching under tool use  | Preserves task context and continues acting coherently                         | resets into commentary, loses tool context, or stops after switch              |
+| `source-docs-discovery-report`     | Source reading + synthesis + action     | Finds sources, uses tools, and produces a useful report without stalling       | thin summary, missing tool work, or incomplete-turn stop                       |
+| `image-understanding-attachment`   | Attachment-driven agentic work          | Interprets the attachment, connects it to tools, and continues the task        | vague narration, attachment ignored, or no concrete next action                |
+| `compaction-retry-mutating-tool`   | Mutating work under compaction pressure | Performs a real write and keeps replay-unsafety explicit after the side effect | mutating write happens but replay safety is implied, missing, or contradictory |
 
 ## Release gate
 
@@ -179,6 +184,16 @@ Parity evidence is intentionally split across two layers:
 
 - PR D proves same-scenario GPT-5.4 vs Opus 4.6 behavior with QA-lab
 - PR B deterministic suites prove auth, proxy, DNS, and `/elevated full` truthfulness outside the harness
+
+## Goal-to-evidence matrix
+
+| Completion gate item                                     | Owning PR   | Evidence source                                                    | Pass signal                                                                              |
+| -------------------------------------------------------- | ----------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| GPT-5.4 no longer stalls after planning                  | PR A        | `approval-turn-tool-followthrough` plus PR A runtime suites        | approval turns trigger real work or an explicit blocked state                            |
+| GPT-5.4 no longer fakes progress or fake tool completion | PR A + PR D | parity report scenario outcomes and fake-success count             | no suspicious pass results and no commentary-only completion                             |
+| GPT-5.4 no longer gives false `/elevated full` guidance  | PR B        | deterministic truthfulness suites                                  | blocked reasons and full-access hints stay runtime-accurate                              |
+| Replay/liveness failures stay explicit                   | PR C + PR D | PR C lifecycle/replay suites plus `compaction-retry-mutating-tool` | mutating work keeps replay-unsafety explicit instead of silently disappearing            |
+| GPT-5.4 matches or beats Opus 4.6 on the agreed metrics  | PR D        | `qa-agentic-parity-report.md` and `qa-agentic-parity-summary.json` | same scenario coverage and no regression on completion, stop behavior, or valid tool use |
 
 ## How to read the parity verdict
 
