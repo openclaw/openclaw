@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 import type { BrowserRequest } from "./types.js";
 
@@ -74,13 +74,15 @@ const DEFAULT_SSRF_POLICY = { allowPrivateNetwork: false } as const;
 
 const { registerBrowserAgentActRoutes } = await import("./agent.act.js");
 
-function getActPostHandler(ssrfPolicy?: { allowPrivateNetwork: false }) {
+function getActPostHandler(
+  ssrfPolicy: { allowPrivateNetwork: false } | null = DEFAULT_SSRF_POLICY,
+) {
   const { app, postHandlers } = createBrowserRouteApp();
   registerBrowserAgentActRoutes(app, {
     state: () => ({
       resolved: {
         evaluateEnabled: true,
-        ssrfPolicy: ssrfPolicy ?? DEFAULT_SSRF_POLICY,
+        ssrfPolicy: ssrfPolicy ?? undefined,
       },
     }),
   } as never);
@@ -91,6 +93,7 @@ function getActPostHandler(ssrfPolicy?: { allowPrivateNetwork: false }) {
 
 describe("existing-session interaction navigation guard", () => {
   beforeEach(() => {
+    vi.useFakeTimers();
     for (const fn of Object.values(chromeMcpMocks)) {
       fn.mockClear();
     }
@@ -100,24 +103,30 @@ describe("existing-session interaction navigation guard", () => {
     chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValue("https://example.com");
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function runAction(
+    body: Record<string, unknown>,
+    ssrfPolicy: { allowPrivateNetwork: false } | null = DEFAULT_SSRF_POLICY,
+  ) {
+    const handler = getActPostHandler(ssrfPolicy);
+    const response = createBrowserRouteResponse();
+    const pending = handler?.({ params: {}, query: {}, body }, response.res);
+    await vi.runAllTimersAsync();
+    await pending;
+    return response;
+  }
+
   it("checks navigation after click and key-driven submit paths", async () => {
-    const handler = getActPostHandler();
-
-    const clickResponse = createBrowserRouteResponse();
-    await handler?.(
-      { params: {}, query: {}, body: { kind: "click", ref: "btn-1" } },
-      clickResponse.res,
-    );
-
-    const typeResponse = createBrowserRouteResponse();
-    await handler?.(
-      {
-        params: {},
-        query: {},
-        body: { kind: "type", ref: "field-1", text: "hello", submit: true },
-      },
-      typeResponse.res,
-    );
+    const clickResponse = await runAction({ kind: "click", ref: "btn-1" });
+    const typeResponse = await runAction({
+      kind: "type",
+      ref: "field-1",
+      text: "hello",
+      submit: true,
+    });
 
     expect(clickResponse.statusCode).toBe(200);
     expect(typeResponse.statusCode).toBe(200);
@@ -145,22 +154,13 @@ describe("existing-session interaction navigation guard", () => {
   });
 
   it("rechecks the page url after delayed navigation-triggering interactions", async () => {
-    const handler = getActPostHandler();
     chromeMcpMocks.evaluateChromeMcpScript
       .mockResolvedValueOnce(42 as never)
       .mockResolvedValueOnce("https://example.com" as never)
       .mockResolvedValueOnce("http://169.254.169.254/latest/meta-data/" as never)
       .mockResolvedValueOnce("http://169.254.169.254/latest/meta-data/" as never);
 
-    const response = createBrowserRouteResponse();
-    await handler?.(
-      {
-        params: {},
-        query: {},
-        body: { kind: "evaluate", fn: "() => document.title" },
-      },
-      response.res,
-    );
+    const response = await runAction({ kind: "evaluate", fn: "() => document.title" });
 
     expect(response.statusCode).toBe(200);
     expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledTimes(4);
@@ -179,23 +179,32 @@ describe("existing-session interaction navigation guard", () => {
   });
 
   it("skips the guard when no SSRF policy is configured", async () => {
-    const { app, postHandlers } = createBrowserRouteApp();
-    registerBrowserAgentActRoutes(app, {
-      state: () => ({
-        resolved: {
-          evaluateEnabled: true,
-          ssrfPolicy: undefined,
-        },
-      }),
-    } as never);
-    const handler = postHandlers.get("/act");
-    const response = createBrowserRouteResponse();
-
-    await handler?.({ params: {}, query: {}, body: { kind: "press", key: "Enter" } }, response.res);
+    const response = await runAction({ kind: "press", key: "Enter" }, null);
 
     expect(response.statusCode).toBe(200);
     expect(chromeMcpMocks.pressChromeMcpKey).toHaveBeenCalledOnce();
     expect(chromeMcpMocks.evaluateChromeMcpScript).not.toHaveBeenCalled();
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
+  });
+
+  it("still probes navigation when the interaction command throws", async () => {
+    chromeMcpMocks.clickChromeMcpElement.mockImplementationOnce(() => {
+      throw new Error("stale element");
+    });
+
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    const pending =
+      handler?.({ params: {}, query: {}, body: { kind: "click", ref: "btn-1" } }, response.res) ??
+      Promise.resolve();
+    void pending.catch(() => {});
+    const completion = (async () => {
+      await vi.runAllTimersAsync();
+      await pending;
+    })();
+
+    await expect(completion).rejects.toThrow("stale element");
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalled();
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalled();
   });
 });
