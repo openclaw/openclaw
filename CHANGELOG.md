@@ -146,6 +146,7 @@ Docs: https://docs.openclaw.ai
 - Plugin SDK/command auth: split command status builders onto the lightweight `openclaw/plugin-sdk/command-status` subpath while preserving deprecated `command-auth` compatibility exports, so auth-only plugin imports no longer pull status/context warmup into CLI onboarding paths. (#63174) Thanks @hxy91819.
 - Wizard/plugin config: coerce integer-typed plugin config fields from interactive text input so integer schema values persist as numbers instead of failing validation. (#63346) Thanks @jalehman.
 - Dreaming/narrative: harden request-scoped diary fallback so scheduled dreaming only falls back on the dedicated subagent-runtime error, stop trusting spoofable raw error-code objects, and avoid leaking workspace paths when local fallback writes fail. (#64156) Thanks @mbelinky.
+- Reply/skills: keep resolved skill and memory secret config stable through embedded reply runs so raw SecretRefs in secondary skill settings no longer crash replies when the gateway already has the live env. (#64249) Thanks @mbelinky.
 
 ## 2026.4.8
 
