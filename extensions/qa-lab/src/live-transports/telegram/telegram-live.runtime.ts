@@ -3,12 +3,19 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { startQaGatewayChild } from "./gateway-child.js";
+import { startQaGatewayChild } from "../../gateway-child.js";
 import {
   defaultQaModelForMode,
   normalizeQaProviderMode,
   type QaProviderModeInput,
-} from "./run-config.js";
+} from "../../run-config.js";
+import { startQaLiveLaneGateway } from "../shared/live-gateway.runtime.js";
+import { appendLiveLaneIssue, buildLiveLaneArtifactsError } from "../shared/live-lane-helpers.js";
+import {
+  collectLiveTransportStandardScenarioCoverage,
+  selectLiveTransportScenarios,
+  type LiveTransportScenarioDefinition,
+} from "../shared/live-transport-scenarios.js";
 
 type TelegramQaRuntimeEnv = {
   groupId: string;
@@ -23,10 +30,7 @@ type TelegramBotIdentity = {
   username?: string;
 };
 
-type TelegramQaScenarioDefinition = {
-  id: "telegram-help-command";
-  title: string;
-  timeoutMs: number;
+type TelegramQaScenarioDefinition = LiveTransportScenarioDefinition<"telegram-help-command"> & {
   buildInput: (sutUsername: string) => string;
 };
 
@@ -71,6 +75,7 @@ type TelegramQaSummary = {
   groupId: string;
   startedAt: string;
   finishedAt: string;
+  cleanupIssues: string[];
   counts: {
     total: number;
     passed: number;
@@ -154,11 +159,17 @@ type TelegramSendMessageResult = {
 const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
   {
     id: "telegram-help-command",
+    standardId: "help-command",
     title: "Telegram help command reply",
     timeoutMs: 45_000,
     buildInput: (sutUsername) => `/help@${sutUsername}`,
   },
 ];
+
+export const TELEGRAM_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
+  alwaysOnStandardScenarioIds: ["canary"],
+  scenarios: TELEGRAM_QA_SCENARIOS,
+});
 
 const TELEGRAM_QA_ENV_KEYS = [
   "OPENCLAW_QA_TELEGRAM_GROUP_ID",
@@ -427,6 +438,7 @@ async function waitForTelegramChannelRunning(
 }
 
 function renderTelegramQaMarkdown(params: {
+  cleanupIssues: string[];
   groupId: string;
   startedAt: string;
   finishedAt: string;
@@ -447,6 +459,14 @@ function renderTelegramQaMarkdown(params: {
     lines.push("");
     lines.push(`- Status: ${scenario.status}`);
     lines.push(`- Details: ${scenario.details}`);
+    lines.push("");
+  }
+  if (params.cleanupIssues.length > 0) {
+    lines.push("## Cleanup");
+    lines.push("");
+    for (const issue of params.cleanupIssues) {
+      lines.push(`- ${issue}`);
+    }
     lines.push("");
   }
   return lines.join("\n");
@@ -475,18 +495,11 @@ function buildObservedMessagesArtifact(params: {
 }
 
 function findScenario(ids?: string[]) {
-  if (!ids || ids.length === 0) {
-    return [...TELEGRAM_QA_SCENARIOS];
-  }
-  const requested = new Set(ids);
-  const selected = TELEGRAM_QA_SCENARIOS.filter((scenario) => ids.includes(scenario.id));
-  const missingIds = [...requested].filter(
-    (id) => !selected.some((scenario) => scenario.id === id),
-  );
-  if (missingIds.length > 0) {
-    throw new Error(`unknown Telegram QA scenario id(s): ${missingIds.join(", ")}`);
-  }
-  return selected;
+  return selectLiveTransportScenarios({
+    ids,
+    laneLabel: "Telegram",
+    scenarios: TELEGRAM_QA_SCENARIOS,
+  });
 }
 
 function classifyCanaryReply(params: {
@@ -699,7 +712,7 @@ export async function runTelegramQaLive(params: {
     flushTelegramUpdates(runtimeEnv.sutToken),
   ]);
 
-  const gateway = await startQaGatewayChild({
+  const gatewayHarness = await startQaLiveLaneGateway({
     repoRoot,
     qaBusBaseUrl: "http://127.0.0.1:43123",
     providerMode,
@@ -717,9 +730,10 @@ export async function runTelegramQaLive(params: {
   });
 
   const scenarioResults: TelegramQaScenarioResult[] = [];
+  const cleanupIssues: string[] = [];
   let canaryFailure: string | null = null;
   try {
-    await waitForTelegramChannelRunning(gateway, sutAccountId);
+    await waitForTelegramChannelRunning(gatewayHarness.gateway, sutAccountId);
     try {
       await runCanary({
         driverToken: runtimeEnv.driverToken,
@@ -782,7 +796,11 @@ export async function runTelegramQaLive(params: {
       }
     }
   } finally {
-    await gateway.stop();
+    try {
+      await gatewayHarness.stop();
+    } catch (error) {
+      appendLiveLaneIssue(cleanupIssues, "live gateway cleanup", error);
+    }
   }
 
   const finishedAt = new Date().toISOString();
@@ -790,6 +808,7 @@ export async function runTelegramQaLive(params: {
     groupId: runtimeEnv.groupId,
     startedAt,
     finishedAt,
+    cleanupIssues,
     counts: {
       total: scenarioResults.length,
       passed: scenarioResults.filter((entry) => entry.status === "pass").length,
@@ -803,6 +822,7 @@ export async function runTelegramQaLive(params: {
   await fs.writeFile(
     reportPath,
     `${renderTelegramQaMarkdown({
+      cleanupIssues,
       groupId: runtimeEnv.groupId,
       startedAt,
       finishedAt,
@@ -826,9 +846,26 @@ export async function runTelegramQaLive(params: {
     )}\n`,
     { encoding: "utf8", mode: 0o600 },
   );
+  const artifactPaths = {
+    report: reportPath,
+    summary: summaryPath,
+    observedMessages: observedMessagesPath,
+  };
   if (canaryFailure) {
     throw new Error(
-      `${canaryFailure}\nArtifacts:\n- report: ${reportPath}\n- summary: ${summaryPath}\n- observedMessages: ${observedMessagesPath}`,
+      buildLiveLaneArtifactsError({
+        heading: canaryFailure,
+        artifacts: artifactPaths,
+      }),
+    );
+  }
+  if (cleanupIssues.length > 0) {
+    throw new Error(
+      buildLiveLaneArtifactsError({
+        heading: "Telegram QA cleanup failed after artifacts were written.",
+        details: cleanupIssues,
+        artifacts: artifactPaths,
+      }),
     );
   }
 
@@ -843,6 +880,7 @@ export async function runTelegramQaLive(params: {
 
 export const __testing = {
   TELEGRAM_QA_SCENARIOS,
+  TELEGRAM_QA_STANDARD_SCENARIO_IDS,
   buildTelegramQaConfig,
   buildObservedMessagesArtifact,
   canaryFailureMessage,

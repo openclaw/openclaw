@@ -720,6 +720,7 @@ export async function startQaGatewayChild(params: {
   repoRoot: string;
   providerBaseUrl?: string;
   qaBusBaseUrl: string;
+  includeQaChannel?: boolean;
   controlUiAllowedOrigins?: string[];
   providerMode?: "mock-openai" | "live-frontier";
   primaryModel?: string;
@@ -780,6 +781,7 @@ export async function startQaGatewayChild(params: {
     gatewayToken,
     providerBaseUrl: params.providerBaseUrl,
     qaBusBaseUrl: params.qaBusBaseUrl,
+    includeQaChannel: params.includeQaChannel,
     workspaceDir,
     controlUiRoot: resolveQaControlUiRoot({
       repoRoot: params.repoRoot,
