@@ -1447,6 +1447,7 @@ export async function runEmbeddedAttempt(
         getSuccessfulCronAdds,
         didSendViaMessagingTool,
         getLastToolError,
+        setTerminalLifecycleMeta,
         getUsageTotals,
         getCompactionCount,
       } = subscription;
@@ -2277,6 +2278,7 @@ export async function runEmbeddedAttempt(
           successfulCronAdds: getSuccessfulCronAdds(),
         }),
         itemLifecycle: getItemLifecycle(),
+        setTerminalLifecycleMeta,
         aborted,
         timedOut,
         idleTimedOut,

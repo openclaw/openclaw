@@ -1503,6 +1503,21 @@ export async function runEmbeddedPiAgent(
                 "Please try again, or increase `agents.defaults.llm.idleTimeoutSeconds` in your config (set to 0 to disable)."
               : "Request timed out before a response was generated. " +
                 "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.";
+            const replayInvalid = resolveReplayInvalidFlag({
+              attempt,
+              incompleteTurnText: null,
+            });
+            const livenessState = resolveRunLivenessState({
+              payloadCount: payloads.length,
+              aborted,
+              timedOut,
+              attempt,
+              incompleteTurnText: null,
+            });
+            attempt.setTerminalLifecycleMeta?.({
+              replayInvalid,
+              livenessState,
+            });
             return {
               payloads: [
                 {
@@ -1516,17 +1531,8 @@ export async function runEmbeddedPiAgent(
                 aborted,
                 systemPromptReport: attempt.systemPromptReport,
                 finalAssistantVisibleText,
-                replayInvalid: resolveReplayInvalidFlag({
-                  attempt,
-                  incompleteTurnText: null,
-                }),
-                livenessState: resolveRunLivenessState({
-                  payloadCount: payloads.length,
-                  aborted,
-                  timedOut,
-                  attempt,
-                  incompleteTurnText: null,
-                }),
+                replayInvalid,
+                livenessState,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
               didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
@@ -1619,6 +1625,21 @@ export async function runEmbeddedPiAgent(
             };
           }
           if (incompleteTurnText) {
+            const replayInvalid = resolveReplayInvalidFlag({
+              attempt,
+              incompleteTurnText,
+            });
+            const livenessState = resolveRunLivenessState({
+              payloadCount: payloads.length,
+              aborted,
+              timedOut,
+              attempt,
+              incompleteTurnText,
+            });
+            attempt.setTerminalLifecycleMeta?.({
+              replayInvalid,
+              livenessState,
+            });
             const incompleteStopReason = attempt.lastAssistant?.stopReason;
             log.warn(
               `incomplete turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
@@ -1647,17 +1668,8 @@ export async function runEmbeddedPiAgent(
                 aborted,
                 systemPromptReport: attempt.systemPromptReport,
                 finalAssistantVisibleText,
-                replayInvalid: resolveReplayInvalidFlag({
-                  attempt,
-                  incompleteTurnText,
-                }),
-                livenessState: resolveRunLivenessState({
-                  payloadCount: payloads.length,
-                  aborted,
-                  timedOut,
-                  attempt,
-                  incompleteTurnText,
-                }),
+                replayInvalid,
+                livenessState,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
               didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
@@ -1684,6 +1696,21 @@ export async function runEmbeddedPiAgent(
               agentDir: params.agentDir,
             });
           }
+          const replayInvalid = resolveReplayInvalidFlag({
+            attempt,
+            incompleteTurnText: null,
+          });
+          const livenessState = resolveRunLivenessState({
+            payloadCount: payloads.length,
+            aborted,
+            timedOut,
+            attempt,
+            incompleteTurnText: null,
+          });
+          attempt.setTerminalLifecycleMeta?.({
+            replayInvalid,
+            livenessState,
+          });
           return {
             payloads: payloadsWithToolMedia?.length ? payloadsWithToolMedia : undefined,
             meta: {
@@ -1692,17 +1719,8 @@ export async function runEmbeddedPiAgent(
               aborted,
               systemPromptReport: attempt.systemPromptReport,
               finalAssistantVisibleText,
-              replayInvalid: resolveReplayInvalidFlag({
-                attempt,
-                incompleteTurnText: null,
-              }),
-              livenessState: resolveRunLivenessState({
-                payloadCount: payloads.length,
-                aborted,
-                timedOut,
-                attempt,
-                incompleteTurnText: null,
-              }),
+              replayInvalid,
+              livenessState,
               // Handle client tool calls (OpenResponses hosted tools)
               // Propagate the LLM stop reason so callers (lifecycle events,
               // ACP bridge) can distinguish end_turn from max_tokens.

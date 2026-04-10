@@ -8,6 +8,7 @@ import type { PluginHookBeforeAgentStartResult } from "../../../plugins/types.js
 import type { MessagingToolSend } from "../../pi-embedded-messaging.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import type { NormalizedUsage } from "../../usage.js";
+import type { EmbeddedRunLivenessState } from "../types.js";
 import type { RunEmbeddedPiAgentParams } from "./params.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.js";
 
@@ -98,4 +99,8 @@ export type EmbeddedRunAttemptResult = {
     completedCount: number;
     activeCount: number;
   };
+  setTerminalLifecycleMeta?: (meta: {
+    replayInvalid?: boolean;
+    livenessState?: EmbeddedRunLivenessState;
+  }) => void;
 };
