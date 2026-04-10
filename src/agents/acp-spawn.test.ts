@@ -1757,6 +1757,42 @@ describe("spawnAcpDirect", () => {
     expect(agentCall?.params?.channel).toBe("telegram");
   });
 
+  it("drops self-parent Telegram current-conversation refs before binding", async () => {
+    enableTelegramCurrentConversationBindings();
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:telegram:direct:6098642967",
+        agentChannel: "telegram",
+        agentAccountId: "default",
+        agentTo: "telegram:6098642967",
+      },
+    );
+
+    const accepted = expectAcceptedSpawn(result);
+    expect(accepted.mode).toBe("session");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "6098642967",
+        }),
+      }),
+    );
+    const bindCall = hoisted.sessionBindingBindMock.mock.calls.at(-1)?.[0] as
+      | { conversation?: { parentConversationId?: string } }
+      | undefined;
+    expect(bindCall?.conversation?.parentConversationId).toBeUndefined();
+  });
+
   it("preserves topic-qualified Telegram targets without a separate threadId", async () => {
     enableTelegramCurrentConversationBindings();
 
