@@ -7,6 +7,7 @@ import { PluginApprovalResolutions, type PluginApprovalResolution } from "../plu
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { isPlainObject } from "../utils.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
+import type { ToolPolicyPipelineAudit } from "./tool-policy-pipeline.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -18,11 +19,7 @@ export type HookContext = {
   sessionId?: string;
   runId?: string;
   loopDetection?: ToolLoopDetectionConfig;
-  toolPolicyAudit?: {
-    decision: "allow" | "deny";
-    matchedBy: string;
-    rule?: string;
-  };
+  toolPolicyAudit?: ToolPolicyPipelineAudit | (() => ToolPolicyPipelineAudit);
 };
 
 type HookOutcome = { blocked: true; reason: string } | { blocked: false; params: unknown };
@@ -104,7 +101,7 @@ function formatToolPolicyAuditLog(params: {
   toolName: string;
   toolCallId?: string;
   runId?: string;
-  audit: NonNullable<HookContext["toolPolicyAudit"]>;
+  audit: ToolPolicyPipelineAudit;
 }): string {
   return [
     "embedded run tool policy:",
@@ -434,13 +431,18 @@ export function wrapToolWithBeforeToolCallHook(
         }
       }
       const normalizedToolName = normalizeToolName(toolName || "tool");
-      if (ctx?.toolPolicyAudit) {
+      const toolPolicyAuditSource = ctx?.toolPolicyAudit;
+      const toolPolicyAudit =
+        typeof toolPolicyAuditSource === "function"
+          ? toolPolicyAuditSource()
+          : toolPolicyAuditSource;
+      if (toolPolicyAudit) {
         log.debug(
           formatToolPolicyAuditLog({
             toolName: normalizedToolName,
             toolCallId,
-            runId: ctx.runId,
-            audit: ctx.toolPolicyAudit,
+            runId: ctx?.runId,
+            audit: toolPolicyAudit,
           }),
         );
       }

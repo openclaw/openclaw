@@ -641,6 +641,13 @@ export function createOpenClawCodingTools(options?: {
       modelCompat: options?.modelCompat,
     }),
   );
+  const getToolPolicyAudit = (toolName: string) =>
+    explainToolPolicyPipelineDecision({
+      toolName,
+      tools: toolsByAuthorization,
+      toolMeta: (candidate) => getPluginToolMeta(candidate),
+      steps: policySteps,
+    });
   const withHooks = normalized.map((tool) =>
     wrapToolWithBeforeToolCallHook(tool, {
       agentId,
@@ -648,12 +655,7 @@ export function createOpenClawCodingTools(options?: {
       sessionId: options?.sessionId,
       runId: options?.runId,
       loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
-      toolPolicyAudit: explainToolPolicyPipelineDecision({
-        toolName: tool.name,
-        tools: toolsByAuthorization,
-        toolMeta: (candidate) => getPluginToolMeta(candidate),
-        steps: policySteps,
-      }),
+      toolPolicyAudit: () => getToolPolicyAudit(tool.name),
     }),
   );
   const withAbort = options?.abortSignal
