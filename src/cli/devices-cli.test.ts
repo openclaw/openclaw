@@ -84,10 +84,41 @@ describe("devices cli approve", () => {
     );
   });
 
+  it("prints confirmation details and exits when implicit approval is used without --yes", async () => {
+    callGateway.mockResolvedValueOnce({
+      pending: [
+        {
+          requestId: "req-abc",
+          deviceId: "device-9",
+          displayName: "Device Nine",
+          role: "operator",
+          scopes: ["operator.admin"],
+          remoteIp: "10.0.0.9",
+          ts: 1000,
+        },
+      ],
+    });
+
+    await runDevicesApprove([]);
+
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "device.pair.list" }),
+    );
+    const logOutput = runtime.log.mock.calls.map((c) => readRuntimeCallText(c)).join("\n");
+    expect(logOutput).toContain("req-abc");
+    expect(logOutput).toContain("Device Nine");
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Pass --yes to confirm"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(callGateway).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "device.pair.approve" }),
+    );
+  });
+
   it.each([
     {
-      name: "id is omitted",
-      args: [] as string[],
+      name: "id is omitted with --yes",
+      args: ["--yes"] as string[],
       pending: [
         { requestId: "req-1", ts: 1000 },
         { requestId: "req-2", ts: 2000 },
@@ -95,8 +126,8 @@ describe("devices cli approve", () => {
       expectedRequestId: "req-2",
     },
     {
-      name: "--latest is passed",
-      args: ["req-old", "--latest"] as string[],
+      name: "--latest is passed with --yes",
+      args: ["req-old", "--latest", "--yes"] as string[],
       pending: [
         { requestId: "req-2", ts: 2000 },
         { requestId: "req-3", ts: 3000 },
@@ -287,7 +318,7 @@ describe("devices cli local fallback", () => {
     });
     summarizeDeviceTokens.mockReturnValue(undefined);
 
-    await runDevicesApprove(["--latest"]);
+    await runDevicesApprove(["--latest", "--yes"]);
 
     expect(approveDevicePairing).toHaveBeenCalledWith("req-latest", {
       callerScopes: ["operator.admin"],

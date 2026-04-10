@@ -402,14 +402,45 @@ export function registerDevicesCli(program: Command) {
       .description("Approve a pending device pairing request")
       .argument("[requestId]", "Pending request id")
       .option("--latest", "Approve the most recent pending request", false)
+      .option("--yes", "Confirm implicit request selection without prompting", false)
       .action(async (requestId: string | undefined, opts: DevicesRpcOpts) => {
         let resolvedRequestId = requestId?.trim();
-        if (!resolvedRequestId || opts.latest) {
-          const latest = selectLatestPendingRequest((await listPairingWithFallback(opts)).pending);
-          resolvedRequestId = latest?.requestId?.trim();
+        const usingImplicitSelection = !resolvedRequestId || Boolean(opts.latest);
+        let selectedRequest: PendingDevice | null = null;
+        if (usingImplicitSelection) {
+          selectedRequest = selectLatestPendingRequest(
+            (await listPairingWithFallback(opts)).pending,
+          );
+          resolvedRequestId = selectedRequest?.requestId?.trim();
         }
         if (!resolvedRequestId) {
           defaultRuntime.error("No pending device pairing requests to approve");
+          defaultRuntime.exit(1);
+          return;
+        }
+        if (usingImplicitSelection && !opts.yes) {
+          // Require explicit confirmation so the operator can verify the selected
+          // request before minting tokens. Without this gate an attacker who submits
+          // or refreshes a pairing request between list and approve wins by timestamp.
+          const req = selectedRequest!;
+          defaultRuntime.log(
+            `${theme.warn("Confirm approval of")} ${theme.command(req.requestId)}`,
+          );
+          defaultRuntime.log(`  Device: ${req.displayName ?? req.deviceId}`);
+          const role = formatPendingRoles(req);
+          if (role) {
+            defaultRuntime.log(`  Role:   ${role}`);
+          }
+          const scopes = formatPendingScopes(req);
+          if (scopes) {
+            defaultRuntime.log(`  Scopes: ${scopes}`);
+          }
+          if (req.remoteIp) {
+            defaultRuntime.log(`  IP:     ${req.remoteIp}`);
+          }
+          defaultRuntime.error(
+            "Pass --yes to confirm implicit approval, or specify the request ID explicitly.",
+          );
           defaultRuntime.exit(1);
           return;
         }
