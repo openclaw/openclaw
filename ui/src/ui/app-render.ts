@@ -461,6 +461,17 @@ export function renderApp(state: AppViewState) {
     const index = ensure ? ensureAgentIndex(agentId) : findAgentIndex(agentId);
     return index >= 0 ? (["agents", "list", index, "tools"] as const) : null;
   };
+  const resolveAgentModelFormEntry = (index: number) => {
+    const list = (getCurrentConfigValue() as { agents?: { list?: unknown[] } } | null)?.agents
+      ?.list;
+    const existing = Array.isArray(list)
+      ? (list[index] as { model?: unknown } | undefined)?.model
+      : undefined;
+    return {
+      basePath: ["agents", "list", index, "model"] as Array<string | number>,
+      existing,
+    };
+  };
   const cronAgentSuggestions = sortLocaleStrings(
     new Set(
       [
@@ -1554,16 +1565,11 @@ export function renderApp(state: AppViewState) {
                   if (index < 0) {
                     return;
                   }
-                  const list = (getCurrentConfigValue() as { agents?: { list?: unknown[] } } | null)
-                    ?.agents?.list;
-                  const basePath = ["agents", "list", index, "model"];
+                  const modelEntry = resolveAgentModelFormEntry(index);
+                  const { basePath, existing } = modelEntry;
                   if (!modelId) {
                     removeConfigFormValue(state, basePath);
                   } else {
-                    const entry = Array.isArray(list)
-                      ? (list[index] as { model?: unknown })
-                      : undefined;
-                    const existing = entry?.model;
                     if (existing && typeof existing === "object" && !Array.isArray(existing)) {
                       const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
                       const next = {
@@ -1599,13 +1605,7 @@ export function renderApp(state: AppViewState) {
                   if (index < 0) {
                     return;
                   }
-                  const list = (getCurrentConfigValue() as { agents?: { list?: unknown[] } } | null)
-                    ?.agents?.list;
-                  const basePath = ["agents", "list", index, "model"];
-                  const entry = Array.isArray(list)
-                    ? (list[index] as { model?: unknown })
-                    : undefined;
-                  const existing = entry?.model;
+                  const { basePath, existing } = resolveAgentModelFormEntry(index);
                   const resolvePrimary = () => {
                     if (typeof existing === "string") {
                       return existing.trim() || null;
