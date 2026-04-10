@@ -259,14 +259,14 @@ function renderExecPolicyShow(payload: ExecPolicyShowPayload): void {
 }
 
 async function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPolicyShowPayload> {
-  if (policy.host === "node") {
+  const configSnapshot = await readConfigFileSnapshot();
+  const nextConfig = buildNextExecPolicyConfig(configSnapshot.config ?? {}, policy);
+  if (nextConfig.tools?.exec?.host === "node") {
     failExecPolicy(
       "Local exec-policy cannot synchronize host=node. Node approvals are fetched from the node at runtime.",
     );
   }
-  const configSnapshot = await readConfigFileSnapshot();
   const approvalsSnapshot = readExecApprovalsSnapshot();
-  const nextConfig = buildNextExecPolicyConfig(configSnapshot.config ?? {}, policy);
   const nextApprovals = applyApprovalsDefaults(approvalsSnapshot.file, policy);
   saveExecApprovals(nextApprovals);
   try {

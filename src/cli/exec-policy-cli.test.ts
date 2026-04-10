@@ -304,6 +304,28 @@ describe("exec-policy CLI", () => {
     expect(mocks.saveExecApprovals).not.toHaveBeenCalled();
   });
 
+  it("rejects sync when the resulting requested host remains node", async () => {
+    mocks.setConfig({
+      tools: {
+        exec: {
+          host: "node",
+          security: "allowlist",
+          ask: "on-miss",
+        },
+      },
+    });
+
+    await expect(
+      runExecPolicyCommand(["exec-policy", "set", "--security", "full"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(mocks.runtimeErrors).toEqual([
+      "Local exec-policy cannot synchronize host=node. Node approvals are fetched from the node at runtime.",
+    ]);
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    expect(mocks.saveExecApprovals).not.toHaveBeenCalled();
+  });
+
   it("rolls back approvals if the config write fails after approvals save", async () => {
     const writeFileSyncSpy = vi.spyOn(fs, "writeFileSync").mockImplementation(() => undefined);
     const originalApprovals = structuredClone(mocks.getApprovals());
