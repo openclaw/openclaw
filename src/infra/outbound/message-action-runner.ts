@@ -78,7 +78,9 @@ export type RunMessageActionParams = {
   action: ChannelMessageActionName;
   params: Record<string, unknown>;
   defaultAccountId?: string;
+  requesterAccountId?: string | null;
   requesterSenderId?: string | null;
+  senderIsOwner?: boolean;
   sessionId?: string;
   toolContext?: ChannelThreadingToolContext;
   gateway?: MessageActionRunnerGateway;
@@ -542,6 +544,9 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       channel,
       params,
       agentId,
+      sessionKey: input.sessionKey,
+      requesterAccountId: input.requesterAccountId ?? undefined,
+      requesterSenderId: input.requesterSenderId ?? undefined,
       mediaAccess: ctx.mediaAccess,
       accountId: accountId ?? undefined,
       gateway,
@@ -702,6 +707,7 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
     mediaReadFile: mediaAccess.readFile,
     accountId: accountId ?? undefined,
     requesterSenderId: input.requesterSenderId ?? undefined,
+    senderIsOwner: input.senderIsOwner,
     sessionKey: input.sessionKey,
     sessionId: input.sessionId,
     agentId,
@@ -775,6 +781,10 @@ export async function runMessageAction(
     cfg,
     agentId: resolvedAgentId,
     mediaSources: collectActionMediaSourceHints(params),
+    sessionKey: input.sessionKey,
+    messageProvider: input.sessionKey ? undefined : channel,
+    accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
+    requesterSenderId: input.requesterSenderId,
   });
   const mediaPolicy = resolveAttachmentMediaPolicy({
     sandboxRoot: input.sandboxRoot,

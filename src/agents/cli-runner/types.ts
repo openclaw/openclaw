@@ -35,6 +35,7 @@ export type RunCliAgentParams = {
   skillsSnapshot?: SkillSnapshot;
   messageProvider?: string;
   agentAccountId?: string;
+  senderIsOwner?: boolean;
   abortSignal?: AbortSignal;
   replyOperation?: ReplyOperation;
 };

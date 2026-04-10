@@ -11,9 +11,9 @@ import {
   collectRelevantDoctorPluginIds,
   listPluginDoctorLegacyConfigRules,
 } from "../plugins/doctor-contract-registry.js";
+import { resolveManifestCommandAliasOwner } from "../plugins/manifest-command-aliases.runtime.js";
 import {
   loadPluginManifestRegistry,
-  resolveManifestCommandAliasOwner,
   resolveManifestContractPluginIds,
 } from "../plugins/manifest-registry.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";

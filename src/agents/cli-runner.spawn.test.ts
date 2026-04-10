@@ -2,15 +2,21 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearActiveMcpLoopbackRuntime,
+  setActiveMcpLoopbackRuntime,
+} from "../gateway/mcp-http.loopback-runtime.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import {
   makeBootstrapWarn as realMakeBootstrapWarn,
   resolveBootstrapContextForRun as realResolveBootstrapContextForRun,
 } from "./bootstrap-files.js";
+import { runClaudeCliAgent } from "./cli-runner.js";
 import {
   createManagedRun,
   mockSuccessfulCliRun,
   restoreCliRunnerPrepareTestDeps,
+  setupCliRunnerTestRegistry,
   supervisorSpawnMock,
 } from "./cli-runner.test-support.js";
 import { buildCliEnvAuthLog, executePreparedCliRun } from "./cli-runner/execute.js";
@@ -95,6 +101,19 @@ function buildPreparedCliRunContext(params: {
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
     bootstrapPromptWarningLines: [],
   };
+}
+
+function createClaudeSuccessRun(sessionId: string) {
+  return createManagedRun({
+    reason: "exit",
+    exitCode: 0,
+    exitSignal: null,
+    durationMs: 50,
+    stdout: JSON.stringify({ message: "ok", session_id: sessionId }),
+    stderr: "",
+    timedOut: false,
+    noOutputTimedOut: false,
+  });
 }
 
 describe("runCliAgent spawn path", () => {
@@ -364,6 +383,55 @@ describe("runCliAgent spawn path", () => {
       } else {
         process.env.CLI_SKILL_API_KEY = previousEnvValue;
       }
+    }
+  });
+
+  it("ignores legacy claudeSessionId on the compat wrapper", async () => {
+    setupCliRunnerTestRegistry();
+    supervisorSpawnMock.mockResolvedValueOnce(createClaudeSuccessRun("sid-wrapper"));
+
+    await runClaudeCliAgent({
+      sessionId: "openclaw-session",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      prompt: "hi",
+      model: "opus",
+      timeoutMs: 1_000,
+      runId: "run-claude-legacy-wrapper",
+      claudeSessionId: "c9d7b831-1c31-4d22-80b9-1e50ca207d4b",
+    });
+
+    const input = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[]; input?: string };
+    expect(input.argv).not.toContain("--resume");
+    expect(input.argv).not.toContain("c9d7b831-1c31-4d22-80b9-1e50ca207d4b");
+    expect(input.argv).toContain("--session-id");
+    expect(input.input).toContain("hi");
+  });
+
+  it("forwards senderIsOwner through the compat wrapper into bundle MCP env", async () => {
+    setupCliRunnerTestRegistry();
+    setActiveMcpLoopbackRuntime({ port: 23119, token: "loopback-token-123" });
+    try {
+      supervisorSpawnMock.mockResolvedValueOnce(createClaudeSuccessRun("sid-owner"));
+
+      await runClaudeCliAgent({
+        sessionId: "openclaw-session",
+        sessionKey: "agent:main:matrix:room:123",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        prompt: "hi",
+        model: "opus",
+        timeoutMs: 1_000,
+        runId: "run-claude-owner-wrapper",
+        senderIsOwner: false,
+      });
+
+      const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
+        env?: Record<string, string | undefined>;
+      };
+      expect(input.env?.OPENCLAW_MCP_SENDER_IS_OWNER).toBe("false");
+    } finally {
+      clearActiveMcpLoopbackRuntime("loopback-token-123");
     }
   });
 

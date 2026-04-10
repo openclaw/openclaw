@@ -342,7 +342,7 @@ describe("Engine contract tests", () => {
   });
 
   it("legacy compact preserves runtimeContext currentTokenCount when top-level value is absent", async () => {
-    const compactRuntimeSpy = await installCompactRuntimeSpy();
+    const compactRuntimeSpy = installCompactRuntimeSpy();
     const engine = new LegacyContextEngine();
 
     await engine.compact({
@@ -362,7 +362,7 @@ describe("Engine contract tests", () => {
   });
 
   it("delegateCompactionToRuntime reuses the legacy runtime bridge", async () => {
-    const compactRuntimeSpy = await installCompactRuntimeSpy();
+    const compactRuntimeSpy = installCompactRuntimeSpy();
     const result = await delegateCompactionToRuntime({
       sessionId: "s2",
       sessionFile: "/tmp/session.json",

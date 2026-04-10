@@ -122,7 +122,7 @@ export async function waitForAgentRun(params: {
 }): Promise<AgentWaitResult> {
   const timeoutMs = Math.max(1, Math.floor(params.timeoutMs));
   try {
-    const wait = await (params.callGateway ?? runWaitDeps.callGateway)<RawAgentWaitResponse>({
+    const wait = await (params.callGateway ?? runWaitDeps.callGateway)({
       method: "agent.wait",
       params: {
         runId: params.runId,

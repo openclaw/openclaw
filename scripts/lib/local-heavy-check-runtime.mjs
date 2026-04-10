@@ -6,6 +6,7 @@ import path from "node:path";
 const GIB = 1024 ** 3;
 const DEFAULT_LOCAL_GO_GC = "30";
 const DEFAULT_LOCAL_GO_MEMORY_LIMIT = "3GiB";
+const DEFAULT_LOCAL_TSGO_BUILD_INFO_FILE = ".artifacts/tsgo-cache/root.tsbuildinfo";
 const DEFAULT_LOCK_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_LOCK_POLL_MS = 500;
 const DEFAULT_LOCK_PROGRESS_MS = 15 * 1000;
@@ -26,6 +27,7 @@ export function hasFlag(args, name) {
 export function applyLocalTsgoPolicy(args, env, hostResources) {
   const nextEnv = { ...env };
   const nextArgs = [...args];
+  const defaultProjectRun = nextArgs.length === 0;
 
   if (!hasFlag(nextArgs, "--declaration") && !nextArgs.includes("-d")) {
     insertBeforeSeparator(nextArgs, "--declaration", "false");
@@ -33,6 +35,15 @@ export function applyLocalTsgoPolicy(args, env, hostResources) {
 
   if (!isLocalCheckEnabled(nextEnv)) {
     return { env: nextEnv, args: nextArgs };
+  }
+
+  if (defaultProjectRun) {
+    insertBeforeSeparator(nextArgs, "--incremental");
+    insertBeforeSeparator(
+      nextArgs,
+      "--tsBuildInfoFile",
+      nextEnv.OPENCLAW_TSGO_BUILD_INFO_FILE ?? DEFAULT_LOCAL_TSGO_BUILD_INFO_FILE,
+    );
   }
 
   if (shouldThrottleLocalHeavyChecks(nextEnv, hostResources)) {

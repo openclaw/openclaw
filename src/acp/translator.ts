@@ -1144,7 +1144,7 @@ export class AcpGatewayAgent implements Agent {
     }
     let result: AgentWaitResult | undefined;
     try {
-      result = await this.gateway.request<AgentWaitResult>(
+      result = await this.gateway.request(
         "agent.wait",
         {
           runId: pending.idempotencyKey,
@@ -1308,7 +1308,7 @@ export class AcpGatewayAgent implements Agent {
   }
 
   private async getSessionTranscript(sessionKey: string): Promise<GatewayTranscriptMessage[]> {
-    const result = await this.gateway.request<{ messages?: unknown[] }>("sessions.get", {
+    const result = await this.gateway.request("sessions.get", {
       key: sessionKey,
       limit: ACP_LOAD_SESSION_REPLAY_LIMIT,
     });

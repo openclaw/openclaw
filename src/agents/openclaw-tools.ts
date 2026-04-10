@@ -206,6 +206,7 @@ export function createOpenClawTools(
         sandboxRoot: options?.sandboxRoot,
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         requesterSenderId: options?.requesterSenderId ?? undefined,
+        senderIsOwner: options?.senderIsOwner,
       });
   const nodesToolBase = createNodesTool({
     agentSessionKey: options?.agentSessionKey,
