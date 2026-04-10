@@ -50,7 +50,7 @@ import {
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
   hasCompletedBootstrapTurn,
   makeBootstrapWarn,
-  resolveBootstrapContextForRun,
+  resolveBootstrapFilesWithSignatureForRun,
   resolveContextInjectionMode,
 } from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
@@ -77,6 +77,7 @@ import {
   materializeBundleMcpToolsForRun,
 } from "../../pi-bundle-mcp-tools.js";
 import {
+  buildBootstrapContextFiles,
   downgradeOpenAIFunctionCallReasoningPairs,
   isCloudCodeAssistFormatError,
   resolveBootstrapMaxChars,
@@ -414,12 +415,27 @@ export async function runEmbeddedAttempt(
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const contextInjectionMode = resolveContextInjectionMode(params.config);
+    const bootstrapWarn = makeBootstrapWarn({
+      sessionLabel,
+      warn: (message) => log.warn(message),
+    });
+    let bootstrapFilesPromise:
+      | Promise<Awaited<ReturnType<typeof resolveBootstrapFilesWithSignatureForRun>>>
+      | undefined;
     let bootstrapContextPromise:
-      | Promise<Awaited<ReturnType<typeof resolveBootstrapContextForRun>>>
+      | Promise<{
+          bootstrapFiles: Awaited<
+            ReturnType<typeof resolveBootstrapFilesWithSignatureForRun>
+          >["bootstrapFiles"];
+          contextFiles: Awaited<
+            ReturnType<typeof buildBootstrapContextFiles>
+          >;
+          bootstrapSignature: string;
+        }>
       | undefined;
     const resolveAttemptBootstrapFiles = () =>
-      (bootstrapContextPromise ??=
-        resolveBootstrapContextForRun({
+      (bootstrapFilesPromise ??=
+        resolveBootstrapFilesWithSignatureForRun({
           workspaceDir: effectiveWorkspace,
           config: params.config,
           sessionKey: params.sessionKey,
@@ -427,10 +443,21 @@ export async function runEmbeddedAttempt(
           agentId: params.agentId,
           modelProviderId: params.provider,
           modelId: params.modelId,
-          warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
+          warn: bootstrapWarn,
           contextMode: params.bootstrapContextMode,
           runKind: params.bootstrapContextRunKind,
         }));
+    const resolveAttemptBootstrapContextValue = () =>
+      (bootstrapContextPromise ??=
+        resolveAttemptBootstrapFiles().then(({ bootstrapFiles, bootstrapSignature }) => ({
+          bootstrapFiles,
+          contextFiles: buildBootstrapContextFiles(bootstrapFiles, {
+            maxChars: resolveBootstrapMaxChars(params.config),
+            totalMaxChars: resolveBootstrapTotalMaxChars(params.config),
+            warn: bootstrapWarn,
+          }),
+          bootstrapSignature,
+        })));
     const {
       bootstrapFiles: hookAdjustedBootstrapFiles,
       contextFiles,
@@ -444,7 +471,7 @@ export async function runEmbeddedAttempt(
       resolveBootstrapSignatureForRun: async () =>
         (await resolveAttemptBootstrapFiles()).bootstrapSignature,
       hasCompletedBootstrapTurn,
-      resolveBootstrapContextForRun: resolveAttemptBootstrapFiles,
+      resolveBootstrapContextForRun: resolveAttemptBootstrapContextValue,
     });
     const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
     const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
