@@ -594,19 +594,32 @@ describe("normalizeCronJobCreate", () => {
     expect(normalized.sessionTarget).toBe("session:MySessionID");
   });
 
-  it("rejects custom session ids with path separators", () => {
+  it("encodes path separators in custom session ids instead of rejecting them (#64030)", () => {
+    // DingTalk base64 conversation IDs contain `/` — encoding them
+    // preserves the session identity while keeping run-log filenames
+    // path-safe. The downstream `resolveCronRunLogPath` startsWith
+    // guard still blocks actual traversal as defense-in-depth.
+    const created = normalizeCronJobCreate({
+      name: "dingtalk-group",
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "session:agent:main:dingtalk:group:cid/wogxwy2a==",
+      payload: { kind: "agentTurn", message: "hello" },
+    });
+    expect(created.sessionTarget).toBe("session:agent:main:dingtalk:group:cid%2Fwogxwy2a==");
+
+    const patched = normalizeCronJobPatch({
+      sessionTarget: "session:..\\outside",
+    });
+    expect(patched.sessionTarget).toBe("session:..%5Coutside");
+  });
+
+  it("still rejects null bytes in custom session ids", () => {
     expect(() =>
       normalizeCronJobCreate({
-        name: "bad-custom-session",
+        name: "null-byte",
         schedule: { kind: "cron", expr: "* * * * *" },
-        sessionTarget: "session:../../outside",
+        sessionTarget: "session:bad\0id",
         payload: { kind: "agentTurn", message: "hello" },
-      }),
-    ).toThrow("invalid cron sessionTarget session id");
-
-    expect(() =>
-      normalizeCronJobPatch({
-        sessionTarget: "session:..\\outside",
       }),
     ).toThrow("invalid cron sessionTarget session id");
   });

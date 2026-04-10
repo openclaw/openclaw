@@ -59,10 +59,15 @@ function assertSafeCronRunLogJobId(jobId: string): string {
   if (!trimmed) {
     throw new Error("invalid cron run log job id");
   }
-  if (trimmed.includes("/") || trimmed.includes("\\") || trimmed.includes("\0")) {
+  if (trimmed.includes("\0")) {
     throw new Error("invalid cron run log job id");
   }
-  return trimmed;
+  // Encode path-separator characters for the same reason as
+  // assertSafeCronSessionTargetId — jobId is derived from sessionKey
+  // which may contain `/` for channels like DingTalk (#64030).
+  // The downstream `resolveCronRunLogPath` has an additional
+  // startsWith guard against path traversal as defense-in-depth.
+  return trimmed.replaceAll("/", "%2F").replaceAll("\\", "%5C");
 }
 
 export function resolveCronRunLogPath(params: { storePath: string; jobId: string }) {

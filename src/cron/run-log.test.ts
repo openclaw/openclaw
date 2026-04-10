@@ -53,15 +53,30 @@ describe("cron run log", () => {
     expect(p.endsWith(path.join(os.tmpdir(), "cron", "runs", "job-1.jsonl"))).toBe(true);
   });
 
-  it("rejects unsafe job ids when resolving run log path", () => {
+  it("encodes path-separator characters in job ids instead of rejecting them (#64030)", () => {
+    // DingTalk and other channels produce conversation IDs that contain `/`
+    // (e.g. `cid3tmd4xb19xjfk/wogxwy2a==`). Previously these threw; now
+    // they are percent-encoded so they become safe filenames while remaining
+    // reversible via decodeURIComponent for debugging. The startsWith guard
+    // at resolveCronRunLogPath:74 is the path-traversal defense-in-depth.
     const storePath = path.join(os.tmpdir(), "cron", "jobs.json");
-    expect(() => resolveCronRunLogPath({ storePath, jobId: "../job-1" })).toThrow(
-      /invalid cron run log job id/i,
-    );
-    expect(() => resolveCronRunLogPath({ storePath, jobId: "nested/job-1" })).toThrow(
-      /invalid cron run log job id/i,
-    );
-    expect(() => resolveCronRunLogPath({ storePath, jobId: "..\\job-1" })).toThrow(
+    const runsDir = path.join(os.tmpdir(), "cron", "runs");
+
+    const p1 = resolveCronRunLogPath({ storePath, jobId: "nested/job-1" });
+    expect(p1).toBe(path.join(runsDir, "nested%2Fjob-1.jsonl"));
+
+    const p2 = resolveCronRunLogPath({ storePath, jobId: "..\\job-1" });
+    expect(p2).toBe(path.join(runsDir, "..%5Cjob-1.jsonl"));
+
+    // Actual traversal attempt still produces a valid path INSIDE runsDir
+    // because the encoded `..%2F` is a literal filename, not a `../` traversal.
+    const p3 = resolveCronRunLogPath({ storePath, jobId: "../job-1" });
+    expect(p3).toBe(path.join(runsDir, "..%2Fjob-1.jsonl"));
+  });
+
+  it("still rejects null-byte job ids", () => {
+    const storePath = path.join(os.tmpdir(), "cron", "jobs.json");
+    expect(() => resolveCronRunLogPath({ storePath, jobId: "job\0evil" })).toThrow(
       /invalid cron run log job id/i,
     );
   });
