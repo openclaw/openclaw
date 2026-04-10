@@ -278,6 +278,11 @@ export async function resolveReplyDirectives(params: {
         modelAliases: configuredAliases,
       });
       if (directiveOnlyCheck.cleaned.trim().length > 0) {
+        // Preserve thinking/verbose levels when clearing inline directives.
+        // The levels should still apply to the run even when the message has
+        // real content alongside the directive (e.g. webchat /think injection).
+        const preservedThinkLevel = parsedDirectives.thinkLevel;
+        const preservedVerboseLevel = parsedDirectives.verboseLevel;
         const allowInlineStatus =
           parsedDirectives.hasStatusDirective && allowTextCommands && command.isAuthorizedSender;
         parsedDirectives = allowInlineStatus
@@ -286,6 +291,19 @@ export async function resolveReplyDirectives(params: {
               hasStatusDirective: true,
             }
           : clearInlineDirectives(parsedDirectives.cleaned);
+        // Re-inject preserved levels so they take effect for this run,
+        // but only for authorized senders — unauthorized users must not be
+        // able to escalate thinking effort via inline directives.
+        if (command.isAuthorizedSender) {
+          if (preservedThinkLevel !== undefined) {
+            parsedDirectives.thinkLevel = preservedThinkLevel;
+            parsedDirectives.hasThinkDirective = true;
+          }
+          if (preservedVerboseLevel !== undefined) {
+            parsedDirectives.verboseLevel = preservedVerboseLevel;
+            parsedDirectives.hasVerboseDirective = true;
+          }
+        }
       }
     }
   }
