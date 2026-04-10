@@ -153,10 +153,30 @@ const LINE_RULES: LineRule[] = [
     requiresContext: /child_process/,
   },
   {
+    ruleId: "dangerous-exec-dynamic",
+    severity: "critical",
+    message: "Dynamic property access on child_process module detected",
+    pattern: /\[\s*["'`](exec|execSync|spawn|spawnSync|execFile|execFileSync)["'`]\s*\]/,
+    requiresContext: /child_process/,
+  },
+  {
+    ruleId: "dangerous-exec-indirect",
+    severity: "warn",
+    message: "Indirect child_process access via computed property or Reflect",
+    pattern: /Reflect\.apply|Object\.getOwnPropertyDescriptor|\.constructor\s*\(/,
+    requiresContext: /child_process/,
+  },
+  {
     ruleId: "dynamic-code-execution",
     severity: "critical",
     message: "Dynamic code execution detected",
     pattern: /\beval\s*\(|new\s+Function\s*\(/,
+  },
+  {
+    ruleId: "dynamic-code-execution-indirect",
+    severity: "critical",
+    message: "Indirect eval/Function access detected",
+    pattern: /globalThis\s*\[\s*["'`]eval["'`]|globalThis\s*\[\s*["'`]Function["'`]|window\s*\[\s*["'`]eval["'`]|\.constructor\s*\.\s*constructor/,
   },
   {
     ruleId: "crypto-mining",
@@ -170,6 +190,19 @@ const LINE_RULES: LineRule[] = [
     message: "WebSocket connection to non-standard port",
     pattern: /new\s+WebSocket\s*\(\s*["']wss?:\/\/[^"']*:(\d+)/,
   },
+  {
+    ruleId: "prototype-pollution",
+    severity: "critical",
+    message: "Prototype pollution pattern detected",
+    pattern: /__proto__\s*[=\[]|Object\s*\.\s*prototype\s*\.\s*\w+\s*=|\.prototype\s*\[\s*["'][^\]]*["']\s*\]\s*=/,
+  },
+  {
+    ruleId: "import-aliasing",
+    severity: "warn",
+    message: "Destructured import aliasing of dangerous function detected",
+    pattern: /\{\s*(exec|execSync|spawn|spawnSync|execFile|execFileSync)\s*(:|as)\s*\w+/,
+    requiresContext: /child_process/,
+  },
 ];
 
 const STANDARD_PORTS = new Set([80, 443, 8080, 8443, 3000]);
@@ -179,28 +212,46 @@ const SOURCE_RULES: SourceRule[] = [
     ruleId: "potential-exfiltration",
     severity: "warn",
     message: "File read combined with network send — possible data exfiltration",
-    pattern: /readFileSync|readFile/,
-    requiresContext: /\bfetch\b|\bpost\b|http\.request/i,
+    pattern: /readFileSync|readFile|fs\.promises\.readFile/,
+    requiresContext: /\bfetch\b|\bpost\b|http\.request|http\.get|XMLHttpRequest|WebSocket|axios|\.request\s*\(/i,
   },
   {
     ruleId: "obfuscated-code",
     severity: "warn",
     message: "Hex-encoded string sequence detected (possible obfuscation)",
-    pattern: /(\\x[0-9a-fA-F]{2}){6,}/,
+    pattern: /(\\x[0-9a-fA-F]{2}){4,}/,
+  },
+  {
+    ruleId: "obfuscated-code",
+    severity: "warn",
+    message: "Unicode escape sequence detected (possible obfuscation)",
+    pattern: /(\\u[0-9a-fA-F]{4}){4,}/,
+  },
+  {
+    ruleId: "obfuscated-code",
+    severity: "warn",
+    message: "String.fromCharCode pattern detected (possible obfuscation)",
+    pattern: /String\.fromCharCode\s*\(\s*\d+\s*(,\s*\d+\s*){3,}\)/,
   },
   {
     ruleId: "obfuscated-code",
     severity: "warn",
     message: "Large base64 payload with decode call detected (possible obfuscation)",
-    pattern: /(?:atob|Buffer\.from)\s*\(\s*["'][A-Za-z0-9+/=]{200,}["']/,
+    pattern: /(?:atob|Buffer\.from)\s*\(\s*["'][A-Za-z0-9+/=]{100,}["']/,
   },
   {
     ruleId: "env-harvesting",
     severity: "critical",
     message:
       "Environment variable access combined with network send — possible credential harvesting",
-    pattern: /process\.env/,
-    requiresContext: /\bfetch\b|\bpost\b|http\.request/i,
+    pattern: /process\.env|\benv\s*\}\s*=\s*process/,
+    requiresContext: /\bfetch\b|\bpost\b|http\.request|http\.get|XMLHttpRequest|WebSocket|axios|\.request\s*\(/i,
+  },
+  {
+    ruleId: "dynamic-import-dangerous",
+    severity: "warn",
+    message: "Dynamic import of potentially dangerous module detected",
+    pattern: /import\s*\(\s*["'`]?(child_process|node:child_process|fs|node:fs|net|node:net|dgram|node:dgram)["'`]?\s*\)/,
   },
 ];
 
