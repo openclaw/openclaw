@@ -7,6 +7,7 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import { resolveAssistantMessagePhase } from "../shared/chat-message-content.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { stripTrailingDirective } from "../utils/directive-tags.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
@@ -27,21 +28,6 @@ import {
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
-
-const stripTrailingDirective = (text: string): string => {
-  const openIndex = text.lastIndexOf("[[");
-  if (openIndex < 0) {
-    if (text.endsWith("[")) {
-      return text.slice(0, -1);
-    }
-    return text;
-  }
-  const closeIndex = text.indexOf("]]", openIndex + 2);
-  if (closeIndex >= 0) {
-    return text;
-  }
-  return text.slice(0, openIndex);
-};
 
 const coerceText = (value: unknown): string => {
   if (typeof value === "string") {

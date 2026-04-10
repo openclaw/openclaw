@@ -1,6 +1,11 @@
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { splitMediaFromOutput } from "../../media/parse.js";
-import { parseInlineDirectives } from "../../utils/directive-tags.js";
+import {
+  type FenceState,
+  parseInlineDirectives,
+  splitTrailingDirective,
+  updateFenceState,
+} from "../../utils/directive-tags.js";
 import {
   isSilentReplyPrefixText,
   isSilentReplyText,
@@ -23,21 +28,6 @@ type ParsedChunk = ReplyDirectiveParseResult & {
 type ConsumeOptions = {
   final?: boolean;
   silentToken?: string;
-};
-
-const splitTrailingDirective = (text: string): { text: string; tail: string } => {
-  const openIndex = text.lastIndexOf("[[");
-  if (openIndex < 0) {
-    return { text, tail: "" };
-  }
-  const closeIndex = text.indexOf("]]", openIndex + 2);
-  if (closeIndex >= 0) {
-    return { text, tail: "" };
-  }
-  return {
-    text: text.slice(0, openIndex),
-    tail: text.slice(openIndex),
-  };
 };
 
 const parseChunk = (raw: string, options?: { silentToken?: string }): ParsedChunk => {
@@ -80,11 +70,13 @@ const hasRenderableContent = (parsed: ReplyDirectiveParseResult): boolean =>
 
 export function createStreamingDirectiveAccumulator() {
   let pendingTail = "";
+  let fenceState: FenceState;
   let pendingReply: PendingReplyState = { sawCurrent: false, hasTag: false };
   let activeReply: PendingReplyState = { sawCurrent: false, hasTag: false };
 
   const reset = () => {
     pendingTail = "";
+    fenceState = undefined;
     pendingReply = { sawCurrent: false, hasTag: false };
     activeReply = { sawCurrent: false, hasTag: false };
   };
@@ -94,10 +86,17 @@ export function createStreamingDirectiveAccumulator() {
     pendingTail = "";
 
     if (!options.final) {
-      const split = splitTrailingDirective(combined);
+      const split = splitTrailingDirective(combined, { fenceState });
       combined = split.text;
       pendingTail = split.tail;
     }
+
+    // Update fence state *after* splitting so that splitTrailingDirective
+    // receives the state at the start of the chunk, not the post-chunk state.
+    // We update from the full combined (pendingTail + raw) to track every
+    // fence marker that arrived, using the original `raw` which represents
+    // the new text added in this chunk.
+    fenceState = updateFenceState(raw ?? "", fenceState);
 
     if (!combined) {
       return null;
