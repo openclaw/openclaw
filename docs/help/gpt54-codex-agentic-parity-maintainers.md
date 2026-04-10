@@ -108,6 +108,12 @@ PR D is the proof layer. It should not be the reason runtime-correctness PRs are
 - reports are readable by humans and automation
 - parity claims are evidence-backed, not anecdotal
 
+Expected artifacts from PR D:
+
+- `qa-suite-report.md` / `qa-suite-summary.json` for each model run
+- `qa-agentic-parity-report.md` with aggregate and scenario-level comparison
+- `qa-agentic-parity-summary.json` with a machine-readable verdict
+
 ## Release gate
 
 Do not claim GPT-5.4 parity or superiority over Opus 4.6 until:

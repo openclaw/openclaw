@@ -1,4 +1,10 @@
+import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  buildQaAgenticParityComparison,
+  renderQaAgenticParityMarkdownReport,
+  type QaParitySuiteSummary,
+} from "./agentic-parity-report.js";
 import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
 import { runQaCharacterEval, type QaCharacterModelOptions } from "./character-eval.js";
 import { resolveRepoRelativeOutputDir } from "./cli-paths.js";
@@ -287,6 +293,45 @@ export async function runQaSuiteCommand(opts: {
   process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
 }
 
+export async function runQaParityReportCommand(opts: {
+  repoRoot?: string;
+  candidateSummary: string;
+  baselineSummary: string;
+  candidateLabel?: string;
+  baselineLabel?: string;
+  outputDir?: string;
+}) {
+  const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
+  const outputDir =
+    resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ??
+    path.join(repoRoot, ".artifacts", "qa-e2e", `parity-${Date.now().toString(36)}`);
+  await fs.mkdir(outputDir, { recursive: true });
+
+  const candidateSummaryPath = path.resolve(repoRoot, opts.candidateSummary);
+  const baselineSummaryPath = path.resolve(repoRoot, opts.baselineSummary);
+  const candidateSummary = JSON.parse(
+    await fs.readFile(candidateSummaryPath, "utf8"),
+  ) as QaParitySuiteSummary;
+  const baselineSummary = JSON.parse(
+    await fs.readFile(baselineSummaryPath, "utf8"),
+  ) as QaParitySuiteSummary;
+
+  const comparison = buildQaAgenticParityComparison({
+    candidateLabel: opts.candidateLabel?.trim() || "openai/gpt-5.4",
+    baselineLabel: opts.baselineLabel?.trim() || "anthropic/claude-opus-4-6",
+    candidateSummary,
+    baselineSummary,
+  });
+  const report = renderQaAgenticParityMarkdownReport(comparison);
+  const reportPath = path.join(outputDir, "qa-agentic-parity-report.md");
+  const summaryPath = path.join(outputDir, "qa-agentic-parity-summary.json");
+  await fs.writeFile(reportPath, report, "utf8");
+  await fs.writeFile(summaryPath, `${JSON.stringify(comparison, null, 2)}\n`, "utf8");
+
+  process.stdout.write(`QA parity report: ${reportPath}\n`);
+  process.stdout.write(`QA parity summary: ${summaryPath}\n`);
+  process.stdout.write(`QA parity verdict: ${comparison.pass ? "pass" : "fail"}\n`);
+}
 export async function runQaCharacterEvalCommand(opts: {
   repoRoot?: string;
   outputDir?: string;

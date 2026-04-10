@@ -48,6 +48,22 @@ This slice adds the first-wave QA-lab parity pack so GPT-5.4 and Opus 4.6 can be
 
 The parity pack is the proof layer. It does not change runtime behavior by itself.
 
+After you have two `qa-suite-summary.json` artifacts, generate the release-gate comparison with:
+
+```bash
+pnpm qa parity-report \
+  --repo-root . \
+  --candidate-summary .artifacts/qa-e2e/gpt54/qa-suite-summary.json \
+  --baseline-summary .artifacts/qa-e2e/opus46/qa-suite-summary.json \
+  --output-dir .artifacts/qa-e2e/parity
+```
+
+That command writes:
+
+- a human-readable Markdown report
+- a machine-readable JSON verdict
+- an explicit `pass` / `fail` gate result
+
 ## Why this improves GPT-5.4 in practice
 
 Before this work, GPT-5.4 on OpenClaw could feel less agentic than Opus in real coding sessions because the runtime tolerated behaviors that are especially harmful for GPT-5-style models:
@@ -115,6 +131,13 @@ Required outcomes:
 - no incorrect `/elevated full` guidance
 - no silent replay or compaction abandonment
 - parity-pack metrics that are at least as strong as the agreed Opus 4.6 baseline
+
+For the first-wave harness, the gate compares:
+
+- completion rate
+- unintended-stop rate
+- valid-tool-call rate
+- fake-success count
 
 ## Who should enable `strict-agentic`
 
