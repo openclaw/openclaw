@@ -124,10 +124,9 @@ default: `once`).
 
 Sub-agent sessions use a reduced bootstrap allowlist to keep context smaller.
 Today that minimal set includes `AGENTS.md`, `TOOLS.md`, `SOUL.md`,
-`IDENTITY.md`, and `USER.md`. You can further narrow the AGENTS source with
-`agents.defaults.subagents.agentsFile` or exact model-specific
-`agents.defaults.subagents.agentsFilesByModel` overrides such as
-`SUBAGENTS.md` or `SUBAGENTS.gpt-5.4.md`.
+`IDENTITY.md`, and `USER.md`. This reduced bootstrap set is currently
+implementation-defined rather than configurable through documented
+`agents.defaults.subagents.*` settings.
 
 Internal hooks can intercept this step via `agent:bootstrap` to mutate or replace
 the injected bootstrap files (for example swapping `SOUL.md` for an alternate persona).

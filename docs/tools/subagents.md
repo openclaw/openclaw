@@ -76,14 +76,15 @@ tasks, set a cheaper model for sub-agents and keep your main agent on a higher-q
 You can configure this via `agents.defaults.subagents.model` or per-agent overrides.
 
 If sub-agents should not inherit the main agent's full AGENTS instructions, set
-`agents.defaults.subagents.agentsFile` (and optionally
-`agents.defaults.subagents.agentsFilesByModel`) to swap in a narrower Markdown
-file such as `SUBAGENTS.md` or `SUBAGENTS.gpt-5.4.md`.
+the shared workspace bootstrap files so the reduced sub-agent bootstrap set
+already contains the narrower guidance you want. The sub-agent AGENTS source is
+not currently configurable through documented `agents.defaults.subagents.*`
+settings.
 
 Migration note: if you previously used the SubAgent Context Limiter plugin only
-to swap `SubAgentMD` into sub-agent runs, prefer these core config fields
-instead. The core path now handles AGENTS selection directly during bootstrap
-and compaction reinjection.
+to swap `SubAgentMD` into sub-agent runs, keep that plugin or hook-based setup
+for now. OpenClaw does not yet expose a documented core config replacement for
+that exact AGENTS-file swap.
 
 ## Tool
 
@@ -92,7 +93,7 @@ Use `sessions_spawn`:
 - Starts a sub-agent run (`deliver: false`, global lane: `subagent`)
 - Then runs an announce step and posts the announce reply to the requester chat channel
 - Default model: inherits the caller unless you set `agents.defaults.subagents.model` (or per-agent `agents.list[].subagents.model`); an explicit `sessions_spawn.model` still wins.
-- Default AGENTS source: uses the main agent's `AGENTS.md` unless you set `agents.defaults.subagents.agentsFile` (or per-agent `agents.list[].subagents.agentsFile`); exact model matches in `*.agentsFilesByModel` win over the base file.
+- Default AGENTS source: inherits from the workspace bootstrap set, but sub-agents use a reduced internal allowlist rather than a separately configurable `agents.defaults.subagents.agentsFile` setting.
 - Default thinking: inherits the caller unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.list[].subagents.thinking`); an explicit `sessions_spawn.thinking` still wins.
 - Default run timeout: if `sessions_spawn.runTimeoutSeconds` is omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` when set; otherwise it falls back to `0` (no timeout).
 
