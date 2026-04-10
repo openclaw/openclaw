@@ -167,6 +167,40 @@ describe("feishu_doc image fetch hardening", () => {
     return (await tool.execute("tool-call", params)) as ToolResultWithDetails;
   }
 
+  it("normalizes descendant children to arrays before sending create requests", async () => {
+    convertMock.mockResolvedValue({
+      code: 0,
+      data: {
+        blocks: [
+          { block_type: 12, block_id: "list1", children: "li1" },
+          { block_type: 13, block_id: "li1", parent_id: "list1" },
+        ],
+        first_level_block_ids: ["list1"],
+      },
+    });
+
+    blockDescendantCreateMock.mockResolvedValueOnce({
+      code: 0,
+      data: { children: [{ block_type: 12, block_id: "list1" }] },
+    });
+
+    const feishuDocTool = resolveFeishuDocTool();
+
+    await executeFeishuDocTool(feishuDocTool, {
+      action: "append",
+      doc_token: "doc_1",
+      content: "- item",
+    });
+
+    const descendants = blockDescendantCreateMock.mock.calls[0]?.[0]?.data.descendants as Array<{
+      block_id: string;
+      children?: string[] | string;
+    }>;
+    expect(descendants[0]).toMatchObject({ block_type: 12, block_id: "list1", children: ["li1"] });
+    expect(Array.isArray(descendants[0]?.children)).toBe(true);
+    expect(descendants[1]).toMatchObject({ block_type: 13, block_id: "li1" });
+  });
+
   it("inserts blocks sequentially to preserve document order", async () => {
     const blocks = [
       { block_type: 3, block_id: "h1" },

@@ -170,9 +170,9 @@ function toCreateChildBlock(block: FeishuDocxBlock): DocxChildrenCreateChild {
 function toDescendantBlock(block: FeishuDocxBlock): DocxDescendantCreateBlock {
   const children = normalizeChildIds(block.children);
   return {
+    ...block,
     ...(block.block_id ? { block_id: block.block_id } : {}),
     ...(children.length > 0 ? { children } : {}),
-    ...block,
   } as DocxDescendantCreateBlock;
 }
 
