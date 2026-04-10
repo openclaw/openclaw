@@ -211,6 +211,28 @@ describe("handleAgentEnd", () => {
     });
   });
 
+  it("derives abandoned lifecycle end state when replay-invalid work finished without a reply", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.state.replayInvalid = true;
+    ctx.state.livenessState = "working";
+    ctx.state.assistantTexts = [];
+    ctx.state.messagingToolSentTexts = [];
+    ctx.state.messagingToolSentMediaUrls = [];
+    ctx.state.successfulCronAdds = 0;
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        livenessState: "abandoned",
+        replayInvalid: true,
+      },
+    });
+  });
+
   it("flushes orphaned tool media as a media-only block reply", async () => {
     const ctx = createContext(undefined);
     ctx.state.pendingToolMediaUrls = ["/tmp/reply.opus"];

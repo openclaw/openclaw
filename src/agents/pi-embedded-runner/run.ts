@@ -564,6 +564,7 @@ export async function runEmbeddedPiAgent(
           }
         };
         let authRetryPending = false;
+        let accumulatedReplayInvalid = false;
         // Hoisted so the retry-limit error path can use the most recent API total.
         let lastTurnTotal: number | undefined;
         while (true) {
@@ -672,6 +673,7 @@ export async function runEmbeddedPiAgent(
             resolvedApiKey: resolvedStreamApiKey,
             authProfileId: lastProfileId,
             authProfileIdSource: lockedProfileId ? "user" : "auto",
+            initialReplayInvalid: accumulatedReplayInvalid,
             authStorage,
             modelRegistry,
             agentId: workspaceResolution.agentId,
@@ -747,6 +749,15 @@ export async function runEmbeddedPiAgent(
             provider,
             model: modelId,
           });
+          const resolveReplayInvalidForAttempt = (incompleteTurnText?: string | null) =>
+            accumulatedReplayInvalid ||
+            resolveReplayInvalidFlag({
+              attempt,
+              incompleteTurnText,
+            });
+          if (resolveReplayInvalidForAttempt(null)) {
+            accumulatedReplayInvalid = true;
+          }
           const formattedAssistantErrorText = lastAssistant
             ? formatAssistantErrorText(lastAssistant, {
                 cfg: params.config,
@@ -1102,7 +1113,7 @@ export async function runEmbeddedPiAgent(
             }
             const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
             attempt.setTerminalLifecycleMeta?.({
-              replayInvalid: resolveReplayInvalidFlag({ attempt }),
+              replayInvalid: resolveReplayInvalidForAttempt(),
               livenessState: "blocked",
             });
             return {
@@ -1126,7 +1137,7 @@ export async function runEmbeddedPiAgent(
                   lastTurnTotal,
                 }),
                 systemPromptReport: attempt.systemPromptReport,
-                replayInvalid: resolveReplayInvalidFlag({ attempt }),
+                replayInvalid: resolveReplayInvalidForAttempt(),
                 livenessState: "blocked",
                 error: { kind, message: errorText },
               },
@@ -1156,7 +1167,7 @@ export async function runEmbeddedPiAgent(
             // Handle role ordering errors with a user-friendly message
             if (/incorrect role information|roles must alternate/i.test(errorText)) {
               attempt.setTerminalLifecycleMeta?.({
-                replayInvalid: resolveReplayInvalidFlag({ attempt }),
+                replayInvalid: resolveReplayInvalidForAttempt(),
                 livenessState: "blocked",
               });
               return {
@@ -1180,7 +1191,7 @@ export async function runEmbeddedPiAgent(
                     lastTurnTotal,
                   }),
                   systemPromptReport: attempt.systemPromptReport,
-                  replayInvalid: resolveReplayInvalidFlag({ attempt }),
+                  replayInvalid: resolveReplayInvalidForAttempt(),
                   livenessState: "blocked",
                   error: { kind: "role_ordering", message: errorText },
                 },
@@ -1194,7 +1205,7 @@ export async function runEmbeddedPiAgent(
                 typeof maxMb === "number" && Number.isFinite(maxMb) ? `${maxMb}` : null;
               const maxBytesHint = maxMbLabel ? ` (max ${maxMbLabel}MB)` : "";
               attempt.setTerminalLifecycleMeta?.({
-                replayInvalid: resolveReplayInvalidFlag({ attempt }),
+                replayInvalid: resolveReplayInvalidForAttempt(),
                 livenessState: "blocked",
               });
               return {
@@ -1218,7 +1229,7 @@ export async function runEmbeddedPiAgent(
                     lastTurnTotal,
                   }),
                   systemPromptReport: attempt.systemPromptReport,
-                  replayInvalid: resolveReplayInvalidFlag({ attempt }),
+                  replayInvalid: resolveReplayInvalidForAttempt(),
                   livenessState: "blocked",
                   error: { kind: "image_size", message: errorText },
                 },
@@ -1503,10 +1514,7 @@ export async function runEmbeddedPiAgent(
                 "Please try again, or increase `agents.defaults.llm.idleTimeoutSeconds` in your config (set to 0 to disable)."
               : "Request timed out before a response was generated. " +
                 "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.";
-            const replayInvalid = resolveReplayInvalidFlag({
-              attempt,
-              incompleteTurnText: null,
-            });
+            const replayInvalid = resolveReplayInvalidForAttempt(null);
             const livenessState = resolveRunLivenessState({
               payloadCount: payloads.length,
               aborted,
@@ -1625,10 +1633,7 @@ export async function runEmbeddedPiAgent(
             };
           }
           if (incompleteTurnText) {
-            const replayInvalid = resolveReplayInvalidFlag({
-              attempt,
-              incompleteTurnText,
-            });
+            const replayInvalid = resolveReplayInvalidForAttempt(incompleteTurnText);
             const livenessState = resolveRunLivenessState({
               payloadCount: payloads.length,
               aborted,
@@ -1696,10 +1701,7 @@ export async function runEmbeddedPiAgent(
               agentDir: params.agentDir,
             });
           }
-          const replayInvalid = resolveReplayInvalidFlag({
-            attempt,
-            incompleteTurnText: null,
-          });
+          const replayInvalid = resolveReplayInvalidForAttempt(null);
           const livenessState = resolveRunLivenessState({
             payloadCount: payloads.length,
             aborted,
