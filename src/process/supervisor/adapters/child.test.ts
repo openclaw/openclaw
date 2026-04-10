@@ -27,12 +27,32 @@ function createStubChild(pid = 1234) {
   Object.defineProperty(child, "killed", { value: false, configurable: true, writable: true });
   Object.defineProperty(child, "exitCode", { value: null, configurable: true, writable: true });
   Object.defineProperty(child, "signalCode", { value: null, configurable: true, writable: true });
+  let emittedClose = false;
+  let emittedExit = false;
+  let closedStreams = 0;
+  const maybeEmitCloseAfterStreamShutdown = () => {
+    if (emittedClose || !emittedExit || closedStreams < 2) {
+      return;
+    }
+    emittedClose = true;
+    child.emit("close", child.exitCode, child.signalCode);
+  };
+  child.stdout.on("close", () => {
+    closedStreams += 1;
+    maybeEmitCloseAfterStreamShutdown();
+  });
+  child.stderr.on("close", () => {
+    closedStreams += 1;
+    maybeEmitCloseAfterStreamShutdown();
+  });
   const killMock = vi.fn(() => true);
   child.kill = killMock as ChildProcess["kill"];
   const emitClose = (code: number | null, signal: NodeJS.Signals | null = null) => {
+    emittedClose = true;
     child.emit("close", code, signal);
   };
   const emitExit = (code: number | null, signal: NodeJS.Signals | null = null) => {
+    emittedExit = true;
     child.exitCode = code;
     child.signalCode = signal;
     child.emit("exit", code, signal);

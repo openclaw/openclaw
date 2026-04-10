@@ -7,7 +7,6 @@ import { toStringEnv } from "./env.js";
 
 const FORCE_KILL_WAIT_FALLBACK_MS = 4000;
 const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
-const WINDOWS_CLOSE_STATE_POLL_MS = 10;
 
 function resolveCommand(command: string): string {
   return resolveWindowsCommandShim({
@@ -125,7 +124,7 @@ export async function createChildAdapter(params: {
   let waitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | null }> | null = null;
   let forceKillWaitFallbackTimer: NodeJS.Timeout | null = null;
   let childExitState: { code: number | null; signal: NodeJS.Signals | null } | null = null;
-  let windowsExitSettleTimer: NodeJS.Timeout | null = null;
+  let windowsCloseFallbackTimer: NodeJS.Timeout | null = null;
 
   const clearForceKillWaitFallback = () => {
     if (!forceKillWaitFallbackTimer) {
@@ -135,12 +134,12 @@ export async function createChildAdapter(params: {
     forceKillWaitFallbackTimer = null;
   };
 
-  const clearWindowsExitSettleTimer = () => {
-    if (!windowsExitSettleTimer) {
+  const clearWindowsCloseFallbackTimer = () => {
+    if (!windowsCloseFallbackTimer) {
       return;
     }
-    clearTimeout(windowsExitSettleTimer);
-    windowsExitSettleTimer = null;
+    clearTimeout(windowsCloseFallbackTimer);
+    windowsCloseFallbackTimer = null;
   };
 
   const settleWait = (value: { code: number | null; signal: NodeJS.Signals | null }) => {
@@ -148,7 +147,7 @@ export async function createChildAdapter(params: {
       return;
     }
     clearForceKillWaitFallback();
-    clearWindowsExitSettleTimer();
+    clearWindowsCloseFallbackTimer();
     waitResult = value;
     if (resolveWait) {
       const resolve = resolveWait;
@@ -163,7 +162,7 @@ export async function createChildAdapter(params: {
       return;
     }
     clearForceKillWaitFallback();
-    clearWindowsExitSettleTimer();
+    clearWindowsCloseFallbackTimer();
     waitError = error;
     if (rejectWait) {
       const reject = rejectWait;
@@ -185,25 +184,29 @@ export async function createChildAdapter(params: {
   const resolveObservedExitState = (fallback: {
     code: number | null;
     signal: NodeJS.Signals | null;
-  }) => ({
-    code: childExitState?.code ?? child.exitCode ?? fallback.code,
-    signal: childExitState?.signal ?? child.signalCode ?? fallback.signal,
-  });
-
-  const hasObservedExitState = () =>
-    childExitState != null || child.exitCode != null || child.signalCode != null;
-
-  const scheduleWindowsExitStateSettle = (fallback: {
-    code: number | null;
-    signal: NodeJS.Signals | null;
   }) => {
+    if (childExitState != null) {
+      return childExitState;
+    }
+    return {
+      code: child.exitCode ?? fallback.code,
+      signal: child.signalCode ?? fallback.signal,
+    };
+  };
+
+  const scheduleWindowsCloseFallback = () => {
     if (process.platform !== "win32") {
       return;
     }
-    clearWindowsExitSettleTimer();
-    windowsExitSettleTimer = setTimeout(() => {
-      settleWait(resolveObservedExitState(fallback));
+    clearWindowsCloseFallbackTimer();
+    windowsCloseFallbackTimer = setTimeout(() => {
+      if (waitResult || waitError !== undefined) {
+        return;
+      }
+      child.stdout?.destroy();
+      child.stderr?.destroy();
     }, WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS);
+    windowsCloseFallbackTimer.unref?.();
   };
 
   child.once("error", (error) => {
@@ -211,31 +214,10 @@ export async function createChildAdapter(params: {
   });
   child.once("exit", (code, signal) => {
     childExitState = { code, signal };
-    scheduleWindowsExitStateSettle({ code, signal });
+    scheduleWindowsCloseFallback();
   });
   child.once("close", (code, signal) => {
-    if (process.platform !== "win32" || hasObservedExitState() || code != null || signal != null) {
-      settleWait(resolveObservedExitState({ code, signal }));
-      return;
-    }
-
-    const startedAt = Date.now();
-    const waitForExitState = () => {
-      if (waitResult || waitError !== undefined) {
-        return;
-      }
-      if (hasObservedExitState()) {
-        settleWait(resolveObservedExitState({ code, signal }));
-        return;
-      }
-      if (Date.now() - startedAt >= WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS) {
-        settleWait({ code, signal });
-        return;
-      }
-      setTimeout(waitForExitState, WINDOWS_CLOSE_STATE_POLL_MS);
-    };
-
-    waitForExitState();
+    settleWait(resolveObservedExitState({ code, signal }));
   });
 
   const wait = async () => {
@@ -292,7 +274,7 @@ export async function createChildAdapter(params: {
 
   const dispose = () => {
     clearForceKillWaitFallback();
-    clearWindowsExitSettleTimer();
+    clearWindowsCloseFallbackTimer();
     child.removeAllListeners();
   };
 
