@@ -209,6 +209,14 @@ async function appendPostCompactionRefreshPrompt(params: {
   const refreshPrompt = await readPostCompactionContext(
     params.followupRun.run.workspaceDir,
     params.cfg,
+    undefined,
+    {
+      sessionKey: params.followupRun.run.sessionKey,
+      sessionId: params.followupRun.run.sessionId,
+      agentId: params.followupRun.run.agentId,
+      modelProviderId: params.followupRun.run.provider,
+      modelId: params.followupRun.run.model,
+    },
   );
   if (!refreshPrompt) {
     return;

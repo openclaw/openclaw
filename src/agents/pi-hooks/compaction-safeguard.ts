@@ -3,6 +3,7 @@ import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext, FileOperations } from "@mariozechner/pi-coding-agent";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
+import { resolveEffectiveAgentsBootstrapFileForRun } from "../bootstrap-files.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isAbortError } from "../../infra/unhandled-rejections.js";
@@ -672,14 +673,26 @@ function extractLatestUserAsk(messages: AgentMessage[]): string | null {
 
 /**
  * Read and format critical workspace context for compaction summary.
- * Extracts "Session Startup" and "Red Lines" from AGENTS.md.
+ * Extracts "Session Startup" and "Red Lines" from the effective AGENTS source.
  * Falls back to legacy names "Every Session" and "Safety".
  * Limited to 2000 chars to avoid bloating the summary.
  */
-async function readWorkspaceContextForSummary(): Promise<string> {
+async function readWorkspaceContextForSummary(
+  runtime?: ReturnType<typeof getCompactionSafeguardRuntime>,
+): Promise<string> {
   const MAX_SUMMARY_CONTEXT_CHARS = 2000;
-  const workspaceDir = process.cwd();
-  const agentsPath = path.join(workspaceDir, "AGENTS.md");
+  const workspaceDir = runtime?.workspaceDir ?? process.cwd();
+  const agentsPath = (
+    await resolveEffectiveAgentsBootstrapFileForRun({
+      workspaceDir,
+      config: runtime?.cfg,
+      sessionKey: runtime?.sessionKey,
+      sessionId: runtime?.sessionId,
+      agentId: runtime?.agentId,
+      modelProviderId: runtime?.modelProviderId,
+      modelId: runtime?.modelId,
+    })
+  ).bootstrapFile.path;
 
   try {
     const opened = await openBoundaryFile({
@@ -817,7 +830,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           if (providerResult !== undefined) {
             // Provider succeeded — assemble suffix metadata and return.
             // No quality guard: the provider is trusted.
-            const workspaceContext = await readWorkspaceContextForSummary();
+            const workspaceContext = await readWorkspaceContextForSummary(runtime);
             const suffix = assembleSuffix({
               splitTurnSection,
               preservedTurnsSection,
@@ -1096,7 +1109,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
       // Cap the main history body first, then append split-turn context, preserved
       // turns, diagnostics, and workspace rules so they survive truncation.
-      const workspaceContext = await readWorkspaceContextForSummary();
+      const workspaceContext = await readWorkspaceContextForSummary(runtime);
       const suffix = assembleSuffix({
         splitTurnSection: lastSplitTurnSection,
         preservedTurnsSection,
