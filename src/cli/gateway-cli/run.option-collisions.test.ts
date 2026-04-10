@@ -174,7 +174,7 @@ describe("gateway run option collisions", () => {
       "gateway",
       "run",
       "--token",
-      "tok_run",
+      "0123456789abcdef0123456789abcdef",
       "--allow-unconfigured",
       "--ws-log",
       "full",
@@ -191,7 +191,7 @@ describe("gateway run option collisions", () => {
       18789,
       expect.objectContaining({
         auth: expect.objectContaining({
-          token: "tok_run",
+          token: "0123456789abcdef0123456789abcdef",
         }),
       }),
     );
@@ -345,6 +345,25 @@ describe("gateway run option collisions", () => {
     expect(runtimeErrors).toContain(
       "Warning: --password can be exposed via process listings. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
     );
+  });
+
+  it.each(["change-me-to-a-long-random-token", "change-me", "changeme", "secret", "password"])(
+    "rejects weak/placeholder gateway token: %s",
+    async (weakToken) => {
+      await expect(
+        runGatewayCli(["gateway", "run", "--token", weakToken, "--allow-unconfigured"]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(runtimeErrors.some((e) => e.includes("[HARDENED]"))).toBe(true);
+    },
+  );
+
+  it("rejects gateway token shorter than 32 characters", async () => {
+    await expect(
+      runGatewayCli(["gateway", "run", "--token", "short-but-not-weak", "--allow-unconfigured"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors.some((e) => e.includes("[HARDENED]"))).toBe(true);
   });
 
   it("rejects using both --password and --password-file", async () => {
