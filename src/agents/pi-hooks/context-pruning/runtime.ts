@@ -6,6 +6,7 @@ export type ContextPruningRuntimeValue = {
   contextWindowTokens?: number | null;
   isToolPrunable: (toolName: string) => boolean;
   dropThinkingBlocks: boolean;
+  thinkingBlockEstimateStrategy?: "generic" | "github-copilot";
   lastCacheTouchAt?: number | null;
 };
 

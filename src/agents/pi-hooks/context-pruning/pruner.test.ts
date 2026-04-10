@@ -221,6 +221,50 @@ describe("pruneContextMessages", () => {
     expect(result).toBe(messages);
   });
 
+  it("uses Copilot replay sanitization when estimating latest-turn thinking", () => {
+    const messages: AgentMessage[] = [
+      makeUser("first"),
+      makeToolResult([{ type: "text", text: "X".repeat(2_000) }]),
+      makeUser("latest"),
+      makeAssistant([
+        {
+          type: "thinking",
+          thinking: "internal",
+          thinkingSignature: "S".repeat(40_000),
+        } as unknown as AssistantContentBlock,
+        { type: "text", text: "latest reply" },
+      ]),
+    ];
+
+    const settings = {
+      ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+      keepLastAssistants: 1,
+      softTrimRatio: 0.5,
+      softTrim: { maxChars: 200, headChars: 100, tailChars: 50 },
+      hardClear: { ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear, enabled: false },
+    };
+    const ctx = { model: { contextWindow: 5_000 } } as unknown as ExtensionContext;
+
+    const genericEstimate = pruneContextMessages({
+      messages,
+      settings,
+      ctx,
+      isToolPrunable: () => true,
+      dropThinkingBlocksForEstimate: true,
+    });
+    expect(genericEstimate).not.toBe(messages);
+
+    const copilotEstimate = pruneContextMessages({
+      messages,
+      settings,
+      ctx,
+      isToolPrunable: () => true,
+      dropThinkingBlocksForEstimate: true,
+      thinkingBlockEstimateStrategy: "github-copilot",
+    });
+    expect(copilotEstimate).toBe(messages);
+  });
+
   it("soft-trims image-containing tool results by replacing image blocks with placeholders", () => {
     const messages: AgentMessage[] = [
       makeUser("summarize this"),
