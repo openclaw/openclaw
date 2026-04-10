@@ -21,6 +21,7 @@ import { ensureOpenClawModelsJson } from "./models-config.js";
 import { EmbeddedBlockChunker, type BlockReplyChunking } from "./pi-embedded-block-chunker.js";
 import { resolveModelWithRegistry } from "./pi-embedded-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./pi-embedded-runner/runs.js";
+import { streamWithPayloadPatch } from "./pi-embedded-runner/stream-payload-utils.js";
 import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 import { stripToolResultDetails } from "./session-transcript-repair.js";
 
@@ -283,7 +284,8 @@ export async function runBtwSideQuestion(
     await blockEmitChain;
   };
 
-  const stream = streamSimple(
+  const stream = await streamWithPayloadPatch(
+    streamSimple,
     model,
     {
       systemPrompt: buildBtwSystemPrompt(),
@@ -307,6 +309,13 @@ export async function runBtwSideQuestion(
       // reasoning off so we reliably receive answer text instead of thinking-only output.
       reasoning: undefined,
       signal: params.opts?.abortSignal,
+    },
+    (payloadObj) => {
+      // BTW is intentionally tool-less. Some OpenAI-compatible providers reject
+      // the empty tools arrays injected for generic tool-history replay.
+      if (Array.isArray(payloadObj.tools) && payloadObj.tools.length === 0) {
+        delete payloadObj.tools;
+      }
     },
   );
 
