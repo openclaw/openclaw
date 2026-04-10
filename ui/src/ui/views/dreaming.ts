@@ -728,37 +728,39 @@ function renderDiarySection(props: DreamingProps) {
 
   return html`
     <section class="dreams-diary">
-      <div class="dreams-diary__header">
-        <span class="dreams-diary__title">${t("dreaming.diary.title")}</span>
-        <button
-          class="btn btn--subtle btn--sm"
-          ?disabled=${props.modeSaving || props.dreamDiaryLoading}
-          @click=${() => {
-            _diaryPage = 0;
-            props.onRefreshDiary();
-          }}
-        >
-          ${props.dreamDiaryLoading ? t("dreaming.diary.reloading") : t("dreaming.diary.reload")}
-        </button>
-      </div>
+      <div class="dreams-diary__chrome">
+        <div class="dreams-diary__header">
+          <span class="dreams-diary__title">${t("dreaming.diary.title")}</span>
+          <button
+            class="btn btn--subtle btn--sm"
+            ?disabled=${props.modeSaving || props.dreamDiaryLoading}
+            @click=${() => {
+              _diaryPage = 0;
+              props.onRefreshDiary();
+            }}
+          >
+            ${props.dreamDiaryLoading ? t("dreaming.diary.reloading") : t("dreaming.diary.reload")}
+          </button>
+        </div>
 
-      <!-- Simple day chips -->
-      <div class="dreams-diary__daychips">
-        ${reversed.map(
-          (e) => html`
-            <button
-              class="dreams-diary__day-chip ${e.page === page
-                ? "dreams-diary__day-chip--active"
-                : ""}"
-              @click=${() => {
-                setDiaryPage(e.page);
-                props.onRequestUpdate?.();
-              }}
-            >
-              ${formatDiaryChipLabel(e.date)}
-            </button>
-          `,
-        )}
+        <!-- Simple day chips -->
+        <div class="dreams-diary__daychips">
+          ${reversed.map(
+            (e) => html`
+              <button
+                class="dreams-diary__day-chip ${e.page === page
+                  ? "dreams-diary__day-chip--active"
+                  : ""}"
+                @click=${() => {
+                  setDiaryPage(e.page);
+                  props.onRequestUpdate?.();
+                }}
+              >
+                ${formatDiaryChipLabel(e.date)}
+              </button>
+            `,
+          )}
+        </div>
       </div>
 
       <article class="dreams-diary__entry" key="${page}">

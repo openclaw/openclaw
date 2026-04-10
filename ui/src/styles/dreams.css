@@ -686,14 +686,30 @@
 
 /* ---- Diary header ---- */
 
+.dreams-diary__chrome {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  width: min(100%, 680px);
+  max-width: 100%;
+  min-width: 0;
+  padding-bottom: 14px;
+  margin-bottom: 10px;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--bg) 98%, transparent) 0%,
+      color-mix(in oklab, var(--bg) 94%, transparent) 72%,
+      color-mix(in oklab, var(--bg) 0%, transparent) 100%
+    );
+}
+
 .dreams-diary__header {
   display: flex;
   align-items: center;
   gap: 16px;
-  margin-bottom: 20px;
+  margin-bottom: 14px;
   flex-shrink: 0;
-  position: relative;
-  z-index: 2;
 }
 
 .dreams-diary__title {
@@ -773,7 +789,7 @@
 .dreams-diary__daychips {
   display: flex;
   gap: 6px;
-  margin: 0 0 24px;
+  margin: 0;
   width: min(100%, 680px);
   max-width: 100%;
   min-width: 0;
@@ -782,8 +798,6 @@
   scrollbar-width: none;
   -ms-overflow-style: none;
   padding-bottom: 2px;
-  position: relative;
-  z-index: 2;
 }
 
 .dreams-diary__daychips::-webkit-scrollbar {
