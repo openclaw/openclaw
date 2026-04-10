@@ -11,6 +11,11 @@ import {
   resizeChromeMcpPage,
 } from "../chrome-mcp.js";
 import type { BrowserActRequest } from "../client-actions.types.js";
+import {
+  assertBrowserNavigationResultAllowed,
+  type BrowserNavigationPolicyOptions,
+  withBrowserNavigationPolicy,
+} from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import { matchBrowserUrlPattern } from "../url-pattern.js";
@@ -36,6 +41,62 @@ import { jsonError, toNumber, toStringOrEmpty } from "./utils.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const EXISTING_SESSION_INTERACTION_NAVIGATION_RECHECK_DELAYS_MS = [0, 250, 500] as const;
+
+async function readExistingSessionLocationHref(params: {
+  profileName: string;
+  userDataDir?: string;
+  targetId: string;
+}): Promise<string> {
+  const currentUrl = await evaluateChromeMcpScript({
+    profileName: params.profileName,
+    userDataDir: params.userDataDir,
+    targetId: params.targetId,
+    fn: "() => window.location.href",
+  });
+  return typeof currentUrl === "string" ? currentUrl : "";
+}
+
+async function assertExistingSessionPostInteractionNavigationAllowed(params: {
+  profileName: string;
+  userDataDir?: string;
+  targetId: string;
+  baselineUrl?: string;
+  ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
+}): Promise<void> {
+  const ssrfPolicyOpts = withBrowserNavigationPolicy(params.ssrfPolicy);
+  if (!ssrfPolicyOpts.ssrfPolicy) {
+    return;
+  }
+
+  let lastUrl = params.baselineUrl ?? "";
+  let sawStableUrl = false;
+  for (const delayMs of EXISTING_SESSION_INTERACTION_NAVIGATION_RECHECK_DELAYS_MS) {
+    if (delayMs > 0) {
+      await sleep(delayMs);
+    }
+    let currentUrl: string;
+    try {
+      currentUrl = await readExistingSessionLocationHref(params);
+    } catch {
+      return;
+    }
+    await assertBrowserNavigationResultAllowed({
+      url: currentUrl,
+      ...ssrfPolicyOpts,
+    });
+    if (currentUrl !== lastUrl) {
+      lastUrl = currentUrl;
+      sawStableUrl = false;
+      continue;
+    }
+    if (sawStableUrl) {
+      return;
+    }
+    sawStableUrl = true;
+  }
 }
 
 function buildExistingSessionWaitPredicate(params: {
@@ -268,6 +329,13 @@ export function registerBrowserAgentActRoutes(
                 uid: action.ref!,
                 doubleClick: action.doubleClick ?? false,
               });
+              await assertExistingSessionPostInteractionNavigationAllowed({
+                profileName,
+                userDataDir: profileCtx.profile.userDataDir,
+                targetId: tab.targetId,
+                baselineUrl: tab.url,
+                ssrfPolicy,
+              });
               return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
             case "type":
               await fillChromeMcpElement({
@@ -285,6 +353,13 @@ export function registerBrowserAgentActRoutes(
                   key: "Enter",
                 });
               }
+              await assertExistingSessionPostInteractionNavigationAllowed({
+                profileName,
+                userDataDir: profileCtx.profile.userDataDir,
+                targetId: tab.targetId,
+                baselineUrl: tab.url,
+                ssrfPolicy,
+              });
               return res.json({ ok: true, targetId: tab.targetId });
             case "press":
               await pressChromeMcpKey({
@@ -293,6 +368,13 @@ export function registerBrowserAgentActRoutes(
                 targetId: tab.targetId,
                 key: action.key,
               });
+              await assertExistingSessionPostInteractionNavigationAllowed({
+                profileName,
+                userDataDir: profileCtx.profile.userDataDir,
+                targetId: tab.targetId,
+                baselineUrl: tab.url,
+                ssrfPolicy,
+              });
               return res.json({ ok: true, targetId: tab.targetId });
             case "hover":
               await hoverChromeMcpElement({
@@ -300,6 +382,13 @@ export function registerBrowserAgentActRoutes(
                 userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
                 uid: action.ref!,
+              });
+              await assertExistingSessionPostInteractionNavigationAllowed({
+                profileName,
+                userDataDir: profileCtx.profile.userDataDir,
+                targetId: tab.targetId,
+                baselineUrl: tab.url,
+                ssrfPolicy,
               });
               return res.json({ ok: true, targetId: tab.targetId });
             case "scrollIntoView":
@@ -310,6 +399,13 @@ export function registerBrowserAgentActRoutes(
                 fn: `(el) => { el.scrollIntoView({ block: "center", inline: "center" }); return true; }`,
                 args: [action.ref!],
               });
+              await assertExistingSessionPostInteractionNavigationAllowed({
+                profileName,
+                userDataDir: profileCtx.profile.userDataDir,
+                targetId: tab.targetId,
+                baselineUrl: tab.url,
+                ssrfPolicy,
+              });
               return res.json({ ok: true, targetId: tab.targetId });
             case "drag":
               await dragChromeMcpElement({
@@ -319,6 +415,13 @@ export function registerBrowserAgentActRoutes(
                 fromUid: action.startRef!,
                 toUid: action.endRef!,
               });
+              await assertExistingSessionPostInteractionNavigationAllowed({
+                profileName,
+                userDataDir: profileCtx.profile.userDataDir,
+                targetId: tab.targetId,
+                baselineUrl: tab.url,
+                ssrfPolicy,
+              });
               return res.json({ ok: true, targetId: tab.targetId });
             case "select":
               await fillChromeMcpElement({
@@ -327,6 +430,13 @@ export function registerBrowserAgentActRoutes(
                 targetId: tab.targetId,
                 uid: action.ref!,
                 value: action.values[0] ?? "",
+              });
+              await assertExistingSessionPostInteractionNavigationAllowed({
+                profileName,
+                userDataDir: profileCtx.profile.userDataDir,
+                targetId: tab.targetId,
+                baselineUrl: tab.url,
+                ssrfPolicy,
               });
               return res.json({ ok: true, targetId: tab.targetId });
             case "fill":
@@ -338,6 +448,13 @@ export function registerBrowserAgentActRoutes(
                   uid: field.ref,
                   value: String(field.value ?? ""),
                 })),
+              });
+              await assertExistingSessionPostInteractionNavigationAllowed({
+                profileName,
+                userDataDir: profileCtx.profile.userDataDir,
+                targetId: tab.targetId,
+                baselineUrl: tab.url,
+                ssrfPolicy,
               });
               return res.json({ ok: true, targetId: tab.targetId });
             case "resize":
@@ -371,6 +488,13 @@ export function registerBrowserAgentActRoutes(
                 targetId: tab.targetId,
                 fn: action.fn,
                 args: action.ref ? [action.ref] : undefined,
+              });
+              await assertExistingSessionPostInteractionNavigationAllowed({
+                profileName,
+                userDataDir: profileCtx.profile.userDataDir,
+                targetId: tab.targetId,
+                baselineUrl: tab.url,
+                ssrfPolicy,
               });
               return res.json({
                 ok: true,
