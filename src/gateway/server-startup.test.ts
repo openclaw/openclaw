@@ -143,6 +143,7 @@ describe("gateway startup primary model warmup", () => {
     expect(selectAgentHarnessMock).toHaveBeenCalledWith({
       provider: "codex",
       modelId: "gpt-5.4",
+      config: cfg,
     });
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
     expect(resolveModelMock).not.toHaveBeenCalled();
@@ -188,6 +189,7 @@ describe("gateway startup primary model warmup", () => {
     expect(selectAgentHarnessMock).toHaveBeenCalledWith({
       provider: "openai-codex",
       modelId: "gpt-5.4",
+      config: cfg,
     });
     expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(cfg, "/tmp/agent");
     expect(resolveModelMock).toHaveBeenCalled();

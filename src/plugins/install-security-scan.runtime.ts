@@ -187,9 +187,11 @@ async function inspectNodeModulesSymlinkTarget(params: {
   const resolvedTargetStats = await fs.stat(resolvedTargetPath);
   const resolvedTargetRelativePath = path.relative(params.rootRealPath, resolvedTargetPath);
   return {
-    blockedDirectoryFinding: findBlockedPackageDirectoryInPath({
-      pathRelativeToRoot: resolvedTargetRelativePath,
-    }),
+    blockedDirectoryFinding: resolvedTargetStats.isDirectory()
+      ? findBlockedPackageDirectoryInPath({
+          pathRelativeToRoot: resolvedTargetRelativePath,
+        })
+      : undefined,
     blockedFileFinding: resolvedTargetStats.isFile()
       ? findBlockedPackageFileAliasInPath({
           pathRelativeToRoot: resolvedTargetRelativePath,
@@ -262,16 +264,6 @@ function resolvePackageManifestTraversalLimits(): PackageManifestTraversalLimits
   };
 }
 
-async function resolvePackageManifestPath(dir: string): Promise<string | undefined> {
-  const manifestPath = path.join(dir, "package.json");
-  try {
-    const stats = await fs.stat(manifestPath);
-    return stats.isFile() ? manifestPath : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 async function collectPackageManifestPaths(
   rootDir: string,
 ): Promise<PackageManifestTraversalResult> {
@@ -280,6 +272,8 @@ async function collectPackageManifestPaths(
   const queue: Array<{ depth: number; dir: string }> = [{ depth: 0, dir: rootDir }];
   const packageManifestPaths: string[] = [];
   const visitedDirectories = new Set<string>();
+  let firstBlockedDirectoryFinding: BlockedPackageDirectoryFinding | undefined;
+  let firstBlockedFileFinding: BlockedPackageFileFinding | undefined;
   let queueIndex = 0;
 
   while (queueIndex < queue.length) {
@@ -331,19 +325,13 @@ async function collectPackageManifestPaths(
           directoryRelativePath: relativeNextPath,
         });
         if (blockedDirectoryFinding) {
-          return {
-            blockedDirectoryFinding,
-            packageManifestPaths,
-          };
+          firstBlockedDirectoryFinding ??= blockedDirectoryFinding;
         }
         const blockedFileFinding = findBlockedNodeModulesFileAlias({
           fileRelativePath: relativeNextPath,
         });
         if (blockedFileFinding) {
-          return {
-            blockedFileFinding,
-            packageManifestPaths,
-          };
+          firstBlockedFileFinding ??= blockedFileFinding;
         }
         if (pathContainsNodeModulesSegment(relativeNextPath)) {
           const symlinkTargetInspection = await inspectNodeModulesSymlinkTarget({
@@ -352,16 +340,10 @@ async function collectPackageManifestPaths(
             symlinkRelativePath: relativeNextPath,
           });
           if (symlinkTargetInspection.blockedDirectoryFinding) {
-            return {
-              blockedDirectoryFinding: symlinkTargetInspection.blockedDirectoryFinding,
-              packageManifestPaths,
-            };
+            firstBlockedDirectoryFinding ??= symlinkTargetInspection.blockedDirectoryFinding;
           }
           if (symlinkTargetInspection.blockedFileFinding) {
-            return {
-              blockedFileFinding: symlinkTargetInspection.blockedFileFinding,
-              packageManifestPaths,
-            };
+            firstBlockedFileFinding ??= symlinkTargetInspection.blockedFileFinding;
           }
         }
         continue;
@@ -371,14 +353,7 @@ async function collectPackageManifestPaths(
           directoryRelativePath: relativeNextPath,
         });
         if (blockedDirectoryFinding) {
-          const manifestPath = await resolvePackageManifestPath(nextPath);
-          if (manifestPath) {
-            packageManifestPaths.push(manifestPath);
-          }
-          return {
-            blockedDirectoryFinding,
-            packageManifestPaths,
-          };
+          firstBlockedDirectoryFinding ??= blockedDirectoryFinding;
         }
         queue.push({ depth: current.depth + 1, dir: nextPath });
         continue;
@@ -388,10 +363,7 @@ async function collectPackageManifestPaths(
           fileRelativePath: relativeNextPath,
         });
         if (blockedFileFinding) {
-          return {
-            blockedFileFinding,
-            packageManifestPaths,
-          };
+          firstBlockedFileFinding ??= blockedFileFinding;
         }
       }
       if (entry.isFile() && entry.name === "package.json") {
@@ -405,7 +377,11 @@ async function collectPackageManifestPaths(
     }
   }
 
-  return { packageManifestPaths };
+  return {
+    packageManifestPaths,
+    blockedDirectoryFinding: firstBlockedDirectoryFinding,
+    blockedFileFinding: firstBlockedFileFinding,
+  };
 }
 
 async function scanManifestDependencyDenylist(params: {
