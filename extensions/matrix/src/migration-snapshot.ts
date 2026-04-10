@@ -1,5 +1,4 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { isMatrixLegacyCryptoInspectorAvailable } from "./legacy-crypto-inspector-availability.js";
 import { detectLegacyMatrixCrypto } from "./legacy-crypto.js";
 import { detectLegacyMatrixState } from "./legacy-state.js";
 import {
@@ -24,8 +23,7 @@ export function resolveMatrixMigrationStatus(params: {
   const legacyState = detectLegacyMatrixState({ cfg: params.cfg, env });
   const legacyCrypto = detectLegacyMatrixCrypto({ cfg: params.cfg, env });
   const actionableLegacyState = legacyState !== null && !("warning" in legacyState);
-  const actionableLegacyCrypto =
-    legacyCrypto.plans.length > 0 && isMatrixLegacyCryptoInspectorAvailable();
+  const actionableLegacyCrypto = legacyCrypto.plans.length > 0 && legacyCrypto.inspectorAvailable;
   return {
     legacyState,
     legacyCrypto,

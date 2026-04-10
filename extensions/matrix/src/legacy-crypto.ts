@@ -57,6 +57,7 @@ type MatrixLegacyCryptoPlan = {
 };
 
 type MatrixLegacyCryptoDetection = {
+  inspectorAvailable: boolean;
   plans: MatrixLegacyCryptoPlan[];
   warnings: string[];
 };
@@ -324,13 +325,20 @@ export function detectLegacyMatrixCrypto(params: {
     cfg: params.cfg,
     env: params.env ?? process.env,
   });
-  if (detection.plans.length > 0 && !isMatrixLegacyCryptoInspectorAvailable()) {
+  const inspectorAvailable =
+    detection.plans.length === 0 || isMatrixLegacyCryptoInspectorAvailable();
+  if (!inspectorAvailable && detection.plans.length > 0) {
     return {
+      inspectorAvailable,
       plans: detection.plans,
       warnings: [...detection.warnings, MATRIX_LEGACY_CRYPTO_INSPECTOR_UNAVAILABLE_MESSAGE],
     };
   }
-  return detection;
+  return {
+    inspectorAvailable,
+    plans: detection.plans,
+    warnings: detection.warnings,
+  };
 }
 
 export async function autoPrepareLegacyMatrixCrypto(params: {
@@ -359,7 +367,7 @@ export async function autoPrepareLegacyMatrixCrypto(params: {
       warnings,
     };
   }
-  if (!params.deps?.inspectLegacyStore && !isMatrixLegacyCryptoInspectorAvailable()) {
+  if (!params.deps?.inspectLegacyStore && !detection.inspectorAvailable) {
     if (warnings.length > 0) {
       params.log?.warn?.(
         `matrix: legacy encrypted-state warnings:\n${warnings.map((entry) => `- ${entry}`).join("\n")}`,
