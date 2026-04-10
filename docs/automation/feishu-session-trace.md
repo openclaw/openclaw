@@ -111,7 +111,13 @@ Create `~/Library/LaunchAgents/ai.openclaw.session-trace.plist`:
 Then load it:
 
 ```bash
-launchctl load ~/Library/LaunchAgents/ai.openclaw.session-trace.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.openclaw.session-trace.plist
+```
+
+To stop it later:
+
+```bash
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/ai.openclaw.session-trace.plist
 ```
 
 ## Troubleshooting

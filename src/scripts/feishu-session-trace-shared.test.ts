@@ -49,6 +49,7 @@ describe("feishu session trace shared helpers", () => {
   it("redacts obvious secrets", () => {
     expect(redactTraceText("OPENAI_API_KEY=sk-1234567890abcdef")).toBe("OPENAI_API_KEY=***");
     expect(redactTraceText("ghp_1234567890abcdef")).toBe("ghp_***");
+    expect(redactTraceText("Run command curl sk-1234567890abcdef")).toBe("Run command curl sk-***");
   });
 
   it("summarizes supported tool calls", () => {
@@ -85,6 +86,35 @@ describe("feishu session trace shared helpers", () => {
     expect(extractTraceMessagesFromSessionLine(line)).toEqual([
       "Read file /tmp/a.txt",
       "Search web openclaw",
+    ]);
+  });
+
+  it("accepts legacy content block types and top-level tool call payloads", () => {
+    const line = JSON.stringify({
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_call",
+            name: "edit",
+            input: { path: "/tmp/b.txt" },
+          },
+        ],
+        tool_calls: [
+          {
+            function: {
+              name: "exec",
+              arguments: JSON.stringify({ command: "pnpm test" }),
+            },
+          },
+        ],
+      },
+    });
+
+    expect(extractTraceMessagesFromSessionLine(line)).toEqual([
+      "Edit file /tmp/b.txt",
+      "Run command pnpm test",
     ]);
   });
 });

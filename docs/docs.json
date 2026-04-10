@@ -1156,9 +1156,9 @@
                   "automation/cron-jobs",
                   "automation/tasks",
                   "automation/taskflow",
-                  "automation/feishu-session-trace",
                   "automation/standing-orders",
-                  "automation/hooks"
+                  "automation/hooks",
+                  "automation/feishu-session-trace"
                 ]
               },
               {

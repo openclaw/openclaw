@@ -81,6 +81,75 @@ export function redactTraceText(text: string): string {
     .replace(/\b(OPENAI_API_KEY|ANTHROPIC_API_KEY|FEISHU_APP_SECRET)\s*=\s*[^ \n]+/g, "$1=***");
 }
 
+const TOOL_CALL_TYPES = new Set([
+  "toolcall",
+  "tool_call",
+  "tooluse",
+  "tool_use",
+  "functioncall",
+  "function_call",
+]);
+
+function normalizeToolCallType(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function parseToolCallArgs(value: unknown): unknown {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (record.arguments && typeof record.arguments === "object") {
+    return record.arguments;
+  }
+  if (record.input && typeof record.input === "object") {
+    return record.input;
+  }
+  if (record.args && typeof record.args === "object") {
+    return record.args;
+  }
+  const fn = record.function;
+  if (!fn || typeof fn !== "object") {
+    return undefined;
+  }
+  const fnRecord = fn as Record<string, unknown>;
+  if (fnRecord.arguments && typeof fnRecord.arguments === "object") {
+    return fnRecord.arguments;
+  }
+  if (typeof fnRecord.arguments === "string") {
+    try {
+      return JSON.parse(fnRecord.arguments);
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+function resolveToolCallName(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.name === "string" && record.name.trim()) {
+    return record.name;
+  }
+  const fn = record.function;
+  if (!fn || typeof fn !== "object") {
+    return undefined;
+  }
+  const fnName = (fn as Record<string, unknown>).name;
+  return typeof fnName === "string" && fnName.trim() ? fnName : undefined;
+}
+
+function summarizeTraceToolCall(value: unknown): string | null {
+  const toolName = resolveToolCallName(value);
+  if (!toolName) {
+    return null;
+  }
+  return summarizeToolCall(toolName, parseToolCallArgs(value));
+}
+
 export function summarizeToolCall(toolName: unknown, args: unknown): string | null {
   const name = String(toolName);
   const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
@@ -164,20 +233,30 @@ export function extractTraceMessagesFromSessionLine(line: string): string[] {
     return [];
   }
 
-  const content = Array.isArray(messageRecord.content) ? messageRecord.content : [];
   const summaries: string[] = [];
+  const content = Array.isArray(messageRecord.content) ? messageRecord.content : [];
   for (const part of content) {
-    if (!part || typeof part !== "object") {
+    if (!TOOL_CALL_TYPES.has(normalizeToolCallType((part as { type?: unknown } | null)?.type))) {
       continue;
     }
-    const partRecord = part as Record<string, unknown>;
-    if (partRecord.type !== "toolCall") {
-      continue;
-    }
-    const summary = summarizeToolCall(partRecord.name, partRecord.arguments);
+    const summary = summarizeTraceToolCall(part);
     if (summary) {
       summaries.push(summary);
     }
   }
+
+  const rawToolCalls =
+    messageRecord.tool_calls ??
+    messageRecord.toolCalls ??
+    messageRecord.function_call ??
+    messageRecord.functionCall;
+  const toolCalls = Array.isArray(rawToolCalls) ? rawToolCalls : rawToolCalls ? [rawToolCalls] : [];
+  for (const call of toolCalls) {
+    const summary = summarizeTraceToolCall(call);
+    if (summary) {
+      summaries.push(summary);
+    }
+  }
+
   return summaries;
 }
