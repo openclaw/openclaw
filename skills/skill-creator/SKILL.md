@@ -43,6 +43,16 @@ Match the level of specificity to the task's fragility and variability:
 
 Think of Codex as exploring a path: a narrow bridge with cliffs needs specific guardrails (low freedom), while an open field allows many routes (high freedom).
 
+### Determinism Ladder (Review Criterion)
+
+When creating, reviewing, or auditing a skill, evaluate each instruction against the determinism ladder — prefer more deterministic implementations over prompt-based ones:
+
+1. **Script** (`scripts/`): If the task can be fully automated with a script, write one. Scripts are deterministic, token-efficient, and testable.
+2. **Structured automation** (hooks, templates, config): If the task has a fixed pattern but needs some context, use structured formats over free-text instructions.
+3. **Prompt instruction** (SKILL.md body): Only for tasks requiring LLM judgment, contextual reasoning, or creative decisions.
+
+**During review/audit**, flag any SKILL.md instruction that could be a script or structured automation. Ask: "Would a script do this more reliably?" If yes, move it to `scripts/`.
+
 ### Anatomy of a Skill
 
 Every skill consists of a required SKILL.md file and optional bundled resources:
