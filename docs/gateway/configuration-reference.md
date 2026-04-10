@@ -953,6 +953,44 @@ Controls when workspace bootstrap files are injected into the system prompt. Def
 }
 ```
 
+### `agents.defaults.agentsFile`
+
+Sets the default AGENTS source file for main/default runs. The file path may be
+workspace-relative or absolute, but it must resolve inside the workspace root.
+If the configured file is missing or invalid, OpenClaw warns and falls back to
+workspace `AGENTS.md`.
+
+```json5
+{
+  agents: { defaults: { agentsFile: "AGENTS.main.md" } },
+}
+```
+
+### `agents.defaults.agentsFilesByModel`
+
+Sets exact model-specific AGENTS source files for main/default runs. Keys must
+use canonical `provider/model` refs.
+
+```json5
+{
+  agents: {
+    defaults: {
+      agentsFilesByModel: {
+        "openai/gpt-5.4": "AGENTS.gpt-5.4.md",
+        "anthropic/claude-opus-4-6": "AGENTS.opus.md",
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- Matching happens after OpenClaw resolves the actual runtime model.
+- These overrides are exact-match only; there is no wildcard or prefix matching.
+- If no model entry matches, OpenClaw uses `agents.defaults.agentsFile` and then
+  falls back to workspace `AGENTS.md`.
+
 ### `agents.defaults.bootstrapMaxChars`
 
 Max characters per workspace bootstrap file before truncation. Default: `20000`.
@@ -1614,6 +1652,10 @@ scripts/sandbox-browser-setup.sh   # optional browser image
         workspace: "~/.openclaw/workspace",
         agentDir: "~/.openclaw/agents/main/agent",
         model: "anthropic/claude-opus-4-6", // or { primary, fallbacks }
+        agentsFile: "AGENTS.main.md",
+        agentsFilesByModel: {
+          "openai/gpt-5.4": "AGENTS.gpt-5.4.md",
+        },
         thinkingDefault: "high", // per-agent thinking level override
         reasoningDefault: "on", // per-agent reasoning visibility override
         fastModeDefault: false, // per-agent fast mode override
@@ -1637,7 +1679,13 @@ scripts/sandbox-browser-setup.sh   # optional browser image
             cwd: "/workspace/openclaw",
           },
         },
-        subagents: { allowAgents: ["*"] },
+        subagents: {
+          allowAgents: ["*"],
+          agentsFile: "SUBAGENTS.md",
+          agentsFilesByModel: {
+            "openai/gpt-5.4": "SUBAGENTS.gpt-5.4.md",
+          },
+        },
         tools: {
           profile: "coding",
           allow: ["browser"],
@@ -1655,6 +1703,8 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 - `model`: string form overrides `primary` only; object form `{ primary, fallbacks }` overrides both (`[]` disables global fallbacks). Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
 - `params`: per-agent stream params merged over the selected model entry in `agents.defaults.models`. Use this for agent-specific overrides like `cacheRetention`, `temperature`, or `maxTokens` without duplicating the whole model catalog.
 - `skills`: optional per-agent skill allowlist. If omitted, the agent inherits `agents.defaults.skills` when set; an explicit list replaces defaults instead of merging, and `[]` means no skills.
+- `agentsFile`: optional per-agent AGENTS source file for main/default runs.
+- `agentsFilesByModel`: optional per-agent exact `provider/model -> file` map for main/default runs.
 - `thinkingDefault`: optional per-agent default thinking level (`off | minimal | low | medium | high | xhigh | adaptive`). Overrides `agents.defaults.thinkingDefault` for this agent when no per-message or session override is set.
 - `reasoningDefault`: optional per-agent default reasoning visibility (`on | off | stream`). Applies when no per-message or session reasoning override is set.
 - `fastModeDefault`: optional per-agent default for fast mode (`true | false`). Applies when no per-message or session fast-mode override is set.
@@ -1663,6 +1713,8 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
 - `identity` derives defaults: `ackReaction` from `emoji`, `mentionPatterns` from `name`/`emoji`.
 - `subagents.allowAgents`: allowlist of agent ids for `sessions_spawn` (`["*"]` = any; default: same agent only).
+- `subagents.agentsFile`: optional per-agent AGENTS source file for spawned sub-agent runs.
+- `subagents.agentsFilesByModel`: optional per-agent exact `provider/model -> file` map for spawned sub-agent runs.
 - Sandbox inheritance guard: if the requester session is sandboxed, `sessions_spawn` rejects targets that would run unsandboxed.
 - `subagents.requireAgentId`: when true, block `sessions_spawn` calls that omit `agentId` (forces explicit profile selection; default: false).
 
@@ -2362,6 +2414,10 @@ Notes:
       subagents: {
         allowAgents: ["research"],
         model: "minimax/MiniMax-M2.7",
+        agentsFile: "SUBAGENTS.md",
+        agentsFilesByModel: {
+          "openai/gpt-5.4": "SUBAGENTS.gpt-5.4.md",
+        },
         maxConcurrent: 8,
         runTimeoutSeconds: 900,
         archiveAfterMinutes: 60,
@@ -2373,9 +2429,37 @@ Notes:
 
 - `model`: default model for spawned sub-agents. If omitted, sub-agents inherit the caller's model.
 - `allowAgents`: default allowlist of target agent ids for `sessions_spawn` when the requester agent does not set its own `subagents.allowAgents` (`["*"]` = any; default: same agent only).
+- `agentsFile`: default AGENTS source file for sub-agent runs. Use this when
+  sub-agents should receive a narrower worker profile such as `SUBAGENTS.md`.
+- `agentsFilesByModel`: exact model-specific AGENTS overrides for sub-agent
+  runs keyed by canonical `provider/model` refs.
 - `runTimeoutSeconds`: default timeout (seconds) for `sessions_spawn` when the tool call omits `runTimeoutSeconds`. `0` means no timeout.
 - Per-subagent tool policy: `tools.subagents.tools.allow` / `tools.subagents.tools.deny`.
 
+Selection order for the AGENTS source:
+
+1. `agents.list[].subagents.agentsFilesByModel["provider/model"]`
+2. `agents.defaults.subagents.agentsFilesByModel["provider/model"]`
+3. `agents.list[].subagents.agentsFile`
+4. `agents.defaults.subagents.agentsFile`
+5. workspace `AGENTS.md`
+
+Security note:
+
+- Sub-agents still use the reduced bootstrap allowlist.
+- If you point sub-agents at `SUBAGENTS.md`, OpenClaw keeps using that same
+  effective AGENTS source during continuation checks, compaction refresh, and
+  post-compaction reinjection instead of silently reverting to the main
+  orchestrator `AGENTS.md`.
+
+Scenario example:
+
+- Main agent on `anthropic/claude-opus-4-6` can keep a broad planning and
+  orchestration file.
+- Worker sub-agents on `openai/gpt-5.4` can use a tighter file with explicit
+  task boundaries, shorter output rules, and less global policy overhead.
+- This lets teams tune prompt shape for each model without rewriting their
+  primary workspace prompt every time they switch providers.
 ---
 
 ## Custom providers and base URLs
