@@ -153,7 +153,7 @@ beforeEach(() => {
   clearSessionQueuesMock.mockReset();
   clearSessionQueuesMock.mockReturnValue({ followupCleared: 0, laneCleared: 0, keys: [] });
   refreshQueuedFollowupSessionMock.mockReset();
-  refreshQueuedFollowupSessionMock.mockResolvedValue(undefined);
+  refreshQueuedFollowupSessionMock.mockResolvedValue(null);
   loadCronStoreMock.mockClear();
   // Default: no cron jobs in store.
   loadCronStoreMock.mockResolvedValue({ version: 1, jobs: [] });
