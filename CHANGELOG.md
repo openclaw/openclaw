@@ -140,6 +140,8 @@ Docs: https://docs.openclaw.ai
 
 - Logging/security: redact Gmail watcher `--hook-token` values from startup logging and `logs.tail` output. (#62661) Thanks @eleqtrizit.
 
+- Sandbox/security: auto-derive CDP source-range from Docker network gateway and refuse to start the socat relay without one, so peer containers cannot reach CDP unauthenticated. (#61404) Thanks @dims.
+
 ## 2026.4.9
 
 ### Changes
