@@ -37,7 +37,7 @@ import type { QaThinkingLevel } from "./qa-gateway-config.js";
 import { extractQaFailureReplyText } from "./reply-failure.js";
 import { renderQaMarkdownReport, type QaReportCheck, type QaReportScenario } from "./report.js";
 import { qaChannelPlugin, type QaBusMessage } from "./runtime-api.js";
-import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
+import { readQaBootstrapScenarioCatalog, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
 
 type QaSuiteStep = {
@@ -1006,7 +1006,7 @@ type QaScenarioFlowApi = {
   env: QaSuiteEnvironment;
   lab: QaSuiteEnvironment["lab"];
   state: QaBusState;
-  scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
+  scenario: QaSeedScenarioWithSource;
   config: Record<string, unknown>;
   fs: typeof fs;
   path: typeof path;
@@ -1067,8 +1067,7 @@ type QaScenarioFlowApi = {
 
 function createScenarioFlowApi(
   env: QaSuiteEnvironment,
-  scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number],
-): QaScenarioFlowApi {
+  scenario: QaSeedScenarioWithSource,
   return {
     env,
     lab: env.lab,
@@ -1147,7 +1146,7 @@ export const qaSuiteTesting = {
 
 async function runScenarioDefinition(
   env: QaSuiteEnvironment,
-  scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number],
+  scenario: QaSeedScenarioWithSource,
 ) {
   const api = createScenarioFlowApi(env, scenario);
   if (!scenario.execution.flow) {
