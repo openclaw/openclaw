@@ -159,7 +159,211 @@ export function inspectGeminiToolSchemas(
   });
 }
 
-export type ProviderToolCompatFamily = "gemini";
+export function normalizeOpenAIToolSchemas(
+  ctx: ProviderNormalizeToolSchemasContext,
+): AnyAgentTool[] {
+  if (!shouldApplyOpenAIToolCompat(ctx)) {
+    return ctx.tools;
+  }
+  return ctx.tools.map((tool) => {
+    if (!tool.parameters || typeof tool.parameters !== "object") {
+      return tool;
+    }
+    return {
+      ...tool,
+      parameters: normalizeOpenAIStrictCompatSchema(tool.parameters),
+    };
+  });
+}
+
+function normalizeOpenAIStrictCompatSchema(schema: unknown): unknown {
+  return normalizeOpenAIStrictCompatSchemaRecursive(schema);
+}
+
+function shouldApplyOpenAIToolCompat(ctx: ProviderNormalizeToolSchemasContext): boolean {
+  const provider = String(ctx.model?.provider ?? ctx.provider ?? "")
+    .trim()
+    .toLowerCase();
+  const api = String(ctx.model?.api ?? ctx.modelApi ?? "")
+    .trim()
+    .toLowerCase();
+  const baseUrl = String(ctx.model?.baseUrl ?? "")
+    .trim()
+    .toLowerCase();
+
+  if (provider === "openai") {
+    return api === "openai-responses" && (!baseUrl || isOpenAIResponsesBaseUrl(baseUrl));
+  }
+  if (provider === "openai-codex") {
+    return (
+      api === "openai-codex-responses" &&
+      (!baseUrl || isOpenAIResponsesBaseUrl(baseUrl) || isOpenAICodexBaseUrl(baseUrl))
+    );
+  }
+  return false;
+}
+
+function isOpenAIResponsesBaseUrl(baseUrl: string): boolean {
+  return /^https:\/\/api\.openai\.com(?:\/v1)?(?:\/|$)/i.test(baseUrl);
+}
+
+function isOpenAICodexBaseUrl(baseUrl: string): boolean {
+  return /^https:\/\/chatgpt\.com\/backend-api(?:\/|$)/i.test(baseUrl);
+}
+
+function normalizeOpenAIStrictCompatSchemaRecursive(schema: unknown): unknown {
+  if (Array.isArray(schema)) {
+    let changed = false;
+    const normalized = schema.map((entry) => {
+      const next = normalizeOpenAIStrictCompatSchemaRecursive(entry);
+      changed ||= next !== entry;
+      return next;
+    });
+    return changed ? normalized : schema;
+  }
+  if (!schema || typeof schema !== "object") {
+    return schema;
+  }
+
+  const record = schema as Record<string, unknown>;
+  let changed = false;
+  const normalized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    const next = normalizeOpenAIStrictCompatSchemaRecursive(value);
+    normalized[key] = next;
+    changed ||= next !== value;
+  }
+
+  if (Object.keys(normalized).length === 0) {
+    return {
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: false,
+    };
+  }
+
+  const hasObjectShapeHints =
+    !("type" in normalized) &&
+    ((normalized.properties &&
+      typeof normalized.properties === "object" &&
+      !Array.isArray(normalized.properties)) ||
+      Array.isArray(normalized.required));
+  if (hasObjectShapeHints) {
+    normalized.type = "object";
+    changed = true;
+  }
+  if (normalized.type === "object" && !("properties" in normalized)) {
+    normalized.properties = {};
+    changed = true;
+  }
+
+  const hasEmptyProperties =
+    normalized.properties &&
+    typeof normalized.properties === "object" &&
+    !Array.isArray(normalized.properties) &&
+    Object.keys(normalized.properties as Record<string, unknown>).length === 0;
+
+  if (normalized.type === "object" && !Array.isArray(normalized.required) && hasEmptyProperties) {
+    normalized.required = [];
+    changed = true;
+  }
+
+  if (
+    normalized.type === "object" &&
+    hasEmptyProperties &&
+    !("additionalProperties" in normalized) &&
+    normalized.additionalProperties !== false
+  ) {
+    normalized.additionalProperties = false;
+    changed = true;
+  }
+
+  return changed ? normalized : schema;
+}
+
+export function findOpenAIStrictSchemaViolations(schema: unknown, path: string): string[] {
+  if (Array.isArray(schema)) {
+    return schema.flatMap((item, index) =>
+      findOpenAIStrictSchemaViolations(item, `${path}[${index}]`),
+    );
+  }
+  if (!schema || typeof schema !== "object") {
+    return [];
+  }
+
+  const record = schema as Record<string, unknown>;
+  const violations: string[] = [];
+  for (const key of ["anyOf", "oneOf", "allOf"] as const) {
+    if (Array.isArray(record[key])) {
+      violations.push(`${path}.${key}`);
+    }
+  }
+  if (Array.isArray(record.type)) {
+    violations.push(`${path}.type`);
+  }
+
+  const properties =
+    record.properties && typeof record.properties === "object" && !Array.isArray(record.properties)
+      ? (record.properties as Record<string, unknown>)
+      : undefined;
+
+  if (record.type === "object") {
+    if (record.additionalProperties !== false) {
+      violations.push(`${path}.additionalProperties`);
+    }
+    const required = Array.isArray(record.required)
+      ? record.required.filter((entry): entry is string => typeof entry === "string")
+      : undefined;
+    if (!required) {
+      violations.push(`${path}.required`);
+    } else if (properties) {
+      const requiredSet = new Set(required);
+      for (const key of Object.keys(properties)) {
+        if (!requiredSet.has(key)) {
+          violations.push(`${path}.required.${key}`);
+        }
+      }
+    }
+  }
+
+  if (properties) {
+    for (const [key, value] of Object.entries(properties)) {
+      violations.push(...findOpenAIStrictSchemaViolations(value, `${path}.properties.${key}`));
+    }
+  }
+
+  for (const [key, value] of Object.entries(record)) {
+    if (key === "properties") {
+      continue;
+    }
+    if (value && typeof value === "object") {
+      violations.push(...findOpenAIStrictSchemaViolations(value, `${path}.${key}`));
+    }
+  }
+
+  return violations;
+}
+
+export function inspectOpenAIToolSchemas(
+  ctx: ProviderNormalizeToolSchemasContext,
+): ProviderToolSchemaDiagnostic[] {
+  if (!shouldApplyOpenAIToolCompat(ctx)) {
+    return [];
+  }
+  return ctx.tools.flatMap((tool, toolIndex) => {
+    const violations = findOpenAIStrictSchemaViolations(
+      normalizeOpenAIStrictCompatSchema(tool.parameters),
+      `${tool.name}.parameters`,
+    );
+    if (violations.length === 0) {
+      return [];
+    }
+    return [{ toolName: tool.name, toolIndex, violations }];
+  });
+}
+
+export type ProviderToolCompatFamily = "gemini" | "openai";
 
 export function buildProviderToolCompatFamilyHooks(family: ProviderToolCompatFamily): {
   normalizeToolSchemas: (ctx: ProviderNormalizeToolSchemasContext) => AnyAgentTool[];
@@ -170,6 +374,11 @@ export function buildProviderToolCompatFamilyHooks(family: ProviderToolCompatFam
       return {
         normalizeToolSchemas: normalizeGeminiToolSchemas,
         inspectToolSchemas: inspectGeminiToolSchemas,
+      };
+    case "openai":
+      return {
+        normalizeToolSchemas: normalizeOpenAIToolSchemas,
+        inspectToolSchemas: inspectOpenAIToolSchemas,
       };
   }
   throw new Error("Unsupported provider tool compatibility family");
