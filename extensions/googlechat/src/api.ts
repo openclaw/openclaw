@@ -173,7 +173,9 @@ export async function sendGoogleChatMessage(params: {
   } catch (err) {
     // If the thread resource name is invalid, retry without threading
     // to avoid infinite retry loops (see #64313).
-    if (thread && String(err).includes("INVALID_ARGUMENT")) {
+    // Narrow the match to thread-related INVALID_ARGUMENT errors to avoid
+    // masking unrelated failures (e.g. bad text or attachment token).
+    if (thread && String(err).includes("INVALID_ARGUMENT") && String(err).toLowerCase().includes("thread")) {
       delete body.thread;
       const fallbackUrl = new URL(`${CHAT_API_BASE}/${space}/messages`).toString();
       const result = await fetchJson<{ name?: string }>(account, fallbackUrl, {
