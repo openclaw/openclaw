@@ -54,6 +54,7 @@ describe("startQaLiveLaneGateway", () => {
     });
     expect(startQaGatewayChild).toHaveBeenCalledWith(
       expect.objectContaining({
+        includeQaChannel: false,
         providerBaseUrl: "http://127.0.0.1:44080/v1",
         providerMode: "mock-openai",
       }),
@@ -77,6 +78,7 @@ describe("startQaLiveLaneGateway", () => {
     expect(startQaMockOpenAiServer).not.toHaveBeenCalled();
     expect(startQaGatewayChild).toHaveBeenCalledWith(
       expect.objectContaining({
+        includeQaChannel: false,
         providerBaseUrl: undefined,
         providerMode: "live-frontier",
       }),

@@ -28,6 +28,7 @@ export async function startQaLiveLaneGateway(params: {
       repoRoot: params.repoRoot,
       providerBaseUrl: mock ? `${mock.baseUrl}/v1` : undefined,
       qaBusBaseUrl: params.qaBusBaseUrl,
+      includeQaChannel: false,
       controlUiAllowedOrigins: params.controlUiAllowedOrigins,
       providerMode: params.providerMode,
       primaryModel: params.primaryModel,
