@@ -23,6 +23,8 @@ export type AgentBootstrapHookContext = {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  modelProviderId?: string;
+  modelId?: string;
 };
 
 export type AgentBootstrapHookEvent = InternalHookEvent & {

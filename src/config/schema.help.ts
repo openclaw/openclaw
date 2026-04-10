@@ -204,6 +204,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional per-agent default reasoning visibility (on|off|stream). Applies when no per-message or session reasoning override is set.",
   "agents.list[].fastModeDefault":
     "Optional per-agent default for fast mode. Applies when no per-message or session fast-mode override is set.",
+  "agents.list[].agentsFile":
+    "Optional per-agent AGENTS source for main/default runs. Use a workspace-relative or absolute path that stays within the agent workspace when this agent needs a different base instruction file than AGENTS.md.",
+  "agents.list[].agentsFilesByModel":
+    'Optional per-agent model-specific AGENTS sources for main/default runs keyed by canonical "provider/model" refs (for example "openai/gpt-5.4"). Matching is exact after runtime model resolution.',
+  "agents.list[].subagents.agentsFile":
+    "Optional per-agent AGENTS source for spawned sub-agent runs. Use this to give sub-agents a narrower instruction file than the parent/orchestrator receives.",
+  "agents.list[].subagents.agentsFilesByModel":
+    'Optional per-agent model-specific AGENTS sources for spawned sub-agent runs keyed by canonical "provider/model" refs. Use exact matches when different models need different sub-agent prompt shaping or security boundaries.',
   "agents.list[].runtime":
     "Optional runtime descriptor for this agent. Use embedded for default OpenClaw execution or acp for external ACP harness defaults.",
   "agents.list[].runtime.type":
@@ -834,6 +842,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Default workspace path exposed to agent runtime tools for filesystem context and repo-aware behavior. Set this explicitly when running from wrappers so path resolution stays deterministic.",
   "agents.defaults.contextInjection":
     'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
+  "agents.defaults.agentsFile":
+    "Default AGENTS source for main/default runs. Use a workspace-relative or absolute path that stays within the workspace root when you want the main agent to inject a different Markdown file than AGENTS.md.",
+  "agents.defaults.agentsFilesByModel":
+    'Default model-specific AGENTS sources for main/default runs keyed by canonical "provider/model" refs. Matching is exact after runtime model selection so you can swap in tuned prompts per model without changing the base AGENTS.md.',
+  "agents.defaults.subagents.agentsFile":
+    "Default AGENTS source for spawned sub-agent runs. Use this to replace AGENTS.md with a narrower workspace file so sub-agents do not inherit the full main-agent instruction set.",
+  "agents.defaults.subagents.agentsFilesByModel":
+    'Default model-specific AGENTS sources for spawned sub-agent runs keyed by canonical "provider/model" refs. Use exact matches when different models need different sub-agent instruction tuning or isolation.',
   "agents.defaults.bootstrapMaxChars":
     "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
   "agents.defaults.bootstrapTotalMaxChars":
@@ -1144,7 +1160,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.postIndexSync":
     'Controls post-compaction session memory reindex mode: "off", "async", or "await" (default: "async"). Use "await" for strongest freshness, "async" for lower compaction latency, and "off" only when session-memory sync is handled elsewhere.',
   "agents.defaults.compaction.postCompactionSections":
-    'AGENTS.md H2/H3 section names re-injected after compaction so the agent reruns critical startup guidance. Leave unset to use "Session Startup"/"Red Lines" with legacy fallback to "Every Session"/"Safety"; set to [] to disable reinjection entirely.',
+    'Effective AGENTS-source H2/H3 section names re-injected after compaction so the agent reruns critical startup guidance. Leave unset to use "Session Startup"/"Red Lines" with legacy fallback to "Every Session"/"Safety"; set to [] to disable reinjection entirely.',
   "agents.defaults.compaction.timeoutSeconds":
     "Maximum time in seconds allowed for a single compaction operation before it is aborted (default: 900). Increase this for very large sessions that need more time to summarize, or decrease it to fail faster on unresponsive models.",
   "agents.defaults.compaction.model":

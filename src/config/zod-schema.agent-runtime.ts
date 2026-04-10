@@ -16,6 +16,11 @@ import {
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
+export const AgentBootstrapFileOverrideFields = {
+  agentsFile: z.string().optional(),
+  agentsFilesByModel: z.record(z.string(), z.string()).optional(),
+} as const;
+
 export const HeartbeatSchema = z
   .object({
     every: z.string().optional(),
@@ -790,6 +795,7 @@ export const AgentEntrySchema = z
     agentDir: z.string().optional(),
     systemPromptOverride: z.string().optional(),
     model: AgentModelSchema.optional(),
+    ...AgentBootstrapFileOverrideFields,
     thinkingDefault: z
       .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"])
       .optional(),
@@ -815,6 +821,7 @@ export const AgentEntrySchema = z
               .strict(),
           ])
           .optional(),
+        ...AgentBootstrapFileOverrideFields,
         thinking: z.string().optional(),
         requireAgentId: z.boolean().optional(),
       })

@@ -83,6 +83,10 @@ export function buildEmbeddedExtensionFactories(params: {
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel | undefined;
+  workspaceDir?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  agentId?: string;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
   if (resolveCompactionMode(params.cfg) === "safeguard") {
@@ -105,6 +109,13 @@ export function buildEmbeddedExtensionFactories(params: {
       qualityGuardEnabled: qualityGuardCfg?.enabled ?? false,
       qualityGuardMaxRetries: qualityGuardCfg?.maxRetries,
       model: params.model,
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      agentId: params.agentId,
+      modelProviderId: params.provider,
+      modelId: params.modelId,
       recentTurnsPreserve: compactionCfg?.recentTurnsPreserve,
       provider: compactionCfg?.provider,
     });
