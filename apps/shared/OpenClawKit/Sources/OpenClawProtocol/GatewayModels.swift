@@ -2510,17 +2510,20 @@ public struct AgentSummary: Codable, Sendable {
 public struct AgentsCreateParams: Codable, Sendable {
     public let name: String
     public let workspace: String
+    public let model: String?
     public let emoji: String?
     public let avatar: String?
 
     public init(
         name: String,
         workspace: String,
+        model: String?,
         emoji: String?,
         avatar: String?)
     {
         self.name = name
         self.workspace = workspace
+        self.model = model
         self.emoji = emoji
         self.avatar = avatar
     }
@@ -2528,6 +2531,7 @@ public struct AgentsCreateParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case name
         case workspace
+        case model
         case emoji
         case avatar
     }
@@ -2538,17 +2542,20 @@ public struct AgentsCreateResult: Codable, Sendable {
     public let agentid: String
     public let name: String
     public let workspace: String
+    public let model: String?
 
     public init(
         ok: Bool,
         agentid: String,
         name: String,
-        workspace: String)
+        workspace: String,
+        model: String?)
     {
         self.ok = ok
         self.agentid = agentid
         self.name = name
         self.workspace = workspace
+        self.model = model
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2556,6 +2563,7 @@ public struct AgentsCreateResult: Codable, Sendable {
         case agentid = "agentId"
         case name
         case workspace
+        case model
     }
 }
 
@@ -2564,6 +2572,7 @@ public struct AgentsUpdateParams: Codable, Sendable {
     public let name: String?
     public let workspace: String?
     public let model: String?
+    public let emoji: String?
     public let avatar: String?
 
     public init(
@@ -2571,12 +2580,14 @@ public struct AgentsUpdateParams: Codable, Sendable {
         name: String?,
         workspace: String?,
         model: String?,
+        emoji: String?,
         avatar: String?)
     {
         self.agentid = agentid
         self.name = name
         self.workspace = workspace
         self.model = model
+        self.emoji = emoji
         self.avatar = avatar
     }
 
@@ -2585,6 +2596,7 @@ public struct AgentsUpdateParams: Codable, Sendable {
         case name
         case workspace
         case model
+        case emoji
         case avatar
     }
 }
@@ -2880,6 +2892,92 @@ public struct ModelsListResult: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case models
+    }
+}
+
+public struct CommandEntry: Codable, Sendable {
+    public let name: String
+    public let nativename: String?
+    public let textaliases: [String]?
+    public let description: String
+    public let category: AnyCodable?
+    public let source: AnyCodable
+    public let scope: AnyCodable
+    public let acceptsargs: Bool
+    public let args: [[String: AnyCodable]]?
+
+    public init(
+        name: String,
+        nativename: String?,
+        textaliases: [String]?,
+        description: String,
+        category: AnyCodable?,
+        source: AnyCodable,
+        scope: AnyCodable,
+        acceptsargs: Bool,
+        args: [[String: AnyCodable]]?)
+    {
+        self.name = name
+        self.nativename = nativename
+        self.textaliases = textaliases
+        self.description = description
+        self.category = category
+        self.source = source
+        self.scope = scope
+        self.acceptsargs = acceptsargs
+        self.args = args
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case nativename = "nativeName"
+        case textaliases = "textAliases"
+        case description
+        case category
+        case source
+        case scope
+        case acceptsargs = "acceptsArgs"
+        case args
+    }
+}
+
+public struct CommandsListParams: Codable, Sendable {
+    public let agentid: String?
+    public let provider: String?
+    public let scope: AnyCodable?
+    public let includeargs: Bool?
+
+    public init(
+        agentid: String?,
+        provider: String?,
+        scope: AnyCodable?,
+        includeargs: Bool?)
+    {
+        self.agentid = agentid
+        self.provider = provider
+        self.scope = scope
+        self.includeargs = includeargs
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case provider
+        case scope
+        case includeargs = "includeArgs"
+    }
+}
+
+public struct CommandsListResult: Codable, Sendable {
+    public let commands: [CommandEntry]
+
+    public init(
+        commands: [CommandEntry])
+    {
+        self.commands = commands
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case commands
     }
 }
 

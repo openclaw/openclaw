@@ -7,7 +7,7 @@
   "skills": ["./skills"],
   "configSchema": {
     "type": "object",
-    "additionalProperties": false,
+    "additionalProperties": true,
     "$defs": {
       "audioFormatPolicy": {
         "type": "object",
@@ -77,7 +77,7 @@
       },
       "account": {
         "type": "object",
-        "additionalProperties": false,
+        "additionalProperties": true,
         "properties": {
           "enabled": { "type": "boolean" },
           "name": { "type": "string" },
@@ -102,15 +102,22 @@
             "enum": ["doc", "hot-reload"]
           },
           "streaming": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "mode": {
-                "type": "string",
-                "enum": ["off", "partial"],
-                "default": "partial"
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": ["off", "partial"],
+                    "default": "partial"
+                  }
+                }
               }
-            }
+            ]
           }
         }
       }
@@ -141,15 +148,22 @@
         "enum": ["doc", "hot-reload"]
       },
       "streaming": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "mode": {
-            "type": "string",
-            "enum": ["off", "partial"],
-            "default": "partial"
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": ["off", "partial"],
+                "default": "partial"
+              }
+            }
           }
-        }
+        ]
       },
       "accounts": {
         "type": "object",

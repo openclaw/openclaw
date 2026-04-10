@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
+import type { MSTeamsConversationStore } from "../conversation-store.js";
 import type { GraphThreadMessage } from "../graph-thread.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
 import { setMSTeamsRuntime } from "../runtime.js";
@@ -116,8 +117,13 @@ describe("msteams monitor handler authz", () => {
     } as unknown as PluginRuntime);
 
     const conversationStore = {
+      get: vi.fn(async () => null),
       upsert: vi.fn(async () => undefined),
-    };
+      list: vi.fn(async () => []),
+      remove: vi.fn(async () => false),
+      findPreferredDmByUserId: vi.fn(async () => null),
+      findByUserId: vi.fn(async () => null),
+    } satisfies MSTeamsConversationStore;
 
     const deps: MSTeamsMessageHandlerDeps = {
       cfg,
@@ -129,8 +135,7 @@ describe("msteams monitor handler authz", () => {
       },
       textLimit: 4000,
       mediaMaxBytes: 1024 * 1024,
-      conversationStore:
-        conversationStore as unknown as MSTeamsMessageHandlerDeps["conversationStore"],
+      conversationStore,
       pollStore: {
         recordVote: vi.fn(async () => null),
       } as unknown as MSTeamsMessageHandlerDeps["pollStore"],

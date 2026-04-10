@@ -46,7 +46,7 @@ import {
   syncTelegramMenuCommands as syncTelegramMenuCommandsRuntime,
 } from "./bot-native-command-menu.js";
 import { TelegramUpdateKeyContext } from "./bot-updates.js";
-import type { TelegramBotOptions } from "./bot.js";
+import type { TelegramBotOptions } from "./bot.types.js";
 import {
   buildTelegramRoutingTarget,
   buildTelegramThreadParams,

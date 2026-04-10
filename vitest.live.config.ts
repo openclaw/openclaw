@@ -21,7 +21,7 @@ export default defineConfig({
     disableConsoleIntercept: true,
     maxWorkers: 1,
     setupFiles: [...new Set([...(baseTest.setupFiles ?? []), "test/setup-openclaw-runtime.ts"])],
-    include: ["src/**/*.live.test.ts", BUNDLED_PLUGIN_LIVE_TEST_GLOB],
+    include: ["src/**/*.live.test.ts", "test/**/*.live.test.ts", BUNDLED_PLUGIN_LIVE_TEST_GLOB],
     exclude,
   },
 });

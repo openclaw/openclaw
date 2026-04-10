@@ -7,9 +7,9 @@ import type { EmbeddedRunTrigger } from "./params.js";
  * Default idle timeout for LLM streaming responses in milliseconds.
  * If no token is received within this time, the request is aborted.
  * Set to 0 to disable (never timeout).
- * Default: 60 seconds.
+ * Default: 120 seconds.
  */
-export const DEFAULT_LLM_IDLE_TIMEOUT_MS = 60_000;
+export const DEFAULT_LLM_IDLE_TIMEOUT_MS = 120_000;
 
 /**
  * Maximum safe timeout value (approximately 24.8 days).

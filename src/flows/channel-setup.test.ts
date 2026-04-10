@@ -43,6 +43,12 @@ vi.mock("../channels/plugins/setup-registry.js", () => ({
 
 vi.mock("../channels/registry.js", () => ({
   listChatChannels: () => [],
+  getChatChannelMeta: (channelId?: unknown) => ({
+    id: typeof channelId === "string" ? channelId : "unknown",
+    label: typeof channelId === "string" ? channelId : "Unknown",
+  }),
+  normalizeChatChannelId: (channelId?: unknown) =>
+    typeof channelId === "string" ? channelId.trim().toLowerCase() : undefined,
 }));
 
 vi.mock("../commands/channel-setup/discovery.js", () => ({

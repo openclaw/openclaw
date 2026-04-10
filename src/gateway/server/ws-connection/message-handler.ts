@@ -816,8 +816,6 @@ export function attachGatewayWsMessageHandler(params: {
             displayName: connectParams.client.displayName,
             clientId: connectParams.client.id,
             clientMode: connectParams.client.mode,
-            role,
-            scopes,
             remoteIp: reportedClientIp,
           };
           const requirePairing = async (

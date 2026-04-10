@@ -1,22 +1,14 @@
 import { describe, expect, it } from "vitest";
-import falPlugin from "../../extensions/fal/index.js";
-import googlePlugin from "../../extensions/google/index.js";
-import minimaxPlugin from "../../extensions/minimax/index.js";
-import openaiPlugin from "../../extensions/openai/index.js";
-import vydraPlugin from "../../extensions/vydra/index.js";
+import { loadBundledProviderPlugin as loadBundledProviderPluginFromTestHelper } from "./helpers/media-generation/bundled-provider-builders.js";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
-} from "../../test/helpers/plugins/provider-registration.js";
-import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
-import { collectProviderApiKeys } from "../agents/live-auth-keys.js";
-import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../agents/live-test-helpers.js";
-import { resolveApiKeyForProvider } from "../agents/model-auth.js";
-import { loadConfig, type OpenClawConfig } from "../config/config.js";
-import { isTruthyEnvValue } from "../infra/env.js";
-import { getShellEnvAppliedKeys, loadShellEnvFallback } from "../infra/shell-env.js";
-import { encodePngRgba, fillPixel } from "../media/png-encode.js";
-import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+} from "./helpers/plugins/provider-registration.js";
+import { resolveOpenClawAgentDir } from "../src/agents/agent-paths.js";
+import { collectProviderApiKeys } from "../src/agents/live-auth-keys.js";
+import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../src/agents/live-test-helpers.js";
+import { resolveApiKeyForProvider } from "../src/agents/model-auth.js";
+import { loadConfig, type OpenClawConfig } from "../src/config/config.js";
 import {
   DEFAULT_LIVE_IMAGE_MODELS,
   parseCaseFilter,
@@ -25,7 +17,11 @@ import {
   redactLiveApiKey,
   resolveConfiguredLiveImageModels,
   resolveLiveImageAuthStore,
-} from "./live-test-helpers.js";
+} from "../src/image-generation/live-test-helpers.js";
+import { isTruthyEnvValue } from "../src/infra/env.js";
+import { getShellEnvAppliedKeys, loadShellEnvFallback } from "../src/infra/shell-env.js";
+import { encodePngRgba, fillPixel } from "../src/media/png-encode.js";
+import { getProviderEnvVars } from "../src/secrets/provider-env-vars.js";
 
 const LIVE = isLiveTestEnabled();
 const REQUIRE_PROFILE_KEYS =
@@ -36,7 +32,6 @@ const caseFilter = parseCaseFilter(process.env.OPENCLAW_LIVE_IMAGE_GENERATION_CA
 const envModelMap = parseProviderModelMap(process.env.OPENCLAW_LIVE_IMAGE_GENERATION_MODELS);
 
 type LiveProviderCase = {
-  plugin: Parameters<typeof registerProviderPlugin>[0]["plugin"];
   pluginId: string;
   pluginName: string;
   providerId: string;
@@ -52,28 +47,34 @@ type LiveImageCase = {
   inputImages?: Array<{ buffer: Buffer; mimeType: string; fileName?: string }>;
 };
 
+function loadBundledProviderPlugin(
+  pluginId: string,
+): ReturnType<typeof loadBundledProviderPluginFromTestHelper> {
+  return loadBundledProviderPluginFromTestHelper(pluginId);
+}
+
 const PROVIDER_CASES: LiveProviderCase[] = [
-  { plugin: falPlugin, pluginId: "fal", pluginName: "fal Provider", providerId: "fal" },
   {
-    plugin: googlePlugin,
+    pluginId: "fal",
+    pluginName: "fal Provider",
+    providerId: "fal",
+  },
+  {
     pluginId: "google",
     pluginName: "Google Provider",
     providerId: "google",
   },
   {
-    plugin: minimaxPlugin,
     pluginId: "minimax",
     pluginName: "MiniMax Provider",
     providerId: "minimax",
   },
   {
-    plugin: openaiPlugin,
     pluginId: "openai",
     pluginName: "OpenAI Provider",
     providerId: "openai",
   },
   {
-    plugin: vydraPlugin,
     pluginId: "vydra",
     pluginName: "Vydra Provider",
     providerId: "vydra",
@@ -221,7 +222,7 @@ describeLive("image generation live (provider sweep)", () => {
         }
 
         const { imageProviders } = await registerProviderPlugin({
-          plugin: providerCase.plugin,
+          plugin: loadBundledProviderPlugin(providerCase.pluginId),
           id: providerCase.pluginId,
           name: providerCase.pluginName,
         });

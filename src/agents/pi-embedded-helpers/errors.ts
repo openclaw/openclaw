@@ -20,6 +20,7 @@ export {
 } from "../../shared/assistant-error-format.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
+import { isModelNotFoundErrorMessage } from "../live-model-errors.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox/runtime-status.js";
 import { stableStringify } from "../stable-stringify.js";
 import {
@@ -1240,36 +1241,7 @@ export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean
   return isAuthErrorMessage(msg.errorMessage ?? "");
 }
 
-export function isModelNotFoundErrorMessage(raw: string): boolean {
-  if (!raw) {
-    return false;
-  }
-  const lower = normalizeLowercaseStringOrEmpty(raw);
-
-  // Direct pattern matches from OpenClaw internals and common providers.
-  if (
-    lower.includes("unknown model") ||
-    lower.includes("model not found") ||
-    lower.includes("model_not_found") ||
-    lower.includes("not_found_error") ||
-    (lower.includes("does not exist") && lower.includes("model")) ||
-    (lower.includes("invalid model") && !lower.includes("invalid model reference"))
-  ) {
-    return true;
-  }
-
-  // Google Gemini: "models/X is not found for api version"
-  if (/models\/[^\s]+ is not found/i.test(raw)) {
-    return true;
-  }
-
-  // JSON error payloads: {"status": "NOT_FOUND"} or {"code": 404} combined with not-found text.
-  if (/\b404\b/.test(raw) && /not[-_ ]?found/i.test(raw)) {
-    return true;
-  }
-
-  return false;
-}
+export { isModelNotFoundErrorMessage };
 
 function isCliSessionExpiredErrorMessage(raw: string): boolean {
   if (!raw) {
