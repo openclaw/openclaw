@@ -45,7 +45,7 @@ import { theme } from "../../terminal/theme.js";
 import { pathExists } from "../../utils.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
-import { installCompletion } from "../completion-cli.js";
+import { installCompletion } from "../completion-runtime.js";
 import { runDaemonInstall, runDaemonRestart } from "../daemon-cli.js";
 import {
   renderRestartDiagnostics,

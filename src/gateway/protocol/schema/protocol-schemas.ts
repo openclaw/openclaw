@@ -61,6 +61,11 @@ import {
   WebLoginWaitParamsSchema,
 } from "./channels.js";
 import {
+  CommandEntrySchema,
+  CommandsListParamsSchema,
+  CommandsListResultSchema,
+} from "./commands.js";
+import {
   ConfigApplyParamsSchema,
   ConfigGetParamsSchema,
   ConfigPatchParamsSchema,
@@ -297,6 +302,9 @@ export const ProtocolSchemas = {
   ModelChoice: ModelChoiceSchema,
   ModelsListParams: ModelsListParamsSchema,
   ModelsListResult: ModelsListResultSchema,
+  CommandEntry: CommandEntrySchema,
+  CommandsListParams: CommandsListParamsSchema,
+  CommandsListResult: CommandsListResultSchema,
   SkillsStatusParams: SkillsStatusParamsSchema,
   ToolsCatalogParams: ToolsCatalogParamsSchema,
   ToolCatalogProfile: ToolCatalogProfileSchema,

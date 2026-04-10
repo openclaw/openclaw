@@ -147,6 +147,7 @@ Those belong in your plugin code and `package.json`.
 | `providers`                         | No       | `string[]`                       | Provider ids owned by this plugin.                                                                                                                                                                           |
 | `modelSupport`                      | No       | `object`                         | Manifest-owned shorthand model-family metadata used to auto-load the plugin before runtime.                                                                                                                  |
 | `cliBackends`                       | No       | `string[]`                       | CLI inference backend ids owned by this plugin. Used for startup auto-activation from explicit config refs.                                                                                                  |
+| `commandAliases`                    | No       | `object[]`                       | Command names owned by this plugin that should produce plugin-aware config and CLI diagnostics before runtime loads.                                                                                         |
 | `providerAuthEnvVars`               | No       | `Record<string, string[]>`       | Cheap provider-auth env metadata that OpenClaw can inspect without loading plugin code.                                                                                                                      |
 | `providerAuthAliases`               | No       | `Record<string, string>`         | Provider ids that should reuse another provider id for auth lookup, for example a coding provider that shares the base provider API key and auth profiles.                                                   |
 | `channelEnvVars`                    | No       | `Record<string, string[]>`       | Cheap channel env metadata that OpenClaw can inspect without loading plugin code. Use this for env-driven channel setup or auth surfaces that generic startup/config helpers should see.                     |
@@ -182,6 +183,30 @@ OpenClaw reads this before provider runtime loads.
 | `cliOption`           | No       | `string`                                        | Full CLI option shape, such as `--openrouter-api-key <key>`.                                             |
 | `cliDescription`      | No       | `string`                                        | Description used in CLI help.                                                                            |
 | `onboardingScopes`    | No       | `Array<"text-inference" \| "image-generation">` | Which onboarding surfaces this choice should appear in. If omitted, it defaults to `["text-inference"]`. |
+
+## commandAliases reference
+
+Use `commandAliases` when a plugin owns a runtime command name that users may
+mistakenly put in `plugins.allow` or try to run as a root CLI command. OpenClaw
+uses this metadata for diagnostics without importing plugin runtime code.
+
+```json
+{
+  "commandAliases": [
+    {
+      "name": "dreaming",
+      "kind": "runtime-slash",
+      "cliCommand": "memory"
+    }
+  ]
+}
+```
+
+| Field        | Required | Type              | What it means                                                           |
+| ------------ | -------- | ----------------- | ----------------------------------------------------------------------- |
+| `name`       | Yes      | `string`          | Command name that belongs to this plugin.                               |
+| `kind`       | No       | `"runtime-slash"` | Marks the alias as a chat slash command rather than a root CLI command. |
+| `cliCommand` | No       | `string`          | Related root CLI command to suggest for CLI operations, if one exists.  |
 
 ## uiHints reference
 

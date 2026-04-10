@@ -364,7 +364,10 @@ describe("broadcast dispatch", () => {
     });
 
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
-    const sessionKey = String(finalizeInboundContextCalls[0]?.SessionKey ?? "");
+    const sessionKey =
+      typeof finalizeInboundContextCalls[0]?.SessionKey === "string"
+        ? finalizeInboundContextCalls[0].SessionKey
+        : "";
     expect(sessionKey).toBe("agent:susan:feishu:group:oc-broadcast-group");
   });
 });

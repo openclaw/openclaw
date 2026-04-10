@@ -88,6 +88,7 @@ function buildSkillCommandDefinitions(skillCommands?: SkillCommandSpec[]): ChatC
     acceptsArgs: true,
     argsParsing: "none",
     scope: "both",
+    category: "tools",
   }));
 }
 

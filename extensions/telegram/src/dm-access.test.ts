@@ -142,7 +142,7 @@ describe("enforceTelegramDmAccess", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
     const [firstCall] = sendMessage.mock.calls as Array<unknown[]>;
     expect(firstCall?.[0]).toBe(42);
-    const sentText = String(firstCall?.[1] ?? "");
+    const sentText = typeof firstCall?.[1] === "string" ? firstCall[1] : "";
     expect(sentText).toContain("Pairing code:");
     expect(firstCall?.[2]).toEqual(expect.objectContaining({ parse_mode: "HTML" }));
     expect(logger.info).toHaveBeenCalledWith(

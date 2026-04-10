@@ -20,6 +20,16 @@ const SETUP_REGISTRY_RUNTIME_CANDIDATES = ["./setup-registry.js", "./setup-regis
 let setupRegistryRuntimeModule: SetupRegistryRuntimeModule | undefined;
 let bundledSetupCliBackendsCache: SetupCliBackendRuntimeEntry[] | undefined;
 
+export const __testing = {
+  resetRuntimeState(): void {
+    setupRegistryRuntimeModule = undefined;
+    bundledSetupCliBackendsCache = undefined;
+  },
+  setRuntimeModuleForTest(module: SetupRegistryRuntimeModule | undefined): void {
+    setupRegistryRuntimeModule = module;
+  },
+};
+
 function resolveBundledSetupCliBackends(): SetupCliBackendRuntimeEntry[] {
   if (bundledSetupCliBackendsCache) {
     return bundledSetupCliBackendsCache;
@@ -54,11 +64,14 @@ function loadSetupRegistryRuntime(): SetupRegistryRuntimeModule | null {
 }
 
 export function resolvePluginSetupCliBackendRuntime(params: { backend: string }) {
+  const normalized = normalizeProviderId(params.backend);
   const runtime = loadSetupRegistryRuntime();
   if (runtime) {
-    return runtime.resolvePluginSetupCliBackend(params);
+    const resolved = runtime.resolvePluginSetupCliBackend(params);
+    if (resolved) {
+      return resolved;
+    }
   }
-  const normalized = normalizeProviderId(params.backend);
   return resolveBundledSetupCliBackends().find(
     (entry) => normalizeProviderId(entry.backend.id) === normalized,
   );

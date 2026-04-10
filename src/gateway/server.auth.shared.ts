@@ -63,11 +63,11 @@ const readConnectChallengeNonce = async (ws: WebSocket) => {
   if (cached) {
     return cached;
   }
-  const challenge = await onceMessage<{
+  const challenge: {
     type?: string;
     event?: string;
     payload?: Record<string, unknown> | null;
-  }>(ws, (o) => o.type === "event" && o.event === "connect.challenge");
+  } = await onceMessage(ws, (o) => o.type === "event" && o.event === "connect.challenge");
   const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;
   expect(typeof nonce).toBe("string");
   return String(nonce);
@@ -290,7 +290,7 @@ async function sendRawConnectReq(
       },
     }),
   );
-  return onceMessage<{
+  const response: {
     type?: string;
     id?: string;
     ok?: boolean;
@@ -302,7 +302,8 @@ async function sendRawConnectReq(
         reason?: string;
       };
     };
-  }>(ws, isConnectResMessage(params.id));
+  } = await onceMessage(ws, isConnectResMessage(params.id));
+  return response;
 }
 
 async function resolvePairedTokenForDeviceIdentityPath(deviceIdentityPath: string): Promise<{

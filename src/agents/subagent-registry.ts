@@ -1,3 +1,4 @@
+import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import { loadConfig } from "../config/config.js";
 import type { ensureContextEnginesInitialized as ensureContextEnginesInitializedFn } from "../context-engine/init.js";
 import type { resolveContextEngine as resolveContextEngineFn } from "../context-engine/registry.js";
@@ -64,6 +65,7 @@ const log = createSubsystemLogger("agents/subagent-registry");
 type SubagentRegistryDeps = {
   callGateway: typeof callGateway;
   captureSubagentCompletionReply: typeof subagentAnnounceModule.captureSubagentCompletionReply;
+  cleanupBrowserSessionsForLifecycleEnd: typeof cleanupBrowserSessionsForLifecycleEnd;
   getSubagentRunsSnapshotForRead: typeof getSubagentRunsSnapshotForRead;
   loadConfig: typeof loadConfig;
   onAgentEvent: typeof onAgentEvent;
@@ -80,6 +82,7 @@ const defaultSubagentRegistryDeps: SubagentRegistryDeps = {
   callGateway,
   captureSubagentCompletionReply: (sessionKey) =>
     subagentAnnounceModule.captureSubagentCompletionReply(sessionKey),
+  cleanupBrowserSessionsForLifecycleEnd,
   getSubagentRunsSnapshotForRead,
   loadConfig,
   onAgentEvent,
@@ -313,6 +316,8 @@ const subagentLifecycleController = createSubagentRegistryLifecycleController({
   resumeSubagentRun,
   captureSubagentCompletionReply: (sessionKey) =>
     subagentRegistryDeps.captureSubagentCompletionReply(sessionKey),
+  cleanupBrowserSessionsForLifecycleEnd: (args) =>
+    subagentRegistryDeps.cleanupBrowserSessionsForLifecycleEnd(args),
   runSubagentAnnounceFlow: (params) => subagentRegistryDeps.runSubagentAnnounceFlow(params),
   warn: (message, meta) => log.warn(message, meta),
 });
@@ -485,7 +490,10 @@ async function sweepSubagentRuns() {
     // Session-mode runs have no archiveAtMs — apply absolute TTL after cleanup completes.
     // Use cleanupCompletedAt (not endedAt) to avoid interrupting deferred cleanup flows.
     if (!entry.archiveAtMs) {
-      if (typeof entry.cleanupCompletedAt === "number" && now - entry.cleanupCompletedAt > SESSION_RUN_TTL_MS) {
+      if (
+        typeof entry.cleanupCompletedAt === "number" &&
+        now - entry.cleanupCompletedAt > SESSION_RUN_TTL_MS
+      ) {
         clearPendingLifecycleError(runId);
         void notifyContextEngineSubagentEnded({
           childSessionKey: entry.childSessionKey,

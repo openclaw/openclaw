@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
-import { resolveMatrixAccountStorageRoot } from "../plugin-sdk/matrix.js";
+import { resolveMatrixAccountStorageRoot } from "../plugin-sdk/matrix-helper.js";
 import * as noteModule from "../terminal/note.js";
 import { setChannelPluginRegistryForTests } from "./channel-test-registry.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
