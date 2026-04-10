@@ -94,7 +94,7 @@ export function createSubagentRegistryLifecycleController(params: {
   const safeSetSubagentTaskDeliveryStatus = (args: {
     runId: string;
     childSessionKey: string;
-    deliveryStatus: "failed";
+    deliveryStatus: "delivered" | "failed";
   }) => {
     try {
       setDetachedTaskDeliveryStatusByRunId({
@@ -375,21 +375,11 @@ export function createSubagentRegistryLifecycleController(params: {
         entry.completionAnnouncedAt = Date.now();
         params.persist();
       }
-      try {
-        setDetachedTaskDeliveryStatusByRunId({
-          runId,
-          runtime: "subagent",
-          sessionKey: entry.childSessionKey,
-          deliveryStatus: "delivered",
-        });
-      } catch (err) {
-        params.warn("failed to update subagent background task delivery state", {
-          error: buildSafeLifecycleErrorMeta(err),
-          runId: maskRunId(runId),
-          childSessionKey: maskSessionKey(entry.childSessionKey),
-          deliveryStatus: "delivered",
-        });
-      }
+      safeSetSubagentTaskDeliveryStatus({
+        runId,
+        childSessionKey: entry.childSessionKey,
+        deliveryStatus: "delivered",
+      });
       entry.wakeOnDescendantSettle = undefined;
       entry.fallbackFrozenResultText = undefined;
       entry.fallbackFrozenResultCapturedAt = undefined;
@@ -442,10 +432,9 @@ export function createSubagentRegistryLifecycleController(params: {
     }
 
     if (deferredDecision.kind === "give-up") {
-      setDetachedTaskDeliveryStatusByRunId({
+      safeSetSubagentTaskDeliveryStatus({
         runId,
-        runtime: "subagent",
-        sessionKey: entry.childSessionKey,
+        childSessionKey: entry.childSessionKey,
         deliveryStatus: "failed",
       });
       entry.wakeOnDescendantSettle = undefined;
