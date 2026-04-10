@@ -116,6 +116,7 @@ function sanitizeArgs(args: string | undefined): string | undefined {
 function resolveBindingConversationFromCommand(params: {
   config?: OpenClawConfig;
   channel: string;
+  senderId?: string;
   from?: string;
   to?: string;
   accountId?: string;
@@ -140,6 +141,7 @@ function resolveBindingConversationFromCommand(params: {
     accountId: params.accountId,
     threadId: params.messageThreadId,
     threadParentId: params.threadParentId,
+    senderId: params.senderId,
     originatingTo: params.from,
     commandTo: params.to,
     fallbackTo: params.to ?? params.from,
@@ -187,6 +189,7 @@ export async function executePluginCommand(params: {
   const bindingConversation = resolveBindingConversationFromCommand({
     config,
     channel,
+    senderId,
     from: params.from,
     to: params.to,
     accountId: params.accountId,
