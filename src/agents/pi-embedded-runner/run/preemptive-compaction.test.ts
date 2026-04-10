@@ -84,6 +84,29 @@ describe("preemptive-compaction", () => {
     expect(result.estimatedPromptTokens).toBeLessThan(result.promptBudgetBeforeReserve);
   });
 
+  it("requests soft preemptive compaction when prompt pressure is high even before hard overflow", () => {
+    const longHistory = "old discussion with retained decisions and verbose context ".repeat(4200);
+    const reserveTokens = 5_000;
+    const estimatedPromptTokens = estimatePrePromptTokens({
+      messages: [makeAssistantHistory(longHistory)],
+      systemPrompt: verboseSystem,
+      prompt: verbosePrompt,
+    });
+    const targetPromptBudgetBeforeReserve = Math.ceil(estimatedPromptTokens / 0.72);
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [makeAssistantHistory(longHistory)],
+      systemPrompt: verboseSystem,
+      prompt: verbosePrompt,
+      contextTokenBudget: targetPromptBudgetBeforeReserve + reserveTokens,
+      reserveTokens,
+    });
+
+    expect(result.overflowTokens).toBe(0);
+    expect(result.promptUsageRatio).toBeGreaterThanOrEqual(0.7);
+    expect(result.shouldCompact).toBe(true);
+    expect(result.route).toBe("compact_only");
+  });
+
   it("routes to direct tool-result truncation when recent tool tails can clearly absorb the overflow", () => {
     const medium = "alpha beta gamma delta epsilon ".repeat(2200);
     const messages: AgentMessage[] = [

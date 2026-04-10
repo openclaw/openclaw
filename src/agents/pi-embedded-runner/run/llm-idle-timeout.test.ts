@@ -7,6 +7,10 @@ import {
 } from "./llm-idle-timeout.js";
 
 describe("resolveLlmIdleTimeoutMs", () => {
+  it("defaults to 120 seconds", () => {
+    expect(DEFAULT_LLM_IDLE_TIMEOUT_MS).toBe(120_000);
+  });
+
   it("returns default when config is undefined", () => {
     expect(resolveLlmIdleTimeoutMs(undefined)).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });

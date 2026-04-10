@@ -8,6 +8,7 @@ export const PREEMPTIVE_OVERFLOW_ERROR_TEXT =
 
 const ESTIMATED_CHARS_PER_TOKEN = 4;
 const TRUNCATION_ROUTE_BUFFER_TOKENS = 512;
+const SOFT_COMPACTION_PRESSURE_RATIO = 0.7;
 
 export type PreemptiveCompactionRoute =
   | "fits"
@@ -50,6 +51,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   promptBudgetBeforeReserve: number;
   overflowTokens: number;
   toolResultReducibleChars: number;
+  promptUsageRatio: number;
 } {
   const estimatedPromptTokens = estimatePrePromptTokens(params);
   const promptBudgetBeforeReserve = Math.max(
@@ -57,6 +59,8 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
     Math.floor(params.contextTokenBudget) - Math.max(0, Math.floor(params.reserveTokens)),
   );
   const overflowTokens = Math.max(0, estimatedPromptTokens - promptBudgetBeforeReserve);
+  const promptUsageRatio =
+    promptBudgetBeforeReserve > 0 ? estimatedPromptTokens / promptBudgetBeforeReserve : 0;
   const toolResultPotential = estimateToolResultReductionPotential({
     messages: params.messages,
     contextWindowTokens: params.contextTokenBudget,
@@ -78,6 +82,8 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
     } else {
       route = "compact_then_truncate";
     }
+  } else if (promptUsageRatio >= SOFT_COMPACTION_PRESSURE_RATIO) {
+    route = "compact_only";
   }
   return {
     route,
@@ -86,5 +92,6 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
     promptBudgetBeforeReserve,
     overflowTokens,
     toolResultReducibleChars,
+    promptUsageRatio,
   };
 }
