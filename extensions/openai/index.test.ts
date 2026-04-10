@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
+import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
@@ -78,18 +79,21 @@ describe("openai plugin", () => {
       source: "env",
       mode: "api-key",
     });
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        data: [
-          {
-            b64_json: Buffer.from("png-data").toString("base64"),
-            revised_prompt: "revised",
-          },
-        ],
-      }),
+    const postJsonRequestSpy = vi.spyOn(providerHttp, "postJsonRequest").mockResolvedValue({
+      response: {
+        ok: true,
+        json: async () => ({
+          data: [
+            {
+              b64_json: Buffer.from("png-data").toString("base64"),
+              revised_prompt: "revised",
+            },
+          ],
+        }),
+      } as Response,
+      release: vi.fn(async () => {}),
     });
-    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(providerHttp, "assertOkOrThrowHttpError").mockResolvedValue(undefined);
 
     const provider = buildOpenAIImageGenerationProvider();
     const authStore = { version: 1, profiles: {} };
@@ -107,16 +111,20 @@ describe("openai plugin", () => {
         store: authStore,
       }),
     );
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://api.openai.com/v1/images/generations",
+    expect(postJsonRequestSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
+        url: "https://api.openai.com/v1/images/generations",
+        body: {
           model: "gpt-image-1",
           prompt: "draw a cat",
           n: 1,
           size: "1024x1024",
-        }),
+        },
+      }),
+    );
+    expect(postJsonRequestSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api.openai.com/v1/images/edits",
       }),
     );
     expect(result).toEqual({
@@ -138,17 +146,20 @@ describe("openai plugin", () => {
       source: "env",
       mode: "api-key",
     });
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        data: [
-          {
-            b64_json: Buffer.from("edited-image").toString("base64"),
-          },
-        ],
-      }),
+    const postJsonRequestSpy = vi.spyOn(providerHttp, "postJsonRequest").mockResolvedValue({
+      response: {
+        ok: true,
+        json: async () => ({
+          data: [
+            {
+              b64_json: Buffer.from("edited-image").toString("base64"),
+            },
+          ],
+        }),
+      } as Response,
+      release: vi.fn(async () => {}),
     });
-    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(providerHttp, "assertOkOrThrowHttpError").mockResolvedValue(undefined);
 
     const provider = buildOpenAIImageGenerationProvider();
     const authStore = { version: 1, profiles: {} };
@@ -171,11 +182,10 @@ describe("openai plugin", () => {
         store: authStore,
       }),
     );
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://api.openai.com/v1/images/edits",
+    expect(postJsonRequestSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
+        url: "https://api.openai.com/v1/images/edits",
+        body: {
           model: "gpt-image-1",
           prompt: "Edit this image",
           n: 1,
@@ -188,7 +198,7 @@ describe("openai plugin", () => {
               image_url: "data:image/jpeg;base64,eQ==",
             },
           ],
-        }),
+        },
       }),
     );
     expect(result).toEqual({
