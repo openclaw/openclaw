@@ -1,13 +1,13 @@
 import type { AgentHarness } from "openclaw/plugin-sdk/agent-harness";
-import { listCodexAppServerModels } from "./app-server/client.js";
+import { listCodexAppServerModels } from "./src/app-server/client.js";
 import type {
   CodexAppServerListModelsOptions,
   CodexAppServerModel,
   CodexAppServerModelListResult,
-} from "./app-server/client.js";
-import { maybeCompactCodexAppServerSession } from "./app-server/compact.js";
-import { runCodexAppServerAttempt } from "./app-server/run-attempt.js";
-import { clearCodexAppServerBinding } from "./app-server/session-binding.js";
+} from "./src/app-server/client.js";
+import { maybeCompactCodexAppServerSession } from "./src/app-server/compact.js";
+import { runCodexAppServerAttempt } from "./src/app-server/run-attempt.js";
+import { clearCodexAppServerBinding } from "./src/app-server/session-binding.js";
 
 const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai-codex"]);
 

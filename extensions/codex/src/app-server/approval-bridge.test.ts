@@ -38,7 +38,7 @@ describe("Codex app-server approval bridge", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         itemId: "cmd-1",
-        command: "pnpm test extensions/codex/app-server",
+        command: "pnpm test extensions/codex/src/app-server",
       },
       paramsForRun: params,
       threadId: "thread-1",
