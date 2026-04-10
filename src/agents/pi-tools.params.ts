@@ -84,6 +84,66 @@ export const REQUIRED_PARAM_GROUPS = {
   ],
 } as const;
 
+// ========== FORK PATCH: Claude Code alias mapping via prepareArguments ==========
+// 3rd party models (GPT-5 via unleashed, Qwen via litellm) are trained on Claude Code
+// conventions and emit {file_path, old_string, new_string} instead of pi-coding-agent's
+// {path, oldText, newText}. We chain into the tool's prepareArguments hook (which runs
+// BEFORE schema validation in pi-agent-core) to map aliases before upstream's own
+// normalization (prepareEditArguments: flat → edits[] array).
+
+const CLAUDE_CODE_ALIASES: readonly { original: string; alias: string }[] = [
+  { original: "path", alias: "file_path" },
+  { original: "path", alias: "filePath" },
+  { original: "path", alias: "file" },
+  { original: "oldText", alias: "old_string" },
+  { original: "oldText", alias: "old_text" },
+  { original: "oldText", alias: "oldString" },
+  { original: "newText", alias: "new_string" },
+  { original: "newText", alias: "new_text" },
+  { original: "newText", alias: "newString" },
+];
+
+function mapClaudeCodeAliases(args: unknown): unknown {
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    return args;
+  }
+  const record = args as Record<string, unknown>;
+  let changed = false;
+  const result: Record<string, unknown> = { ...record };
+  for (const { original, alias } of CLAUDE_CODE_ALIASES) {
+    if (alias in result) {
+      if (!(original in result)) {
+        result[original] = result[alias];
+      }
+      delete result[alias];
+      changed = true;
+    }
+  }
+  return changed ? result : args;
+}
+
+/**
+ * Wrap a tool's prepareArguments hook to map Claude Code aliases
+ * (file_path/old_string/new_string) to pi-coding-agent conventions
+ * (path/oldText/newText) BEFORE the upstream prepareArguments runs.
+ *
+ * pi-coding-agent's edit tool already has prepareEditArguments that wraps
+ * flat {oldText, newText} into {edits: [{oldText, newText}]}. After our
+ * alias mapping, that upstream logic handles the rest.
+ */
+export function wrapToolWithClaudeCodeAliases(tool: AnyAgentTool): AnyAgentTool {
+  const upstreamPrepare = tool.prepareArguments;
+  return {
+    ...tool,
+    prepareArguments: (args: unknown) => {
+      const aliased = mapClaudeCodeAliases(args);
+      return upstreamPrepare ? upstreamPrepare(aliased) : aliased;
+    },
+  } as AnyAgentTool;
+}
+
+// ========== END FORK PATCH ==========
+
 export function getToolParamsRecord(params: unknown): Record<string, unknown> | undefined {
   return params && typeof params === "object" ? (params as Record<string, unknown>) : undefined;
 }

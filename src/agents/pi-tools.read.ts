@@ -20,6 +20,7 @@ import {
   assertRequiredParams,
   getToolParamsRecord,
   wrapToolParamValidation,
+  wrapToolWithClaudeCodeAliases,
 } from "./pi-tools.params.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
@@ -604,7 +605,8 @@ export function createSandboxedWriteTool(params: SandboxToolParams) {
   const base = createWriteTool(params.root, {
     operations: createSandboxWriteOperations(params),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+  // Fork patch: map Claude Code aliases (file_path → path) via prepareArguments hook.
+  return wrapToolParamValidation(wrapToolWithClaudeCodeAliases(base), REQUIRED_PARAM_GROUPS.write);
 }
 
 export function createSandboxedEditTool(params: SandboxToolParams) {
@@ -616,14 +618,20 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
     readFile: async (absolutePath: string) =>
       (await params.bridge.readFile({ filePath: absolutePath, cwd: params.root })).toString("utf8"),
   });
-  return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.edit);
+  // Fork patch: map Claude Code aliases (file_path/old_string/new_string) before upstream
+  // prepareEditArguments handles flat → edits[] conversion.
+  return wrapToolParamValidation(
+    wrapToolWithClaudeCodeAliases(withRecovery),
+    REQUIRED_PARAM_GROUPS.edit,
+  );
 }
 
 export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
   const base = createWriteTool(root, {
     operations: createHostWriteOperations(root, options),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+  // Fork patch: map Claude Code aliases (file_path → path) via prepareArguments hook.
+  return wrapToolParamValidation(wrapToolWithClaudeCodeAliases(base), REQUIRED_PARAM_GROUPS.write);
 }
 
 export function createHostWorkspaceEditTool(root: string, options?: { workspaceOnly?: boolean }) {
@@ -634,15 +642,22 @@ export function createHostWorkspaceEditTool(root: string, options?: { workspaceO
     root,
     readFile: (absolutePath: string) => fs.readFile(absolutePath, "utf-8"),
   });
-  return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.edit);
+  // Fork patch: map Claude Code aliases (file_path/old_string/new_string) before upstream
+  // prepareEditArguments handles flat → edits[] conversion.
+  return wrapToolParamValidation(
+    wrapToolWithClaudeCodeAliases(withRecovery),
+    REQUIRED_PARAM_GROUPS.edit,
+  );
 }
 
 export function createOpenClawReadTool(
   base: AnyAgentTool,
   options?: OpenClawReadToolOptions,
 ): AnyAgentTool {
+  // Fork patch: map Claude Code aliases (file_path → path) via prepareArguments hook.
+  const aliased = wrapToolWithClaudeCodeAliases(base);
   return {
-    ...base,
+    ...aliased,
     execute: async (toolCallId, params, signal) => {
       const record = getToolParamsRecord(params);
       assertRequiredParams(record, REQUIRED_PARAM_GROUPS.read, base.name);
