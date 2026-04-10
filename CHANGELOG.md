@@ -92,6 +92,7 @@ Docs: https://docs.openclaw.ai
 - ACP/gateway chat: classify lifecycle errors before forwarding them to ACP clients so refusals use ACP's refusal stop reason while transient backend errors continue to finish as normal turns.
 - Commands/btw: keep tool-less side questions from sending injected empty `tools` arrays on strict OpenAI-compatible providers, so `/btw` continues working after prior tool-call history. (#64219) Thanks @ngutman.
 - Agents/Bedrock: let `/btw` side questions use `auth: "aws-sdk"` without a static API key so Bedrock IAM and instance-role sessions stop failing before the side question runs. (#64218) Thanks @SnowSky1.
+- Agents/failover: detect llama.cpp slot context overflows as context-overflow errors so compaction can retry self-hosted OpenAI-compatible runs instead of surfacing the raw upstream 400. (#64196) Thanks @alexander-applyinnovations.
 
 ## 2026.4.9
 
