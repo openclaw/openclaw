@@ -77,6 +77,24 @@ describe("resolveDirectAnnounceDeliveryTarget", () => {
     });
   });
 
+  it("keeps best-effort implicit delivery enabled when gateway can still resolve a default target", () => {
+    expect(
+      __testing.resolveDirectAnnounceDeliveryTarget({
+        requesterIsSubagent: false,
+        bestEffortDeliver: true,
+        origin: {
+          channel: "telegram",
+        },
+      }),
+    ).toEqual({
+      shouldDeliverExternally: true,
+      channel: "telegram",
+      to: undefined,
+      accountId: undefined,
+      threadId: undefined,
+    });
+  });
+
   it("enables external delivery only when channel and target are both resolved", () => {
     expect(
       __testing.resolveDirectAnnounceDeliveryTarget({

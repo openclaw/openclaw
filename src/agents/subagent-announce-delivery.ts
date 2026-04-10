@@ -59,6 +59,7 @@ type ResolvedDirectAnnounceDeliveryTarget = {
 
 function resolveDirectAnnounceDeliveryTarget(params: {
   requesterIsSubagent: boolean;
+  bestEffortDeliver?: boolean;
   origin?: DeliveryContext;
 }): ResolvedDirectAnnounceDeliveryTarget {
   const directChannelRaw =
@@ -71,7 +72,8 @@ function resolveDirectAnnounceDeliveryTarget(params: {
       ? String(params.origin.threadId)
       : undefined;
   const shouldDeliverExternally =
-    !params.requesterIsSubagent && Boolean(directChannel) && Boolean(directTo);
+    !params.requesterIsSubagent &&
+    (Boolean(directChannel && directTo) || params.bestEffortDeliver === true);
   if (!shouldDeliverExternally) {
     return {
       shouldDeliverExternally: false,
@@ -80,7 +82,7 @@ function resolveDirectAnnounceDeliveryTarget(params: {
   return {
     shouldDeliverExternally: true,
     channel: directChannel,
-    to: directTo,
+    to: directTo || undefined,
     accountId: params.origin?.accountId,
     threadId,
   };
@@ -461,6 +463,7 @@ async function sendSubagentAnnounceDirectly(params: {
         : directOrigin;
     const externalTarget = resolveDirectAnnounceDeliveryTarget({
       requesterIsSubagent: params.requesterIsSubagent,
+      bestEffortDeliver: params.bestEffortDeliver,
       origin: effectiveDirectOrigin,
     });
     if (params.signal?.aborted) {
