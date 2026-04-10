@@ -11,6 +11,7 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
     config: {},
     runtime: {} as OpenClawPluginApi["runtime"],
     logger: { info() {}, warn() {}, error() {}, debug() {} },
+    registerStatusProvider() {},
     registerTool() {},
     registerHook() {},
     registerHttpRoute() {},
