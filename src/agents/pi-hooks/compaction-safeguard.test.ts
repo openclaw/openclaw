@@ -10,6 +10,7 @@ import {
   clearCompactionProviders,
   registerCompactionProvider,
 } from "../../plugins/compaction-provider.js";
+import { resolveEffectiveHomeDir } from "../../infra/home-dir.js";
 import * as compactionModule from "../compaction.js";
 import { buildEmbeddedExtensionFactories } from "../pi-embedded-runner/extensions.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
@@ -2045,6 +2046,27 @@ describe("readWorkspaceContextForSummary", () => {
       expect(result).toContain("subagent rules");
       expect(result).toContain("stay narrow");
       expect(result).not.toContain("main rules");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("normalizes tilde workspace roots before reading summary context", async () => {
+    const homeDir = resolveEffectiveHomeDir();
+    expect(homeDir).toBeTruthy();
+    if (!homeDir) {
+      return;
+    }
+    const root = fs.mkdtempSync(path.join(homeDir, "openclaw-compaction-summary-home-"));
+    try {
+      fs.writeFileSync(path.join(root, "AGENTS.md"), "## Session Startup\nRead home AGENTS.md\n");
+      const tildeWorkspace = `~/${path.relative(homeDir, root)}`;
+
+      const result = await readWorkspaceContextForSummary({
+        workspaceDir: tildeWorkspace,
+      });
+
+      expect(result).toContain("Read home AGENTS.md");
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
