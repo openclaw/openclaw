@@ -186,12 +186,13 @@ async function inspectNodeModulesSymlinkTarget(params: {
 
   const resolvedTargetStats = await fs.stat(resolvedTargetPath);
   const resolvedTargetRelativePath = path.relative(params.rootRealPath, resolvedTargetPath);
+  const blockedDirectoryFinding = findBlockedPackageDirectoryInPath({
+    pathRelativeToRoot: resolvedTargetRelativePath,
+  });
   return {
-    blockedDirectoryFinding: resolvedTargetStats.isDirectory()
-      ? findBlockedPackageDirectoryInPath({
-          pathRelativeToRoot: resolvedTargetRelativePath,
-        })
-      : undefined,
+    // File symlinks can point into a blocked package directory, for example
+    // vendor/node_modules/safe-name -> ../plain-crypto-js/dist/index.js.
+    blockedDirectoryFinding,
     blockedFileFinding: resolvedTargetStats.isFile()
       ? findBlockedPackageFileAliasInPath({
           pathRelativeToRoot: resolvedTargetRelativePath,
