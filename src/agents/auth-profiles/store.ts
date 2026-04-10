@@ -21,6 +21,7 @@ import {
   loadLegacyAuthProfileStore,
   loadPersistedAuthProfileStore,
   mergeAuthProfileStores,
+  mergeAuthProfileStoresPreferringOverrideProviders,
   mergeOAuthFileIntoStore,
 } from "./persisted.js";
 import { savePersistedAuthProfileState } from "./state.js";
@@ -37,7 +38,7 @@ type SaveAuthProfileStoreOptions = {
   syncExternalCli?: boolean;
 };
 
-const runtimeAuthStoreSnapshots = new Map<string, AuthProfileStore>();
+const runtimeAuthStoreSnapshots = new Map<string | undefined, AuthProfileStore>();
 const loadedAuthStoreCache = new Map<
   string,
   {
@@ -48,10 +49,6 @@ const loadedAuthStoreCache = new Map<
   }
 >();
 
-function resolveRuntimeStoreKey(agentDir?: string): string {
-  return resolveAuthStorePath(agentDir);
-}
-
 function cloneAuthProfileStore(store: AuthProfileStore): AuthProfileStore {
   return structuredClone(store);
 }
@@ -61,12 +58,10 @@ function resolveRuntimeAuthProfileStore(agentDir?: string): AuthProfileStore | n
     return null;
   }
 
-  const mainKey = resolveRuntimeStoreKey(undefined);
-  const requestedKey = resolveRuntimeStoreKey(agentDir);
-  const mainStore = runtimeAuthStoreSnapshots.get(mainKey);
-  const requestedStore = runtimeAuthStoreSnapshots.get(requestedKey);
+  const mainStore = runtimeAuthStoreSnapshots.get(undefined);
+  const requestedStore = runtimeAuthStoreSnapshots.get(agentDir);
 
-  if (!agentDir || requestedKey === mainKey) {
+  if (!agentDir) {
     if (!mainStore) {
       return null;
     }
@@ -74,7 +69,7 @@ function resolveRuntimeAuthProfileStore(agentDir?: string): AuthProfileStore | n
   }
 
   if (mainStore && requestedStore) {
-    return mergeAuthProfileStores(
+    return mergeAuthProfileStoresPreferringOverrideProviders(
       cloneAuthProfileStore(mainStore),
       cloneAuthProfileStore(requestedStore),
     );
@@ -102,10 +97,7 @@ export function replaceRuntimeAuthProfileStoreSnapshots(
 ): void {
   runtimeAuthStoreSnapshots.clear();
   for (const entry of entries) {
-    runtimeAuthStoreSnapshots.set(
-      resolveRuntimeStoreKey(entry.agentDir),
-      cloneAuthProfileStore(entry.store),
-    );
+    runtimeAuthStoreSnapshots.set(entry.agentDir, cloneAuthProfileStore(entry.store));
   }
 }
 
@@ -340,9 +332,12 @@ export function loadAuthProfileStoreForRuntime(
   }
 
   const mainStore = loadAuthProfileStoreForAgent(undefined, options);
-  return overlayExternalAuthProfiles(mergeAuthProfileStores(mainStore, store), {
-    agentDir,
-  });
+  return overlayExternalAuthProfiles(
+    mergeAuthProfileStoresPreferringOverrideProviders(mainStore, store),
+    {
+      agentDir,
+    },
+  );
 }
 
 export function loadAuthProfileStoreForSecretsRuntime(agentDir?: string): AuthProfileStore {
@@ -366,7 +361,7 @@ export function ensureAuthProfileStore(
   }
 
   const mainStore = loadAuthProfileStoreForAgent(undefined, options);
-  const merged = mergeAuthProfileStores(mainStore, store);
+  const merged = mergeAuthProfileStoresPreferringOverrideProviders(mainStore, store);
 
   return overlayExternalAuthProfiles(merged, { agentDir });
 }
@@ -384,7 +379,7 @@ export function ensureAuthProfileStoreForLocalUpdate(agentDir?: string): AuthPro
     readOnly: true,
     syncExternalCli: false,
   });
-  return mergeAuthProfileStores(mainStore, store);
+  return mergeAuthProfileStoresPreferringOverrideProviders(mainStore, store);
 }
 
 export function hasAnyAuthProfileStoreSource(agentDir?: string): boolean {
@@ -413,7 +408,7 @@ export function saveAuthProfileStore(
 ): void {
   const authPath = resolveAuthStorePath(agentDir);
   const statePath = resolveAuthStatePath(agentDir);
-  const runtimeKey = resolveRuntimeStoreKey(agentDir);
+  const runtimeKey = agentDir;
   const payload = buildPersistedAuthProfileSecretsStore(store, ({ profileId, credential }) => {
     if (credential.type !== "oauth") {
       return true;

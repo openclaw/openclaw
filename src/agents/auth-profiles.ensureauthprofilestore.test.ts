@@ -6,6 +6,7 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
   loadAuthProfileStoreForRuntime,
+  replaceRuntimeAuthProfileStoreSnapshots,
 } from "./auth-profiles.js";
 import { AUTH_STORE_VERSION, log } from "./auth-profiles/constants.js";
 import type { AuthProfileCredential } from "./auth-profiles/types.js";
@@ -177,7 +178,138 @@ describe("ensureAuthProfileStore", () => {
     }
   });
 
+  it("prefers same-provider agent profiles over inherited main profiles (#64274)", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-provider-shadow-"));
+    const prevAgentDir = process.env.OPENCLAW_AGENT_DIR;
+    const prevPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+    try {
+      const mainDir = path.join(root, "agents", "main", "agent");
+      const agentDir = path.join(root, "agents", "kate", "agent");
+      fs.mkdirSync(mainDir, { recursive: true });
+      fs.mkdirSync(agentDir, { recursive: true });
+
+      process.env.OPENCLAW_AGENT_DIR = mainDir;
+      process.env.PI_CODING_AGENT_DIR = mainDir;
+
+      // Main agent has a minimax-portal:minimax-cli profile (e.g. from MiniMax CLI sync)
+      fs.writeFileSync(
+        path.join(mainDir, "auth-profiles.json"),
+        JSON.stringify({
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            "minimax-portal:minimax-cli": {
+              type: "oauth",
+              provider: "minimax-portal",
+              access: "main-access",
+              refresh: "main-refresh",
+              expires: Date.now() + 60_000,
+            },
+          },
+        }),
+        "utf8",
+      );
+
+      // Kate has her own independent minimax-portal:default profile
+      fs.writeFileSync(
+        path.join(agentDir, "auth-profiles.json"),
+        JSON.stringify({
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            "minimax-portal:default": {
+              type: "oauth",
+              provider: "minimax-portal",
+              access: "kate-access",
+              refresh: "kate-refresh",
+              expires: Date.now() + 60_000,
+            },
+          },
+        }),
+        "utf8",
+      );
+
+      const store = ensureAuthProfileStore(agentDir);
+      // Kate's own profile must win; main's same-provider profile must not shadow it
+      expect(store.profiles["minimax-portal:default"]).toMatchObject({
+        access: "kate-access",
+      });
+      expect(store.profiles["minimax-portal:minimax-cli"]).toBeUndefined();
+    } finally {
+      if (prevAgentDir === undefined) {
+        delete process.env.OPENCLAW_AGENT_DIR;
+      } else {
+        process.env.OPENCLAW_AGENT_DIR = prevAgentDir;
+      }
+      if (prevPiAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = prevPiAgentDir;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps main and agent runtime snapshots distinct when OPENCLAW_AGENT_DIR points at the agent (#64274)", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-runtime-key-"));
+    const prevAgentDir = process.env.OPENCLAW_AGENT_DIR;
+    const prevPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+    try {
+      const kateDir = path.join(root, "agents", "kate", "agent");
+      fs.mkdirSync(kateDir, { recursive: true });
+
+      process.env.OPENCLAW_AGENT_DIR = kateDir;
+      process.env.PI_CODING_AGENT_DIR = kateDir;
+
+      replaceRuntimeAuthProfileStoreSnapshots([
+        {
+          store: {
+            version: AUTH_STORE_VERSION,
+            profiles: {
+              "openai:default": { type: "api_key", provider: "openai", key: "main-key" },
+            },
+          },
+        },
+        {
+          agentDir: kateDir,
+          store: {
+            version: AUTH_STORE_VERSION,
+            profiles: {
+              "anthropic:default": {
+                type: "api_key",
+                provider: "anthropic",
+                key: "kate-key",
+              },
+            },
+          },
+        },
+      ]);
+
+      expect(ensureAuthProfileStore(undefined).profiles).toMatchObject({
+        "openai:default": { type: "api_key", provider: "openai", key: "main-key" },
+      });
+      expect(ensureAuthProfileStore(undefined).profiles["anthropic:default"]).toBeUndefined();
+
+      expect(ensureAuthProfileStore(kateDir).profiles).toMatchObject({
+        "openai:default": { type: "api_key", provider: "openai", key: "main-key" },
+        "anthropic:default": { type: "api_key", provider: "anthropic", key: "kate-key" },
+      });
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+      if (prevAgentDir === undefined) {
+        delete process.env.OPENCLAW_AGENT_DIR;
+      } else {
+        process.env.OPENCLAW_AGENT_DIR = prevAgentDir;
+      }
+      if (prevPiAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = prevPiAgentDir;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it.each([
+
     {
       name: "mode/apiKey aliases map to type/key",
       profile: {
