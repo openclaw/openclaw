@@ -240,9 +240,6 @@ function buildAnthropicCliBackendFixture(): CliBackendPlugin {
       systemPromptArg: "--append-system-prompt",
       systemPromptMode: "append",
       systemPromptWhen: "first",
-      env: {
-        CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
-      },
       clearEnv: [...clearEnv],
       reliability: {
         watchdog: {

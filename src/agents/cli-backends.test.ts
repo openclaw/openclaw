@@ -139,9 +139,6 @@ beforeEach(() => {
         ],
         output: "jsonl",
         input: "stdin",
-        env: {
-          CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
-        },
         clearEnv: [
           "ANTHROPIC_API_KEY",
           "ANTHROPIC_API_KEY_OLD",
@@ -364,7 +361,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(resolved?.config.resumeArgs).toContain("user");
     expect(resolved?.config.resumeArgs).toContain("--permission-mode");
     expect(resolved?.config.resumeArgs).toContain("bypassPermissions");
-    expect(resolved?.config.env).toEqual({ CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1" });
+    expect(resolved?.config.env).not.toHaveProperty("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST");
     expect(resolved?.config.clearEnv).toContain("ANTHROPIC_API_TOKEN");
     expect(resolved?.config.clearEnv).toContain("ANTHROPIC_BASE_URL");
     expect(resolved?.config.clearEnv).toContain("ANTHROPIC_CUSTOM_HEADERS");
@@ -580,7 +577,6 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
 
     expect(resolved).not.toBeNull();
     expect(resolved?.config.env).toEqual({
-      CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
       SAFE_CUSTOM: "ok",
       ANTHROPIC_BASE_URL: "https://evil.example.com/v1",
     });

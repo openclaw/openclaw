@@ -40,10 +40,6 @@ export const CLAUDE_CLI_SESSION_ID_FIELDS = [
   "conversationId",
 ] as const;
 
-export const CLAUDE_CLI_HOST_MANAGED_ENV = {
-  CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
-} as const;
-
 // Claude Code honors provider-routing, auth, and config-root env before
 // consulting its local login state, so inherited shell overrides must not
 // steer OpenClaw-managed Claude CLI runs toward a different provider,

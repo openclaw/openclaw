@@ -558,7 +558,7 @@ describe("runCliAgent spawn path", () => {
     expect(input.env?.SAFE_OVERRIDE).toBe("from-override");
   });
 
-  it("clears claude-cli provider-routing, auth, and telemetry env while keeping host-managed hardening", async () => {
+  it("clears claude-cli provider-routing, auth, telemetry, and host-managed env", async () => {
     vi.stubEnv("ANTHROPIC_BASE_URL", "https://proxy.example.com/v1");
     vi.stubEnv("ANTHROPIC_API_TOKEN", "env-api-token");
     vi.stubEnv("ANTHROPIC_CUSTOM_HEADERS", "x-test-header: env");
@@ -573,6 +573,7 @@ describe("runCliAgent spawn path", () => {
     vi.stubEnv("OTEL_TRACES_EXPORTER", "none");
     vi.stubEnv("OTEL_EXPORTER_OTLP_PROTOCOL", "none");
     vi.stubEnv("OTEL_SDK_DISABLED", "true");
+    vi.stubEnv("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST", "1");
     mockSuccessfulCliRun();
 
     await executePreparedCliRun(
@@ -611,7 +612,7 @@ describe("runCliAgent spawn path", () => {
       env?: Record<string, string | undefined>;
     };
     expect(input.env?.SAFE_KEEP).toBe("ok");
-    expect(input.env?.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe("1");
+    expect(input.env?.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
     expect(input.env?.ANTHROPIC_BASE_URL).toBe("https://override.example.com/v1");
     expect(input.env?.ANTHROPIC_API_TOKEN).toBeUndefined();
     expect(input.env?.ANTHROPIC_CUSTOM_HEADERS).toBeUndefined();

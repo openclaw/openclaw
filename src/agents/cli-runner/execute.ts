@@ -234,6 +234,12 @@ export async function executePreparedCliRun(
           );
         }
         Object.assign(next, context.preparedBackend.env);
+
+        // Never mark Claude CLI as host-managed. That marker routes runs into
+        // Anthropic's separate host-managed usage tier instead of normal CLI
+        // subscription behavior.
+        delete next["CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST"];
+
         return next;
       })();
       if (logOutputText) {
