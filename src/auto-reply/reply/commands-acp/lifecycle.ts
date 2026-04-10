@@ -31,11 +31,10 @@ import {
   resolveThreadBindingSpawnPolicy,
 } from "../../../channels/thread-bindings-policy.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { updateSessionStoreEntry } from "../../../config/sessions/store.js";
 import type { SessionAcpMeta } from "../../../config/sessions/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { normalizeConversationRef } from "../../../infra/outbound/session-binding-normalization.js";
-import { resolveGatewayRpcTimeoutMs } from "../../../gateway/call-timeouts.js";
-import { callGateway } from "../../../gateway/call.js";
 import {
   getSessionBindingService,
   type SessionBindingRecord,
@@ -431,6 +430,25 @@ async function cleanupFailedSpawn(params: {
   });
 }
 
+async function persistSpawnedAcpSessionLabel(params: {
+  sessionKey: string;
+  label?: string;
+  storePath?: string;
+}) {
+  const label = params.label?.trim();
+  if (!label || !params.storePath) {
+    return;
+  }
+  const updated = await updateSessionStoreEntry({
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+    update: async () => ({ label }),
+  });
+  if (!updated) {
+    throw new Error(`ACP session ${params.sessionKey} was not found in the session store.`);
+  }
+}
+
 export async function handleAcpSpawnAction(
   params: HandleCommandsParams,
   restTokens: string[],
@@ -535,13 +553,10 @@ export async function handleAcpSpawnAction(
   }
 
   try {
-    await callGateway({
-      method: "sessions.patch",
-      params: {
-        key: sessionKey,
-        ...(spawn.label ? { label: spawn.label } : {}),
-      },
-      timeoutMs: resolveGatewayRpcTimeoutMs(params.cfg),
+    await persistSpawnedAcpSessionLabel({
+      sessionKey,
+      label: spawn.label,
+      storePath: params.storePath,
     });
   } catch (err) {
     await cleanupFailedSpawn({
