@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  clearMemoryPluginState,
+  registerMemoryCapability,
+} from "../../../src/plugins/memory-state.js";
 import type { OpenClawConfig } from "../api.js";
 import { resolveMemoryWikiConfig } from "./config.js";
 import { renderWikiMarkdown } from "./markdown.js";
@@ -13,6 +17,10 @@ import {
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
+
+afterEach(() => {
+  clearMemoryPluginState();
+});
 
 async function resolveBridgeMissingArtifactsStatus() {
   const config = resolveMemoryWikiConfig(
@@ -89,6 +97,50 @@ describe("resolveMemoryWikiStatus", () => {
 
     expect(status.bridgePublicArtifactCount).toBe(0);
     expect(status.warnings.map((warning) => warning.code)).toContain("bridge-artifacts-missing");
+  });
+
+  it("reports exported bridge artifacts from the active memory capability (regression: cache drops capability)", async () => {
+    registerMemoryCapability("memory-core", {
+      publicArtifacts: {
+        async listArtifacts() {
+          return [
+            {
+              kind: "memory-root",
+              workspaceDir: "/tmp/workspace",
+              relativePath: "MEMORY.md",
+              absolutePath: "/tmp/workspace/MEMORY.md",
+              agentIds: ["main"],
+              contentType: "markdown" as const,
+            },
+          ];
+        },
+      },
+    });
+    const config = resolveMemoryWikiConfig(
+      {
+        vaultMode: "bridge",
+        bridge: {
+          enabled: true,
+          readMemoryArtifacts: true,
+        },
+      },
+      { homedir: "/Users/tester" },
+    );
+
+    const status = await resolveMemoryWikiStatus(config, {
+      appConfig: {
+        agents: {
+          list: [{ id: "main", default: true, workspace: "/tmp/workspace" }],
+        },
+      } as OpenClawConfig,
+      pathExists: async () => true,
+      resolveCommand: async () => null,
+    });
+
+    expect(status.bridgePublicArtifactCount).toBe(1);
+    expect(status.warnings.map((warning) => warning.code)).not.toContain(
+      "bridge-artifacts-missing",
+    );
   });
 
   it("counts source provenance from the vault", async () => {

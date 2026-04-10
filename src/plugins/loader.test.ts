@@ -38,8 +38,12 @@ import {
 } from "./memory-embedding-providers.js";
 import {
   buildMemoryPromptSection,
+  clearMemoryPluginState,
+  getMemoryCapabilityRegistration,
   getMemoryRuntime,
+  listActiveMemoryPublicArtifacts,
   listMemoryCorpusSupplements,
+  registerMemoryCapability,
   registerMemoryCorpusSupplement,
   registerMemoryFlushPlanResolver,
   registerMemoryPromptSupplement,
@@ -1638,6 +1642,113 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["active"]);
   });
 
+  it("preserves the active memory capability during non-activating loads", async () => {
+    useNoBundledPlugins();
+    registerMemoryCapability("active-memory", {
+      promptBuilder: () => ["active capability section"],
+      flushPlanResolver: () => ({
+        softThresholdTokens: 1,
+        forceFlushTranscriptBytes: 2,
+        reserveTokensFloor: 3,
+        prompt: "active",
+        systemPrompt: "active",
+        relativePath: "memory/active-capability.md",
+      }),
+      runtime: {
+        async getMemorySearchManager() {
+          return { manager: null, error: "active-capability" };
+        },
+        resolveMemoryBackendConfig() {
+          return { backend: "builtin" as const };
+        },
+      },
+      publicArtifacts: {
+        async listArtifacts() {
+          return [
+            {
+              kind: "memory-root",
+              workspaceDir: "/tmp/active-workspace",
+              relativePath: "MEMORY.md",
+              absolutePath: "/tmp/active-workspace/MEMORY.md",
+              agentIds: ["main"],
+              contentType: "markdown" as const,
+            },
+          ];
+        },
+      },
+    });
+    const plugin = writePlugin({
+      id: "snapshot-memory-capability",
+      filename: "snapshot-memory-capability.cjs",
+      body: `module.exports = {
+        id: "snapshot-memory-capability",
+        kind: "memory",
+        register(api) {
+          api.registerMemoryCapability({
+            promptBuilder: () => ["snapshot capability section"],
+            flushPlanResolver: () => ({
+              softThresholdTokens: 10,
+              forceFlushTranscriptBytes: 20,
+              reserveTokensFloor: 30,
+              prompt: "snapshot",
+              systemPrompt: "snapshot",
+              relativePath: "memory/snapshot-capability.md",
+            }),
+            runtime: {
+              async getMemorySearchManager() {
+                return { manager: null, error: "snapshot-capability" };
+              },
+              resolveMemoryBackendConfig() {
+                return { backend: "qmd", qmd: {} };
+              },
+            },
+            publicArtifacts: {
+              async listArtifacts() {
+                return [{
+                  kind: "daily-note",
+                  workspaceDir: "/tmp/snapshot-workspace",
+                  relativePath: "memory/2026-04-10.md",
+                  absolutePath: "/tmp/snapshot-workspace/memory/2026-04-10.md",
+                  agentIds: ["snapshot"],
+                  contentType: "markdown",
+                }];
+              },
+            },
+          });
+        },
+      };`,
+    });
+
+    const scoped = loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["snapshot-memory-capability"],
+          slots: { memory: "snapshot-memory-capability" },
+        },
+      },
+      onlyPluginIds: ["snapshot-memory-capability"],
+    });
+
+    expect(scoped.plugins.find((entry) => entry.id === "snapshot-memory-capability")?.status).toBe(
+      "loaded",
+    );
+    expect(getMemoryCapabilityRegistration()?.pluginId).toBe("active-memory");
+    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toStrictEqual([
+      {
+        kind: "memory-root",
+        workspaceDir: "/tmp/active-workspace",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/active-workspace/MEMORY.md",
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+    ]);
+  });
+
   it("clears newly-registered memory plugin registries when plugin register fails", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
@@ -1699,6 +1810,113 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(listMemoryEmbeddingProviders()).toEqual([]);
   });
 
+  it("restores the active memory capability when plugin register fails", async () => {
+    useNoBundledPlugins();
+    registerMemoryCapability("active-memory", {
+      promptBuilder: () => ["active capability section"],
+      flushPlanResolver: () => ({
+        softThresholdTokens: 1,
+        forceFlushTranscriptBytes: 2,
+        reserveTokensFloor: 3,
+        prompt: "active",
+        systemPrompt: "active",
+        relativePath: "memory/active-capability.md",
+      }),
+      runtime: {
+        async getMemorySearchManager() {
+          return { manager: null, error: "active-capability" };
+        },
+        resolveMemoryBackendConfig() {
+          return { backend: "builtin" as const };
+        },
+      },
+      publicArtifacts: {
+        async listArtifacts() {
+          return [
+            {
+              kind: "memory-root",
+              workspaceDir: "/tmp/active-workspace",
+              relativePath: "MEMORY.md",
+              absolutePath: "/tmp/active-workspace/MEMORY.md",
+              agentIds: ["main"],
+              contentType: "markdown" as const,
+            },
+          ];
+        },
+      },
+    });
+    const plugin = writePlugin({
+      id: "failing-memory-capability",
+      filename: "failing-memory-capability.cjs",
+      body: `module.exports = {
+        id: "failing-memory-capability",
+        kind: "memory",
+        register(api) {
+          api.registerMemoryCapability({
+            promptBuilder: () => ["failed capability section"],
+            flushPlanResolver: () => ({
+              softThresholdTokens: 10,
+              forceFlushTranscriptBytes: 20,
+              reserveTokensFloor: 30,
+              prompt: "failed",
+              systemPrompt: "failed",
+              relativePath: "memory/failed-capability.md",
+            }),
+            runtime: {
+              async getMemorySearchManager() {
+                return { manager: null, error: "failed-capability" };
+              },
+              resolveMemoryBackendConfig() {
+                return { backend: "builtin" };
+              },
+            },
+            publicArtifacts: {
+              async listArtifacts() {
+                return [{
+                  kind: "dream-report",
+                  workspaceDir: "/tmp/failed-workspace",
+                  relativePath: "memory/dreaming/2026-04-10.md",
+                  absolutePath: "/tmp/failed-workspace/memory/dreaming/2026-04-10.md",
+                  agentIds: ["failed"],
+                  contentType: "markdown",
+                }];
+              },
+            },
+          });
+          throw new Error("memory capability register failed");
+        },
+      };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["failing-memory-capability"],
+          slots: { memory: "failing-memory-capability" },
+        },
+      },
+      onlyPluginIds: ["failing-memory-capability"],
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "failing-memory-capability")?.status).toBe(
+      "error",
+    );
+    expect(getMemoryCapabilityRegistration()?.pluginId).toBe("active-memory");
+    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toStrictEqual([
+      {
+        kind: "memory-root",
+        workspaceDir: "/tmp/active-workspace",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/active-workspace/MEMORY.md",
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+    ]);
+  });
+
   it("throws when activate:false is used without cache:false", () => {
     expect(() => loadOpenClawPlugins({ activate: false })).toThrow(
       "activate:false requires cache:false",
@@ -1737,6 +1955,94 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(getGlobalHookRunner()).not.toBeNull();
 
     resetGlobalHookRunner();
+  });
+
+  it("restores memory capabilities when serving a registry from cache", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "cached-memory-capability",
+      filename: "cached-memory-capability.cjs",
+      body: `module.exports = {
+        id: "cached-memory-capability",
+        kind: "memory",
+        register(api) {
+          api.registerMemoryCapability({
+            promptBuilder: () => ["cached capability section"],
+            flushPlanResolver: () => ({
+              softThresholdTokens: 10,
+              forceFlushTranscriptBytes: 20,
+              reserveTokensFloor: 30,
+              prompt: "cached",
+              systemPrompt: "cached",
+              relativePath: "memory/cached.md",
+            }),
+            runtime: {
+              async getMemorySearchManager() {
+                return { manager: null, error: "cached" };
+              },
+              resolveMemoryBackendConfig() {
+                return { backend: "builtin" };
+              },
+            },
+            publicArtifacts: {
+              async listArtifacts() {
+                return [{
+                  kind: "memory-root",
+                  workspaceDir: "/tmp/cache-workspace",
+                  relativePath: "MEMORY.md",
+                  absolutePath: "/tmp/cache-workspace/MEMORY.md",
+                  agentIds: ["main"],
+                  contentType: "markdown",
+                }];
+              },
+            },
+          });
+        },
+      };`,
+    });
+    const options = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["cached-memory-capability"],
+          slots: { memory: "cached-memory-capability" },
+        },
+      },
+    };
+
+    const first = loadOpenClawPlugins(options);
+    expect(first.plugins.find((entry) => entry.id === "cached-memory-capability")?.status).toBe(
+      "loaded",
+    );
+    expect(getMemoryCapabilityRegistration()?.pluginId).toBe("cached-memory-capability");
+    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toStrictEqual([
+      {
+        kind: "memory-root",
+        workspaceDir: "/tmp/cache-workspace",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/cache-workspace/MEMORY.md",
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+    ]);
+
+    clearMemoryPluginState();
+    expect(getMemoryCapabilityRegistration()).toBeUndefined();
+
+    const second = loadOpenClawPlugins(options);
+    expect(second).toBe(first);
+    expect(getMemoryCapabilityRegistration()?.pluginId).toBe("cached-memory-capability");
+    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toStrictEqual([
+      {
+        kind: "memory-root",
+        workspaceDir: "/tmp/cache-workspace",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/cache-workspace/MEMORY.md",
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+    ]);
   });
 
   it.each([

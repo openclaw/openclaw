@@ -274,6 +274,60 @@ describe("memory plugin state", () => {
     expect(getMemoryRuntime()).toBe(runtime);
   });
 
+  it("preserves publicArtifacts across snapshot restore (regression: cache omitted capability)", async () => {
+    const runtime = createMemoryRuntime();
+    registerMemoryCapability("memory-core", {
+      promptBuilder: () => ["capability prompt"],
+      flushPlanResolver: () => createMemoryFlushPlan("memory/capability.md"),
+      runtime,
+      publicArtifacts: {
+        async listArtifacts() {
+          return [
+            {
+              kind: "memory-root",
+              workspaceDir: "/tmp/workspace",
+              relativePath: "MEMORY.md",
+              absolutePath: "/tmp/workspace/MEMORY.md",
+              agentIds: ["main"],
+              contentType: "markdown" as const,
+            },
+          ];
+        },
+      },
+    });
+
+    const snapshot = createMemoryStateSnapshot();
+    clearMemoryPluginState();
+
+    expectClearedMemoryState();
+
+    restoreMemoryPluginState(snapshot);
+
+    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toStrictEqual([
+      {
+        kind: "memory-root",
+        workspaceDir: "/tmp/workspace",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/workspace/MEMORY.md",
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+    ]);
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["capability prompt"]);
+    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/capability.md");
+    await expect(
+      getMemoryRuntime()?.getMemorySearchManager({
+        cfg: {} as never,
+        agentId: "main",
+      }),
+    ).resolves.toEqual({ manager: null, error: "missing" });
+    expect(getMemoryCapabilityRegistration()?.pluginId).toBe("memory-core");
+    expect(getMemoryCapabilityRegistration()?.capability.publicArtifacts).toBeDefined();
+    expect(getMemoryCapabilityRegistration()?.capability.promptBuilder).toBeDefined();
+    expect(getMemoryCapabilityRegistration()?.capability.flushPlanResolver).toBeDefined();
+    expect(getMemoryCapabilityRegistration()?.capability.runtime).toBeDefined();
+  });
+
   it("clearMemoryPluginState resets both registries", () => {
     registerMemoryState({
       promptSection: ["stale section"],
