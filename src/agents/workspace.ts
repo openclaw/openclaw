@@ -146,6 +146,7 @@ export type WorkspaceBootstrapFile = {
   path: string;
   content?: string;
   missing: boolean;
+  unavailableReason?: WorkspaceGuardedReadResult["reason"];
 };
 
 export type ExtraBootstrapLoadDiagnosticCode =
@@ -507,6 +508,7 @@ export async function loadWorkspaceBootstrapFileFromPath(params: {
     name: params.name,
     path: resolvedPath,
     missing: true,
+    unavailableReason: loaded.reason,
   };
 }
 
