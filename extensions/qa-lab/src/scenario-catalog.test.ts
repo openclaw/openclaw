@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { QA_AGENTIC_PARITY_SCENARIO_IDS } from "./agentic-parity.js";
 import {
-  QA_AGENTIC_PARITY_SCENARIO_IDS,
   listQaScenarioMarkdownPaths,
   readQaBootstrapScenarioCatalog,
   readQaScenarioById,
