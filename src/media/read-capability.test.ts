@@ -45,8 +45,8 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
     const result = resolveAgentScopedOutboundMediaAccess({
       cfg,
       sessionKey: "agent:main:whatsapp:group:ops",
-      messageProvider: "whatsapp",
-      // "attacker" matches the "id:attacker" toolsBySender entry after sender-id normalization.
+      // Production call sites set messageProvider: undefined when sessionKey is present;
+      // resolveGroupToolPolicy derives channel from the session key instead.
       requesterSenderId: "attacker",
     });
 
@@ -76,7 +76,6 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
     const result = resolveAgentScopedOutboundMediaAccess({
       cfg,
       sessionKey: "agent:main:whatsapp:group:ops",
-      messageProvider: "whatsapp",
       requesterSenderId: "trusted-user",
     });
 
