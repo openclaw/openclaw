@@ -54,7 +54,7 @@ export type NpmDistTagMirrorAuth = {
 };
 const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 const MAX_CALVER_DISTANCE_DAYS = 2;
-const REQUIRED_PACKED_PATHS = ["dist/control-ui/index.html"];
+const REQUIRED_PACKED_PATHS = ["dist/control-ui/index.html", "qa/scenarios/index.md"];
 const CONTROL_UI_ASSET_PREFIX = "dist/control-ui/assets/";
 const FORBIDDEN_PACKED_PATH_PREFIXES = ["docs/.generated/"] as const;
 const NPM_PACK_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
