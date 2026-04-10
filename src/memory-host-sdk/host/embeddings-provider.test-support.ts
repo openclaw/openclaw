@@ -21,18 +21,28 @@ vi.mock("../../infra/net/fetch-guard.js", () => ({
 }));
 
 type FetchPayloadFactory = (input: RequestInfo | URL, init?: RequestInit) => unknown;
+type JsonResponseFetchMock = ReturnType<typeof vi.fn<FetchMock>> & {
+  preconnect: (
+    url: string | URL,
+    options?: { dns?: boolean; tcp?: boolean; http?: boolean; https?: boolean },
+  ) => void;
+  __openclawAcceptsDispatcher: true;
+};
 
 export type JsonFetchMock = ReturnType<typeof createJsonResponseFetchMock>;
 
-export function createJsonResponseFetchMock(payload: unknown | FetchPayloadFactory) {
+export function createJsonResponseFetchMock(payload: FetchPayloadFactory): JsonResponseFetchMock;
+export function createJsonResponseFetchMock(payload: unknown): JsonResponseFetchMock;
+export function createJsonResponseFetchMock(payload: unknown) {
   const fetchMock = vi.fn<FetchMock>(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const body = typeof payload === "function" ? payload(input, init) : payload;
+    const body =
+      typeof payload === "function" ? (payload as FetchPayloadFactory)(input, init) : payload;
     return new Response(JSON.stringify(body), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
   });
-  return withFetchPreconnect(fetchMock);
+  return withFetchPreconnect(fetchMock) as JsonResponseFetchMock;
 }
 
 export function createEmbeddingDataFetchMock(embeddingValues = [0.1, 0.2, 0.3]) {

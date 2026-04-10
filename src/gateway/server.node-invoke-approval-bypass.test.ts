@@ -131,11 +131,7 @@ describe("node.invoke approval bypass", () => {
       const ws = new WebSocket(`ws://127.0.0.1:${port}`);
       trackConnectChallengeNonce(ws);
       const challengePromise = resolveDevice
-        ? onceMessage<{
-            type?: string;
-            event?: string;
-            payload?: Record<string, unknown> | null;
-          }>(ws, (o) => o.type === "event" && o.event === "connect.challenge")
+        ? onceMessage(ws, (o) => o.type === "event" && o.event === "connect.challenge")
         : null;
       await new Promise<void>((resolve) => ws.once("open", resolve));
       const nonce = (() => {

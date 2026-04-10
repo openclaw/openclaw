@@ -549,12 +549,12 @@ async function runModelRun(params: {
   }
 
   const { provider, model } = resolveModelRefOverride(params.model);
-  const response = await callGateway<{
+  const response: {
     result?: {
       payloads?: Array<{ text?: string; mediaUrl?: string | null; mediaUrls?: string[] }>;
       meta?: { agentMeta?: { provider?: string; model?: string } };
     };
-  }>({
+  } = await callGateway({
     method: "agent",
     params: {
       agentId,
@@ -871,12 +871,12 @@ async function runTtsConvert(params: {
 }) {
   if (params.transport === "gateway") {
     const gatewayConnection = buildGatewayConnectionDetailsWithResolvers({ config: loadConfig() });
-    const result = await callGateway<{
+    const result: {
       audioPath?: string;
       provider?: string;
       outputFormat?: string;
       voiceCompatible?: boolean;
-    }>({
+    } = await callGateway({
       method: "tts.convert",
       params: {
         text: params.text,
@@ -964,10 +964,10 @@ async function runTtsConvert(params: {
 async function runTtsProviders(transport: CapabilityTransport) {
   const cfg = loadConfig();
   if (transport === "gateway") {
-    const payload = await callGateway<{
+    const payload: {
       providers?: Array<Record<string, unknown>>;
       active?: string;
-    }>({
+    } = await callGateway({
       method: "tts.providers",
       timeoutMs: 30_000,
     });

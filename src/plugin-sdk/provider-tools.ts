@@ -172,4 +172,5 @@ export function buildProviderToolCompatFamilyHooks(family: ProviderToolCompatFam
         inspectToolSchemas: inspectGeminiToolSchemas,
       };
   }
+  throw new Error("Unsupported provider tool compatibility family");
 }

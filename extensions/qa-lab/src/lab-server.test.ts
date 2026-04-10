@@ -448,7 +448,7 @@ describe("qa-lab server", () => {
     const initialOutcomes = (await (
       await fetchWithRetry(`${lab.baseUrl}/api/outcomes`)
     ).json()) as {
-      run: null | unknown;
+      run: unknown;
     };
     expect(initialOutcomes.run).toBeNull();
 

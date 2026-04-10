@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import { downloadMSTeamsGraphMedia } from "./attachments/graph.js";
+import { resolveRequestUrl } from "./attachments/shared.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 
 const GRAPH_HOST = "graph.microsoft.com";
@@ -263,7 +264,7 @@ describe("msteams graph attachments", () => {
     const seen: Array<{ url: string; auth: string }> = [];
     const referenceAttachment = createReferenceAttachment();
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
+      const url = resolveRequestUrl(input);
       const auth = new Headers(init?.headers).get("Authorization") ?? "";
       seen.push({ url, auth });
 

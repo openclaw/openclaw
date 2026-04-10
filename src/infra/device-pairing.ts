@@ -137,6 +137,7 @@ export function formatDevicePairingForbiddenMessage(result: DevicePairingForbidd
     case "bootstrap-scope-not-allowed":
       return `bootstrap profile does not allow scope: ${result.scope ?? "unknown"}`;
   }
+  throw new Error("Unsupported device pairing forbidden reason");
 }
 
 async function loadState(baseDir?: string): Promise<DevicePairingStateFile> {
