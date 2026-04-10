@@ -850,6 +850,33 @@ describe("lmstudio setup", () => {
     expect(discoverLmstudioModelsMock).not.toHaveBeenCalled();
   });
 
+  it("discoverLmstudioProvider returns null for an unresolved apiKey ref", async () => {
+    const result = await discoverLmstudioProvider(
+      buildDiscoveryContext({
+        config: {
+          models: {
+            providers: {
+              lmstudio: {
+                baseUrl: "http://localhost:1234/v1",
+                api: "openai-completions",
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "LMSTUDIO_DISCOVERY_TOKEN",
+                },
+                models: [],
+              },
+            },
+          },
+        } as OpenClawConfig,
+        env: {},
+      }),
+    );
+
+    expect(result).toBeNull();
+    expect(discoverLmstudioModelsMock).not.toHaveBeenCalled();
+  });
+
   it("discoverLmstudioProvider uses configured direct apiKey for discovery", async () => {
     discoverLmstudioModelsMock.mockResolvedValueOnce([
       createModel("qwen3-8b-instruct", "Qwen3 8B"),

@@ -268,6 +268,14 @@ async function discoverLmstudioProviderCatalog(params: {
   };
 }
 
+function isLmstudioDiscoveryConfigResolutionError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("models.providers.lmstudio.apiKey") ||
+    message.includes("models.providers.lmstudio.headers.")
+  );
+}
+
 /** Preserves existing allowlist metadata and appends discovered LM Studio model refs. */
 function mergeDiscoveredLmstudioAllowlistEntries(params: {
   existing?: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"];
@@ -673,10 +681,18 @@ export async function discoverLmstudioProvider(ctx: ProviderCatalogContext): Pro
   }
   const hasExplicitModels = Array.isArray(explicit?.models) && explicit.models.length > 0;
   const { apiKey, discoveryApiKey } = ctx.resolveProviderApiKey(PROVIDER_ID);
-  const configuredDiscoveryApiKey = await resolveLmstudioConfiguredApiKey({
-    config: ctx.config,
-    env: ctx.env,
-  });
+  let configuredDiscoveryApiKey: string | undefined;
+  try {
+    configuredDiscoveryApiKey = await resolveLmstudioConfiguredApiKey({
+      config: ctx.config,
+      env: ctx.env,
+    });
+  } catch (error) {
+    if (isLmstudioDiscoveryConfigResolutionError(error)) {
+      return null;
+    }
+    throw error;
+  }
   const resolvedDiscoveryApiKey = discoveryApiKey ?? configuredDiscoveryApiKey;
   let resolvedHeaders: Record<string, string> | undefined;
   try {
@@ -686,8 +702,7 @@ export async function discoverLmstudioProvider(ctx: ProviderCatalogContext): Pro
       headers: explicit?.headers,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (message.includes("models.providers.lmstudio.headers.")) {
+    if (isLmstudioDiscoveryConfigResolutionError(error)) {
       return null;
     }
     throw error;
