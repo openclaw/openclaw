@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ImageContent } from "../agents/command/types.js";
+import { normalizeUsage } from "../agents/usage.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
@@ -57,6 +58,8 @@ type OpenAiChatMessage = {
 type OpenAiChatCompletionRequest = {
   model?: unknown;
   stream?: unknown;
+  // Naming/style reference: src/agents/openai-transport-stream.ts:1262-1273
+  stream_options?: unknown;
   messages?: unknown;
   user?: unknown;
 };
@@ -160,6 +163,40 @@ function writeAssistantContentChunk(
         finish_reason: params.finishReason,
       },
     ],
+  });
+}
+
+function writeAssistantStopChunk(res: ServerResponse, params: { runId: string; model: string }) {
+  writeSse(res, {
+    id: params.runId,
+    object: "chat.completion.chunk",
+    created: Math.floor(Date.now() / 1000),
+    model: params.model,
+    choices: [
+      {
+        index: 0,
+        delta: {},
+        finish_reason: "stop",
+      },
+    ],
+  });
+}
+
+function writeUsageChunk(
+  res: ServerResponse,
+  params: {
+    runId: string;
+    model: string;
+    usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+  },
+) {
+  writeSse(res, {
+    id: params.runId,
+    object: "chat.completion.chunk",
+    created: Math.floor(Date.now() / 1000),
+    model: params.model,
+    choices: [],
+    usage: params.usage,
   });
 }
 
@@ -421,6 +458,66 @@ function resolveAgentResponseText(result: unknown): string {
   return content || "No response from OpenClaw.";
 }
 
+type AgentUsageMeta = {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  total?: number;
+};
+
+function resolveRawAgentUsage(result: unknown): AgentUsageMeta | undefined {
+  return (
+    result as {
+      meta?: {
+        agentMeta?: {
+          usage?: AgentUsageMeta;
+        };
+      };
+    } | null
+  )?.meta?.agentMeta?.usage;
+}
+
+function resolveChatCompletionUsage(result: unknown): {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+} {
+  const usage = normalizeUsage(resolveRawAgentUsage(result));
+
+  // Keep the wire-format aligned with OpenAI chat completions:
+  // prompt_tokens includes prompt input plus cache-read reuse, but not cache-write overhead.
+  const input = usage?.input ?? 0;
+  const output = usage?.output ?? 0;
+  const cacheRead = usage?.cacheRead ?? 0;
+  const promptTokens = input + cacheRead;
+  const completionTokens = output;
+  const hasComponentBreakdown =
+    usage?.input !== undefined ||
+    usage?.output !== undefined ||
+    usage?.cacheRead !== undefined ||
+    usage?.cacheWrite !== undefined;
+  const totalTokens = hasComponentBreakdown
+    ? promptTokens + completionTokens
+    : Math.max(0, usage?.total ?? 0);
+
+  return {
+    prompt_tokens: Math.max(0, promptTokens),
+    completion_tokens: Math.max(0, completionTokens),
+    total_tokens: Math.max(0, totalTokens),
+  };
+}
+
+function resolveIncludeUsageForStreaming(payload: OpenAiChatCompletionRequest): boolean {
+  // Keep parsing aligned with OpenAI wire-format field names.
+  // Flow reference: src/agents/openai-transport-stream.ts:1262-1273
+  const streamOptions = payload.stream_options;
+  if (!streamOptions || typeof streamOptions !== "object" || Array.isArray(streamOptions)) {
+    return false;
+  }
+  return (streamOptions as { include_usage?: unknown }).include_usage === true;
+}
+
 export async function handleOpenAiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -451,6 +548,7 @@ export async function handleOpenAiHttpRequest(
 
   const payload = coerceRequest(handled.body);
   const stream = Boolean(payload.stream);
+  const streamIncludeUsage = stream && resolveIncludeUsageForStreaming(payload);
   const model = typeof payload.model === "string" ? payload.model : "openclaw";
   const user = typeof payload.user === "string" ? payload.user : undefined;
 
@@ -526,6 +624,7 @@ export async function handleOpenAiHttpRequest(
       }
 
       const content = resolveAgentResponseText(result);
+      const usage = resolveChatCompletionUsage(result);
 
       sendJson(res, 200, {
         id: runId,
@@ -539,7 +638,7 @@ export async function handleOpenAiHttpRequest(
             finish_reason: "stop",
           },
         ],
-        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        usage,
       });
     } catch (err) {
       if (abortController.signal.aborted) {
@@ -558,9 +657,63 @@ export async function handleOpenAiHttpRequest(
   setSseHeaders(res);
 
   let wroteRole = false;
+  let wroteStopChunk = false;
   let sawAssistantDelta = false;
+  let finalUsage:
+    | {
+        prompt_tokens: number;
+        completion_tokens: number;
+        total_tokens: number;
+      }
+    | undefined;
+  let finalizeRequested = false;
   let closed = false;
   let stopWatchingDisconnect = () => {};
+
+  // Streaming finalize gate intentionally mirrors openresponses-http.ts:
+  // lifecycle:end requests finalize, while the command result supplies finalUsage.
+  // When stream_options.include_usage=true, both signals must arrive before the
+  // stream closes so the final usage chunk is emitted before [DONE].
+  //
+  // This does not leave the stream permanently hung waiting for usage. The
+  // agentCommandFromIngress promise always settles via normal completion, timeout,
+  // or abort. On success, the IIFE sets finalUsage from the command result and
+  // calls requestFinalize(); its finally path also emits lifecycle:end, which in
+  // turn calls requestFinalize(). On error or timeout, the catch path sets a
+  // zeroed finalUsage, emits lifecycle:error, and calls requestFinalize(). That
+  // means the same runner-level failure path already produces the fallback final
+  // usage state before this HTTP adapter tries to close the stream.
+  //
+  // Client disconnect is the separate early-exit case: watchClientDisconnect()
+  // marks the stream closed and aborts the runner, then the rejected promise
+  // returns early from catch because closed/aborted is already true.
+  // Whether adapters should also add a shorter HTTP-specific bounded fallback
+  // remains a shared adapter decision rather than a chat-completions-only change.
+  const maybeFinalize = () => {
+    if (closed || !finalizeRequested) {
+      return;
+    }
+    if (streamIncludeUsage && !finalUsage) {
+      return;
+    }
+    closed = true;
+    stopWatchingDisconnect();
+    unsubscribe();
+    if (!wroteStopChunk) {
+      writeAssistantStopChunk(res, { runId, model });
+      wroteStopChunk = true;
+    }
+    if (streamIncludeUsage && finalUsage) {
+      writeUsageChunk(res, { runId, model, usage: finalUsage });
+    }
+    writeDone(res);
+    res.end();
+  };
+
+  const requestFinalize = () => {
+    finalizeRequested = true;
+    maybeFinalize();
+  };
 
   const unsubscribe = onAgentEvent((evt) => {
     if (evt.runId !== runId) {
@@ -594,11 +747,7 @@ export async function handleOpenAiHttpRequest(
     if (evt.stream === "lifecycle") {
       const phase = evt.data?.phase;
       if (phase === "end" || phase === "error") {
-        closed = true;
-        stopWatchingDisconnect();
-        unsubscribe();
-        writeDone(res);
-        res.end();
+        requestFinalize();
       }
     }
   });
@@ -616,6 +765,8 @@ export async function handleOpenAiHttpRequest(
         return;
       }
 
+      finalUsage = resolveChatCompletionUsage(result);
+
       if (!sawAssistantDelta) {
         if (!wroteRole) {
           wroteRole = true;
@@ -632,6 +783,7 @@ export async function handleOpenAiHttpRequest(
           finishReason: null,
         });
       }
+      requestFinalize();
     } catch (err) {
       if (closed || abortController.signal.aborted) {
         return;
@@ -643,18 +795,25 @@ export async function handleOpenAiHttpRequest(
         content: "Error: internal error",
         finishReason: "stop",
       });
+      wroteStopChunk = true;
+      finalUsage = {
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        total_tokens: 0,
+      };
       emitAgentEvent({
         runId,
         stream: "lifecycle",
         data: { phase: "error" },
       });
+      requestFinalize();
     } finally {
       if (!closed) {
-        closed = true;
-        stopWatchingDisconnect();
-        unsubscribe();
-        writeDone(res);
-        res.end();
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          data: { phase: "end" },
+        });
       }
     }
   })();
