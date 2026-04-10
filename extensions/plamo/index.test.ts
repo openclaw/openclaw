@@ -957,4 +957,41 @@ describe("plamo provider plugin", () => {
       ],
     });
   });
+
+  it("parses standalone tool_request blocks even when wrapped tool_requests blocks are present", () => {
+    const wrappedToolMarkup =
+      "<|plamo:begin_tool_requests:plamo|>" +
+      "<|plamo:begin_tool_request:plamo|>" +
+      "<|plamo:begin_tool_name:plamo|>read<|plamo:end_tool_name:plamo|>" +
+      '<|plamo:begin_tool_arguments:plamo|><|plamo:msg|>{"path":"README.md"}' +
+      "<|plamo:end_tool_arguments:plamo|>" +
+      "<|plamo:end_tool_request:plamo|>" +
+      "<|plamo:end_tool_requests:plamo|>";
+    const standaloneToolMarkup =
+      "<|plamo:begin_tool_request:plamo|>" +
+      "<|plamo:begin_tool_name:plamo|>write<|plamo:end_tool_name:plamo|>" +
+      '<|plamo:begin_tool_arguments:plamo|><|plamo:msg|>{"path":"notes.txt","content":"ok"}' +
+      "<|plamo:end_tool_arguments:plamo|>" +
+      "<|plamo:end_tool_request:plamo|>";
+
+    const message = {
+      role: "assistant",
+      stopReason: "stop",
+      content: [{ type: "text", text: `${wrappedToolMarkup}${standaloneToolMarkup}` }],
+    };
+
+    normalizePlamoToolMarkupInMessage(message);
+
+    expect(message).toMatchObject({
+      stopReason: "toolUse",
+      content: [
+        { type: "toolCall", name: "read", arguments: { path: "README.md" } },
+        {
+          type: "toolCall",
+          name: "write",
+          arguments: { path: "notes.txt", content: "ok" },
+        },
+      ],
+    });
+  });
 });
