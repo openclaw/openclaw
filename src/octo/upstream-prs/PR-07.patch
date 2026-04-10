@@ -1,0 +1,46 @@
+From: Octopus Orchestrator upstream PR draft wave (M0-21)
+Subject: [PATCH] hooks: add "octo" to InternalHookEventType union
+
+Extend the central hook event-type union in src/hooks/internal-hooks.ts
+with a new "octo" literal so that Octopus Orchestrator lifecycle events
+(mission.create, arm.spawn, arm.completed) can flow through the
+existing internal hook dispatcher without any runtime changes.
+
+This is a vocabulary-only change. The dispatcher machinery
+(registerInternalHook, triggerInternalHook, hasInternalHookListeners,
+createInternalHookEvent) is generic over the event type and requires
+no behavioral changes. Dispatch call sites that fire octo.* events
+land in the Octopus control-plane code in a later PR; this PR opens
+the door in the central union so those call sites type-check.
+
+No behavior change for deployments with octo.enabled: false (default
+through Milestone 1). When octo is disabled, no producers exist, so
+the new event family is dead code at the hook layer.
+
+Draft authored against upstream commit 9ece252.
+
+---
+ src/hooks/internal-hooks.ts | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/src/hooks/internal-hooks.ts b/src/hooks/internal-hooks.ts
+index 0000000..0000001 100644
+--- a/src/hooks/internal-hooks.ts
++++ b/src/hooks/internal-hooks.ts
+@@ -14,7 +14,13 @@ import { formatErrorMessage } from "../infra/errors.js";
+ import { createSubsystemLogger } from "../logging/subsystem.js";
+ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+
+-export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
++export type InternalHookEventType =
++  | "command"
++  | "session"
++  | "agent"
++  | "gateway"
++  | "message"
++  | "octo";
+
+ export type AgentBootstrapHookContext = {
+   workspaceDir: string;
+--
+draft-patch 1.0

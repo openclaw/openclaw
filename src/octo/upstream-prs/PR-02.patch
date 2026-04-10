@@ -1,0 +1,54 @@
+From: Octopus Orchestrator upstream PR draft wave (M0-16)
+Subject: [PATCH] gateway: advertise features.octo from hello-ok handshake
+
+Wire buildFeaturesOcto (already implemented in src/octo/wire/features.ts)
+into the Gateway hello-ok handshake so clients can feature-detect
+Octopus Orchestrator support via features.octo?.enabled === true.
+
+The octo key is always emitted, even when octo.enabled: false — in that
+case buildFeaturesOcto returns the canonical disabled descriptor
+(empty adapters, baseline capabilities). Clients gate on the enabled
+boolean, not on key presence, matching the contract in
+docs/octopus-orchestrator/HLD.md §Feature advertisement via
+hello-ok.features.octo.
+
+No new schema, no new transport, no new config keys. enabled and
+adapters are sourced from the loaded octo config (loadOctoConfig,
+M0-11) and passed through verbatim — the handshake layer performs no
+filtering or policy of its own.
+
+No behavior change for deployments with octo.enabled: false (default
+through Milestone 1): clients simply see enabled: false and hide
+their Octopus UI.
+
+Draft authored against upstream commit 9ece252.
+
+---
+ src/gateway/server/ws-connection/message-handler.ts | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/src/gateway/server/ws-connection/message-handler.ts b/src/gateway/server/ws-connection/message-handler.ts
+index 0000000..0000001 100644
+--- a/src/gateway/server/ws-connection/message-handler.ts
++++ b/src/gateway/server/ws-connection/message-handler.ts
+@@ -40,6 +40,7 @@
+ import { buildGatewaySnapshot } from "../snapshot.js";
++import { buildFeaturesOcto } from "../../../octo/wire/features.js";
+ import { mintCanvasCapabilityToken } from "../canvas-capability.js";
+@@ -1209,7 +1210,13 @@
+             version: resolveRuntimeServiceVersion(process.env),
+             connId,
+           },
+-          features: { methods: gatewayMethods, events },
++          features: {
++            methods: gatewayMethods,
++            events,
++            octo: buildFeaturesOcto({
++              enabled: octoConfig.enabled,
++              adapters: octoConfig.adapters,
++            }),
++          },
+           snapshot,
+           canvasHostUrl: scopedCanvasHostUrl,
+--
+draft-patch 1.0

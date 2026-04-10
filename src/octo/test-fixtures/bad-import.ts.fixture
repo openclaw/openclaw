@@ -1,0 +1,19 @@
+// Fixture for M0-12 / scripts/check-octo-upstream-imports.mjs
+//
+// This file INTENTIONALLY violates OCTO-DEC-033 by importing from an
+// OpenClaw internal path outside src/octo/. The check-octo-upstream-imports
+// script MUST flag it when run with --include-fixtures.
+//
+// The file lives OUTSIDE src/octo/adapters/openclaw/, so the rule applies.
+//
+// The .ts.fixture extension keeps oxlint, tsc, and vitest from parsing this
+// file as real source. Only the upstream-imports check script reads it (and
+// only under --include-fixtures).
+
+// Forbidden: relative import escaping src/octo/
+import { fake } from "../../gateway/server-methods-list";
+
+// Forbidden: absolute OpenClaw-internal import
+import { other } from "src/config/loader";
+
+export { fake, other };

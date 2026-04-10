@@ -1,0 +1,108 @@
+From: Octopus Orchestrator upstream PR draft wave (M0-19)
+Subject: [PATCH] cron: add payload kind "octo.mission" for scheduled mission dispatch
+
+Extend the cron payload discriminated union with a new variant,
+kind: "octo.mission", so a cron entry in openclaw.json can launch an
+Octopus Orchestrator mission on a schedule. The cron runtime
+dispatches octo.mission.create via an injected deps helper and tags
+the resulting mission with metadata.source="cron" and
+metadata.cron_id=<jobId>.
+
+Execution semantics (isolated session allocation, stagger, timezone,
+run-log persistence, failure alerts) are unchanged. Only the dispatch
+leaf in executeDetachedCronJob is new.
+
+Feature flag: cron fires on schedule regardless of octo.enabled. When
+octo.enabled=false the dispatcher returns not_enabled synchronously
+and the run is recorded as status=skipped. No retry, no job disable.
+This matches OCTO-DEC-027.
+
+Draft authored against upstream commit 9ece252.
+
+---
+ src/gateway/protocol/schema/cron.ts |  9 +++++++++
+ src/cron/service/timer.ts           | 22 +++++++++++++++++++---
+ src/cron/types.ts                   | 10 +++++++++-
+ 3 files changed, 37 insertions(+), 4 deletions(-)
+
+diff --git a/src/gateway/protocol/schema/cron.ts b/src/gateway/protocol/schema/cron.ts
+index 0000000..0000001 100644
+--- a/src/gateway/protocol/schema/cron.ts
++++ b/src/gateway/protocol/schema/cron.ts
+@@ -130,6 +130,15 @@ export const CronPayloadSchema = Type.Union([
+   cronAgentTurnPayloadSchema({
+     message: NonEmptyString,
+     toolsAllow: Type.Array(Type.String()),
+   }),
++  Type.Object(
++    {
++      kind: Type.Literal("octo.mission"),
++      template: NonEmptyString,
++      args: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
++    },
++    { additionalProperties: false },
++  ),
+ ]);
+
+diff --git a/src/cron/service/timer.ts b/src/cron/service/timer.ts
+index 0000000..0000002 100644
+--- a/src/cron/service/timer.ts
++++ b/src/cron/service/timer.ts
+@@ -1253,9 +1253,29 @@ async function executeDetachedCronJob(
+ ): Promise<
+   CronRunOutcome & CronRunTelemetry & { delivered?: boolean; deliveryAttempted?: boolean }
+ > {
+-  if (job.payload.kind !== "agentTurn") {
+-    return { status: "skipped", error: "isolated job requires payload.kind=agentTurn" };
++  const kind = job.payload.kind;
++  if (kind === "octo.mission") {
++    if (abortSignal?.aborted) return resolveAbortError();
++    const res = await state.deps.dispatchOctoMissionCreate({
++      cronId: job.id,
++      template: job.payload.template,
++      args: job.payload.args,
++      abortSignal,
++    });
++    if (res.status === "not_enabled") {
++      // Feature flag off (OCTO-DEC-027): log once as skipped, do not retry.
++      return { status: "skipped", error: "octo.mission dispatch: not_enabled" };
++    }
++    return {
++      status: res.status,
++      error: res.error,
++      summary: res.summary,
++      sessionId: res.missionId,
++    };
++  }
++  if (kind !== "agentTurn") {
++    return {
++      status: "skipped",
++      error: "isolated job requires payload.kind in {agentTurn,octo.mission}",
++    };
+   }
+   if (abortSignal?.aborted) {
+     return resolveAbortError();
+   }
+
+diff --git a/src/cron/types.ts b/src/cron/types.ts
+index 0000000..0000003 100644
+--- a/src/cron/types.ts
++++ b/src/cron/types.ts
+@@ -84,7 +84,15 @@ export type CronFailureAlert = {
+   accountId?: string;
+ };
+
+-export type CronPayload = { kind: "systemEvent"; text: string } | CronAgentTurnPayload;
++export type CronOctoMissionPayload = {
++  kind: "octo.mission";
++  template: string;
++  args?: Record<string, unknown>;
++};
++
++export type CronPayload =
++  | { kind: "systemEvent"; text: string }
++  | CronAgentTurnPayload
++  | CronOctoMissionPayload;
+
+--
+draft-patch 1.0

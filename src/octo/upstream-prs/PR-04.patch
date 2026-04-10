@@ -1,0 +1,80 @@
+From: Octopus Orchestrator upstream PR draft wave (M0-18)
+Subject: [PATCH] auto-reply: register /octo slash command in shared registry
+
+Register /octo in buildBuiltinChatCommands() so the Octopus in-chat
+operator surface (INTEGRATION.md §In-chat operator surface) is
+dispatchable from every channel that consumes the shared registry.
+The action choices enumerate the documented subcommands: status,
+missions, mission, arms, arm, attach, unattach, tail, events, help.
+target + captureRemaining value handle composite forms such as
+'arm kill <id>' and 'mission create <template>'.
+
+This change only adds the REGISTRATION entry. The handler lands in
+a later octo-internal milestone at src/octo/cli/slash-commands.ts.
+Until then, invocation returns a structured not_enabled error
+(octo.enabled: false, per OCTO-DEC-027) or not_implemented (enabled
+but no handler attached). Attach semantics live on the octo handler
+per OCTO-DEC-032, not in channel bindings.
+
+No behavior change for octo.enabled: false deployments beyond /octo
+appearing in /commands listings and autocomplete.
+
+Draft authored against upstream commit 9ece252.
+
+---
+ src/auto-reply/commands-registry.shared.ts | 32 ++++++++++++++++++++++
+ 1 file changed, 32 insertions(+)
+
+diff --git a/src/auto-reply/commands-registry.shared.ts b/src/auto-reply/commands-registry.shared.ts
+index 0000000..0000001 100644
+--- a/src/auto-reply/commands-registry.shared.ts
++++ b/src/auto-reply/commands-registry.shared.ts
+@@ -337,6 +337,38 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
+       ],
+       argsMenu: "auto",
+     }),
++    defineChatCommand({
++      key: "octo",
++      nativeName: "octo",
++      description:
++        "Octopus Orchestrator operator surface: missions, arms, attach, tail, events.",
++      textAlias: "/octo",
++      category: "management",
++      args: [
++        {
++          name: "action",
++          description: "Octopus subcommand",
++          type: "string",
++          preferAutocomplete: true,
++          choices: [
++            "status",
++            "missions",
++            "mission",
++            "arms",
++            "arm",
++            "attach",
++            "unattach",
++            "tail",
++            "events",
++            "help",
++          ],
++        },
++        {
++          name: "target",
++          description: "Mission id, arm id, or template name",
++          type: "string",
++        },
++        {
++          name: "value",
++          description: "Additional arguments (e.g. 'kill' for arm kill)",
++          type: "string",
++          captureRemaining: true,
++        },
++      ],
++      argsMenu: "auto",
++    }),
+     defineChatCommand({
+       key: "acp",
+       nativeName: "acp",
+--
+draft-patch 1.0

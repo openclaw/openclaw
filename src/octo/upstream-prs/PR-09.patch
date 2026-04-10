@@ -1,0 +1,173 @@
+From: Octopus Orchestrator upstream PR draft wave (M0-23)
+Subject: [PATCH] agents: register octo_* tools in tool-catalog
+
+Register the 16 Octopus Orchestrator agent tools in
+CORE_TOOL_DEFINITIONS so profile-based allowlisting (coding /
+messaging / minimal) and the group:openclaw umbrella can see them.
+
+Partition (per INTEGRATION.md §1 and OCTO-DEC-028):
+  - 8 read-only tools (octo_status, octo_mission_list,
+    octo_mission_show, octo_arm_list, octo_arm_show, octo_grip_list,
+    octo_events_tail, octo_claims_list) join profiles
+    ["minimal", "coding", "messaging"] and group:openclaw.
+  - 8 writer tools (octo_mission_create, octo_mission_pause,
+    octo_mission_resume, octo_mission_abort, octo_arm_spawn,
+    octo_arm_send, octo_arm_terminate, octo_grip_reassign) are
+    profiles: [] (opt-in by explicit tools.allow only) and are
+    NOT in group:openclaw.
+
+Per OCTO-DEC-029, writer tools are NOT gated by tools.elevated
+(which is about exec sandbox breakout, owned by OpenClaw). The
+second gate beyond tools.allow is the octo.writer device-token
+capability added by the M0-24 draft PR. This patch does not touch
+tools.elevated.
+
+Tool name strings are the same set as OCTO_TOOL_NAMES in
+src/octo/tools/schemas.ts. No factories are added here; catalog
+entries are inert until a later PR wires createOcto*Tool functions
+into src/agents/openclaw-tools.ts.
+
+Draft authored against upstream commit 9ece252.
+
+---
+ src/agents/tool-catalog.ts | 112 +++++++++++++++++++++++++++++++++++++
+ 1 file changed, 112 insertions(+)
+
+diff --git a/src/agents/tool-catalog.ts b/src/agents/tool-catalog.ts
+index 0000000..0000001 100644
+--- a/src/agents/tool-catalog.ts
++++ b/src/agents/tool-catalog.ts
+@@ -300,6 +300,118 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
+     profiles: [],
+     includeInOpenClawGroup: true,
+   },
++  // Octopus Orchestrator — read-only tools (default allowlist).
++  // See src/octo/tools/schemas.ts OCTO_TOOL_SCHEMA_REGISTRY and
++  // docs/octopus-orchestrator/INTEGRATION.md §Agent tool surface.
++  {
++    id: "octo_status",
++    label: "octo_status",
++    description: "Octopus: active arms, queued grips, healthy nodes, mission count",
++    sectionId: "sessions",
++    profiles: ["minimal", "coding", "messaging"],
++    includeInOpenClawGroup: true,
++  },
++  {
++    id: "octo_mission_list",
++    label: "octo_mission_list",
++    description: "Octopus: list missions visible to the caller's agent id",
++    sectionId: "sessions",
++    profiles: ["minimal", "coding", "messaging"],
++    includeInOpenClawGroup: true,
++  },
++  {
++    id: "octo_mission_show",
++    label: "octo_mission_show",
++    description: "Octopus: mission detail including grip graph and current budget state",
++    sectionId: "sessions",
++    profiles: ["minimal", "coding", "messaging"],
++    includeInOpenClawGroup: true,
++  },
++  {
++    id: "octo_arm_list",
++    label: "octo_arm_list",
++    description: "Octopus: list arms filtered by mission, node, state, labels",
++    sectionId: "sessions",
++    profiles: ["minimal", "coding", "messaging"],
++    includeInOpenClawGroup: true,
++  },
++  {
++    id: "octo_arm_show",
++    label: "octo_arm_show",
++    description: "Octopus: arm detail including current grip, lease, checkpoint, recent output",
++    sectionId: "sessions",
++    profiles: ["minimal", "coding", "messaging"],
++    includeInOpenClawGroup: true,
++  },
++  {
++    id: "octo_grip_list",
++    label: "octo_grip_list",
++    description: "Octopus: list grips with dependencies and status",
++    sectionId: "sessions",
++    profiles: ["minimal", "coding", "messaging"],
++    includeInOpenClawGroup: true,
++  },
++  {
++    id: "octo_events_tail",
++    label: "octo_events_tail",
++    description: "Octopus: bounded event tail, filterable by entity",
++    sectionId: "sessions",
++    profiles: ["minimal", "coding", "messaging"],
++    includeInOpenClawGroup: true,
++  },
++  {
++    id: "octo_claims_list",
++    label: "octo_claims_list",
++    description: "Octopus: current claims with owner and expiry",
++    sectionId: "sessions",
++    profiles: ["minimal", "coding", "messaging"],
++    includeInOpenClawGroup: true,
++  },
++  // Octopus Orchestrator — writer tools (opt-in; profiles: [] is intentional).
++  // Gated by per-agent tools.allow AND the octo.writer device-token
++  // capability (OCTO-DEC-024 / OCTO-DEC-029). NOT gated by tools.elevated.
++  {
++    id: "octo_mission_create",
++    label: "octo_mission_create",
++    description: "Octopus: create a mission from a template or inline MissionSpec",
++    sectionId: "automation",
++    profiles: [],
++  },
++  {
++    id: "octo_mission_pause",
++    label: "octo_mission_pause",
++    description: "Octopus: pause a mission (no new grip assignment)",
++    sectionId: "automation",
++    profiles: [],
++  },
++  {
++    id: "octo_mission_resume",
++    label: "octo_mission_resume",
++    description: "Octopus: resume a paused mission",
++    sectionId: "automation",
++    profiles: [],
++  },
++  {
++    id: "octo_mission_abort",
++    label: "octo_mission_abort",
++    description: "Octopus: abort a mission and terminate live arms",
++    sectionId: "automation",
++    profiles: [],
++  },
++  {
++    id: "octo_arm_spawn",
++    label: "octo_arm_spawn",
++    description: "Octopus: spawn a new arm with an ArmSpec",
++    sectionId: "automation",
++    profiles: [],
++  },
++  {
++    id: "octo_arm_send",
++    label: "octo_arm_send",
++    description: "Octopus: send input to a live arm",
++    sectionId: "automation",
++    profiles: [],
++  },
++  {
++    id: "octo_arm_terminate",
++    label: "octo_arm_terminate",
++    description: "Octopus: terminate an arm with reason",
++    sectionId: "automation",
++    profiles: [],
++  },
++  {
++    id: "octo_grip_reassign",
++    label: "octo_grip_reassign",
++    description: "Octopus: reassign a grip to a different arm or node",
++    sectionId: "automation",
++    profiles: [],
++  },
+ ];
+
+--
+draft-patch 1.0

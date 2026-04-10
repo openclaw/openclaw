@@ -1,0 +1,99 @@
+From: Octopus Orchestrator upstream PR draft wave (M0-24)
+Subject: [PATCH] gateway: recognize octo.writer capability and gate octo.* mutators
+
+Introduce a new operator scope literal `operator.octo.writer` and gate
+the five side-effecting Octopus Orchestrator methods behind it at
+dispatch time. Read-only octo.* methods stay in READ_SCOPE and are
+unaffected.
+
+Calls arriving on a loopback transport are auto-granted the capability
+per OCTO-DEC-024, preserving the existing same-host openclaw CLI UX.
+
+Distinct from `tools.elevated` (sandbox breakout for exec, owned by
+OpenClaw tools pipeline) per OCTO-DEC-029 supersession. The two share
+no code paths.
+
+Draft authored against upstream commit 9ece252.
+
+---
+ src/gateway/operator-scopes.ts |  4 +++-
+ src/gateway/method-scopes.ts   | 22 +++++++++++++++++++++-
+ 2 files changed, 24 insertions(+), 2 deletions(-)
+
+diff --git a/src/gateway/operator-scopes.ts b/src/gateway/operator-scopes.ts
+index 0000000..0000001 100644
+--- a/src/gateway/operator-scopes.ts
++++ b/src/gateway/operator-scopes.ts
+@@ -4,11 +4,13 @@ export const WRITE_SCOPE = "operator.write" as const;
+ export const APPROVALS_SCOPE = "operator.approvals" as const;
+ export const PAIRING_SCOPE = "operator.pairing" as const;
+ export const TALK_SECRETS_SCOPE = "operator.talk.secrets" as const;
++export const OCTO_WRITER_SCOPE = "operator.octo.writer" as const;
+
+ export type OperatorScope =
+   | typeof ADMIN_SCOPE
+   | typeof READ_SCOPE
+   | typeof WRITE_SCOPE
+   | typeof APPROVALS_SCOPE
+   | typeof PAIRING_SCOPE
+-  | typeof TALK_SECRETS_SCOPE;
++  | typeof TALK_SECRETS_SCOPE
++  | typeof OCTO_WRITER_SCOPE;
+diff --git a/src/gateway/method-scopes.ts b/src/gateway/method-scopes.ts
+index 0000000..0000002 100644
+--- a/src/gateway/method-scopes.ts
++++ b/src/gateway/method-scopes.ts
+@@ -4,6 +4,7 @@ import {
+   ADMIN_SCOPE,
+   APPROVALS_SCOPE,
+   PAIRING_SCOPE,
++  OCTO_WRITER_SCOPE,
+   READ_SCOPE,
+   TALK_SECRETS_SCOPE,
+   WRITE_SCOPE,
+@@ -14,6 +15,7 @@ export {
+   ADMIN_SCOPE,
+   APPROVALS_SCOPE,
+   PAIRING_SCOPE,
++  OCTO_WRITER_SCOPE,
+   READ_SCOPE,
+   TALK_SECRETS_SCOPE,
+   WRITE_SCOPE,
+@@ -140,6 +142,14 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
+     "agents.files.set",
+   ],
+   [TALK_SECRETS_SCOPE]: [],
++  // Octopus Orchestrator control-plane mutators. Read-only octo.* methods
++  // (octo.arm.attach, octo.arm.health, octo.node.capabilities) remain in
++  // READ_SCOPE above. See OCTO-DEC-029: this is NOT tools.elevated.
++  [OCTO_WRITER_SCOPE]: [
++    "octo.arm.spawn",
++    "octo.arm.send",
++    "octo.arm.checkpoint",
++    "octo.arm.terminate",
++    "octo.node.reconcile",
++  ],
+ };
+
+@@ -228,10 +238,20 @@ export function resolveLeastPrivilegeOperatorScopesForMethod(method: string): Op
+
+ export function authorizeOperatorScopesForMethod(
+   method: string,
+   scopes: readonly string[],
++  options?: { isLoopback?: boolean },
+ ): { allowed: true } | { allowed: false; missingScope: OperatorScope } {
+   if (scopes.includes(ADMIN_SCOPE)) {
+     return { allowed: true };
+   }
+   const requiredScope = resolveRequiredOperatorScopeForMethod(method) ?? ADMIN_SCOPE;
++  // OCTO-DEC-024: loopback callers are auto-granted octo.writer so the
++  // same-host `openclaw` CLI continues to work without re-scoping its
++  // device token. Remote callers must carry the explicit capability.
++  if (requiredScope === OCTO_WRITER_SCOPE && options?.isLoopback) {
++    return { allowed: true };
++  }
+   if (requiredScope === READ_SCOPE) {
+     if (scopes.includes(READ_SCOPE) || scopes.includes(WRITE_SCOPE)) {
+       return { allowed: true };
+--
+draft-patch 1.0

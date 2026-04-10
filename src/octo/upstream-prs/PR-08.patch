@@ -1,0 +1,57 @@
+From: Octopus Orchestrator upstream PR draft wave (M0-22)
+Subject: [PATCH] cli: register `octo` as a top-level openclaw subcommand
+
+Wire `openclaw octo` into the existing subcommand registry so the
+Octopus Orchestrator CLI surface (status, mission, arm, grip, claims,
+events, node, init, doctor — per LLD section Operator Surfaces) has a
+dispatch entry point. Individual verb handlers land in later octo
+milestones under src/octo/cli/octo-*.ts; this change adds only the
+top-level registration.
+
+Feature-flag gating (octo.enabled) is enforced inside the handler, not
+at registration time, matching the pattern used by PR 1 (method list)
+and PR 4 (slash command). When octo.enabled: false, the handler emits
+a subsystem-specific error rather than Commander's default "unknown
+command".
+
+Draft authored against upstream commit 9ece252.
+
+---
+ src/cli/program/register.subclis.ts    | 5 +++++
+ src/cli/program/subcli-descriptors.ts  | 5 +++++
+ 2 files changed, 10 insertions(+)
+
+diff --git a/src/cli/program/subcli-descriptors.ts b/src/cli/program/subcli-descriptors.ts
+index 0000000..0000001 100644
+--- a/src/cli/program/subcli-descriptors.ts
++++ b/src/cli/program/subcli-descriptors.ts
+@@ -49,6 +49,11 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
+     description: "Run and manage the headless node host service",
+     hasSubcommands: true,
+   },
++  {
++    name: "octo",
++    description: "Octopus Orchestrator control plane (missions, arms, grips)",
++    hasSubcommands: true,
++  },
+   {
+     name: "sandbox",
+     description: "Manage sandbox containers for agent isolation",
+diff --git a/src/cli/program/register.subclis.ts b/src/cli/program/register.subclis.ts
+index 0000000..0000001 100644
+--- a/src/cli/program/register.subclis.ts
++++ b/src/cli/program/register.subclis.ts
+@@ -98,6 +98,11 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
+       loadModule: () => import("../node-cli.js"),
+       exportName: "registerNodeCli",
+     },
++    {
++      commandNames: ["octo"],
++      loadModule: () => import("../octo-cli.js"),
++      exportName: "registerOctoCli",
++    },
+     {
+       commandNames: ["sandbox"],
+       loadModule: () => import("../sandbox-cli.js"),
+--
+draft-patch 1.0

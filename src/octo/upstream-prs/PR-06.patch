@@ -1,0 +1,136 @@
+From: Octopus Orchestrator upstream PR draft wave (M0-20)
+Subject: [PATCH] tasks/task-flow: add octo_mirrored sync mode and octo.mission step vocabulary
+
+Extend Task Flow with the minimal upstream surface needed to host
+mirrored Octopus Orchestrator missions as first-class flow records,
+per OCTO-DEC-030 (mirrored-mode default) and OCTO-DEC-033 (bridge
+file placement).
+
+Adds:
+  - TaskFlowSyncMode variant "octo_mirrored" — an observer-only
+    projection sibling to the existing "task_mirrored" mode. State
+    of record lives in the Octopus event log; Task Flow reflects it.
+  - OCTO_MISSION_STEP_TYPE = "octo.mission" — reserved currentStep
+    vocabulary entry for octo-mirrored flows. Task Flow's currentStep
+    is free-form today, so this is a vocabulary reservation.
+  - createTaskFlowForOctoMission — named constructor, thin wrapper
+    over createFlowRecord with observer-mode defaults.
+  - applyOctoMissionEvent — narrow event ingestion seam that maps
+    a fixed set of octo event kinds to FlowRecordPatch updates via
+    the existing updateFlowRecordByIdExpectedRevision path.
+
+No behavior change for deployments with octo.enabled: false (default
+through Milestone 1): the new sync mode is unreachable, the new
+exports are unused, and every existing task-flow-registry caller is
+untouched.
+
+Downstream octo consumer binds to this surface via
+src/octo/adapters/openclaw/taskflow-bridge.ts (placeholder from
+Octopus M0-10). No other Octopus code imports Task Flow directly.
+
+Draft authored against upstream commit 9ece252.
+
+---
+ src/tasks/task-flow-registry.types.ts |  8 ++++-
+ src/tasks/task-flow-registry.ts       | 52 +++++++++++++++++++++++++--
+ 2 files changed, 57 insertions(+), 3 deletions(-)
+
+diff --git a/src/tasks/task-flow-registry.types.ts b/src/tasks/task-flow-registry.types.ts
+index 0000000..0000001 100644
+--- a/src/tasks/task-flow-registry.types.ts
++++ b/src/tasks/task-flow-registry.types.ts
+@@ -9,7 +9,13 @@ export type JsonValue =
+   | JsonValue[]
+   | { [key: string]: JsonValue };
+
+-export type TaskFlowSyncMode = "task_mirrored" | "managed";
++export type TaskFlowSyncMode = "task_mirrored" | "managed" | "octo_mirrored";
++
++// Reserved currentStep vocabulary entry for octo-mirrored flows.
++// Task Flow's currentStep is free-form today; this constant pins the
++// canonical value so future step-type-aware consumers can discriminate
++// mirrored Octopus mission flows without a schema migration.
++export const OCTO_MISSION_STEP_TYPE = "octo.mission" as const;
+
+ export type TaskFlowStatus =
+   | "queued"
+diff --git a/src/tasks/task-flow-registry.ts b/src/tasks/task-flow-registry.ts
+index 0000000..0000002 100644
+--- a/src/tasks/task-flow-registry.ts
++++ b/src/tasks/task-flow-registry.ts
+@@ -12,6 +12,7 @@ import type {
+   TaskFlowStatus,
+   TaskFlowSyncMode,
+   JsonValue,
++  OCTO_MISSION_STEP_TYPE,
+ } from "./task-flow-registry.types.js";
+ import type { TaskNotifyPolicy, TaskRecord } from "./task-registry.types.js";
+
+@@ -90,7 +91,11 @@ function cloneFlowRecord(record: TaskFlowRecord): TaskFlowRecord {
+ }
+
+ function normalizeRestoredFlowRecord(record: TaskFlowRecord): TaskFlowRecord {
+-  const syncMode = record.syncMode === "task_mirrored" ? "task_mirrored" : "managed";
++  const syncMode: TaskFlowSyncMode =
++    record.syncMode === "task_mirrored"
++      ? "task_mirrored"
++      : record.syncMode === "octo_mirrored"
++        ? "octo_mirrored"
++        : "managed";
+   const controllerId =
+     syncMode === "managed"
+       ? (normalizeOptionalString(record.controllerId) ?? "core/legacy-restored")
+@@ -435,6 +440,51 @@ export function createTaskFlowForTask(params: {
+   });
+ }
+
++export type OctoMissionEventEnvelope = {
++  kind:
++    | "mission.started"
++    | "mission.step"
++    | "mission.waiting"
++    | "mission.completed"
++    | "mission.failed"
++    | "mission.cancelled";
++  summary?: string;
++  stateJson?: JsonValue;
++  blockedSummary?: string;
++  endedAt?: number;
++};
++
++export function createTaskFlowForOctoMission(params: {
++  ownerKey: string;
++  goal: string;
++  notifyPolicy: TaskNotifyPolicy;
++  requesterOrigin?: TaskFlowRecord["requesterOrigin"];
++  createdAt?: number;
++}): TaskFlowRecord {
++  return createFlowRecord({
++    syncMode: "octo_mirrored",
++    ownerKey: params.ownerKey,
++    goal: params.goal,
++    notifyPolicy: params.notifyPolicy,
++    requesterOrigin: params.requesterOrigin,
++    currentStep: OCTO_MISSION_STEP_TYPE,
++    status: "queued",
++    createdAt: params.createdAt,
++  });
++}
++
++export function applyOctoMissionEvent(params: {
++  flowId: string;
++  expectedRevision: number;
++  event: OctoMissionEventEnvelope;
++}): TaskFlowUpdateResult {
++  return updateFlowRecordByIdExpectedRevision({
++    flowId: params.flowId,
++    expectedRevision: params.expectedRevision,
++    patch: mapOctoEventToPatch(params.event),
++  });
++}
++
+ function updateFlowRecordByIdUnchecked(
+   flowId: string,
+   patch: FlowRecordPatch,
+--
+draft-patch 1.0

@@ -1,0 +1,92 @@
+From: Octopus Orchestrator upstream PR draft wave (M0-17)
+Subject: [PATCH] gateway: accept capsOcto on role: node connect
+
+Let a node advertise Octopus Orchestrator host capabilities during the
+Gateway connect handshake. Adds a new optional capsOcto field to
+ConnectParamsSchema (version, adapters list, maxArms) and stores it on
+the NodeSession so scheduler code can filter octo-eligible nodes via
+the existing NodeRegistry.listConnected() / get() query surface.
+
+Purely additive: no existing key changes shape. Nodes that omit the
+field are unaffected. Gateways with octo.enabled: false accept and
+store the field anyway — nodes connect to multiple heads and the wire
+protocol must be forward-compatible per head. Dispatch and scheduler
+placement remain out of scope for this PR.
+
+Draft authored against upstream commit 9ece252.
+
+---
+ src/gateway/node-registry.ts             | 13 +++++++++++++
+ src/gateway/protocol/schema/frames.ts    | 15 +++++++++++++++
+ 2 files changed, 28 insertions(+)
+
+diff --git a/src/gateway/protocol/schema/frames.ts b/src/gateway/protocol/schema/frames.ts
+index 0000000..0000001 100644
+--- a/src/gateway/protocol/schema/frames.ts
++++ b/src/gateway/protocol/schema/frames.ts
+@@ -18,6 +18,20 @@ export const ShutdownEventSchema = Type.Object(
+   { additionalProperties: false },
+ );
+
++// Octopus Orchestrator node-host capability declaration. Purely additive
++// — a node running an Octopus Node Agent attaches this to its connect
++// params to signal "I can host octo arms." Nodes that omit it are
++// unaffected and remain non-octo-eligible at scheduling time.
++export const NodeCapsOctoSchema = Type.Object(
++  {
++    version: NonEmptyString,
++    adapters: Type.Array(NonEmptyString, { minItems: 1 }),
++    maxArms: Type.Integer({ minimum: 0 }),
++  },
++  { additionalProperties: false },
++);
++
+ export const ConnectParamsSchema = Type.Object(
+   {
+     minProtocol: Type.Integer({ minimum: 1 }),
+@@ -38,6 +52,7 @@ export const ConnectParamsSchema = Type.Object(
+     permissions: Type.Optional(Type.Record(NonEmptyString, Type.Boolean())),
+     pathEnv: Type.Optional(Type.String()),
+     role: Type.Optional(NonEmptyString),
++    capsOcto: Type.Optional(NodeCapsOctoSchema),
+     scopes: Type.Optional(Type.Array(NonEmptyString)),
+     device: Type.Optional(
+       Type.Object(
+diff --git a/src/gateway/node-registry.ts b/src/gateway/node-registry.ts
+index 0000000..0000001 100644
+--- a/src/gateway/node-registry.ts
++++ b/src/gateway/node-registry.ts
+@@ -1,6 +1,12 @@
+ import { randomUUID } from "node:crypto";
+ import type { GatewayWsClient } from "./server/ws-types.js";
+
++export type NodeCapsOcto = {
++  version: string;
++  adapters: string[];
++  maxArms: number;
++};
++
+ export type NodeSession = {
+   nodeId: string;
+   connId: string;
+@@ -16,6 +22,7 @@ export type NodeSession = {
+   modelIdentifier?: string;
+   remoteIp?: string;
+   caps: string[];
++  capsOcto?: NodeCapsOcto;
+   commands: string[];
+   permissions?: Record<string, boolean>;
+   pathEnv?: string;
+@@ -70,6 +77,10 @@ export class NodeRegistry {
+       modelIdentifier: connect.client.modelIdentifier,
+       remoteIp: opts.remoteIp,
+       caps,
++      capsOcto:
++        typeof (connect as { capsOcto?: NodeCapsOcto }).capsOcto === "object"
++          ? (connect as { capsOcto?: NodeCapsOcto }).capsOcto
++          : undefined,
+       commands,
+       permissions,
+       pathEnv,
+--
+draft-patch 1.0

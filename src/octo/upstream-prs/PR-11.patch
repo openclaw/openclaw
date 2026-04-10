@@ -1,0 +1,77 @@
+From: Octopus Orchestrator upstream PR draft wave (M0-25)
+Subject: [PATCH] config: wire loadOctoConfig into the core loader
+
+Plumb the `octo:` config block at the root of openclaw.json into the
+core config loader. When present, loadConfig() dispatches to
+loadOctoConfig() from src/octo/config/loader.ts (M0-11) to obtain a
+validated OctoConfig, which is attached to the resolved OpenClawConfig
+under a new optional `octo` field alongside other subsystem configs
+(channels, cron, tools, hooks, memory, mcp).
+
+loadOctoConfig is pure: it takes the already-parsed root config object
+as input and performs NO file I/O, env substitution, or include
+resolution. Those concerns remain the core loader's, upstream of the
+dispatch point. The core loader does NOT redefine the schema — the
+single source of truth is src/octo/config/schema.ts (M0-06).
+
+Default behavior when `octo:` is missing: the loader resolves to
+{ enabled: false, ... }, and the octo subsystem is completely dormant —
+no state dirs, no method dispatch (octo.* handlers return not_enabled),
+no CLI entry, no cron/hook/tool registration. Existing 2026.4.8
+deployments upgrade with zero behavior change.
+
+Malformed `octo:` blocks cause startup to fail with a clear error
+message listing the failing paths. Matches the core loader's strict-
+validation policy — no silent fallback to defaults (OCTO-DEC-027,
+CONFIG.md §Validation).
+
+Draft authored against upstream commit 9ece252.
+
+---
+ src/config/io.ts              | 3 +++
+ src/config/types.openclaw.ts  | 2 ++
+ 2 files changed, 5 insertions(+)
+
+diff --git a/src/config/types.openclaw.ts b/src/config/types.openclaw.ts
+index 0000000..0000001 100644
+--- a/src/config/types.openclaw.ts
++++ b/src/config/types.openclaw.ts
+@@ -17,6 +17,7 @@ import type { HooksConfig } from "./types.hooks.js";
+ import type { McpConfig } from "./types.mcp.js";
+ import type { MemoryConfig } from "./types.memory.js";
++import type { OctoConfig } from "../octo/config/schema.js";
+ import type {
+   AudioConfig,
+   BroadcastConfig,
+@@ -122,6 +123,7 @@ export type OpenClawConfig = {
+   gateway?: GatewayConfig;
+   memory?: MemoryConfig;
+   mcp?: McpConfig;
++  /** Octopus Orchestrator subsystem config. Default: { enabled: false }. See src/octo/config/schema.ts. */
++  octo?: OctoConfig;
+ };
+
+diff --git a/src/config/io.ts b/src/config/io.ts
+index 0000000..0000001 100644
+--- a/src/config/io.ts
++++ b/src/config/io.ts
+@@ -68,6 +68,7 @@ import {
+   materializeRuntimeConfig,
+ } from "./materialize.js";
+ import { applyMergePatch } from "./merge-patch.js";
++import { loadOctoConfig } from "../octo/config/loader.js";
+ import { resolveConfigPath, resolveStateDir } from "./paths.js";
+ import { applyConfigOverrides } from "./runtime-overrides.js";
+@@ -1146,6 +1147,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
+         }),
+       });
+
++      // Validate and attach the octo: subsystem block (OCTO-DEC-027).
++      // loadOctoConfig is pure — no disk I/O; throws on malformed input.
++      cfg.octo = loadOctoConfig(cfg as Readonly<Record<string, unknown>>);
++
+       const duplicates = findDuplicateAgentDirs(cfg, {
+         env: deps.env,
+         homedir: deps.homedir,
+--
+draft-patch 1.0

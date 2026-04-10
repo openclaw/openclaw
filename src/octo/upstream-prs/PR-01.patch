@@ -1,0 +1,43 @@
+From: Octopus Orchestrator upstream PR draft wave (M0-15)
+Subject: [PATCH] gateway: register octo.* methods in server-methods-list
+
+Advertise Octopus Orchestrator method names from the canonical
+Gateway method directory. Names are singly-sourced in
+src/octo/wire/methods.ts as OCTO_METHOD_NAMES; this change spreads
+them into BASE_METHODS so listGatewayMethods() returns them.
+
+Runtime feature-flag gating (octo.enabled) is enforced at dispatch
+time per OCTO-DEC-027, not at listing time — matching the existing
+pattern where method names are listed regardless of whether their
+subsystems are currently configured on.
+
+No behavior change for deployments with octo.enabled: false (default
+through Milestone 1).
+
+Draft authored against upstream commit 9ece252.
+
+---
+ src/gateway/server-methods-list.ts | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/src/gateway/server-methods-list.ts b/src/gateway/server-methods-list.ts
+index 0000000..0000001 100644
+--- a/src/gateway/server-methods-list.ts
++++ b/src/gateway/server-methods-list.ts
+@@ -1,4 +1,5 @@
+ import { listChannelPlugins } from "../channels/plugins/index.js";
++import { OCTO_METHOD_NAMES } from "../octo/wire/methods.js";
+ import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "./events.js";
+
+ const BASE_METHODS = [
+@@ -124,6 +125,8 @@ const BASE_METHODS = [
+   "chat.history",
+   "chat.abort",
+   "chat.send",
++  // Octopus Orchestrator control plane (see src/octo/wire/methods.ts).
++  ...OCTO_METHOD_NAMES,
+ ];
+
+ export function listGatewayMethods(): string[] {
+--
+draft-patch 1.0
