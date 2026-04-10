@@ -19,6 +19,9 @@ const state = vi.hoisted(() => ({
   listOutput: "",
   printOutput: "",
   printNotLoadedRemaining: 0,
+  printError: "",
+  printCode: 1,
+  printFailuresRemaining: 0,
   bootstrapError: "",
   bootstrapCode: 1,
   kickstartError: "",
@@ -87,6 +90,10 @@ vi.mock("./exec-file.js", () => ({
       if (state.printNotLoadedRemaining > 0) {
         state.printNotLoadedRemaining -= 1;
         return { stdout: "", stderr: "Could not find service", code: 113 };
+      }
+      if (state.printError && state.printFailuresRemaining > 0) {
+        state.printFailuresRemaining -= 1;
+        return { stdout: "", stderr: state.printError, code: state.printCode };
       }
       if (!state.serviceLoaded) {
         return { stdout: "", stderr: "Could not find service", code: 113 };
@@ -210,6 +217,9 @@ beforeEach(() => {
   state.listOutput = "";
   state.printOutput = "";
   state.printNotLoadedRemaining = 0;
+  state.printError = "";
+  state.printCode = 1;
+  state.printFailuresRemaining = 0;
   state.bootstrapError = "";
   state.bootstrapCode = 1;
   state.kickstartError = "";
@@ -517,6 +527,34 @@ describe("launchd install", () => {
     expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(true);
     expect(output).toContain("Stopped LaunchAgent (degraded)");
     expect(output).toContain("did not fully stop the service");
+  });
+
+  it("falls back to bootout when launchctl print cannot confirm the stop state", async () => {
+    const env = createDefaultLaunchdEnv();
+    const stdout = new PassThrough();
+    let output = "";
+    state.printError = "launchctl print permission denied";
+    state.printFailuresRemaining = 10;
+    stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+
+    await stopLaunchAgent({ env, stdout });
+
+    expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(true);
+    expect(output).toContain("Stopped LaunchAgent (degraded)");
+    expect(output).toContain("could not confirm stop");
+  });
+
+  it("throws when launchctl print cannot confirm stop and bootout also fails", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.printError = "launchctl print permission denied";
+    state.printFailuresRemaining = 10;
+    state.bootoutError = "launchctl bootout permission denied";
+
+    await expect(stopLaunchAgent({ env, stdout: new PassThrough() })).rejects.toThrow(
+      "launchctl print could not confirm stop: launchctl print permission denied; launchctl bootout failed: launchctl bootout permission denied",
+    );
   });
 
   it("restarts LaunchAgent with kickstart and no bootout", async () => {
