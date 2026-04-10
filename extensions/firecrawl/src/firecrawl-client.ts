@@ -42,13 +42,22 @@ function isPrivateOrLocalHost(hostname: string): boolean {
   if (h === "localhost" || h === "127.0.0.1" || h === "::1" || h === "[::1]") {
     return true;
   }
+  // IPv6 unique-local (fc00::/7) and link-local (fe80::/10) — bare or bracketed
+  const bare = h.startsWith("[") && h.endsWith("]") ? h.slice(1, -1) : h;
+  if (/^f[cd][0-9a-f]{2}:/i.test(bare) || /^fe[89ab][0-9a-f]:/i.test(bare)) {
+    return true;
+  }
   if (h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".internal")) {
     return true;
   }
-  // RFC 1918 / link-local / carrier-grade NAT IPv4 ranges
+  // RFC 1918 / link-local / carrier-grade NAT / loopback IPv4 ranges
   const ipv4Match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
   if (ipv4Match) {
     const [, a, b] = ipv4Match.map(Number);
+    // 127.0.0.0/8 (full loopback subnet)
+    if (a === 127) {
+      return true;
+    }
     // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10
     if (a === 10) {
       return true;

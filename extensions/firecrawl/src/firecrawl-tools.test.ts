@@ -651,6 +651,21 @@ describe("firecrawl tools", () => {
     expect(firecrawlClientTesting.resolveEndpoint("http://myhost.local:3002", "/v2/scrape")).toBe(
       "http://myhost.local:3002/v2/scrape",
     );
+    // Full loopback subnet (127.x.x.x)
+    expect(firecrawlClientTesting.resolveEndpoint("http://127.0.0.2:3002", "/v2/scrape")).toBe(
+      "http://127.0.0.2:3002/v2/scrape",
+    );
+    expect(firecrawlClientTesting.resolveEndpoint("http://127.255.0.1:3002", "/v2/search")).toBe(
+      "http://127.255.0.1:3002/v2/search",
+    );
+    // IPv6 unique-local (fc00::/7)
+    expect(firecrawlClientTesting.resolveEndpoint("http://[fd12::1]:3002", "/v2/scrape")).toBe(
+      "http://[fd12::1]:3002/v2/scrape",
+    );
+    // IPv6 link-local (fe80::/10)
+    expect(firecrawlClientTesting.resolveEndpoint("http://[fe80::1]:3002", "/v2/search")).toBe(
+      "http://[fe80::1]:3002/v2/search",
+    );
   });
 
   it("respects positive numeric overrides for scrape and cache behavior", () => {
