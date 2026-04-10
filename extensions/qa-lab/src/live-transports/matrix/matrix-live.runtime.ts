@@ -318,7 +318,7 @@ export async function runMatrixQaLive(params: {
   let canaryArtifact: MatrixQaCanaryArtifact | undefined;
   let gatewayHarness: Awaited<ReturnType<typeof startQaLiveLaneGateway>> | null = null;
   let canaryFailed = false;
-  let canarySince: string | undefined;
+  const syncState: { driver?: string; observer?: string } = {};
 
   try {
     gatewayHarness = await startQaLiveLaneGateway({
@@ -353,7 +353,7 @@ export async function runMatrixQaLive(params: {
         driverAccessToken: provisioning.driver.accessToken,
         observedEvents,
         roomId: provisioning.roomId,
-        since: canarySince,
+        syncState,
         sutUserId: provisioning.sut.userId,
         timeoutMs: 45_000,
       });
@@ -362,7 +362,6 @@ export async function runMatrixQaLive(params: {
         reply: canary.reply,
         token: canary.token,
       };
-      canarySince = canary.since;
       checks.push({
         name: "Matrix canary",
         status: "pass",
@@ -396,11 +395,10 @@ export async function runMatrixQaLive(params: {
               await waitForMatrixChannelReady(gatewayHarness.gateway, sutAccountId);
             },
             roomId: provisioning.roomId,
-            since: canarySince,
+            syncState,
             sutUserId: provisioning.sut.userId,
             timeoutMs: scenario.timeoutMs,
           });
-          canarySince = result.since;
           scenarioResults.push({
             artifacts: result.artifacts,
             id: scenario.id,
