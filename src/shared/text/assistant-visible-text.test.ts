@@ -152,6 +152,27 @@ describe("stripAssistantInternalScaffolding", () => {
       );
     });
 
+    it("strips Qwen-style <tool_call> with nested <function=...> XML", () => {
+      expectVisibleText(
+        "prefix\n<tool_call><function=read><parameter=path>/home/user</parameter></function></tool_call>\nsuffix",
+        "prefix\n\nsuffix",
+      );
+    });
+
+    it("strips Qwen-style <tool_call> with whitespace before nested XML", () => {
+      expectVisibleText(
+        "prefix\n<tool_call>\n<function=search><parameter=query>test</parameter></function>\n</tool_call>\nsuffix",
+        "prefix\n\nsuffix",
+      );
+    });
+
+    it("strips dangling Qwen-style <tool_call> with nested XML to end", () => {
+      expectVisibleText(
+        "prefix\n<tool_call><function=read><parameter=path>/home",
+        "prefix\n",
+      );
+    });
+
     it("does not close early on </tool_call> text inside JSON strings", () => {
       expectVisibleText(
         [

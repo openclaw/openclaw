@@ -26,6 +26,7 @@ type SessionsSpawnGatewayMockOptions = {
 
 const hoisted = vi.hoisted(() => {
   const callGatewayMock = vi.fn();
+  let nextRunId = 0;
   const defaultConfigOverride = {
     session: {
       mainKey: "main",
@@ -88,7 +89,15 @@ const hoisted = vi.hoisted(() => {
     defaultRunSubagentAnnounceFlow,
     runSubagentAnnounceFlowOverride: defaultRunSubagentAnnounceFlow,
   };
-  return { callGatewayMock, defaultConfigOverride, state };
+  return {
+    callGatewayMock,
+    defaultConfigOverride,
+    nextRunId: () => {
+      nextRunId += 1;
+      return `run-${nextRunId}`;
+    },
+    state,
+  };
 });
 
 let cachedCreateSessionsSpawnTool: CreateSessionsSpawnTool | null = null;
@@ -143,6 +152,7 @@ export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
   subagentRegistryTesting.setDepsForTest({
     callGateway: (optsUnknown) => hoisted.callGatewayMock(optsUnknown),
     loadConfig: () => hoisted.state.configOverride,
+    cleanupBrowserSessionsForLifecycleEnd: async () => {},
     captureSubagentCompletionReply: (sessionKey) =>
       hoisted.state.captureSubagentCompletionReplyOverride(sessionKey),
     runSubagentAnnounceFlow: (params) => hoisted.state.runSubagentAnnounceFlowOverride(params),
@@ -161,7 +171,6 @@ export function setupSessionsSpawnGatewayMock(setupOpts: SessionsSpawnGatewayMoc
 } {
   const calls: Array<GatewayRequest> = [];
   const waitCalls: Array<AgentWaitCall> = [];
-  let agentCallCount = 0;
   let childRunId: string | undefined;
   let childSessionKey: string | undefined;
 
@@ -182,8 +191,7 @@ export function setupSessionsSpawnGatewayMock(setupOpts: SessionsSpawnGatewayMoc
     }
 
     if (request.method === "agent") {
-      agentCallCount += 1;
-      const runId = `run-${agentCallCount}`;
+      const runId = hoisted.nextRunId();
       const params = request.params as { lane?: string; sessionKey?: string } | undefined;
       // Capture only the subagent run metadata.
       if (params?.lane === "subagent") {
@@ -194,7 +202,7 @@ export function setupSessionsSpawnGatewayMock(setupOpts: SessionsSpawnGatewayMoc
       return {
         runId,
         status: "accepted",
-        acceptedAt: 1000 + agentCallCount,
+        acceptedAt: Date.now(),
       };
     }
 

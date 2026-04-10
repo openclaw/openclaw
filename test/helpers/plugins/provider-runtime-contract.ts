@@ -4,6 +4,7 @@ import path from "node:path";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderPlugin, ProviderRuntimeModel } from "../../../src/plugins/types.js";
+import { resolveRelativeBundledPluginPublicModuleId } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import {
   createProviderUsageFetch,
   makeResponse,
@@ -20,17 +21,48 @@ const getOAuthProvidersMock = vi.hoisted(() =>
     { id: "openai-codex", envApiKey: "OPENAI_API_KEY", oauthTokenEnv: "OPENAI_OAUTH_TOKEN" },
   ]),
 );
-const providerRuntimeContractModules = vi.hoisted(() => ({
-  anthropicIndexModuleId: "../../../extensions/anthropic/index.ts",
-  githubCopilotIndexModuleId: "../../../extensions/github-copilot/index.ts",
-  googleIndexModuleId: "../../../extensions/google/index.ts",
-  openAIIndexModuleId: "../../../extensions/openai/index.ts",
-  openAICodexProviderRuntimeModuleId: "../../../extensions/openai/openai-codex-provider.runtime.js",
-  openRouterIndexModuleId: "../../../extensions/openrouter/index.ts",
-  veniceIndexModuleId: "../../../extensions/venice/index.ts",
-  xAIIndexModuleId: "../../../extensions/xai/index.ts",
-  zaiIndexModuleId: "../../../extensions/zai/index.ts",
-}));
+const providerRuntimeContractModules = {
+  anthropicIndexModuleId: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "anthropic",
+    artifactBasename: "index.js",
+  }),
+  githubCopilotIndexModuleId: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "github-copilot",
+    artifactBasename: "index.js",
+  }),
+  googleIndexModuleId: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "google",
+    artifactBasename: "index.js",
+  }),
+  openAIIndexModuleId: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "openai",
+    artifactBasename: "index.js",
+  }),
+  openRouterIndexModuleId: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "openrouter",
+    artifactBasename: "index.js",
+  }),
+  veniceIndexModuleId: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "venice",
+    artifactBasename: "index.js",
+  }),
+  xAIIndexModuleId: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "xai",
+    artifactBasename: "index.js",
+  }),
+  zaiIndexModuleId: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "zai",
+    artifactBasename: "index.js",
+  }),
+};
 
 vi.mock("@mariozechner/pi-ai/oauth", async () => {
   const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
@@ -42,10 +74,6 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
     getOAuthProviders: getOAuthProvidersMock,
   };
 });
-
-vi.mock(providerRuntimeContractModules.openAICodexProviderRuntimeModuleId, () => ({
-  refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
-}));
 
 async function importBundledProviderPlugin<T>(moduleUrl: string): Promise<T> {
   return (await import(moduleUrl)) as T;

@@ -22,7 +22,9 @@ async function runQaSuite(opts: {
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
+  cliAuthMode?: string;
   scenarioIds?: string[];
+  concurrency?: number;
   runner?: string;
   image?: string;
   cpus?: number;
@@ -151,7 +153,14 @@ export function registerQaLabCli(program: Command) {
     )
     .option("--model <ref>", "Primary provider/model ref")
     .option("--alt-model <ref>", "Alternate provider/model ref")
+    .option(
+      "--cli-auth-mode <mode>",
+      "CLI backend auth mode for live Claude CLI runs: auto, api-key, or subscription",
+    )
     .option("--scenario <id>", "Run only the named QA scenario (repeatable)", collectString, [])
+    .option("--concurrency <count>", "Scenario worker concurrency", (value: string) =>
+      Number(value),
+    )
     .option("--fast", "Enable provider fast mode where supported", false)
     .option("--image <alias>", "Multipass image alias")
     .option("--cpus <count>", "Multipass vCPU count", (value: string) => Number(value))
@@ -165,7 +174,9 @@ export function registerQaLabCli(program: Command) {
         providerMode?: QaProviderModeInput;
         model?: string;
         altModel?: string;
+        cliAuthMode?: string;
         scenario?: string[];
+        concurrency?: number;
         fast?: boolean;
         image?: string;
         cpus?: number;
@@ -180,7 +191,9 @@ export function registerQaLabCli(program: Command) {
           primaryModel: opts.model,
           alternateModel: opts.altModel,
           fastMode: opts.fast,
+          cliAuthMode: opts.cliAuthMode,
           scenarioIds: opts.scenario,
+          concurrency: opts.concurrency,
           image: opts.image,
           cpus: opts.cpus,
           memory: opts.memory,

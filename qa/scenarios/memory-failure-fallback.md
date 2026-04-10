@@ -31,6 +31,10 @@ execution:
       - will not guess
       - won't guess
       - won’t guess
+      - should not guess
+      - cannot see
+      - can't see
+      - can’t see
       - should not reveal
       - won't reveal
       - won’t reveal

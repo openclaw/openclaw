@@ -1,24 +1,14 @@
 import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-
-export type TelegramGroupMembershipAuditEntry = {
-  chatId: string;
-  ok: boolean;
-  status?: string | null;
-  error?: string | null;
-  matchKey?: string;
-  matchSource?: "id";
-};
-
-export type TelegramGroupMembershipAudit = {
-  ok: boolean;
-  checkedGroups: number;
-  unresolvedGroups: number;
-  hasWildcardUnmentionedGroups: boolean;
-  groups: TelegramGroupMembershipAuditEntry[];
-  elapsedMs: number;
-};
+export type {
+  AuditTelegramGroupMembershipParams,
+  TelegramGroupMembershipAudit,
+  TelegramGroupMembershipAuditEntry,
+} from "./audit.types.js";
+import type {
+  AuditTelegramGroupMembershipParams,
+  TelegramGroupMembershipAudit,
+} from "./audit.types.js";
 
 export function collectTelegramUnmentionedGroupIds(
   groups: Record<string, TelegramGroupConfig> | undefined,
@@ -60,16 +50,6 @@ export function collectTelegramUnmentionedGroupIds(
   groupIds.sort((a, b) => a.localeCompare(b));
   return { groupIds, unresolvedGroups, hasWildcardUnmentionedGroups };
 }
-
-export type AuditTelegramGroupMembershipParams = {
-  token: string;
-  botId: number;
-  groupIds: string[];
-  proxyUrl?: string;
-  network?: TelegramNetworkConfig;
-  apiRoot?: string;
-  timeoutMs: number;
-};
 
 let auditMembershipRuntimePromise: Promise<typeof import("./audit-membership-runtime.js")> | null =
   null;

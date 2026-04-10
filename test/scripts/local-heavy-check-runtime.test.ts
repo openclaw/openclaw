@@ -31,9 +31,15 @@ describe("local-heavy-check-runtime", () => {
   it("tightens local tsgo runs on constrained hosts", () => {
     const { args, env } = applyLocalTsgoPolicy([], makeEnv(), CONSTRAINED_HOST);
 
-    expect(args).toEqual(["--singleThreaded", "--checkers", "1"]);
+    expect(args).toEqual(["--declaration", "false", "--singleThreaded", "--checkers", "1"]);
     expect(env.GOGC).toBe("30");
     expect(env.GOMEMLIMIT).toBe("3GiB");
+  });
+
+  it("skips declaration transforms for no-emit tsgo checks", () => {
+    const { args } = applyLocalTsgoPolicy([], makeEnv({ OPENCLAW_LOCAL_CHECK: "0" }), ROOMY_HOST);
+
+    expect(args).toEqual(["--declaration", "false"]);
   });
 
   it("keeps explicit tsgo flags and Go env overrides intact when throttled", () => {
@@ -47,15 +53,31 @@ describe("local-heavy-check-runtime", () => {
       CONSTRAINED_HOST,
     );
 
-    expect(args).toEqual(["--checkers", "4", "--singleThreaded", "--pprofDir", "/tmp/existing"]);
+    expect(args).toEqual([
+      "--checkers",
+      "4",
+      "--singleThreaded",
+      "--pprofDir",
+      "/tmp/existing",
+      "--declaration",
+      "false",
+    ]);
     expect(env.GOGC).toBe("80");
     expect(env.GOMEMLIMIT).toBe("5GiB");
+  });
+
+  it("keeps explicit tsgo declaration flags intact", () => {
+    const longFlag = applyLocalTsgoPolicy(["--declaration"], makeEnv(), ROOMY_HOST);
+    const shortFlag = applyLocalTsgoPolicy(["-d"], makeEnv(), ROOMY_HOST);
+
+    expect(longFlag.args).toEqual(["--declaration"]);
+    expect(shortFlag.args).toEqual(["-d"]);
   });
 
   it("keeps local tsgo at full speed on roomy hosts in auto mode", () => {
     const { args, env } = applyLocalTsgoPolicy([], makeEnv(), ROOMY_HOST);
 
-    expect(args).toEqual([]);
+    expect(args).toEqual(["--declaration", "false"]);
     expect(env.GOGC).toBeUndefined();
     expect(env.GOMEMLIMIT).toBeUndefined();
   });
@@ -69,7 +91,7 @@ describe("local-heavy-check-runtime", () => {
       ROOMY_HOST,
     );
 
-    expect(args).toEqual(["--singleThreaded", "--checkers", "1"]);
+    expect(args).toEqual(["--declaration", "false", "--singleThreaded", "--checkers", "1"]);
     expect(env.GOGC).toBe("30");
     expect(env.GOMEMLIMIT).toBe("3GiB");
   });

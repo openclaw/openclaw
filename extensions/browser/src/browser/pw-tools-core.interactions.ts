@@ -10,7 +10,7 @@ import {
   resolveActInteractionTimeoutMs,
   resolveActWaitTimeoutMs,
 } from "./act-policy.js";
-import type { BrowserActRequest, BrowserFormField } from "./client-actions-core.js";
+import type { BrowserActRequest, BrowserFormField } from "./client-actions.types.js";
 import { DEFAULT_FILL_FIELD_TYPE } from "./form-fields.js";
 import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
 import {

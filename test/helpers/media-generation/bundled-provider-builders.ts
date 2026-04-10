@@ -1,52 +1,88 @@
-import { buildAlibabaVideoGenerationProvider } from "../../../extensions/alibaba/video-generation-provider.js";
-import { buildBytePlusVideoGenerationProvider } from "../../../extensions/byteplus/video-generation-provider.js";
-import { buildComfyMusicGenerationProvider } from "../../../extensions/comfy/music-generation-provider.js";
-import { buildComfyVideoGenerationProvider } from "../../../extensions/comfy/video-generation-provider.js";
-import { buildFalVideoGenerationProvider } from "../../../extensions/fal/video-generation-provider.js";
-import { buildGoogleMusicGenerationProvider } from "../../../extensions/google/music-generation-provider.js";
-import { buildGoogleVideoGenerationProvider } from "../../../extensions/google/video-generation-provider.js";
-import { buildMinimaxMusicGenerationProvider } from "../../../extensions/minimax/music-generation-provider.js";
-import { buildMinimaxVideoGenerationProvider } from "../../../extensions/minimax/video-generation-provider.js";
-import { buildOpenAIVideoGenerationProvider } from "../../../extensions/openai/video-generation-provider.js";
-import { buildQwenVideoGenerationProvider } from "../../../extensions/qwen/video-generation-provider.js";
-import { buildRunwayVideoGenerationProvider } from "../../../extensions/runway/video-generation-provider.js";
-import { buildTogetherVideoGenerationProvider } from "../../../extensions/together/video-generation-provider.js";
-import { buildVydraVideoGenerationProvider } from "../../../extensions/vydra/video-generation-provider.js";
-import { buildXaiVideoGenerationProvider } from "../../../extensions/xai/video-generation-provider.js";
-import type { MusicGenerationProvider } from "../../../src/music-generation/types.js";
-import type { VideoGenerationProvider } from "../../../src/video-generation/types.js";
+import type {
+  ImageGenerationProviderPlugin,
+  MusicGenerationProviderPlugin,
+  OpenClawPluginApi,
+  VideoGenerationProviderPlugin,
+} from "../../../src/plugins/types.js";
+import { loadBundledPluginPublicSurfaceSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
+import { registerProviderPlugin } from "../plugins/provider-registration.js";
+
+type BundledPluginEntryModule = {
+  default: {
+    register(api: OpenClawPluginApi): void | Promise<void>;
+  };
+};
 
 export type BundledVideoProviderEntry = {
   pluginId: string;
-  provider: VideoGenerationProvider;
+  provider: VideoGenerationProviderPlugin;
 };
 
 export type BundledMusicProviderEntry = {
   pluginId: string;
-  provider: MusicGenerationProvider;
+  provider: MusicGenerationProviderPlugin;
 };
 
-export function loadBundledVideoGenerationProviders(): BundledVideoProviderEntry[] {
-  return [
-    { pluginId: "alibaba", provider: buildAlibabaVideoGenerationProvider() },
-    { pluginId: "byteplus", provider: buildBytePlusVideoGenerationProvider() },
-    { pluginId: "comfy", provider: buildComfyVideoGenerationProvider() },
-    { pluginId: "fal", provider: buildFalVideoGenerationProvider() },
-    { pluginId: "google", provider: buildGoogleVideoGenerationProvider() },
-    { pluginId: "minimax", provider: buildMinimaxVideoGenerationProvider() },
-    { pluginId: "openai", provider: buildOpenAIVideoGenerationProvider() },
-    { pluginId: "qwen", provider: buildQwenVideoGenerationProvider() },
-    { pluginId: "runway", provider: buildRunwayVideoGenerationProvider() },
-    { pluginId: "together", provider: buildTogetherVideoGenerationProvider() },
-    { pluginId: "vydra", provider: buildVydraVideoGenerationProvider() },
-    { pluginId: "xai", provider: buildXaiVideoGenerationProvider() },
-  ];
+export type BundledImageProviderEntry = {
+  pluginId: string;
+  provider: ImageGenerationProviderPlugin;
+};
+
+const BUNDLED_VIDEO_PROVIDER_PLUGIN_IDS = [
+  "alibaba",
+  "byteplus",
+  "comfy",
+  "fal",
+  "google",
+  "minimax",
+  "openai",
+  "qwen",
+  "runway",
+  "together",
+  "vydra",
+  "xai",
+] as const;
+
+const BUNDLED_MUSIC_PROVIDER_PLUGIN_IDS = ["comfy", "google", "minimax"] as const;
+
+function loadBundledPluginEntry(pluginId: string): BundledPluginEntryModule {
+  return loadBundledPluginPublicSurfaceSync<BundledPluginEntryModule>({
+    pluginId,
+    artifactBasename: "index.js",
+  });
 }
 
-export function loadBundledMusicGenerationProviders(): BundledMusicProviderEntry[] {
-  return [
-    { pluginId: "comfy", provider: buildComfyMusicGenerationProvider() },
-    { pluginId: "google", provider: buildGoogleMusicGenerationProvider() },
-    { pluginId: "minimax", provider: buildMinimaxMusicGenerationProvider() },
-  ];
+export function loadBundledProviderPlugin(pluginId: string): BundledPluginEntryModule["default"] {
+  return loadBundledPluginEntry(pluginId).default;
+}
+
+async function registerBundledMediaPlugin(pluginId: string) {
+  const plugin = loadBundledProviderPlugin(pluginId);
+  return await registerProviderPlugin({
+    plugin,
+    id: pluginId,
+    name: pluginId,
+  });
+}
+
+export async function loadBundledVideoGenerationProviders(): Promise<BundledVideoProviderEntry[]> {
+  return (
+    await Promise.all(
+      BUNDLED_VIDEO_PROVIDER_PLUGIN_IDS.map(async (pluginId) => {
+        const { videoProviders } = await registerBundledMediaPlugin(pluginId);
+        return videoProviders.map((provider) => ({ pluginId, provider }));
+      }),
+    )
+  ).flat();
+}
+
+export async function loadBundledMusicGenerationProviders(): Promise<BundledMusicProviderEntry[]> {
+  return (
+    await Promise.all(
+      BUNDLED_MUSIC_PROVIDER_PLUGIN_IDS.map(async (pluginId) => {
+        const { musicProviders } = await registerBundledMediaPlugin(pluginId);
+        return musicProviders.map((provider) => ({ pluginId, provider }));
+      }),
+    )
+  ).flat();
 }

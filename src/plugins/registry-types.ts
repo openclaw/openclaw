@@ -15,6 +15,7 @@ import type {
   OpenClawPluginCliCommandDescriptor,
   OpenClawPluginCliRegistrar,
   OpenClawPluginCommandDefinition,
+  OpenClawPluginGatewayRuntimeScopeSurface,
   OpenClawPluginHttpRouteAuth,
   OpenClawPluginHttpRouteHandler,
   OpenClawPluginHttpRouteMatch,
@@ -66,6 +67,7 @@ export type PluginHttpRouteRegistration = {
   handler: OpenClawPluginHttpRouteHandler;
   auth: OpenClawPluginHttpRouteAuth;
   match: OpenClawPluginHttpRouteMatch;
+  gatewayRuntimeScopeSurface?: OpenClawPluginGatewayRuntimeScopeSurface;
   source?: string;
 };
 

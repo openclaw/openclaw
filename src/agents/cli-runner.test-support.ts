@@ -156,8 +156,11 @@ function buildAnthropicCliBackendFixture(): CliBackendPlugin {
   const clearEnv = [
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_API_KEY_OLD",
+    "ANTHROPIC_API_TOKEN",
     "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_CUSTOM_HEADERS",
+    "ANTHROPIC_OAUTH_TOKEN",
     "ANTHROPIC_UNIX_SOCKET",
     "CLAUDE_CONFIG_DIR",
     "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
@@ -237,9 +240,6 @@ function buildAnthropicCliBackendFixture(): CliBackendPlugin {
       systemPromptArg: "--append-system-prompt",
       systemPromptMode: "append",
       systemPromptWhen: "first",
-      env: {
-        CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
-      },
       clearEnv: [...clearEnv],
       reliability: {
         watchdog: {

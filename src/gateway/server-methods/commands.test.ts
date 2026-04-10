@@ -299,10 +299,33 @@ describe("commands.list handler", () => {
   it("keeps plugin text commands visible for scope=text even without native provider support", () => {
     const { payload } = callHandler({ provider: "whatsapp", scope: "text" });
     const { commands } = payload as {
-      commands: Array<{ name: string; source: string; textAliases?: string[] }>;
+      commands: Array<{
+        name: string;
+        source: string;
+        textAliases?: string[];
+        nativeName?: string;
+      }>;
     };
     expect(commands.find((c) => c.source === "plugin")).toMatchObject({
       name: "tts",
+      textAliases: ["/tts"],
+    });
+    expect(commands.find((c) => c.source === "plugin")?.nativeName).toBeUndefined();
+  });
+
+  it("keeps plugin text names while exposing provider-native aliases for scope=text", () => {
+    const { payload } = callHandler({ provider: "discord", scope: "text" });
+    const { commands } = payload as {
+      commands: Array<{
+        name: string;
+        source: string;
+        textAliases?: string[];
+        nativeName?: string;
+      }>;
+    };
+    expect(commands.find((c) => c.source === "plugin")).toMatchObject({
+      name: "tts",
+      nativeName: "discord_tts",
       textAliases: ["/tts"],
     });
   });
