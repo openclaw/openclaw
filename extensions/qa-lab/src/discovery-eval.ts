@@ -11,6 +11,13 @@ const MAX_REQUIRED_DISCOVERY_REF_LENGTH = 256;
 
 let cachedRequiredDiscoveryRefsLower: string[] | undefined;
 
+function shouldFallbackRequiredDiscoveryRefs(error: unknown) {
+  return (
+    error instanceof Error &&
+    error.message.startsWith("qa scenario pack not found:")
+  );
+}
+
 function sanitizeRequiredDiscoveryRefs(requiredFiles: unknown): string[] {
   if (!Array.isArray(requiredFiles)) {
     return [];
@@ -33,7 +40,10 @@ function readRequiredDiscoveryRefs() {
       | undefined;
     const configuredRefs = sanitizeRequiredDiscoveryRefs(config?.requiredFiles);
     return configuredRefs.length > 0 ? configuredRefs : [...DEFAULT_REQUIRED_DISCOVERY_REFS];
-  } catch {
+  } catch (error) {
+    if (!shouldFallbackRequiredDiscoveryRefs(error)) {
+      throw error;
+    }
     return [...DEFAULT_REQUIRED_DISCOVERY_REFS];
   }
 }

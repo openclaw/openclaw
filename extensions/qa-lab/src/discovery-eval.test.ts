@@ -1,9 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   hasDiscoveryLabels,
   reportsDiscoveryScopeLeak,
   reportsMissingDiscoveryFiles,
 } from "./discovery-eval.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.resetModules();
+});
 
 describe("qa discovery evaluation", () => {
   it("accepts rich discovery reports that explicitly confirm all required files were read", () => {
@@ -97,5 +102,20 @@ Final QA tally update: all mandatory scenarios resolved. QA run complete.
     expect(hasDiscoveryLabels(report)).toBe(true);
     expect(reportsMissingDiscoveryFiles(report)).toBe(false);
     expect(reportsDiscoveryScopeLeak(report)).toBe(true);
+  });
+
+  it("rethrows scenario-pack parse failures instead of silently falling back", async () => {
+    vi.doMock("./scenario-catalog.js", () => ({
+      readQaScenarioExecutionConfig: () => {
+        throw new Error("unknown qa scenario: source-docs-discovery-report");
+      },
+    }));
+
+    const { reportsMissingDiscoveryFiles: reportsMissingDiscoveryFilesWithMock } =
+      await import("./discovery-eval.js");
+
+    expect(() => reportsMissingDiscoveryFilesWithMock("Worked\n- none")).toThrow(
+      "unknown qa scenario: source-docs-discovery-report",
+    );
   });
 });
