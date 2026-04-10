@@ -442,12 +442,14 @@ export function renderApp(state: AppViewState) {
     const payload = (await state.client.request("wiki.get", {
       lookup,
       fromLine: 1,
-      lineCount: 800,
+      lineCount: 5000,
     })) as {
       title?: unknown;
       path?: unknown;
       content?: unknown;
       updatedAt?: unknown;
+      totalLines?: unknown;
+      truncated?: unknown;
     } | null;
     const title =
       typeof payload?.title === "string" && payload.title.trim() ? payload.title.trim() : lookup;
@@ -461,10 +463,17 @@ export function renderApp(state: AppViewState) {
       typeof payload?.updatedAt === "string" && payload.updatedAt.trim()
         ? payload.updatedAt.trim()
         : undefined;
+    const totalLines =
+      typeof payload?.totalLines === "number" && Number.isFinite(payload.totalLines)
+        ? Math.max(0, Math.floor(payload.totalLines))
+        : undefined;
+    const truncated = payload?.truncated === true;
     return {
       title,
       path,
       content,
+      ...(totalLines !== undefined ? { totalLines } : {}),
+      ...(truncated ? { truncated } : {}),
       ...(updatedAt ? { updatedAt } : {}),
     };
   };

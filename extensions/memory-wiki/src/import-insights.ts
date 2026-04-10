@@ -278,6 +278,10 @@ function deriveSummary(params: {
   return params.title;
 }
 
+function shouldExposeImportContent(digestStatus: "available" | "withheld"): boolean {
+  return digestStatus === "available";
+}
+
 function normalizeRiskLevel(value: unknown): MemoryWikiImportInsightItem["riskLevel"] {
   if (value === "low" || value === "medium" || value === "high") {
     return value;
@@ -320,15 +324,28 @@ export async function listMemoryWikiImportInsights(
       )
         ? "withheld"
         : "available";
+      const exposeImportContent = shouldExposeImportContent(digestStatus);
       const userTurns = transcriptTurns.filter((turn) => turn.role === "user");
       const assistantTurns = transcriptTurns.filter((turn) => turn.role === "assistant");
-      const assistantOpener = firstParagraph(assistantTurns[0]?.text ?? "");
-      const correctionSignals = extractCorrectionSignals(transcriptTurns);
-      const preferenceSignals = extractPreferenceSignals(digestLines);
-      const candidateSignals = deriveCandidateSignals({
-        preferenceSignals,
-        correctionSignals,
-      });
+      const assistantOpener = exposeImportContent
+        ? firstParagraph(assistantTurns[0]?.text ?? "")
+        : undefined;
+      const correctionSignals = exposeImportContent
+        ? extractCorrectionSignals(transcriptTurns)
+        : [];
+      const preferenceSignals = exposeImportContent ? extractPreferenceSignals(digestLines) : [];
+      const candidateSignals = exposeImportContent
+        ? deriveCandidateSignals({
+            preferenceSignals,
+            correctionSignals,
+          })
+        : [];
+      const firstUserLine = exposeImportContent
+        ? extractDigestField(digestLines, "First user line")
+        : undefined;
+      const lastUserLine = exposeImportContent
+        ? extractDigestField(digestLines, "Last user line")
+        : undefined;
       return [
         {
           pagePath: page.relativePath,
@@ -348,20 +365,14 @@ export async function listMemoryWikiImportInsights(
             extractIntegerField(digestLines, "Assistant messages"),
             assistantTurns.length,
           ),
-          ...(extractDigestField(digestLines, "First user line")
-            ? { firstUserLine: extractDigestField(digestLines, "First user line") }
-            : {}),
-          ...(extractDigestField(digestLines, "Last user line")
-            ? { lastUserLine: extractDigestField(digestLines, "Last user line") }
-            : {}),
+          ...(firstUserLine ? { firstUserLine } : {}),
+          ...(lastUserLine ? { lastUserLine } : {}),
           ...(assistantOpener ? { assistantOpener } : {}),
           summary: deriveSummary({
             title: page.title.replace(/^ChatGPT Export:\s*/i, ""),
             digestStatus,
             ...(assistantOpener ? { assistantOpener } : {}),
-            ...(extractDigestField(digestLines, "First user line")
-              ? { firstUserLine: extractDigestField(digestLines, "First user line") }
-              : {}),
+            ...(firstUserLine ? { firstUserLine } : {}),
             riskReasons: normalizeStringArray(parsed.frontmatter.riskReasons),
             topicLabel: topic.label,
           }),

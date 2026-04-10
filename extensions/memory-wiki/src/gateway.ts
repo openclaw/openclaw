@@ -135,6 +135,7 @@ export function registerMemoryWikiGatewayMethods(params: {
     "wiki.importInsights",
     async ({ respond }) => {
       try {
+        await syncImportedSourcesIfNeeded(config, appConfig);
         respond(true, await listMemoryWikiImportInsights(config));
       } catch (error) {
         respondError(respond, error);

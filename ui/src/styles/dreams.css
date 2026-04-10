@@ -1046,6 +1046,13 @@
   padding: 20px;
 }
 
+.dreams-diary__preview-hint {
+  margin-bottom: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
 .dreams-diary__preview-pre {
   margin: 0;
   white-space: pre-wrap;

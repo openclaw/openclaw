@@ -130,6 +130,8 @@ export type DreamingProps = {
     title: string;
     path: string;
     content: string;
+    totalLines?: number;
+    truncated?: boolean;
     updatedAt?: string;
   } | null>;
   onBackfillDiary: () => void;
@@ -184,6 +186,8 @@ let _wikiPreviewTitle = "";
 let _wikiPreviewPath = "";
 let _wikiPreviewUpdatedAt: string | null = null;
 let _wikiPreviewContent = "";
+let _wikiPreviewTotalLines: number | null = null;
+let _wikiPreviewTruncated = false;
 let _wikiPreviewError: string | null = null;
 
 export function setDreamSubTab(tab: DreamSubTab): void {
@@ -518,6 +522,8 @@ async function openWikiPreview(lookup: string, props: DreamingProps): Promise<vo
   _wikiPreviewPath = lookup;
   _wikiPreviewUpdatedAt = null;
   _wikiPreviewContent = "";
+  _wikiPreviewTotalLines = null;
+  _wikiPreviewTruncated = false;
   _wikiPreviewError = null;
   props.onRequestUpdate?.();
   try {
@@ -530,6 +536,8 @@ async function openWikiPreview(lookup: string, props: DreamingProps): Promise<vo
     _wikiPreviewPath = preview.path;
     _wikiPreviewUpdatedAt = preview.updatedAt ?? null;
     _wikiPreviewContent = preview.content;
+    _wikiPreviewTotalLines = typeof preview.totalLines === "number" ? preview.totalLines : null;
+    _wikiPreviewTruncated = preview.truncated === true;
   } catch (error) {
     _wikiPreviewError = String(error);
   } finally {
@@ -545,6 +553,8 @@ function closeWikiPreview(requestUpdate?: () => void): void {
   _wikiPreviewPath = "";
   _wikiPreviewUpdatedAt = null;
   _wikiPreviewContent = "";
+  _wikiPreviewTotalLines = null;
+  _wikiPreviewTruncated = false;
   _wikiPreviewError = null;
   requestUpdate?.();
 }
@@ -578,7 +588,19 @@ function renderWikiPreviewOverlay(props: DreamingProps) {
             ? html`<div class="dreams-diary__empty-text">Loading wiki page…</div>`
             : _wikiPreviewError
               ? html`<div class="dreams-diary__error">${_wikiPreviewError}</div>`
-              : html`<pre class="dreams-diary__preview-pre">${_wikiPreviewContent}</pre>`}
+              : html`
+                  ${_wikiPreviewTruncated
+                    ? html`
+                        <div class="dreams-diary__preview-hint">
+                          Showing the first chunk of this
+                          page${_wikiPreviewTotalLines !== null
+                            ? ` (${_wikiPreviewTotalLines} total lines)`
+                            : ""}.
+                        </div>
+                      `
+                    : nothing}
+                  <pre class="dreams-diary__preview-pre">${_wikiPreviewContent}</pre>
+                `}
         </div>
       </div>
     </div>

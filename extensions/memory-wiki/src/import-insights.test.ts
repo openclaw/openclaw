@@ -71,6 +71,19 @@ describe("listMemoryWikiImportInsights", () => {
           "## Auto Digest",
           "- Auto digest withheld from durable-candidate generation until reviewed.",
           "- Risk reasons: health content",
+          "- First user line: i have a migraine, pink or yellow?",
+          "- Last user line: should i take this now?",
+          "- Preference signals:",
+          "  - prefers color-coded medication guidance",
+          "",
+          "## Active Branch Transcript",
+          "### User",
+          "",
+          "i have a migraine, pink or yellow?",
+          "",
+          "### Assistant",
+          "",
+          "You're right, let's reset and stick to safe dosing guidance.",
           "",
         ].join("\n"),
       }),
@@ -118,8 +131,12 @@ describe("listMemoryWikiImportInsights", () => {
         "Sensitive health chat withheld from durable-memory extraction because it touches health.",
       candidateSignals: [],
       correctionSignals: [],
-      userMessageCount: 0,
-      assistantMessageCount: 0,
+      preferenceSignals: [],
+      userMessageCount: 1,
+      assistantMessageCount: 1,
     });
+    expect(healthItem?.firstUserLine).toBeUndefined();
+    expect(healthItem?.lastUserLine).toBeUndefined();
+    expect(healthItem?.assistantOpener).toBeUndefined();
   });
 });

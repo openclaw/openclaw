@@ -335,6 +335,42 @@ describe("dreaming view", () => {
     setDreamSubTab("scene");
   });
 
+  it("shows a truncation hint when the wiki preview only contains the first chunk", async () => {
+    setDreamSubTab("diary");
+    setDreamDiarySubTab("insights");
+    const container = document.createElement("div");
+    let props: DreamingProps;
+    const onOpenWikiPage = vi.fn().mockResolvedValue({
+      title: "BA flight receipts process",
+      path: "sources/chatgpt-2026-04-10-alpha.md",
+      content: "# ChatGPT Export: BA flight receipts process",
+      totalLines: 6001,
+      truncated: true,
+    });
+    const rerender = () => render(renderDreaming(props), container);
+    props = buildProps({
+      onOpenWikiPage,
+      onRequestUpdate: rerender,
+    });
+    rerender();
+
+    container
+      .querySelectorAll<HTMLButtonElement>(".dreams-diary__insight-actions .btn")[1]
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(container.querySelector(".dreams-diary__preview-hint")?.textContent).toContain(
+      "6001 total lines",
+    );
+
+    container
+      .querySelector<HTMLButtonElement>(".dreams-diary__preview-header .btn")
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    setDreamDiarySubTab("dreams");
+    setDreamSubTab("scene");
+  });
+
   it("renders the memory palace inside the diary tab", () => {
     setDreamSubTab("diary");
     setDreamDiarySubTab("palace");
