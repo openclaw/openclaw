@@ -320,22 +320,30 @@ function extractOrbitCode(text: string) {
   return /\bORBIT-\d+\b/i.exec(text)?.[0]?.toUpperCase() ?? null;
 }
 
-function extractExactReplyDirective(text: string) {
-  const colonMatch = /reply(?: with)? exactly:\s*([^\n]+)/i.exec(text);
-  if (colonMatch?.[1]) {
-    return colonMatch[1].trim();
+function extractLastCapture(text: string, pattern: RegExp) {
+  let lastMatch: RegExpExecArray | null = null;
+  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+  const globalPattern = new RegExp(pattern.source, flags);
+  for (let match = globalPattern.exec(text); match; match = globalPattern.exec(text)) {
+    lastMatch = match;
   }
-  const backtickedMatch = /reply(?: with)? exactly\s+`([^`]+)`/i.exec(text);
-  return backtickedMatch?.[1]?.trim() || null;
+  return lastMatch?.[1]?.trim() || null;
+}
+
+function extractExactReplyDirective(text: string) {
+  const colonMatch = extractLastCapture(text, /reply(?: with)? exactly:\s*([^\n]+)/i);
+  if (colonMatch) {
+    return colonMatch;
+  }
+  return extractLastCapture(text, /reply(?: with)? exactly\s+`([^`]+)`/i);
 }
 
 function extractExactMarkerDirective(text: string) {
-  const backtickedMatch = /exact marker:\s*`([^`]+)`/i.exec(text);
-  if (backtickedMatch?.[1]) {
-    return backtickedMatch[1].trim();
+  const backtickedMatch = extractLastCapture(text, /exact marker:\s*`([^`]+)`/i);
+  if (backtickedMatch) {
+    return backtickedMatch;
   }
-  const plainMatch = /exact marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i.exec(text);
-  return plainMatch?.[1]?.trim() || null;
+  return extractLastCapture(text, /exact marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i);
 }
 
 function isHeartbeatPrompt(text: string) {

@@ -41,7 +41,7 @@ export async function resolveCommandsSystemPromptBundle(
   });
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
-    sessionKey: params.ctx.SessionKey ?? params.sessionKey,
+    sessionKey: params.sessionKey ?? params.ctx.SessionKey,
   });
   const skillsSnapshot = (() => {
     try {
@@ -69,7 +69,7 @@ export async function resolveCommandsSystemPromptBundle(
     try {
       return createOpenClawCodingTools({
         config: params.cfg,
-        agentId: params.agentId,
+        agentId: sessionAgentId,
         workspaceDir,
         sessionKey: params.sessionKey,
         allowGatewaySubagentBinding: true,

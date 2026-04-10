@@ -5,6 +5,7 @@ import {
   registerPluginInteractiveHandler,
 } from "openclaw/plugin-sdk/plugin-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { mockPinnedHostnameResolution } from "../../../src/test-helpers/ssrf.js";
 import type { TelegramInteractiveHandlerContext } from "./interactive-dispatch.js";
 const {
   answerCallbackQuerySpy,
@@ -15,6 +16,7 @@ const {
   getFileSpy,
   getChatSpy,
   getLoadConfigMock,
+  getLoadWebMediaMock,
   getReadChannelAllowFromStoreMock,
   getOnHandler,
   listSkillCommandsForAgents,
@@ -36,6 +38,7 @@ let createTelegramBot: (
 ) => ReturnType<typeof import("./bot.js").createTelegramBot>;
 
 const loadConfig = getLoadConfigMock();
+const loadWebMedia = getLoadWebMediaMock();
 const readChannelAllowFromStore = getReadChannelAllowFromStoreMock();
 const PUZZLE_EMOJI = "\u{1F9E9}";
 const CROSS_MARK_EMOJI = "\u{274C}";
@@ -1281,6 +1284,7 @@ describe("createTelegramBot", () => {
     onSpy.mockClear();
     replySpy.mockClear();
     getFileSpy.mockClear();
+    loadWebMedia.mockResolvedValueOnce({ path: "/tmp/reply-photo.png", contentType: "image/png" });
 
     const mediaFetch = vi.fn(
       async () =>
@@ -1289,30 +1293,35 @@ describe("createTelegramBot", () => {
           headers: { "content-type": "image/png" },
         }),
     );
+    const ssrfMock = mockPinnedHostnameResolution();
 
-    createTelegramBot({
-      token: "tok",
-      telegramTransport: {
-        fetch: mediaFetch as typeof fetch,
-        sourceFetch: mediaFetch as typeof fetch,
-      },
-    });
-    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
-    await handler({
-      message: {
-        chat: { id: 7, type: "private" },
-        text: "what is in this image?",
-        date: 1736380800,
-        reply_to_message: {
-          message_id: 9001,
-          photo: [{ file_id: "reply-photo-1" }],
-          from: { first_name: "Ada" },
+    try {
+      createTelegramBot({
+        token: "tok",
+        telegramTransport: {
+          fetch: mediaFetch as typeof fetch,
+          sourceFetch: mediaFetch as typeof fetch,
         },
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({}),
-    });
+      });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: 7, type: "private" },
+          text: "what is in this image?",
+          date: 1736380800,
+          reply_to_message: {
+            message_id: 9001,
+            photo: [{ file_id: "reply-photo-1" }],
+            from: { first_name: "Ada" },
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+    } finally {
+      ssrfMock.mockRestore();
+    }
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = replySpy.mock.calls[0][0] as {
@@ -1322,6 +1331,7 @@ describe("createTelegramBot", () => {
     };
     expect(payload.ReplyToBody).toBe("<media:image>");
     expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1");
+    expect(loadWebMedia).not.toHaveBeenCalled();
     expect(mediaFetch).toHaveBeenCalledTimes(1);
   });
 
