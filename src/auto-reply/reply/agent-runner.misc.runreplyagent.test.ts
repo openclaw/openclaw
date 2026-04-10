@@ -39,6 +39,7 @@ const runtimeErrorMock = vi.fn();
 const abortEmbeddedPiRunMock = vi.fn();
 const clearSessionQueuesMock = vi.fn();
 const refreshQueuedFollowupSessionMock = vi.fn();
+const readPostCompactionContextMock = vi.fn();
 const compactState = vi.hoisted(() => ({
   compactEmbeddedPiSessionMock: vi.fn(),
 }));
@@ -75,6 +76,10 @@ vi.mock("../../agents/pi-embedded.js", () => {
 
 vi.mock("../../agents/cli-runner.js", () => ({
   runCliAgent: (...args: unknown[]) => runCliAgentMock(...args),
+}));
+
+vi.mock("./post-compaction-context.js", () => ({
+  readPostCompactionContext: (...args: unknown[]) => readPostCompactionContextMock(...args),
 }));
 
 vi.mock("../../runtime.js", () => {
@@ -145,6 +150,8 @@ beforeEach(() => {
   runWithModelFallbackMock.mockClear();
   runtimeErrorMock.mockClear();
   abortEmbeddedPiRunMock.mockClear();
+  readPostCompactionContextMock.mockReset();
+  readPostCompactionContextMock.mockResolvedValue(undefined);
   compactState.compactEmbeddedPiSessionMock.mockReset();
   compactState.compactEmbeddedPiSessionMock.mockResolvedValue({
     compacted: false,
@@ -287,6 +294,78 @@ describe("runReplyAgent auto-compaction token update", () => {
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     // totalTokens should use lastCallUsage (55k), not accumulated (75k)
     expect(stored[sessionKey].totalTokens).toBe(55_000);
+  });
+
+  it("uses the active fallback provider and model for post-compaction refresh", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-post-compact-model-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 50_000,
+    };
+
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          usage: { input: 75_000, output: 5_000, total: 80_000 },
+          lastCallUsage: { input: 55_000, output: 2_000, total: 57_000 },
+          compactionCount: 1,
+          provider: "openai",
+          model: "gpt-5.4",
+        },
+      },
+    });
+
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath,
+      sessionEntry,
+    });
+
+    followupRun.run.provider = "anthropic";
+    followupRun.run.model = "claude-opus-4-6";
+
+    await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expect(readPostCompactionContextMock).toHaveBeenCalledWith(
+      followupRun.run.workspaceDir,
+      followupRun.run.config,
+      undefined,
+      expect.objectContaining({
+        sessionKey: followupRun.run.sessionKey,
+        sessionId: followupRun.run.sessionId,
+        agentId: followupRun.run.agentId,
+        modelProviderId: "openai",
+        modelId: "gpt-5.4",
+      }),
+    );
   });
 });
 
