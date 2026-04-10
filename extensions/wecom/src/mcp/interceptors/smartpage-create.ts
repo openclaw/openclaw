@@ -115,16 +115,28 @@ async function resolvePages(
       let fileContent: string;
       try {
         // Validate path against trusted roots to prevent arbitrary file reads
-        const resolved = path.resolve(filePath);
+        // Use realpath to resolve symlinks and prevent symlink-based escapes
+        let resolved: string;
+        try {
+          resolved = await fs.realpath(path.resolve(filePath));
+        } catch {
+          resolved = path.resolve(filePath);
+        }
         const trustedRoots = [process.cwd(), "/tmp"];
-        const inTrustedRoot = trustedRoots.some((root) => {
-          const r = path.resolve(root);
+        const realTrustedRoots = await Promise.all(
+          trustedRoots.map(async (root) => {
+            try {
+              return await fs.realpath(path.resolve(root));
+            } catch {
+              return path.resolve(root);
+            }
+          }),
+        );
+        const inTrustedRoot = realTrustedRoots.some((r) => {
           return resolved === r || resolved.startsWith(r + path.sep);
         });
         if (!inTrustedRoot) {
-          throw new Error(
-            `路径 "${filePath}" 不在允许的目录范围内（仅允许工作目录和 /tmp）`,
-          );
+          throw new Error(`路径 "${filePath}" 不在允许的目录范围内（仅允许工作目录和 /tmp）`);
         }
         fileContent = await fs.readFile(resolved, "utf-8");
       } catch (err) {

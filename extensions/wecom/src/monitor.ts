@@ -46,12 +46,10 @@ import type { WeComMonitorOptions, MessageState } from "./interface.js";
 import { downloadAndSaveImages, downloadAndSaveFiles } from "./media-handler.js";
 import { uploadAndSendMedia } from "./media-uploader.js";
 import { parseMessageContent, type MessageBody } from "./message-parser.js";
-import {
-  sendWeComReply,
-  StreamExpiredError,
-} from "./message-sender.js";
+import { sendWeComReply, StreamExpiredError } from "./message-sender.js";
 import { getDefaultMediaLocalRoots, resolveStateDir } from "./openclaw-compat.js";
 import { getWeComRuntime } from "./runtime.js";
+import { resolveWecomCommandAuthorization } from "./shared/command-auth.js";
 import {
   setWeComWebSocket,
   setMessageState,
@@ -187,7 +185,7 @@ export { sendWeComReply } from "./message-sender.js";
  * 构建消息上下文
  * @returns 消息上下文对象
  */
-function buildMessageContext(
+async function buildMessageContext(
   frame: WsFrame,
   account: ResolvedWeComAccount,
   config: OpenClawConfig,
@@ -257,6 +255,16 @@ function buildMessageContext(
     agentId: route.agentId,
   });
 
+  // Compute CommandAuthorized dynamically (aligned with webhook path and other channels)
+  const authz = await resolveWecomCommandAuthorization({
+    core,
+    cfg: config,
+    accountConfig: account.config,
+    rawBody: messageBody,
+    senderUserId: body.from.userid,
+  });
+  const commandAuthorized = authz.commandAuthorized;
+
   // 构建标准消息上下文
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: messageBody,
@@ -284,7 +292,7 @@ function buildMessageContext(
     OriginatingChannel: CHANNEL_ID,
     OriginatingTo: `${CHANNEL_ID}:${chatId}`,
 
-    CommandAuthorized: true,
+    CommandAuthorized: commandAuthorized,
 
     ResponseUrl: body.response_url,
     ReqId: frame.headers.req_id,
@@ -467,8 +475,8 @@ async function finishThinkingStream(ctx: DeliverContext): Promise<void> {
  * Route the message to the core processing pipeline and handle replies
  */
 async function routeAndDispatchMessage(params: {
-  ctxPayload: ReturnType<typeof buildMessageContext>["ctxPayload"];
-  route: ReturnType<typeof buildMessageContext>["route"];
+  ctxPayload: Awaited<ReturnType<typeof buildMessageContext>>["ctxPayload"];
+  route: Awaited<ReturnType<typeof buildMessageContext>>["route"];
   storePath: string;
   chatId: string;
   chatType: string;
@@ -810,7 +818,7 @@ async function processWeComMessageNow(entry: WeComMessageEntry): Promise<void> {
     storePath,
     chatId: resolvedChatId,
     chatType,
-  } = buildMessageContext(frame, account, config, text, mediaList, quoteContent, runtime);
+  } = await buildMessageContext(frame, account, config, text, mediaList, quoteContent, runtime);
   // runtime.log?.(`[plugin -> openclaw] body=${text}, mediaPaths=${JSON.stringify(mediaList.map(m => m.path))}${quoteContent ? `, quote=${quoteContent}` : ''}`);
 
   try {

@@ -442,14 +442,29 @@ export async function startAgentForStream(params: {
       const allowedRoots = target.account.config.mediaLocalRoots ?? [];
       for (const p of imagePaths) {
         try {
-          // Validate path against allowed media roots
-          const resolved = pathModule.resolve(p);
+          // Validate path against allowed media roots (resolve symlinks to prevent escapes)
+          let resolved: string;
+          try {
+            resolved = await fs.realpath(pathModule.resolve(p));
+          } catch {
+            resolved = pathModule.resolve(p);
+          }
           if (
             allowedRoots.length > 0 &&
-            !allowedRoots.some((r) => {
-              const root = pathModule.resolve(r);
-              return resolved === root || resolved.startsWith(root + pathModule.sep);
-            })
+            !(await (async () => {
+              for (const r of allowedRoots) {
+                let root: string;
+                try {
+                  root = await fs.realpath(pathModule.resolve(r));
+                } catch {
+                  root = pathModule.resolve(r);
+                }
+                if (resolved === root || resolved.startsWith(root + pathModule.sep)) {
+                  return true;
+                }
+              }
+              return false;
+            })())
           ) {
             target.runtime.error?.(
               `[webhook] local-path: path ${p} outside allowed media roots, skipping`,
@@ -1006,14 +1021,29 @@ export async function startAgentForStream(params: {
               try {
                 const fs = await import("node:fs/promises");
                 const pathModule = await import("node:path");
-                const resolved = pathModule.resolve(p);
+                let resolved: string;
+                try {
+                  resolved = await fs.realpath(pathModule.resolve(p));
+                } catch {
+                  resolved = pathModule.resolve(p);
+                }
                 const roots = target.account.config.mediaLocalRoots ?? [];
                 if (
                   roots.length > 0 &&
-                  !roots.some((r) => {
-                    const root = pathModule.resolve(r);
-                    return resolved === root || resolved.startsWith(root + pathModule.sep);
-                  })
+                  !(await (async () => {
+                    for (const r of roots) {
+                      let root: string;
+                      try {
+                        root = await fs.realpath(pathModule.resolve(r));
+                      } catch {
+                        root = pathModule.resolve(r);
+                      }
+                      if (resolved === root || resolved.startsWith(root + pathModule.sep)) {
+                        return true;
+                      }
+                    }
+                    return false;
+                  })())
                 ) {
                   target.runtime.error?.(
                     `[webhook] local-path: path ${p} outside allowed media roots, skipping`,
@@ -1134,14 +1164,29 @@ export async function startAgentForStream(params: {
             } else {
               const fs = await import("node:fs/promises");
               const pathMod = await import("node:path");
-              const resolved = pathMod.resolve(mPath);
+              let resolved: string;
+              try {
+                resolved = await fs.realpath(pathMod.resolve(mPath));
+              } catch {
+                resolved = pathMod.resolve(mPath);
+              }
               const roots = target.account.config.mediaLocalRoots ?? [];
               if (
                 roots.length > 0 &&
-                !roots.some((r) => {
-                  const root = pathMod.resolve(r);
-                  return resolved === root || resolved.startsWith(root + pathMod.sep);
-                })
+                !(await (async () => {
+                  for (const r of roots) {
+                    let root: string;
+                    try {
+                      root = await fs.realpath(pathMod.resolve(r));
+                    } catch {
+                      root = pathMod.resolve(r);
+                    }
+                    if (resolved === root || resolved.startsWith(root + pathMod.sep)) {
+                      return true;
+                    }
+                  }
+                  return false;
+                })())
               ) {
                 throw new Error(`Path "${mPath}" outside allowed media roots`);
               }
@@ -1549,14 +1594,29 @@ async function agentDmMedia(params: {
   } else {
     const fs = await import("node:fs/promises");
     const pathMod = await import("node:path");
-    const resolved = pathMod.resolve(mediaUrlOrPath);
+    let resolved: string;
+    try {
+      resolved = await fs.realpath(pathMod.resolve(mediaUrlOrPath));
+    } catch {
+      resolved = pathMod.resolve(mediaUrlOrPath);
+    }
     const roots = target.account.config.mediaLocalRoots ?? [];
     if (
       roots.length > 0 &&
-      !roots.some((r) => {
-        const root = pathMod.resolve(r);
-        return resolved === root || resolved.startsWith(root + pathMod.sep);
-      })
+      !(await (async () => {
+        for (const r of roots) {
+          let root: string;
+          try {
+            root = await fs.realpath(pathMod.resolve(r));
+          } catch {
+            root = pathMod.resolve(r);
+          }
+          if (resolved === root || resolved.startsWith(root + pathMod.sep)) {
+            return true;
+          }
+        }
+        return false;
+      })())
     ) {
       throw new Error(`Path "${mediaUrlOrPath}" outside allowed media roots`);
     }

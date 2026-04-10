@@ -530,19 +530,13 @@ async function processAgentMessage(params: {
     body: finalContent,
   });
 
-  const accountConfig = (config.channels?.[CHANNEL_ID] ?? {}) as Record<string, unknown>;
-  type DmPolicyType = "pairing" | "allowlist" | "open" | "disabled" | undefined;
+  // Resolve merged account config so account-level dmPolicy/allowFrom overrides are respected
+  const { resolveWeComAccountMulti } = await import("../accounts.js");
+  const resolvedAuthAccount = resolveWeComAccountMulti({ cfg: config, accountId: agent.accountId });
   const authz = await resolveWecomCommandAuthorization({
     core,
     cfg: config,
-    accountConfig: {
-      dmPolicy:
-        (accountConfig.dmPolicy as DmPolicyType) ??
-        ((agent.config as Record<string, unknown>).dmPolicy as DmPolicyType),
-      allowFrom:
-        (accountConfig.allowFrom as Array<string | number> | undefined) ??
-        ((agent.config as Record<string, unknown>).allowFrom as Array<string | number> | undefined),
-    },
+    accountConfig: resolvedAuthAccount.config,
     rawBody: finalContent,
     senderUserId: fromUser,
   });
@@ -715,8 +709,24 @@ async function processAgentMessage(params: {
             } else {
               const fs = await import("node:fs/promises");
               const pathModule = await import("node:path");
-              buf = await fs.readFile(mediaPath);
-              filename = pathModule.basename(mediaPath);
+              // Validate local path against mediaLocalRoots (aligned with webhook/monitor.ts)
+              const resolved = pathModule.resolve(mediaPath);
+              const wecomCfg = (config.channels?.wecom ?? {}) as Record<string, unknown>;
+              const roots = (wecomCfg.mediaLocalRoots as string[] | undefined) ?? [];
+              if (
+                roots.length > 0 &&
+                !roots.some((r) => {
+                  const root = pathModule.resolve(r);
+                  return resolved === root || resolved.startsWith(root + pathModule.sep);
+                })
+              ) {
+                log?.(
+                  `[wecom-agent] media path "${mediaPath}" outside allowed media roots, skipping`,
+                );
+                continue;
+              }
+              buf = await fs.readFile(resolved);
+              filename = pathModule.basename(resolved);
               const ext = pathModule.extname(mediaPath).slice(1).toLowerCase();
               const MIME_MAP: Record<string, string> = {
                 jpg: "image/jpeg",

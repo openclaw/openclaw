@@ -206,10 +206,14 @@ export const wecomPlugin: ChannelPlugin<ResolvedWeComAccount> = {
         return next;
       }
 
-      // Delete the specified account
+      // Delete the specified account (normalize ID to match config keys consistently)
       const wecomConfig = cfg.channels?.[CHANNEL_ID] as WeComMultiAccountConfig | undefined;
       const accounts = { ...wecomConfig?.accounts };
-      delete accounts[accountId];
+      const normalizedId = accountId.toLowerCase().trim();
+      // Find the actual key that matches the normalized accountId
+      const matchedKey =
+        Object.keys(accounts).find((k) => k.toLowerCase().trim() === normalizedId) ?? accountId;
+      delete accounts[matchedKey];
 
       return {
         ...cfg,
