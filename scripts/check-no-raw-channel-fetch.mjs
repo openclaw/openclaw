@@ -35,6 +35,8 @@ const allowedRawFetchCallsites = new Set([
   bundledPluginCallsite("huggingface", "models.ts", 142),
   bundledPluginCallsite("kilocode", "provider-models.ts", 130),
   bundledPluginCallsite("matrix", "src/matrix/sdk/transport.ts", 112),
+  bundledPluginCallsite("model-switch", "src/health.ts", 18),
+  bundledPluginCallsite("model-switch", "src/health.ts", 38),
   bundledPluginCallsite("microsoft-foundry", "onboard.ts", 479),
   bundledPluginCallsite("microsoft", "speech-provider.ts", 140),
   bundledPluginCallsite("minimax", "oauth.ts", 66),
