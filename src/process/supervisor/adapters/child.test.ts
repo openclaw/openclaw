@@ -1,8 +1,8 @@
+import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import type { ChildProcess } from "node:child_process";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { createChildProcessAdapter } from "./child.js";
+import { createChildAdapter } from "./child.js";
 
 const spawnWithFallbackMock = vi.fn();
 
@@ -48,7 +48,7 @@ async function createAdapterHarness(params?: {
     args: params?.argv?.slice(1) ?? [],
   });
 
-  const adapter = await createChildProcessAdapter({
+  const adapter = await createChildAdapter({
     argv: params?.argv ?? ["test"],
     env: params?.env,
   });
@@ -78,39 +78,35 @@ describe("ChildProcessAdapter", () => {
 
   it("proxies stdout and stderr streams", async () => {
     const { adapter, child } = await createAdapterHarness();
-    const stdoutData: Buffer[] = [];
-    const stderrData: Buffer[] = [];
+    const stdoutData: string[] = [];
+    const stderrData: string[] = [];
 
-    adapter.stdout.on("data", (chunk) => stdoutData.push(chunk));
-    adapter.stderr.on("data", (chunk) => stderrData.push(chunk));
+    adapter.onStdout((chunk) => stdoutData.push(chunk));
+    adapter.onStderr((chunk) => stderrData.push(chunk));
 
     child.stdout?.emit("data", Buffer.from("out"));
     child.stderr?.emit("data", Buffer.from("err"));
 
-    expect(Buffer.concat(stdoutData).toString()).toBe("out");
-    expect(Buffer.concat(stderrData).toString()).toBe("err");
+    expect(stdoutData.join("")).toBe("out");
+    expect(stderrData.join("")).toBe("err");
   });
 
   it("handles process exit", async () => {
     const { adapter, emitExit } = await createAdapterHarness();
-    const exitPromise = new Promise<{ code: number | null; signal: string | null }>((resolve) => {
-      adapter.on("exit", (code, signal) => resolve({ code, signal }));
-    });
+    const waitPromise = adapter.wait();
 
     emitExit(0);
-    const result = await exitPromise;
+    const result = await waitPromise;
     expect(result.code).toBe(0);
     expect(result.signal).toBeNull();
   });
 
   it("handles process close", async () => {
     const { adapter, emitClose } = await createAdapterHarness();
-    const closePromise = new Promise<{ code: number | null; signal: string | null }>((resolve) => {
-      adapter.on("close", (code, signal) => resolve({ code, signal }));
-    });
+    const waitPromise = adapter.wait();
 
     emitClose(1, "SIGTERM");
-    const result = await closePromise;
+    const result = await waitPromise;
     expect(result.code).toBe(1);
     expect(result.signal).toBe("SIGTERM");
   });

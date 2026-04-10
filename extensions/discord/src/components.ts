@@ -54,8 +54,11 @@ export type {
   DiscordComponentEntry,
   DiscordComponentMessageSpec,
   DiscordComponentModalEntry,
+  DiscordComponentModalEntry as DiscordModalEntry,
   DiscordComponentModalFieldDefinition,
+  DiscordComponentModalFieldDefinition as DiscordModalFieldDefinition,
   DiscordComponentModalFieldSpec,
+  DiscordComponentModalFieldSpec as DiscordModalFieldSpec,
   DiscordComponentModalFieldType,
   DiscordComponentSectionAccessory,
   DiscordComponentSelectOption,
@@ -187,7 +190,7 @@ function mapButtonStyle(style?: DiscordComponentButtonStyle): ButtonStyle {
   }
 }
 
-function mapTextInputStyle(style?: DiscordModalFieldSpec["style"]) {
+function mapTextInputStyle(style?: DiscordComponentModalFieldSpec["style"]) {
   return style === "paragraph" ? TextInputStyle.Paragraph : TextInputStyle.Short;
 }
 
@@ -283,7 +286,11 @@ function parseSelectSpec(raw: unknown, label: string): DiscordComponentSelectSpe
   };
 }
 
-function parseModalField(raw: unknown, label: string, index: number): DiscordModalFieldSpec {
+function parseModalField(
+  raw: unknown,
+  label: string,
+  index: number,
+): DiscordComponentModalFieldSpec {
   const obj = requireObject(raw, label);
   const type = normalizeLowercaseStringOrEmpty(
     readString(obj.type, `${label}.type`),
@@ -315,7 +322,7 @@ function parseModalField(raw: unknown, label: string, index: number): DiscordMod
     maxValues: readOptionalNumber(obj.maxValues),
     minLength: readOptionalNumber(obj.minLength),
     maxLength: readOptionalNumber(obj.maxLength),
-    style: readOptionalString(obj.style) as DiscordModalFieldSpec["style"],
+    style: readOptionalString(obj.style) as DiscordComponentModalFieldSpec["style"],
   };
 }
 
@@ -690,7 +697,7 @@ function isSelectComponent(
 }
 
 function createModalFieldComponent(
-  field: DiscordModalFieldDefinition,
+  field: DiscordComponentModalFieldDefinition,
 ): TextInput | StringSelectMenu | UserSelectMenu | RoleSelectMenu | CheckboxGroup | RadioGroup {
   if (field.type === "text") {
     class DynamicTextInput extends TextInput {
@@ -765,7 +772,7 @@ export function buildDiscordComponentMessage(params: {
   accountId?: string;
 }): DiscordComponentBuildResult {
   const entries: DiscordComponentEntry[] = [];
-  const modals: DiscordModalEntry[] = [];
+  const modals: DiscordComponentModalEntry[] = [];
   const components: TopLevelComponents[] = [];
   const containerChildren: Array<
     | Row<
@@ -944,7 +951,11 @@ export class DiscordFormModal extends ModalBase {
   components: Array<Label | TextDisplay>;
   customIdParser = parseDiscordModalCustomIdForCarbonImpl;
 
-  constructor(params: { modalId: string; title: string; fields: DiscordModalFieldDefinition[] }) {
+  constructor(params: {
+    modalId: string;
+    title: string;
+    fields: DiscordComponentModalFieldDefinition[];
+  }) {
     super();
     this.title = params.title;
     this.customId = buildDiscordModalCustomIdImpl(params.modalId);
@@ -965,7 +976,7 @@ export class DiscordFormModal extends ModalBase {
   }
 }
 
-export function createDiscordFormModal(entry: DiscordModalEntry): Modal {
+export function createDiscordFormModal(entry: DiscordComponentModalEntry): Modal {
   return new DiscordFormModal({
     modalId: entry.id,
     title: entry.title,
