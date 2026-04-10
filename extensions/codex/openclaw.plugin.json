@@ -1,0 +1,44 @@
+{
+  "id": "codex",
+  "enabledByDefault": true,
+  "name": "Codex",
+  "description": "Codex app-server harness and Codex-managed GPT model catalog.",
+  "providers": ["codex"],
+  "modelSupport": {
+    "providerIds": ["codex"],
+    "modelPrefixes": ["gpt-", "o1", "o3", "o4", "arcanine"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "discovery": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "timeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "default": 2500
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "discovery": {
+      "label": "Model Discovery",
+      "help": "Plugin-owned controls for discovering Codex app-server models."
+    },
+    "discovery.enabled": {
+      "label": "Enable Discovery",
+      "help": "When false, OpenClaw keeps the Codex harness available but uses the bundled fallback model list."
+    },
+    "discovery.timeoutMs": {
+      "label": "Discovery Timeout",
+      "help": "Maximum time to wait for Codex app-server model discovery before falling back to the bundled model list.",
+      "advanced": true
+    }
+  }
+}
