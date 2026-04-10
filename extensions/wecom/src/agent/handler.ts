@@ -12,6 +12,7 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { CHANNEL_ID, DEFAULT_MEDIA_MAX_MB } from "../const.js";
 import { processDynamicRouting } from "../dynamic-routing.js";
+import { checkGroupPolicy } from "../group-policy.js";
 import {
   buildWecomUnauthorizedCommandPrompt,
   resolveWecomCommandAuthorization,
@@ -554,6 +555,23 @@ async function processAgentMessage(params: {
   if (!authz.shouldComputeAuth && authz.dmPolicy !== "open" && !authz.senderAllowed) {
     log?.(`[wecom-agent] sender ${fromUser} not allowed by dmPolicy=${authz.dmPolicy}, skipping`);
     return;
+  }
+
+  // Group policy gate: if this is a group message, check groupPolicy/groupAllowFrom
+  if (isGroup) {
+    const { resolveWeComAccountMulti } = await import("../accounts.js");
+    const resolvedAccount = resolveWeComAccountMulti({ cfg: config, accountId: agent.accountId });
+    const groupPolicyResult = checkGroupPolicy({
+      chatId: peerId,
+      senderId: fromUser,
+      account: resolvedAccount,
+      config,
+      runtime: { log: (msg) => log?.(msg), error: (msg) => error?.(msg) },
+    });
+    if (!groupPolicyResult.allowed) {
+      log?.(`[wecom-agent] group ${peerId} not allowed by groupPolicy, skipping`);
+      return;
+    }
   }
 
   // 命令门禁：未授权时必须明确回复（Agent 侧用私信提示）

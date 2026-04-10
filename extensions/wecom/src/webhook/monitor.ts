@@ -14,6 +14,7 @@ import {
   sendMedia as sendAgentMedia,
 } from "../agent/api-client.js";
 import { processDynamicRouting } from "../dynamic-routing.js";
+import { checkGroupPolicy } from "../group-policy.js";
 import {
   resolveWecomCommandAuthorization,
   buildWecomUnauthorizedCommandPrompt,
@@ -753,6 +754,29 @@ export async function startAgentForStream(params: {
     });
     streamStore.onStreamFinished(streamId);
     return;
+  }
+
+  // Group policy gate: if this is a group message, check groupPolicy/groupAllowFrom
+  if (chatType === "group") {
+    const groupPolicyResult = checkGroupPolicy({
+      chatId,
+      senderId: userid,
+      account: target.account,
+      config,
+      runtime: {
+        log: (msg) => target.runtime.log?.(msg),
+        error: (msg) => target.runtime.error?.(msg),
+      },
+    });
+    if (!groupPolicyResult.allowed) {
+      target.runtime.log?.(`[webhook] group ${chatId} not allowed by groupPolicy, skipping`);
+      streamStore.updateStream(streamId, (s) => {
+        s.finished = true;
+        s.content = "";
+      });
+      streamStore.onStreamFinished(streamId);
+      return;
+    }
   }
 
   // Command gate: if this is a command and unauthorized, must give user a clear Chinese reply (cannot silently ignore)
