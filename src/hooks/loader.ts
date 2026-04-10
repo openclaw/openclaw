@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { openBoundaryFile } from "../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { shouldIncludeHook } from "./config.js";
 import { buildImportUrl } from "./import-url.js";
@@ -21,7 +22,12 @@ import { resolveFunctionModuleExport } from "./module-loader.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
 const log = createSubsystemLogger("hooks:loader");
-const loadedHookRegistrations: Array<{ event: string; handler: InternalHookHandler }> = [];
+const LOADED_INTERNAL_HOOK_REGISTRATIONS_KEY = Symbol.for(
+  "openclaw.loadedInternalHookRegistrations",
+);
+const loadedHookRegistrations = resolveGlobalSingleton<
+  Array<{ event: string; handler: InternalHookHandler }>
+>(LOADED_INTERNAL_HOOK_REGISTRATIONS_KEY, () => []);
 
 function safeLogValue(value: string): string {
   return sanitizeForLog(value);

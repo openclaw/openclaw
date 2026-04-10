@@ -290,7 +290,11 @@ describe("resolveGatewayStartupPluginIds", () => {
             memory: "memory-lancedb",
           },
           entries: {
+            "memory-core": {
+              enabled: true,
+            },
             "memory-lancedb": {
+              enabled: true,
               config: {
                 dreaming: {
                   enabled: true,
@@ -301,6 +305,30 @@ describe("resolveGatewayStartupPluginIds", () => {
         },
       } as OpenClawConfig,
       expected: ["demo-channel", "browser", "memory-core", "memory-lancedb"],
+    });
+  });
+
+  it("does not bypass activation policy for dreaming startup owners", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          slots: {
+            memory: "memory-lancedb",
+          },
+          entries: {
+            "memory-lancedb": {
+              enabled: false,
+              config: {
+                dreaming: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      expected: ["browser"],
     });
   });
 });

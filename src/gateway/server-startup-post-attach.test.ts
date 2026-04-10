@@ -4,6 +4,7 @@ const hoisted = vi.hoisted(() => {
   const startPluginServices = vi.fn(async () => null);
   const startGmailWatcherWithLogs = vi.fn(async () => undefined);
   const loadInternalHooks = vi.fn(async () => 0);
+  const setInternalHooksEnabled = vi.fn();
   const startGatewayMemoryBackend = vi.fn(async () => undefined);
   const scheduleGatewayUpdateCheck = vi.fn(() => () => {});
   const startGatewayTailscaleExposure = vi.fn(async () => null);
@@ -20,6 +21,7 @@ const hoisted = vi.hoisted(() => {
     startPluginServices,
     startGmailWatcherWithLogs,
     loadInternalHooks,
+    setInternalHooksEnabled,
     startGatewayMemoryBackend,
     scheduleGatewayUpdateCheck,
     startGatewayTailscaleExposure,
@@ -53,6 +55,7 @@ vi.mock("../hooks/gmail-watcher-lifecycle.js", () => ({
 
 vi.mock("../hooks/internal-hooks.js", () => ({
   createInternalHookEvent: vi.fn(() => ({})),
+  setInternalHooksEnabled: hoisted.setInternalHooksEnabled,
   triggerInternalHook: vi.fn(async () => undefined),
 }));
 
@@ -102,6 +105,7 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.startPluginServices.mockClear();
     hoisted.startGmailWatcherWithLogs.mockClear();
     hoisted.loadInternalHooks.mockClear();
+    hoisted.setInternalHooksEnabled.mockClear();
     hoisted.startGatewayMemoryBackend.mockClear();
     hoisted.scheduleGatewayUpdateCheck.mockClear();
     hoisted.startGatewayTailscaleExposure.mockClear();
@@ -153,5 +157,6 @@ describe("startGatewayPostAttachRuntime", () => {
 
     expect(unavailableGatewayMethods.has("chat.history")).toBe(false);
     expect(hoisted.startPluginServices).toHaveBeenCalledTimes(1);
+    expect(hoisted.setInternalHooksEnabled).toHaveBeenCalledWith(false);
   });
 });

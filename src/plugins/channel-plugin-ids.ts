@@ -122,12 +122,6 @@ export function resolveGatewayStartupPluginIds(params: {
       if (plugin.channels.some((channelId) => configuredChannelIds.has(channelId))) {
         return true;
       }
-      if (startupDreamingPluginIds.has(plugin.id)) {
-        return true;
-      }
-      if (!isGatewayStartupSidecar(plugin)) {
-        return false;
-      }
       const activationState = resolveEffectivePluginActivationState({
         id: plugin.id,
         origin: plugin.origin,
@@ -136,13 +130,22 @@ export function resolveGatewayStartupPluginIds(params: {
         enabledByDefault: plugin.enabledByDefault,
         activationSource,
       });
-      if (!activationState.enabled) {
+      const isAllowedStartupActivation = (): boolean => {
+        if (!activationState.enabled) {
+          return false;
+        }
+        if (plugin.origin !== "bundled") {
+          return activationState.explicitlyEnabled;
+        }
+        return activationState.source === "explicit" || activationState.source === "default";
+      };
+      if (startupDreamingPluginIds.has(plugin.id)) {
+        return isAllowedStartupActivation();
+      }
+      if (!isGatewayStartupSidecar(plugin)) {
         return false;
       }
-      if (plugin.origin !== "bundled") {
-        return activationState.explicitlyEnabled;
-      }
-      return activationState.source === "explicit" || activationState.source === "default";
+      return isAllowedStartupActivation();
     })
     .map((plugin) => plugin.id);
 }

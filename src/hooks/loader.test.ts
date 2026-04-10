@@ -13,6 +13,7 @@ import {
   triggerInternalHook,
   createInternalHookEvent,
   registerInternalHook,
+  setInternalHooksEnabled,
 } from "./internal-hooks.js";
 import { loadInternalHooks } from "./loader.js";
 
@@ -28,6 +29,7 @@ describe("loader", () => {
 
   beforeEach(async () => {
     clearInternalHooks();
+    setInternalHooksEnabled(true);
     // Create a temp directory for test modules
     tmpDir = path.join(fixtureRoot, `case-${caseId++}`);
     await fs.mkdir(tmpDir, { recursive: true });
@@ -117,6 +119,7 @@ describe("loader", () => {
 
   afterEach(async () => {
     clearInternalHooks();
+    setInternalHooksEnabled(true);
     loggingState.rawConsole = null;
     setLoggerOverride(null);
     envSnapshot.restore();
