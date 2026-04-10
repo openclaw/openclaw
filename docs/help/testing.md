@@ -399,6 +399,8 @@ Docker notes:
   - send a first gateway agent turn to `codex/gpt-5.4`
   - send a second turn to the same OpenClaw session and verify the app-server
     thread can resume
+  - run `/codex status` and `/codex models` through the same gateway command
+    path
 - Test: `src/gateway/gateway-codex-harness.live.test.ts`
 - Enable: `OPENCLAW_LIVE_CODEX_HARNESS=1`
 - Default model: `codex/gpt-5.4`
