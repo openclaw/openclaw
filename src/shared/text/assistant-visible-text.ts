@@ -25,6 +25,8 @@ const TOOL_CALL_TAG_NAMES = new Set([
 ]);
 const TOOL_CALL_JSON_PAYLOAD_START_RE =
   /^(?:\s+[A-Za-z_:][-A-Za-z0-9_:.]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))*\s*(?:\r?\n\s*)?[[{]/;
+const TOOL_CALL_XML_PAYLOAD_START_RE =
+  /^\s*(?:\r?\n\s*)?<(?:function|invoke|parameters?|arguments?)\b/i;
 
 function endsInsideQuotedString(text: string, start: number, end: number): boolean {
   let quoteChar: "'" | '"' | null = null;
@@ -107,7 +109,11 @@ function findTagCloseIndex(text: string, start: number): number {
 }
 
 function looksLikeToolCallPayloadStart(text: string, start: number): boolean {
-  return TOOL_CALL_JSON_PAYLOAD_START_RE.test(text.slice(start));
+  const rest = text.slice(start);
+  return (
+    TOOL_CALL_JSON_PAYLOAD_START_RE.test(rest) ||
+    TOOL_CALL_XML_PAYLOAD_START_RE.test(rest)
+  );
 }
 
 function parseToolCallTagAt(text: string, start: number): ParsedToolCallTag | null {
@@ -212,9 +218,14 @@ export function stripToolCallXmlTags(text: string): string {
         idx = Math.max(idx, tag.end - 1);
         continue;
       }
+      const payloadStart = tag.isTruncated ? tag.contentStart : tag.end;
+      const hasToolCallPayloadStart =
+        tag.tagName === "tool_call"
+          ? looksLikeToolCallPayloadStart(text, payloadStart)
+          : TOOL_CALL_JSON_PAYLOAD_START_RE.test(text.slice(payloadStart));
       if (
         !tag.isClose &&
-        looksLikeToolCallPayloadStart(text, tag.isTruncated ? tag.contentStart : tag.end)
+        hasToolCallPayloadStart
       ) {
         inToolCallBlock = true;
         toolCallContentStart = tag.end;
