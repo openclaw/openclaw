@@ -70,6 +70,7 @@ Docs: https://docs.openclaw.ai
 - Cron/tool schemas: keep cron tool schemas strict-model-friendly while still preserving `failureAlert=false`, nullable `agentId`/`sessionKey`, and flattened add/update recovery for the newly exposed cron job fields. (#55043) Thanks @brunolorente.
 - Git metadata: read commit ids from packed refs as well as loose refs so version and status metadata stay accurate after repository maintenance. (#63943)
 - Gateway: keep `commands.list` skill entries categorized under tools and include provider-aware plugin `nativeName` metadata even when `scope=text`, so remote clients can group skills correctly and map text-surface plugin commands back to native aliases.
+- TUI: reset footer activity to idle when switching sessions so a stale streaming indicator cannot persist after the selection changes. (#63988) Thanks @neeravmakwana.
 
 ## 2026.4.9
 
