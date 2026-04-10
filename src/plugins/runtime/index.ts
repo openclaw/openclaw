@@ -111,19 +111,6 @@ function createRuntimeLlmFacade(): PluginRuntime["llm"] {
   };
 }
 
-function createRuntimeSandboxFacade(): PluginRuntime["sandbox"] {
-  const loadSandbox = createLazyRuntimeSurface(
-    () => import("./runtime-sandbox.runtime.js"),
-    (m) => m.createRuntimeSandbox(),
-  );
-  return {
-    exec: async (params) => {
-      const sandbox = await loadSandbox();
-      return sandbox.exec(params);
-    },
-  };
-}
-
 function createRuntimeModelAuth(): PluginRuntime["modelAuth"] {
   const getApiKeyForModel = createLazyRuntimeMethod(
     loadModelAuthRuntime,
@@ -273,7 +260,6 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     | "videoGeneration"
     | "musicGeneration"
     | "llm"
-    | "sandbox"
   > &
     Partial<
       Pick<
@@ -286,7 +272,6 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
         | "videoGeneration"
         | "musicGeneration"
         | "llm"
-        | "sandbox"
       >
     >;
 
@@ -300,7 +285,6 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
   defineCachedValue(runtime, "videoGeneration", createRuntimeVideoGeneration);
   defineCachedValue(runtime, "musicGeneration", createRuntimeMusicGeneration);
   defineCachedValue(runtime, "llm", createRuntimeLlmFacade);
-  defineCachedValue(runtime, "sandbox", createRuntimeSandboxFacade);
 
   return runtime as unknown as PluginRuntime;
 }

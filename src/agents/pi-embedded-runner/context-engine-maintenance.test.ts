@@ -64,7 +64,7 @@ async function waitForAssertion(
 }
 
 vi.mock("./context-engine-capabilities.js", () => ({
-  resolveContextEngineCapabilities: async () => ({ llm: undefined, sandbox: undefined }),
+  resolveContextEngineCapabilities: async () => ({ llm: undefined }),
 }));
 
 vi.mock("./transcript-rewrite.js", () => ({
