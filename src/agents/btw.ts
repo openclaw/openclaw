@@ -15,6 +15,7 @@ import {
   type SessionEntry,
 } from "../config/sessions.js";
 import { diagnosticLogger as diag } from "../logging/diagnostic.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
@@ -83,27 +84,71 @@ function buildBtwQuestionPrompt(question: string, inFlightPrompt?: string): stri
   return lines.join("\n");
 }
 
-const BTW_TOOL_BLOCK_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
+const BTW_ALLOWED_USER_BLOCK_TYPES = new Set(["text", "image"]);
+const BTW_ALLOWED_ASSISTANT_BLOCK_TYPES = new Set(["text", "thinking"]);
 
-function sanitizeBtwAssistantMessage(
-  message: Extract<Message, { role: "assistant" }>,
-): Extract<Message, { role: "assistant" }> | undefined {
-  const originalContent = Array.isArray(message.content) ? message.content : [];
-  const content = originalContent.filter((block) => {
+function normalizeBtwContentBlocks(content: unknown): unknown[] | undefined {
+  if (Array.isArray(content)) {
+    return content;
+  }
+  if (content && typeof content === "object") {
+    return [content];
+  }
+  return undefined;
+}
+
+function sanitizeBtwContentBlocks(
+  content: unknown,
+  allowedTypes: Set<string>,
+): unknown[] | undefined {
+  const blocks = normalizeBtwContentBlocks(content);
+  if (!blocks) {
+    return undefined;
+  }
+  const sanitizedBlocks = blocks.filter((block) => {
     if (!block || typeof block !== "object") {
-      return true;
+      return false;
     }
-    return !BTW_TOOL_BLOCK_TYPES.has((block as { type?: unknown }).type as string);
+    return allowedTypes.has(normalizeLowercaseStringOrEmpty((block as { type?: unknown }).type));
   });
-  if (content.length === originalContent.length) {
+  return sanitizedBlocks.length > 0 ? sanitizedBlocks : undefined;
+}
+
+function sanitizeBtwUserMessage(
+  message: Extract<Message, { role: "user" }>,
+): Extract<Message, { role: "user" }> | undefined {
+  if (typeof message.content === "string") {
     return message;
   }
-  if (content.length === 0) {
+  const content = sanitizeBtwContentBlocks(message.content, BTW_ALLOWED_USER_BLOCK_TYPES);
+  if (!content) {
     return undefined;
   }
   return {
     ...message,
-    content,
+    content: content as Extract<Message, { role: "user" }>["content"],
+  };
+}
+
+function sanitizeBtwAssistantMessage(
+  message: Extract<Message, { role: "assistant" }>,
+): Extract<Message, { role: "assistant" }> | undefined {
+  const rawContent = (message as { content?: unknown }).content;
+  if (typeof rawContent === "string") {
+    return rawContent.trim().length > 0
+      ? {
+          ...message,
+          content: [{ type: "text", text: rawContent }],
+        }
+      : undefined;
+  }
+  const content = sanitizeBtwContentBlocks(rawContent, BTW_ALLOWED_ASSISTANT_BLOCK_TYPES);
+  if (!content) {
+    return undefined;
+  }
+  return {
+    ...message,
+    content: content as Extract<Message, { role: "assistant" }>["content"],
   };
 }
 
@@ -114,13 +159,16 @@ function toSimpleContextMessages(messages: unknown[]): Message[] {
     }
     const role = (message as { role?: unknown }).role;
     if (role === "user") {
-      return [message as Extract<Message, { role: "user" }>];
+      const sanitizedMessage = sanitizeBtwUserMessage(
+        message as Extract<Message, { role: "user" }>,
+      );
+      return sanitizedMessage ? [sanitizedMessage] : [];
     }
     if (role !== "assistant") {
       return [];
     }
-    // BTW is a no-tools path, so strip replay-only tool calls from assistant
-    // context before handing history to strict providers like Bedrock.
+    // BTW is a no-tools path, so keep only user/assistant blocks that remain
+    // readable without replaying tool calls or tool results.
     const sanitizedMessage = sanitizeBtwAssistantMessage(
       message as Extract<Message, { role: "assistant" }>,
     );
