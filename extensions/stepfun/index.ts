@@ -73,6 +73,7 @@ function resolvePairedProviderId(providerId: string): string {
 function inferOrderedRegionForProvider(
   ctx: ProviderCatalogContext,
   providerId: string,
+  currentProfileId?: string,
 ): StepFunRegion | undefined {
   const configuredOrder = ctx.config.auth?.order;
   if (!configuredOrder || typeof configuredOrder !== "object") {
@@ -85,10 +86,34 @@ function inferOrderedRegionForProvider(
   if (!Array.isArray(matchingOrder)) {
     return undefined;
   }
+  const configuredProfiles = ctx.config.auth?.profiles;
+  const normalizedProviderId = providerId.trim().toLowerCase();
 
   // applyAuthProfileConfig writes the latest selected profile first.
   for (const profileId of matchingOrder) {
-    const region = inferRegionFromProfileId(typeof profileId === "string" ? profileId : "");
+    if (typeof profileId !== "string") {
+      continue;
+    }
+    const normalizedProfileId = profileId.trim();
+    if (!normalizedProfileId) {
+      continue;
+    }
+
+    const configuredProfile = configuredProfiles?.[normalizedProfileId];
+    const profileMatchesConfiguredProvider =
+      configuredProfile &&
+      typeof configuredProfile === "object" &&
+      typeof configuredProfile.provider === "string" &&
+      configuredProfile.provider.trim().toLowerCase() === normalizedProviderId;
+    const profileMatchesCurrent =
+      Boolean(currentProfileId) && normalizedProfileId === currentProfileId?.trim();
+
+    // Ignore stale auth.order entries that cannot be tied to this provider.
+    if (!profileMatchesConfiguredProvider && !profileMatchesCurrent) {
+      continue;
+    }
+
+    const region = inferRegionFromProfileId(normalizedProfileId);
     if (region) {
       return region;
     }
@@ -102,7 +127,7 @@ function inferLatestConfiguredRegion(
   profileId: string | undefined,
 ): StepFunRegion | undefined {
   return (
-    inferOrderedRegionForProvider(ctx, providerId) ??
+    inferOrderedRegionForProvider(ctx, providerId, profileId) ??
     inferRegionFromProfileId(profileId) ??
     inferOrderedRegionForProvider(ctx, resolvePairedProviderId(providerId))
   );

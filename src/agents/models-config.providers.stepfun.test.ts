@@ -224,4 +224,24 @@ describe("StepFun provider catalog", () => {
     expect(providers?.stepfun?.baseUrl).toBe("https://api.stepfun.com/v1");
     expect(providers?.["stepfun-plan"]?.baseUrl).toBe("https://api.stepfun.ai/step_plan/v1");
   });
+
+  it("ignores stale auth.order entries when discovery relies on env fallback", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+
+    const providers = await resolveImplicitProvidersForTest({
+      agentDir,
+      env: { ...process.env, STEPFUN_API_KEY: "test-stepfun-key" },
+      config: {
+        auth: {
+          order: {
+            stepfun: ["stepfun:cn"],
+            "stepfun-plan": ["stepfun-plan:cn"],
+          },
+        },
+      },
+    });
+
+    expect(providers?.stepfun?.baseUrl).toBe("https://api.stepfun.ai/v1");
+    expect(providers?.["stepfun-plan"]?.baseUrl).toBe("https://api.stepfun.ai/step_plan/v1");
+  });
 });
