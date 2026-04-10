@@ -62,6 +62,15 @@ describe("shared/chat-content", () => {
     ).toBeNull();
   });
 
+  it("extracts serverToolDisplay text alongside normal text", () => {
+    expect(
+      extractTextFromChatContent([
+        { type: "text", text: "[Advisor] The answer is 42.", serverToolDisplay: true },
+        { type: "text", text: "Final response." },
+      ]),
+    ).toBe("[Advisor] The answer is 42. Final response.");
+  });
+
   it("tolerates sanitize and normalize hooks that return non-string values", () => {
     expect(
       extractTextFromChatContent("hello", {
