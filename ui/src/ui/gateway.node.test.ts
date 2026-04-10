@@ -93,9 +93,11 @@ type ConnectFrame = {
 };
 
 function stubWindowGlobals(storage?: ReturnType<typeof createStorageMock>) {
+  const sessionStorage = createStorageMock();
   vi.stubGlobal("window", {
     location: { href: "http://127.0.0.1:18789/" },
     localStorage: storage,
+    sessionStorage,
     setTimeout: (handler: (...args: unknown[]) => void, timeout?: number, ...args: unknown[]) =>
       globalThis.setTimeout(() => handler(...args), timeout),
     clearTimeout: (timeoutId: number | undefined) => globalThis.clearTimeout(timeoutId),
@@ -182,6 +184,7 @@ async function startRetriedDeviceTokenConnect(params: {
 describe("GatewayBrowserClient", () => {
   beforeEach(() => {
     const storage = createStorageMock();
+    const sessionStorage = createStorageMock();
     wsInstances.length = 0;
     loadOrCreateDeviceIdentityMock.mockReset();
     signDevicePayloadMock.mockClear();
@@ -192,8 +195,10 @@ describe("GatewayBrowserClient", () => {
     });
 
     vi.stubGlobal("localStorage", storage);
+    vi.stubGlobal("sessionStorage", sessionStorage);
     stubWindowGlobals(storage);
     localStorage.clear();
+    sessionStorage.clear();
     vi.stubGlobal("WebSocket", MockWebSocket);
 
     storeDeviceAuthToken({
@@ -294,7 +299,7 @@ describe("GatewayBrowserClient", () => {
   });
 
   it("ignores cached operator device tokens that do not include read access", async () => {
-    localStorage.clear();
+    sessionStorage.clear();
     storeDeviceAuthToken({
       deviceId: "device-1",
       role: "operator",

@@ -1,5 +1,5 @@
 import { getPublicKeyAsync, signAsync, utils } from "@noble/ed25519";
-import { getSafeLocalStorage } from "../local-storage.ts";
+import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
 
 type StoredIdentity = {
   version: 1;
@@ -16,6 +16,14 @@ export type DeviceIdentity = {
 };
 
 const STORAGE_KEY = "openclaw-device-identity-v1";
+
+function scrubLegacyLocalIdentity() {
+  try {
+    getSafeLocalStorage()?.removeItem(STORAGE_KEY);
+  } catch {
+    // best-effort legacy scrub
+  }
+}
 
 function base64UrlEncode(bytes: Uint8Array): string {
   let binary = "";
@@ -59,7 +67,8 @@ async function generateIdentity(): Promise<DeviceIdentity> {
 }
 
 export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
-  const storage = getSafeLocalStorage();
+  const storage = getSafeSessionStorage();
+  const legacyStorage = getSafeLocalStorage();
   try {
     const raw = storage?.getItem(STORAGE_KEY);
     if (raw) {
@@ -77,6 +86,7 @@ export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
             deviceId: derivedId,
           };
           storage?.setItem(STORAGE_KEY, JSON.stringify(updated));
+          scrubLegacyLocalIdentity();
           return {
             deviceId: derivedId,
             publicKey: parsed.publicKey,
@@ -85,6 +95,34 @@ export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
         }
         return {
           deviceId: parsed.deviceId,
+          publicKey: parsed.publicKey,
+          privateKey: parsed.privateKey,
+        };
+      }
+    }
+  } catch {
+    // fall through to regenerate
+  }
+
+  try {
+    const raw = legacyStorage?.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as StoredIdentity;
+      if (
+        parsed?.version === 1 &&
+        typeof parsed.deviceId === "string" &&
+        typeof parsed.publicKey === "string" &&
+        typeof parsed.privateKey === "string"
+      ) {
+        const derivedId = await fingerprintPublicKey(base64UrlDecode(parsed.publicKey));
+        const migrated: StoredIdentity = {
+          ...parsed,
+          deviceId: derivedId,
+        };
+        storage?.setItem(STORAGE_KEY, JSON.stringify(migrated));
+        scrubLegacyLocalIdentity();
+        return {
+          deviceId: derivedId,
           publicKey: parsed.publicKey,
           privateKey: parsed.privateKey,
         };
@@ -103,6 +141,7 @@ export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
     createdAtMs: Date.now(),
   };
   storage?.setItem(STORAGE_KEY, JSON.stringify(stored));
+  scrubLegacyLocalIdentity();
   return identity;
 }
 

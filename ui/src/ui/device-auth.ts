@@ -5,13 +5,13 @@ import {
   storeDeviceAuthTokenInStore,
 } from "../../../src/shared/device-auth-store.js";
 import type { DeviceAuthStore } from "../../../src/shared/device-auth.js";
-import { getSafeLocalStorage } from "../local-storage.ts";
+import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
 
 const STORAGE_KEY = "openclaw.device.auth.v1";
 
-function readStore(): DeviceAuthStore | null {
+function readStoreFrom(storage: Storage | null): DeviceAuthStore | null {
   try {
-    const raw = getSafeLocalStorage()?.getItem(STORAGE_KEY);
+    const raw = storage?.getItem(STORAGE_KEY);
     if (!raw) {
       return null;
     }
@@ -31,9 +31,26 @@ function readStore(): DeviceAuthStore | null {
   }
 }
 
+function readStore(): DeviceAuthStore | null {
+  const sessionStore = readStoreFrom(getSafeSessionStorage());
+  if (sessionStore) {
+    return sessionStore;
+  }
+  const legacyStore = readStoreFrom(getSafeLocalStorage());
+  if (legacyStore) {
+    writeStore(legacyStore);
+    try {
+      getSafeLocalStorage()?.removeItem(STORAGE_KEY);
+    } catch {
+      // best-effort legacy scrub
+    }
+  }
+  return legacyStore;
+}
+
 function writeStore(store: DeviceAuthStore) {
   try {
-    getSafeLocalStorage()?.setItem(STORAGE_KEY, JSON.stringify(store));
+    getSafeSessionStorage()?.setItem(STORAGE_KEY, JSON.stringify(store));
   } catch {
     // best-effort
   }
@@ -71,4 +88,9 @@ export function clearDeviceAuthToken(params: { deviceId: string; role: string })
     deviceId: params.deviceId,
     role: params.role,
   });
+  try {
+    getSafeLocalStorage()?.removeItem(STORAGE_KEY);
+  } catch {
+    // best-effort legacy scrub
+  }
 }
