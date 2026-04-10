@@ -29,11 +29,6 @@ export type UsageState = {
   settings?: { gatewayUrl?: string };
 };
 
-type UsageDateInterpretationParams = {
-  mode: "utc" | "specific";
-  utcOffset?: string;
-};
-
 const LEGACY_USAGE_DATE_PARAMS_STORAGE_KEY = "openclaw.control.usage.date-params.v1";
 const LEGACY_USAGE_DATE_PARAMS_DEFAULT_GATEWAY_KEY = "__default__";
 const LEGACY_USAGE_DATE_PARAMS_MODE_RE = /unexpected property ['"]mode['"]/i;
@@ -137,9 +132,7 @@ const formatUtcOffset = (timezoneOffsetMinutes: number): string => {
     : `UTC${sign}${hours}:${minutes.toString().padStart(2, "0")}`;
 };
 
-const buildDateInterpretationParams = (
-  timeZone: "local" | "utc",
-): UsageDateInterpretationParams => {
+const buildDateInterpretationParams = (timeZone: "local" | "utc") => {
   if (timeZone === "utc") {
     return { mode: "utc" };
   }
@@ -253,38 +246,41 @@ export const __test = {
   },
 };
 
-export async function loadSessionTimeSeries(state: UsageState, sessionKey: string) {
-  if (!state.client || !state.connected || state.usageTimeSeriesLoading) {
+async function runOptionalUsageDetailRequest(
+  state: UsageState,
+  loadingKey: "usageTimeSeriesLoading" | "usageSessionLogsLoading",
+  run: (client: GatewayBrowserClient) => Promise<void>,
+) {
+  const client = state.client;
+  if (!client || !state.connected || state[loadingKey]) {
     return;
   }
-  state.usageTimeSeriesLoading = true;
-  state.usageTimeSeries = null;
+  state[loadingKey] = true;
   try {
-    const res = await state.client.request("sessions.usage.timeseries", { key: sessionKey });
-    state.usageTimeSeries = res ? (res as SessionUsageTimeSeries) : null;
+    await run(client);
   } catch {
-    // Silently fail - time series is optional.
+    // Silently fail - optional detail endpoints
   } finally {
-    state.usageTimeSeriesLoading = false;
+    state[loadingKey] = false;
   }
 }
 
+export async function loadSessionTimeSeries(state: UsageState, sessionKey: string) {
+  await runOptionalUsageDetailRequest(state, "usageTimeSeriesLoading", async (client) => {
+    state.usageTimeSeries = null;
+    const res = await client.request("sessions.usage.timeseries", { key: sessionKey });
+    state.usageTimeSeries = res ? (res as SessionUsageTimeSeries) : null;
+  });
+}
+
 export async function loadSessionLogs(state: UsageState, sessionKey: string) {
-  if (!state.client || !state.connected || state.usageSessionLogsLoading) {
-    return;
-  }
-  state.usageSessionLogsLoading = true;
-  state.usageSessionLogs = null;
-  try {
-    const payload = (await state.client.request("sessions.usage.logs", {
+  await runOptionalUsageDetailRequest(state, "usageSessionLogsLoading", async (client) => {
+    state.usageSessionLogs = null;
+    const payload = (await client.request("sessions.usage.logs", {
       key: sessionKey,
       limit: 1000,
     })) as { logs?: unknown } | null;
     const logs = payload?.logs;
     state.usageSessionLogs = Array.isArray(logs) ? (logs as SessionLogEntry[]) : null;
-  } catch {
-    // Silently fail - logs are optional.
-  } finally {
-    state.usageSessionLogsLoading = false;
-  }
+  });
 }

@@ -63,21 +63,11 @@ export type SkillMessage = {
 
 export type SkillMessageMap = Record<string, SkillMessage>;
 
-type LoadSkillsOptions = {
-  clearMessages?: boolean;
-};
-
-function setSkillMessage(state: SkillsState, key: string, message?: SkillMessage) {
+function setSkillMessage(state: SkillsState, key: string, message: SkillMessage) {
   if (!key.trim()) {
     return;
   }
-  const next = { ...state.skillMessages };
-  if (message) {
-    next[key] = message;
-  } else {
-    delete next[key];
-  }
-  state.skillMessages = next;
+  state.skillMessages = { ...state.skillMessages, [key]: message };
 }
 
 function getErrorMessage(err: unknown) {
@@ -120,14 +110,11 @@ export function setClawHubSearchQuery(state: SkillsState, query: string) {
   state.clawhubSearchLoading = false;
 }
 
-export async function loadSkills(state: SkillsState, options?: LoadSkillsOptions) {
+export async function loadSkills(state: SkillsState, options?: { clearMessages?: boolean }) {
   if (options?.clearMessages && Object.keys(state.skillMessages).length > 0) {
     state.skillMessages = {};
   }
-  if (!state.client || !state.connected) {
-    return;
-  }
-  if (state.skillsLoading) {
+  if (!state.client || !state.connected || state.skillsLoading) {
     return;
   }
   state.skillsLoading = true;
