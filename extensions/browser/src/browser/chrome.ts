@@ -173,7 +173,7 @@ async function fetchChromeVersion(
   try {
     await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
     const versionUrl = appendCdpPath(cdpUrl, "/json/version");
-    const res = await fetchCdpChecked(versionUrl, timeoutMs, { signal: ctrl.signal });
+    const res = await fetchCdpChecked(versionUrl, timeoutMs, { signal: ctrl.signal }, ssrfPolicy);
     const data = (await res.json()) as ChromeVersion;
     if (!data || typeof data !== "object") {
       return null;

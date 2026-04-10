@@ -116,6 +116,18 @@ describe("browser navigation guard", () => {
     expect(lookupFn).toHaveBeenCalledWith("example.com", { all: true });
   });
 
+  it("blocks hostname navigation when strict SSRF policy is explicitly configured", async () => {
+    const lookupFn = createLookupFn("93.184.216.34");
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "https://example.com",
+        lookupFn,
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+      }),
+    ).rejects.toThrow(/dns rebinding protections are unavailable/i);
+    expect(lookupFn).not.toHaveBeenCalled();
+  });
+
   it("blocks strict policy navigation when env proxy is configured", async () => {
     vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
     const lookupFn = createLookupFn("93.184.216.34");

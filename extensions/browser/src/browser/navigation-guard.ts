@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
 import {
@@ -41,6 +42,35 @@ export function requiresInspectableBrowserNavigationRedirects(ssrfPolicy?: SsrFP
   return !isPrivateNetworkAllowedByPolicy(ssrfPolicy);
 }
 
+function isIpLiteralHostname(hostname: string): boolean {
+  return isIP(hostname) !== 0;
+}
+
+function normalizePolicyHostname(value: string): string {
+  return value.trim().toLowerCase().replace(/\.+$/, "");
+}
+
+function isExplicitlyAllowedBrowserHostname(hostname: string, ssrfPolicy?: SsrFPolicy): boolean {
+  const normalizedHostname = normalizePolicyHostname(hostname);
+  const exactMatches = ssrfPolicy?.allowedHostnames ?? [];
+  if (exactMatches.some((value) => normalizePolicyHostname(value) === normalizedHostname)) {
+    return true;
+  }
+  const hostnameAllowlist = ssrfPolicy?.hostnameAllowlist ?? [];
+  return hostnameAllowlist.some((pattern) => {
+    const normalizedPattern = normalizePolicyHostname(pattern);
+    if (normalizedPattern.startsWith("*.")) {
+      const suffix = normalizedPattern.slice(2);
+      return (
+        Boolean(suffix) &&
+        normalizedHostname !== suffix &&
+        normalizedHostname.endsWith(`.${suffix}`)
+      );
+    }
+    return normalizedPattern === normalizedHostname;
+  });
+}
+
 export async function assertBrowserNavigationAllowed(
   opts: {
     url: string;
@@ -75,6 +105,21 @@ export async function assertBrowserNavigationAllowed(
   if (hasProxyEnvConfigured() && !isPrivateNetworkAllowedByPolicy(opts.ssrfPolicy)) {
     throw new InvalidBrowserNavigationUrlError(
       "Navigation blocked: strict browser SSRF policy cannot be enforced while env proxy variables are set",
+    );
+  }
+
+  // Browser navigations happen in Chromium's network stack, not Node's. In
+  // strict mode, a hostname-based URL would be resolved twice by different
+  // resolvers, so Node-side pinning cannot guarantee the browser connects to
+  // the same address that passed policy checks.
+  if (
+    opts.ssrfPolicy &&
+    !isPrivateNetworkAllowedByPolicy(opts.ssrfPolicy) &&
+    !isIpLiteralHostname(parsed.hostname) &&
+    !isExplicitlyAllowedBrowserHostname(parsed.hostname, opts.ssrfPolicy)
+  ) {
+    throw new InvalidBrowserNavigationUrlError(
+      "Navigation blocked: strict browser SSRF policy requires an IP-literal URL because browser DNS rebinding protections are unavailable for hostname-based navigation",
     );
   }
 

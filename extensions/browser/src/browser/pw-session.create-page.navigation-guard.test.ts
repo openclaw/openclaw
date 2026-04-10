@@ -202,6 +202,20 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     expect(pageGoto).not.toHaveBeenCalled();
   });
 
+  it("blocks hostname navigation when strict SSRF policy is configured", async () => {
+    const { pageGoto } = installBrowserMocks();
+
+    await expect(
+      createPageViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        url: "https://example.com",
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+      }),
+    ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
+
+    expect(pageGoto).not.toHaveBeenCalled();
+  });
+
   it("blocks private intermediate redirect hops", async () => {
     const { pageGoto, pageClose, getRouteHandler, mainFrame } = installBrowserMocks();
     mockBlockedRedirectNavigation({ pageGoto, getRouteHandler, mainFrame });

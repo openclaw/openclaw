@@ -233,8 +233,9 @@ export async function fetchJson<T>(
   url: string,
   timeoutMs = CDP_HTTP_REQUEST_TIMEOUT_MS,
   init?: RequestInit,
+  ssrfPolicy?: SsrFPolicy,
 ): Promise<T> {
-  const res = await fetchCdpChecked(url, timeoutMs, init);
+  const res = await fetchCdpChecked(url, timeoutMs, init, ssrfPolicy);
   return (await res.json()) as T;
 }
 
@@ -242,30 +243,34 @@ export async function fetchCdpChecked(
   url: string,
   timeoutMs = CDP_HTTP_REQUEST_TIMEOUT_MS,
   init?: RequestInit,
+  ssrfPolicy?: SsrFPolicy,
 ): Promise<Response> {
   const ctrl = new AbortController();
   const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
   let release: (() => Promise<void>) | undefined;
   try {
     const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
-    // Block redirects on all CDP HTTP paths (not just probes) because a
-    // redirect to an internal host is an SSRF vector regardless of whether
-    // the call is /json/version, /json/list, /json/activate, or /json/close.
-    const guarded = await withNoProxyForCdpUrl(url, () =>
-      fetchWithSsrFGuard({
-        url,
-        init: { ...init, headers },
-        maxRedirects: 0,
-        policy: { allowPrivateNetwork: true },
-        signal: ctrl.signal,
-        auditContext: "browser-cdp",
-      }),
-    );
-    release = guarded.release;
-    const res = guarded.response;
-    if (res.status >= 300 && res.status < 400) {
-      throw new Error("CDP endpoint redirects are not allowed");
-    }
+    const res = await withNoProxyForCdpUrl(url, async () => {
+      if (ssrfPolicy) {
+        const guarded = await fetchWithSsrFGuard({
+          url,
+          init: { ...init, headers },
+          maxRedirects: 0,
+          signal: ctrl.signal,
+          policy: ssrfPolicy,
+          auditContext: "browser-cdp",
+        });
+        release = guarded.release;
+        return guarded.response;
+      }
+      // Block redirects on all CDP HTTP paths because a redirect to an
+      // internal host is an SSRF vector regardless of which /json/* call.
+      const raw = await fetch(url, { ...init, headers, redirect: "manual", signal: ctrl.signal });
+      if (raw.status >= 300 && raw.status < 400) {
+        throw new Error("CDP endpoint redirects are not allowed");
+      }
+      return raw;
+    });
     if (!res.ok) {
       if (res.status === 429) {
         // Do not reflect upstream response text into the error surface (log/agent injection risk)
@@ -297,8 +302,9 @@ export async function fetchOk(
   url: string,
   timeoutMs = CDP_HTTP_REQUEST_TIMEOUT_MS,
   init?: RequestInit,
+  ssrfPolicy?: SsrFPolicy,
 ): Promise<void> {
-  await fetchCdpChecked(url, timeoutMs, init);
+  await fetchCdpChecked(url, timeoutMs, init, ssrfPolicy);
 }
 
 export function openCdpWebSocket(

@@ -191,6 +191,8 @@ export async function createTargetViaCdp(opts: {
     const version = await fetchJson<{ webSocketDebuggerUrl?: string }>(
       appendCdpPath(opts.cdpUrl, "/json/version"),
       1500,
+      undefined,
+      opts.ssrfPolicy,
     );
     const wsUrlRaw = String(version?.webSocketDebuggerUrl ?? "").trim();
     wsUrl = wsUrlRaw ? normalizeCdpWsUrl(wsUrlRaw, opts.cdpUrl) : "";
