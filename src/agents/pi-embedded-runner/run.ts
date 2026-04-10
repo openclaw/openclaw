@@ -43,7 +43,7 @@ import {
   resolveAuthProfileOrder,
   shouldPreferExplicitConfigApiKeyAuth,
 } from "../model-auth.js";
-import { normalizeProviderId } from "../model-selection.js";
+import { normalizeProviderId, resolveDefaultModelForAgent } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { disposeSessionMcpRuntime } from "../pi-bundle-mcp-tools.js";
 import {
@@ -234,6 +234,14 @@ export async function runEmbeddedPiAgent(
         agentId: params.agentId,
         sessionKey: normalizedSessionKey,
       });
+      // Resolve agent-specific defaults for live-switch/recovery paths
+      // Note: params.config is guaranteed to be defined here (early return at line 127)
+      const agentDefaultRef = params.config
+        ? resolveDefaultModelForAgent({
+            cfg: params.config,
+            agentId: params.agentId,
+          })
+        : { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL };
       await ensureOpenClawModelsJson(params.config, agentDir);
       const resolvedSessionKey = normalizedSessionKey;
       const hookRunner = getGlobalHookRunner();
@@ -751,8 +759,8 @@ export async function runEmbeddedPiAgent(
             cfg: params.config,
             sessionKey: resolvedSessionKey,
             agentId: params.agentId,
-            defaultProvider: DEFAULT_PROVIDER,
-            defaultModel: DEFAULT_MODEL,
+            defaultProvider: agentDefaultRef.provider,
+            defaultModel: agentDefaultRef.model,
             currentProvider: provider,
             currentModel: modelId,
             currentAuthProfileId: preferredProfileId,
