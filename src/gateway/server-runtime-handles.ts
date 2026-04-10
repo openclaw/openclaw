@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
-import { startChannelHealthMonitor } from "./channel-health-monitor.js";
+import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 
 export type GatewayConfigReloaderHandle = {
   stop: () => Promise<void>;
@@ -18,7 +18,7 @@ export type GatewayServerMutableState = {
   skillsRefreshTimer: ReturnType<typeof setTimeout> | null;
   skillsRefreshDelayMs: number;
   skillsChangeUnsub: () => void;
-  channelHealthMonitor: ReturnType<typeof startChannelHealthMonitor> | null;
+  channelHealthMonitor: ChannelHealthMonitor | null;
   stopModelPricingRefresh: () => void;
   mcpServer: { port: number; close: () => Promise<void> } | undefined;
   configReloader: GatewayConfigReloaderHandle;
@@ -49,7 +49,7 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     skillsRefreshTimer: null as ReturnType<typeof setTimeout> | null,
     skillsRefreshDelayMs: 30_000,
     skillsChangeUnsub: () => {},
-    channelHealthMonitor: null as ReturnType<typeof startChannelHealthMonitor> | null,
+    channelHealthMonitor: null as ChannelHealthMonitor | null,
     stopModelPricingRefresh: () => {},
     mcpServer: undefined as { port: number; close: () => Promise<void> } | undefined,
     configReloader: { stop: async () => {} } satisfies GatewayConfigReloaderHandle,

@@ -14,15 +14,10 @@ import { createSecretsHandlers } from "./server-methods/secrets.js";
 import {
   disconnectStaleSharedGatewayAuthClients,
   setCurrentSharedGatewaySessionGeneration,
+  type SharedGatewayAuthClient,
   type SharedGatewaySessionGenerationState,
 } from "./server-shared-auth-generation.js";
 import type { ActivateRuntimeSecrets } from "./server-startup-config.js";
-
-type SharedGatewayAuthClient = {
-  usesSharedGatewayAuth?: boolean;
-  sharedGatewaySessionGeneration?: string;
-  socket: { close: (code: number, reason: string) => void };
-};
 
 type GatewayAuxHandlerLogger = {
   warn?: (message: string) => void;
