@@ -29,10 +29,8 @@ export type UsageState = {
   settings?: { gatewayUrl?: string };
 };
 
-type DateInterpretationMode = "utc" | "gateway" | "specific";
-
 type UsageDateInterpretationParams = {
-  mode: DateInterpretationMode;
+  mode: "utc" | "specific";
   utcOffset?: string;
 };
 
@@ -105,17 +103,15 @@ function normalizeGatewayCompatibilityKey(gatewayUrl?: string): string {
   }
 }
 
-function resolveGatewayCompatibilityKey(state: UsageState): string {
-  return normalizeGatewayCompatibilityKey(state.settings?.gatewayUrl);
-}
-
 function shouldSendLegacyDateInterpretation(state: UsageState): boolean {
-  return !getLegacyUsageDateParamsCache().has(resolveGatewayCompatibilityKey(state));
+  return !getLegacyUsageDateParamsCache().has(
+    normalizeGatewayCompatibilityKey(state.settings?.gatewayUrl),
+  );
 }
 
 function rememberLegacyDateInterpretation(state: UsageState) {
   const cache = getLegacyUsageDateParamsCache();
-  cache.add(resolveGatewayCompatibilityKey(state));
+  cache.add(normalizeGatewayCompatibilityKey(state.settings?.gatewayUrl));
   persistLegacyUsageDateParamsCache(cache);
 }
 
@@ -143,11 +139,7 @@ const formatUtcOffset = (timezoneOffsetMinutes: number): string => {
 
 const buildDateInterpretationParams = (
   timeZone: "local" | "utc",
-  includeDateInterpretation: boolean,
-): UsageDateInterpretationParams | undefined => {
-  if (!includeDateInterpretation) {
-    return undefined;
-  }
+): UsageDateInterpretationParams => {
   if (timeZone === "utc") {
     return { mode: "utc" };
   }
@@ -174,6 +166,15 @@ function toErrorMessage(err: unknown): string {
   return "request failed";
 }
 
+function applyUsageResults(state: UsageState, sessionsRes: unknown, costRes: unknown) {
+  if (sessionsRes) {
+    state.usageResult = sessionsRes as SessionsUsageResult;
+  }
+  if (costRes) {
+    state.usageCostSummary = costRes as CostUsageSummary;
+  }
+}
+
 export async function loadUsage(
   state: UsageState,
   overrides?: {
@@ -192,10 +193,9 @@ export async function loadUsage(
     const startDate = overrides?.startDate ?? state.usageStartDate;
     const endDate = overrides?.endDate ?? state.usageEndDate;
     const runUsageRequests = (includeDateInterpretation: boolean) => {
-      const dateInterpretation = buildDateInterpretationParams(
-        state.usageTimeZone,
-        includeDateInterpretation,
-      );
+      const dateInterpretation = includeDateInterpretation
+        ? buildDateInterpretationParams(state.usageTimeZone)
+        : undefined;
       return Promise.all([
         client.request("sessions.usage", {
           startDate,
@@ -212,26 +212,17 @@ export async function loadUsage(
       ]);
     };
 
-    const applyUsageResults = (sessionsRes: unknown, costRes: unknown) => {
-      if (sessionsRes) {
-        state.usageResult = sessionsRes as SessionsUsageResult;
-      }
-      if (costRes) {
-        state.usageCostSummary = costRes as CostUsageSummary;
-      }
-    };
-
     const includeDateInterpretation = shouldSendLegacyDateInterpretation(state);
     try {
       const [sessionsRes, costRes] = await runUsageRequests(includeDateInterpretation);
-      applyUsageResults(sessionsRes, costRes);
+      applyUsageResults(state, sessionsRes, costRes);
     } catch (err) {
       if (includeDateInterpretation && isLegacyDateInterpretationUnsupportedError(err)) {
         // Older gateways reject `mode`/`utcOffset` in `sessions.usage`.
         // Remember this per gateway and retry once without those fields.
         rememberLegacyDateInterpretation(state);
         const [sessionsRes, costRes] = await runUsageRequests(false);
-        applyUsageResults(sessionsRes, costRes);
+        applyUsageResults(state, sessionsRes, costRes);
       } else {
         throw err;
       }

@@ -87,6 +87,31 @@ function getErrorMessage(err: unknown) {
   return String(err);
 }
 
+async function runStaleAwareRequest<T>(
+  isCurrent: () => boolean,
+  request: () => Promise<T>,
+  onSuccess: (value: T) => void,
+  onError: (err: unknown) => void,
+  onFinally: () => void,
+) {
+  try {
+    const result = await request();
+    if (!isCurrent()) {
+      return;
+    }
+    onSuccess(result);
+  } catch (err) {
+    if (!isCurrent()) {
+      return;
+    }
+    onError(err);
+  } finally {
+    if (isCurrent()) {
+      onFinally();
+    }
+  }
+}
+
 export function setClawHubSearchQuery(state: SkillsState, query: string) {
   state.clawhubSearchQuery = query;
   state.clawhubInstallMessage = null;
@@ -202,56 +227,53 @@ export async function searchClawHub(state: SkillsState, query: string) {
     state.clawhubSearchLoading = false;
     return;
   }
+  const client = state.client;
   // Clear stale entries as soon as a new search begins so the UI cannot act on
   // results that no longer match the current query while the next request is in flight.
   state.clawhubSearchResults = null;
   state.clawhubSearchLoading = true;
   state.clawhubSearchError = null;
-  try {
-    const res = await state.client.request<{ results: ClawHubSearchResult[] }>("skills.search", {
-      query,
-      limit: 20,
-    });
-    if (query !== state.clawhubSearchQuery) {
-      return;
-    }
-    state.clawhubSearchResults = res?.results ?? [];
-  } catch (err) {
-    if (query !== state.clawhubSearchQuery) {
-      return;
-    }
-    state.clawhubSearchError = getErrorMessage(err);
-  } finally {
-    if (query === state.clawhubSearchQuery) {
+  await runStaleAwareRequest(
+    () => query === state.clawhubSearchQuery,
+    () =>
+      client.request<{ results: ClawHubSearchResult[] }>("skills.search", {
+        query,
+        limit: 20,
+      }),
+    (res) => {
+      state.clawhubSearchResults = res?.results ?? [];
+    },
+    (err) => {
+      state.clawhubSearchError = getErrorMessage(err);
+    },
+    () => {
       state.clawhubSearchLoading = false;
-    }
-  }
+    },
+  );
 }
 
 export async function loadClawHubDetail(state: SkillsState, slug: string) {
   if (!state.client || !state.connected) {
     return;
   }
+  const client = state.client;
   state.clawhubDetailSlug = slug;
   state.clawhubDetailLoading = true;
   state.clawhubDetailError = null;
   state.clawhubDetail = null;
-  try {
-    const res = await state.client.request<ClawHubSkillDetail>("skills.detail", { slug });
-    if (slug !== state.clawhubDetailSlug) {
-      return;
-    }
-    state.clawhubDetail = res ?? null;
-  } catch (err) {
-    if (slug !== state.clawhubDetailSlug) {
-      return;
-    }
-    state.clawhubDetailError = getErrorMessage(err);
-  } finally {
-    if (slug === state.clawhubDetailSlug) {
+  await runStaleAwareRequest(
+    () => slug === state.clawhubDetailSlug,
+    () => client.request<ClawHubSkillDetail>("skills.detail", { slug }),
+    (res) => {
+      state.clawhubDetail = res ?? null;
+    },
+    (err) => {
+      state.clawhubDetailError = getErrorMessage(err);
+    },
+    () => {
       state.clawhubDetailLoading = false;
-    }
-  }
+    },
+  );
 }
 
 export function closeClawHubDetail(state: SkillsState) {
