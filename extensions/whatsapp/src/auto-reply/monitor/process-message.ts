@@ -191,6 +191,12 @@ export async function processMessage(params: {
   maxMediaTextChunkLimit?: number;
   groupHistory?: GroupHistoryEntry[];
   suppressGroupHistoryClear?: boolean;
+  /** Pre-computed audio transcript from a caller-level preflight, used to avoid
+   * re-transcribing the same voice note once per broadcast agent.
+   * - string  → transcript obtained; use it directly, skip internal STT
+   * - null    → preflight was attempted but failed / returned nothing; skip internal STT
+   * - undefined (omitted) → caller did not attempt preflight; run internal STT as normal */
+  preflightAudioTranscript?: string | null;
 }) {
   const conversationId = params.msg.conversationId ?? params.msg.from;
   const self = getSelfIdentity(params.msg);
@@ -210,9 +216,50 @@ export async function processMessage(params: {
     agentId: params.route.agentId,
     sessionKey: params.route.sessionKey,
   });
+  // Preflight audio transcription: transcribe voice notes before building the
+  // inbound context so the agent receives the transcript instead of <media:audio>.
+  // Mirrors the preflight step added for Telegram in #61008.
+  // When the caller already performed transcription (e.g. on-message.ts before
+  // broadcast fan-out) the pre-computed result is reused to avoid N STT calls
+  // for N broadcast agents on the same voice note.
+  // preflightAudioTranscript semantics:
+  //   string    → transcript ready, use it
+  //   null      → caller attempted but got nothing; skip internal STT to avoid retry
+  //   undefined → caller did not attempt; run internal STT
+  let audioTranscript: string | undefined = params.preflightAudioTranscript ?? undefined;
+  const hasAudioBody =
+    params.msg.mediaType?.startsWith("audio/") === true && params.msg.body === "<media:audio>";
+  if (params.preflightAudioTranscript === undefined && hasAudioBody && params.msg.mediaPath) {
+    try {
+      const { transcribeFirstAudio } = await import("./audio-preflight.runtime.js");
+      audioTranscript = await transcribeFirstAudio({
+        ctx: {
+          MediaPaths: [params.msg.mediaPath],
+          MediaTypes: params.msg.mediaType ? [params.msg.mediaType] : undefined,
+        },
+        cfg: params.cfg,
+      });
+    } catch {
+      // Transcription failure is non-fatal: fall back to <media:audio> placeholder.
+      if (shouldLogVerbose()) {
+        logVerbose("whatsapp: audio preflight transcription failed, using placeholder");
+      }
+    }
+  }
+
+  // If we have a transcript, replace the body so the agent sees the spoken text.
+  // mediaPath and mediaType are intentionally preserved so that inboundAudio detection
+  // (used by features such as messages.tts.auto: "inbound") still sees this as an
+  // audio message. The transcript is also stored in Transcript so downstream pipelines
+  // can detect it. Preventing a second STT pass in the media-understanding pipeline
+  // requires SDK-level support (alreadyTranscribed on a shared attachment instance);
+  // that is a shared concern across all channels and is tracked separately.
+  const msgForInbound =
+    audioTranscript !== undefined ? { ...params.msg, body: audioTranscript } : params.msg;
+
   let combinedBody = buildInboundLine({
     cfg: params.cfg,
-    msg: params.msg,
+    msg: msgForInbound,
     agentId: params.route.agentId,
     previousTimestamp,
     envelope: envelopeOptions,
@@ -316,10 +363,12 @@ export async function processMessage(params: {
     senderE164: sender.e164 ?? undefined,
     normalizeE164,
   });
-  const commandAuthorized = shouldComputeCommandAuthorized(params.msg.body, params.cfg)
+  // Use msgForInbound so that if a voice note transcribes to a command (e.g. /new),
+  // command detection and auth are evaluated against the transcript, not <media:audio>.
+  const commandAuthorized = shouldComputeCommandAuthorized(msgForInbound.body, params.cfg)
     ? await resolveWhatsAppCommandAuthorized({
         cfg: params.cfg,
-        msg: params.msg,
+        msg: msgForInbound,
         policy: inboundPolicy,
       })
     : undefined;
@@ -359,7 +408,7 @@ export async function processMessage(params: {
     groupHistory: visibleGroupHistory,
     groupMemberRoster: params.groupMemberNames.get(params.groupHistoryKey),
     groupSystemPrompt: conversationSystemPrompt,
-    msg: params.msg,
+    msg: msgForInbound,
     route: params.route,
     sender: {
       id: getPrimaryIdentityId(sender) ?? undefined,

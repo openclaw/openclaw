@@ -39,6 +39,7 @@ export function createWebOnMessageHandler(params: {
     opts?: {
       groupHistory?: GroupHistoryEntry[];
       suppressGroupHistoryClear?: boolean;
+      preflightAudioTranscript?: string | null;
     },
   ) =>
     processMessage({
@@ -60,6 +61,7 @@ export function createWebOnMessageHandler(params: {
       buildCombinedEchoKey: params.echoTracker.buildCombinedKey,
       groupHistory: opts?.groupHistory,
       suppressGroupHistoryClear: opts?.suppressGroupHistoryClear,
+      preflightAudioTranscript: opts?.preflightAudioTranscript,
     });
 
   return async (msg: WebInboundMsg) => {
@@ -159,6 +161,32 @@ export function createWebOnMessageHandler(params: {
       }
     }
 
+    // Preflight audio transcription: run once here, before broadcast fan-out, so
+    // all agents share the same transcript instead of each making a separate STT call.
+    // null = preflight was attempted but produced no transcript (failed / disabled / no audio);
+    // undefined = preflight was not attempted (non-audio message).
+    let preflightAudioTranscript: string | null | undefined;
+    const hasAudioBody =
+      msg.mediaType?.startsWith("audio/") === true && msg.body === "<media:audio>";
+    if (hasAudioBody && msg.mediaPath) {
+      try {
+        const { transcribeFirstAudio } = await import("./audio-preflight.runtime.js");
+        // transcribeFirstAudio returns undefined on failure/disabled; store null so
+        // processMessage knows the attempt was already made and does not retry.
+        preflightAudioTranscript =
+          (await transcribeFirstAudio({
+            ctx: {
+              MediaPaths: [msg.mediaPath],
+              MediaTypes: msg.mediaType ? [msg.mediaType] : undefined,
+            },
+            cfg: params.cfg,
+          })) ?? null;
+      } catch {
+        // Non-fatal: store null so per-agent retries are suppressed.
+        preflightAudioTranscript = null;
+      }
+    }
+
     // Broadcast groups: when we'd reply anyway, run multiple agents.
     // Does not bypass group mention/activation gating above.
     if (
@@ -169,12 +197,13 @@ export function createWebOnMessageHandler(params: {
         route,
         groupHistoryKey,
         groupHistories: params.groupHistories,
-        processMessage: processForRoute,
+        preflightAudioTranscript,
+        processMessage: (m, r, k, opts) => processForRoute(m, r, k, opts),
       })
     ) {
       return;
     }
 
-    await processForRoute(msg, route, groupHistoryKey);
+    await processForRoute(msg, route, groupHistoryKey, { preflightAudioTranscript });
   };
 }
