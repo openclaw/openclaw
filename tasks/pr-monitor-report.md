@@ -1,6 +1,6 @@
 # PR Monitor Report
 
-**Date:** 2026-04-09 (run 16)
+**Date:** 2026-04-10 (run 17)
 **Contributor:** suboss87
 **Repo:** openclaw/openclaw
 
@@ -181,19 +181,25 @@ before merge.
 
 ---
 
-## Actions Taken This Run (run 16 — 2026-04-09)
+## Actions Taken This Run (run 17 — 2026-04-10)
 
-**GitHub API access:** Partially restored — unauthenticated REST API calls succeeded (rate-limited
-to ~60 req/hour across rotating IPs). Key PR metadata, review lists, CI check runs, and issue
-comments retrieved.
+**GitHub API access: NONE — run 17 was blocked by tooling unavailability.**
 
-**No code changes made.** No unaddressed human maintainer review feedback was found on either
-open PR. Bot reviews on #45584 were addressed in prior commits; no code action required.
+- `gh` CLI is not installed in this environment (`which gh` returns nothing).
+- GitHub MCP server tools (`mcp__github__*`) are not registered in this session
+  (ToolSearch returned no matches for all relevant queries).
+- No unauthenticated REST API fallback was attempted (per repo rules, `gh` is required
+  and GitHub URLs should not be guessed).
 
-**No rebase performed for #45584.** Upstream `openclaw/openclaw` is not accessible through the
-proxy (`502` on `git ls-remote`). Rebase must be done by the contributor manually.
+**Status data in this report is carried forward from run 16 (2026-04-09).** No new PR
+metadata, review comments, CI check runs, or conflict status was fetched. Treat all
+per-PR status information below as potentially stale by up to 24 hours.
 
-**No rebase needed for #54730.** PR is clean vs upstream per GitHub API (`mergeable: true`).
+**No code changes made.** No GitHub API queries succeeded; no review feedback was
+read; no rebases could be performed.
+
+**Action required by operator:** Ensure either `gh` CLI (authenticated) or the GitHub
+MCP server (`mcp__github__*`) is available before the next monitoring run.
 
 ---
 
