@@ -47,6 +47,8 @@ export function createSearxngWebSearchProvider(): WebSearchProviderPlugin {
     envVars: ["SEARXNG_BASE_URL"],
     placeholder: "http://localhost:8080",
     signupUrl: "https://docs.searxng.org/",
+    credentialNote:
+      "For SearXNG JSON API to work, make sure your SearXNG instance has the json format enabled in its settings.yml under search.formats",
     autoDetectOrder: 200,
     credentialPath: "plugins.entries.searxng.config.webSearch.baseUrl",
     inactiveSecretPaths: ["plugins.entries.searxng.config.webSearch.baseUrl"],

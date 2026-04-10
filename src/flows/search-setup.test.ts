@@ -13,6 +13,7 @@ const mockGrokProvider = vi.hoisted(() => ({
   credentialLabel: "xAI API key",
   placeholder: "xai-...",
   signupUrl: "https://x.ai/api",
+  credentialNote: "Test credential note for Grok",
   envVars: ["XAI_API_KEY"],
   onboardingScopes: ["text-inference"],
   credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
@@ -174,5 +175,23 @@ describe("runSearchSetupFlow", () => {
       enabled: true,
       model: "grok-4-1-fast",
     });
+  });
+
+  it("shows credentialNote before credential prompt when provider has one", async () => {
+    const select = vi.fn().mockResolvedValueOnce("grok").mockResolvedValueOnce("no");
+    const text = vi.fn().mockResolvedValue("xai-test-key");
+    const note = vi.fn(async () => {});
+    const prompter = createWizardPrompter({
+      select: select as never,
+      text: text as never,
+      note,
+    });
+
+    await runSearchSetupFlow({}, createNonExitingRuntime(), prompter);
+
+    const noteCalls = note.mock.calls as unknown as [string, string][];
+    const credentialNoteCall = noteCalls.find(([msg]) => msg === "Test credential note for Grok");
+    expect(credentialNoteCall).toBeDefined();
+    expect(credentialNoteCall?.[1]).toBe("Grok");
   });
 });

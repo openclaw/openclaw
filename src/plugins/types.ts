@@ -1676,6 +1676,8 @@ export type WebSearchProviderPlugin = {
   placeholder: string;
   signupUrl: string;
   docsUrl?: string;
+  /** Optional note shown to the user before the credential/URL prompt during interactive setup. */
+  credentialNote?: string;
   autoDetectOrder?: number;
   credentialPath: string;
   inactiveSecretPaths?: string[];
