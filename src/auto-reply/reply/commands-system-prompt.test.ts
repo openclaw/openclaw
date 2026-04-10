@@ -165,4 +165,38 @@ describe("resolveCommandsSystemPromptBundle", () => {
       }),
     );
   });
+
+  it("uses the resolved session key and forwards full-access block reasons", async () => {
+    const { resolveCommandsSystemPromptBundle } = await import("./commands-system-prompt.js");
+    const sandboxRuntime = await import("../../agents/sandbox.js");
+    const systemPromptRuntime = await import("../../agents/system-prompt.js");
+
+    vi.mocked(sandboxRuntime.resolveSandboxRuntimeStatus).mockImplementation(({ sessionKey }) => {
+      expect(sessionKey).toBe("agent:target:default");
+      return { sandboxed: true, mode: "workspace-write" } as never;
+    });
+
+    const params = makeParams();
+    params.sessionKey = "agent:target:default";
+    params.ctx.SessionKey = "agent:source:default";
+    params.elevated = {
+      enabled: true,
+      allowed: false,
+      failures: [],
+    };
+
+    await resolveCommandsSystemPromptBundle(params);
+
+    expect(vi.mocked(systemPromptRuntime.buildAgentSystemPrompt)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sandboxInfo: expect.objectContaining({
+          enabled: true,
+          elevated: expect.objectContaining({
+            fullAccessAvailable: false,
+            fullAccessBlockedReason: "host-policy",
+          }),
+        }),
+      }),
+    );
+  });
 });
