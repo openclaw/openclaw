@@ -70,6 +70,7 @@ describe("heartbeat event prompts", () => {
 
 describe("heartbeat event classification", () => {
   it.each([
+    { value: "exec finished: ok", expected: true },
     { value: "Exec finished (node=abc, code 0)", expected: true },
     { value: "Exec Finished (node=abc, code 1)", expected: true },
     { value: "Exec completed (abc12345, code 0) :: some output", expected: true },
@@ -90,6 +91,7 @@ describe("heartbeat event classification", () => {
     { value: "heartbeat_ok: already handled", expected: false },
     { value: "heartbeat poll: noop", expected: false },
     { value: "heartbeat wake: noop", expected: false },
+    { value: "exec finished: ok", expected: false },
     { value: "Exec finished (node=abc, code 0)", expected: false },
     { value: "Exec completed (abc12345, code 0) :: some output", expected: false },
     { value: "Exec failed (abc12345, signal SIGTERM) :: error output", expected: false },
