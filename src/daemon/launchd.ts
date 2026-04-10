@@ -519,7 +519,10 @@ async function probeLaunchAgentState(serviceTarget: string): Promise<LaunchAgent
     };
   }
   const runtime = parseLaunchctlPrint(probe.stdout || probe.stderr || "");
-  if (typeof runtime.pid === "number" && runtime.pid > 1) {
+  if (
+    normalizeLowercaseStringOrEmpty(runtime.state) === "running" ||
+    (typeof runtime.pid === "number" && runtime.pid > 1)
+  ) {
     return { state: "running" };
   }
   return { state: "stopped" };

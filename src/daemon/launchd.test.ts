@@ -554,6 +554,23 @@ describe("launchd install", () => {
     expect(output).toContain("did not fully stop the service");
   });
 
+  it("treats launchctl print state=running as running even when pid is missing", async () => {
+    const env = createDefaultLaunchdEnv();
+    const stdout = new PassThrough();
+    let output = "";
+    state.stopLeavesRunning = true;
+    state.printOutput = "state = running\n";
+    stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+
+    await stopLaunchAgent({ env, stdout });
+
+    expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(true);
+    expect(output).toContain("Stopped LaunchAgent (degraded)");
+    expect(output).toContain("did not fully stop the service");
+  });
+
   it("falls back to bootout when launchctl stop itself errors", async () => {
     const env = createDefaultLaunchdEnv();
     const stdout = new PassThrough();
