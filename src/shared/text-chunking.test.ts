@@ -37,4 +37,13 @@ describe("shared/text-chunking", () => {
       "def",
     ]);
   });
+
+  it("trims trailing whitespace from the final chunk emitted after the loop", () => {
+    expect(
+      chunkTextByBreakResolver("  ! ", 2, (window) => window.lastIndexOf(" ") || window.length),
+    ).toEqual(["!"]);
+    expect(
+      chunkTextByBreakResolver("a b ", 2, (window) => window.lastIndexOf(" ") || window.length),
+    ).toEqual(["a", "b"]);
+  });
 });
