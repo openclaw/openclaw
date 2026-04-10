@@ -82,12 +82,13 @@ final reply.
 - **Anthropic only.** The advisor tool has no effect on non-Anthropic providers.
 - **Separate token costs.** The advisor sub-inference has its own input/output
   token usage, billed independently from the primary inference.
-- **Multi-turn round-tripping.** All server-side tool blocks (including
-  advisor results and encrypted content) are preserved in conversation history
-  and sent back to the API on subsequent turns. The round-trip path uses
-  `opaqueServerBlock` storage which bypasses the pi-ai type system via cast —
-  if pi-ai ever adds strict runtime validation on content block types, an
-  upstream type extension may be needed.
+- **Multi-turn round-tripping.** Advisor output appears inline as
+  `[Advisor] ...` display text in the current turn but is **not** replayed
+  verbatim to the API on subsequent turns. The model's text response already
+  incorporates the advisor's input, so follow-up turns have the context they
+  need via normal assistant text. Full round-tripping of encrypted content
+  blobs (for end-to-end preservation of advisor internal state) is deferred
+  to a follow-up PR.
 
 ## Related
 
