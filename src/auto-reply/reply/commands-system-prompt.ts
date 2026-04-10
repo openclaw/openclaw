@@ -4,6 +4,7 @@ import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
 import { canExecRequestNode } from "../../agents/exec-defaults.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import type { EmbeddedContextFile } from "../../agents/pi-embedded-helpers.js";
+import { resolveEmbeddedFullAccessState } from "../../agents/pi-embedded-runner/sandbox-info.js";
 import { createOpenClawCodingTools } from "../../agents/pi-tools.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
@@ -118,6 +119,18 @@ export async function resolveCommandsSystemPromptBundle(
         elevated: {
           allowed: params.elevated.allowed,
           defaultLevel: (params.resolvedElevatedLevel ?? "off") as "on" | "off" | "ask" | "full",
+          fullAccessAvailable: resolveEmbeddedFullAccessState({
+            sandboxEnabled: true,
+            execElevated: {
+              enabled: params.elevated.enabled,
+              allowed: params.elevated.allowed,
+              defaultLevel: (params.resolvedElevatedLevel ?? "off") as
+                | "on"
+                | "off"
+                | "ask"
+                | "full",
+            },
+          }).available,
         },
       }
     : { enabled: false };
