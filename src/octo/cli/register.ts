@@ -422,6 +422,25 @@ export function registerOctoCli(program: Command) {
     });
 
   grip
+    .command("abandon [grip_id]")
+    .description("Abandon a grip (or all grips for a mission)")
+    .option("--mission <mission_id>", "Abandon all non-terminal grips for this mission")
+    .option("--reason <reason>", "Abandon reason", "abandoned via CLI")
+    .option("--json", "Output as JSON")
+    .action(async (gripId, opts) => {
+      const { runGripAbandon } = await import("./grip-abandon.js");
+      const code = await withRegistry(({ registry, eventLog }) =>
+        runGripAbandon(registry, eventLog, {
+          grip_id: gripId ?? "",
+          mission: opts.mission,
+          reason: opts.reason,
+          json: opts.json,
+        }),
+      );
+      process.exit(code);
+    });
+
+  grip
     .command("reassign <grip_id> <target_arm_id>")
     .description("Reassign a grip to a different arm")
     .action(async (gripId, targetArmId) => {
