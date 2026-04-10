@@ -8,7 +8,7 @@ import { loggingState } from "../logging/state.js";
 import { stripAnsi } from "../terminal/ansi.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
-  clearInternalHooks,
+  clearAllInternalHooks,
   getRegisteredEventKeys,
   triggerInternalHook,
   createInternalHookEvent,
@@ -26,7 +26,7 @@ describe("loader", () => {
   });
 
   beforeEach(async () => {
-    clearInternalHooks();
+    clearAllInternalHooks();
     // Create a temp directory for test modules
     tmpDir = path.join(fixtureRoot, `case-${caseId++}`);
     await fs.mkdir(tmpDir, { recursive: true });
@@ -115,7 +115,7 @@ describe("loader", () => {
   }
 
   afterEach(async () => {
-    clearInternalHooks();
+    clearAllInternalHooks();
     loggingState.rawConsole = null;
     setLoggerOverride(null);
     envSnapshot.restore();

@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
+  clearAllInternalHooks,
   clearInternalHooks,
+  clearPluginInternalHooks,
   createInternalHookEvent,
   getRegisteredEventKeys,
   isAgentBootstrapEvent,
@@ -21,11 +23,11 @@ const INTERNAL_HOOK_HANDLERS_KEY = Symbol.for("openclaw.internalHookHandlers");
 
 describe("hooks", () => {
   beforeEach(() => {
-    clearInternalHooks();
+    clearAllInternalHooks();
   });
 
   afterEach(() => {
-    clearInternalHooks();
+    clearAllInternalHooks();
   });
 
   describe("registerInternalHook", () => {
@@ -450,7 +452,20 @@ describe("hooks", () => {
   });
 
   describe("clearInternalHooks", () => {
-    it("should remove all registered handlers", () => {
+    it("should remove all file-based handlers but preserve plugin handlers", () => {
+      registerInternalHook("command:new", vi.fn());
+      registerInternalHook("command:stop", vi.fn());
+      registerInternalHook("session:start", vi.fn(), { source: "plugin" });
+
+      clearInternalHooks();
+
+      const keys = getRegisteredEventKeys();
+      expect(keys).toEqual(["session:start"]);
+      expect(keys).not.toContain("command:new");
+      expect(keys).not.toContain("command:stop");
+    });
+
+    it("should remove all registered file handlers", () => {
       registerInternalHook("command:new", vi.fn());
       registerInternalHook("command:stop", vi.fn());
 
@@ -458,6 +473,72 @@ describe("hooks", () => {
 
       const keys = getRegisteredEventKeys();
       expect(keys).toEqual([]);
+    });
+  });
+
+  describe("clearPluginInternalHooks", () => {
+    it("should remove all plugin handlers but preserve file handlers", () => {
+      registerInternalHook("command:new", vi.fn());
+      registerInternalHook("command:stop", vi.fn(), { source: "plugin" });
+
+      clearPluginInternalHooks();
+
+      const keys = getRegisteredEventKeys();
+      expect(keys).toEqual(["command:new"]);
+      expect(keys).not.toContain("command:stop");
+    });
+  });
+
+  describe("clearAllInternalHooks", () => {
+    it("should remove both file and plugin handlers", () => {
+      registerInternalHook("command:new", vi.fn());
+      registerInternalHook("command:stop", vi.fn(), { source: "plugin" });
+
+      clearAllInternalHooks();
+
+      const keys = getRegisteredEventKeys();
+      expect(keys).toEqual([]);
+    });
+  });
+
+  describe("plugin hooks", () => {
+    it("should register handlers with plugin source", () => {
+      const handler = vi.fn();
+      registerInternalHook("gateway:startup", handler, { source: "plugin" });
+
+      const keys = getRegisteredEventKeys();
+      expect(keys).toContain("gateway:startup");
+    });
+
+    it("should trigger plugin handlers alongside file handlers", async () => {
+      const fileHandler = vi.fn();
+      const pluginHandler = vi.fn();
+
+      registerInternalHook("gateway:startup", fileHandler);
+      registerInternalHook("gateway:startup", pluginHandler, { source: "plugin" });
+
+      const event = createInternalHookEvent("gateway", "startup", "gateway:startup", {
+        cfg: {},
+      });
+      await triggerInternalHook(event);
+
+      expect(fileHandler).toHaveBeenCalledWith(event);
+      expect(pluginHandler).toHaveBeenCalledWith(event);
+    });
+
+    it("should survive clearInternalHooks when registered as plugin", () => {
+      const handler = vi.fn();
+      registerInternalHook("gateway:startup", handler, { source: "plugin" });
+
+      clearInternalHooks();
+
+      const event = createInternalHookEvent("gateway", "startup", "gateway:startup", {
+        cfg: {},
+      });
+      void triggerInternalHook(event);
+
+      const keys = getRegisteredEventKeys();
+      expect(keys).toContain("gateway:startup");
     });
   });
 });

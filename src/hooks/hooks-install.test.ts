@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { installHooksFromPath } from "./install.js";
 import {
-  clearInternalHooks,
+  clearAllInternalHooks,
   createInternalHookEvent,
   triggerInternalHook,
 } from "./internal-hooks.js";
@@ -85,7 +85,7 @@ describe("hooks install (e2e)", () => {
       return;
     }
 
-    clearInternalHooks();
+    clearAllInternalHooks();
     const bundledHooksDir = path.join(baseDir, "bundled-none");
     await fs.mkdir(bundledHooksDir, { recursive: true });
     const loaded = await loadInternalHooks(

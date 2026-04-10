@@ -19,17 +19,21 @@ vi.mock("../../../logging/subsystem.js", () => ({
 }));
 
 const { default: runBootChecklist } = await import("./handler.js");
-const { clearInternalHooks, createInternalHookEvent, registerInternalHook, triggerInternalHook } =
-  await import("../../internal-hooks.js");
+const {
+  clearAllInternalHooks,
+  createInternalHookEvent,
+  registerInternalHook,
+  triggerInternalHook,
+} = await import("../../internal-hooks.js");
 
 describe("boot-md startup hook integration", () => {
   beforeEach(() => {
     runBootOnce.mockClear();
-    clearInternalHooks();
+    clearAllInternalHooks();
   });
 
   afterEach(() => {
-    clearInternalHooks();
+    clearAllInternalHooks();
   });
 
   it("dispatches gateway:startup through internal hooks and runs BOOT for each configured agent scope", async () => {

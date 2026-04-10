@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  clearInternalHooks,
+  clearAllInternalHooks,
   createInternalHookEvent,
   registerInternalHook,
   triggerInternalHook,
@@ -108,11 +108,11 @@ const actionCases: ActionCase[] = [
 
 describe("message hooks", () => {
   beforeEach(() => {
-    clearInternalHooks();
+    clearAllInternalHooks();
   });
 
   afterEach(() => {
-    clearInternalHooks();
+    clearAllInternalHooks();
   });
 
   describe("action handlers", () => {
