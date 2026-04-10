@@ -1099,6 +1099,7 @@ describe("sessions tools", () => {
       message: "announce now",
       threadId: "99",
     });
+  });
 
   it("subagents lists active and recent runs", async () => {
     resetSubagentRegistryForTests();
