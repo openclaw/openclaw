@@ -79,6 +79,8 @@ Docs: https://docs.openclaw.ai
 - iMessage/self-chat: remember ambiguous `sender === chat_identifier` outbound rows with missing `destination_caller_id` in self-chat dedupe state so the later reflected inbound copy still drops instead of re-entering inbound handling when the echo cache misses. Thanks @neeravmakwana.
 - Claude CLI: stop marking spawned Claude Code runs as host-managed so they keep using normal CLI subscription behavior. (#64023) Thanks @Alex-Alaniz.
 - Agents/failover: classify OpenRouter `404 No endpoints found for <model>` responses as `model_not_found` so fallback chains continue past retired OpenRouter candidates. (#61472) Thanks @MonkeyLeeT.
+- Browser/plugin SDK: route browser auth, profile, host-inspection, and doctor readiness helpers through browser plugin public facades so core compatibility helpers stop carrying duplicate runtime implementations. (#63957) Thanks @joshavant.
+- Agents/failover: allow cooldown probes for `timeout` (including network outage classifications) so the primary model can recover after failover without a gateway restart. (#63996) Thanks @neeravmakwana.
 
 ## 2026.4.9
 
