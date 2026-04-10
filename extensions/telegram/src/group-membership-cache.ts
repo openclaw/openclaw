@@ -5,7 +5,7 @@
 
 import { createHash } from "node:crypto";
 import type { Api } from "grammy";
-import { logVerbose, warn } from "../../../src/globals.js";
+import { logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import type { NormalizedAllowFrom } from "./bot-access.js";
 
 const TTL_MS = 5 * 60 * 1000; // 5 minutes

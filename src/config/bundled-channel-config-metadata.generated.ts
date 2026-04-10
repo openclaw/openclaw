@@ -193,7 +193,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         },
         groupPolicy: {
           type: "string",
-          enum: ["open", "disabled", "allowlist"],
+          enum: ["open", "disabled", "allowlist", "members"],
         },
         enrichGroupParticipantsFromContacts: {
           default: true,
@@ -499,7 +499,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               },
               groupPolicy: {
                 type: "string",
-                enum: ["open", "disabled", "allowlist"],
+                enum: ["open", "disabled", "allowlist", "members"],
               },
               enrichGroupParticipantsFromContacts: {
                 default: true,
@@ -787,7 +787,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         groupPolicy: {
           default: "allowlist",
           type: "string",
-          enum: ["open", "disabled", "allowlist"],
+          enum: ["open", "disabled", "allowlist", "members"],
         },
         contextVisibility: {
           type: "string",
@@ -1951,7 +1951,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               groupPolicy: {
                 default: "allowlist",
                 type: "string",
-                enum: ["open", "disabled", "allowlist"],
+                enum: ["open", "disabled", "allowlist", "members"],
               },
               contextVisibility: {
                 type: "string",
@@ -4341,7 +4341,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         groupPolicy: {
           default: "allowlist",
           type: "string",
-          enum: ["open", "disabled", "allowlist"],
+          enum: ["open", "disabled", "allowlist", "members"],
         },
         groupAllowFrom: {
           type: "array",
@@ -4719,7 +4719,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               groupPolicy: {
                 default: "allowlist",
                 type: "string",
-                enum: ["open", "disabled", "allowlist"],
+                enum: ["open", "disabled", "allowlist", "members"],
               },
               groupAllowFrom: {
                 type: "array",
@@ -5174,7 +5174,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         groupPolicy: {
           default: "allowlist",
           type: "string",
-          enum: ["open", "disabled", "allowlist"],
+          enum: ["open", "disabled", "allowlist", "members"],
         },
         contextVisibility: {
           type: "string",
@@ -5454,7 +5454,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               groupPolicy: {
                 default: "allowlist",
                 type: "string",
-                enum: ["open", "disabled", "allowlist"],
+                enum: ["open", "disabled", "allowlist", "members"],
               },
               contextVisibility: {
                 type: "string",
@@ -5756,7 +5756,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         groupPolicy: {
           default: "allowlist",
           type: "string",
-          enum: ["open", "disabled", "allowlist"],
+          enum: ["open", "disabled", "allowlist", "members"],
         },
         groupAllowFrom: {
           type: "array",
@@ -6046,7 +6046,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               groupPolicy: {
                 default: "allowlist",
                 type: "string",
-                enum: ["open", "disabled", "allowlist"],
+                enum: ["open", "disabled", "allowlist", "members"],
               },
               groupAllowFrom: {
                 type: "array",
@@ -6793,7 +6793,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         },
         groupPolicy: {
           type: "string",
-          enum: ["open", "disabled", "allowlist"],
+          enum: ["open", "disabled", "allowlist", "members"],
         },
         contextVisibility: {
           type: "string",
@@ -7324,7 +7324,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         groupPolicy: {
           default: "allowlist",
           type: "string",
-          enum: ["open", "disabled", "allowlist"],
+          enum: ["open", "disabled", "allowlist", "members"],
         },
         textChunkLimit: {
           type: "integer",
@@ -7626,7 +7626,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               groupPolicy: {
                 default: "allowlist",
                 type: "string",
-                enum: ["open", "disabled", "allowlist"],
+                enum: ["open", "disabled", "allowlist", "members"],
               },
               textChunkLimit: {
                 type: "integer",
@@ -7948,7 +7948,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         groupPolicy: {
           default: "allowlist",
           type: "string",
-          enum: ["open", "disabled", "allowlist"],
+          enum: ["open", "disabled", "allowlist", "members"],
         },
         contextVisibility: {
           type: "string",
@@ -8484,7 +8484,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         groupPolicy: {
           default: "allowlist",
           type: "string",
-          enum: ["open", "disabled", "allowlist"],
+          enum: ["open", "disabled", "allowlist", "members"],
         },
         rooms: {
           type: "object",
@@ -8825,7 +8825,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               groupPolicy: {
                 default: "allowlist",
                 type: "string",
-                enum: ["open", "disabled", "allowlist"],
+                enum: ["open", "disabled", "allowlist", "members"],
               },
               rooms: {
                 type: "object",
@@ -9786,7 +9786,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         groupPolicy: {
           default: "allowlist",
           type: "string",
-          enum: ["open", "disabled", "allowlist"],
+          enum: ["open", "disabled", "allowlist", "members"],
         },
         contextVisibility: {
           type: "string",
@@ -10105,7 +10105,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               groupPolicy: {
                 default: "allowlist",
                 type: "string",
-                enum: ["open", "disabled", "allowlist"],
+                enum: ["open", "disabled", "allowlist", "members"],
               },
               contextVisibility: {
                 type: "string",
@@ -10738,7 +10738,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         groupPolicy: {
           default: "allowlist",
           type: "string",
-          enum: ["open", "disabled", "allowlist"],
+          enum: ["open", "disabled", "allowlist", "members"],
         },
         contextVisibility: {
           type: "string",
@@ -11647,7 +11647,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               },
               groupPolicy: {
                 type: "string",
-                enum: ["open", "disabled", "allowlist"],
+                enum: ["open", "disabled", "allowlist", "members"],
               },
               contextVisibility: {
                 type: "string",
@@ -12547,7 +12547,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               },
               groupPolicy: {
                 type: "string",
-                enum: ["open", "disabled", "allowlist"],
+                enum: ["open", "disabled", "allowlist", "members"],
               },
               tools: {
                 type: "object",
@@ -12647,7 +12647,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     },
                     groupPolicy: {
                       type: "string",
-                      enum: ["open", "disabled", "allowlist"],
+                      enum: ["open", "disabled", "allowlist", "members"],
                     },
                     skills: {
                       type: "array",
@@ -12742,7 +12742,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         groupPolicy: {
           default: "allowlist",
           type: "string",
-          enum: ["open", "disabled", "allowlist"],
+          enum: ["open", "disabled", "allowlist", "members"],
         },
         contextVisibility: {
           type: "string",
@@ -12885,7 +12885,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     },
                     groupPolicy: {
                       type: "string",
-                      enum: ["open", "disabled", "allowlist"],
+                      enum: ["open", "disabled", "allowlist", "members"],
                     },
                     skills: {
                       type: "array",
@@ -13580,7 +13580,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     },
                     groupPolicy: {
                       type: "string",
-                      enum: ["open", "disabled", "allowlist"],
+                      enum: ["open", "disabled", "allowlist", "members"],
                     },
                     tools: {
                       type: "object",
@@ -13680,7 +13680,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                           },
                           groupPolicy: {
                             type: "string",
-                            enum: ["open", "disabled", "allowlist"],
+                            enum: ["open", "disabled", "allowlist", "members"],
                           },
                           skills: {
                             type: "array",
@@ -13775,7 +13775,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               groupPolicy: {
                 default: "allowlist",
                 type: "string",
-                enum: ["open", "disabled", "allowlist"],
+                enum: ["open", "disabled", "allowlist", "members"],
               },
               contextVisibility: {
                 type: "string",
@@ -13918,7 +13918,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                           },
                           groupPolicy: {
                             type: "string",
-                            enum: ["open", "disabled", "allowlist"],
+                            enum: ["open", "disabled", "allowlist", "members"],
                           },
                           skills: {
                             type: "array",
@@ -14987,7 +14987,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         groupPolicy: {
           default: "allowlist",
           type: "string",
-          enum: ["open", "disabled", "allowlist"],
+          enum: ["open", "disabled", "allowlist", "members"],
         },
         contextVisibility: {
           type: "string",
@@ -15240,7 +15240,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               groupPolicy: {
                 default: "allowlist",
                 type: "string",
-                enum: ["open", "disabled", "allowlist"],
+                enum: ["open", "disabled", "allowlist", "members"],
               },
               contextVisibility: {
                 type: "string",
@@ -15684,7 +15684,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         },
         groupPolicy: {
           type: "string",
-          enum: ["open", "disabled", "allowlist"],
+          enum: ["open", "disabled", "allowlist", "members"],
         },
         groupAllowFrom: {
           type: "array",
@@ -15890,7 +15890,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               },
               groupPolicy: {
                 type: "string",
-                enum: ["open", "disabled", "allowlist"],
+                enum: ["open", "disabled", "allowlist", "members"],
               },
               groupAllowFrom: {
                 type: "array",
@@ -15994,7 +15994,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         groupPolicy: {
           default: "allowlist",
           type: "string",
-          enum: ["open", "disabled", "allowlist"],
+          enum: ["open", "disabled", "allowlist", "members"],
         },
         groups: {
           type: "object",
@@ -16108,7 +16108,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               groupPolicy: {
                 default: "allowlist",
                 type: "string",
-                enum: ["open", "disabled", "allowlist"],
+                enum: ["open", "disabled", "allowlist", "members"],
               },
               groups: {
                 type: "object",

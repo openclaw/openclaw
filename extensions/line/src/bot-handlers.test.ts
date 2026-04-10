@@ -104,6 +104,7 @@ vi.mock("openclaw/plugin-sdk/command-auth", () => ({
   }),
 }));
 vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
+  normalizeNonTelegramGroupPolicy: (policy: string) => (policy === "members" ? "open" : policy),
   resolveAllowlistProviderRuntimeGroupPolicy: ({
     groupPolicy,
     defaultGroupPolicy,

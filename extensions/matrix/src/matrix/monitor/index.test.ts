@@ -165,6 +165,7 @@ vi.mock("../../runtime-api.js", () => {
       ...additions,
     ],
     normalizeAccountId,
+    normalizeNonTelegramGroupPolicy: (policy: string) => (policy === "members" ? "open" : policy),
     normalizeOptionalAccountId: normalizeAccountId,
     resolveThreadBindingIdleTimeoutMsForChannel: () => 24 * 60 * 60 * 1000,
     resolveThreadBindingMaxAgeMsForChannel: () => 0,

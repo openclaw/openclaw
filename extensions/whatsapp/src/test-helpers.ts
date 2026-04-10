@@ -445,6 +445,7 @@ vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
     const digits = value.replace(/\D+/g, "");
     return digits ? `+${digits}` : null;
   },
+  normalizeNonTelegramGroupPolicy: (policy: string) => (policy === "members" ? "open" : policy),
   readStoreAllowFromForDmPolicy: async () => [] as string[],
   recordSessionMetaFromInbound: async () => undefined,
   resolveChannelContextVisibilityMode: resolveChannelContextVisibilityModeMock,
