@@ -487,7 +487,50 @@ export class OctoGatewayHandlers {
       updated_at: this.now(),
     });
 
-    // Step 11 — return.
+    // Step 11 — grip assignment. If the ArmSpec carries a `labels.grip`
+    // matching a mission grip, assign that grip to this arm. This bridges
+    // the gap between "arm is spawned" and "grip knows which arm is working it."
+    const gripLabel = spec.labels?.grip;
+    if (gripLabel && spec.mission_id) {
+      const grip = this.registry.getGrip(gripLabel);
+      if (grip && grip.mission_id === spec.mission_id && grip.status === "queued") {
+        try {
+          const gripAssigned = applyGripTransition(
+            { state: grip.status, updated_at: grip.updated_at },
+            "assigned",
+            { now: this.now(), grip_id: grip.grip_id },
+          );
+          this.registry.casUpdateGrip(grip.grip_id, grip.version, {
+            status: gripAssigned.state,
+            assigned_arm_id: arm_id,
+            updated_at: gripAssigned.updated_at,
+          });
+
+          // Also set current_grip_id on the arm record.
+          const latestArm = this.registry.getArm(arm_id);
+          if (latestArm) {
+            this.registry.casUpdateArm(arm_id, latestArm.version, {
+              current_grip_id: grip.grip_id,
+              updated_at: this.now(),
+            });
+          }
+
+          await this.eventLog.append({
+            schema_version: 1,
+            entity_type: "grip",
+            entity_id: grip.grip_id,
+            event_type: "grip.assigned",
+            ts: new Date(this.now()).toISOString(),
+            actor: `node-agent:${this.nodeId}`,
+            payload: { arm_id, mission_id: spec.mission_id },
+          });
+        } catch {
+          // Best-effort — grip assignment failure should not block arm spawn.
+        }
+      }
+    }
+
+    // Step 12 — return.
     return { arm_id, session_ref };
   }
 

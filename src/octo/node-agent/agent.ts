@@ -23,6 +23,7 @@ import path from "node:path";
 import { applyArmTransition, InvalidTransitionError } from "../head/arm-fsm.ts";
 import type { EventLogService } from "../head/event-log.ts";
 import type { AppendInput } from "../head/event-log.ts";
+import { applyGripTransition } from "../head/grip-fsm.ts";
 import { ConflictError } from "../head/registry.ts";
 import type { ArmRecord, RegistryService } from "../head/registry.ts";
 import { ProcessWatcher, type ProcessWatcherEvent } from "./process-watcher.ts";
@@ -348,6 +349,76 @@ export class NodeAgent {
         event_type: eventType,
         error: err instanceof Error ? err.message : String(err),
       });
+    }
+
+    // Cascade: when an arm completes, transition its current grip to completed.
+    // This bridges the arm lifecycle (adapter layer) with the grip lifecycle
+    // (head services layer). Without this, grips remain in assigned/running
+    // state even after the arm successfully finishes work.
+    if (toState === "completed" && arm.current_grip_id) {
+      try {
+        const grip = this.registry.getGrip(arm.current_grip_id);
+        if (
+          grip &&
+          grip.status !== "completed" &&
+          grip.status !== "abandoned" &&
+          grip.status !== "archived"
+        ) {
+          // Drive grip through assigned→running→completed if needed.
+          let currentState = grip.status;
+          let currentVersion = grip.version;
+          let currentUpdatedAt = grip.updated_at;
+
+          // If still assigned, transition to running first.
+          if (currentState === "assigned") {
+            const running = applyGripTransition(
+              { state: currentState, updated_at: currentUpdatedAt },
+              "running",
+              { now, grip_id: grip.grip_id },
+            );
+            const updated = this.registry.casUpdateGrip(grip.grip_id, currentVersion, {
+              status: running.state,
+              updated_at: running.updated_at,
+            });
+            currentState = updated.status;
+            currentVersion = updated.version;
+            currentUpdatedAt = updated.updated_at;
+          }
+
+          // Now transition to completed.
+          if (currentState === "running") {
+            const completed = applyGripTransition(
+              { state: currentState, updated_at: currentUpdatedAt },
+              "completed",
+              { now, grip_id: grip.grip_id },
+            );
+            this.registry.casUpdateGrip(grip.grip_id, currentVersion, {
+              status: completed.state,
+              updated_at: completed.updated_at,
+            });
+
+            await this.eventLog.append({
+              schema_version: 1,
+              entity_type: "grip",
+              entity_id: grip.grip_id,
+              event_type: "grip.completed",
+              ts: new Date(now).toISOString(),
+              actor: `node-agent:${this.nodeId}`,
+              payload: {
+                arm_id: arm.arm_id,
+                mission_id: arm.mission_id,
+              },
+            });
+          }
+        }
+      } catch (err) {
+        // Best-effort — grip cascade failure should not break the arm lifecycle.
+        this.log("warn", "transitionArm: grip completion cascade failed", {
+          arm_id: arm.arm_id,
+          grip_id: arm.current_grip_id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
   }
 
