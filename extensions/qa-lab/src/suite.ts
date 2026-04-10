@@ -180,6 +180,68 @@ function splitModelRef(ref: string) {
   };
 }
 
+function normalizeQaConfigString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function scenarioMatchesLiveLane(params: {
+  scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
+  primaryModel: string;
+  providerMode: "mock-openai" | "live-frontier";
+  claudeCliAuthMode?: QaCliBackendAuthMode;
+}) {
+  if (params.providerMode !== "live-frontier") {
+    return true;
+  }
+  const selected = splitModelRef(params.primaryModel);
+  const config = params.scenario.execution.config ?? {};
+  const requiredProvider = normalizeQaConfigString(config.requiredProvider);
+  if (requiredProvider && selected?.provider !== requiredProvider) {
+    return false;
+  }
+  const requiredModel = normalizeQaConfigString(config.requiredModel);
+  if (requiredModel && selected?.model !== requiredModel) {
+    return false;
+  }
+  const requiredAuthMode = normalizeQaConfigString(config.authMode);
+  if (requiredAuthMode && params.claudeCliAuthMode !== requiredAuthMode) {
+    return false;
+  }
+  return true;
+}
+
+function selectQaSuiteScenarios(params: {
+  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
+  scenarioIds?: string[];
+  providerMode: "mock-openai" | "live-frontier";
+  primaryModel: string;
+  claudeCliAuthMode?: QaCliBackendAuthMode;
+}) {
+  const requestedScenarioIds =
+    params.scenarioIds && params.scenarioIds.length > 0 ? new Set(params.scenarioIds) : null;
+  const requestedScenarios = requestedScenarioIds
+    ? params.scenarios.filter((scenario) => requestedScenarioIds.has(scenario.id))
+    : params.scenarios;
+  if (requestedScenarioIds) {
+    const foundScenarioIds = new Set(requestedScenarios.map((scenario) => scenario.id));
+    const missingScenarioIds = [...requestedScenarioIds].filter(
+      (scenarioId) => !foundScenarioIds.has(scenarioId),
+    );
+    if (missingScenarioIds.length > 0) {
+      throw new Error(`unknown QA scenario id(s): ${missingScenarioIds.join(", ")}`);
+    }
+    return requestedScenarios;
+  }
+  return requestedScenarios.filter((scenario) =>
+    scenarioMatchesLiveLane({
+      scenario,
+      providerMode: params.providerMode,
+      primaryModel: params.primaryModel,
+      claudeCliAuthMode: params.claudeCliAuthMode,
+    }),
+  );
+}
+
 function liveTurnTimeoutMs(env: QaSuiteEnvironment, fallbackMs: number) {
   return resolveQaLiveTurnTimeoutMs(env, fallbackMs);
 }
@@ -525,6 +587,12 @@ async function runConfigMutation(params: {
   action: "config.patch" | "config.apply";
   raw: string;
   sessionKey?: string;
+  deliveryContext?: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
   note?: string;
   restartDelayMs?: number;
 }) {
@@ -539,10 +607,11 @@ async function runConfigMutation(params: {
           raw: params.raw,
           baseHash: snapshot.hash,
           ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+          ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
           ...(params.note ? { note: params.note } : {}),
           restartDelayMs,
         },
-        { timeoutMs: 45_000 },
+        { timeoutMs: 45_000, retryOnRestart: false },
       );
       await waitForConfigRestartSettle(params.env, restartDelayMs);
       return result;
@@ -576,6 +645,12 @@ async function patchConfig(params: {
   env: QaSuiteEnvironment;
   patch: Record<string, unknown>;
   sessionKey?: string;
+  deliveryContext?: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
   note?: string;
   restartDelayMs?: number;
 }) {
@@ -584,6 +659,7 @@ async function patchConfig(params: {
     action: "config.patch",
     raw: JSON.stringify(params.patch, null, 2),
     sessionKey: params.sessionKey,
+    deliveryContext: params.deliveryContext,
     note: params.note,
     restartDelayMs: params.restartDelayMs,
   });
@@ -593,6 +669,12 @@ async function applyConfig(params: {
   env: QaSuiteEnvironment;
   nextConfig: Record<string, unknown>;
   sessionKey?: string;
+  deliveryContext?: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
   note?: string;
   restartDelayMs?: number;
 }) {
@@ -601,6 +683,7 @@ async function applyConfig(params: {
     action: "config.apply",
     raw: JSON.stringify(params.nextConfig, null, 2),
     sessionKey: params.sessionKey,
+    deliveryContext: params.deliveryContext,
     note: params.note,
     restartDelayMs: params.restartDelayMs,
   });
@@ -1205,6 +1288,8 @@ export const qaSuiteTesting = {
   isConfigHashConflict,
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
+  scenarioMatchesLiveLane,
+  selectQaSuiteScenarios,
   waitForOutboundMessage,
 };
 
@@ -1303,20 +1388,13 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     path.join(repoRoot, ".artifacts", "qa-e2e", `suite-${Date.now().toString(36)}`);
   await fs.mkdir(outputDir, { recursive: true });
   const catalog = readQaBootstrapScenarioCatalog();
-  const requestedScenarioIds =
-    params?.scenarioIds && params.scenarioIds.length > 0 ? new Set(params.scenarioIds) : null;
-  const selectedCatalogScenarios = requestedScenarioIds
-    ? catalog.scenarios.filter((scenario) => requestedScenarioIds.has(scenario.id))
-    : catalog.scenarios;
-  if (requestedScenarioIds) {
-    const foundScenarioIds = new Set(selectedCatalogScenarios.map((scenario) => scenario.id));
-    const missingScenarioIds = [...requestedScenarioIds].filter(
-      (scenarioId) => !foundScenarioIds.has(scenarioId),
-    );
-    if (missingScenarioIds.length > 0) {
-      throw new Error(`unknown QA scenario id(s): ${missingScenarioIds.join(", ")}`);
-    }
-  }
+  const selectedCatalogScenarios = selectQaSuiteScenarios({
+    scenarios: catalog.scenarios,
+    scenarioIds: params?.scenarioIds,
+    providerMode,
+    primaryModel,
+    claudeCliAuthMode: params?.claudeCliAuthMode,
+  });
   const concurrency = normalizeQaSuiteConcurrency(
     params?.concurrency,
     selectedCatalogScenarios.length,
