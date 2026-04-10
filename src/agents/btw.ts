@@ -2,8 +2,10 @@ import {
   streamSimple,
   type Api,
   type AssistantMessageEvent,
+  type ImageContent,
   type Message,
   type Model,
+  type TextContent,
 } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
@@ -17,6 +19,10 @@ import {
 import { diagnosticLogger as diag } from "../logging/diagnostic.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
+import {
+  resolveImageSanitizationLimits,
+  type ImageSanitizationLimits,
+} from "./image-sanitization.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { EmbeddedBlockChunker, type BlockReplyChunking } from "./pi-embedded-block-chunker.js";
@@ -25,6 +31,7 @@ import { getActiveEmbeddedRunSnapshot } from "./pi-embedded-runner/runs.js";
 import { streamWithPayloadPatch } from "./pi-embedded-runner/stream-payload-utils.js";
 import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 import { stripToolResultDetails } from "./session-transcript-repair.js";
+import { sanitizeImageBlocks } from "./tool-images.js";
 
 type SessionManagerLike = {
   getLeafEntry?: () => {
@@ -84,9 +91,6 @@ function buildBtwQuestionPrompt(question: string, inFlightPrompt?: string): stri
   return lines.join("\n");
 }
 
-const BTW_ALLOWED_USER_BLOCK_TYPES = new Set(["text", "image"]);
-const BTW_ALLOWED_ASSISTANT_BLOCK_TYPES = new Set(["text", "thinking"]);
-
 function normalizeBtwContentBlocks(content: unknown): unknown[] | undefined {
   if (Array.isArray(content)) {
     return content;
@@ -97,36 +101,60 @@ function normalizeBtwContentBlocks(content: unknown): unknown[] | undefined {
   return undefined;
 }
 
-function sanitizeBtwContentBlocks(
-  content: unknown,
-  allowedTypes: Set<string>,
-): unknown[] | undefined {
-  const blocks = normalizeBtwContentBlocks(content);
+function isBtwTextBlock(block: unknown): block is TextContent {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const record = block as { type?: unknown; text?: unknown };
+  return normalizeLowercaseStringOrEmpty(record.type) === "text" && typeof record.text === "string";
+}
+
+function isBtwImageBlock(block: unknown): block is ImageContent {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const record = block as { type?: unknown; data?: unknown; mimeType?: unknown };
+  return (
+    normalizeLowercaseStringOrEmpty(record.type) === "image" &&
+    typeof record.data === "string" &&
+    typeof record.mimeType === "string"
+  );
+}
+
+async function sanitizeBtwUserMessage(params: {
+  message: Extract<Message, { role: "user" }>;
+  imageLimits: ImageSanitizationLimits;
+}): Promise<Extract<Message, { role: "user" }> | undefined> {
+  if (typeof params.message.content === "string") {
+    return params.message;
+  }
+  const blocks = normalizeBtwContentBlocks(params.message.content);
   if (!blocks) {
     return undefined;
   }
-  const sanitizedBlocks = blocks.filter((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    return allowedTypes.has(normalizeLowercaseStringOrEmpty((block as { type?: unknown }).type));
-  });
-  return sanitizedBlocks.length > 0 ? sanitizedBlocks : undefined;
-}
 
-function sanitizeBtwUserMessage(
-  message: Extract<Message, { role: "user" }>,
-): Extract<Message, { role: "user" }> | undefined {
-  if (typeof message.content === "string") {
-    return message;
+  const content: Array<TextContent | ImageContent> = [];
+  for (const block of blocks) {
+    if (isBtwTextBlock(block)) {
+      content.push({ type: "text", text: block.text });
+      continue;
+    }
+    if (!isBtwImageBlock(block)) {
+      continue;
+    }
+    const { images } = await sanitizeImageBlocks([block], "btw:context", params.imageLimits);
+    const image = images[0];
+    if (image) {
+      content.push(image);
+    }
   }
-  const content = sanitizeBtwContentBlocks(message.content, BTW_ALLOWED_USER_BLOCK_TYPES);
-  if (!content) {
+
+  if (content.length === 0) {
     return undefined;
   }
   return {
-    ...message,
-    content: content as Extract<Message, { role: "user" }>["content"],
+    ...params.message,
+    content,
   };
 }
 
@@ -135,45 +163,62 @@ function sanitizeBtwAssistantMessage(
 ): Extract<Message, { role: "assistant" }> | undefined {
   const rawContent = (message as { content?: unknown }).content;
   if (typeof rawContent === "string") {
-    return rawContent.trim().length > 0
+    const trimmed = rawContent.trim();
+    return trimmed.length > 0
       ? {
           ...message,
-          content: [{ type: "text", text: rawContent }],
+          content: [{ type: "text", text: trimmed }],
         }
       : undefined;
   }
-  const content = sanitizeBtwContentBlocks(rawContent, BTW_ALLOWED_ASSISTANT_BLOCK_TYPES);
-  if (!content) {
+  const blocks = normalizeBtwContentBlocks(rawContent);
+  if (!blocks) {
+    return undefined;
+  }
+  const content = blocks.flatMap((block): TextContent[] =>
+    isBtwTextBlock(block) ? [{ type: "text", text: block.text }] : [],
+  );
+  if (content.length === 0) {
     return undefined;
   }
   return {
     ...message,
-    content: content as Extract<Message, { role: "assistant" }>["content"],
+    content,
   };
 }
 
-function toSimpleContextMessages(messages: unknown[]): Message[] {
-  const contextMessages = messages.flatMap((message): Message[] => {
+async function toSimpleContextMessages(params: {
+  messages: unknown[];
+  imageLimits: ImageSanitizationLimits;
+}): Promise<Message[]> {
+  const contextMessages: Message[] = [];
+  for (const message of params.messages) {
     if (!message || typeof message !== "object") {
-      return [];
+      continue;
     }
     const role = (message as { role?: unknown }).role;
     if (role === "user") {
-      const sanitizedMessage = sanitizeBtwUserMessage(
-        message as Extract<Message, { role: "user" }>,
-      );
-      return sanitizedMessage ? [sanitizedMessage] : [];
+      const sanitizedMessage = await sanitizeBtwUserMessage({
+        message: message as Extract<Message, { role: "user" }>,
+        imageLimits: params.imageLimits,
+      });
+      if (sanitizedMessage) {
+        contextMessages.push(sanitizedMessage);
+      }
+      continue;
     }
     if (role !== "assistant") {
-      return [];
+      continue;
     }
-    // BTW is a no-tools path, so keep only user/assistant blocks that remain
-    // readable without replaying tool calls or tool results.
+    // BTW is a no-tools path, so keep only user-visible blocks from prior
+    // messages and strip hidden reasoning/tool replay data.
     const sanitizedMessage = sanitizeBtwAssistantMessage(
       message as Extract<Message, { role: "assistant" }>,
     );
-    return sanitizedMessage ? [sanitizedMessage] : [];
-  });
+    if (sanitizedMessage) {
+      contextMessages.push(sanitizedMessage);
+    }
+  }
   return stripToolResultDetails(
     contextMessages as Parameters<typeof stripToolResultDetails>[0],
   ) as Message[];
@@ -283,10 +328,14 @@ export async function runBtwSideQuestion(
 
   const sessionManager = SessionManager.open(sessionFile) as SessionManagerLike;
   const activeRunSnapshot = getActiveEmbeddedRunSnapshot(sessionId);
+  const imageLimits = resolveImageSanitizationLimits(params.cfg);
   let messages: Message[] = [];
   let inFlightPrompt: string | undefined;
   if (Array.isArray(activeRunSnapshot?.messages) && activeRunSnapshot.messages.length > 0) {
-    messages = toSimpleContextMessages(activeRunSnapshot.messages);
+    messages = await toSimpleContextMessages({
+      messages: activeRunSnapshot.messages,
+      imageLimits,
+    });
     inFlightPrompt = activeRunSnapshot.inFlightPrompt;
   } else if (activeRunSnapshot) {
     inFlightPrompt = activeRunSnapshot.inFlightPrompt;
@@ -314,9 +363,10 @@ export async function runBtwSideQuestion(
   }
   if (messages.length === 0) {
     const sessionContext = sessionManager.buildSessionContext();
-    messages = toSimpleContextMessages(
-      Array.isArray(sessionContext.messages) ? sessionContext.messages : [],
-    );
+    messages = await toSimpleContextMessages({
+      messages: Array.isArray(sessionContext.messages) ? sessionContext.messages : [],
+      imageLimits,
+    });
   }
   if (messages.length === 0 && !inFlightPrompt?.trim()) {
     throw new Error("No active session context.");

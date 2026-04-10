@@ -726,6 +726,135 @@ describe("runBtwSideQuestion", () => {
     });
   });
 
+  it("drops assistant thinking blocks from BTW context", async () => {
+    getActiveEmbeddedRunSnapshotMock.mockReturnValue({
+      transcriptLeafId: "assistant-1",
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "seed" }],
+          timestamp: 1,
+        },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Visible answer" },
+            { type: "thinking", thinking: "Hidden chain of thought" },
+          ],
+          provider: DEFAULT_PROVIDER,
+          api: "anthropic-messages",
+          model: DEFAULT_MODEL,
+          stopReason: "stop",
+          usage: {
+            input: 1,
+            output: 1,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 2,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          timestamp: 2,
+        },
+      ],
+    });
+    mockDoneAnswer(MATH_ANSWER);
+
+    await runMathSideQuestion();
+
+    const [, context] = streamSimpleMock.mock.calls[0] ?? [];
+    expect(context).toMatchObject({
+      messages: [
+        expect.objectContaining({ role: "user" }),
+        expect.objectContaining({
+          role: "assistant",
+          content: [{ type: "text", text: "Visible answer" }],
+        }),
+        expect.objectContaining({ role: "user" }),
+      ],
+    });
+    expect(
+      (context as { messages?: Array<{ role?: string; content?: Array<{ type?: string }> }> })
+        .messages,
+    ).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "assistant",
+          content: expect.arrayContaining([expect.objectContaining({ type: "thinking" })]),
+        }),
+      ]),
+    );
+  });
+
+  it("drops thinking-only assistant messages from BTW context", async () => {
+    getActiveEmbeddedRunSnapshotMock.mockReturnValue({
+      transcriptLeafId: "assistant-1",
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "seed" }],
+          timestamp: 1,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "thinking", thinking: "Hidden chain of thought" }],
+          provider: DEFAULT_PROVIDER,
+          api: "anthropic-messages",
+          model: DEFAULT_MODEL,
+          stopReason: "stop",
+          usage: {
+            input: 1,
+            output: 1,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 2,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          timestamp: 2,
+        },
+      ],
+    });
+    mockDoneAnswer(MATH_ANSWER);
+
+    await runMathSideQuestion();
+
+    const [, context] = streamSimpleMock.mock.calls[0] ?? [];
+    expect(
+      (context as { messages?: Array<{ role?: string }> }).messages?.filter(
+        (message) => message.role === "assistant",
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("drops malformed user image blocks from BTW context", async () => {
+    getActiveEmbeddedRunSnapshotMock.mockReturnValue({
+      transcriptLeafId: "assistant-1",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "seed" },
+            { type: "image", mimeType: "image/png" },
+          ],
+          timestamp: 1,
+        },
+      ],
+    });
+    mockDoneAnswer(MATH_ANSWER);
+
+    await runMathSideQuestion();
+
+    const [, context] = streamSimpleMock.mock.calls[0] ?? [];
+    expect(context).toMatchObject({
+      messages: [
+        expect.objectContaining({
+          role: "user",
+          content: [{ type: "text", text: "seed" }],
+        }),
+        expect.objectContaining({ role: "user" }),
+      ],
+    });
+  });
+
   it("normalizes malformed assistant content before stripping tool blocks", async () => {
     getActiveEmbeddedRunSnapshotMock.mockReturnValue({
       transcriptLeafId: "assistant-1",
