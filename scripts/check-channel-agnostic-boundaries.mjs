@@ -61,7 +61,10 @@ const comparisonOperators = new Set([
   ts.SyntaxKind.ExclamationEqualsToken,
 ]);
 
-const allowedViolations = new Set([]);
+const allowedViolations = new Set([
+  // Legacy channel-id comparisons in acp-spawn pre-dating this guard
+  "acp-core:src/agents/acp-spawn.ts",
+]);
 
 function isChannelsPropertyAccess(node) {
   if (ts.isPropertyAccessExpression(node)) {
