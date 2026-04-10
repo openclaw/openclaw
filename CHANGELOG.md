@@ -28,6 +28,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/thread routing: preserve Slack, Telegram, Mattermost, and ACP parent-thread delivery targets so subagent, cron, and stream-relay completion messages land back in the originating thread or topic. (#54840, #57056, #63228, #63506) Thanks @yzzymt.
 - Agents/timeouts: extend the default LLM idle window to 120s and keep silent no-token idle timeouts on recovery paths, so slow models can retry or fall back before users see an error.
 - Gateway/agents: preserve configured model selection and richer `IDENTITY.md` content across agent create/update flows and workspace moves, and fail safely instead of silently overwriting unreadable identity files. (#61577) Thanks @samzong.
+- Skills/TaskFlow: restore valid frontmatter fences for the bundled `taskflow` and `taskflow-inbox-triage` skills so they stay discoverable and loadable after updates. (#64469) Thanks @extrasmall0.
 - Windows/exec: settle supervisor waits from child exit state after stdout and stderr drain even when `close` never arrives, so CLI commands stop hanging or dying with forced `SIGKILL` on Windows. (#64072) Thanks @obviyus.
 - Browser/sandbox: prevent sandbox browser CDP startup hangs by recreating containers when the browser security hash changes and by waiting on the correct sandbox browser lifecycle. (#62873) Thanks @Syysean.
 - iMessage/self-chat: distinguish normal DM outbound rows from true self-chat using `destination_caller_id` plus chat participants, while preserving multi-handle self-chat aliases so outbound DM replies stop looping back as inbound messages. (#61619) Thanks @neeravmakwana.
@@ -134,6 +135,9 @@ Docs: https://docs.openclaw.ai
 - Hooks/security: mark agent hook system events as untrusted and sanitize hook display names before cron metadata reuse. (#64372) Thanks @eleqtrizit.
 - Media/security: honor sender-scoped `toolsBySender` policy for outbound host-media reads so denied senders cannot trigger host file disclosure via attachment hydration. (#64459) Thanks @eleqtrizit.
 - Browser/security: reject strict-policy hostname navigation unless the hostname is an explicit allowlist exception or IP literal, and route CDP HTTP discovery through the pinned SSRF fetch path. (#64367) Thanks @eleqtrizit.
+- Plugins/ACPX: wrap plugin tools on the MCP bridge with the shared `before_tool_call` handler so block and approval hooks fire consistently across all execution paths. (#63886) Thanks @eleqtrizit.
+
+- Logging/security: redact Gmail watcher `--hook-token` values from startup logging and `logs.tail` output. (#62661) Thanks @eleqtrizit.
 
 ## 2026.4.9
 
