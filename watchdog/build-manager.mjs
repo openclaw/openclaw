@@ -316,16 +316,26 @@ export function activateBuild(repoRoot, commitHash) {
 
   const previousHash = getActiveBuild(repoRoot);
 
-  // Atomic symlink swap: create temp link, then rename over the old one
-  const tmpLink = currentLink + ".tmp";
-  try {
-    fs.unlinkSync(tmpLink);
-  } catch {
-    // OK if it doesn't exist
+  if (process.platform === "win32") {
+    // Windows: cannot atomically rename over a junction. Use unlink+create.
+    // Junctions don't require admin; relative target keeps them portable.
+    try {
+      fs.rmSync(currentLink, { recursive: false, force: true });
+    } catch {
+      // OK if it doesn't exist
+    }
+    fs.symlinkSync(commitHash, currentLink, "junction");
+  } else {
+    // Atomic symlink swap: create temp link, then rename over the old one
+    const tmpLink = currentLink + ".tmp";
+    try {
+      fs.unlinkSync(tmpLink);
+    } catch {
+      // OK if it doesn't exist
+    }
+    fs.symlinkSync(commitHash, tmpLink);
+    fs.renameSync(tmpLink, currentLink);
   }
-
-  fs.symlinkSync(commitHash, tmpLink);
-  fs.renameSync(tmpLink, currentLink);
 
   // Write active version to .watchdog/active-version for runtime detection
   const watchdogDir = path.join(repoRoot, ".watchdog");
