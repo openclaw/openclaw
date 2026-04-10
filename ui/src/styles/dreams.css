@@ -510,39 +510,15 @@
 }
 
 .dreams-advanced__summary {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.dreams-advanced__summary-card {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 14px 16px;
-  border-radius: 14px;
-  border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
-  background: color-mix(in oklab, var(--panel) 88%, transparent);
-}
-
-.dreams-advanced__summary-label {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  margin-top: 12px;
+  font-size: 12px;
+  line-height: 1.5;
   color: var(--muted);
 }
 
-.dreams-advanced__summary-value {
-  font-size: 24px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  color: var(--text);
-}
-
 .dreams-advanced__sections {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: 16px;
 }
 
@@ -558,11 +534,17 @@
 
 .dreams-advanced__section-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
   padding: 14px 16px;
   border-bottom: 1px solid color-mix(in oklab, var(--border) 62%, transparent);
+  flex-wrap: wrap;
+}
+
+.dreams-advanced__section-copy {
+  min-width: 0;
+  max-width: 56ch;
 }
 
 .dreams-advanced__section-title {
@@ -571,6 +553,20 @@
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--muted);
+}
+
+.dreams-advanced__section-description {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.dreams-advanced__section-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .dreams-advanced__section-count {
@@ -588,6 +584,39 @@
   font-variant-numeric: tabular-nums;
 }
 
+.dreams-advanced__sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--border) 62%, transparent);
+  background: color-mix(in oklab, var(--surface) 92%, transparent);
+}
+
+.dreams-advanced__sort-btn {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background 0.2s ease,
+    color 0.2s ease;
+}
+
+.dreams-advanced__sort-btn:hover {
+  color: var(--text);
+}
+
+.dreams-advanced__sort-btn--active {
+  background: color-mix(in oklab, var(--accent-subtle) 85%, transparent);
+  color: var(--accent);
+}
+
 .dreams-advanced__list {
   display: flex;
   flex-direction: column;
@@ -596,6 +625,20 @@
 .dreams-advanced__item {
   padding: 14px 16px;
   border-top: 1px solid color-mix(in oklab, var(--border) 50%, transparent);
+}
+
+.dreams-advanced__badge {
+  display: inline-flex;
+  align-items: center;
+  margin-bottom: 10px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--accent-subtle) 72%, transparent);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .dreams-advanced__item:first-child {
@@ -837,11 +880,6 @@
 
   .dreams-advanced {
     padding: 20px 16px 32px;
-  }
-
-  .dreams-advanced__summary,
-  .dreams-advanced__sections {
-    grid-template-columns: 1fr;
   }
 
   .dreams__phases {

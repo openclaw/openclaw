@@ -2,7 +2,12 @@
 
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
-import { renderDreaming, setDreamSubTab, type DreamingProps } from "./dreaming.ts";
+import {
+  renderDreaming,
+  setDreamAdvancedWaitingSort,
+  setDreamSubTab,
+  type DreamingProps,
+} from "./dreaming.ts";
 
 function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
   return {
@@ -315,9 +320,10 @@ describe("dreaming view", () => {
 
   it("renders operator actions and evidence lists on the advanced tab", () => {
     setDreamSubTab("advanced");
+    setDreamAdvancedWaitingSort("recent");
     const container = renderInto(buildProps());
     expect(container.querySelector(".dreams-advanced__title")?.textContent).toContain(
-      "Grounded Replay",
+      "Daily Log Replay",
     );
     const buttons = [...container.querySelectorAll("button")].map((node) =>
       node.textContent?.trim(),
@@ -325,10 +331,20 @@ describe("dreaming view", () => {
     expect(buttons).toContain("Backfill");
     expect(buttons).toContain("Reset");
     expect(buttons).toContain("Clear Grounded");
-    expect(container.querySelector(".dreams-advanced__summary-value")?.textContent).toBe("47");
+    expect(buttons).toContain("Most recent");
+    expect(buttons).toContain("Strongest support");
+    const sectionTitles = [...container.querySelectorAll(".dreams-advanced__section-title")].map(
+      (node) => node.textContent?.trim(),
+    );
+    expect(sectionTitles).toEqual(["From Daily Log", "Waiting for Promotion", "Recent Promotions"]);
+    expect(container.querySelector(".dreams-advanced__summary")?.textContent).toContain(
+      "1 from daily log",
+    );
     expect(container.querySelector(".dreams-advanced__item")?.textContent).toContain(
       "Emma prefers shorter",
     );
+    expect(container.textContent).not.toContain("Signal Hotspots");
+    setDreamAdvancedWaitingSort("recent");
     setDreamSubTab("scene");
   });
 
