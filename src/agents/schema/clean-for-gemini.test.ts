@@ -68,9 +68,18 @@ describe("cleanSchemaForGemini", () => {
     expect(cleaned.required).toBeUndefined();
   });
 
-  it("leaves required as-is when properties is absent", () => {
+  it("removes required from object schemas when properties is absent", () => {
     const cleaned = cleanSchemaForGemini({
       type: "object",
+      required: ["a", "b"],
+    }) as { required?: string[] };
+
+    expect(cleaned.required).toBeUndefined();
+  });
+
+  it("leaves required as-is for non-object schemas when properties is absent", () => {
+    const cleaned = cleanSchemaForGemini({
+      type: "array",
       required: ["a", "b"],
     }) as { required?: string[] };
 

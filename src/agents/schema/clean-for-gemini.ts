@@ -214,12 +214,18 @@ function simplifyUnionVariants(params: { obj: Record<string, unknown>; variants:
 
 // Gemini rejects object schemas whose `required` entries do not exist in `properties`.
 function sanitizeRequiredFields(schema: Record<string, unknown>): Record<string, unknown> {
+  if (!Array.isArray(schema.required)) {
+    return schema;
+  }
+
   if (
-    !Array.isArray(schema.required) ||
     !schema.properties ||
     typeof schema.properties !== "object" ||
     Array.isArray(schema.properties)
   ) {
+    if (schema.type === "object") {
+      delete schema.required;
+    }
     return schema;
   }
 
