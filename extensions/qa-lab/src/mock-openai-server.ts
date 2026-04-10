@@ -324,7 +324,7 @@ function extractLastCapture(text: string, pattern: RegExp) {
   let lastMatch: RegExpExecArray | null = null;
   const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
   const globalPattern = new RegExp(pattern.source, flags);
-  for (const match of text.matchAll(globalPattern)) {
+  for (let match = globalPattern.exec(text); match; match = globalPattern.exec(text)) {
     lastMatch = match;
   }
   return lastMatch?.[1]?.trim() || null;
