@@ -1253,6 +1253,105 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
+  it("fails closed with a visible reply when planning stalls without concrete progress", async () => {
+    setNoAbort();
+    vi.useFakeTimers();
+    const cfg = {
+      ...emptyConfig,
+      agents: {
+        defaults: {
+          verboseDefault: "on",
+        },
+      },
+    } satisfies OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      ChatType: "direct",
+      SessionKey: "agent:main:discord:channel:memory",
+    });
+
+    const replyResolver = vi.fn(
+      async (_ctx: MsgContext, opts?: GetReplyOptions, _cfg?: OpenClawConfig) => {
+        await opts?.onPlanUpdate?.({
+          phase: "update",
+          explanation: "Inspect code, patch it, run tests.",
+          steps: ["Inspect code", "Patch code", "Run tests"],
+        });
+        return await new Promise<ReplyPayload | undefined>((_resolve, reject) => {
+          opts?.abortSignal?.addEventListener(
+            "abort",
+            () => reject(opts.abortSignal?.reason ?? new Error("aborted")),
+            { once: true },
+          );
+        });
+      },
+    );
+
+    const pending = dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    await vi.advanceTimersByTimeAsync(45_000);
+    const result = await pending;
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        isError: true,
+        text: "⚠️ Turn stalled after planning and was stopped instead of hanging silently. Please retry.",
+      }),
+    );
+    expect(result.queuedFinal).toBe(true);
+    vi.useRealTimers();
+  });
+
+  it("does not trip the planning stall guard after concrete progress is emitted", async () => {
+    setNoAbort();
+    vi.useFakeTimers();
+    const cfg = {
+      ...emptyConfig,
+      agents: {
+        defaults: {
+          verboseDefault: "on",
+        },
+      },
+    } satisfies OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      ChatType: "direct",
+      SessionKey: "agent:main:discord:channel:memory",
+    });
+
+    const replyResolver = vi.fn(
+      async (_ctx: MsgContext, opts?: GetReplyOptions, _cfg?: OpenClawConfig) => {
+        await opts?.onPlanUpdate?.({
+          phase: "update",
+          explanation: "Inspect code, patch it, run tests.",
+          steps: ["Inspect code", "Patch code", "Run tests"],
+        });
+        await opts?.onToolResult?.({ text: "patched file" });
+        await new Promise((resolve) => setTimeout(resolve, 46_000));
+        return { text: "done" } satisfies ReplyPayload;
+      },
+    );
+
+    const pending = dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    await vi.advanceTimersByTimeAsync(46_000);
+    const result = await pending;
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "patched file" }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        isError: true,
+        text: "⚠️ Turn stalled after planning and was stopped instead of hanging silently. Please retry.",
+      }),
+    );
+    expect(result.queuedFinal).toBe(true);
+    vi.useRealTimers();
+  });
+
   it("suppresses plan and working-status progress when session verbose is off", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {

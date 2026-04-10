@@ -5,6 +5,7 @@ import { CommandLane } from "./lanes.js";
 const diagnosticMocks = vi.hoisted(() => ({
   logLaneEnqueue: vi.fn(),
   logLaneDequeue: vi.fn(),
+  logSessionStateChange: vi.fn(),
   diag: {
     debug: vi.fn(),
     warn: vi.fn(),
@@ -15,6 +16,7 @@ const diagnosticMocks = vi.hoisted(() => ({
 vi.mock("../logging/diagnostic.js", () => ({
   logLaneEnqueue: diagnosticMocks.logLaneEnqueue,
   logLaneDequeue: diagnosticMocks.logLaneDequeue,
+  logSessionStateChange: diagnosticMocks.logSessionStateChange,
   diagnosticLogger: diagnosticMocks.diag,
 }));
 
@@ -81,6 +83,7 @@ describe("command queue", () => {
     setCommandLaneConcurrency(CommandLane.Main, 1);
     diagnosticMocks.logLaneEnqueue.mockClear();
     diagnosticMocks.logLaneDequeue.mockClear();
+    diagnosticMocks.logSessionStateChange.mockClear();
     diagnosticMocks.diag.debug.mockClear();
     diagnosticMocks.diag.warn.mockClear();
     diagnosticMocks.diag.error.mockClear();
@@ -179,6 +182,40 @@ describe("command queue", () => {
     expect(diagnosticMocks.diag.debug).toHaveBeenCalledWith(
       expect.stringContaining("lane task interrupted: lane=nested"),
     );
+  });
+
+  it("fail-closes session lane state on failover timeout errors", async () => {
+    const error = new Error("LLM request timed out.");
+    error.name = "FailoverError";
+
+    await expect(
+      enqueueCommandInLane("session:agent:main:discord:channel:123", async () => {
+        throw error;
+      }),
+    ).rejects.toBe(error);
+
+    expect(diagnosticMocks.logSessionStateChange).toHaveBeenCalledWith({
+      sessionKey: "agent:main:discord:channel:123",
+      state: "idle",
+      reason: "lane_task_error_fail_closed",
+    });
+  });
+
+  it("fail-closes main lane state on failover timeout errors", async () => {
+    const error = new Error("LLM request timed out.");
+    error.name = "FailoverError";
+
+    await expect(
+      enqueueCommandInLane("main", async () => {
+        throw error;
+      }),
+    ).rejects.toBe(error);
+
+    expect(diagnosticMocks.logSessionStateChange).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      state: "idle",
+      reason: "lane_task_error_fail_closed",
+    });
   });
 
   it("getActiveTaskCount returns count of currently executing tasks", async () => {

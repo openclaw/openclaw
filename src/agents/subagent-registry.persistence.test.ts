@@ -404,7 +404,7 @@ describe("subagent registry persistence", () => {
     expect(afterSecond.runs?.["run-4"]).toBeUndefined();
   });
 
-  it("reconciles orphaned restored runs by pruning them from registry", async () => {
+  it("reconciles orphaned restored runs into announced retained error records", async () => {
     const persisted = createPersistedEndedRun({
       runId: "run-orphan-restore",
       childSessionKey: "agent:main:subagent:ghost-restore",
@@ -417,12 +417,18 @@ describe("subagent registry persistence", () => {
 
     await restartRegistryAndFlush();
 
-    expect(announceSpy).not.toHaveBeenCalled();
+    expect(announceSpy).toHaveBeenCalledTimes(1);
     const after = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
       runs?: Record<string, unknown>;
     };
-    expect(after.runs?.["run-orphan-restore"]).toBeUndefined();
-    expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
+    expect(after.runs?.["run-orphan-restore"]).toMatchObject({
+      outcome: {
+        status: "error",
+        error: "orphaned subagent run (missing-session-entry)",
+      },
+      cleanupHandled: true,
+    });
+    expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(1);
   });
 
   it("removes attachments when pruning orphaned restored runs", async () => {
@@ -556,7 +562,7 @@ describe("subagent registry persistence", () => {
     expect(resolved?.endedAt).toBe(220);
   });
 
-  it("resume guard prunes orphan runs before announce retry", async () => {
+  it("resume guard announces orphan runs back to the parent instead of pruning them silently", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
     const runId = "run-orphan-resume-guard";
@@ -587,10 +593,66 @@ describe("subagent registry persistence", () => {
     expect(changed).toBe(true);
     await flushQueuedRegistryWork();
 
-    expect(announceSpy).not.toHaveBeenCalled();
-    expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
+    expect(announceSpy).toHaveBeenCalledTimes(1);
+    expect(announceSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        childRunId: runId,
+        childSessionKey,
+        requesterSessionKey: "agent:main:main",
+        outcome: {
+          status: "error",
+          error: "orphaned subagent run (missing-session-entry)",
+        },
+      }),
+    );
+    expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(1);
     const persisted = loadSubagentRegistryFromDisk();
-    expect(persisted.has(runId)).toBe(false);
+    expect(persisted.get(runId)).toMatchObject({
+      outcome: {
+        status: "error",
+        error: "orphaned subagent run (missing-session-entry)",
+      },
+      cleanupHandled: true,
+    });
+  });
+
+  it("startup restore announces orphaned ended runs instead of silently dropping them", async () => {
+    announceSpy.mockClear();
+    const registryPath = await writePersistedRegistry(
+      createPersistedEndedRun({
+        runId: "run-orphan-restore",
+        childSessionKey: "agent:main:subagent:ghost-restore",
+        task: "restore orphan announce",
+        cleanup: "keep",
+      }),
+      { seedChildSessions: false },
+    );
+
+    await restartRegistryAndFlush();
+
+    expect(announceSpy).toHaveBeenCalledTimes(1);
+    expect(announceSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        childRunId: "run-orphan-restore",
+        childSessionKey: "agent:main:subagent:ghost-restore",
+        requesterSessionKey: "agent:main:main",
+        outcome: {
+          status: "error",
+          error: "orphaned subagent run (missing-session-entry)",
+        },
+      }),
+    );
+    const persisted = await readPersistedRun<Record<string, unknown>>(
+      registryPath,
+      "run-orphan-restore",
+    );
+    expect(persisted).toMatchObject({
+      outcome: {
+        status: "error",
+        error: "orphaned subagent run (missing-session-entry)",
+      },
+      cleanupHandled: true,
+    });
   });
 
   it("uses isolated temp state when OPENCLAW_STATE_DIR is unset in tests", async () => {

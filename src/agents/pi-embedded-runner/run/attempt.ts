@@ -1831,6 +1831,7 @@ export async function runEmbeddedAttempt(
                   `${params.provider}/${params.modelId} route=${preemptiveCompaction.route} ` +
                   `truncatedCount=${truncationResult.truncatedCount} ` +
                   `estimatedPromptTokens=${preemptiveCompaction.estimatedPromptTokens} ` +
+                  `promptUsageRatio=${preemptiveCompaction.promptUsageRatio.toFixed(2)} ` +
                   `promptBudgetBeforeReserve=${preemptiveCompaction.promptBudgetBeforeReserve} ` +
                   `overflowTokens=${preemptiveCompaction.overflowTokens} ` +
                   `toolResultReducibleChars=${preemptiveCompaction.toolResultReducibleChars} ` +
@@ -1862,6 +1863,7 @@ export async function runEmbeddedAttempt(
                 `provider=${params.provider}/${params.modelId} ` +
                 `route=${preemptiveCompaction.route} ` +
                 `estimatedPromptTokens=${preemptiveCompaction.estimatedPromptTokens} ` +
+                `promptUsageRatio=${preemptiveCompaction.promptUsageRatio.toFixed(2)} ` +
                 `promptBudgetBeforeReserve=${preemptiveCompaction.promptBudgetBeforeReserve} ` +
                 `overflowTokens=${preemptiveCompaction.overflowTokens} ` +
                 `toolResultReducibleChars=${preemptiveCompaction.toolResultReducibleChars} ` +

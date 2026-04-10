@@ -71,6 +71,10 @@ let getReplyFromConfigRuntimePromise: Promise<
 let abortRuntimePromise: Promise<typeof import("./abort.runtime.js")> | null = null;
 let ttsRuntimePromise: Promise<typeof import("../../tts/tts.runtime.js")> | null = null;
 
+const CONTROL_PLANE_STALL_TIMEOUT_MS = 45_000;
+const CONTROL_PLANE_STALL_REPLY_TEXT =
+  "⚠️ Turn stalled after planning and was stopped instead of hanging silently. Please retry.";
+
 function loadRouteReplyRuntime() {
   routeReplyRuntimePromise ??= import("./route-reply.runtime.js");
   return routeReplyRuntimePromise;
@@ -89,6 +93,28 @@ function loadAbortRuntime() {
 function loadTtsRuntime() {
   ttsRuntimePromise ??= import("../../tts/tts.runtime.js");
   return ttsRuntimePromise;
+}
+
+function createAbortControllerWithForwardedSignal(signal?: AbortSignal): {
+  controller: AbortController;
+  cleanup: () => void;
+} {
+  const controller = new AbortController();
+  if (!signal) {
+    return { controller, cleanup: () => {} };
+  }
+  if (signal.aborted) {
+    controller.abort(signal.reason);
+    return { controller, cleanup: () => {} };
+  }
+  const onAbort = () => {
+    controller.abort(signal.reason);
+  };
+  signal.addEventListener("abort", onAbort, { once: true });
+  return {
+    controller,
+    cleanup: () => signal.removeEventListener("abort", onAbort),
+  };
 }
 
 async function maybeApplyTtsToReplyPayload(
@@ -289,6 +315,32 @@ export async function dispatchReplyFromConfig(params: {
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
   const hookRunner = getGlobalHookRunner();
+  const controlPlaneAbort = createAbortControllerWithForwardedSignal(
+    params.replyOptions?.abortSignal,
+  );
+  let controlPlaneStallTimer: NodeJS.Timeout | null = null;
+  let controlPlaneTimedOut = false;
+  let concreteProgressSeen = false;
+  const clearControlPlaneStallTimer = () => {
+    if (controlPlaneStallTimer) {
+      clearTimeout(controlPlaneStallTimer);
+      controlPlaneStallTimer = null;
+    }
+  };
+  const markConcreteProgress = () => {
+    concreteProgressSeen = true;
+    clearControlPlaneStallTimer();
+  };
+  const armControlPlaneStallTimer = () => {
+    if (concreteProgressSeen || controlPlaneStallTimer || ctx.CommandSource === "native") {
+      return;
+    }
+    controlPlaneStallTimer = setTimeout(() => {
+      controlPlaneStallTimer = null;
+      controlPlaneTimedOut = true;
+      controlPlaneAbort.controller.abort(new Error("control_plane_stall"));
+    }, CONTROL_PLANE_STALL_TIMEOUT_MS);
+  };
 
   // Extract message context for hooks (plugin and internal)
   const timestamp =
@@ -826,9 +878,11 @@ export async function dispatchReplyFromConfig(params: {
       ctx,
       {
         ...params.replyOptions,
+        abortSignal: controlPlaneAbort.controller.signal,
         typingPolicy: typing.typingPolicy,
         suppressTyping: typing.suppressTyping,
         onToolResult: (payload: ReplyPayload) => {
+          markConcreteProgress();
           const run = async () => {
             const ttsPayload = await maybeApplyTtsToReplyPayload({
               payload,
@@ -854,12 +908,14 @@ export async function dispatchReplyFromConfig(params: {
           if (phase !== "update") {
             return;
           }
+          armControlPlaneStallTimer();
           return sendPlanUpdate({ explanation, steps });
         },
         onApprovalEvent: ({ phase, status, command, message }) => {
           if (phase !== "requested") {
             return;
           }
+          markConcreteProgress();
           const label = summarizeApprovalLabel({ status, command, message });
           if (!label) {
             return;
@@ -870,6 +926,7 @@ export async function dispatchReplyFromConfig(params: {
           if (phase !== "end") {
             return;
           }
+          markConcreteProgress();
           const label = summarizePatchLabel({ summary, title });
           if (!label) {
             return;
@@ -877,6 +934,7 @@ export async function dispatchReplyFromConfig(params: {
           return maybeSendWorkingStatus(label);
         },
         onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => {
+          markConcreteProgress();
           const run = async () => {
             // Suppress reasoning payloads — channels using this generic dispatch
             // path (WhatsApp, web, etc.) do not have a dedicated reasoning lane.
@@ -1047,8 +1105,43 @@ export async function dispatchReplyFromConfig(params: {
     markIdle("message_completed");
     return { queuedFinal, counts };
   } catch (err) {
+    if (controlPlaneTimedOut) {
+      let queuedFinal = false;
+      let routedFinalCount = 0;
+      const payload: ReplyPayload = {
+        text: CONTROL_PLANE_STALL_REPLY_TEXT,
+        isError: true,
+      };
+      if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+        const result = await routeReplyRuntime.routeReply({
+          payload,
+          channel: originatingChannel,
+          to: originatingTo,
+          sessionKey: ctx.SessionKey,
+          accountId: ctx.AccountId,
+          threadId: routeThreadId,
+          cfg,
+          isGroup,
+          groupId,
+        });
+        queuedFinal = result.ok;
+        if (result.ok) {
+          routedFinalCount += 1;
+        }
+      } else {
+        queuedFinal = dispatcher.sendFinalReply(payload);
+      }
+      const counts = dispatcher.getQueuedCounts();
+      counts.final += routedFinalCount;
+      recordProcessed("error", { error: "control_plane_stall" });
+      markIdle("control_plane_stall");
+      return { queuedFinal, counts };
+    }
     recordProcessed("error", { error: String(err) });
     markIdle("message_error");
     throw err;
+  } finally {
+    clearControlPlaneStallTimer();
+    controlPlaneAbort.cleanup();
   }
 }

@@ -8,6 +8,7 @@ import {
   pruneDiagnosticSessionStates,
   resetDiagnosticSessionStateForTest,
   type SessionRef,
+  type SessionState,
   type SessionStateValue,
 } from "./diagnostic-session-state.js";
 import { createSubsystemLogger } from "./subsystem.js";
@@ -28,6 +29,18 @@ const MAX_STUCK_SESSION_WARN_MS = 24 * 60 * 60 * 1000;
 let commandPollBackoffRuntimePromise: Promise<
   typeof import("../agents/command-poll-backoff.runtime.js")
 > | null = null;
+const EMBEDDED_RUN_STATE_KEY = Symbol.for("openclaw.embeddedRunState");
+const REPLY_RUN_STATE_KEY = Symbol.for("openclaw.replyRunRegistry");
+
+type EmbeddedRunStateLike = {
+  activeRuns?: Map<string, unknown>;
+  sessionIdsByKey?: Map<string, string>;
+};
+
+type ReplyRunStateLike = {
+  activeSessionIdsByKey?: Map<string, string>;
+  activeKeysBySessionId?: Map<string, string>;
+};
 
 function loadCommandPollBackoffRuntime() {
   commandPollBackoffRuntimePromise ??= import("../agents/command-poll-backoff.runtime.js");
@@ -36,6 +49,46 @@ function loadCommandPollBackoffRuntime() {
 
 function markActivity() {
   lastActivityAt = Date.now();
+}
+
+function getEmbeddedRunState(): EmbeddedRunStateLike | undefined {
+  return (globalThis as Record<PropertyKey, unknown>)[EMBEDDED_RUN_STATE_KEY] as
+    | EmbeddedRunStateLike
+    | undefined;
+}
+
+function getReplyRunState(): ReplyRunStateLike | undefined {
+  return (globalThis as Record<PropertyKey, unknown>)[REPLY_RUN_STATE_KEY] as
+    | ReplyRunStateLike
+    | undefined;
+}
+
+function sessionHasLiveRun(state: SessionState): boolean {
+  const sessionId = state.sessionId?.trim();
+  const sessionKey = state.sessionKey?.trim();
+  const embedded = getEmbeddedRunState();
+  const reply = getReplyRunState();
+
+  if (sessionId) {
+    if (embedded?.activeRuns?.has(sessionId)) {
+      return true;
+    }
+    if (reply?.activeKeysBySessionId?.has(sessionId)) {
+      return true;
+    }
+  }
+
+  if (sessionKey) {
+    const embeddedSessionId = embedded?.sessionIdsByKey?.get(sessionKey);
+    if (embeddedSessionId && embedded?.activeRuns?.has(embeddedSessionId)) {
+      return true;
+    }
+    if (reply?.activeSessionIdsByKey?.has(sessionKey)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 export function resolveStuckSessionWarnMs(config?: OpenClawConfig): number {
@@ -349,6 +402,16 @@ export function startDiagnosticHeartbeat(
     const stuckSessionWarnMs = resolveStuckSessionWarnMs(heartbeatConfig);
     const now = Date.now();
     pruneDiagnosticSessionStates(now, true);
+    for (const [, state] of diagnosticSessionStates) {
+      if (state.state === "processing" && !sessionHasLiveRun(state)) {
+        logSessionStateChange({
+          sessionId: state.sessionId,
+          sessionKey: state.sessionKey,
+          state: "idle",
+          reason: "stale_processing_reconciled",
+        });
+      }
+    }
     const activeCount = Array.from(diagnosticSessionStates.values()).filter(
       (s) => s.state === "processing",
     ).length;

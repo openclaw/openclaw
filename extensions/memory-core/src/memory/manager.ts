@@ -324,7 +324,14 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       },
     });
     if (preflight.shouldInitializeProvider) {
-      await this.ensureProviderInitialized();
+      try {
+        await this.ensureProviderInitialized();
+      } catch (err) {
+        const message = String(err);
+        this.provider = null;
+        this.providerUnavailableReason = message;
+        log.warn(`memory search degrading to FTS-only after provider init failure: ${message}`);
+      }
     }
     const minScore = opts?.minScore ?? this.settings.query.minScore;
     const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
@@ -386,7 +393,14 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         ? await this.searchKeyword(cleaned, candidates).catch(() => [])
         : [];
 
-    const queryVec = await this.embedQueryWithTimeout(cleaned);
+    let queryVec: number[] = [];
+    try {
+      queryVec = await this.embedQueryWithTimeout(cleaned);
+    } catch (err) {
+      const message = String(err);
+      this.providerUnavailableReason = message;
+      log.warn(`memory search degrading to keyword-only after query embedding failure: ${message}`);
+    }
     const hasVector = queryVec.some((v) => v !== 0);
     const vectorResults = hasVector
       ? await this.searchVector(queryVec, candidates).catch(() => [])

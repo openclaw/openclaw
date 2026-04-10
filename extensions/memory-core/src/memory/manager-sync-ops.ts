@@ -76,6 +76,7 @@ const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const SESSION_DIRTY_DEBOUNCE_MS = 5000;
+const SESSION_DELTA_RETRY_DELAY_MS = 60_000;
 const SESSION_DELTA_READ_CHUNK_BYTES = 64 * 1024;
 const VECTOR_LOAD_TIMEOUT_MS = 30_000;
 const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
@@ -431,6 +432,11 @@ export abstract class MemoryManagerSyncOps {
     const pending = Array.from(this.sessionPendingFiles);
     this.sessionPendingFiles.clear();
     let shouldSync = false;
+    const retriableThresholds: Array<{
+      sessionFile: string;
+      restoreBytes: number;
+      restoreMessages: number;
+    }> = [];
     for (const sessionFile of pending) {
       const delta = await this.updateSessionDelta(sessionFile);
       if (!delta) {
@@ -454,10 +460,40 @@ export abstract class MemoryManagerSyncOps {
       delta.pendingMessages =
         messagesThreshold > 0 ? Math.max(0, delta.pendingMessages - messagesThreshold) : 0;
       shouldSync = true;
+      retriableThresholds.push({
+        sessionFile,
+        restoreBytes: bytesHit ? Math.max(bytesThreshold, 1) : 0,
+        restoreMessages: messagesHit ? Math.max(messagesThreshold, 1) : 0,
+      });
     }
     if (shouldSync) {
       void this.sync({ reason: "session-delta" }).catch((err) => {
         log.warn(`memory sync failed (session-delta): ${String(err)}`);
+        if (this.closed || !/\bfetch failed\b/i.test(String(err))) {
+          return;
+        }
+        for (const threshold of retriableThresholds) {
+          this.sessionPendingFiles.add(threshold.sessionFile);
+          const delta = this.sessionDeltas.get(threshold.sessionFile);
+          if (!delta) {
+            continue;
+          }
+          if (threshold.restoreBytes > 0) {
+            delta.pendingBytes += threshold.restoreBytes;
+          }
+          if (threshold.restoreMessages > 0) {
+            delta.pendingMessages += threshold.restoreMessages;
+          }
+        }
+        if (this.sessionWatchTimer) {
+          return;
+        }
+        this.sessionWatchTimer = setTimeout(() => {
+          this.sessionWatchTimer = null;
+          void this.processSessionDeltaBatch().catch((retryErr) => {
+            log.warn(`memory session delta failed: ${String(retryErr)}`);
+          });
+        }, SESSION_DELTA_RETRY_DELAY_MS);
       });
     }
   }

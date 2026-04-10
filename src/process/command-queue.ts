@@ -1,4 +1,9 @@
-import { diagnosticLogger as diag, logLaneDequeue, logLaneEnqueue } from "../logging/diagnostic.js";
+import {
+  diagnosticLogger as diag,
+  logLaneDequeue,
+  logLaneEnqueue,
+  logSessionStateChange,
+} from "../logging/diagnostic.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { CommandLane } from "./lanes.js";
 /**
@@ -55,6 +60,28 @@ type ActiveTaskWaiter = {
 
 function isExpectedNonErrorLaneFailure(err: unknown): boolean {
   return err instanceof Error && err.name === "LiveSessionModelSwitchError";
+}
+
+function isFailClosedLaneError(err: unknown): boolean {
+  return err instanceof Error && err.name === "FailoverError";
+}
+
+function resolveSessionRefForLane(lane: string): { sessionKey?: string } | null {
+  const normalized = normalizeLane(lane);
+  if (!normalized) {
+    return null;
+  }
+  if (normalized === "main") {
+    return { sessionKey: "agent:main:main" };
+  }
+  if (normalized.startsWith("session:")) {
+    const sessionKey = normalized.slice("session:".length).trim();
+    return sessionKey ? { sessionKey } : null;
+  }
+  if (normalized.startsWith("agent:")) {
+    return { sessionKey: normalized };
+  }
+  return null;
 }
 
 /**
@@ -203,6 +230,16 @@ function drainLane(lane: string) {
               diag.debug(
                 `lane task interrupted: lane=${lane} durationMs=${Date.now() - startTime} reason="${String(err)}"`,
               );
+            }
+            if (!isProbeLane && isFailClosedLaneError(err)) {
+              const sessionRef = resolveSessionRefForLane(lane);
+              if (sessionRef?.sessionKey) {
+                logSessionStateChange({
+                  sessionKey: sessionRef.sessionKey,
+                  state: "idle",
+                  reason: "lane_task_error_fail_closed",
+                });
+              }
             }
             if (completedCurrentGeneration) {
               notifyActiveTaskWaiters();
