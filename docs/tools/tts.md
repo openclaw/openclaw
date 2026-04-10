@@ -9,7 +9,7 @@ title: "Text-to-Speech"
 
 # Text-to-speech (TTS)
 
-OpenClaw can convert outbound replies into audio using ElevenLabs, Microsoft, MiniMax, or OpenAI.
+OpenClaw can convert outbound replies into audio using ElevenLabs, Microsoft, MiniMax, OpenAI, or Mistral.
 It works anywhere OpenClaw can send audio.
 
 ## Supported services
@@ -18,6 +18,7 @@ It works anywhere OpenClaw can send audio.
 - **Microsoft** (primary or fallback provider; current bundled implementation uses `node-edge-tts`)
 - **MiniMax** (primary or fallback provider; uses the T2A v2 API)
 - **OpenAI** (primary or fallback provider; also used for summaries)
+- **Mistral** (primary or fallback provider; uses Voxtral TTS and can reuse your Mistral provider auth)
 
 ### Microsoft speech notes
 
@@ -34,17 +35,22 @@ or ElevenLabs.
 
 ## Optional keys
 
-If you want OpenAI, ElevenLabs, or MiniMax:
+If you want OpenAI, ElevenLabs, MiniMax, or Mistral:
 
 - `ELEVENLABS_API_KEY` (or `XI_API_KEY`)
 - `MINIMAX_API_KEY`
 - `OPENAI_API_KEY`
+- `MISTRAL_API_KEY`
 
 Microsoft speech does **not** require an API key.
 
 If multiple providers are configured, the selected provider is used first and the others are fallback options.
 Auto-summary uses the configured `summaryModel` (or `agents.defaults.model.primary`),
 so that provider must also be authenticated if you enable summaries.
+
+If you already configured an API key for models from OpenAI, Mistral or MiniMax,
+OpenClaw can reuse that same auth for TTS. You do not need to copy the
+key into `messages.tts.providers.<provider>.apiKey` unless you want a TTS-specific override.
 
 ## Service links
 
@@ -116,6 +122,25 @@ Full schema is in [Gateway configuration](/gateway/configuration).
             useSpeakerBoost: true,
             speed: 1.0,
           },
+        },
+      },
+    },
+  },
+}
+```
+
+### Mistral with shared provider auth
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "mistral",
+      providers: {
+        mistral: {
+          model: "voxtral-mini-tts-2603",
+          voice: "gb_oliver_excited",
         },
       },
     },

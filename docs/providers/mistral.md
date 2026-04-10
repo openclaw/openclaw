@@ -1,15 +1,16 @@
 ---
-summary: "Use Mistral models and Voxtral transcription with OpenClaw"
+summary: "Use Mistral models plus Voxtral speech with OpenClaw"
 read_when:
   - You want to use Mistral models in OpenClaw
   - You need Mistral API key onboarding and model refs
+  - You want Voxtral transcription or text-to-speech
 title: "Mistral"
 ---
 
 # Mistral
 
-OpenClaw supports Mistral for both text/image model routing (`mistral/...`) and
-audio transcription via Voxtral in media understanding.
+OpenClaw supports Mistral for text/image model routing (`mistral/...`), audio
+transcription via Voxtral in media understanding, and Voxtral text-to-speech.
 Mistral can also be used for memory embeddings (`memorySearch.provider = "mistral"`).
 
 - Provider: `mistral`
@@ -114,8 +115,34 @@ The media transcription path uses `/v1/audio/transcriptions`. The default audio 
 
   </Accordion>
 
+  <Accordion title="Text-to-speech (Voxtral)">
+    See the [Voxtral TTS documentation](https://docs.mistral.ai/capabilities/audio/text_to_speech) for available models and voices.
+
+    ```json5
+    {
+      messages: {
+        tts: {
+          auto: "always",
+          provider: "mistral",
+          providers: {
+            mistral: {
+              voice: "gb_oliver_excited",
+              model: "voxtral-mini-tts-2603",
+              apiKey: "mistral_api_key",
+              baseUrl: "https://api.mistral.ai/v1",
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    `openclaw onboard --auth-choice mistral-api-key` makes the same key available to Mistral TTS. Set `messages.tts.provider` to `"mistral"` or use `/tts provider mistral`; no separate TTS API key is required. TTS path uses `/v1/audio/speech`.
+
+  </Accordion>
+
   <Accordion title="Auth and base URL">
-    - Mistral auth uses `MISTRAL_API_KEY`.
+    - Mistral auth uses `MISTRAL_API_KEY` for models, Voxtral transcription, and Voxtral TTS.
     - Provider base URL defaults to `https://api.mistral.ai/v1`.
     - Onboarding default model is `mistral/mistral-large-latest`.
     - Z.AI uses Bearer auth with your API key.

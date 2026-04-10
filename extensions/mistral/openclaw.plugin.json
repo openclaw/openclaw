@@ -21,6 +21,7 @@
     }
   ],
   "contracts": {
+    "speechProviders": ["mistral"],
     "mediaUnderstandingProviders": ["mistral"]
   },
   "configSchema": {
