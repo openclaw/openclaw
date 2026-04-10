@@ -67,7 +67,7 @@ async function prewarmConfiguredPrimaryModel(params: {
   if (runtime !== "auto" && runtime !== "pi") {
     return;
   }
-  if (selectAgentHarness({ provider, modelId: model }).id !== "pi") {
+  if (selectAgentHarness({ provider, modelId: model, config: params.cfg }).id !== "pi") {
     return;
   }
   const agentDir = resolveOpenClawAgentDir();

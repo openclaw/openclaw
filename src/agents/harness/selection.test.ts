@@ -1,11 +1,12 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../pi-embedded-runner/run/types.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
-import { runAgentHarnessAttemptWithFallback } from "./selection.js";
+import { runAgentHarnessAttemptWithFallback, selectAgentHarness } from "./selection.js";
 import type { AgentHarness } from "./types.js";
 
 const piRunAttempt = vi.fn(async () => createAttemptResult("pi"));
@@ -20,6 +21,7 @@ vi.mock("./builtin-pi.js", () => ({
 }));
 
 const originalRuntime = process.env.OPENCLAW_AGENT_RUNTIME;
+const originalHarnessFallback = process.env.OPENCLAW_AGENT_HARNESS_FALLBACK;
 
 afterEach(() => {
   clearAgentHarnesses();
@@ -29,9 +31,14 @@ afterEach(() => {
   } else {
     process.env.OPENCLAW_AGENT_RUNTIME = originalRuntime;
   }
+  if (originalHarnessFallback == null) {
+    delete process.env.OPENCLAW_AGENT_HARNESS_FALLBACK;
+  } else {
+    process.env.OPENCLAW_AGENT_HARNESS_FALLBACK = originalHarnessFallback;
+  }
 });
 
-function createAttemptParams(): EmbeddedRunAttemptParams {
+function createAttemptParams(config?: OpenClawConfig): EmbeddedRunAttemptParams {
   return {
     prompt: "hello",
     sessionId: "session-1",
@@ -45,6 +52,7 @@ function createAttemptParams(): EmbeddedRunAttemptParams {
     authStorage: {} as never,
     modelRegistry: {} as never,
     thinkLevel: "low",
+    config,
   } as EmbeddedRunAttemptParams;
 }
 
@@ -114,5 +122,65 @@ describe("runAgentHarnessAttemptWithFallback", () => {
       "codex startup failed",
     );
     expect(piRunAttempt).not.toHaveBeenCalled();
+  });
+
+  it("disables PI retry fallback when auto-selected harness fails and fallback is none", async () => {
+    process.env.OPENCLAW_AGENT_RUNTIME = "auto";
+    registerFailingCodexHarness();
+
+    await expect(
+      runAgentHarnessAttemptWithFallback(
+        createAttemptParams({ agents: { defaults: { embeddedHarness: { fallback: "none" } } } }),
+      ),
+    ).rejects.toThrow("codex startup failed");
+    expect(piRunAttempt).not.toHaveBeenCalled();
+  });
+
+  it("honors env fallback override over config fallback", async () => {
+    process.env.OPENCLAW_AGENT_RUNTIME = "auto";
+    process.env.OPENCLAW_AGENT_HARNESS_FALLBACK = "none";
+    registerFailingCodexHarness();
+
+    await expect(runAgentHarnessAttemptWithFallback(createAttemptParams())).rejects.toThrow(
+      "codex startup failed",
+    );
+    expect(piRunAttempt).not.toHaveBeenCalled();
+  });
+});
+
+describe("selectAgentHarness", () => {
+  it("fails instead of choosing PI when no plugin harness matches and fallback is none", () => {
+    expect(() =>
+      selectAgentHarness({
+        provider: "anthropic",
+        modelId: "sonnet-4.6",
+        config: { agents: { defaults: { embeddedHarness: { fallback: "none" } } } },
+      }),
+    ).toThrow("PI fallback is disabled");
+    expect(piRunAttempt).not.toHaveBeenCalled();
+  });
+
+  it("allows per-agent embedded harness policy overrides", () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: { embeddedHarness: { fallback: "pi" } },
+        list: [
+          { id: "main", default: true },
+          { id: "strict", embeddedHarness: { fallback: "none" } },
+        ],
+      },
+    };
+
+    expect(() =>
+      selectAgentHarness({
+        provider: "anthropic",
+        modelId: "sonnet-4.6",
+        config,
+        sessionKey: "agent:strict:session-1",
+      }),
+    ).toThrow("PI fallback is disabled");
+    expect(selectAgentHarness({ provider: "anthropic", modelId: "sonnet-4.6", config }).id).toBe(
+      "pi",
+    );
   });
 });

@@ -1,20 +1,35 @@
 export type EmbeddedAgentRuntime = "pi" | "auto" | (string & {});
+export type EmbeddedAgentHarnessFallback = "pi" | "none";
+
+export function normalizeEmbeddedAgentRuntime(raw: string | undefined): EmbeddedAgentRuntime {
+  const value = raw?.trim();
+  if (!value) {
+    return "auto";
+  }
+  if (value === "pi") {
+    return "pi";
+  }
+  if (value === "codex" || value === "codex-app-server" || value === "app-server") {
+    return "codex";
+  }
+  if (value === "auto") {
+    return "auto";
+  }
+  return value;
+}
 
 export function resolveEmbeddedAgentRuntime(
   env: NodeJS.ProcessEnv = process.env,
 ): EmbeddedAgentRuntime {
-  const raw = env.OPENCLAW_AGENT_RUNTIME?.trim();
-  if (!raw) {
-    return "auto";
+  return normalizeEmbeddedAgentRuntime(env.OPENCLAW_AGENT_RUNTIME?.trim());
+}
+
+export function resolveEmbeddedAgentHarnessFallback(
+  env: NodeJS.ProcessEnv = process.env,
+): EmbeddedAgentHarnessFallback | undefined {
+  const raw = env.OPENCLAW_AGENT_HARNESS_FALLBACK?.trim().toLowerCase();
+  if (raw === "pi" || raw === "none") {
+    return raw;
   }
-  if (raw === "pi") {
-    return "pi";
-  }
-  if (raw === "codex" || raw === "codex-app-server" || raw === "app-server") {
-    return "codex";
-  }
-  if (raw === "auto") {
-    return "auto";
-  }
-  return raw;
+  return undefined;
 }
