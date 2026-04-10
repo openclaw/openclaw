@@ -67,7 +67,7 @@ These commands sit beside the main test suites when you need QA-lab realism:
   - Starts the Docker-backed QA site for operator-style QA work.
 - `pnpm openclaw qa matrix`
   - Runs the Matrix live QA lane against a disposable Docker-backed Tuwunel homeserver.
-  - Provisions two temporary Matrix users plus one private room, then starts a QA gateway child with the real Matrix plugin as the SUT transport.
+  - Provisions three temporary Matrix users (`driver`, `sut`, `observer`) plus one private room, then starts a QA gateway child with the real Matrix plugin as the SUT transport.
   - Uses the pinned stable Tuwunel image `ghcr.io/matrix-construct/tuwunel:v1.5.1` by default. Override with `OPENCLAW_QA_MATRIX_TUWUNEL_IMAGE` when you need to test a different image.
   - Writes a Matrix QA report, summary, and observed-events artifact under `.artifacts/qa-e2e/...`.
 

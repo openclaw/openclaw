@@ -72,6 +72,7 @@ type TelegramQaSummary = {
   groupId: string;
   startedAt: string;
   finishedAt: string;
+  cleanupIssues: string[];
   counts: {
     total: number;
     passed: number;
@@ -428,6 +429,7 @@ async function waitForTelegramChannelRunning(
 }
 
 function renderTelegramQaMarkdown(params: {
+  cleanupIssues: string[];
   groupId: string;
   startedAt: string;
   finishedAt: string;
@@ -448,6 +450,14 @@ function renderTelegramQaMarkdown(params: {
     lines.push("");
     lines.push(`- Status: ${scenario.status}`);
     lines.push(`- Details: ${scenario.details}`);
+    lines.push("");
+  }
+  if (params.cleanupIssues.length > 0) {
+    lines.push("## Cleanup");
+    lines.push("");
+    for (const issue of params.cleanupIssues) {
+      lines.push(`- ${issue}`);
+    }
     lines.push("");
   }
   return lines.join("\n");
@@ -718,6 +728,7 @@ export async function runTelegramQaLive(params: {
   });
 
   const scenarioResults: TelegramQaScenarioResult[] = [];
+  const cleanupIssues: string[] = [];
   let canaryFailure: string | null = null;
   try {
     await waitForTelegramChannelRunning(gatewayHarness.gateway, sutAccountId);
@@ -783,7 +794,11 @@ export async function runTelegramQaLive(params: {
       }
     }
   } finally {
-    await gatewayHarness.stop();
+    try {
+      await gatewayHarness.stop();
+    } catch (error) {
+      cleanupIssues.push(`live gateway cleanup: ${formatErrorMessage(error)}`);
+    }
   }
 
   const finishedAt = new Date().toISOString();
@@ -791,6 +806,7 @@ export async function runTelegramQaLive(params: {
     groupId: runtimeEnv.groupId,
     startedAt,
     finishedAt,
+    cleanupIssues,
     counts: {
       total: scenarioResults.length,
       passed: scenarioResults.filter((entry) => entry.status === "pass").length,
@@ -804,6 +820,7 @@ export async function runTelegramQaLive(params: {
   await fs.writeFile(
     reportPath,
     `${renderTelegramQaMarkdown({
+      cleanupIssues,
       groupId: runtimeEnv.groupId,
       startedAt,
       finishedAt,
@@ -830,6 +847,18 @@ export async function runTelegramQaLive(params: {
   if (canaryFailure) {
     throw new Error(
       `${canaryFailure}\nArtifacts:\n- report: ${reportPath}\n- summary: ${summaryPath}\n- observedMessages: ${observedMessagesPath}`,
+    );
+  }
+  if (cleanupIssues.length > 0) {
+    throw new Error(
+      [
+        "Telegram QA cleanup failed after artifacts were written.",
+        ...cleanupIssues,
+        "Artifacts:",
+        `- report: ${reportPath}`,
+        `- summary: ${summaryPath}`,
+        `- observedMessages: ${observedMessagesPath}`,
+      ].join("\n"),
     );
   }
 

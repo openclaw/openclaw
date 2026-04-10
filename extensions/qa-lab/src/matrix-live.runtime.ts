@@ -360,6 +360,7 @@ export async function runMatrixQaLive(params: {
     },
   ];
   const scenarioResults: MatrixQaScenarioResult[] = [];
+  const cleanupErrors: string[] = [];
   let gatewayHarness: Awaited<ReturnType<typeof startQaLiveLaneGateway>> | null = null;
   let canaryFailed = false;
   let canarySince: string | undefined;
@@ -449,8 +450,25 @@ export async function runMatrixQaLive(params: {
       }
     }
   } finally {
-    await gatewayHarness?.stop().catch(() => {});
-    await harness.stop().catch(() => {});
+    if (gatewayHarness) {
+      try {
+        await gatewayHarness.stop();
+      } catch (error) {
+        cleanupErrors.push(`live gateway cleanup: ${formatErrorMessage(error)}`);
+      }
+    }
+    try {
+      await harness.stop();
+    } catch (error) {
+      cleanupErrors.push(`Matrix harness cleanup: ${formatErrorMessage(error)}`);
+    }
+  }
+  if (cleanupErrors.length > 0) {
+    checks.push({
+      name: "Matrix cleanup",
+      status: "fail",
+      details: cleanupErrors.join("\n"),
+    });
   }
 
   const finishedAtDate = new Date();
@@ -535,6 +553,18 @@ export async function runMatrixQaLive(params: {
         "Matrix QA failed.",
         ...failedChecks.map((check) => `check ${check.name}: ${check.details ?? "failed"}`),
         ...failedScenarios.map((scenario) => `scenario ${scenario.id}: ${scenario.details}`),
+        "Artifacts:",
+        `- report: ${reportPath}`,
+        `- summary: ${summaryPath}`,
+        `- observedEvents: ${observedEventsPath}`,
+      ].join("\n"),
+    );
+  }
+  if (cleanupErrors.length > 0) {
+    throw new Error(
+      [
+        "Matrix QA cleanup failed after artifacts were written.",
+        ...cleanupErrors,
         "Artifacts:",
         `- report: ${reportPath}`,
         `- summary: ${summaryPath}`,

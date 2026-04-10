@@ -1,7 +1,30 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { startQaGatewayChild, type QaCliBackendAuthMode } from "./gateway-child.js";
 import { startQaMockOpenAiServer } from "./mock-openai-server.js";
 import type { QaThinkingLevel } from "./qa-gateway-config.js";
+
+async function stopQaLiveLaneResources(resources: {
+  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>;
+  mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | null;
+}) {
+  const errors: string[] = [];
+  try {
+    await resources.gateway.stop();
+  } catch (error) {
+    errors.push(`gateway stop failed: ${formatErrorMessage(error)}`);
+  }
+  if (resources.mock) {
+    try {
+      await resources.mock.stop();
+    } catch (error) {
+      errors.push(`mock provider stop failed: ${formatErrorMessage(error)}`);
+    }
+  }
+  if (errors.length > 0) {
+    throw new Error(`failed to stop QA live lane resources:\n${errors.join("\n")}`);
+  }
+}
 
 export async function startQaLiveLaneGateway(params: {
   repoRoot: string;
@@ -43,8 +66,7 @@ export async function startQaLiveLaneGateway(params: {
       gateway,
       mock,
       async stop() {
-        await gateway.stop();
-        await mock?.stop();
+        await stopQaLiveLaneResources({ gateway, mock });
       },
     };
   } catch (error) {
