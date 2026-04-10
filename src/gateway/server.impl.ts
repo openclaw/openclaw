@@ -297,6 +297,25 @@ export async function startGatewayServer(
     baseMethods,
   } = pluginBootstrap;
   let { pluginRegistry, baseGatewayMethods } = pluginBootstrap;
+
+  // Octopus Orchestrator subsystem
+  let octoInstance: import("../octo/index.js").OctopusInstance | null = null;
+  try {
+    const { loadOctoConfig, initOctopus } = await import("../octo/index.js");
+    const octoConfig = loadOctoConfig(cfgAtStart as Record<string, unknown>);
+    if (octoConfig.enabled) {
+      const os = await import("node:os");
+      octoInstance = await initOctopus({
+        rawConfig: cfgAtStart as Record<string, unknown>,
+        nodeId: os.hostname(),
+      });
+      baseMethods.push(...octoInstance.methodNames);
+      log.info("octopus: initialized successfully");
+    }
+  } catch (err) {
+    log.warn(`octopus: failed to initialize: ${String(err)}`);
+  }
+
   const channelLogs = Object.fromEntries(
     listChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
   ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
@@ -718,11 +737,24 @@ export async function startGatewayServer(
       rateLimiter: authRateLimiter,
       browserRateLimiter: browserAuthRateLimiter,
       gatewayMethods: runtimeState.gatewayMethods,
-      events: GATEWAY_EVENTS,
+      events: [...GATEWAY_EVENTS, ...(octoInstance?.pushEventNames ?? [])],
       logGateway: log,
       logHealth,
       logWsControl,
-      extraHandlers: { ...pluginRegistry.gatewayHandlers, ...extraHandlers },
+      extraHandlers: {
+        ...pluginRegistry.gatewayHandlers,
+        ...extraHandlers,
+        ...(octoInstance
+          ? Object.fromEntries(
+              Object.entries(octoInstance.handlers).map(([k, fn]) => [
+                k,
+                async (params: unknown) => {
+                  await fn(params);
+                },
+              ]),
+            )
+          : {}),
+      },
       broadcast,
       context: gatewayRequestContext,
     });
@@ -829,6 +861,14 @@ export async function startGatewayServer(
 
   return {
     close: async (opts) => {
+      // Shut down Octopus before closing the Gateway
+      if (octoInstance) {
+        try {
+          await octoInstance.shutdown();
+        } catch (err) {
+          log.warn(`octopus: shutdown failed: ${String(err)}`);
+        }
+      }
       // Run gateway_stop plugin hook before shutdown
       await runGlobalGatewayStopSafely({
         event: { reason: opts?.reason ?? "gateway stopping" },
