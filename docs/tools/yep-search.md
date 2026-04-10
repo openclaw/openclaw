@@ -50,9 +50,9 @@ Provider-specific Yep settings live under `plugins.entries.yep.config.webSearch.
 | Parameter           | Description                                                                                |
 | ------------------- | ------------------------------------------------------------------------------------------ |
 | `query`             | Search query (required)                                                                    |
-| `count`             | Number of results to return (1-10, default: 5)                                             |
+| `count`             | Number of results to return (1-100, default: 10)                                           |
 | `result_type`       | Result type: `basic` (default) or `highlights` (includes text highlights from pages)       |
-| `search_mode`       | `fast` or `balanced` (default). Balanced combines speed and relevance                      |
+| `search_mode`       | `balanced` (default) or `advanced`. Balanced combines speed and relevance; advanced adds LLM ranking |
 | `language`          | ISO 639-1 language code for results (e.g., "en", "de", "fr")                               |
 | `content_type`      | Filter by content type (e.g., "Article", "Video", "Document", "Article/Tutorial_or_Guide") |
 | `safe_search`       | Exclude adult content (default: false)                                                     |
@@ -106,7 +106,7 @@ await web_search({
 ## Notes
 
 - Yep uses an independent web index for results.
-- Pricing: basic searches cost $0.004 per call; highlights cost ~$0.009 per 10 results. See [platform.yep.com](https://platform.yep.com/#pricing) for current pricing.
+- Pricing: balanced mode costs $0.004/request; advanced mode (LLM ranking) costs $0.008/request. See [platform.yep.com](https://platform.yep.com/#pricing) for current pricing.
 - Rate limits: 60 requests/minute, 3,600/hour, 86,400/day per API key.
 - Results are cached for 15 minutes by default.
 

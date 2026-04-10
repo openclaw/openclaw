@@ -1,8 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import {
   buildSearchCacheKey,
-  DEFAULT_SEARCH_COUNT,
-  MAX_SEARCH_COUNT,
   formatCliCommand,
   mergeScopedSearchConfig,
   parseIsoDateRange,
@@ -13,7 +11,6 @@ import {
   readStringParam,
   resolveProviderWebSearchPluginConfig,
   resolveSearchCacheTtlMs,
-  resolveSearchCount,
   resolveSearchTimeoutSeconds,
   resolveSiteName,
   setTopLevelCredentialValue,
@@ -27,6 +24,14 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 
 const YEP_SEARCH_ENDPOINT = "https://platform.yep.com/api/search";
+const YEP_DEFAULT_SEARCH_COUNT = 10;
+const YEP_MAX_SEARCH_COUNT = 100;
+
+/** Local clamp — the shared resolveSearchCount caps at 10; Yep supports up to 100. */
+function resolveYepSearchCount(value: unknown, fallback: number): number {
+  const parsed = typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  return Math.max(1, Math.min(YEP_MAX_SEARCH_COUNT, Math.floor(parsed)));
+}
 
 type YepSearchResult = {
   url?: string;
@@ -183,9 +188,9 @@ function createYepSchema() {
     query: Type.String({ description: "Search query string." }),
     count: Type.Optional(
       Type.Number({
-        description: "Number of results to return (1-10).",
+        description: "Number of results to return (1-100, default: 10).",
         minimum: 1,
-        maximum: MAX_SEARCH_COUNT,
+        maximum: YEP_MAX_SEARCH_COUNT,
       }),
     ),
     result_type: Type.Optional(
@@ -196,7 +201,7 @@ function createYepSchema() {
     ),
     search_mode: Type.Optional(
       Type.String({
-        description: "Search mode: 'fast', 'balanced' (default), or 'advanced'. Balanced combines speed and relevance; advanced uses deeper ranking.",
+        description: "Search mode: 'balanced' (default) or 'advanced'. Balanced combines speed and relevance; advanced adds LLM ranking for highest quality.",
       }),
     ),
     language: Type.Optional(
@@ -284,13 +289,13 @@ function createYepToolDefinition(
       }
       const yepType = (rawType ?? "basic") as "basic" | "highlights";
       const rawSearchMode = readStringParam(params, "search_mode");
-      if (rawSearchMode && rawSearchMode !== "fast" && rawSearchMode !== "balanced" && rawSearchMode !== "advanced") {
+      if (rawSearchMode && rawSearchMode !== "balanced" && rawSearchMode !== "advanced") {
         return {
           error: "invalid_search_mode",
-          message: "search_mode must be 'fast', 'balanced', or 'advanced'.",
+          message: "search_mode must be 'balanced' or 'advanced'.",
         };
       }
-      const searchMode = rawSearchMode as "fast" | "balanced" | "advanced" | undefined;
+      const searchMode = rawSearchMode as "balanced" | "advanced" | undefined;
       const rawLanguage = readStringParam(params, "language");
       const language = normalizeYepLanguage(rawLanguage);
       if (rawLanguage && !language) {
@@ -345,7 +350,7 @@ function createYepToolDefinition(
         yepType,
         searchMode,
         query,
-        resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
+        resolveYepSearchCount(count, YEP_DEFAULT_SEARCH_COUNT),
         language,
         contentType,
         safeSearch,
@@ -364,7 +369,7 @@ function createYepToolDefinition(
       const start = Date.now();
       const results = await runYepSearch({
         query,
-        count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
+        count: resolveYepSearchCount(count, YEP_DEFAULT_SEARCH_COUNT),
         apiKey,
         timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
         type: yepType,
