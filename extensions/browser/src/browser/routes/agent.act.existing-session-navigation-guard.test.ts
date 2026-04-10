@@ -198,8 +198,35 @@ describe("existing-session interaction navigation guard", () => {
       await pending;
     })();
 
-    await expect(completion).rejects.toThrow("Unable to verify post-interaction navigation");
+    await expect(completion).rejects.toThrow("Unable to verify stable post-interaction navigation");
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when a later post-action probe becomes unreadable", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript
+      .mockResolvedValueOnce("result" as never)
+      .mockResolvedValueOnce("https://example.com" as never)
+      .mockResolvedValueOnce(undefined as never)
+      .mockResolvedValueOnce(undefined as never);
+
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    const pending =
+      handler?.(
+        { params: {}, query: {}, body: { kind: "evaluate", fn: "() => 1" } },
+        response.res,
+      ) ?? Promise.resolve();
+    void pending.catch(() => {});
+    const completion = (async () => {
+      await vi.runAllTimersAsync();
+      await pending;
+    })();
+
+    await expect(completion).rejects.toThrow("Unable to verify stable post-interaction navigation");
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledOnce();
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "https://example.com" }),
+    );
   });
 
   it("skips the guard when no SSRF policy is configured", async () => {

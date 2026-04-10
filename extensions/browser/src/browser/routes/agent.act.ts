@@ -70,7 +70,6 @@ async function assertExistingSessionPostInteractionNavigationAllowed(params: {
   profileName: string;
   userDataDir?: string;
   targetId: string;
-  baselineUrl?: string;
   ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
 }): Promise<void> {
   const ssrfPolicyOpts = withBrowserNavigationPolicy(params.ssrfPolicy);
@@ -78,9 +77,7 @@ async function assertExistingSessionPostInteractionNavigationAllowed(params: {
     return;
   }
 
-  let lastUrl = params.baselineUrl ?? "";
-  let sawStableUrl = false;
-  let readSucceeded = false;
+  let lastObservedUrl: string | undefined;
   for (const delayMs of EXISTING_SESSION_INTERACTION_NAVIGATION_RECHECK_DELAYS_MS) {
     if (delayMs > 0) {
       await sleep(delayMs);
@@ -91,25 +88,17 @@ async function assertExistingSessionPostInteractionNavigationAllowed(params: {
     } catch {
       continue;
     }
-    readSucceeded = true;
     await assertBrowserNavigationResultAllowed({
       url: currentUrl,
       ...ssrfPolicyOpts,
     });
-    if (currentUrl !== lastUrl) {
-      lastUrl = currentUrl;
-      sawStableUrl = false;
-      continue;
-    }
-    if (sawStableUrl) {
+    if (currentUrl === lastObservedUrl) {
       return;
     }
-    sawStableUrl = true;
+    lastObservedUrl = currentUrl;
   }
 
-  if (!readSucceeded) {
-    throw new Error("Unable to verify post-interaction navigation");
-  }
+  throw new Error("Unable to verify stable post-interaction navigation");
 }
 
 async function runExistingSessionActionWithNavigationGuard<T>(params: {
@@ -351,7 +340,6 @@ export function registerBrowserAgentActRoutes(
             profileName,
             userDataDir: profileCtx.profile.userDataDir,
             targetId: tab.targetId,
-            baselineUrl: tab.url,
             ssrfPolicy,
           };
           const unsupportedMessage = getExistingSessionUnsupportedMessage(action);
