@@ -40,6 +40,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[2]).toBe("openclaw-launchd-restart-handoff");
     expect(args[6]).toBe("9876");
     expect(args[1]).toContain('while kill -0 "$wait_pid" >/dev/null 2>&1; do');
+    expect(args[1]).toContain('launchctl enable "$service_target" >/dev/null 2>&1');
     expect(args[1]).toContain('launchctl kickstart -k "$service_target" >/dev/null 2>&1');
     expect(args[1]).not.toContain("sleep 1");
     expect(unrefMock).toHaveBeenCalledTimes(1);

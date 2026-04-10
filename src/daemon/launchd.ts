@@ -464,14 +464,80 @@ function isUnsupportedGuiDomain(detail: string): boolean {
   );
 }
 
-export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
-  const domain = resolveGuiDomain();
-  const label = resolveLaunchAgentLabel({ env });
-  const res = await execLaunchctl(["bootout", `${domain}/${label}`]);
-  if (res.code !== 0 && !isLaunchctlNotLoaded(res)) {
-    throw new Error(`launchctl bootout failed: ${res.stderr || res.stdout}`.trim());
+function formatLaunchctlResultDetail(res: {
+  stdout: string;
+  stderr: string;
+  code: number;
+}): string {
+  return (res.stderr || res.stdout).trim();
+}
+
+async function isLaunchAgentProcessRunning(serviceTarget: string): Promise<boolean> {
+  const probe = await execLaunchctl(["print", serviceTarget]);
+  if (probe.code !== 0) {
+    return false;
   }
-  stdout.write(`${formatLine("Stopped LaunchAgent", `${domain}/${label}`)}\n`);
+  const runtime = parseLaunchctlPrint(probe.stdout || probe.stderr || "");
+  return typeof runtime.pid === "number" && runtime.pid > 1;
+}
+
+async function waitForLaunchAgentStopped(serviceTarget: string): Promise<boolean> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    if (!(await isLaunchAgentProcessRunning(serviceTarget))) {
+      return true;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
+  }
+  return false;
+}
+
+export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
+  const serviceEnv = env ?? (process.env as GatewayServiceEnv);
+  const domain = resolveGuiDomain();
+  const label = resolveLaunchAgentLabel({ env: serviceEnv });
+  const serviceTarget = `${domain}/${label}`;
+
+  // Keep the LaunchAgent installed, but persistently suppress KeepAlive/RunAtLoad
+  // before stopping the current process. If disable fails, fall back to bootout so
+  // the command still leaves the gateway down.
+  const disable = await execLaunchctl(["disable", serviceTarget]);
+  if (disable.code !== 0) {
+    const bootout = await execLaunchctl(["bootout", serviceTarget]);
+    if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
+      throw new Error(
+        `launchctl disable failed: ${formatLaunchctlResultDetail(disable)}; launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`,
+      );
+    }
+    stdout.write(
+      `${formatLine("Warning", `launchctl disable failed; used bootout fallback and left service unloaded: ${formatLaunchctlResultDetail(disable)}`)}\n`,
+    );
+    stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
+    return;
+  }
+
+  // `launchctl stop` targets the plain label (not the fully-qualified service target).
+  const stop = await execLaunchctl(["stop", label]);
+  if (stop.code !== 0 && !isLaunchctlNotLoaded(stop)) {
+    throw new Error(`launchctl stop failed: ${formatLaunchctlResultDetail(stop)}`);
+  }
+
+  if (!(await waitForLaunchAgentStopped(serviceTarget))) {
+    const bootout = await execLaunchctl(["bootout", serviceTarget]);
+    if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
+      throw new Error(
+        `launchctl stop left the service running and launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`,
+      );
+    }
+    stdout.write(
+      `${formatLine("Warning", "launchctl stop did not fully stop the service; used bootout fallback and left service unloaded")}\n`,
+    );
+    stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
+    return;
+  }
+
+  stdout.write(`${formatLine("Stopped LaunchAgent", serviceTarget)}\n`);
 }
 
 async function writeLaunchAgentPlist({
@@ -620,6 +686,10 @@ export async function restartLaunchAgent({
   if (cleanupPort !== null) {
     cleanStaleGatewayProcessesSync(cleanupPort);
   }
+
+  // Clear any persisted disabled state left behind by `openclaw gateway stop`
+  // before trying the normal restart path.
+  await execLaunchctl(["enable", serviceTarget]);
 
   const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);
   if (start.code === 0) {
