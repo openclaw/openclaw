@@ -1,0 +1,7 @@
+```md
+Translated line 01
+Translated line 02
+Translated line 03
+Translated line 04
+```
+
