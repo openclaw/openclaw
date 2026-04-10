@@ -85,6 +85,20 @@ describe("registerMaintenanceCommands doctor action", () => {
     );
   });
 
+  it("passes --json through to doctor command", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["doctor", "--json", "--non-interactive"]);
+
+    expect(doctorCommand).toHaveBeenCalledWith(
+      runtime,
+      expect.objectContaining({
+        json: true,
+        nonInteractive: true,
+      }),
+    );
+  });
+
   it("passes noOpen to dashboard command", async () => {
     dashboardCommand.mockResolvedValue(undefined);
 

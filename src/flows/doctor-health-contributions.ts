@@ -463,7 +463,7 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
     }
     return;
   }
-  if (!ctx.prompter.shouldRepair) {
+  if (!ctx.prompter.shouldRepair && ctx.options.json !== true) {
     ctx.runtime.log(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply changes.`);
   }
 }
