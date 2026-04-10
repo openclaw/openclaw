@@ -72,10 +72,10 @@ function createDiscordAcpPlugin(overrides?: {
         parentConversationId?: string;
       }) => {
         if (compiledBinding.conversationId === conversationId) {
-          return { matchPriority: 2 };
+          return { conversationId, matchPriority: 2 };
         }
         if (parentConversationId && compiledBinding.conversationId === parentConversationId) {
-          return { matchPriority: 1 };
+          return { conversationId, parentConversationId, matchPriority: 1 };
         }
         return null;
       },

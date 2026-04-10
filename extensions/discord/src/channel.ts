@@ -306,14 +306,18 @@ function matchDiscordAcpConversation(params: {
   parentConversationId?: string;
 }) {
   if (params.bindingConversationId === params.conversationId) {
-    return { matchPriority: 2 };
+    return { conversationId: params.conversationId, matchPriority: 2 };
   }
   if (
     params.parentConversationId &&
     params.parentConversationId !== params.conversationId &&
     params.bindingConversationId === params.parentConversationId
   ) {
-    return { matchPriority: 1 };
+    return {
+      conversationId: params.conversationId,
+      parentConversationId: params.parentConversationId,
+      matchPriority: 1,
+    };
   }
   return null;
 }

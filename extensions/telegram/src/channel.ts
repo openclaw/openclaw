@@ -253,7 +253,11 @@ function matchTelegramAcpConversation(params: {
   if (binding.conversationId !== incoming.canonicalConversationId) {
     return null;
   }
-  return { matchPriority: 2 };
+  return {
+    conversationId: incoming.canonicalConversationId,
+    parentConversationId: incoming.chatId,
+    matchPriority: 2,
+  };
 }
 
 function shouldTreatTelegramDeliveredTextAsVisible(params: {

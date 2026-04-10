@@ -321,7 +321,16 @@ function matchFeishuAcpConversation(params: {
   if (!matchesCanonicalConversation && !matchesParentTopicForSenderScopedConversation) {
     return null;
   }
-  return { matchPriority: matchesCanonicalConversation ? 2 : 1 };
+  return {
+    conversationId: matchesParentTopicForSenderScopedConversation
+      ? binding.conversationId
+      : incoming.canonicalConversationId,
+    parentConversationId:
+      incoming.scope === "group_topic" || incoming.scope === "group_topic_sender"
+        ? incoming.chatId
+        : undefined,
+    matchPriority: matchesCanonicalConversation ? 2 : 1,
+  };
 }
 
 function resolveFeishuSenderScopedCommandConversation(params: {

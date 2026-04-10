@@ -43,7 +43,9 @@ function createBindingResolution(driverId: string): ConfiguredBindingResolution 
         compileConfiguredBinding: () => ({
           conversationId: "123",
         }),
-        matchInboundConversation: () => ({}),
+        matchInboundConversation: () => ({
+          conversationId: "123",
+        }),
       },
       targetFactory: {
         driverId,
@@ -69,7 +71,9 @@ function createBindingResolution(driverId: string): ConfiguredBindingResolution 
         }),
       },
     },
-    match: {},
+    match: {
+      conversationId: "123",
+    },
     record: {
       bindingId: "binding:123",
       targetSessionKey: `agent:codex:${driverId}`,

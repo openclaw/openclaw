@@ -313,7 +313,12 @@ function createConfiguredBindingRoute(
                   ? { parentConversationId: binding.spec.parentConversationId }
                   : {}),
               }),
-              matchInboundConversation: () => ({}),
+              matchInboundConversation: () => ({
+                conversationId: binding.spec.conversationId,
+                ...(binding.spec.parentConversationId
+                  ? { parentConversationId: binding.spec.parentConversationId }
+                  : {}),
+              }),
             },
             targetFactory: {
               driverId: "acp" as const,
@@ -328,7 +333,12 @@ function createConfiguredBindingRoute(
               }),
             },
           },
-          match: {},
+          match: {
+            conversationId: binding.spec.conversationId,
+            ...(binding.spec.parentConversationId
+              ? { parentConversationId: binding.spec.parentConversationId }
+              : {}),
+          },
           record: binding.record,
           statefulTarget: {
             kind: "stateful" as const,

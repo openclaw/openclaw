@@ -37,7 +37,7 @@ export function normalizeBlueBubblesAcpConversationId(
 export function matchBlueBubblesAcpConversation(params: {
   bindingConversationId: string;
   conversationId: string;
-}): { matchPriority: number } | null {
+}): { conversationId: string; matchPriority: number } | null {
   const binding = normalizeBlueBubblesAcpConversationId(params.bindingConversationId);
   const conversation = normalizeBlueBubblesAcpConversationId(params.conversationId);
   if (!binding || !conversation) {
@@ -46,7 +46,7 @@ export function matchBlueBubblesAcpConversation(params: {
   if (binding.conversationId !== conversation.conversationId) {
     return null;
   }
-  return { matchPriority: 2 };
+  return { conversationId: conversation.conversationId, matchPriority: 2 };
 }
 
 export function resolveBlueBubblesInboundConversationId(params: {

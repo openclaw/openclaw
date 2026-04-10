@@ -66,7 +66,7 @@ function createConfiguredFeishuRoute(): NonNullable<ConfiguredBindingRoute> {
         agentId: "codex",
         provider: {
           compileConfiguredBinding: () => ({ conversationId: "ou_sender_1" }),
-          matchInboundConversation: () => ({}),
+          matchInboundConversation: () => ({ conversationId: "ou_sender_1" }),
         },
         targetFactory: {
           driverId: "acp",
@@ -93,7 +93,9 @@ function createConfiguredFeishuRoute(): NonNullable<ConfiguredBindingRoute> {
           }),
         },
       },
-      match: {},
+      match: {
+        conversationId: "ou_sender_1",
+      },
       record: {
         bindingId: "config:acp:feishu:default:ou_sender_1",
         targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
