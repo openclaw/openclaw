@@ -1517,10 +1517,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 });
                 draftConsumed = true;
               } else {
-                if (draftEventId && (payloadReplyMismatch || mustDeliverFinalNormally)) {
+                const draftRedacted =
+                  Boolean(draftEventId) && (payloadReplyMismatch || mustDeliverFinalNormally);
+                if (draftRedacted && draftEventId) {
                   await redactMatrixDraftEvent(client, roomId, draftEventId);
                 }
-                await deliverMatrixReplies({
+                const deliveredFallback = await deliverMatrixReplies({
                   cfg,
                   replies: [payload],
                   roomId,
@@ -1533,7 +1535,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                   mediaLocalRoots,
                   tableMode,
                 });
-                if (draftEventId) {
+                if (draftRedacted || deliveredFallback) {
                   draftConsumed = true;
                 }
               }

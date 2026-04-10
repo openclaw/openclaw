@@ -48,7 +48,7 @@ vi.mock("../send.js", () => ({
   sendTypingMatrix: vi.fn(async () => {}),
 }));
 
-const deliverMatrixRepliesMock = vi.hoisted(() => vi.fn(async () => {}));
+const deliverMatrixRepliesMock = vi.hoisted(() => vi.fn(async () => true));
 
 vi.mock("./replies.js", () => ({
   deliverMatrixReplies: deliverMatrixRepliesMock,
@@ -2005,7 +2005,7 @@ describe("matrix monitor handler draft streaming", () => {
       .mockReset()
       .mockResolvedValue({ messageId: "$draft1", roomId: "!room" });
     editMessageMatrixMock.mockReset().mockResolvedValue("$edited");
-    deliverMatrixRepliesMock.mockReset().mockResolvedValue(undefined);
+    deliverMatrixRepliesMock.mockReset().mockResolvedValue(true);
 
     const redactEventMock = vi.fn(async () => "$redacted");
 
@@ -2530,7 +2530,7 @@ describe("matrix monitor handler draft streaming", () => {
         .mockReset()
         .mockResolvedValue({ messageId: "$draft1", roomId: "!room" });
       editMessageMatrixMock.mockReset().mockResolvedValue("$edited");
-      deliverMatrixRepliesMock.mockReset().mockResolvedValue(undefined);
+      deliverMatrixRepliesMock.mockReset().mockResolvedValue(true);
       const redactEventMock = vi.fn(async () => "$redacted");
 
       let capturedReplyOpts: ReplyOpts | undefined;
@@ -2588,7 +2588,7 @@ describe("matrix monitor handler draft streaming", () => {
       .mockReset()
       .mockResolvedValue({ messageId: "$draft1", roomId: "!room" });
     editMessageMatrixMock.mockReset().mockResolvedValue("$edited");
-    deliverMatrixRepliesMock.mockReset().mockResolvedValue(undefined);
+    deliverMatrixRepliesMock.mockReset().mockResolvedValue(true);
 
     const redactEventMock = vi.fn(async () => "$redacted");
     let capturedReplyOpts: ReplyOpts | undefined;
@@ -2625,6 +2625,27 @@ describe("matrix monitor handler draft streaming", () => {
       "!room:example.org",
       createMatrixTextMessageEvent({ eventId: "$msg1", body: "hello" }),
     );
+
+    expect(redactEventMock).toHaveBeenCalledWith("!room:example.org", "$draft1");
+  });
+
+  it("keeps shutdown cleanup for empty final payloads that send nothing", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
+    const { deliver, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "Partial reply" });
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+
+    deliverMatrixRepliesMock.mockClear();
+    deliverMatrixRepliesMock.mockResolvedValue(false);
+    await deliver({}, { kind: "final" });
+
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+    expect(redactEventMock).not.toHaveBeenCalled();
+
+    await finish();
 
     expect(redactEventMock).toHaveBeenCalledWith("!room:example.org", "$draft1");
   });
