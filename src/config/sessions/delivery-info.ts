@@ -24,18 +24,20 @@ export function extractDeliveryInfo(sessionKey: string | undefined): {
     const storePath = resolveStorePath(cfg.session?.store);
     const store = loadSessionStore(storePath);
     let entry = store[sessionKey];
-    if (!deliveryContextFromSession(entry) && baseSessionKey !== sessionKey) {
+    let storedDeliveryContext = deliveryContextFromSession(entry);
+    if (!storedDeliveryContext && baseSessionKey !== sessionKey) {
       entry = store[baseSessionKey];
+      storedDeliveryContext = deliveryContextFromSession(entry);
     }
-    const storedDeliveryContext = deliveryContextFromSession(entry);
     if (storedDeliveryContext) {
-      const resolvedThreadId =
-        storedDeliveryContext.threadId ?? entry?.lastThreadId ?? entry?.origin?.threadId;
       deliveryContext = {
         channel: storedDeliveryContext.channel,
         to: storedDeliveryContext.to,
         accountId: storedDeliveryContext.accountId,
-        threadId: resolvedThreadId != null ? String(resolvedThreadId) : undefined,
+        threadId:
+          storedDeliveryContext.threadId != null
+            ? String(storedDeliveryContext.threadId)
+            : undefined,
       };
     }
   } catch {

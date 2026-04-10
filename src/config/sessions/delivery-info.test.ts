@@ -169,8 +169,6 @@ describe("extractDeliveryInfo", () => {
       updatedAt: Date.now(),
       origin: {
         provider: "matrix",
-        to: "room:!MixedCase:example.org",
-        nativeChannelId: "!MixedCase:example.org",
       },
       lastChannel: "matrix",
       lastTo: "room:!MixedCase:example.org",
