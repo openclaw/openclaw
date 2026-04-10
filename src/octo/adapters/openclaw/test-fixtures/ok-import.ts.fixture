@@ -1,0 +1,19 @@
+// Fixture for M0-12 / scripts/check-octo-upstream-imports.mjs
+//
+// This file lives under src/octo/adapters/openclaw/, which is the
+// upstream-bridge whitelist per OCTO-DEC-033. Bridge files are the one
+// place in the Octopus codebase allowed to import from OpenClaw internals.
+//
+// The check script MUST NOT flag this file, even when it contains exactly
+// the same imports that the bad-import fixture uses.
+//
+// The .ts.fixture extension keeps oxlint, tsc, and vitest from parsing this
+// file as real source.
+
+// Allowed (bridge layer): relative import escaping src/octo/
+import { fake } from "../../../gateway/server-methods-list";
+
+// Allowed (bridge layer): absolute OpenClaw-internal import
+import { other } from "src/config/loader";
+
+export { fake, other };
