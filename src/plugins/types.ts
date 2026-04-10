@@ -2397,6 +2397,10 @@ export type PluginHookAgentContext = {
   trigger?: string;
   /** Channel identifier (e.g. "telegram", "discord", "whatsapp"). */
   channelId?: string;
+  /** Absolute paths to inbound media files (images, audio, video, documents). */
+  mediaPaths?: string[];
+  /** MIME types corresponding to each entry in mediaPaths. */
+  mediaTypes?: string[];
 };
 
 // before_model_resolve hook
