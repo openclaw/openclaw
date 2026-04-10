@@ -10,6 +10,7 @@ import {
   agentCommand,
   getFreePort,
   installGatewayTestHooks,
+  startGatewayServerWithRetries,
   testState,
   withGatewayServer,
 } from "./test-helpers.js";
@@ -22,12 +23,21 @@ let enabledPort: number;
 
 beforeAll(async () => {
   ({ startGatewayServer } = await import("./server.js"));
-  enabledPort = await getFreePort();
-  enabledServer = await startServer(enabledPort);
+  const started = await startGatewayServerWithRetries({
+    port: await getFreePort(),
+    opts: {
+      host: "127.0.0.1",
+      auth: { mode: "none" },
+      controlUiEnabled: false,
+      openAiChatCompletionsEnabled: true,
+    },
+  });
+  enabledPort = started.port;
+  enabledServer = started.server;
 });
 
 afterAll(async () => {
-  await enabledServer.close({ reason: "openai http enabled suite done" });
+  await enabledServer?.close({ reason: "openai http enabled suite done" });
 });
 
 async function startServerWithDefaultConfig(port: number) {

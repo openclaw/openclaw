@@ -3,6 +3,6 @@ import { fullSuiteVitestShards } from "./vitest.test-shards.mjs";
 
 export default createProjectShardVitestConfig(
   fullSuiteVitestShards.find(
-    (shard) => shard.config === "vitest.full-core-support-boundary.config.ts",
+    (shard) => shard.config === "test/vitest/vitest.full-core-bundled.config.ts",
   )?.projects ?? [],
 );

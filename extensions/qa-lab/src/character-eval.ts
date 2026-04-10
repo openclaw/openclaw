@@ -4,7 +4,8 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runQaManualLane } from "./manual-lane.runtime.js";
 import { isQaFastModeModelRef, type QaProviderMode } from "./model-selection.js";
 import { type QaThinkingLevel } from "./qa-gateway-config.js";
-import { runQaSuite, type QaSuiteResult } from "./suite.js";
+import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
+import type { QaSuiteResult } from "./suite.js";
 
 const DEFAULT_CHARACTER_SCENARIO_ID = "character-vibes-gollum";
 const DEFAULT_CHARACTER_EVAL_MODELS = Object.freeze([
@@ -518,7 +519,7 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
   const runsDir = path.join(outputDir, "runs");
   await fs.mkdir(runsDir, { recursive: true });
 
-  const runSuite = params.runSuite ?? runQaSuite;
+  const runSuite = params.runSuite ?? runQaSuiteFromRuntime;
   const candidateConcurrency = normalizeConcurrency(
     params.candidateConcurrency,
     DEFAULT_CHARACTER_EVAL_CONCURRENCY,

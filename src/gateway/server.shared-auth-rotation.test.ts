@@ -174,6 +174,7 @@ describe("gateway shared auth rotation with unchanged SecretRefs", () => {
       throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
     }
     secretRefPort = await getFreePort();
+    testState.gatewayAuth = undefined;
     process.env[SECRET_REF_TOKEN_ID] = OLD_TOKEN;
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     await fs.writeFile(
@@ -196,6 +197,7 @@ describe("gateway shared auth rotation with unchanged SecretRefs", () => {
   });
 
   beforeEach(() => {
+    testState.gatewayAuth = undefined;
     process.env[SECRET_REF_TOKEN_ID] = OLD_TOKEN;
   });
 

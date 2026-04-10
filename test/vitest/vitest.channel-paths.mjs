@@ -2,7 +2,7 @@ import path from "node:path";
 import {
   BUNDLED_PLUGIN_PATH_PREFIX,
   bundledPluginRoot,
-} from "./scripts/lib/bundled-plugin-paths.mjs";
+} from "../../scripts/lib/bundled-plugin-paths.mjs";
 
 const normalizeRepoPath = (value) => value.split(path.sep).join("/");
 

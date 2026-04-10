@@ -13,7 +13,7 @@ import {
   type QaProviderMode,
   type QaProviderModeInput,
 } from "./run-config.js";
-import { runQaSuite } from "./suite.js";
+import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
 
 type InterruptibleServer = {
   baseUrl: string;
@@ -200,6 +200,7 @@ export async function runQaSuiteCommand(opts: {
   alternateModel?: string;
   fastMode?: boolean;
   scenarioIds?: string[];
+  concurrency?: number;
   image?: string;
   cpus?: number;
   memory?: string;
@@ -229,6 +230,9 @@ export async function runQaSuiteCommand(opts: {
       alternateModel: opts.alternateModel,
       fastMode: opts.fastMode,
       scenarioIds: opts.scenarioIds,
+      ...(opts.concurrency !== undefined
+        ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
+        : {}),
       image: opts.image,
       cpus: parseQaPositiveIntegerOption("--cpus", opts.cpus),
       memory: opts.memory,
@@ -241,7 +245,7 @@ export async function runQaSuiteCommand(opts: {
     process.stdout.write(`QA Multipass bootstrap log: ${result.bootstrapLogPath}\n`);
     return;
   }
-  const result = await runQaSuite({
+  const result = await runQaSuiteFromRuntime({
     repoRoot,
     outputDir: opts.outputDir ? path.resolve(repoRoot, opts.outputDir) : undefined,
     providerMode,
@@ -249,6 +253,9 @@ export async function runQaSuiteCommand(opts: {
     alternateModel: opts.alternateModel,
     fastMode: opts.fastMode,
     scenarioIds: opts.scenarioIds,
+    ...(opts.concurrency !== undefined
+      ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
+      : {}),
   });
   process.stdout.write(`QA suite watch: ${result.watchUrl}\n`);
   process.stdout.write(`QA suite report: ${result.reportPath}\n`);

@@ -23,6 +23,7 @@ async function runQaSuite(opts: {
   alternateModel?: string;
   fastMode?: boolean;
   scenarioIds?: string[];
+  concurrency?: number;
   runner?: string;
   image?: string;
   cpus?: number;
@@ -152,6 +153,9 @@ export function registerQaLabCli(program: Command) {
     .option("--model <ref>", "Primary provider/model ref")
     .option("--alt-model <ref>", "Alternate provider/model ref")
     .option("--scenario <id>", "Run only the named QA scenario (repeatable)", collectString, [])
+    .option("--concurrency <count>", "Scenario worker concurrency", (value: string) =>
+      Number(value),
+    )
     .option("--fast", "Enable provider fast mode where supported", false)
     .option("--image <alias>", "Multipass image alias")
     .option("--cpus <count>", "Multipass vCPU count", (value: string) => Number(value))
@@ -166,6 +170,7 @@ export function registerQaLabCli(program: Command) {
         model?: string;
         altModel?: string;
         scenario?: string[];
+        concurrency?: number;
         fast?: boolean;
         image?: string;
         cpus?: number;
@@ -181,6 +186,7 @@ export function registerQaLabCli(program: Command) {
           alternateModel: opts.altModel,
           fastMode: opts.fast,
           scenarioIds: opts.scenario,
+          concurrency: opts.concurrency,
           image: opts.image,
           cpus: opts.cpus,
           memory: opts.memory,

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { BUNDLED_PLUGIN_ROOT_DIR } from "./scripts/lib/bundled-plugin-paths.mjs";
+import { BUNDLED_PLUGIN_ROOT_DIR } from "../../scripts/lib/bundled-plugin-paths.mjs";
 
 export const unitTestIncludePatterns = [
   "src/**/*.test.ts",

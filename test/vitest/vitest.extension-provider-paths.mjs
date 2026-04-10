@@ -1,4 +1,4 @@
-import { bundledPluginRoot } from "./scripts/lib/bundled-plugin-paths.mjs";
+import { bundledPluginRoot } from "../../scripts/lib/bundled-plugin-paths.mjs";
 
 export const providerExtensionIds = [
   "amazon-bedrock",

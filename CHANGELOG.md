@@ -17,6 +17,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- fix(nostr): require operator.admin scope for profile mutation routes [AI]. (#63553) Thanks @pgondhi987.
 - Gateway/startup: keep WebSocket RPC available while channels and plugin sidecars start, hold `chat.history` unavailable until startup sidecars finish so synchronous history reads cannot stall startup (reported in #63450), refresh advertised gateway methods after deferred plugin reloads, and enforce the pre-auth WebSocket upgrade budget before the no-handler 503 path so upgrade floods cannot bypass connection limits during that window. (#63480) Thanks @neeravmakwana.
 - Gateway/tailscale: start Tailscale exposure and the gateway update check before awaiting channel and plugin sidecar startup so remote operators are not locked out when startup sidecars stall.
 - WhatsApp: keep inbound replies, media, composing indicators, and queued outbound deliveries attached to the current socket across reconnect gaps, including fresh retry-eligible sends after the listener comes back. (#30806, #46299, #62892, #63916) Thanks @mcaxtr.
@@ -89,8 +90,14 @@ Docs: https://docs.openclaw.ai
 - iMessage (imsg): strip an accidental protobuf length-delimited UTF-8 field wrapper from inbound `text` and `reply_to_text` when it fully consumes the field, fixing leading garbage before the real message. (#63868) Thanks @neeravmakwana.
 - Gateway/pairing: fail closed for paired device records that have no device tokens, and reject pairing approvals whose requested scopes do not match the requested device roles.
 - ACP/gateway chat: classify lifecycle errors before forwarding them to ACP clients so refusals use ACP's refusal stop reason while transient backend errors continue to finish as normal turns.
+- Agents/BTW: strip replayed tool blocks, hidden reasoning, and malformed image payloads from `/btw` side-question context so Bedrock no-tools side questions keep working after tool-use turns. (#64225) Thanks @ngutman.
 - Commands/btw: keep tool-less side questions from sending injected empty `tools` arrays on strict OpenAI-compatible providers, so `/btw` continues working after prior tool-call history. (#64219) Thanks @ngutman.
 - Agents/Bedrock: let `/btw` side questions use `auth: "aws-sdk"` without a static API key so Bedrock IAM and instance-role sessions stop failing before the side question runs. (#64218) Thanks @SnowSky1.
+- Agents/failover: detect llama.cpp slot context overflows as context-overflow errors so compaction can retry self-hosted OpenAI-compatible runs instead of surfacing the raw upstream 400. (#64196) Thanks @alexander-applyinnovations.
+- Claude CLI/skills: pass eligible OpenClaw skills into CLI runs, including native Claude Code skill resolution via a temporary plugin plus per-run skill env/API key injection. (#62686, #62723) Thanks @zomars.
+- Heartbeat: ignore doc-only Markdown fence markers in the default `HEARTBEAT.md` template so comment-only heartbeat scaffolds skip API calls again. (#63434) Thanks @ravyg.
+- Control UI/BTW: render `/btw` side results as dismissible ephemeral cards in the browser, send `/btw` immediately during active runs, and clear stale BTW cards on reset flows so webchat matches the intended detached side-question behavior. (#64290) Thanks @ngutman.
+- Reply/skills: keep resolved skill and memory secret config stable through embedded reply runs so raw SecretRefs in secondary skill settings no longer crash replies when the gateway already has the live env. (#64249) Thanks @mbelinky.
 
 ## 2026.4.9
 
