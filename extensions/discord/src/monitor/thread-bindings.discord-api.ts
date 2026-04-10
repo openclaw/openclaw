@@ -226,6 +226,17 @@ export function findReusableWebhook(params: { accountId: string; channelId: stri
   return {};
 }
 
+/**
+ * Discord REST routes expect numeric snowflake ids. Inbound routing often uses
+ * OpenClaw `channel:<snowflake>` targets; pass those through here before
+ * `Routes.channel(...)` (for example ACP `sessions_spawn` thread binding).
+ */
+function discordChannelSnowflakeForRest(raw: string): string {
+  const trimmed = raw.trim();
+  const prefixed = /^channel:(\d+)$/i.exec(trimmed);
+  return prefixed?.[1] ?? trimmed;
+}
+
 export async function resolveChannelIdForBinding(params: {
   cfg?: OpenClawConfig;
   accountId: string;
@@ -235,8 +246,9 @@ export async function resolveChannelIdForBinding(params: {
 }): Promise<string | null> {
   const explicit = params.channelId?.trim();
   if (explicit) {
-    return explicit;
+    return discordChannelSnowflakeForRest(explicit);
   }
+  const routeThreadId = discordChannelSnowflakeForRest(params.threadId);
   try {
     const rest = createDiscordRestClient(
       {
@@ -245,7 +257,7 @@ export async function resolveChannelIdForBinding(params: {
       },
       params.cfg,
     ).rest;
-    const channel = (await rest.get(Routes.channel(params.threadId))) as {
+    const channel = (await rest.get(Routes.channel(routeThreadId))) as {
       id?: string;
       type?: number;
       parent_id?: string;
@@ -267,7 +279,7 @@ export async function resolveChannelIdForBinding(params: {
     return channelId || null;
   } catch (err) {
     logVerbose(
-      `discord thread binding channel resolve failed for ${params.threadId}: ${summarizeDiscordError(err)}`,
+      `discord thread binding channel resolve failed for ${routeThreadId}: ${summarizeDiscordError(err)}`,
     );
     return null;
   }

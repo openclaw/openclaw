@@ -60,6 +60,8 @@ Docs: https://docs.openclaw.ai
 - Gateway/thread routing: preserve Slack, Telegram, and Mattermost thread-child delivery targets so bound subagent completion messages land in the originating thread instead of top-level channels. (#54840) Thanks @yzzymt.
 - ACP/stream relay: pass parent delivery context to ACP stream relay system events so `streamTo="parent"` updates route to the correct thread or topic instead of falling back to the main DM. (#57056) Thanks @pingren.
 - Agents/sessions: preserve announce `threadId` when `sessions.list` fallback rehydrates agent-to-agent announce targets so final announce messages stay in the originating thread/topic. (#63506) Thanks @SnowSky1.
+- Discord/ACP: normalize `channel:<snowflake>` conversation ids to numeric snowflakes before Discord REST channel resolution so `sessions_spawn` with `runtime: "acp"` and `thread: true` can bind in guild channels. (#63927) Thanks @neeravmakwana.
+
 ## 2026.4.9
 
 ### Changes
