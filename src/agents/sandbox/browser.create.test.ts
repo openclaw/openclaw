@@ -12,6 +12,7 @@ const dockerMocks = vi.hoisted(() => ({
   execDocker: vi.fn(),
   readDockerContainerEnvVar: vi.fn(),
   readDockerContainerLabel: vi.fn(),
+  readDockerNetworkDriver: vi.fn(),
   readDockerNetworkGateway: vi.fn(),
   readDockerPort: vi.fn(),
 }));
@@ -34,6 +35,7 @@ vi.mock("./docker.js", async () => {
     execDocker: dockerMocks.execDocker,
     readDockerContainerEnvVar: dockerMocks.readDockerContainerEnvVar,
     readDockerContainerLabel: dockerMocks.readDockerContainerLabel,
+    readDockerNetworkDriver: dockerMocks.readDockerNetworkDriver,
     readDockerNetworkGateway: dockerMocks.readDockerNetworkGateway,
     readDockerPort: dockerMocks.readDockerPort,
   };
@@ -117,6 +119,7 @@ describe("ensureSandboxBrowser create args", () => {
     dockerMocks.execDocker.mockClear();
     dockerMocks.readDockerContainerEnvVar.mockClear();
     dockerMocks.readDockerContainerLabel.mockClear();
+    dockerMocks.readDockerNetworkDriver.mockClear();
     dockerMocks.readDockerNetworkGateway.mockClear();
     dockerMocks.readDockerPort.mockClear();
     registryMocks.readBrowserRegistry.mockClear();
@@ -133,6 +136,7 @@ describe("ensureSandboxBrowser create args", () => {
     });
     dockerMocks.readDockerContainerLabel.mockResolvedValue(null);
     dockerMocks.readDockerContainerEnvVar.mockResolvedValue(null);
+    dockerMocks.readDockerNetworkDriver.mockResolvedValue("bridge");
     dockerMocks.readDockerNetworkGateway.mockResolvedValue("172.21.0.1");
     dockerMocks.readDockerPort.mockImplementation(async (_containerName: string, port: number) => {
       if (port === 9222) {
@@ -337,6 +341,22 @@ describe("ensureSandboxBrowser create args", () => {
         cfg: buildConfig(false),
       }),
     ).rejects.toThrow(/Cannot derive CDP source range/);
+  });
+
+  it("requires explicit cdpSourceRange for non-bridge network drivers", async () => {
+    dockerMocks.readDockerNetworkDriver.mockResolvedValue("macvlan");
+    dockerMocks.readDockerNetworkGateway.mockResolvedValue("172.21.0.1");
+
+    await expect(
+      ensureSandboxBrowser({
+        scopeKey: "session:test",
+        workspaceDir: "/tmp/workspace",
+        agentWorkspaceDir: "/tmp/workspace",
+        cfg: buildConfig(false),
+      }),
+    ).rejects.toThrow(/Cannot derive CDP source range/);
+    // Gateway helper should not have been called for non-bridge networks.
+    expect(dockerMocks.readDockerNetworkGateway).not.toHaveBeenCalled();
   });
 
   it("uses loopback range for network=none (no IPAM gateway, no peer risk)", async () => {

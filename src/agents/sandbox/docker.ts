@@ -225,6 +225,18 @@ export async function readDockerContainerEnvVar(
   return null;
 }
 
+export async function readDockerNetworkDriver(network: string): Promise<string | null> {
+  const result = await execDocker(
+    ["network", "inspect", "-f", "{{.Driver}}", network],
+    { allowFailure: true },
+  );
+  if (result.code !== 0) {
+    return null;
+  }
+  const driver = result.stdout.trim();
+  return driver || null;
+}
+
 export async function readDockerNetworkGateway(network: string): Promise<string | null> {
   const result = await execDocker(
     ["network", "inspect", "-f", "{{range .IPAM.Config}}{{println .Gateway}}{{end}}", network],

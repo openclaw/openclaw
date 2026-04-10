@@ -26,6 +26,7 @@ import {
   execDocker,
   readDockerContainerEnvVar,
   readDockerContainerLabel,
+  readDockerNetworkDriver,
   readDockerNetworkGateway,
   readDockerPort,
 } from "./docker.js";
@@ -238,9 +239,17 @@ export async function ensureSandboxBrowser(params: {
     // binds on 0.0.0.0 (IPv4); an IPv6 CIDR would cause an address-family mismatch.
     let effectiveCdpSourceRange = cdpSourceRange;
     if (!effectiveCdpSourceRange) {
-      const gateway = await readDockerNetworkGateway(browserDockerCfg.network);
-      if (gateway && !gateway.includes(":")) {
-        effectiveCdpSourceRange = `${gateway}/32`;
+      // Only auto-derive from gateway for bridge-style networks where inbound
+      // CDP traffic reliably comes from the Docker gateway IP. Non-bridge drivers
+      // (macvlan, ipvlan, overlay, etc.) may route traffic from other source IPs,
+      // so they require explicit cdpSourceRange config.
+      const driver = await readDockerNetworkDriver(browserDockerCfg.network);
+      const isBridgeLike = !driver || driver === "bridge";
+      if (isBridgeLike) {
+        const gateway = await readDockerNetworkGateway(browserDockerCfg.network);
+        if (gateway && !gateway.includes(":")) {
+          effectiveCdpSourceRange = `${gateway}/32`;
+        }
       }
     }
     // network="none" has no IPAM gateway by design and no peer container risk;
