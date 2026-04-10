@@ -47,6 +47,50 @@ function buildVersionsUrl(baseUrl: string) {
   return `${baseUrl}_matrix/client/versions`;
 }
 
+async function isMatrixVersionsReachable(baseUrl: string, fetchImpl: FetchLike) {
+  return await fetchImpl(buildVersionsUrl(baseUrl))
+    .then((response) => response.ok)
+    .catch(() => false);
+}
+
+async function waitForReachableMatrixBaseUrl(params: {
+  composeFile: string;
+  containerBaseUrl: string | null;
+  fetchImpl: FetchLike;
+  hostBaseUrl: string;
+  sleepImpl: (ms: number) => Promise<unknown>;
+  timeoutMs?: number;
+  pollMs?: number;
+}) {
+  const timeoutMs = params.timeoutMs ?? 60_000;
+  const pollMs = params.pollMs ?? 1_000;
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    if (await isMatrixVersionsReachable(params.hostBaseUrl, params.fetchImpl)) {
+      return params.hostBaseUrl;
+    }
+    if (
+      params.containerBaseUrl &&
+      (await isMatrixVersionsReachable(params.containerBaseUrl, params.fetchImpl))
+    ) {
+      return params.containerBaseUrl;
+    }
+    await params.sleepImpl(pollMs);
+  }
+
+  const candidateLabel = params.containerBaseUrl
+    ? `${params.hostBaseUrl} or ${params.containerBaseUrl}`
+    : params.hostBaseUrl;
+  throw new Error(
+    [
+      `Matrix homeserver did not become healthy within ${Math.round(timeoutMs / 1000)}s.`,
+      `Last checked: ${candidateLabel}`,
+      `Hint: check container logs with \`docker compose -f ${params.composeFile} logs ${MATRIX_QA_SERVICE}\`.`,
+    ].join("\n"),
+  );
+}
+
 function resolveMatrixQaHarnessImage(image?: string) {
   return (
     image?.trim() || process.env.OPENCLAW_QA_MATRIX_TUWUNEL_IMAGE?.trim() || MATRIX_QA_DEFAULT_IMAGE
@@ -179,10 +223,7 @@ export async function startMatrixQaHarness(
 
   const hostBaseUrl = `http://127.0.0.1:${homeserverPort}/`;
   let baseUrl = hostBaseUrl;
-  const hostVersionsUrl = buildVersionsUrl(hostBaseUrl);
-  const hostReachable = await fetchImpl(hostVersionsUrl)
-    .then((response) => response.ok)
-    .catch(() => false);
+  const hostReachable = await isMatrixVersionsReachable(hostBaseUrl, fetchImpl);
   if (!hostReachable) {
     const containerBaseUrl = await resolveComposeServiceUrl(
       MATRIX_QA_SERVICE,
@@ -191,14 +232,13 @@ export async function startMatrixQaHarness(
       repoRoot,
       runCommand,
     );
-    const containerReachable = containerBaseUrl
-      ? await fetchImpl(buildVersionsUrl(containerBaseUrl))
-          .then((response) => response.ok)
-          .catch(() => false)
-      : false;
-    if (containerReachable && containerBaseUrl) {
-      baseUrl = containerBaseUrl;
-    }
+    baseUrl = await waitForReachableMatrixBaseUrl({
+      composeFile: files.composeFile,
+      containerBaseUrl,
+      fetchImpl,
+      hostBaseUrl,
+      sleepImpl,
+    });
   }
 
   await waitForHealth(buildVersionsUrl(baseUrl), {
@@ -228,6 +268,8 @@ export const __testing = {
   MATRIX_QA_DEFAULT_SERVER_NAME,
   MATRIX_QA_SERVICE,
   buildVersionsUrl,
+  isMatrixVersionsReachable,
   renderMatrixQaCompose,
   resolveMatrixQaHarnessImage,
+  waitForReachableMatrixBaseUrl,
 };

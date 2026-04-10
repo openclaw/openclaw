@@ -149,13 +149,14 @@ function buildMatrixReplyArtifact(
   event: MatrixQaObservedEvent,
   token?: string,
 ): MatrixQaReplyArtifact {
+  const replyBody = event.body?.trim();
   return {
-    bodyPreview: event.body?.slice(0, 200),
+    bodyPreview: replyBody?.slice(0, 200),
     eventId: event.eventId,
     mentions: event.mentions,
     relatesTo: event.relatesTo,
     sender: event.sender,
-    ...(token ? { tokenMatched: (event.body ?? "").includes(token) } : {}),
+    ...(token ? { tokenMatched: replyBody === token } : {}),
   };
 }
 
@@ -661,6 +662,7 @@ export async function runMatrixQaScenario(
 export const __testing = {
   MATRIX_QA_STANDARD_SCENARIO_IDS,
   buildMatrixReplyDetails,
+  buildMatrixReplyArtifact,
   buildMentionPrompt,
   findMatrixQaScenarios,
   readMatrixQaSyncCursor,

@@ -40,6 +40,33 @@ describe("matrix live qa scenarios", () => {
     ).toBe("@sut:matrix-qa.test reply with only this exact marker: MATRIX_QA_CANARY_TOKEN");
   });
 
+  it("requires Matrix replies to match the exact marker body", () => {
+    expect(
+      scenarioTesting.buildMatrixReplyArtifact(
+        {
+          roomId: "!room:matrix-qa.test",
+          eventId: "$event",
+          sender: "@sut:matrix-qa.test",
+          type: "m.room.message",
+          body: "MATRIX_QA_TOKEN",
+        },
+        "MATRIX_QA_TOKEN",
+      ).tokenMatched,
+    ).toBe(true);
+    expect(
+      scenarioTesting.buildMatrixReplyArtifact(
+        {
+          roomId: "!room:matrix-qa.test",
+          eventId: "$event-2",
+          sender: "@sut:matrix-qa.test",
+          type: "m.room.message",
+          body: "prefix MATRIX_QA_TOKEN suffix",
+        },
+        "MATRIX_QA_TOKEN",
+      ).tokenMatched,
+    ).toBe(false);
+  });
+
   it("fails when any requested Matrix scenario id is unknown", () => {
     expect(() =>
       scenarioTesting.findMatrixQaScenarios(["matrix-thread-follow-up", "typo-scenario"]),
