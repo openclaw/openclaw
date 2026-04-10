@@ -166,17 +166,6 @@ describe("usage controller date interpretation params", () => {
 
     vi.unstubAllGlobals();
   });
-});
-
-describe("usage session detail loaders", () => {
-  beforeEach(() => {
-    __test.resetLegacyUsageDateParamsCache();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   it("keeps optional loaders resilient when requests fail", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.usage.timeseries" || method === "sessions.usage.logs") {
