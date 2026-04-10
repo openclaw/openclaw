@@ -605,4 +605,75 @@ describe("plamo provider plugin", () => {
     expect(finalMessage).toMatchObject({ stopReason: "toolUse" });
     expect(result).toBe(finalMessage);
   });
+
+  it("keeps done reason synchronized with normalized tool-use stopReason on wrapped streams", async () => {
+    const provider = await registerSingleProviderPlugin(plamoPlugin);
+    const toolMarkup =
+      "<|plamo:begin_tool_requests:plamo|>" +
+      "<|plamo:begin_tool_request:plamo|>" +
+      "<|plamo:begin_tool_name:plamo|>read<|plamo:end_tool_name:plamo|>" +
+      '<|plamo:begin_tool_arguments:plamo|><|plamo:msg|>{"path":"README.md"}' +
+      "<|plamo:end_tool_arguments:plamo|>" +
+      "<|plamo:end_tool_request:plamo|>" +
+      "<|plamo:end_tool_requests:plamo|>";
+    const doneMessage = {
+      role: "assistant",
+      stopReason: "stop",
+      content: [{ type: "text", text: `I will inspect the file.\n${toolMarkup}` }],
+    };
+
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [{ type: "done", reason: "stop", message: doneMessage }],
+        resultMessage: doneMessage,
+      }),
+    );
+
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "plamo",
+      modelId: "plamo-3.0-prime-beta",
+      streamFn: baseFn as never,
+      extraParams: {},
+    } as never);
+    if (!wrapped) {
+      throw new Error("expected wrapped stream function");
+    }
+
+    const stream = await wrapped(
+      {
+        api: "openai-completions",
+        provider: "plamo",
+        id: "plamo-3.0-prime-beta",
+      } as never,
+      { messages: [] } as never,
+      {} as never,
+    );
+
+    const events: unknown[] = [];
+    for await (const event of stream) {
+      events.push(event);
+    }
+    const result = await stream.result();
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "done",
+        reason: "toolUse",
+        message: expect.objectContaining({
+          stopReason: "toolUse",
+          content: [
+            { type: "text", text: "I will inspect the file." },
+            expect.objectContaining({
+              type: "toolCall",
+              name: "read",
+              arguments: { path: "README.md" },
+            }),
+          ],
+        }),
+      }),
+    );
+    expect(result).toBe(doneMessage);
+    expect(doneMessage).toMatchObject({ stopReason: "toolUse" });
+  });
 });

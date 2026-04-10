@@ -976,6 +976,24 @@ export function normalizePlamoToolMarkupInMessage(message: unknown): void {
   }
 }
 
+function syncDoneEventReasonWithMessageStopReason(event: unknown): void {
+  if (!event || typeof event !== "object") {
+    return;
+  }
+  const doneEvent = event as {
+    type?: unknown;
+    reason?: unknown;
+    message?: unknown;
+  };
+  if (doneEvent.type !== "done" || !doneEvent.message || typeof doneEvent.message !== "object") {
+    return;
+  }
+  const stopReason = (doneEvent.message as { stopReason?: unknown }).stopReason;
+  if (typeof stopReason === "string" && stopReason.length > 0) {
+    doneEvent.reason = stopReason;
+  }
+}
+
 function wrapStreamNormalizePlamoToolMarkup(
   stream: ReturnType<typeof streamSimple>,
 ): ReturnType<typeof streamSimple> {
@@ -997,6 +1015,7 @@ function wrapStreamNormalizePlamoToolMarkup(
             const event = result.value as { partial?: unknown; message?: unknown };
             normalizePlamoToolMarkupInMessage(event.partial);
             normalizePlamoToolMarkupInMessage(event.message);
+            syncDoneEventReasonWithMessageStopReason(event);
           }
           return result;
         },
