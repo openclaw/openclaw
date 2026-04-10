@@ -2399,7 +2399,9 @@ export type PluginHookAgentContext = {
   channelId?: string;
   /** Absolute paths to inbound media files (images, audio, video, documents). */
   mediaPaths?: string[];
-  /** MIME types corresponding to each entry in mediaPaths. */
+  /** URLs for inbound media (may be present even when mediaPaths is empty, e.g. remote-only channels). */
+  mediaUrls?: string[];
+  /** MIME types of inbound media. May be shorter than mediaPaths/mediaUrls when content types are unknown. */
   mediaTypes?: string[];
 };
 

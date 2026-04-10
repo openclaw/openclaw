@@ -563,6 +563,12 @@ export async function getReplyFromConfig(
               : ctx.MediaPath
                 ? [ctx.MediaPath]
                 : [],
+          mediaUrls:
+            Array.isArray(ctx.MediaUrls) && ctx.MediaUrls.length > 0
+              ? [...ctx.MediaUrls]
+              : ctx.MediaUrl
+                ? [ctx.MediaUrl]
+                : [],
           mediaTypes:
             Array.isArray(ctx.MediaTypes) && ctx.MediaTypes.length > 0
               ? [...ctx.MediaTypes]
