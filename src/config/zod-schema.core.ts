@@ -280,18 +280,25 @@ const ConfiguredProviderRequestProxySchema = z
   ])
   .optional();
 
+const ConfiguredProviderRequestFields = {
+  headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
+  auth: ConfiguredProviderRequestAuthSchema,
+  proxy: ConfiguredProviderRequestProxySchema,
+  tls: ConfiguredProviderRequestTlsSchema,
+};
+
 const ConfiguredProviderRequestSchema = z
+  .object(ConfiguredProviderRequestFields)
+  .strict()
+  .optional();
+
+const ConfiguredModelProviderRequestSchema = z
   .object({
-    headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
-    auth: ConfiguredProviderRequestAuthSchema,
-    proxy: ConfiguredProviderRequestProxySchema,
-    tls: ConfiguredProviderRequestTlsSchema,
+    ...ConfiguredProviderRequestFields,
     allowPrivateNetwork: z.boolean().optional(),
   })
   .strict()
   .optional();
-
-const ConfiguredModelProviderRequestSchema = ConfiguredProviderRequestSchema;
 
 export const ModelDefinitionSchema = z
   .object({

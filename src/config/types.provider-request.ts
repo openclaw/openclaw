@@ -40,7 +40,8 @@ export type ConfiguredProviderRequest = {
   auth?: ConfiguredProviderRequestAuth;
   proxy?: ConfiguredProviderRequestProxy;
   tls?: ConfiguredProviderRequestTls;
-  allowPrivateNetwork?: boolean;
 };
 
-export type ConfiguredModelProviderRequest = ConfiguredProviderRequest;
+export type ConfiguredModelProviderRequest = ConfiguredProviderRequest & {
+  allowPrivateNetwork?: boolean;
+};

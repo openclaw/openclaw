@@ -8739,9 +8739,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           },
                           additionalProperties: false,
                         },
-                        allowPrivateNetwork: {
-                          type: "boolean",
-                        },
                       },
                       additionalProperties: false,
                     },
@@ -10047,9 +10044,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         },
                         additionalProperties: false,
                       },
-                      allowPrivateNetwork: {
-                        type: "boolean",
-                      },
                     },
                     additionalProperties: false,
                   },
@@ -11331,9 +11325,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                 },
                               },
                               additionalProperties: false,
-                            },
-                            allowPrivateNetwork: {
-                              type: "boolean",
                             },
                           },
                           additionalProperties: false,
@@ -12692,9 +12683,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         description:
                           "Direct TLS client settings for audio provider requests, including custom CA trust, client certs, or SNI overrides for managed gateways and internal endpoints.",
                       },
-                      allowPrivateNetwork: {
-                        type: "boolean",
-                      },
                     },
                     additionalProperties: false,
                     title: "Audio Request Overrides",
@@ -13979,9 +13967,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                 },
                               },
                               additionalProperties: false,
-                            },
-                            allowPrivateNetwork: {
-                              type: "boolean",
                             },
                           },
                           additionalProperties: false,
@@ -15295,9 +15280,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         },
                         additionalProperties: false,
                       },
-                      allowPrivateNetwork: {
-                        type: "boolean",
-                      },
                     },
                     additionalProperties: false,
                   },
@@ -16579,9 +16561,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                 },
                               },
                               additionalProperties: false,
-                            },
-                            allowPrivateNetwork: {
-                              type: "boolean",
                             },
                           },
                           additionalProperties: false,
