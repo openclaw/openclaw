@@ -53,15 +53,176 @@ const representativeRuntimeSmokeSubpaths = ["channel-runtime", "conversation-run
 
 const importResolvedPluginSdkSubpath = async (specifier: string) => import(specifier);
 
-function readPluginSdkSource(subpath: string): string {
-  const file = resolve(PLUGIN_SDK_DIR, `${subpath}.ts`);
-  const cached = sourceCache.get(file);
+type BrowserFacadeSourceContract = {
+  subpath: string;
+  artifactBasename: string;
+  mentions: readonly string[];
+  omits: readonly string[];
+};
+
+type BrowserHelperExportParityContract = {
+  corePath: string;
+  extensionPath: string;
+  expectedExports: readonly string[];
+};
+
+const BROWSER_FACADE_SOURCE_CONTRACTS: readonly BrowserFacadeSourceContract[] = [
+  {
+    subpath: "browser-control-auth",
+    artifactBasename: "browser-control-auth.js",
+    mentions: [
+      "loadBundledPluginPublicSurfaceModuleSync",
+      "resolveBrowserControlAuth",
+      "shouldAutoGenerateBrowserAuth",
+      "ensureBrowserControlAuth",
+    ],
+    omits: [
+      "resolveGatewayAuth",
+      "writeConfigFile",
+      "generateBrowserControlToken",
+      "ensureGatewayStartupAuth",
+    ],
+  },
+  {
+    subpath: "browser-profiles",
+    artifactBasename: "browser-profiles.js",
+    mentions: [
+      "loadBundledPluginPublicSurfaceModuleSync",
+      "resolveBrowserConfig",
+      "resolveProfile",
+    ],
+    omits: [
+      "resolveBrowserSsrFPolicy",
+      "ensureDefaultProfile",
+      "ensureDefaultUserBrowserProfile",
+      "normalizeHexColor",
+    ],
+  },
+  {
+    subpath: "browser-host-inspection",
+    artifactBasename: "browser-host-inspection.js",
+    mentions: [
+      "loadBundledPluginPublicSurfaceModuleSync",
+      "resolveGoogleChromeExecutableForPlatform",
+      "readBrowserVersion",
+      "parseBrowserMajorVersion",
+    ],
+    omits: ["findFirstChromeExecutable", "findGoogleChromeExecutableLinux", "execText"],
+  },
+];
+
+const BROWSER_HELPER_EXPORT_PARITY_CONTRACTS: readonly BrowserHelperExportParityContract[] = [
+  {
+    corePath: "src/plugin-sdk/browser-control-auth.ts",
+    extensionPath: "extensions/browser/browser-control-auth.ts",
+    expectedExports: [
+      "BrowserControlAuth",
+      "ensureBrowserControlAuth",
+      "resolveBrowserControlAuth",
+      "shouldAutoGenerateBrowserAuth",
+    ],
+  },
+  {
+    corePath: "src/plugin-sdk/browser-profiles.ts",
+    extensionPath: "extensions/browser/browser-profiles.ts",
+    expectedExports: [
+      "DEFAULT_AI_SNAPSHOT_MAX_CHARS",
+      "DEFAULT_BROWSER_DEFAULT_PROFILE_NAME",
+      "DEFAULT_BROWSER_EVALUATE_ENABLED",
+      "DEFAULT_OPENCLAW_BROWSER_COLOR",
+      "DEFAULT_OPENCLAW_BROWSER_ENABLED",
+      "DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME",
+      "DEFAULT_UPLOAD_DIR",
+      "ResolvedBrowserConfig",
+      "ResolvedBrowserProfile",
+      "resolveBrowserConfig",
+      "resolveProfile",
+    ],
+  },
+  {
+    corePath: "src/plugin-sdk/browser-host-inspection.ts",
+    extensionPath: "extensions/browser/browser-host-inspection.ts",
+    expectedExports: [
+      "BrowserExecutable",
+      "parseBrowserMajorVersion",
+      "readBrowserVersion",
+      "resolveGoogleChromeExecutableForPlatform",
+    ],
+  },
+];
+
+function readCachedSource(absolutePath: string): string {
+  const cached = sourceCache.get(absolutePath);
   if (cached !== undefined) {
     return cached;
   }
-  const text = readFileSync(file, "utf8");
-  sourceCache.set(file, text);
+  const text = readFileSync(absolutePath, "utf8");
+  sourceCache.set(absolutePath, text);
   return text;
+}
+
+function readPluginSdkSource(subpath: string): string {
+  return readCachedSource(resolve(PLUGIN_SDK_DIR, `${subpath}.ts`));
+}
+
+function readRepoSource(relativePath: string): string {
+  return readCachedSource(resolve(REPO_ROOT, relativePath));
+}
+
+function collectNamedExportsFromClause(clause: string): string[] {
+  return clause
+    .split(",")
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0)
+    .map((segment) => segment.replace(/^type\s+/u, ""))
+    .map((segment) => {
+      const aliasMatch = segment.match(/\s+as\s+([A-Za-z_$][\w$]*)$/u);
+      if (aliasMatch?.[1]) {
+        return aliasMatch[1];
+      }
+      return segment;
+    });
+}
+
+function collectNamedExportsFromSource(source: string): string[] {
+  const names = new Set<string>();
+
+  const exportClausePattern =
+    /export\s+(?:type\s+)?\{([^}]*)\}\s*(?:from\s+["'][^"']+["'])?\s*;?/gms;
+  for (const match of source.matchAll(exportClausePattern)) {
+    for (const name of collectNamedExportsFromClause(match[1] ?? "")) {
+      names.add(name);
+    }
+  }
+
+  for (const pattern of [
+    /\bexport\s+(?:declare\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/gu,
+    /\bexport\s+(?:declare\s+)?const\s+([A-Za-z_$][\w$]*)/gu,
+    /\bexport\s+type\s+([A-Za-z_$][\w$]*)\s*=/gu,
+    /\bexport\s+interface\s+([A-Za-z_$][\w$]*)/gu,
+    /\bexport\s+class\s+([A-Za-z_$][\w$]*)/gu,
+  ]) {
+    for (const match of source.matchAll(pattern)) {
+      if (match[1]) {
+        names.add(match[1]);
+      }
+    }
+  }
+
+  return [...names].toSorted();
+}
+
+function collectNamedExportsFromRepoFile(relativePath: string): string[] {
+  return collectNamedExportsFromSource(readRepoSource(relativePath));
+}
+
+function expectNamedExportParity(params: BrowserHelperExportParityContract) {
+  const coreExports = collectNamedExportsFromRepoFile(params.corePath);
+  const extensionExports = collectNamedExportsFromRepoFile(params.extensionPath);
+  expect(coreExports, `${params.corePath} exports changed`).toEqual([...params.expectedExports]);
+  expect(extensionExports, `${params.extensionPath} exports changed`).toEqual([
+    ...params.expectedExports,
+  ]);
 }
 
 function listRepoTsFiles(dir: string): string[] {
@@ -162,6 +323,12 @@ function expectSourceOmitsImportPattern(subpath: string, specifier: string) {
   expect(source).not.toMatch(new RegExp(`\\bimport\\(\\s*["']${escapedSpecifier}["']\\s*\\)`, "u"));
 }
 
+function expectBrowserFacadeSourceContract(contract: BrowserFacadeSourceContract) {
+  expectSourceMentions(contract.subpath, contract.mentions);
+  expectSourceContains(contract.subpath, `artifactBasename: "${contract.artifactBasename}"`);
+  expectSourceOmits(contract.subpath, contract.omits);
+}
+
 function isGeneratedBundledFacadeSubpath(subpath: string): boolean {
   const source = readPluginSdkSource(subpath);
   return (
@@ -211,6 +378,18 @@ describe("plugin-sdk subpath exports", () => {
       ),
     );
     expect(banned).toEqual([]);
+  });
+
+  it("keeps browser compatibility helper subpaths as thin facades", () => {
+    for (const contract of BROWSER_FACADE_SOURCE_CONTRACTS) {
+      expectBrowserFacadeSourceContract(contract);
+    }
+  });
+
+  it("keeps browser helper facade exports aligned with extension public wrappers", () => {
+    for (const contract of BROWSER_HELPER_EXPORT_PARITY_CONTRACTS) {
+      expectNamedExportParity(contract);
+    }
   });
 
   it("keeps helper subpaths aligned", () => {
