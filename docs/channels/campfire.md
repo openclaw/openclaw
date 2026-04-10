@@ -39,8 +39,8 @@ Details: [Plugins](/tools/plugin)
 3. Point Campfire webhook delivery to your OpenClaw gateway path:
    - Default: `/channels/campfire/webhook/default`
    - Per-account default: `/channels/campfire/webhook/<account-id>`
-4. If you set `webhookSecret`, include it as a query parameter in the webhook URL:
-   - `?secret=<webhookSecret>`
+4. If you set `webhookSecret`, prefer sending it in the `X-Webhook-Secret` request header.
+   - If Campfire cannot set custom headers directly, keep `?secret=<webhookSecret>` only as a backward-compatible fallback, ideally behind a reverse proxy that adds the header.
 5. Restart gateway and send a message in a configured Campfire room.
 
 Minimal config:
@@ -65,7 +65,7 @@ Minimal config:
 
 - `allowFrom` is a Campfire user-id allowlist for inbound webhook events.
 - Empty `allowFrom` means allow all senders.
-- `webhookSecret` protects inbound requests and must match the `secret` query parameter.
+- `webhookSecret` protects inbound requests and is checked against `X-Webhook-Secret` first, with `?secret=` accepted as a legacy fallback.
 
 ## Outbound delivery
 
@@ -114,7 +114,7 @@ Full configuration: [Configuration](/gateway/configuration)
 - `channels.campfire.enabled`: enable/disable startup.
 - `channels.campfire.baseUrl`: Campfire base URL for the workspace.
 - `channels.campfire.botKey`: Campfire bot API key.
-- `channels.campfire.webhookSecret`: optional shared secret checked from `?secret=`.
+- `channels.campfire.webhookSecret`: optional shared secret checked from `X-Webhook-Secret`, with `?secret=` accepted as a backward-compatible fallback.
 - `channels.campfire.allowFrom`: inbound allowlist of Campfire user IDs (as strings).
 - `channels.campfire.webhookPath`: inbound webhook route path.
 - `channels.campfire.textChunkLimit`: outbound chunk size in characters.

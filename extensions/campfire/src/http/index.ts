@@ -99,6 +99,7 @@ export function createCampfireWebhookHandler(params: {
     }
 
     const configuredWebhookSecret = params.webhookSecret?.trim();
+    const bodyReadProfile = configuredWebhookSecret ? "post-auth" : "pre-auth";
     if (configuredWebhookSecret) {
       const secret = resolveRequestSecret(req);
       if (!secret || !secretsMatch(secret, configuredWebhookSecret)) {
@@ -111,7 +112,7 @@ export function createCampfireWebhookHandler(params: {
     const parsedBody = await readJsonWebhookBodyOrReject({
       req,
       res,
-      profile: "pre-auth",
+      profile: bodyReadProfile,
       invalidJsonMessage: "Bad Request",
     });
     if (!parsedBody.ok) {

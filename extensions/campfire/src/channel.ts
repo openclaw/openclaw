@@ -1,5 +1,4 @@
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   campfireChannelConfigSchema,
@@ -90,7 +89,7 @@ export function createCampfirePlugin(params?: {
       deliveryMode: "direct",
       textChunkLimit: 4000,
       sendText: async ({ cfg, to, text, accountId }) => {
-        const account = resolveCampfireAccount(cfg as OpenClawConfig, accountId);
+        const account = resolveCampfireAccount(cfg, accountId);
         const target = assertCampfireOutboundTarget(to, account);
         const roomId = resolveCampfireRoomIdFromTarget(target);
 

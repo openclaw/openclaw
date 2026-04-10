@@ -67,6 +67,18 @@ const validPayload = {
   },
 };
 
+function createOversizedValidPayload(charCount = 70 * 1024) {
+  return {
+    ...validPayload,
+    message: {
+      ...validPayload.message,
+      body: {
+        plain: "x".repeat(charCount),
+      },
+    },
+  };
+}
+
 describe("createCampfireWebhookHandler", () => {
   afterEach(() => {
     __testing.resetCampfireWebhookPathReservations();
@@ -213,6 +225,39 @@ describe("createCampfireWebhookHandler", () => {
     expect(res.statusCode).toBe(200);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(onInbound).toHaveBeenCalledWith(validPayload);
+  });
+
+  it("uses post-auth body limits after a matching webhook secret", async () => {
+    const onInbound = vi.fn();
+    const handler = createCampfireWebhookHandler({
+      webhookSecret: "expected",
+      onInbound,
+    });
+    const req = createJsonRequest({
+      body: createOversizedValidPayload(),
+      headers: { "x-webhook-secret": "expected" },
+    });
+    const res = createMockServerResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onInbound).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps no-secret webhook requests on pre-auth body limits", async () => {
+    const onInbound = vi.fn();
+    const handler = createCampfireWebhookHandler({ onInbound });
+    const req = createJsonRequest({
+      body: createOversizedValidPayload(),
+    });
+    const res = createMockServerResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(413);
+    expect(onInbound).not.toHaveBeenCalled();
   });
 
   it("rejects when no secret is provided but one is configured", async () => {

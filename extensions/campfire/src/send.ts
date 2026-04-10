@@ -1,4 +1,13 @@
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+
 const DEFAULT_TEXT_CHUNK_LIMIT = 4000;
+const DEFAULT_REPLY_TIMEOUT_MS = 10_000;
+
+let fetchGuard = fetchWithSsrFGuard;
+
+export function _setFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
+  fetchGuard = impl ?? fetchWithSsrFGuard;
+}
 
 export function chunkCampfireText(text: string, chunkLimit = DEFAULT_TEXT_CHUNK_LIMIT): string[] {
   const normalizedLimit =
@@ -28,14 +37,25 @@ export async function sendCampfireReply(
   text: string,
   botKey = "",
 ): Promise<void> {
-  const response = await fetch(replyUrl, {
-    method: "POST",
-    headers: buildCampfireHeaders(botKey),
-    body: text,
+  const { response, release } = await fetchGuard({
+    url: replyUrl,
+    init: {
+      method: "POST",
+      headers: buildCampfireHeaders(botKey),
+      body: text,
+    },
+    timeoutMs: DEFAULT_REPLY_TIMEOUT_MS,
+    // Call sites already constrain reply URLs to the configured Campfire workspace.
+    policy: { allowPrivateNetwork: true },
+    auditContext: "campfire-reply",
   });
 
-  if (!response.ok) {
-    throw new Error(`Campfire reply failed: ${response.status} ${response.statusText}`);
+  try {
+    if (!response.ok) {
+      throw new Error(`Campfire reply failed: ${response.status} ${response.statusText}`);
+    }
+  } finally {
+    await release();
   }
 }
 

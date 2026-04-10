@@ -1,18 +1,26 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chunkCampfireText, sendCampfireReply, sendCampfireText } from "./send.js";
+import {
+  _setFetchGuardForTesting,
+  chunkCampfireText,
+  sendCampfireReply,
+  sendCampfireText,
+} from "./send.js";
 
 describe("sendCampfireReply", () => {
   afterEach(() => {
-    vi.unstubAllGlobals();
+    _setFetchGuardForTesting(null);
   });
 
   it("sends a plain text POST request with bot authorization", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(null, {
+    const release = vi.fn().mockResolvedValue(undefined);
+    const fetchGuardMock = vi.fn().mockResolvedValue({
+      response: new Response(null, {
         status: 200,
       }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+      finalUrl: "https://campfire.example.com/rooms/7/key/messages",
+      release,
+    });
+    _setFetchGuardForTesting(fetchGuardMock);
 
     await sendCampfireReply(
       "https://campfire.example.com/rooms/7/key/messages",
@@ -20,42 +28,57 @@ describe("sendCampfireReply", () => {
       "42-AbCdEf",
     );
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://campfire.example.com/rooms/7/key/messages",
+    expect(fetchGuardMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        method: "POST",
-        headers: {
-          Authorization: "Bearer 42-AbCdEf",
-          "Content-Type": "text/plain; charset=utf-8",
-        },
-        body: "Hello world",
+        url: "https://campfire.example.com/rooms/7/key/messages",
+        timeoutMs: 10_000,
+        policy: { allowPrivateNetwork: true },
+        auditContext: "campfire-reply",
+        init: expect.objectContaining({
+          method: "POST",
+          headers: {
+            Authorization: "Bearer 42-AbCdEf",
+            "Content-Type": "text/plain; charset=utf-8",
+          },
+          body: "Hello world",
+        }),
       }),
     );
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("omits Authorization header when botKey is empty", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchGuardMock = vi.fn().mockResolvedValue({
+      response: new Response(null, { status: 200 }),
+      finalUrl: "https://campfire.example.com/rooms/7/key/messages",
+      release: vi.fn().mockResolvedValue(undefined),
+    });
+    _setFetchGuardForTesting(fetchGuardMock);
 
     await sendCampfireReply("https://campfire.example.com/rooms/7/key/messages", "Hello world");
 
-    const headers = fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>;
+    const headers = fetchGuardMock.mock.calls[0]?.[0]?.init?.headers as Record<string, string>;
     expect(headers.Authorization).toBeUndefined();
     expect(headers["Content-Type"]).toBe("text/plain; charset=utf-8");
   });
 
   it("throws when Campfire rejects the message", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response("no", {
+    const release = vi.fn().mockResolvedValue(undefined);
+    const fetchGuardMock = vi.fn().mockResolvedValue({
+      response: new Response("no", {
         status: 403,
         statusText: "Forbidden",
       }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+      finalUrl: "https://campfire.example.com/rooms/7/key/messages",
+      release,
+    });
+    _setFetchGuardForTesting(fetchGuardMock);
 
     await expect(
       sendCampfireReply("https://campfire.example.com/rooms/7/key/messages", "Hello world"),
     ).rejects.toThrow("Campfire reply failed: 403 Forbidden");
+
+    expect(release).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -85,16 +108,18 @@ describe("chunkCampfireText", () => {
 
 describe("sendCampfireText", () => {
   afterEach(() => {
-    vi.unstubAllGlobals();
+    _setFetchGuardForTesting(null);
   });
 
   it("sends long replies in deterministic chunks", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(null, {
+    const fetchGuardMock = vi.fn().mockResolvedValue({
+      response: new Response(null, {
         status: 200,
       }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+      finalUrl: "https://campfire.example.com/rooms/7/key/messages",
+      release: vi.fn().mockResolvedValue(undefined),
+    });
+    _setFetchGuardForTesting(fetchGuardMock);
 
     await sendCampfireText(
       "https://campfire.example.com/rooms/7/key/messages",
@@ -103,18 +128,18 @@ describe("sendCampfireText", () => {
       4,
     );
 
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(fetchMock.mock.calls[0]?.[1]).toEqual(
+    expect(fetchGuardMock).toHaveBeenCalledTimes(3);
+    expect(fetchGuardMock.mock.calls[0]?.[0]?.init).toEqual(
       expect.objectContaining({
         body: "abcd",
       }),
     );
-    expect(fetchMock.mock.calls[1]?.[1]).toEqual(
+    expect(fetchGuardMock.mock.calls[1]?.[0]?.init).toEqual(
       expect.objectContaining({
         body: "efgh",
       }),
     );
-    expect(fetchMock.mock.calls[2]?.[1]).toEqual(
+    expect(fetchGuardMock.mock.calls[2]?.[0]?.init).toEqual(
       expect.objectContaining({
         body: "ij",
       }),

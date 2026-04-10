@@ -68,7 +68,7 @@ function resolveCampfireConfigSection(cfg: OpenClawConfig): CampfireChannelConfi
   if (!section || typeof section !== "object" || Array.isArray(section)) {
     return {};
   }
-  return section as CampfireChannelConfig;
+  return section;
 }
 
 function hasTopLevelAccountFields(section: CampfireChannelConfig): boolean {
