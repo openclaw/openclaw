@@ -293,7 +293,7 @@ describe("zai provider plugin", () => {
     ]);
   });
 
-  it("does not create env rotation profiles for a single live override key", async () => {
+  it("creates a runtime auth profile for a single live override key", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
     const profiles = provider.resolveExternalAuthProfiles?.({
@@ -307,7 +307,51 @@ describe("zai provider plugin", () => {
       },
     } as never);
 
-    expect(profiles).toBeUndefined();
+    expect(profiles).toEqual([
+      {
+        profileId: "zai:default",
+        persistence: "runtime-only",
+        credential: {
+          type: "api_key",
+          provider: "zai",
+          key: "sk-zai-live",
+          displayName: "Z.AI live override",
+        },
+      },
+    ]);
+  });
+
+  it("emits a new runtime profile when one env key complements a persisted key", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    const profiles = provider.resolveExternalAuthProfiles?.({
+      env: {
+        ZAI_API_KEY_1: "sk-zai-next",
+      },
+      store: {
+        version: 1,
+        profiles: {
+          "zai:default": {
+            type: "api_key",
+            provider: "zai",
+            key: "sk-zai-primary",
+          },
+        },
+      },
+    } as never);
+
+    expect(profiles).toEqual([
+      {
+        profileId: "zai:runtime-env-1",
+        persistence: "runtime-only",
+        credential: {
+          type: "api_key",
+          provider: "zai",
+          key: "sk-zai-next",
+          displayName: "Z.AI env key 1",
+        },
+      },
+    ]);
   });
 
   it("rebuilds the same runtime env profiles when the store already includes them", async () => {

@@ -77,16 +77,19 @@ function collectPrefixedApiKeys(env: NodeJS.ProcessEnv, prefix: string): string[
   return keys;
 }
 
+function listStoredZaiApiKeyProfileIds(store: AuthProfileStore): string[] {
+  return listProfilesForProvider(store, PROVIDER_ID).filter((profileId) => {
+    if (profileId.startsWith(`${ENV_ROTATION_PROFILE_ID_PREFIX}-`)) {
+      return false;
+    }
+    return store.profiles[profileId]?.type === "api_key";
+  });
+}
+
 function collectExistingZaiApiKeys(store: AuthProfileStore): Set<string> {
   const existing = new Set<string>();
-  for (const profileId of listProfilesForProvider(store, PROVIDER_ID)) {
-    if (profileId.startsWith(`${ENV_ROTATION_PROFILE_ID_PREFIX}-`)) {
-      continue;
-    }
+  for (const profileId of listStoredZaiApiKeyProfileIds(store)) {
     const credential = store.profiles[profileId];
-    if (credential?.type !== "api_key") {
-      continue;
-    }
     const key = normalizeOptionalSecretInput(credential.key);
     if (key) {
       existing.add(key);
@@ -99,11 +102,6 @@ function collectZaiRotationApiKeys(params: {
   env: NodeJS.ProcessEnv;
   store: AuthProfileStore;
 }): string[] {
-  const liveOverride = normalizeOptionalSecretInput(params.env.OPENCLAW_LIVE_ZAI_KEY);
-  if (liveOverride) {
-    return [liveOverride];
-  }
-
   const seen = collectExistingZaiApiKeys(params.store);
   const apiKeys: string[] = [];
   const add = (value?: string) => {
@@ -127,9 +125,30 @@ function collectZaiRotationApiKeys(params: {
   return apiKeys;
 }
 
+function resolveZaiLiveOverrideProfileId(store: AuthProfileStore): string {
+  return listStoredZaiApiKeyProfileIds(store)[0] ?? PROFILE_ID;
+}
+
 function resolveZaiEnvRotationProfiles(ctx: { env: NodeJS.ProcessEnv; store: AuthProfileStore }) {
+  const liveOverride = normalizeOptionalSecretInput(ctx.env.OPENCLAW_LIVE_ZAI_KEY);
+  if (liveOverride) {
+    return [
+      {
+        profileId: resolveZaiLiveOverrideProfileId(ctx.store),
+        persistence: "runtime-only" as const,
+        credential: {
+          type: "api_key" as const,
+          provider: PROVIDER_ID,
+          key: liveOverride,
+          displayName: "Z.AI live override",
+        },
+      },
+    ];
+  }
+
   const apiKeys = collectZaiRotationApiKeys(ctx);
-  if (apiKeys.length < 2) {
+  const existingApiKeyCount = collectExistingZaiApiKeys(ctx.store).size;
+  if (existingApiKeyCount + apiKeys.length < 2) {
     return undefined;
   }
   return apiKeys.map((apiKey, index) => ({
