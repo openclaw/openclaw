@@ -132,12 +132,18 @@ export function checkGroupPolicy(params: {
   config: OpenClawConfig;
   runtime: GroupPolicyRuntime;
 }): GroupPolicyCheckResult {
-  const { chatId, senderId, account, runtime } = params;
+  const { chatId, senderId, account, config, runtime } = params;
   // Use account.config (already merged for multi-account), not top-level config.channels.wecom
   // Prevents missing account-level groupAllowFrom / groups in multi-account mode
   const wecomConfig = account.config;
 
-  const groupPolicy = wecomConfig.groupPolicy ?? "open";
+  // Honor channels.defaults.groupPolicy as fallback (aligned with Discord, Slack, etc.)
+  const defaultGroupPolicy = config.channels?.defaults?.groupPolicy as
+    | "open"
+    | "allowlist"
+    | "disabled"
+    | undefined;
+  const groupPolicy = wecomConfig.groupPolicy ?? defaultGroupPolicy ?? "open";
 
   const groupAllowFrom = wecomConfig.groupAllowFrom ?? [];
   const groupAllowed = isWeComGroupAllowed({

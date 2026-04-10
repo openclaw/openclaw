@@ -709,10 +709,14 @@ async function processAgentMessage(params: {
             } else {
               const fs = await import("node:fs/promises");
               const pathModule = await import("node:path");
-              // Validate local path against mediaLocalRoots (aligned with webhook/monitor.ts)
+              // Validate local path against mediaLocalRoots from merged account config
               const resolved = pathModule.resolve(mediaPath);
-              const wecomCfg = (config.channels?.wecom ?? {}) as Record<string, unknown>;
-              const roots = (wecomCfg.mediaLocalRoots as string[] | undefined) ?? [];
+              const { resolveWeComAccountMulti } = await import("../accounts.js");
+              const mergedAccount = resolveWeComAccountMulti({
+                cfg: config,
+                accountId: agent.accountId,
+              });
+              const roots = mergedAccount.config.mediaLocalRoots ?? [];
               if (
                 roots.length > 0 &&
                 !roots.some((r) => {
