@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { startQaGatewayChild, type QaCliBackendAuthMode } from "./gateway-child.js";
+import { appendLiveLaneIssue } from "./live-lane-helpers.js";
 import { startQaMockOpenAiServer } from "./mock-openai-server.js";
 import type { QaThinkingLevel } from "./qa-gateway-config.js";
 
@@ -12,13 +12,13 @@ async function stopQaLiveLaneResources(resources: {
   try {
     await resources.gateway.stop();
   } catch (error) {
-    errors.push(`gateway stop failed: ${formatErrorMessage(error)}`);
+    appendLiveLaneIssue(errors, "gateway stop failed", error);
   }
   if (resources.mock) {
     try {
       await resources.mock.stop();
     } catch (error) {
-      errors.push(`mock provider stop failed: ${formatErrorMessage(error)}`);
+      appendLiveLaneIssue(errors, "mock provider stop failed", error);
     }
   }
   if (errors.length > 0) {

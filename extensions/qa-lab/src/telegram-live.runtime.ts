@@ -5,6 +5,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { startQaGatewayChild } from "./gateway-child.js";
 import { startQaLiveLaneGateway } from "./live-gateway.runtime.js";
+import { appendLiveLaneIssue, buildLiveLaneArtifactsError } from "./live-lane-helpers.js";
 import {
   defaultQaModelForMode,
   normalizeQaProviderMode,
@@ -797,7 +798,7 @@ export async function runTelegramQaLive(params: {
     try {
       await gatewayHarness.stop();
     } catch (error) {
-      cleanupIssues.push(`live gateway cleanup: ${formatErrorMessage(error)}`);
+      appendLiveLaneIssue(cleanupIssues, "live gateway cleanup", error);
     }
   }
 
@@ -844,21 +845,26 @@ export async function runTelegramQaLive(params: {
     )}\n`,
     { encoding: "utf8", mode: 0o600 },
   );
+  const artifactPaths = {
+    report: reportPath,
+    summary: summaryPath,
+    observedMessages: observedMessagesPath,
+  };
   if (canaryFailure) {
     throw new Error(
-      `${canaryFailure}\nArtifacts:\n- report: ${reportPath}\n- summary: ${summaryPath}\n- observedMessages: ${observedMessagesPath}`,
+      buildLiveLaneArtifactsError({
+        heading: canaryFailure,
+        artifacts: artifactPaths,
+      }),
     );
   }
   if (cleanupIssues.length > 0) {
     throw new Error(
-      [
-        "Telegram QA cleanup failed after artifacts were written.",
-        ...cleanupIssues,
-        "Artifacts:",
-        `- report: ${reportPath}`,
-        `- summary: ${summaryPath}`,
-        `- observedMessages: ${observedMessagesPath}`,
-      ].join("\n"),
+      buildLiveLaneArtifactsError({
+        heading: "Telegram QA cleanup failed after artifacts were written.",
+        details: cleanupIssues,
+        artifacts: artifactPaths,
+      }),
     );
   }
 

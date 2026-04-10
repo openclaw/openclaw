@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { startQaGatewayChild } from "./gateway-child.js";
 import { startQaLiveLaneGateway } from "./live-gateway.runtime.js";
+import { appendLiveLaneIssue, buildLiveLaneArtifactsError } from "./live-lane-helpers.js";
 import {
   createMatrixQaClient,
   provisionMatrixQaRoom,
@@ -454,13 +455,13 @@ export async function runMatrixQaLive(params: {
       try {
         await gatewayHarness.stop();
       } catch (error) {
-        cleanupErrors.push(`live gateway cleanup: ${formatErrorMessage(error)}`);
+        appendLiveLaneIssue(cleanupErrors, "live gateway cleanup", error);
       }
     }
     try {
       await harness.stop();
     } catch (error) {
-      cleanupErrors.push(`Matrix harness cleanup: ${formatErrorMessage(error)}`);
+      appendLiveLaneIssue(cleanupErrors, "Matrix harness cleanup", error);
     }
   }
   if (cleanupErrors.length > 0) {
@@ -547,29 +548,30 @@ export async function runMatrixQaLive(params: {
 
   const failedChecks = checks.filter((check) => check.status === "fail");
   const failedScenarios = scenarioResults.filter((scenario) => scenario.status === "fail");
+  const artifactPaths = {
+    report: reportPath,
+    summary: summaryPath,
+    observedEvents: observedEventsPath,
+  };
   if (failedChecks.length > 0 || failedScenarios.length > 0) {
     throw new Error(
-      [
-        "Matrix QA failed.",
-        ...failedChecks.map((check) => `check ${check.name}: ${check.details ?? "failed"}`),
-        ...failedScenarios.map((scenario) => `scenario ${scenario.id}: ${scenario.details}`),
-        "Artifacts:",
-        `- report: ${reportPath}`,
-        `- summary: ${summaryPath}`,
-        `- observedEvents: ${observedEventsPath}`,
-      ].join("\n"),
+      buildLiveLaneArtifactsError({
+        heading: "Matrix QA failed.",
+        details: [
+          ...failedChecks.map((check) => `check ${check.name}: ${check.details ?? "failed"}`),
+          ...failedScenarios.map((scenario) => `scenario ${scenario.id}: ${scenario.details}`),
+        ],
+        artifacts: artifactPaths,
+      }),
     );
   }
   if (cleanupErrors.length > 0) {
     throw new Error(
-      [
-        "Matrix QA cleanup failed after artifacts were written.",
-        ...cleanupErrors,
-        "Artifacts:",
-        `- report: ${reportPath}`,
-        `- summary: ${summaryPath}`,
-        `- observedEvents: ${observedEventsPath}`,
-      ].join("\n"),
+      buildLiveLaneArtifactsError({
+        heading: "Matrix QA cleanup failed after artifacts were written.",
+        details: cleanupErrors,
+        artifacts: artifactPaths,
+      }),
     );
   }
 
