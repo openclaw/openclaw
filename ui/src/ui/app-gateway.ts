@@ -16,6 +16,7 @@ import {
 } from "./app-settings.ts";
 import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";
 import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
+import { parseChatSideResult, type ChatSideResult } from "./chat/side-result.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { loadAgents, type AgentsState } from "./controllers/agents.ts";
 import {
@@ -107,6 +108,11 @@ type SessionDefaultsSnapshot = {
 type GatewayHostWithShutdownMessage = GatewayHost & {
   pendingShutdownMessage?: string | null;
   resumeChatQueueAfterReconnect?: boolean;
+};
+
+type GatewayHostWithSideResults = GatewayHost & {
+  chatSideResult?: ChatSideResult | null;
+  chatSideResultTerminalRuns?: Set<string>;
 };
 
 type ConnectGatewayOptions = {
@@ -322,6 +328,7 @@ function handleTerminalChatEvent(
   host: GatewayHost,
   payload: ChatEventPayload | undefined,
   state: ReturnType<typeof handleChatEvent>,
+  opts?: { skipHistoryReload?: boolean },
 ): boolean {
   if (state !== "final" && state !== "error" && state !== "aborted") {
     return false;
@@ -346,7 +353,7 @@ function handleTerminalChatEvent(
   }
   // Reload history when tools were used so the persisted tool results
   // replace the now-cleared streaming state.
-  if (hadToolEvents && state === "final") {
+  if (hadToolEvents && state === "final" && !opts?.skipHistoryReload) {
     void loadChatHistory(host as unknown as ChatState);
     return true;
   }
@@ -361,8 +368,23 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
     );
   }
   const state = handleChatEvent(host as unknown as ChatState, payload);
-  const historyReloaded = handleTerminalChatEvent(host, payload, state);
-  if (state === "final" && !historyReloaded && shouldReloadHistoryForFinalEvent(payload)) {
+  const sideResultHost = host as GatewayHostWithSideResults;
+  const skipHistoryReloadForSideResult =
+    state === "final" &&
+    typeof payload?.runId === "string" &&
+    sideResultHost.chatSideResultTerminalRuns?.has(payload.runId) === true;
+  if (skipHistoryReloadForSideResult && payload?.runId) {
+    sideResultHost.chatSideResultTerminalRuns?.delete(payload.runId);
+  }
+  const historyReloaded = handleTerminalChatEvent(host, payload, state, {
+    skipHistoryReload: skipHistoryReloadForSideResult,
+  });
+  if (
+    state === "final" &&
+    !skipHistoryReloadForSideResult &&
+    !historyReloaded &&
+    shouldReloadHistoryForFinalEvent(payload)
+  ) {
     void loadChatHistory(host as unknown as ChatState);
   }
 }
@@ -389,6 +411,17 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
 
   if (evt.event === "chat") {
     handleChatGatewayEvent(host, evt.payload as ChatEventPayload | undefined);
+    return;
+  }
+
+  if (evt.event === "chat.side_result") {
+    const sideResult = parseChatSideResult(evt.payload);
+    if (!sideResult || sideResult.sessionKey !== host.sessionKey) {
+      return;
+    }
+    const sideResultHost = host as GatewayHostWithSideResults;
+    sideResultHost.chatSideResult = sideResult;
+    sideResultHost.chatSideResultTerminalRuns?.add(sideResult.runId);
     return;
   }
 

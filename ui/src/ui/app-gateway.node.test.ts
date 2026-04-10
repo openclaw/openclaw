@@ -145,15 +145,20 @@ function createHost() {
     chatStream: null,
     chatStreamStartedAt: null,
     chatRunId: null,
+    chatSideResult: null,
     chatSending: false,
     toolStreamById: new Map(),
     toolStreamOrder: [],
     toolStreamSyncTimer: null,
     refreshSessionsAfterChat: new Set<string>(),
+    chatSideResultTerminalRuns: new Set<string>(),
     execApprovalQueue: [],
     execApprovalError: null,
     updateAvailable: null,
-  } as unknown as Parameters<typeof connectGateway>[0];
+  } as unknown as Parameters<typeof connectGateway>[0] & {
+    chatSideResult: unknown;
+    chatSideResultTerminalRuns: Set<string>;
+  };
 }
 
 function connectHostGateway() {
@@ -563,6 +568,77 @@ describe("connectGateway", () => {
     emitToolResultEvent(client);
 
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("stores BTW side results for the active session", () => {
+    const { host, client } = connectHostGateway();
+
+    client.emitEvent({
+      event: "chat.side_result",
+      payload: {
+        kind: "btw",
+        runId: "btw-run-1",
+        sessionKey: "main",
+        question: "what changed?",
+        text: "Only the UI layer is missing support.",
+        ts: 123,
+      },
+    });
+
+    expect(host.chatSideResult).toMatchObject({
+      kind: "btw",
+      runId: "btw-run-1",
+      question: "what changed?",
+      text: "Only the UI layer is missing support.",
+    });
+    expect(host.chatSideResultTerminalRuns.has("btw-run-1")).toBe(true);
+  });
+
+  it("does not reload chat history for BTW terminal finals, even after tool events", () => {
+    const { host, client } = connectHostGateway();
+    emitToolResultEvent(client);
+
+    client.emitEvent({
+      event: "chat.side_result",
+      payload: {
+        kind: "btw",
+        runId: "btw-run-2",
+        sessionKey: "main",
+        question: "what changed?",
+        text: "A dedicated side-result card now renders in webchat.",
+        ts: 456,
+      },
+    });
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "btw-run-2",
+        sessionKey: "main",
+        state: "final",
+      },
+    });
+
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+    expect(host.chatSideResultTerminalRuns.has("btw-run-2")).toBe(false);
+  });
+
+  it("ignores BTW side results for other sessions", () => {
+    const { host, client } = connectHostGateway();
+
+    client.emitEvent({
+      event: "chat.side_result",
+      payload: {
+        kind: "btw",
+        runId: "btw-run-3",
+        sessionKey: "other-session",
+        question: "what changed?",
+        text: "Nothing here.",
+        ts: 789,
+      },
+    });
+
+    expect(host.chatSideResult).toBeNull();
+    expect(host.chatSideResultTerminalRuns.size).toBe(0);
   });
 
   it("routes plugin.approval.requested into execApprovalQueue with kind plugin", () => {
