@@ -121,4 +121,39 @@ describe("telegram live qa runtime", () => {
       mediaKinds: ["photo"],
     });
   });
+
+  it("formats phase-specific canary diagnostics with context", () => {
+    const error = new Error(
+      "SUT bot did not send any group reply after the canary command within 30s.",
+    );
+    error.name = "TelegramQaCanaryError";
+    Object.assign(error, {
+      phase: "sut_reply_timeout",
+      context: {
+        driverMessageId: 55,
+        sutBotId: 88,
+      },
+    });
+
+    expect(
+      __testing.canaryFailureMessage({
+        error,
+        groupId: "-100123",
+        driverBotId: 42,
+        driverUsername: "driver_bot",
+        sutBotId: 88,
+        sutUsername: "sut_bot",
+      }),
+    ).toContain("Phase: sut_reply_timeout");
+    expect(
+      __testing.canaryFailureMessage({
+        error,
+        groupId: "-100123",
+        driverBotId: 42,
+        driverUsername: "driver_bot",
+        sutBotId: 88,
+        sutUsername: "sut_bot",
+      }),
+    ).toContain("- driverMessageId: 55");
+  });
 });

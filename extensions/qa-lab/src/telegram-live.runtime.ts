@@ -51,6 +51,12 @@ type TelegramQaScenarioResult = {
   details: string;
 };
 
+type TelegramQaCanaryPhase =
+  | "driver_observation_timeout"
+  | "sut_reply_timeout"
+  | "sut_reply_not_threaded"
+  | "sut_reply_empty";
+
 export type TelegramQaRunResult = {
   outputDir: string;
   reportPath: string;
@@ -70,6 +76,32 @@ type TelegramQaSummary = {
   };
   scenarios: TelegramQaScenarioResult[];
 };
+
+class TelegramQaCanaryError extends Error {
+  phase: TelegramQaCanaryPhase;
+  context: Record<string, string | number | undefined>;
+
+  constructor(
+    phase: TelegramQaCanaryPhase,
+    message: string,
+    context: Record<string, string | number | undefined>,
+  ) {
+    super(message);
+    this.name = "TelegramQaCanaryError";
+    this.phase = phase;
+    this.context = context;
+  }
+}
+
+function isTelegramQaCanaryError(error: unknown): error is TelegramQaCanaryError {
+  return (
+    error instanceof TelegramQaCanaryError ||
+    (typeof error === "object" &&
+      error !== null &&
+      typeof (error as { phase?: unknown }).phase === "string" &&
+      typeof (error as { context?: unknown }).context === "object")
+  );
+}
 
 type TelegramApiEnvelope<T> = {
   ok: boolean;
@@ -418,35 +450,107 @@ async function runCanary(params: {
     params.groupId,
     `/help@${params.sutUsername}`,
   );
-  const driverObserved = await waitForObservedMessage({
-    token: params.driverToken,
-    initialOffset: offset,
-    timeoutMs: 20_000,
-    observedMessages: params.observedMessages,
-    predicate: (message) =>
-      message.chatId === Number(params.groupId) &&
-      message.senderId === params.driverBotId &&
-      message.messageId === driverMessage.message_id,
-  });
+  let driverObserved: Awaited<ReturnType<typeof waitForObservedMessage>>;
+  try {
+    driverObserved = await waitForObservedMessage({
+      token: params.driverToken,
+      initialOffset: offset,
+      timeoutMs: 20_000,
+      observedMessages: params.observedMessages,
+      predicate: (message) =>
+        message.chatId === Number(params.groupId) &&
+        message.senderId === params.driverBotId &&
+        message.messageId === driverMessage.message_id,
+    });
+  } catch (error) {
+    throw new TelegramQaCanaryError(
+      "driver_observation_timeout",
+      "Driver bot did not observe its own canary group message within 20s.",
+      {
+        groupId: params.groupId,
+        driverBotId: params.driverBotId,
+        driverMessageId: driverMessage.message_id,
+        cause: formatErrorMessage(error),
+      },
+    );
+  }
   offset = driverObserved.nextOffset;
-  await waitForObservedMessage({
-    token: params.driverToken,
-    initialOffset: offset,
-    timeoutMs: 30_000,
-    observedMessages: params.observedMessages,
-    predicate: (message) =>
-      message.chatId === Number(params.groupId) &&
-      message.senderId === params.sutBotId &&
-      message.replyToMessageId === driverMessage.message_id &&
-      message.text.trim().length > 0,
-  });
+  let sutObserved: Awaited<ReturnType<typeof waitForObservedMessage>>;
+  try {
+    sutObserved = await waitForObservedMessage({
+      token: params.driverToken,
+      initialOffset: offset,
+      timeoutMs: 30_000,
+      observedMessages: params.observedMessages,
+      predicate: (message) =>
+        message.chatId === Number(params.groupId) && message.senderId === params.sutBotId,
+    });
+  } catch (error) {
+    throw new TelegramQaCanaryError(
+      "sut_reply_timeout",
+      "SUT bot did not send any group reply after the canary command within 30s.",
+      {
+        groupId: params.groupId,
+        sutBotId: params.sutBotId,
+        driverMessageId: driverMessage.message_id,
+        cause: formatErrorMessage(error),
+      },
+    );
+  }
+  if (sutObserved.message.replyToMessageId !== driverMessage.message_id) {
+    throw new TelegramQaCanaryError(
+      "sut_reply_not_threaded",
+      "SUT bot replied, but not as a reply to the canary driver message.",
+      {
+        groupId: params.groupId,
+        sutBotId: params.sutBotId,
+        driverMessageId: driverMessage.message_id,
+        sutMessageId: sutObserved.message.messageId,
+        sutReplyToMessageId: sutObserved.message.replyToMessageId,
+      },
+    );
+  }
+  if (!sutObserved.message.text.trim()) {
+    throw new TelegramQaCanaryError(
+      "sut_reply_empty",
+      "SUT bot replied to the canary message but the reply text was empty.",
+      {
+        groupId: params.groupId,
+        sutBotId: params.sutBotId,
+        driverMessageId: driverMessage.message_id,
+        sutMessageId: sutObserved.message.messageId,
+      },
+    );
+  }
 }
 
-function canaryFailureMessage(error: unknown) {
+function canaryFailureMessage(params: {
+  error: unknown;
+  groupId: string;
+  driverBotId: number;
+  driverUsername?: string;
+  sutBotId: number;
+  sutUsername: string;
+}) {
+  const error = params.error;
   const details = formatErrorMessage(error);
+  const phase = isTelegramQaCanaryError(error) ? error.phase : "unknown";
+  const context = isTelegramQaCanaryError(error)
+    ? Object.entries(error.context)
+        .filter(([, value]) => value !== undefined && value !== "")
+        .map(([key, value]) => `- ${key}: ${String(value)}`)
+    : [];
   return [
     "Telegram QA canary failed.",
+    `Phase: ${phase}`,
     details,
+    "Context:",
+    `- groupId: ${params.groupId}`,
+    `- driverBotId: ${params.driverBotId}`,
+    `- driverUsername: ${params.driverUsername ?? "<none>"}`,
+    `- sutBotId: ${params.sutBotId}`,
+    `- sutUsername: ${params.sutUsername}`,
+    ...context,
     "Remediation:",
     "1. Enable Bot-to-Bot Communication Mode for both the driver and SUT bots in @BotFather.",
     "2. Ensure the driver bot can observe bot traffic in the private group by making it admin or disabling privacy mode, then re-add it.",
@@ -514,6 +618,7 @@ export async function runTelegramQaLive(params: {
   });
 
   const scenarioResults: TelegramQaScenarioResult[] = [];
+  let canaryFailure: string | null = null;
   try {
     await waitForTelegramChannelRunning(gateway, sutAccountId);
     try {
@@ -526,42 +631,56 @@ export async function runTelegramQaLive(params: {
         observedMessages,
       });
     } catch (error) {
-      throw new Error(canaryFailureMessage(error), { cause: error });
+      canaryFailure = canaryFailureMessage({
+        error,
+        groupId: runtimeEnv.groupId,
+        driverBotId: driverIdentity.id,
+        driverUsername: driverIdentity.username,
+        sutBotId: sutIdentity.id,
+        sutUsername,
+      });
+      scenarioResults.push({
+        id: "telegram-canary",
+        title: "Telegram canary",
+        status: "fail",
+        details: canaryFailure,
+      });
     }
-
-    let driverOffset = await flushTelegramUpdates(runtimeEnv.driverToken);
-    for (const scenario of scenarios) {
-      try {
-        const sent = await sendGroupMessage(
-          runtimeEnv.driverToken,
-          runtimeEnv.groupId,
-          scenario.buildInput(sutUsername),
-        );
-        const matched = await waitForObservedMessage({
-          token: runtimeEnv.driverToken,
-          initialOffset: driverOffset,
-          timeoutMs: scenario.timeoutMs,
-          observedMessages,
-          predicate: (message) =>
-            message.chatId === Number(runtimeEnv.groupId) &&
-            message.senderId === sutIdentity.id &&
-            message.replyToMessageId === sent.message_id &&
-            message.text.trim().length > 0,
-        });
-        driverOffset = matched.nextOffset;
-        scenarioResults.push({
-          id: scenario.id,
-          title: scenario.title,
-          status: "pass",
-          details: `reply message ${matched.message.messageId} matched`,
-        });
-      } catch (error) {
-        scenarioResults.push({
-          id: scenario.id,
-          title: scenario.title,
-          status: "fail",
-          details: formatErrorMessage(error),
-        });
+    if (!canaryFailure) {
+      let driverOffset = await flushTelegramUpdates(runtimeEnv.driverToken);
+      for (const scenario of scenarios) {
+        try {
+          const sent = await sendGroupMessage(
+            runtimeEnv.driverToken,
+            runtimeEnv.groupId,
+            scenario.buildInput(sutUsername),
+          );
+          const matched = await waitForObservedMessage({
+            token: runtimeEnv.driverToken,
+            initialOffset: driverOffset,
+            timeoutMs: scenario.timeoutMs,
+            observedMessages,
+            predicate: (message) =>
+              message.chatId === Number(runtimeEnv.groupId) &&
+              message.senderId === sutIdentity.id &&
+              message.replyToMessageId === sent.message_id &&
+              message.text.trim().length > 0,
+          });
+          driverOffset = matched.nextOffset;
+          scenarioResults.push({
+            id: scenario.id,
+            title: scenario.title,
+            status: "pass",
+            details: `reply message ${matched.message.messageId} matched`,
+          });
+        } catch (error) {
+          scenarioResults.push({
+            id: scenario.id,
+            title: scenario.title,
+            status: "fail",
+            details: formatErrorMessage(error),
+          });
+        }
       }
     }
   } finally {
@@ -599,6 +718,11 @@ export async function runTelegramQaLive(params: {
     `${JSON.stringify(observedMessages, null, 2)}\n`,
     "utf8",
   );
+  if (canaryFailure) {
+    throw new Error(
+      `${canaryFailure}\nArtifacts:\n- report: ${reportPath}\n- summary: ${summaryPath}\n- observedMessages: ${observedMessagesPath}`,
+    );
+  }
 
   return {
     outputDir,
@@ -612,6 +736,7 @@ export async function runTelegramQaLive(params: {
 export const __testing = {
   TELEGRAM_QA_SCENARIOS,
   buildTelegramQaConfig,
+  canaryFailureMessage,
   normalizeTelegramObservedMessage,
   resolveTelegramQaRuntimeEnv,
 };
