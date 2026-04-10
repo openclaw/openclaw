@@ -268,7 +268,8 @@ export async function sendBlueBubblesAttachment(params: {
   addField("chatGuid", chatGuid);
   addField("name", filename);
   addField("tempGuid", `temp-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`);
-  const deliveryMethod = privateApiEnabled ? "private-api" : sendMethod;
+  const trimmedReplyTo = replyToMessageGuid?.trim();
+  const deliveryMethod = trimmedReplyTo && privateApiEnabled ? "private-api" : sendMethod;
   if (deliveryMethod) {
     addField("method", deliveryMethod);
   }
@@ -278,7 +279,6 @@ export async function sendBlueBubblesAttachment(params: {
     addField("isAudioMessage", "true");
   }
 
-  const trimmedReplyTo = replyToMessageGuid?.trim();
   if (trimmedReplyTo && privateApiEnabled) {
     addField("selectedMessageGuid", trimmedReplyTo);
     addField("partIndex", typeof replyToPartIndex === "number" ? String(replyToPartIndex) : "0");

@@ -518,7 +518,11 @@ describe("sendBlueBubblesAttachment", () => {
     expect(bodyText).not.toContain('name="partIndex"');
   });
 
-  it("uses configured apple-script send method for attachments", async () => {
+  it("uses configured apple-script send method for attachments when private API is enabled", async () => {
+    mockBlueBubblesPrivateApiStatusOnce(
+      vi.mocked(getCachedBlueBubblesPrivateApiStatus),
+      BLUE_BUBBLES_PRIVATE_API_STATUS.enabled,
+    );
     mockFetch.mockResolvedValueOnce({
       ok: true,
       text: () => Promise.resolve(JSON.stringify({ messageId: "msg-apple-script-attachment" })),
@@ -546,6 +550,43 @@ describe("sendBlueBubblesAttachment", () => {
     const bodyText = decodeBody(body);
     expect(bodyText).toContain('name="method"');
     expect(bodyText).toContain("apple-script");
+  });
+
+  it("still uses private-api attachment metadata for replies when configured send method is apple-script", async () => {
+    mockBlueBubblesPrivateApiStatusOnce(
+      vi.mocked(getCachedBlueBubblesPrivateApiStatus),
+      BLUE_BUBBLES_PRIVATE_API_STATUS.enabled,
+    );
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify({ messageId: "msg-private-api-reply" })),
+    });
+
+    await sendBlueBubblesAttachment({
+      to: "chat_guid:iMessage;-;+15551234567",
+      buffer: new Uint8Array([1, 2, 3]),
+      filename: "photo.jpg",
+      contentType: "image/jpeg",
+      replyToMessageGuid: "reply-guid-123",
+      opts: {
+        serverUrl: "http://localhost:1234",
+        password: "test",
+        cfg: {
+          channels: {
+            bluebubbles: {
+              sendMethod: "apple-script",
+            },
+          },
+        },
+      },
+    });
+
+    const body = mockFetch.mock.calls[0][1]?.body as Uint8Array;
+    const bodyText = decodeBody(body);
+    expect(bodyText).toContain('name="method"');
+    expect(bodyText).toContain("private-api");
+    expect(bodyText).toContain('name="selectedMessageGuid"');
+    expect(bodyText).toContain("reply-guid-123");
   });
 
   it("warns and downgrades attachment reply threading when private API status is unknown", async () => {
