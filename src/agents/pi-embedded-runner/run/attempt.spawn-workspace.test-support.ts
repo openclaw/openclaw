@@ -33,6 +33,10 @@ type BootstrapContext = {
   bootstrapFiles: WorkspaceBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
 };
+type BootstrapFilesWithSignature = {
+  bootstrapFiles: WorkspaceBootstrapFile[];
+  bootstrapSignature: string;
+};
 type SessionManagerMocks = {
   getLeafEntry: UnknownMock;
   branch: UnknownMock;
@@ -54,6 +58,7 @@ type AttemptSpawnWorkspaceHoisted = {
   flushPendingToolResultsAfterIdleMock: AsyncUnknownMock;
   releaseWsSessionMock: UnknownMock;
   resolveBootstrapContextForRunMock: Mock<() => Promise<BootstrapContext>>;
+  resolveBootstrapFilesWithSignatureForRunMock: Mock<() => Promise<BootstrapFilesWithSignature>>;
   resolveContextInjectionModeMock: Mock<() => "always" | "continuation-skip">;
   hasCompletedBootstrapTurnMock: Mock<() => Promise<boolean>>;
   getGlobalHookRunnerMock: Mock<() => unknown>;
@@ -108,6 +113,11 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     bootstrapFiles: [],
     contextFiles: [],
   }));
+  const resolveBootstrapFilesWithSignatureForRunMock =
+    vi.fn<() => Promise<BootstrapFilesWithSignature>>(async () => ({
+      bootstrapFiles: [],
+      bootstrapSignature: "agents:AGENTS.md",
+    }));
   const resolveContextInjectionModeMock = vi.fn<() => "always" | "continuation-skip">(
     () => "always",
   );
@@ -142,6 +152,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     flushPendingToolResultsAfterIdleMock,
     releaseWsSessionMock,
     resolveBootstrapContextForRunMock,
+    resolveBootstrapFilesWithSignatureForRunMock,
     resolveContextInjectionModeMock,
     hasCompletedBootstrapTurnMock,
     getGlobalHookRunnerMock,
@@ -221,6 +232,8 @@ vi.mock("../../bootstrap-files.js", async () => {
     ...actual,
     makeBootstrapWarn: () => () => {},
     resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
+    resolveBootstrapFilesWithSignatureForRun:
+      hoisted.resolveBootstrapFilesWithSignatureForRunMock,
     resolveContextInjectionMode: hoisted.resolveContextInjectionModeMock,
     hasCompletedBootstrapTurn: hoisted.hasCompletedBootstrapTurnMock,
   };
@@ -402,10 +415,16 @@ vi.mock("../../../image-generation/runtime.js", () => ({
   listRuntimeImageGenerationProviders: () => [],
 }));
 
-vi.mock("../../model-selection.js", () => ({
-  normalizeProviderId: (providerId?: string) => normalizeLowercaseStringOrEmpty(providerId),
-  resolveDefaultModelForAgent: () => ({ provider: "openai", model: "gpt-test" }),
-}));
+vi.mock("../../model-selection.js", async () => {
+  const actual = await vi.importActual<typeof import("../../model-selection.js")>(
+    "../../model-selection.js",
+  );
+  return {
+    ...actual,
+    normalizeProviderId: (providerId?: string) => normalizeLowercaseStringOrEmpty(providerId),
+    resolveDefaultModelForAgent: () => ({ provider: "openai", model: "gpt-test" }),
+  };
+});
 
 vi.mock("../../anthropic-vertex-stream.js", () => ({
   createAnthropicVertexStreamFnForModel: vi.fn(),
@@ -698,6 +717,10 @@ export function resetEmbeddedAttemptHarness(
   hoisted.resolveBootstrapContextForRunMock.mockReset().mockResolvedValue({
     bootstrapFiles: [],
     contextFiles: [],
+  });
+  hoisted.resolveBootstrapFilesWithSignatureForRunMock.mockReset().mockResolvedValue({
+    bootstrapFiles: [],
+    bootstrapSignature: "agents:AGENTS.md",
   });
   hoisted.resolveContextInjectionModeMock.mockReset().mockReturnValue("always");
   hoisted.hasCompletedBootstrapTurnMock.mockReset().mockResolvedValue(false);
