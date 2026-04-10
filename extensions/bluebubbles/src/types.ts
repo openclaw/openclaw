@@ -159,40 +159,60 @@ export function _setFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null)
   _fetchGuard = impl ?? fetchWithSsrFGuard;
 }
 
+type ResponseLike = Pick<Response, "arrayBuffer" | "json" | "text" | "headers" | "status">;
+
+async function bufferResponseLikeBody(
+  response: Partial<ResponseLike>,
+): Promise<ArrayBuffer | null> {
+  if (typeof response.arrayBuffer === "function") {
+    return await response.arrayBuffer();
+  }
+  if (typeof response.text === "function") {
+    return new TextEncoder().encode(await response.text()).buffer;
+  }
+  if (typeof response.json === "function") {
+    return new TextEncoder().encode(JSON.stringify(await response.json())).buffer;
+  }
+  return null;
+}
+
 export async function blueBubblesFetchWithTimeout(
   url: string,
   init: RequestInit,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   ssrfPolicy?: SsrFPolicy,
 ): Promise<Response> {
-  if (ssrfPolicy !== undefined) {
-    // Use SSRF-guarded fetch; buffer the body so the dispatcher can be released
-    // before the caller reads the response (API responses are small JSON payloads).
-    const { response, release } = await _fetchGuard({
-      url,
-      init,
-      timeoutMs,
-      policy: ssrfPolicy,
-      auditContext: "bluebubbles-api",
-    });
-    // Null-body status codes per Fetch spec — Response constructor rejects a body for these.
-    const isNullBody =
-      response.status === 101 ||
-      response.status === 204 ||
-      response.status === 205 ||
-      response.status === 304;
-    try {
-      const bodyBytes = isNullBody ? null : await response.arrayBuffer();
-      return new Response(bodyBytes, { status: response.status, headers: response.headers });
-    } finally {
-      await release();
-    }
-  }
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // Always route through the guarded fetch seam so channel/plugin runtime code
+  // never uses raw fetch() directly. When no SSRF policy is provided, keep the
+  // previous permissive behavior by skipping DNS pinning instead of implicitly
+  // turning on private-network blocking for legacy callers.
+  const { response, release } = await _fetchGuard(
+    ssrfPolicy === undefined
+      ? {
+          url,
+          init,
+          timeoutMs,
+          pinDns: false,
+          auditContext: "bluebubbles-api",
+        }
+      : {
+          url,
+          init,
+          timeoutMs,
+          policy: ssrfPolicy,
+          auditContext: "bluebubbles-api",
+        },
+  );
+  const status = typeof response.status === "number" ? response.status : 200;
+  // Null-body status codes per Fetch spec — Response constructor rejects a body for these.
+  const isNullBody = status === 101 || status === 204 || status === 205 || status === 304;
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    const bodyBytes = isNullBody ? null : await bufferResponseLikeBody(response);
+    return new Response(bodyBytes, {
+      status,
+      headers: response.headers,
+    });
   } finally {
-    clearTimeout(timer);
+    await release();
   }
 }
