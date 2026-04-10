@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import {
+  AgentBootstrapFileOverrideFields,
   HeartbeatSchema,
   AgentSandboxSchema,
   AgentEmbeddedHarnessSchema,
@@ -49,6 +50,7 @@ export const AgentDefaultsSchema = z
     systemPromptOverride: z.string().optional(),
     skipBootstrap: z.boolean().optional(),
     contextInjection: z.union([z.literal("always"), z.literal("continuation-skip")]).optional(),
+    ...AgentBootstrapFileOverrideFields,
     bootstrapMaxChars: z.number().int().positive().optional(),
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
     bootstrapPromptTruncationWarning: z
@@ -213,6 +215,7 @@ export const AgentDefaultsSchema = z
           ),
         archiveAfterMinutes: z.number().int().min(0).optional(),
         model: AgentModelSchema.optional(),
+        ...AgentBootstrapFileOverrideFields,
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
         announceTimeoutMs: z.number().int().positive().optional(),

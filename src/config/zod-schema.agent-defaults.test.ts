@@ -44,4 +44,21 @@ describe("agent defaults schema", () => {
   it("rejects invalid contextInjection values", () => {
     expect(() => AgentDefaultsSchema.parse({ contextInjection: "never" })).toThrow();
   });
+
+  it("accepts model-aware AGENTS file overrides", () => {
+    expect(() =>
+      AgentDefaultsSchema.parse({
+        agentsFile: "AGENTS.gpt.md",
+        agentsFilesByModel: {
+          "openai/gpt-5.4": "AGENTS.gpt-5.4.md",
+        },
+        subagents: {
+          agentsFile: "SUBAGENTS.md",
+          agentsFilesByModel: {
+            "openai/gpt-5.4": "SUBAGENTS.gpt-5.4.md",
+          },
+        },
+      }),
+    ).not.toThrow();
+  });
 });

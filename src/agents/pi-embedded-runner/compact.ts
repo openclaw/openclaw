@@ -517,6 +517,9 @@ export async function compactEmbeddedPiSessionDirect(
       config: params.config,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
+      agentId: params.agentId,
+      modelProviderId: provider,
+      modelId,
       warn: makeBootstrapWarn({
         sessionLabel,
         warn: (message) => log.warn(message),
@@ -828,6 +831,10 @@ export async function compactEmbeddedPiSessionDirect(
         provider,
         modelId,
         model,
+        workspaceDir: effectiveWorkspace,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        agentId: params.agentId,
       });
       // Only create an explicit resource loader when there are extension factories
       // to register; otherwise let createAgentSession use its built-in default.

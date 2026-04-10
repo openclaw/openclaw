@@ -46,6 +46,7 @@ import {
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
   hasCompletedBootstrapTurn,
   makeBootstrapWarn,
+  resolveEffectiveAgentsBootstrapFileForRun,
   resolveBootstrapContextForRun,
   resolveContextInjectionMode,
 } from "../../bootstrap-files.js";
@@ -403,12 +404,25 @@ export async function runEmbeddedAttempt(
     const {
       bootstrapFiles: hookAdjustedBootstrapFiles,
       contextFiles,
+      bootstrapSignature,
       shouldRecordCompletedBootstrapTurn,
     } = await resolveAttemptBootstrapContext({
       contextInjectionMode,
       bootstrapContextMode: params.bootstrapContextMode,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
       sessionFile: params.sessionFile,
+      resolveBootstrapSignatureForRun: async () =>
+        (
+          await resolveEffectiveAgentsBootstrapFileForRun({
+            workspaceDir: effectiveWorkspace,
+            config: params.config,
+            sessionKey: params.sessionKey,
+            sessionId: params.sessionId,
+            agentId: params.agentId,
+            modelProviderId: params.provider,
+            modelId: params.modelId,
+          })
+        ).bootstrapSignature,
       hasCompletedBootstrapTurn,
       resolveBootstrapContextForRun: async () =>
         await resolveBootstrapContextForRun({
@@ -416,6 +430,9 @@ export async function runEmbeddedAttempt(
           config: params.config,
           sessionKey: params.sessionKey,
           sessionId: params.sessionId,
+          agentId: params.agentId,
+          modelProviderId: params.provider,
+          modelId: params.modelId,
           warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
           contextMode: params.bootstrapContextMode,
           runKind: params.bootstrapContextRunKind,
@@ -884,6 +901,10 @@ export async function runEmbeddedAttempt(
         provider: params.provider,
         modelId: params.modelId,
         model: params.model,
+        workspaceDir: effectiveWorkspace,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        agentId: params.agentId,
       });
       // Only create an explicit resource loader when there are extension factories
       // to register; otherwise let createAgentSession use its built-in default.
@@ -2127,6 +2148,7 @@ export async function runEmbeddedAttempt(
               timestamp: Date.now(),
               runId: params.runId,
               sessionId: params.sessionId,
+              bootstrapSignature,
             });
           } catch (entryErr) {
             log.warn(`failed to persist bootstrap completion entry: ${String(entryErr)}`);

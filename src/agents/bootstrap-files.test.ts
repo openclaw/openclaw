@@ -87,6 +87,112 @@ describe("resolveBootstrapFilesForRun", () => {
     expect(warnings).toHaveLength(3);
     expect(warnings[0]).toContain('missing or invalid "path" field');
   });
+
+  it("selects a model-specific AGENTS file for main runs", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "default rules", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.gpt-5.4.md"), "gpt rules", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: {
+        agents: {
+          defaults: {
+            agentsFilesByModel: {
+              "openai/gpt-5.4": "AGENTS.gpt-5.4.md",
+            },
+          },
+          list: [{ id: "main" }],
+        },
+      },
+      sessionKey: "agent:main:main",
+      modelProviderId: "openai",
+      modelId: "gpt-5.4",
+    });
+
+    const agentsFile = files.find((file) => file.name === "AGENTS.md");
+    expect(agentsFile?.path).toBe(path.join(workspaceDir, "AGENTS.gpt-5.4.md"));
+    expect(agentsFile?.content).toBe("gpt rules");
+  });
+
+  it("selects a subagent-specific AGENTS file and allows model overrides", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "default rules", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "SUBAGENTS.md"), "subagent rules", "utf8");
+    await fs.writeFile(
+      path.join(workspaceDir, "SUBAGENTS.gpt-5.4.md"),
+      "gpt subagent rules",
+      "utf8",
+    );
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: {
+        agents: {
+          defaults: {
+            subagents: {
+              agentsFile: "SUBAGENTS.md",
+              agentsFilesByModel: {
+                "openai/gpt-5.4": "SUBAGENTS.gpt-5.4.md",
+              },
+            },
+          },
+          list: [{ id: "main" }],
+        },
+      },
+      sessionKey: "agent:main:subagent:task-1",
+      modelProviderId: "openai",
+      modelId: "gpt-5.4",
+    });
+
+    const agentsFile = files.find((file) => file.name === "AGENTS.md");
+    expect(agentsFile?.path).toBe(path.join(workspaceDir, "SUBAGENTS.gpt-5.4.md"));
+    expect(agentsFile?.content).toBe("gpt subagent rules");
+  });
+
+  it("falls back to AGENTS.md when a configured override escapes the workspace", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "default rules", "utf8");
+    const warnings: string[] = [];
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: {
+        agents: {
+          defaults: {
+            agentsFile: "../outside.md",
+          },
+          list: [{ id: "main" }],
+        },
+      },
+      warn: (message) => warnings.push(message),
+    });
+
+    const agentsFile = files.find((file) => file.name === "AGENTS.md");
+    expect(agentsFile?.path).toBe(path.join(workspaceDir, "AGENTS.md"));
+    expect(agentsFile?.content).toBe("default rules");
+    expect(warnings[0]).toContain("must stay within the workspace root");
+  });
+
+  it("passes resolved model identity into bootstrap hooks", async () => {
+    const seenContexts: Array<Pick<AgentBootstrapHookContext, "modelProviderId" | "modelId">> = [];
+    registerInternalHook("agent:bootstrap", (event) => {
+      const context = event.context as AgentBootstrapHookContext;
+      seenContexts.push({
+        modelProviderId: context.modelProviderId,
+        modelId: context.modelId,
+      });
+    });
+
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await resolveBootstrapFilesForRun({
+      workspaceDir,
+      modelProviderId: "openai",
+      modelId: "gpt-5.4",
+    });
+
+    expect(seenContexts).toEqual([{ modelProviderId: "openai", modelId: "gpt-5.4" }]);
+  });
 });
 
 describe("resolveBootstrapContextForRun", () => {
@@ -271,6 +377,23 @@ describe("hasCompletedBootstrapTurn", () => {
       "utf8",
     );
     expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(true);
+  });
+
+  it("returns false when the bootstrap signature changed", async () => {
+    const sessionFile = path.join(tmpDir, "signature-mismatch.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({ type: "message", message: { role: "assistant", content: "hi" } }),
+        JSON.stringify({
+          type: "custom",
+          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+          data: { timestamp: 1, bootstrapSignature: "agents:/tmp/AGENTS.old.md" },
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    expect(await hasCompletedBootstrapTurn(sessionFile, "agents:/tmp/AGENTS.new.md")).toBe(false);
   });
 
   it("returns false when compaction happened after the last assistant turn", async () => {

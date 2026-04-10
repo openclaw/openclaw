@@ -13,6 +13,19 @@ import type { MemorySearchConfig } from "./types.tools.js";
 
 export type AgentContextInjection = "always" | "continuation-skip";
 
+export type AgentBootstrapFileOverridesConfig = {
+  /**
+   * Workspace-relative or absolute file path (within the workspace root)
+   * injected in place of AGENTS.md for this run role.
+   */
+  agentsFile?: string;
+  /**
+   * Exact model-specific AGENTS file overrides keyed by canonical
+   * provider/model refs (for example "openai/gpt-5.4").
+   */
+  agentsFilesByModel?: Record<string, string>;
+};
+
 export type AgentModelEntryConfig = {
   alias?: string;
   /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
@@ -176,6 +189,16 @@ export type AgentDefaultsConfig = {
    *   transcript already contains a completed assistant turn
    */
   contextInjection?: AgentContextInjection;
+  /**
+   * Workspace-relative or absolute file path (within the workspace root)
+   * injected in place of AGENTS.md for main/default runs.
+   */
+  agentsFile?: string;
+  /**
+   * Exact model-specific AGENTS file overrides for main/default runs keyed by
+   * canonical provider/model refs (for example "openai/gpt-5.4").
+   */
+  agentsFilesByModel?: Record<string, string>;
   /** Max chars for injected bootstrap files before truncation (default: 20000). */
   bootstrapMaxChars?: number;
   /** Max total chars across all injected bootstrap files (default: 150000). */
@@ -328,6 +351,16 @@ export type AgentDefaultsConfig = {
     archiveAfterMinutes?: number;
     /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */
     model?: AgentModelConfig;
+    /**
+     * Workspace-relative or absolute file path (within the workspace root)
+     * injected in place of AGENTS.md for sub-agent runs.
+     */
+    agentsFile?: string;
+    /**
+     * Exact model-specific AGENTS file overrides for sub-agent runs keyed by
+     * canonical provider/model refs (for example "openai/gpt-5.4").
+     */
+    agentsFilesByModel?: Record<string, string>;
     /** Default thinking level for spawned sub-agents (e.g. "off", "low", "medium", "high"). */
     thinking?: string;
     /** Default run timeout in seconds for spawned sub-agents (0 = no timeout). */

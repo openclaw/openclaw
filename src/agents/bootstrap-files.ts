@@ -1,11 +1,15 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
+import { isSubagentSessionKey } from "../routing/session-key.js";
+import { isPathWithinRoot } from "../shared/avatar-policy.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { resolveSessionAgentIds } from "./agent-scope.js";
+import { resolveAgentConfig, resolveSessionAgentIds } from "./agent-scope.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import { shouldIncludeHeartbeatGuidanceForSystemPrompt } from "./heartbeat-system-prompt.js";
+import { modelKey } from "./model-selection.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import {
   buildBootstrapContextFiles,
@@ -13,8 +17,10 @@ import {
   resolveBootstrapTotalMaxChars,
 } from "./pi-embedded-helpers.js";
 import {
+  DEFAULT_AGENTS_FILENAME,
   DEFAULT_HEARTBEAT_FILENAME,
   filterBootstrapFilesForSession,
+  loadWorkspaceBootstrapFileFromPath,
   loadWorkspaceBootstrapFiles,
   type WorkspaceBootstrapFile,
 } from "./workspace.js";
@@ -25,12 +31,31 @@ export type BootstrapContextRunKind = "default" | "heartbeat" | "cron";
 const CONTINUATION_SCAN_MAX_TAIL_BYTES = 256 * 1024;
 const CONTINUATION_SCAN_MAX_RECORDS = 500;
 export const FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE = "openclaw:bootstrap-context:full";
+const DEFAULT_BOOTSTRAP_SIGNATURE = `agents:${DEFAULT_AGENTS_FILENAME}`;
+
+type AgentsBootstrapRunRole = "main" | "subagent";
+
+export type ResolvedAgentsBootstrapFile = {
+  bootstrapFile: WorkspaceBootstrapFile;
+  bootstrapSignature: string;
+  modelRefKey?: string;
+  runRole: AgentsBootstrapRunRole;
+};
 
 export function resolveContextInjectionMode(config?: OpenClawConfig): AgentContextInjection {
   return config?.agents?.defaults?.contextInjection ?? "always";
 }
 
-export async function hasCompletedBootstrapTurn(sessionFile: string): Promise<boolean> {
+function normalizeBootstrapSignature(value: string | undefined | null): string | undefined {
+  const trimmed = normalizeOptionalString(value);
+  return trimmed || undefined;
+}
+
+export async function hasCompletedBootstrapTurn(
+  sessionFile: string,
+  bootstrapSignature?: string,
+): Promise<boolean> {
+  const expectedSignature = normalizeBootstrapSignature(bootstrapSignature);
   try {
     const stat = await fs.lstat(sessionFile);
     if (stat.isSymbolicLink()) {
@@ -77,6 +102,7 @@ export async function hasCompletedBootstrapTurn(sessionFile: string): Promise<bo
               type?: string;
               customType?: string;
               message?: { role?: string };
+              data?: { bootstrapSignature?: unknown };
             }
           | null
           | undefined;
@@ -88,6 +114,13 @@ export async function hasCompletedBootstrapTurn(sessionFile: string): Promise<bo
           record?.type === "custom" &&
           record.customType === FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE
         ) {
+          const recordedSignature =
+            typeof record.data?.bootstrapSignature === "string"
+              ? normalizeBootstrapSignature(record.data.bootstrapSignature)
+              : undefined;
+          if (expectedSignature && recordedSignature && recordedSignature !== expectedSignature) {
+            return false;
+          }
           return !compactedAfterLatestAssistant;
         }
       }
@@ -181,12 +214,157 @@ function filterHeartbeatBootstrapFile(
   return files.filter((file) => file.name !== DEFAULT_HEARTBEAT_FILENAME);
 }
 
+function resolveAgentsBootstrapRunRole(params: {
+  sessionKey?: string;
+  sessionId?: string;
+}): AgentsBootstrapRunRole {
+  return isSubagentSessionKey(params.sessionKey ?? params.sessionId) ? "subagent" : "main";
+}
+
+function buildBootstrapSignature(filePath: string): string {
+  const normalizedPath = normalizeOptionalString(filePath)?.replace(/\\/g, "/");
+  return normalizedPath ? `agents:${normalizedPath}` : DEFAULT_BOOTSTRAP_SIGNATURE;
+}
+
+function resolveConfiguredAgentsPath(params: {
+  workspaceDir: string;
+  configuredPath: string | undefined;
+  label: string;
+  warn?: (message: string) => void;
+}): string | null {
+  const configuredPath = normalizeOptionalString(params.configuredPath);
+  if (!configuredPath) {
+    return null;
+  }
+  const resolvedWorkspaceDir = path.resolve(params.workspaceDir);
+  const resolvedPath = path.resolve(resolvedWorkspaceDir, configuredPath);
+  if (!isPathWithinRoot(resolvedWorkspaceDir, resolvedPath)) {
+    params.warn?.(
+      `${params.label} must stay within the workspace root; ignoring ${JSON.stringify(configuredPath)}`,
+    );
+    return null;
+  }
+  return resolvedPath;
+}
+
+export async function resolveEffectiveAgentsBootstrapFileForRun(params: {
+  workspaceDir: string;
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  sessionId?: string;
+  agentId?: string;
+  modelProviderId?: string;
+  modelId?: string;
+  warn?: (message: string) => void;
+}): Promise<ResolvedAgentsBootstrapFile> {
+  const resolvedWorkspaceDir = path.resolve(params.workspaceDir);
+  const runRole = resolveAgentsBootstrapRunRole(params);
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey ?? params.sessionId,
+    config: params.config,
+    agentId: params.agentId,
+  });
+  const agentConfig =
+    params.config && sessionAgentId ? resolveAgentConfig(params.config, sessionAgentId) : undefined;
+  const defaultConfig = params.config?.agents?.defaults;
+  const baseConfiguredPath =
+    runRole === "subagent"
+      ? (agentConfig?.subagents?.agentsFile ?? defaultConfig?.subagents?.agentsFile)
+      : (agentConfig?.agentsFile ?? defaultConfig?.agentsFile);
+  const mergedModelMap =
+    runRole === "subagent"
+      ? {
+          ...defaultConfig?.subagents?.agentsFilesByModel,
+          ...agentConfig?.subagents?.agentsFilesByModel,
+        }
+      : {
+          ...defaultConfig?.agentsFilesByModel,
+          ...agentConfig?.agentsFilesByModel,
+        };
+  const modelRefKey =
+    params.modelProviderId && params.modelId
+      ? modelKey(params.modelProviderId, params.modelId)
+      : undefined;
+  const modelConfiguredPath = modelRefKey ? mergedModelMap[modelRefKey] : undefined;
+  const defaultAgentsPath = path.join(resolvedWorkspaceDir, DEFAULT_AGENTS_FILENAME);
+
+  const loadSelectedFile = async (selectedPath: string) =>
+    await loadWorkspaceBootstrapFileFromPath({
+      workspaceDir: resolvedWorkspaceDir,
+      filePath: selectedPath,
+      name: DEFAULT_AGENTS_FILENAME,
+    });
+
+  const resolvedBasePath =
+    resolveConfiguredAgentsPath({
+      workspaceDir: resolvedWorkspaceDir,
+      configuredPath: baseConfiguredPath,
+      label:
+        runRole === "subagent"
+          ? "agents.defaults.subagents.agentsFile"
+          : "agents.defaults.agentsFile",
+      warn: params.warn,
+    }) ?? defaultAgentsPath;
+
+  const tryLoadPath = async (
+    selectedPath: string,
+    warningMessage?: string,
+  ): Promise<WorkspaceBootstrapFile | null> => {
+    const loaded = await loadSelectedFile(selectedPath);
+    if (!loaded.missing) {
+      return loaded;
+    }
+    if (warningMessage) {
+      params.warn?.(warningMessage);
+    }
+    return null;
+  };
+
+  let resolvedFile: WorkspaceBootstrapFile | null = null;
+  if (modelConfiguredPath && modelRefKey) {
+    const resolvedModelPath = resolveConfiguredAgentsPath({
+      workspaceDir: resolvedWorkspaceDir,
+      configuredPath: modelConfiguredPath,
+      label:
+        runRole === "subagent"
+          ? `agents.defaults.subagents.agentsFilesByModel.${modelRefKey}`
+          : `agents.defaults.agentsFilesByModel.${modelRefKey}`,
+      warn: params.warn,
+    });
+    if (resolvedModelPath) {
+      resolvedFile = await tryLoadPath(
+        resolvedModelPath,
+        `configured AGENTS file for model ${modelRefKey} was not found at ${resolvedModelPath}; falling back`,
+      );
+    }
+  }
+
+  if (!resolvedFile) {
+    resolvedFile =
+      (await tryLoadPath(
+        resolvedBasePath,
+        resolvedBasePath !== defaultAgentsPath
+          ? `configured AGENTS file was not found at ${resolvedBasePath}; falling back to ${DEFAULT_AGENTS_FILENAME}`
+          : undefined,
+      )) ?? (await loadSelectedFile(defaultAgentsPath));
+  }
+
+  return {
+    bootstrapFile: resolvedFile,
+    bootstrapSignature: buildBootstrapSignature(resolvedFile.path),
+    modelRefKey,
+    runRole,
+  };
+}
+
 export async function resolveBootstrapFilesForRun(params: {
   workspaceDir: string;
   config?: OpenClawConfig;
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  modelProviderId?: string;
+  modelId?: string;
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
@@ -204,14 +382,20 @@ export async function resolveBootstrapFilesForRun(params: {
     contextMode: params.contextMode,
     runKind: params.runKind,
   });
+  const selectedAgentsFile = await resolveEffectiveAgentsBootstrapFileForRun(params);
+  const bootstrapFilesWithAgentsOverride = bootstrapFiles.map((file) =>
+    file.name === DEFAULT_AGENTS_FILENAME ? selectedAgentsFile.bootstrapFile : file,
+  );
 
   const updated = await applyBootstrapHookOverrides({
-    files: bootstrapFiles,
+    files: bootstrapFilesWithAgentsOverride,
     workspaceDir: params.workspaceDir,
     config: params.config,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     agentId: params.agentId,
+    modelProviderId: params.modelProviderId,
+    modelId: params.modelId,
   });
   return sanitizeBootstrapFiles(
     filterHeartbeatBootstrapFile(updated, excludeHeartbeatBootstrapFile),
@@ -225,12 +409,15 @@ export async function resolveBootstrapContextForRun(params: {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  modelProviderId?: string;
+  modelId?: string;
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
 }): Promise<{
   bootstrapFiles: WorkspaceBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
+  bootstrapSignature: string;
 }> {
   const bootstrapFiles = await resolveBootstrapFilesForRun(params);
   const contextFiles = buildBootstrapContextFiles(bootstrapFiles, {
@@ -238,5 +425,11 @@ export async function resolveBootstrapContextForRun(params: {
     totalMaxChars: resolveBootstrapTotalMaxChars(params.config),
     warn: params.warn,
   });
-  return { bootstrapFiles, contextFiles };
+  const selectedAgentsFile =
+    bootstrapFiles.find((file) => file.name === DEFAULT_AGENTS_FILENAME)?.path ?? "";
+  return {
+    bootstrapFiles,
+    contextFiles,
+    bootstrapSignature: buildBootstrapSignature(selectedAgentsFile),
+  };
 }
