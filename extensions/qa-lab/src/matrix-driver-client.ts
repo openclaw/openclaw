@@ -105,6 +105,17 @@ export type MatrixQaProvisionResult = {
   sut: MatrixQaRegisteredAccount;
 };
 
+export type MatrixQaRoomEventWaitResult =
+  | {
+      event: MatrixQaObservedEvent;
+      matched: true;
+      since?: string;
+    }
+  | {
+      matched: false;
+      since?: string;
+    };
+
 function buildMatrixThreadRelation(threadRootEventId: string, replyToEventId?: string) {
   return {
     "m.relates_to": {
@@ -386,6 +397,45 @@ export function createMatrixQaClient(params: {
 }) {
   const fetchImpl = params.fetchImpl ?? fetch;
 
+  async function waitForOptionalRoomEvent(opts: {
+    observedEvents: MatrixQaObservedEvent[];
+    predicate: (event: MatrixQaObservedEvent) => boolean;
+    roomId: string;
+    since?: string;
+    timeoutMs: number;
+  }): Promise<MatrixQaRoomEventWaitResult> {
+    const startedAt = Date.now();
+    let since = opts.since;
+    while (Date.now() - startedAt < opts.timeoutMs) {
+      const remainingMs = Math.max(1_000, opts.timeoutMs - (Date.now() - startedAt));
+      const response = await requestMatrixJson<MatrixQaSyncResponse>({
+        accessToken: params.accessToken,
+        baseUrl: params.baseUrl,
+        endpoint: "/_matrix/client/v3/sync",
+        fetchImpl,
+        method: "GET",
+        query: {
+          ...(since ? { since } : {}),
+          timeout: Math.min(10_000, remainingMs),
+        },
+        timeoutMs: Math.min(15_000, remainingMs + 5_000),
+      });
+      since = response.body.next_batch?.trim() || since;
+      const roomEvents = response.body.rooms?.join?.[opts.roomId]?.timeline?.events ?? [];
+      for (const event of roomEvents) {
+        const normalized = normalizeMatrixQaObservedEvent(opts.roomId, event);
+        if (!normalized) {
+          continue;
+        }
+        opts.observedEvents.push(normalized);
+        if (opts.predicate(normalized)) {
+          return { event: normalized, matched: true, since };
+        }
+      }
+    }
+    return { matched: false, since };
+  }
+
   return {
     async createPrivateRoom(opts: { inviteUserIds: string[]; name: string }) {
       const result = await requestMatrixJson<MatrixQaRoomCreateResponse>({
@@ -501,6 +551,7 @@ export function createMatrixQaClient(params: {
       });
       return result.body.room_id?.trim() || roomId;
     },
+    waitForOptionalRoomEvent,
     async waitForRoomEvent(opts: {
       observedEvents: MatrixQaObservedEvent[];
       predicate: (event: MatrixQaObservedEvent) => boolean;
@@ -508,34 +559,9 @@ export function createMatrixQaClient(params: {
       since?: string;
       timeoutMs: number;
     }) {
-      const startedAt = Date.now();
-      let since = opts.since;
-      while (Date.now() - startedAt < opts.timeoutMs) {
-        const remainingMs = Math.max(1_000, opts.timeoutMs - (Date.now() - startedAt));
-        const response = await requestMatrixJson<MatrixQaSyncResponse>({
-          accessToken: params.accessToken,
-          baseUrl: params.baseUrl,
-          endpoint: "/_matrix/client/v3/sync",
-          fetchImpl,
-          method: "GET",
-          query: {
-            ...(since ? { since } : {}),
-            timeout: Math.min(10_000, remainingMs),
-          },
-          timeoutMs: Math.min(15_000, remainingMs + 5_000),
-        });
-        since = response.body.next_batch?.trim() || since;
-        const roomEvents = response.body.rooms?.join?.[opts.roomId]?.timeline?.events ?? [];
-        for (const event of roomEvents) {
-          const normalized = normalizeMatrixQaObservedEvent(opts.roomId, event);
-          if (!normalized) {
-            continue;
-          }
-          opts.observedEvents.push(normalized);
-          if (opts.predicate(normalized)) {
-            return { event: normalized, since };
-          }
-        }
+      const result = await waitForOptionalRoomEvent(opts);
+      if (result.matched) {
+        return { event: result.event, since: result.since };
       }
       throw new Error(`timed out after ${opts.timeoutMs}ms waiting for Matrix room event`);
     },
