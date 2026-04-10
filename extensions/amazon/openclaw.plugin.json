@@ -1,0 +1,204 @@
+{
+  "id": "amazon",
+  "providerAuthEnvVars": {
+    "amazon-polly": ["AWS_ACCESS_KEY_ID", "AWS_PROFILE"],
+    "amazon-transcribe": ["AWS_ACCESS_KEY_ID", "AWS_PROFILE"],
+    "amazon-nova-sonic": ["AWS_ACCESS_KEY_ID", "AWS_PROFILE"]
+  },
+  "contracts": {
+    "speechProviders": ["amazon-polly"],
+    "mediaUnderstandingProviders": ["amazon-transcribe"],
+    "realtimeVoiceProviders": ["amazon-nova-sonic"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "polly": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Enable or disable Amazon Polly TTS."
+          },
+          "voice": {
+            "type": "string",
+            "description": "Default Polly voice ID. Generative: Ruth, Matthew, Stephen. Neural: Joanna, Lupe, Amy, Brian."
+          },
+          "engine": {
+            "type": "string",
+            "enum": ["generative", "neural", "standard", "long-form"],
+            "description": "Polly engine type. Generative is highest quality, neural is fastest, standard is cheapest."
+          },
+          "region": {
+            "type": "string",
+            "enum": [
+              "us-east-1", "us-west-2",
+              "eu-west-1", "eu-west-2", "eu-west-3", "eu-central-1", "eu-north-1",
+              "ap-southeast-1", "ap-southeast-2", "ap-northeast-1", "ap-northeast-2", "ap-south-1",
+              "ca-central-1", "sa-east-1", "af-south-1", "me-south-1", "us-gov-west-1"
+            ],
+            "description": "AWS region for Polly API calls."
+          },
+          "languageCode": {
+            "type": "string",
+            "enum": [
+              "en-US", "en-GB", "en-AU", "en-IN", "en-NZ", "en-ZA", "en-IE",
+              "es-ES", "es-MX", "es-US",
+              "fr-FR", "fr-CA",
+              "de-DE", "de-AT",
+              "it-IT",
+              "pt-BR", "pt-PT",
+              "ja-JP", "ko-KR", "zh-CN", "hi-IN", "ar-AE",
+              "nl-NL", "nl-BE",
+              "pl-PL", "ru-RU", "sv-SE", "nb-NO", "da-DK", "fi-FI", "tr-TR",
+              "ca-ES", "cy-GB", "is-IS", "ro-RO"
+            ],
+            "description": "BCP-47 language code."
+          },
+          "sampleRate": {
+            "type": "string",
+            "enum": ["8000", "16000", "22050", "24000"],
+            "description": "Audio sample rate in Hz."
+          }
+        }
+      },
+      "transcribe": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Enable or disable Amazon Transcribe STT."
+          },
+          "region": {
+            "type": "string",
+            "enum": [
+              "us-east-1", "us-east-2", "us-west-2",
+              "eu-west-1", "eu-west-2", "eu-central-1",
+              "ap-southeast-1", "ap-southeast-2", "ap-northeast-1", "ap-northeast-2", "ap-south-1",
+              "ca-central-1", "sa-east-1"
+            ],
+            "description": "AWS region for Transcribe Streaming API calls."
+          },
+          "languageCode": {
+            "type": "string",
+            "enum": [
+              "en-US", "en-GB", "en-AU",
+              "es-US", "es-ES",
+              "fr-FR", "fr-CA",
+              "de-DE", "it-IT", "pt-BR",
+              "ja-JP", "ko-KR", "zh-CN",
+              "hi-IN", "ar-SA"
+            ],
+            "description": "Default language for transcription."
+          }
+        }
+      },
+      "novaSonic": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Enable or disable Amazon Nova Sonic realtime voice."
+          },
+          "model": {
+            "type": "string",
+            "description": "Bedrock model ID for Nova Sonic."
+          },
+          "voice": {
+            "type": "string",
+            "enum": ["tiffany", "matthew", "amy"],
+            "description": "Nova Sonic voice."
+          },
+          "region": {
+            "type": "string",
+            "enum": ["us-east-1"],
+            "description": "AWS region. Nova Sonic currently only available in us-east-1."
+          },
+          "temperature": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Sampling temperature (0-1). Default: 0.7."
+          },
+          "maxTokens": {
+            "type": "number",
+            "minimum": 1,
+            "description": "Maximum output tokens. Default: 4096."
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "polly": {
+      "label": "Amazon Polly (TTS)",
+      "help": "Text-to-speech via Amazon Polly. Uses IAM credential chain — no API key needed."
+    },
+    "polly.enabled": {
+      "label": "Enabled",
+      "help": "Enable or disable Amazon Polly TTS."
+    },
+    "polly.voice": {
+      "label": "Voice",
+      "help": "Polly voice ID. Generative voices (Ruth, Matthew, Stephen) for best quality. Full list: https://docs.aws.amazon.com/polly/latest/dg/voicelist.html"
+    },
+    "polly.engine": {
+      "label": "Engine",
+      "help": "Generative: most natural (~$30/1M chars). Neural: fast (~$16/1M chars). Standard: cheapest (~$4/1M chars). Long-form: optimized for articles."
+    },
+    "polly.region": {
+      "label": "AWS Region",
+      "help": "Region for Polly API calls. Note: generative engine is only available in us-east-1 and eu-west-1."
+    },
+    "polly.languageCode": {
+      "label": "Language Code",
+      "help": "BCP-47 language code. Required for bilingual voices."
+    },
+    "polly.sampleRate": {
+      "label": "Sample Rate",
+      "help": "24000 Hz for generative/long-form. Standard/neural only accept 8000, 16000, or 22050.",
+      "advanced": true
+    },
+    "transcribe": {
+      "label": "Amazon Transcribe (STT)",
+      "help": "Speech-to-text via Amazon Transcribe Streaming. Uses IAM credential chain — no API key needed."
+    },
+    "transcribe.enabled": {
+      "label": "Enabled",
+      "help": "Enable or disable Amazon Transcribe STT."
+    },
+    "transcribe.region": {
+      "label": "AWS Region",
+      "help": "Region for Transcribe Streaming API calls."
+    },
+    "transcribe.languageCode": {
+      "label": "Language Code",
+      "help": "Default language for transcription. Can be overridden per request."
+    },
+    "novaSonic": {
+      "label": "Amazon Nova Sonic (Realtime Voice)",
+      "help": "Bidirectional speech-to-speech via Nova Sonic on Bedrock. Full-duplex voice conversations with tool calling."
+    },
+    "novaSonic.enabled": {
+      "label": "Enabled",
+      "help": "Enable or disable Nova Sonic realtime voice."
+    },
+    "novaSonic.model": {
+      "label": "Model ID",
+      "help": "Bedrock model ID. Default: amazon.nova-sonic-v1:0.",
+      "advanced": true
+    },
+    "novaSonic.voice": {
+      "label": "Voice",
+      "help": "Nova Sonic voice ID. Available: tiffany, matthew, amy."
+    },
+    "novaSonic.region": {
+      "label": "AWS Region",
+      "help": "Region for Bedrock API calls. Nova Sonic currently available in us-east-1."
+    }
+  }
+}
