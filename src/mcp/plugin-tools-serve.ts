@@ -16,6 +16,7 @@ import { loadConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { resolvePluginTools } from "../plugins/tools.js";
+import { DEFAULT_GATEWAY_TOOL_DENY } from "../security/dangerous-tools.js";
 import { VERSION } from "../version.js";
 
 function resolveJsonSchemaForTool(tool: AnyAgentTool): Record<string, unknown> {
@@ -43,8 +44,22 @@ export function createPluginToolsMcpServer(
   const cfg = params.config ?? loadConfig();
   const tools = params.tools ?? resolveTools(cfg);
 
+  // Enforce the universal tool deny-list (RCE, file mutation, control-plane).
+  // Uses DEFAULT_GATEWAY_TOOL_DENY instead of DEFAULT_GATEWAY_HTTP_TOOL_DENY
+  // because MCP clients can handle interactive tools (e.g. whatsapp_login)
+  // that are only blocked on HTTP due to non-interactive surface constraints.
+  const gatewayToolsCfg = cfg.gateway?.tools;
+  const defaultDeny = DEFAULT_GATEWAY_TOOL_DENY.filter(
+    (name) => !gatewayToolsCfg?.allow?.includes(name),
+  );
+  const denySet = new Set<string>([
+    ...defaultDeny,
+    ...(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []),
+  ]);
+  const allowedTools = tools.filter((tool) => !denySet.has(tool.name));
+
   const toolMap = new Map<string, AnyAgentTool>();
-  for (const tool of tools) {
+  for (const tool of allowedTools) {
     toolMap.set(tool.name, tool);
   }
 
@@ -54,7 +69,7 @@ export function createPluginToolsMcpServer(
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: tools.map((tool) => ({
+    tools: allowedTools.map((tool) => ({
       name: tool.name,
       description: tool.description ?? "",
       inputSchema: resolveJsonSchemaForTool(tool),
@@ -62,6 +77,15 @@ export function createPluginToolsMcpServer(
   }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    // Defense-in-depth: reject denied tools explicitly even though they are
+    // already excluded from toolMap, to guard against future code paths that
+    // might bypass the initial filter.
+    if (denySet.has(request.params.name)) {
+      return {
+        content: [{ type: "text", text: `Tool denied by security policy: ${request.params.name}` }],
+        isError: true,
+      };
+    }
     const tool = toolMap.get(request.params.name);
     if (!tool) {
       return {
