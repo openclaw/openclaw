@@ -95,7 +95,9 @@ class FakeMatrixEvent extends EventEmitter {
   }
 }
 
-type MatrixJsClientStub = EventEmitter & {
+type MatrixJsClientStub = {
+  emit: (eventName: string | symbol, ...args: unknown[]) => boolean;
+  on: (eventName: string | symbol, listener: (...args: unknown[]) => void) => MatrixJsClientStub;
   startClient: ReturnType<typeof vi.fn>;
   stopClient: ReturnType<typeof vi.fn>;
   initRustCrypto: ReturnType<typeof vi.fn>;
@@ -126,7 +128,7 @@ type MatrixJsClientStub = EventEmitter & {
 };
 
 function createMatrixJsClientStub(): MatrixJsClientStub {
-  const client = new EventEmitter() as MatrixJsClientStub;
+  const client = new EventEmitter() as unknown as MatrixJsClientStub;
   client.startClient = vi.fn(async () => {
     queueMicrotask(() => {
       client.emit("sync", "PREPARED", null, undefined);
@@ -1977,10 +1979,10 @@ describe("MatrixClient crypto bootstrapping", () => {
       encryption: true,
     });
     vi.spyOn(client, "doRequest").mockImplementation(async (method, endpoint) => {
-      if (method === "GET" && String(endpoint).includes("/room_keys/version")) {
+      if (method === "GET" && endpoint.includes("/room_keys/version")) {
         return { version: "21868" };
       }
-      if (method === "DELETE" && String(endpoint).includes("/room_keys/version/21868")) {
+      if (method === "DELETE" && endpoint.includes("/room_keys/version/21868")) {
         return {};
       }
       return {};
@@ -2031,10 +2033,10 @@ describe("MatrixClient crypto bootstrapping", () => {
       encryption: true,
     });
     vi.spyOn(client, "doRequest").mockImplementation(async (method, endpoint) => {
-      if (method === "GET" && String(endpoint).includes("/room_keys/version")) {
+      if (method === "GET" && endpoint.includes("/room_keys/version")) {
         return { version: "22245" };
       }
-      if (method === "DELETE" && String(endpoint).includes("/room_keys/version/22245")) {
+      if (method === "DELETE" && endpoint.includes("/room_keys/version/22245")) {
         return {};
       }
       return {};
@@ -2071,10 +2073,10 @@ describe("MatrixClient crypto bootstrapping", () => {
       encryption: true,
     });
     vi.spyOn(client, "doRequest").mockImplementation(async (method, endpoint) => {
-      if (method === "GET" && String(endpoint).includes("/room_keys/version")) {
+      if (method === "GET" && endpoint.includes("/room_keys/version")) {
         return { version: "21868" };
       }
-      if (method === "DELETE" && String(endpoint).includes("/room_keys/version/21868")) {
+      if (method === "DELETE" && endpoint.includes("/room_keys/version/21868")) {
         return {};
       }
       return {};
@@ -2129,10 +2131,10 @@ describe("MatrixClient crypto bootstrapping", () => {
       encryption: true,
     });
     vi.spyOn(client, "doRequest").mockImplementation(async (method, endpoint) => {
-      if (method === "GET" && String(endpoint).includes("/room_keys/version")) {
+      if (method === "GET" && endpoint.includes("/room_keys/version")) {
         return { version: "21999" };
       }
-      if (method === "DELETE" && String(endpoint).includes("/room_keys/version/21999")) {
+      if (method === "DELETE" && endpoint.includes("/room_keys/version/21999")) {
         return {};
       }
       return {};
@@ -2189,7 +2191,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       encryption: true,
     });
     const doRequest = vi.spyOn(client, "doRequest").mockImplementation(async (method, endpoint) => {
-      if (method === "GET" && String(endpoint).includes("/room_keys/version")) {
+      if (method === "GET" && endpoint.includes("/room_keys/version")) {
         return {};
       }
       return {};
@@ -2246,10 +2248,10 @@ describe("MatrixClient crypto bootstrapping", () => {
       encryption: true,
     });
     vi.spyOn(client, "doRequest").mockImplementation(async (method, endpoint) => {
-      if (method === "GET" && String(endpoint).includes("/room_keys/version")) {
+      if (method === "GET" && endpoint.includes("/room_keys/version")) {
         return { version: "22000" };
       }
-      if (method === "DELETE" && String(endpoint).includes("/room_keys/version/22000")) {
+      if (method === "DELETE" && endpoint.includes("/room_keys/version/22000")) {
         return {};
       }
       return {};
@@ -2431,7 +2433,7 @@ describe("MatrixClient crypto bootstrapping", () => {
     });
     let backupChecks = 0;
     vi.spyOn(client, "doRequest").mockImplementation(async (_method, endpoint) => {
-      if (String(endpoint).includes("/room_keys/version")) {
+      if (endpoint.includes("/room_keys/version")) {
         backupChecks += 1;
         return backupChecks >= 2 ? { version: "7" } : {};
       }
@@ -2488,7 +2490,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       published: true,
     });
     vi.spyOn(client, "doRequest").mockImplementation(async (_method, endpoint) => {
-      if (String(endpoint).includes("/room_keys/version")) {
+      if (endpoint.includes("/room_keys/version")) {
         return { version: "9" };
       }
       return {};
