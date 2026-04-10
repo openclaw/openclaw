@@ -42,7 +42,6 @@ vi.mock("jsonwebtoken", () => ({
 
 vi.mock("jwks-rsa", () => ({
   JwksClient: class JwksClient {
-    constructor(_opts: unknown) {}
     async getSigningKey(_kid: string) {
       return { getPublicKey: () => "mock-public-key" };
     }
@@ -231,6 +230,21 @@ describe("createBotFrameworkJwtValidator", () => {
     expect(jwtState.verifyCalls).toHaveLength(1);
     const opts = jwtState.verifyCalls[0]?.options as Record<string, unknown>;
     expect(opts.issuer as string[]).toContain("https://login.microsoftonline.com/tenant-id/v2.0");
+  });
+
+  it("validates a token with STS Windows issuer", async () => {
+    jwtState.decodedPayload = {
+      iss: "https://sts.windows.net/d6d49420-f39b-4df7-a1dc-d59a935871db/",
+    };
+
+    const validator = await createBotFrameworkJwtValidator(creds);
+    await expect(validator.validate("Bearer token-sts")).resolves.toBe(true);
+
+    expect(jwtState.verifyCalls).toHaveLength(1);
+    const opts = jwtState.verifyCalls[0]?.options as Record<string, unknown>;
+    expect(opts.issuer as string[]).toContain(
+      "https://sts.windows.net/d6d49420-f39b-4df7-a1dc-d59a935871db/",
+    );
   });
 
   it("rejects tokens with unknown issuer", async () => {

@@ -512,7 +512,7 @@ export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials):
   }
 
   return {
-    async validate(authHeader: string): Promise<boolean> {
+    async validate(authHeader: string, _serviceUrl?: string): Promise<boolean> {
       const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : authHeader;
       if (!token) {
         return false;
