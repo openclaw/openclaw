@@ -484,6 +484,32 @@ async function resolveMemoryBootstrapEntry(
   return null;
 }
 
+export async function loadWorkspaceBootstrapFileFromPath(params: {
+  workspaceDir: string;
+  filePath: string;
+  name: WorkspaceBootstrapFileName;
+}): Promise<WorkspaceBootstrapFile> {
+  const resolvedDir = resolveUserPath(params.workspaceDir);
+  const resolvedPath = path.resolve(params.filePath);
+  const loaded = await readWorkspaceFileWithGuards({
+    filePath: resolvedPath,
+    workspaceDir: resolvedDir,
+  });
+  if (loaded.ok) {
+    return {
+      name: params.name,
+      path: resolvedPath,
+      content: loaded.content,
+      missing: false,
+    };
+  }
+  return {
+    name: params.name,
+    path: resolvedPath,
+    missing: true,
+  };
+}
+
 export async function loadWorkspaceBootstrapFiles(dir: string): Promise<WorkspaceBootstrapFile[]> {
   const resolvedDir = resolveUserPath(dir);
 
@@ -528,20 +554,13 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
 
   const result: WorkspaceBootstrapFile[] = [];
   for (const entry of entries) {
-    const loaded = await readWorkspaceFileWithGuards({
-      filePath: entry.filePath,
-      workspaceDir: resolvedDir,
-    });
-    if (loaded.ok) {
-      result.push({
+    result.push(
+      await loadWorkspaceBootstrapFileFromPath({
+        workspaceDir: resolvedDir,
+        filePath: entry.filePath,
         name: entry.name,
-        path: entry.filePath,
-        content: loaded.content,
-        missing: false,
-      });
-    } else {
-      result.push({ name: entry.name, path: entry.filePath, missing: true });
-    }
+      }),
+    );
   }
   return result;
 }

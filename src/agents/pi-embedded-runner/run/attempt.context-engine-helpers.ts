@@ -11,6 +11,7 @@ export type AttemptContextEngine = ContextEngine;
 export type AttemptBootstrapContext = {
   bootstrapFiles: unknown[];
   contextFiles: unknown[];
+  bootstrapSignature?: string;
 };
 
 export async function resolveAttemptBootstrapContext<
@@ -20,7 +21,8 @@ export async function resolveAttemptBootstrapContext<
   bootstrapContextMode?: string;
   bootstrapContextRunKind?: string;
   sessionFile: string;
-  hasCompletedBootstrapTurn: (sessionFile: string) => Promise<boolean>;
+  resolveBootstrapSignatureForRun?: () => Promise<string | undefined>;
+  hasCompletedBootstrapTurn: (sessionFile: string, bootstrapSignature?: string) => Promise<boolean>;
   resolveBootstrapContextForRun: () => Promise<TContext>;
 }): Promise<
   TContext & {
@@ -28,17 +30,24 @@ export async function resolveAttemptBootstrapContext<
     shouldRecordCompletedBootstrapTurn: boolean;
   }
 > {
+  const bootstrapSignature = await params.resolveBootstrapSignatureForRun?.();
   const isContinuationTurn =
     params.contextInjectionMode === "continuation-skip" &&
     params.bootstrapContextRunKind !== "heartbeat" &&
-    (await params.hasCompletedBootstrapTurn(params.sessionFile));
+    (await (bootstrapSignature
+      ? params.hasCompletedBootstrapTurn(params.sessionFile, bootstrapSignature)
+      : params.hasCompletedBootstrapTurn(params.sessionFile)));
   const shouldRecordCompletedBootstrapTurn =
     !isContinuationTurn &&
     params.bootstrapContextMode !== "lightweight" &&
     params.bootstrapContextRunKind !== "heartbeat";
 
   const context = isContinuationTurn
-    ? ({ bootstrapFiles: [], contextFiles: [] } as unknown as TContext)
+    ? ({
+        bootstrapFiles: [],
+        contextFiles: [],
+        ...(bootstrapSignature ? { bootstrapSignature } : {}),
+      } as unknown as TContext)
     : await params.resolveBootstrapContextForRun();
 
   return {

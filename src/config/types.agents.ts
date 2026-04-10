@@ -1,5 +1,9 @@
 import type { ChatType } from "../channels/chat-type.js";
-import type { AgentDefaultsConfig, EmbeddedPiExecutionContract } from "./types.agent-defaults.js";
+import type {
+  AgentBootstrapFileOverridesConfig,
+  AgentDefaultsConfig,
+  EmbeddedPiExecutionContract,
+} from "./types.agent-defaults.js";
 import type {
   AgentEmbeddedHarnessConfig,
   AgentModelConfig,
@@ -73,6 +77,10 @@ export type AgentConfig = {
   /** Optional per-agent embedded harness policy override. */
   embeddedHarness?: AgentEmbeddedHarnessConfig;
   model?: AgentModelConfig;
+  /** Optional per-agent AGENTS.md replacement for main/default runs. */
+  agentsFile?: AgentBootstrapFileOverridesConfig["agentsFile"];
+  /** Optional per-agent model-specific AGENTS.md replacements for main/default runs. */
+  agentsFilesByModel?: AgentBootstrapFileOverridesConfig["agentsFilesByModel"];
   /** Optional per-agent default thinking level (overrides agents.defaults.thinkingDefault). */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
   /** Optional per-agent default verbosity level. */
@@ -95,6 +103,10 @@ export type AgentConfig = {
     allowAgents?: string[];
     /** Per-agent default model for spawned sub-agents (string or {primary,fallbacks}). */
     model?: AgentModelConfig;
+    /** Optional per-agent AGENTS.md replacement for sub-agent runs. */
+    agentsFile?: AgentBootstrapFileOverridesConfig["agentsFile"];
+    /** Optional per-agent model-specific AGENTS.md replacements for sub-agent runs. */
+    agentsFilesByModel?: AgentBootstrapFileOverridesConfig["agentsFilesByModel"];
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). */
     requireAgentId?: boolean;
   };
