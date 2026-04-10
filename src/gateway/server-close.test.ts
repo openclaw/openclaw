@@ -68,6 +68,70 @@ describe("createGatewayCloseHandler", () => {
     expect(stopTaskRegistryMaintenance).toHaveBeenCalledTimes(1);
   });
 
+  it("stops the config reloader and closes listeners before plugin teardown continues", async () => {
+    const events: string[] = [];
+    const close = createGatewayCloseHandler({
+      bonjourStop: async () => {
+        events.push("bonjourStop");
+      },
+      tailscaleCleanup: null,
+      canvasHost: null,
+      canvasHostServer: null,
+      stopChannel: vi.fn(async () => {
+        events.push("stopChannel");
+      }),
+      pluginServices: {
+        stop: vi.fn(async () => {
+          events.push("pluginServices.stop");
+        }),
+      } as never,
+      cron: { stop: vi.fn(() => events.push("cron.stop")) },
+      heartbeatRunner: { stop: vi.fn(() => events.push("heartbeat.stop")) } as never,
+      updateCheckStop: null,
+      stopTaskRegistryMaintenance: null,
+      nodePresenceTimers: new Map(),
+      broadcast: vi.fn(() => events.push("broadcast.shutdown")),
+      tickInterval: setInterval(() => undefined, 60_000),
+      healthInterval: setInterval(() => undefined, 60_000),
+      dedupeCleanup: setInterval(() => undefined, 60_000),
+      mediaCleanup: null,
+      agentUnsub: null,
+      heartbeatUnsub: null,
+      transcriptUnsub: null,
+      lifecycleUnsub: null,
+      chatRunState: { clear: vi.fn() },
+      clients: new Set([{ socket: { close: vi.fn(() => events.push("client.close")) } }]),
+      configReloader: {
+        stop: vi.fn(async () => {
+          events.push("configReloader.stop");
+        }),
+      },
+      wss: {
+        clients: new Set(),
+        close: (cb: () => void) => {
+          events.push("wss.close");
+          cb();
+        },
+      } as never,
+      httpServer: {
+        close: (cb: (err?: Error | null) => void) => {
+          events.push("http.close");
+          cb(null);
+        },
+        closeIdleConnections: vi.fn(() => events.push("http.closeIdleConnections")),
+      } as never,
+    });
+
+    await close({ reason: "test shutdown" });
+
+    expect(events.indexOf("configReloader.stop")).toBeLessThan(events.indexOf("bonjourStop"));
+    expect(events.indexOf("wss.close")).toBeLessThan(events.indexOf("bonjourStop"));
+    expect(events.indexOf("http.close")).toBeLessThan(events.indexOf("bonjourStop"));
+    expect(events.indexOf("configReloader.stop")).toBeLessThan(
+      events.indexOf("pluginServices.stop"),
+    );
+  });
+
   it("terminates lingering websocket clients when websocket close exceeds the grace window", async () => {
     vi.useFakeTimers();
 

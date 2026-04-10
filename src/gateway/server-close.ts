@@ -63,6 +63,53 @@ export function createGatewayCloseHandler(params: {
   httpServer: HttpServer;
   httpServers?: HttpServer[];
 }) {
+  const closeGatewayListeners = async () => {
+    const wsClients = params.wss.clients ?? new Set();
+    const closePromise = new Promise<void>((resolve) => params.wss.close(() => resolve()));
+    const closedWithinGrace = await Promise.race([
+      closePromise.then(() => true),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), WEBSOCKET_CLOSE_GRACE_MS)),
+    ]);
+    if (!closedWithinGrace) {
+      shutdownLog.warn(
+        `websocket server close exceeded ${WEBSOCKET_CLOSE_GRACE_MS}ms; forcing shutdown continuation with ${wsClients.size} tracked client(s)`,
+      );
+      for (const client of wsClients) {
+        try {
+          client.terminate();
+        } catch {
+          /* ignore */
+        }
+      }
+      await Promise.race([
+        closePromise,
+        new Promise<void>((resolve) =>
+          setTimeout(() => {
+            shutdownLog.warn(
+              `websocket server close still pending after ${WEBSOCKET_CLOSE_FORCE_CONTINUE_MS}ms force window; continuing shutdown`,
+            );
+            resolve();
+          }, WEBSOCKET_CLOSE_FORCE_CONTINUE_MS),
+        ),
+      ]);
+    }
+    const servers =
+      params.httpServers && params.httpServers.length > 0
+        ? params.httpServers
+        : [params.httpServer];
+    for (const server of servers) {
+      const httpServer = server as HttpServer & {
+        closeIdleConnections?: () => void;
+      };
+      if (typeof httpServer.closeIdleConnections === "function") {
+        httpServer.closeIdleConnections();
+      }
+      await new Promise<void>((resolve, reject) =>
+        httpServer.close((err) => (err ? reject(err) : resolve())),
+      );
+    }
+  };
+
   return async (opts?: { reason?: string; restartExpectedMs?: number | null }) => {
     try {
       const reasonRaw = normalizeOptionalString(opts?.reason) ?? "";
@@ -71,6 +118,20 @@ export function createGatewayCloseHandler(params: {
         typeof opts?.restartExpectedMs === "number" && Number.isFinite(opts.restartExpectedMs)
           ? Math.max(0, Math.floor(opts.restartExpectedMs))
           : null;
+      await params.configReloader.stop().catch(() => {});
+      params.broadcast("shutdown", {
+        reason,
+        restartExpectedMs,
+      });
+      for (const c of params.clients) {
+        try {
+          c.socket.close(1012, "service restart");
+        } catch {
+          /* ignore */
+        }
+      }
+      params.clients.clear();
+      await closeGatewayListeners();
       if (params.bonjourStop) {
         try {
           await params.bonjourStop();
@@ -118,10 +179,6 @@ export function createGatewayCloseHandler(params: {
         clearInterval(timer);
       }
       params.nodePresenceTimers.clear();
-      params.broadcast("shutdown", {
-        reason,
-        restartExpectedMs,
-      });
       clearInterval(params.tickInterval);
       clearInterval(params.healthInterval);
       clearInterval(params.dedupeCleanup);
@@ -157,59 +214,6 @@ export function createGatewayCloseHandler(params: {
         }
       }
       params.chatRunState.clear();
-      for (const c of params.clients) {
-        try {
-          c.socket.close(1012, "service restart");
-        } catch {
-          /* ignore */
-        }
-      }
-      params.clients.clear();
-      await params.configReloader.stop().catch(() => {});
-      const wsClients = params.wss.clients ?? new Set();
-      const closePromise = new Promise<void>((resolve) => params.wss.close(() => resolve()));
-      const closedWithinGrace = await Promise.race([
-        closePromise.then(() => true),
-        new Promise<false>((resolve) => setTimeout(() => resolve(false), WEBSOCKET_CLOSE_GRACE_MS)),
-      ]);
-      if (!closedWithinGrace) {
-        shutdownLog.warn(
-          `websocket server close exceeded ${WEBSOCKET_CLOSE_GRACE_MS}ms; forcing shutdown continuation with ${wsClients.size} tracked client(s)`,
-        );
-        for (const client of wsClients) {
-          try {
-            client.terminate();
-          } catch {
-            /* ignore */
-          }
-        }
-        await Promise.race([
-          closePromise,
-          new Promise<void>((resolve) =>
-            setTimeout(() => {
-              shutdownLog.warn(
-                `websocket server close still pending after ${WEBSOCKET_CLOSE_FORCE_CONTINUE_MS}ms force window; continuing shutdown`,
-              );
-              resolve();
-            }, WEBSOCKET_CLOSE_FORCE_CONTINUE_MS),
-          ),
-        ]);
-      }
-      const servers =
-        params.httpServers && params.httpServers.length > 0
-          ? params.httpServers
-          : [params.httpServer];
-      for (const server of servers) {
-        const httpServer = server as HttpServer & {
-          closeIdleConnections?: () => void;
-        };
-        if (typeof httpServer.closeIdleConnections === "function") {
-          httpServer.closeIdleConnections();
-        }
-        await new Promise<void>((resolve, reject) =>
-          httpServer.close((err) => (err ? reject(err) : resolve())),
-        );
-      }
     } finally {
       try {
         params.releasePluginRouteRegistry?.();
