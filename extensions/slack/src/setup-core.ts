@@ -257,7 +257,7 @@ export function createSlackSetupWizardBase(handlers: {
     }),
     finalize: async ({ cfg, accountId, options, prompter }) => {
       if (hasSlackInteractiveRepliesConfig(cfg, accountId)) {
-        return;
+        return undefined;
       }
       if (options?.quickstartDefaults) {
         return {

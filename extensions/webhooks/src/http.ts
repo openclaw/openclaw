@@ -658,6 +658,7 @@ async function executeWebhookAction(params: {
       };
     }
   }
+  throw new Error("Unsupported webhook action");
 }
 
 export function createTaskFlowWebhookRequestHandler(params: {

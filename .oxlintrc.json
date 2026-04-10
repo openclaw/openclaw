@@ -17,7 +17,7 @@
     "oxc/no-accumulating-spread": "off",
     "oxc/no-async-endpoint-handlers": "off",
     "oxc/no-map-spread": "off",
-    "typescript/consistent-return": "off",
+    "typescript/consistent-return": "error",
     "typescript/no-explicit-any": "error",
     "typescript/no-extraneous-class": "off",
     "typescript/no-unnecessary-type-conversion": "off",
