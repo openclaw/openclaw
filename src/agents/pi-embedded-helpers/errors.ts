@@ -465,7 +465,7 @@ const TIMEOUT_ERROR_CODES = new Set([
   "EAI_AGAIN",
 ]);
 const AUTH_SCOPE_HINT_RE =
-  /\b(?:missing|required|requires|insufficient)\s+(?:the\s+following\s+)?scopes?\b|\bmissing\s+scope\b|\binsufficient\s+permissions?\b/i;
+  /\b(?:missing|required|requires|insufficient)\s+(?:the\s+following\s+)?scopes?\b|\bmissing\s+scope\b/i;
 const AUTH_SCOPE_NAME_RE = /\b(?:api\.responses\.write|model\.request)\b/i;
 const HTML_BODY_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
 const HTML_CLOSE_RE = /<\/html>/i;

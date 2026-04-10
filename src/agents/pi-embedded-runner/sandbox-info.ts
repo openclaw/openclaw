@@ -2,10 +2,10 @@ import type { ExecElevatedDefaults } from "../bash-tools.js";
 import type { resolveSandboxContext } from "../sandbox.js";
 import type { EmbeddedFullAccessBlockedReason, EmbeddedSandboxInfo } from "./types.js";
 
-export function resolveEmbeddedFullAccessState(params: {
-  sandboxEnabled: boolean;
-  execElevated?: ExecElevatedDefaults;
-}): { available: boolean; blockedReason?: EmbeddedFullAccessBlockedReason } {
+export function resolveEmbeddedFullAccessState(params: { execElevated?: ExecElevatedDefaults }): {
+  available: boolean;
+  blockedReason?: EmbeddedFullAccessBlockedReason;
+} {
   if (params.execElevated?.fullAccessAvailable === true) {
     return { available: true };
   }
@@ -21,9 +21,6 @@ export function resolveEmbeddedFullAccessState(params: {
       blockedReason: "host-policy",
     };
   }
-  if (!params.sandboxEnabled) {
-    return { available: true };
-  }
   return { available: true };
 }
 
@@ -37,7 +34,6 @@ export function buildEmbeddedSandboxInfo(
   const elevatedConfigured = execElevated?.enabled === true;
   const elevatedAllowed = Boolean(execElevated?.enabled && execElevated.allowed);
   const fullAccess = resolveEmbeddedFullAccessState({
-    sandboxEnabled: true,
     execElevated,
   });
   return {

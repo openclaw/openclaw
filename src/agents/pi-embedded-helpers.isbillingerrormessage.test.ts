@@ -1124,6 +1124,16 @@ describe("classifyProviderRuntimeFailureKind", () => {
     ).not.toBe("auth_scope");
   });
 
+  it("does not treat generic Codex permission failures as missing scope failures", () => {
+    expect(
+      classifyProviderRuntimeFailureKind({
+        provider: "openai-codex",
+        message:
+          '403 {"type":"error","error":{"type":"permission_error","message":"Insufficient permissions for this organization"}}',
+      }),
+    ).not.toBe("auth_scope");
+  });
+
   it("classifies OAuth refresh failures", () => {
     expect(
       classifyProviderRuntimeFailureKind(

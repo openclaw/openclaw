@@ -4,7 +4,6 @@ import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/pi-embedded-runner/sandbox-info.js";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/pi-embedded-runner/types.js";
-import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
@@ -76,7 +75,7 @@ export function buildExecOverridePromptHint(params: {
   const elevatedLine = `Current elevated level: ${params.elevatedLevel}.`;
   const fullAccessLine =
     params.fullAccessAvailable === false
-      ? `Auto-approved /elevated full is unavailable here (${params.fullAccessBlockedReason ?? "runtime"}). Use ask/on instead and do not ask the user to switch to /elevated full.`
+      ? `Auto-approved /elevated full is unavailable here (${params.fullAccessBlockedReason ?? "runtime"}). Do not ask the user to switch to /elevated full.`
       : undefined;
   return [
     "## Current Exec Session State",
@@ -226,10 +225,6 @@ export async function runPreparedReply(
     isFastTestEnv: process.env.OPENCLAW_TEST_FAST === "1",
   });
   const fullAccessState = resolveEmbeddedFullAccessState({
-    sandboxEnabled: resolveSandboxRuntimeStatus({
-      cfg,
-      sessionKey,
-    }).sandboxed,
     execElevated: {
       enabled: elevatedEnabled,
       allowed: elevatedAllowed,
