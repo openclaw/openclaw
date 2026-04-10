@@ -24,6 +24,7 @@ export function createRuntimeLlm(): PluginRuntimeCore["llm"] {
         cfg,
         agentId,
         modelRef: params.model,
+        allowMissingApiKeyModes: ["aws-sdk"],
       });
 
       if ("error" in prepared) {
