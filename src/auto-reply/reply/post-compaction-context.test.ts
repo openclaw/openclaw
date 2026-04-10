@@ -112,6 +112,34 @@ Ignore this.
     expect(result).not.toContain("Other");
   });
 
+  it("reads the configured subagent AGENTS source instead of AGENTS.md", async () => {
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), "## Session Startup\n\nmain rules\n");
+    fs.writeFileSync(
+      path.join(tmpDir, "SUBAGENTS.md"),
+      "## Session Startup\n\nsubagent rules\n\n## Red Lines\n\nstay narrow\n",
+    );
+    const cfg = {
+      agents: {
+        defaults: {
+          subagents: {
+            agentsFile: "SUBAGENTS.md",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await readPostCompactionContext(tmpDir, cfg, undefined, {
+      sessionKey: "agent:main:subagent:task-1",
+      modelProviderId: "openai",
+      modelId: "gpt-5.4",
+    });
+
+    expect(result).toContain("subagent rules");
+    expect(result).toContain("stay narrow");
+    expect(result).not.toContain("main rules");
+    expect(result).toContain("SUBAGENTS.md");
+  });
+
   it("truncates when content exceeds limit", async () => {
     const longContent = "## Session Startup\n\n" + "A".repeat(4000) + "\n\n## Other\n\nStuff.";
     fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), longContent);
