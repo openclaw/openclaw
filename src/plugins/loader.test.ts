@@ -1781,13 +1781,11 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(listMemoryEmbeddingProviders()).toEqual([]);
   });
 
-  it("throws when activate:false is used without cache:false", () => {
-    expect(() => loadOpenClawPlugins({ activate: false })).toThrow(
-      "activate:false requires cache:false",
-    );
-    expect(() => loadOpenClawPlugins({ activate: false, cache: true })).toThrow(
-      "activate:false requires cache:false",
-    );
+  it("auto-corrects cache:false when activate:false is used without it", () => {
+    // Previously threw; now auto-corrects to cache:false so indirect callers
+    // (e.g. model-fallback provider resolution) don't crash.
+    expect(() => loadOpenClawPlugins({ activate: false })).not.toThrow();
+    expect(() => loadOpenClawPlugins({ activate: false, cache: true })).not.toThrow();
   });
 
   it("re-initializes global hook runner when serving registry from cache", () => {
