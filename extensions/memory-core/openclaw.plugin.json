@@ -34,7 +34,11 @@
             "properties": {
               "mode": {
                 "type": "string",
-                "enum": ["inline", "separate", "both"]
+                "enum": [
+                  "inline",
+                  "separate",
+                  "both"
+                ]
               },
               "separateReports": {
                 "type": "boolean"
@@ -127,6 +131,7 @@
           }
         }
       }
-    }
+    },
+    "description": "Configuration schema for the memory-core plugin. The root type is \"object\" to ensure the validator correctly evaluates the additionalProperties constraint."
   }
 }
