@@ -231,6 +231,9 @@ function resolveExplicitPluginSelection(params: {
   if (params.config.slots.memory === params.id) {
     return { explicitlyEnabled: true, cause: "selected-memory-slot" };
   }
+  if (params.config.slots.contextEngine === params.id) {
+    return { explicitlyEnabled: true, cause: "selected-context-engine-slot" };
+  }
   if (params.origin !== "bundled" && params.config.allow.includes(params.id)) {
     return { explicitlyEnabled: true, cause: "selected-in-allowlist" };
   }
@@ -304,6 +307,15 @@ export function resolvePluginActivationState(params: {
       explicitlyEnabled: true,
       source: "explicit",
       cause: "selected-memory-slot",
+    });
+  }
+  if (params.config.slots.contextEngine === params.id) {
+    return toPluginActivationState({
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: true,
+      source: "explicit",
+      cause: "selected-context-engine-slot",
     });
   }
   if (explicitSelection.cause === "bundled-channel-enabled-in-config") {
