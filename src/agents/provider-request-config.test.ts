@@ -555,17 +555,20 @@ describe("provider request config", () => {
   it("keeps allowPrivateNetwork false when only defaultBaseUrl is provided", () => {
     // defaultBaseUrl represents a hard-coded provider default, not an operator override.
     // It must not implicitly enable private-network access even if the host is not in
-    // the known-provider allowlist (e.g. api.deepgram.com resolves to endpointClass "custom").
+    // the known-provider allowlist — api.deepgram.com resolves to endpointClass "custom",
+    // which proves that defaultBaseUrl-only callers stay default-deny regardless of class.
     const resolved = resolveProviderRequestPolicyConfig({
       provider: "openai",
       api: "openai-audio-transcriptions",
-      defaultBaseUrl: "https://api.openai.com/v1",
+      defaultBaseUrl: "https://api.deepgram.com/v1",
       capability: "audio",
       transport: "media-understanding",
     });
 
     expect(resolved.allowPrivateNetwork).toBe(false);
-    expect(resolved.policy.endpointClass).toBe("default");
+    // endpointClass is "custom" (unrecognized host), but allowPrivateNetwork stays false
+    // because only defaultBaseUrl was provided — no explicit operator baseUrl override.
+    expect(resolved.policy.endpointClass).toBe("custom");
   });
 
   it("keeps allowPrivateNetwork false for known public providers even with an explicit baseUrl", () => {
