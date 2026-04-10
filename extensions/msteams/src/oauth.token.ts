@@ -1,3 +1,4 @@
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   MSTEAMS_DEFAULT_DELEGATED_SCOPES,
   MSTEAMS_DEFAULT_TOKEN_FETCH_TIMEOUT_MS,
@@ -30,27 +31,42 @@ export async function exchangeMSTeamsCodeForTokens(params: {
     scope: [...scopes].join(" "),
   });
 
-  const response = await fetch(tokenUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-      Accept: "application/json",
+  const currentFetch = globalThis.fetch;
+  const { response, release } = await fetchWithSsrFGuard({
+    url: tokenUrl,
+    fetchImpl: async (input, guardedInit) => await currentFetch(input, guardedInit),
+    init: {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        Accept: "application/json",
+      },
+      body,
+      signal: AbortSignal.timeout(MSTEAMS_DEFAULT_TOKEN_FETCH_TIMEOUT_MS),
     },
-    body,
-    signal: AbortSignal.timeout(MSTEAMS_DEFAULT_TOKEN_FETCH_TIMEOUT_MS),
+    auditContext: "msteams-oauth-token-exchange",
   });
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`MSTeams token exchange failed (${response.status}): ${errorText}`);
-  }
-
-  const data = (await response.json()) as {
+  let data: {
     access_token: string;
     refresh_token?: string;
     expires_in: number;
     scope?: string;
   };
+  try {
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`MSTeams token exchange failed (${response.status}): ${errorText}`);
+    }
+    data = (await response.json()) as {
+      access_token: string;
+      refresh_token?: string;
+      expires_in: number;
+      scope?: string;
+    };
+  } finally {
+    await release();
+  }
 
   if (!data.refresh_token) {
     throw new Error("No refresh token received from Azure AD. Please try again.");
@@ -84,27 +100,42 @@ export async function refreshMSTeamsDelegatedTokens(params: {
     scope: [...scopes].join(" "),
   });
 
-  const response = await fetch(tokenUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-      Accept: "application/json",
+  const currentFetch = globalThis.fetch;
+  const { response, release } = await fetchWithSsrFGuard({
+    url: tokenUrl,
+    fetchImpl: async (input, guardedInit) => await currentFetch(input, guardedInit),
+    init: {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        Accept: "application/json",
+      },
+      body,
+      signal: AbortSignal.timeout(MSTEAMS_DEFAULT_TOKEN_FETCH_TIMEOUT_MS),
     },
-    body,
-    signal: AbortSignal.timeout(MSTEAMS_DEFAULT_TOKEN_FETCH_TIMEOUT_MS),
+    auditContext: "msteams-oauth-token-refresh",
   });
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`MSTeams token refresh failed (${response.status}): ${errorText}`);
-  }
-
-  const data = (await response.json()) as {
+  let data: {
     access_token: string;
     refresh_token?: string;
     expires_in: number;
     scope?: string;
   };
+  try {
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`MSTeams token refresh failed (${response.status}): ${errorText}`);
+    }
+    data = (await response.json()) as {
+      access_token: string;
+      refresh_token?: string;
+      expires_in: number;
+      scope?: string;
+    };
+  } finally {
+    await release();
+  }
 
   const expiresAt = Date.now() + data.expires_in * 1000 - EXPIRY_BUFFER_MS;
 

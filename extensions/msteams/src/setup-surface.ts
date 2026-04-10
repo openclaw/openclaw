@@ -297,7 +297,7 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
         }
       }
     }
-    return { ...(baseResult ?? {}), cfg: next };
+    return { ...baseResult, cfg: next };
   },
   dmPolicy: msteamsDmPolicy,
   groupAccess: msteamsGroupAccess,

@@ -209,7 +209,7 @@ function resolveConversationBasePath(to: string): string {
   const cleaned = stripTargetPrefix(to);
   if (cleaned.includes("/")) {
     const [teamId, channelId] = cleaned.split("/", 2);
-    return `/teams/${encodeURIComponent(teamId!)}/channels/${encodeURIComponent(channelId!)}`;
+    return `/teams/${encodeURIComponent(teamId)}/channels/${encodeURIComponent(channelId)}`;
   }
   return `/chats/${encodeURIComponent(cleaned)}`;
 }

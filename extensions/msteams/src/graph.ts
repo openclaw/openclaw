@@ -26,19 +26,6 @@ export type GraphChannel = {
 
 export type GraphResponse<T> = { value?: T[] };
 
-/** Graph collection response with optional pagination link. */
-export type GraphPagedResponse<T> = {
-  value?: T[];
-  "@odata.nextLink"?: string;
-};
-
-/** Result of a paginated Graph API fetch. */
-export type PaginatedResult<T> = {
-  items: T[];
-  truncated: boolean;
-  found?: T;
-};
-
 export function normalizeQuery(value?: string | null): string {
   return value?.trim() ?? "";
 }
@@ -103,6 +90,19 @@ export async function fetchGraphJson<T>(params: {
   });
   return await readOptionalGraphJson<T>(res);
 }
+
+/** Graph collection response with optional pagination link. */
+export type GraphPagedResponse<T> = {
+  value?: T[];
+  "@odata.nextLink"?: string;
+};
+
+/** Result of a paginated Graph API fetch. */
+export type PaginatedResult<T> = {
+  items: T[];
+  truncated: boolean;
+  found?: T;
+};
 
 /**
  * Fetch all pages of a Graph API collection, following @odata.nextLink.

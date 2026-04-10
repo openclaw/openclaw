@@ -357,7 +357,9 @@ describe("msteams graph helpers", () => {
     /** Build a paged Graph response with optional nextLink. */
     function pagedResponse(items: Item[], nextLink?: string) {
       const body: Record<string, unknown> = { value: items };
-      if (nextLink) body["@odata.nextLink"] = nextLink;
+      if (nextLink) {
+        body["@odata.nextLink"] = nextLink;
+      }
       return body;
     }
 

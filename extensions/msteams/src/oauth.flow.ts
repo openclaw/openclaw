@@ -49,7 +49,9 @@ export function buildMSTeamsAuthUrl(params: {
 
 export function parseCallbackInput(
   input: string,
-  expectedState: string,
+  // Kept in the signature for API symmetry with the caller's CSRF verify step.
+  // The caller compares the parsed `state` against the expected value.
+  _expectedState: string,
 ): { code: string; state: string } | { error: string } {
   const trimmed = input.trim();
   if (!trimmed) {

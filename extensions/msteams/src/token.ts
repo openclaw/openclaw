@@ -76,7 +76,9 @@ export async function resolveDelegatedAccessToken(params: {
   clientSecret: string;
 }): Promise<string | undefined> {
   const tokens = loadDelegatedTokens();
-  if (!tokens) return undefined;
+  if (!tokens) {
+    return undefined;
+  }
 
   // Token still valid (5-min buffer already baked into expiresAt)
   if (tokens.expiresAt > Date.now()) {

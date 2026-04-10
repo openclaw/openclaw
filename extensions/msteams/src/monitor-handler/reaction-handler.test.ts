@@ -27,7 +27,7 @@ function buildMockRuntime(overrides?: Partial<PluginRuntime>): PluginRuntime {
   } as unknown as PluginRuntime;
 }
 
-function buildDeps(cfg: OpenClawConfig, runtime?: PluginRuntime): MSTeamsMessageHandlerDeps {
+function buildDeps(cfg: OpenClawConfig, _runtime?: PluginRuntime): MSTeamsMessageHandlerDeps {
   return {
     cfg,
     runtime: { error: vi.fn() } as unknown as MSTeamsMessageHandlerDeps["runtime"],
