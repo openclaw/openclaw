@@ -2959,20 +2959,20 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 properties: {
                   runtime: {
                     type: "string",
-                    title: "Embedded Harness Runtime",
+                    title: "Default Embedded Harness Runtime",
                     description:
                       "Embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
                   },
                   fallback: {
                     type: "string",
                     enum: ["pi", "none"],
-                    title: "Embedded Harness Fallback",
+                    title: "Default Embedded Harness Fallback",
                     description:
                       "Embedded harness fallback when no plugin harness matches or an auto-selected plugin harness fails before side effects. Set none to disable automatic PI fallback.",
                   },
                 },
                 additionalProperties: false,
-                title: "Embedded Harness",
+                title: "Default Embedded Harness",
                 description:
                   "Default embedded agent harness policy. Use runtime=auto for plugin harness selection, runtime=pi for built-in PI, or a registered harness id such as codex.",
               },
@@ -5442,20 +5442,20 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   properties: {
                     runtime: {
                       type: "string",
-                      title: "Embedded Harness Runtime",
+                      title: "Agent Embedded Harness Runtime",
                       description:
                         "Per-agent embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
                     },
                     fallback: {
                       type: "string",
                       enum: ["pi", "none"],
-                      title: "Embedded Harness Fallback",
+                      title: "Agent Embedded Harness Fallback",
                       description:
                         "Per-agent embedded harness fallback. Set none to disable automatic PI fallback for this agent.",
                     },
                   },
                   additionalProperties: false,
-                  title: "Embedded Harness",
+                  title: "Agent Embedded Harness",
                   description:
                     "Per-agent embedded harness policy override. Use fallback=none to make this agent fail instead of falling back to PI.",
                 },
@@ -22906,10 +22906,40 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Shared default settings inherited by agents unless overridden per entry in agents.list. Use defaults to enforce consistent baseline behavior and reduce duplicated per-agent configuration.",
       tags: ["advanced"],
     },
+    "agents.defaults.embeddedHarness": {
+      label: "Default Embedded Harness",
+      help: "Default embedded agent harness policy. Use runtime=auto for plugin harness selection, runtime=pi for built-in PI, or a registered harness id such as codex.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.embeddedHarness.runtime": {
+      label: "Default Embedded Harness Runtime",
+      help: "Embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.embeddedHarness.fallback": {
+      label: "Default Embedded Harness Fallback",
+      help: "Embedded harness fallback when no plugin harness matches or an auto-selected plugin harness fails before side effects. Set none to disable automatic PI fallback.",
+      tags: ["reliability"],
+    },
     "agents.list": {
       label: "Agent List",
       help: "Explicit list of configured agents with IDs and optional overrides for model, tools, identity, and workspace. Keep IDs stable over time so bindings, approvals, and session routing remain deterministic.",
       tags: ["advanced"],
+    },
+    "agents.list.*.embeddedHarness": {
+      label: "Agent Embedded Harness",
+      help: "Per-agent embedded harness policy override. Use fallback=none to make this agent fail instead of falling back to PI.",
+      tags: ["advanced"],
+    },
+    "agents.list.*.embeddedHarness.runtime": {
+      label: "Agent Embedded Harness Runtime",
+      help: "Per-agent embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
+      tags: ["advanced"],
+    },
+    "agents.list.*.embeddedHarness.fallback": {
+      label: "Agent Embedded Harness Fallback",
+      help: "Per-agent embedded harness fallback. Set none to disable automatic PI fallback for this agent.",
+      tags: ["reliability"],
     },
     "gateway.port": {
       label: "Gateway Port",
@@ -25301,21 +25331,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "System-prompt override for the pre-compaction memory flush turn to control extraction style and safety constraints. Use carefully so custom instructions do not reduce memory quality or leak sensitive context.",
       tags: ["advanced"],
     },
-    "agents.defaults.embeddedHarness": {
-      label: "Embedded Harness",
-      help: "Default embedded agent harness policy. Use runtime=auto for plugin harness selection, runtime=pi for built-in PI, or a registered harness id such as codex.",
-      tags: ["advanced"],
-    },
-    "agents.defaults.embeddedHarness.runtime": {
-      label: "Embedded Harness Runtime",
-      help: "Embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
-      tags: ["advanced"],
-    },
-    "agents.defaults.embeddedHarness.fallback": {
-      label: "Embedded Harness Fallback",
-      help: "Embedded harness fallback when no plugin harness matches or an auto-selected plugin harness fails before side effects. Set none to disable automatic PI fallback.",
-      tags: ["reliability"],
-    },
     "agents.defaults.embeddedPi": {
       label: "Embedded Pi",
       help: "Embedded Pi runner hardening controls for how workspace-local Pi settings are trusted and applied in OpenClaw sessions.",
@@ -25325,21 +25340,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Embedded Pi Project Settings Policy",
       help: 'How embedded Pi handles workspace-local `.pi/config/settings.json`: "sanitize" (default) strips shellPath/shellCommandPrefix, "ignore" disables project settings entirely, and "trusted" applies project settings as-is.',
       tags: ["access"],
-    },
-    "agents.list.*.embeddedHarness": {
-      label: "Embedded Harness",
-      help: "Per-agent embedded harness policy override. Use fallback=none to make this agent fail instead of falling back to PI.",
-      tags: ["advanced"],
-    },
-    "agents.list.*.embeddedHarness.runtime": {
-      label: "Embedded Harness Runtime",
-      help: "Per-agent embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
-      tags: ["advanced"],
-    },
-    "agents.list.*.embeddedHarness.fallback": {
-      label: "Embedded Harness Fallback",
-      help: "Per-agent embedded harness fallback. Set none to disable automatic PI fallback for this agent.",
-      tags: ["reliability"],
     },
     "agents.defaults.heartbeat.includeSystemPromptSection": {
       label: "Heartbeat Include System Prompt Section",
