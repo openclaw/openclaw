@@ -26,7 +26,22 @@ const DEFAULT_HEARTBEAT_TARGET = "none";
 
 function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
   const list = cfg.agents?.list ?? [];
-  return list.some((entry) => Boolean(entry?.heartbeat));
+  return list.some((entry) => isHeartbeatConfigEnabled(entry?.heartbeat));
+}
+
+/**
+ * Check if heartbeat config is effectively enabled.
+ * Empty object {}, null, undefined, and false are treated as disabled.
+ */
+function isHeartbeatConfigEnabled(heartbeat: HeartbeatConfig | null | undefined): boolean {
+  if (!heartbeat) {
+    return false;
+  }
+  // Empty object {} should be treated as disabled
+  if (typeof heartbeat === 'object' && Object.keys(heartbeat).length === 0) {
+    return false;
+  }
+  return true;
 }
 
 export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string): boolean {
@@ -35,8 +50,12 @@ export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string
   const hasExplicit = hasExplicitHeartbeatAgents(cfg);
   if (hasExplicit) {
     return list.some(
-      (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry?.id) === resolvedAgentId,
+      (entry) => isHeartbeatConfigEnabled(entry?.heartbeat) && normalizeAgentId(entry?.id) === resolvedAgentId,
     );
+  }
+  // Check if defaults.heartbeat is effectively enabled (not empty object, null, or false)
+  if (!isHeartbeatConfigEnabled(cfg.agents?.defaults?.heartbeat)) {
+    return false;
   }
   return resolvedAgentId === resolveDefaultAgentId(cfg);
 }

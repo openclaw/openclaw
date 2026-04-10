@@ -138,9 +138,24 @@ export type HeartbeatRunner = {
   updateConfig: (cfg: OpenClawConfig) => void;
 };
 
+/**
+ * Check if heartbeat config is effectively enabled.
+ * Empty object {}, null, undefined, and false are treated as disabled.
+ */
+function isHeartbeatConfigEnabled(heartbeat: HeartbeatConfig | null | undefined): boolean {
+  if (!heartbeat) {
+    return false;
+  }
+  // Empty object {} should be treated as disabled
+  if (typeof heartbeat === 'object' && Object.keys(heartbeat).length === 0) {
+    return false;
+  }
+  return true;
+}
+
 function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
   const list = cfg.agents?.list ?? [];
-  return list.some((entry) => Boolean(entry?.heartbeat));
+  return list.some((entry) => isHeartbeatConfigEnabled(entry?.heartbeat));
 }
 
 function resolveHeartbeatConfig(
@@ -162,12 +177,17 @@ function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
   const list = cfg.agents?.list ?? [];
   if (hasExplicitHeartbeatAgents(cfg)) {
     return list
-      .filter((entry) => entry?.heartbeat)
+      .filter((entry) => isHeartbeatConfigEnabled(entry?.heartbeat))
       .map((entry) => {
         const id = normalizeAgentId(entry.id);
         return { agentId: id, heartbeat: resolveHeartbeatConfig(cfg, id) };
       })
       .filter((entry) => entry.agentId);
+  }
+  // Check if defaults.heartbeat is effectively enabled
+  const defaultsHeartbeat = cfg.agents?.defaults?.heartbeat;
+  if (!isHeartbeatConfigEnabled(defaultsHeartbeat)) {
+    return [];
   }
   const fallbackId = resolveDefaultAgentId(cfg);
   return [{ agentId: fallbackId, heartbeat: resolveHeartbeatConfig(cfg, fallbackId) }];
