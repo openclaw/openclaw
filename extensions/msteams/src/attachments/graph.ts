@@ -323,12 +323,15 @@ export async function downloadMSTeamsGraphMedia(params: {
           const name = att.name ?? "file";
 
           try {
-            // SharePoint URLs need to be accessed via Graph shares API
+            // SharePoint URLs need to be accessed via Graph shares API. Validate the
+            // rewritten Graph URL, not the original SharePoint host, so the existing
+            // Graph allowlist path can fetch shared files without separately allowing
+            // arbitrary SharePoint hosts.
             const shareUrl = att.contentUrl!;
-            if (!isUrlAllowed(shareUrl, policy.allowHosts)) {
+            const sharesUrl = `${GRAPH_ROOT}/shares/${encodeGraphShareId(shareUrl)}/driveItem/content`;
+            if (!isUrlAllowed(sharesUrl, policy.allowHosts)) {
               continue;
             }
-            const sharesUrl = `${GRAPH_ROOT}/shares/${encodeGraphShareId(shareUrl)}/driveItem/content`;
 
             const media = await downloadAndStoreMSTeamsRemoteMedia({
               url: sharesUrl,
