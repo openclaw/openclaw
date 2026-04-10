@@ -187,7 +187,8 @@ describe("lmstudio setup", () => {
         ctx: ProviderAuthMethodNonInteractiveContext;
       }) => {
         const modelId =
-          String(ctx.opts.customModelId ?? "qwen3-8b-instruct").trim() || "qwen3-8b-instruct";
+          (typeof ctx.opts.customModelId === "string" ? ctx.opts.customModelId.trim() : "") ||
+          "qwen3-8b-instruct";
         return {
           agents: { defaults: { model: { primary: `${providerId}/${modelId}` } } },
           models: {

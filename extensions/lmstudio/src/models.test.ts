@@ -23,6 +23,12 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
 
 describe("lmstudio-models", () => {
   const asFetch = <T>(mock: T) => mock as unknown as typeof fetch;
+  const parseJsonRequestBody = <T>(init: RequestInit | undefined): T => {
+    if (typeof init?.body !== "string") {
+      throw new Error("Expected request body to be a JSON string");
+    }
+    return JSON.parse(init.body) as T;
+  };
 
   afterEach(() => {
     fetchWithSsrFGuardMock.mockReset();
@@ -207,8 +213,7 @@ describe("lmstudio-models", () => {
     const loadCall = fetchMock.mock.calls.find((call) => String(call[0]).endsWith("/models/load"));
     expect(loadCall).toBeDefined();
     const loadInit = loadCall?.[1] as RequestInit;
-    expect(typeof loadInit.body).toBe("string");
-    const loadBody = JSON.parse(loadInit.body as string) as { context_length: number };
+    const loadBody = parseJsonRequestBody<{ context_length: number }>(loadInit);
     expect(loadBody.context_length).toBe(8192);
   });
 
@@ -268,8 +273,7 @@ describe("lmstudio-models", () => {
       }),
     });
     const loadInit = loadCall![1] as RequestInit;
-    expect(typeof loadInit.body).toBe("string");
-    const loadBody = JSON.parse(loadInit.body as string) as { context_length: number };
+    const loadBody = parseJsonRequestBody<{ context_length: number }>(loadInit);
     expect(loadBody.context_length).not.toBe(LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH);
   });
 
@@ -311,7 +315,7 @@ describe("lmstudio-models", () => {
     const loadCall = fetchMock.mock.calls.find((call) => String(call[0]).endsWith("/models/load"));
     expect(loadCall).toBeDefined();
     const loadInit = loadCall?.[1] as unknown as RequestInit;
-    const loadBody = JSON.parse(String(loadInit.body)) as { context_length: number };
+    const loadBody = parseJsonRequestBody<{ context_length: number }>(loadInit);
     expect(loadBody.context_length).toBe(8192);
   });
 

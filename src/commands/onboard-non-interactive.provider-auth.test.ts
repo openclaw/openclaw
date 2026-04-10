@@ -439,14 +439,16 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
       return [];
     }
     return models
-      .map((entry) =>
-        entry && typeof entry === "object"
-          ? {
-              type: "type" in entry ? String((entry as { type?: unknown }).type ?? "") : "",
-              key: "key" in entry ? String((entry as { key?: unknown }).key ?? "") : "",
-            }
-          : null,
-      )
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return null;
+        }
+        const typedEntry = entry as { type?: unknown; key?: unknown };
+        return {
+          type: normalizeText(typedEntry.type),
+          key: normalizeText(typedEntry.key),
+        };
+      })
       .filter((entry): entry is { type: string; key: string } => Boolean(entry))
       .filter((entry) => entry.type.trim().toLowerCase() === "llm")
       .map((entry) => entry.key.trim())
