@@ -1,4 +1,5 @@
 import path from "node:path";
+import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
 import { runQaCharacterEval, type QaCharacterModelOptions } from "./character-eval.js";
 import { resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
@@ -213,6 +214,7 @@ export async function runQaSuiteCommand(opts: {
   alternateModel?: string;
   fastMode?: boolean;
   cliAuthMode?: string;
+  parityPack?: string;
   scenarioIds?: string[];
   concurrency?: number;
   image?: string;
@@ -222,6 +224,10 @@ export async function runQaSuiteCommand(opts: {
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const runner = (opts.runner ?? "host").trim().toLowerCase();
+  const scenarioIds = resolveQaParityPackScenarioIds({
+    parityPack: opts.parityPack,
+    scenarioIds: opts.scenarioIds,
+  });
   if (runner !== "host" && runner !== "multipass") {
     throw new Error(`--runner must be one of host or multipass, got "${opts.runner}".`);
   }
@@ -247,7 +253,7 @@ export async function runQaSuiteCommand(opts: {
       primaryModel: opts.primaryModel,
       alternateModel: opts.alternateModel,
       fastMode: opts.fastMode,
-      scenarioIds: opts.scenarioIds,
+      scenarioIds,
       ...(opts.concurrency !== undefined
         ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
         : {}),
@@ -271,7 +277,7 @@ export async function runQaSuiteCommand(opts: {
     alternateModel: opts.alternateModel,
     fastMode: opts.fastMode,
     ...(claudeCliAuthMode ? { claudeCliAuthMode } : {}),
-    scenarioIds: opts.scenarioIds,
+    scenarioIds,
     ...(opts.concurrency !== undefined
       ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
       : {}),

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  QA_AGENTIC_PARITY_SCENARIO_IDS,
   listQaScenarioMarkdownPaths,
   readQaBootstrapScenarioCatalog,
   readQaScenarioById,
@@ -33,6 +34,11 @@ describe("qa scenario catalog", () => {
     expect(catalog.scenarios.some((scenario) => scenario.id === "subagent-fanout-synthesis")).toBe(
       true,
     );
+    expect(
+      QA_AGENTIC_PARITY_SCENARIO_IDS.every((scenarioId) =>
+        catalog.scenarios.some((scenario) => scenario.id === scenarioId),
+      ),
+    ).toBe(true);
   });
 
   it("loads scenario-specific execution config from per-scenario markdown", () => {
