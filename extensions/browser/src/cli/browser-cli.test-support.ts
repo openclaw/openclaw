@@ -1,12 +1,7 @@
 import { Command } from "commander";
-import type { GatewayRpcOpts } from "openclaw/plugin-sdk/browser-node-runtime";
 import { createCliRuntimeCapture } from "../../test-support.js";
 import type { CliRuntimeCapture } from "../../test-support.js";
-
-type BrowserParentOpts = GatewayRpcOpts & {
-  json?: boolean;
-  browserProfile?: string;
-};
+import type { BrowserParentOpts } from "./browser-cli-shared.js";
 
 export function createBrowserProgram(params?: { withGatewayUrl?: boolean }): {
   program: Command;
@@ -25,7 +20,7 @@ export function createBrowserProgram(params?: { withGatewayUrl?: boolean }): {
   return { program, browser, parentOpts };
 }
 
-const browserCliRuntimeState = { capture: null as CliRuntimeCapture | null };
+const browserCliRuntimeState: { capture?: CliRuntimeCapture } = {};
 
 export function getBrowserCliRuntimeCapture(): CliRuntimeCapture {
   browserCliRuntimeState.capture ??= createCliRuntimeCapture();

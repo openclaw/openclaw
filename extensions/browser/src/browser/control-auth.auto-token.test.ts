@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
     ({
       authConfig,
     }: {
-      authConfig?: NonNullable<NonNullable<OpenClawConfig["gateway"]>["auth"]> | undefined;
+      authConfig?: NonNullable<NonNullable<OpenClawConfig["gateway"]>["auth"]>;
     }) => {
       const token =
         typeof authConfig?.token === "string"
@@ -57,6 +57,14 @@ vi.mock("../gateway/startup-auth.js", () => ({
 vi.mock("../gateway/auth.js", () => ({
   resolveGatewayAuth: mocks.resolveGatewayAuth,
 }));
+
+function readPersistedConfig(): OpenClawConfig {
+  const persistedCfg = mocks.writeConfigFile.mock.calls[0]?.[0];
+  if (!persistedCfg) {
+    throw new Error("expected persisted config");
+  }
+  return persistedCfg;
+}
 
 let ensureBrowserControlAuth: typeof import("./control-auth.js").ensureBrowserControlAuth;
 
@@ -176,7 +184,7 @@ describe("ensureBrowserControlAuth", () => {
     expect(result.auth.token).toBe(result.generatedToken);
     expect(result.auth.password).toBeUndefined();
     expect(mocks.writeConfigFile).toHaveBeenCalledTimes(1);
-    const persistedCfg = mocks.writeConfigFile.mock.calls[0]?.[0] as OpenClawConfig | undefined;
+    const persistedCfg = readPersistedConfig();
     expect(persistedCfg?.gateway?.auth?.mode).toBe("none");
     expect(persistedCfg?.gateway?.auth?.token).toBe(result.generatedToken);
     expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
@@ -223,7 +231,7 @@ describe("ensureBrowserControlAuth", () => {
     expect(result.auth.token).toBe(result.generatedToken);
     expect(result.auth.password).toBeUndefined();
     expect(mocks.writeConfigFile).toHaveBeenCalledTimes(1);
-    const persistedCfg = mocks.writeConfigFile.mock.calls[0]?.[0] as OpenClawConfig | undefined;
+    const persistedCfg = readPersistedConfig();
     expect(persistedCfg?.gateway?.auth?.mode).toBe("none");
     expect(persistedCfg?.gateway?.auth?.token).toBe(result.generatedToken);
     expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
@@ -246,7 +254,7 @@ describe("ensureBrowserControlAuth", () => {
     expect(result.auth.password).toBe(result.generatedToken);
     expect(result.auth.token).toBeUndefined();
     expect(mocks.writeConfigFile).toHaveBeenCalledTimes(1);
-    const persistedCfg = mocks.writeConfigFile.mock.calls[0]?.[0] as OpenClawConfig | undefined;
+    const persistedCfg = readPersistedConfig();
     expect(persistedCfg?.gateway?.auth?.mode).toBe("trusted-proxy");
     expect(persistedCfg?.gateway?.auth?.password).toBe(result.generatedToken);
     expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
@@ -273,7 +281,7 @@ describe("ensureBrowserControlAuth", () => {
     expect(result.auth.password).toBe(result.generatedToken);
     expect(result.auth.token).toBeUndefined();
     expect(mocks.writeConfigFile).toHaveBeenCalledTimes(1);
-    const persistedCfg = mocks.writeConfigFile.mock.calls[0]?.[0] as OpenClawConfig | undefined;
+    const persistedCfg = readPersistedConfig();
     expect(persistedCfg?.gateway?.auth?.mode).toBe("trusted-proxy");
     expect(persistedCfg?.gateway?.auth?.password).toBe(result.generatedToken);
     expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
