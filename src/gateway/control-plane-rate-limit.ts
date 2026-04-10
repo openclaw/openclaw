@@ -50,7 +50,10 @@ export function consumeControlPlaneWriteBudget(params: {
   if (!bucket || nowMs - bucket.windowStartMs >= CONTROL_PLANE_RATE_LIMIT_WINDOW_MS) {
     // Enforce hard cap before inserting a new key to bound memory usage
     // even between periodic prune sweeps.
-    if (!controlPlaneBuckets.has(key) && controlPlaneBuckets.size >= CONTROL_PLANE_BUCKET_MAX_ENTRIES) {
+    if (
+      !controlPlaneBuckets.has(key) &&
+      controlPlaneBuckets.size >= CONTROL_PLANE_BUCKET_MAX_ENTRIES
+    ) {
       const oldest = controlPlaneBuckets.keys().next().value;
       if (oldest !== undefined) {
         controlPlaneBuckets.delete(oldest);
@@ -107,6 +110,9 @@ export function pruneStaleControlPlaneBuckets(nowMs = Date.now()): number {
 }
 
 export const __testing = {
+  getControlPlaneRateLimitBucketCount() {
+    return controlPlaneBuckets.size;
+  },
   resetControlPlaneRateLimitState() {
     controlPlaneBuckets.clear();
   },
