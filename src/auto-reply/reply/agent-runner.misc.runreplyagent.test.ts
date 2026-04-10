@@ -16,6 +16,7 @@ import {
 } from "../../plugins/memory-state.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
+import * as postCompactionContextModule from "./post-compaction-context.js";
 import { __testing as replyRunRegistryTesting } from "./reply-run-registry.js";
 import { createMockTypingController } from "./test-helpers.js";
 
@@ -287,6 +288,82 @@ describe("runReplyAgent auto-compaction token update", () => {
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     // totalTokens should use lastCallUsage (55k), not accumulated (75k)
     expect(stored[sessionKey].totalTokens).toBe(55_000);
+  });
+
+  it("uses the active runtime model for post-compaction AGENTS refresh", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-post-compact-model-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      sessionFile: path.join(tmp, "session.jsonl"),
+      updatedAt: Date.now(),
+      compactionCount: 0,
+    };
+
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+    const readPostCompactionContextSpy = vi
+      .spyOn(postCompactionContextModule, "readPostCompactionContext")
+      .mockResolvedValue(undefined);
+
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "openai-codex",
+          model: "gpt-5.3-codex-spark",
+          compactionCount: 1,
+          lastCallUsage: { input: 10_000, output: 2_000, total: 12_000 },
+        },
+      },
+    });
+
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath,
+      sessionEntry,
+      workspaceDir: tmp,
+      sessionFile: path.join(tmp, "session.jsonl"),
+    });
+
+    await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expect(readPostCompactionContextSpy).toHaveBeenCalledWith(
+      tmp,
+      followupRun.run.config,
+      undefined,
+      expect.objectContaining({
+        sessionKey: "main",
+        sessionId: "session",
+        agentId: "main",
+        modelProviderId: "openai-codex",
+        modelId: "gpt-5.3-codex-spark",
+      }),
+    );
+    readPostCompactionContextSpy.mockRestore();
   });
 });
 
