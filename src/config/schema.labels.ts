@@ -254,6 +254,9 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.fetch.maxRedirects": "Web Fetch Max Redirects",
   "tools.web.fetch.userAgent": "Web Fetch User-Agent",
   "tools.web.fetch.readability": "Web Fetch Readability Extraction",
+  "tools.web.fetch.ssrfPolicy": "Web Fetch SSRF Policy",
+  "tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange":
+    "Web Fetch Allow RFC 2544 Benchmark Range",
   "gateway.controlUi.basePath": "Control UI Base Path",
   "gateway.controlUi.root": "Control UI Assets Root",
   "gateway.controlUi.allowedOrigins": "Control UI Allowed Origins",
@@ -479,6 +482,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "models.providers.*.request.tls.passphrase": "Model Provider Request TLS Passphrase",
   "models.providers.*.request.tls.serverName": "Model Provider Request TLS Server Name",
   "models.providers.*.request.tls.insecureSkipVerify": "Model Provider Request TLS Skip Verify",
+  "models.providers.*.request.allowPrivateNetwork": "Model Provider Request Allow Private Network",
   "models.providers.*.models": "Model Provider Model List",
   "auth.cooldowns.billingBackoffHours": "Billing Backoff (hours)",
   "auth.cooldowns.billingBackoffHoursByProvider": "Billing Backoff Overrides",

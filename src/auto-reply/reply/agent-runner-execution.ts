@@ -4,6 +4,10 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
+import {
+  buildOAuthRefreshFailureLoginCommand,
+  classifyOAuthRefreshFailure,
+} from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
@@ -54,11 +58,14 @@ import {
   isSilentReplyPrefixText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
+  startsWithSilentToken,
+  stripLeadingSilentToken,
 } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
   buildEmbeddedRunExecutionParams,
+  resolveQueuedReplyRuntimeConfig,
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
 import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -106,6 +113,7 @@ type FallbackSelectionState = Pick<
   SessionEntry,
   | "providerOverride"
   | "modelOverride"
+  | "modelOverrideSource"
   | "authProfileOverride"
   | "authProfileOverrideSource"
   | "authProfileOverrideCompactionCount"
@@ -114,6 +122,7 @@ type FallbackSelectionState = Pick<
 const FALLBACK_SELECTION_STATE_KEYS = [
   "providerOverride",
   "modelOverride",
+  "modelOverrideSource",
   "authProfileOverride",
   "authProfileOverrideSource",
   "authProfileOverrideCompactionCount",
@@ -134,6 +143,12 @@ function setFallbackSelectionStateField(
     case "modelOverride":
       if (entry.modelOverride !== value) {
         entry.modelOverride = value as SessionEntry["modelOverride"];
+        return true;
+      }
+      return false;
+    case "modelOverrideSource":
+      if (entry.modelOverrideSource !== value) {
+        entry.modelOverrideSource = value as SessionEntry["modelOverrideSource"];
         return true;
       }
       return false;
@@ -163,6 +178,7 @@ function snapshotFallbackSelectionState(entry: SessionEntry): FallbackSelectionS
   return {
     providerOverride: entry.providerOverride,
     modelOverride: entry.modelOverride,
+    modelOverrideSource: entry.modelOverrideSource,
     authProfileOverride: entry.authProfileOverride,
     authProfileOverrideSource: entry.authProfileOverrideSource,
     authProfileOverrideCompactionCount: entry.authProfileOverrideCompactionCount,
@@ -178,6 +194,7 @@ function buildFallbackSelectionState(params: {
   return {
     providerOverride: params.provider,
     modelOverride: params.model,
+    modelOverrideSource: "auto",
     authProfileOverride: params.authProfileId,
     authProfileOverrideSource: params.authProfileId ? params.authProfileIdSource : undefined,
     authProfileOverrideCompactionCount: undefined,
@@ -303,9 +320,51 @@ function isToolResultTurnMismatchError(message: string): boolean {
   );
 }
 
+function collapseRepeatedFailureDetail(message: string): string {
+  const parts = message
+    .split(/\s+\|\s+/u)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length >= 2 && parts.every((part) => part === parts[0])) {
+    return parts[0];
+  }
+  return message.trim();
+}
+
+const SAFE_MISSING_API_KEY_PROVIDERS = new Set(["anthropic", "google", "openai", "openai-codex"]);
+
+function buildMissingApiKeyFailureText(message: string): string | null {
+  const normalizedMessage = collapseRepeatedFailureDetail(message);
+  const providerMatch = normalizedMessage.match(/No API key found for provider "([^"]+)"/u);
+  const provider = providerMatch?.[1]?.trim().toLowerCase();
+  if (!provider) {
+    return null;
+  }
+  if (provider === "openai" && normalizedMessage.includes("OpenAI Codex OAuth")) {
+    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai-codex/gpt-5.4` for OAuth, or set `OPENAI_API_KEY`, then try again.";
+  }
+  if (SAFE_MISSING_API_KEY_PROVIDERS.has(provider)) {
+    return `⚠️ Missing API key for provider "${provider}". Configure the gateway auth for that provider, then try again.`;
+  }
+  return "⚠️ Missing API key for the selected provider on the gateway. Configure provider auth, then try again.";
+}
+
 function buildExternalRunFailureText(message: string): string {
-  if (isToolResultTurnMismatchError(message)) {
+  const normalizedMessage = collapseRepeatedFailureDetail(message);
+  if (isToolResultTurnMismatchError(normalizedMessage)) {
     return "⚠️ Session history got out of sync. Please try again, or use /new to start a fresh session.";
+  }
+  const missingApiKeyFailure = buildMissingApiKeyFailureText(normalizedMessage);
+  if (missingApiKeyFailure) {
+    return missingApiKeyFailure;
+  }
+  const oauthRefreshFailure = classifyOAuthRefreshFailure(normalizedMessage);
+  if (oauthRefreshFailure) {
+    const loginCommand = buildOAuthRefreshFailureLoginCommand(oauthRefreshFailure.provider);
+    if (oauthRefreshFailure.reason) {
+      return `⚠️ Model login expired on the gateway${oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : ""}. Re-auth with \`${loginCommand}\`, then try again.`;
+    }
+    return `⚠️ Model login failed on the gateway${oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : ""}. Please try again. If this keeps happening, re-auth with \`${loginCommand}\`.`;
   }
   return "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
 }
@@ -523,10 +582,18 @@ export async function runAgentTurnWithFallback(params: {
   let autoCompactionCount = 0;
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
   const directlySentBlockKeys = new Set<string>();
+  const runtimeConfig = resolveQueuedReplyRuntimeConfig(params.followupRun.run.config);
+  const effectiveRun =
+    runtimeConfig === params.followupRun.run.config
+      ? params.followupRun.run
+      : {
+          ...params.followupRun.run,
+          config: runtimeConfig,
+        };
 
   const runId = params.opts?.runId ?? crypto.randomUUID();
   const normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
-    cfg: params.followupRun.run.config,
+    cfg: runtimeConfig,
     sessionKey: params.sessionKey,
     workspaceDir: params.followupRun.run.workspaceDir,
   });
@@ -660,6 +727,9 @@ export async function runAgentTurnWithFallback(params: {
         ) {
           return { skip: true };
         }
+        if (text && startsWithSilentToken(text, SILENT_REPLY_TOKEN)) {
+          text = stripLeadingSilentToken(text, SILENT_REPLY_TOKEN);
+        }
         if (!text) {
           // Allow media-only payloads (e.g. tool result screenshots) through.
           if (reply.hasMedia) {
@@ -728,7 +798,7 @@ export async function runAgentTurnWithFallback(params: {
             );
           }
 
-          if (isCliProvider(provider, params.followupRun.run.config)) {
+          if (isCliProvider(provider, runtimeConfig)) {
             const startedAt = Date.now();
             notifyAgentRunStart();
             emitAgentEvent({
@@ -756,7 +826,7 @@ export async function runAgentTurnWithFallback(params: {
                   agentId: params.followupRun.run.agentId,
                   sessionFile: params.followupRun.run.sessionFile,
                   workspaceDir: params.followupRun.run.workspaceDir,
-                  config: params.followupRun.run.config,
+                  config: runtimeConfig,
                   prompt: params.commandBody,
                   provider,
                   model,
@@ -850,7 +920,7 @@ export async function runAgentTurnWithFallback(params: {
           }
           const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams(
             {
-              run: params.followupRun.run,
+              run: effectiveRun,
               sessionCtx: params.sessionCtx,
               hasRepliedRef: params.opts?.hasRepliedRef,
               provider,
@@ -1030,8 +1100,7 @@ export async function runAgentTurnWithFallback(params: {
                       // Keep custom compaction callbacks active, but gate the
                       // fallback user-facing notice behind explicit opt-in.
                       const notifyUser =
-                        params.followupRun.run.config.agents?.defaults?.compaction?.notifyUser ===
-                        true;
+                        runtimeConfig?.agents?.defaults?.compaction?.notifyUser === true;
                       if (params.opts?.onCompactionStart) {
                         await params.opts.onCompactionStart();
                       } else if (notifyUser && params.opts?.onBlockReply) {

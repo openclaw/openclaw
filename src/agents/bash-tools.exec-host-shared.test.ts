@@ -1,8 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  sendExecApprovalFollowup: vi.fn(),
-  logWarn: vi.fn(),
   resolveExecApprovals: vi.fn(() => ({
     defaults: {
       security: "allowlist",
@@ -21,14 +19,6 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("./bash-tools.exec-approval-followup.js", () => ({
-  sendExecApprovalFollowup: mocks.sendExecApprovalFollowup,
-}));
-
-vi.mock("../logger.js", () => ({
-  logWarn: mocks.logWarn,
-}));
-
 vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../infra/exec-approvals.js")>();
   return {
@@ -43,8 +33,6 @@ let enforceStrictInlineEvalApprovalBoundary: typeof import("./bash-tools.exec-ho
 let resolveExecHostApprovalContext: typeof import("./bash-tools.exec-host-shared.js").resolveExecHostApprovalContext;
 let resolveExecApprovalUnavailableState: typeof import("./bash-tools.exec-host-shared.js").resolveExecApprovalUnavailableState;
 let buildExecApprovalPendingToolResult: typeof import("./bash-tools.exec-host-shared.js").buildExecApprovalPendingToolResult;
-let sendExecApprovalFollowup: typeof import("./bash-tools.exec-approval-followup.js").sendExecApprovalFollowup;
-let logWarn: typeof import("../logger.js").logWarn;
 
 beforeAll(async () => {
   ({
@@ -55,14 +43,15 @@ beforeAll(async () => {
     resolveExecApprovalUnavailableState,
     buildExecApprovalPendingToolResult,
   } = await import("./bash-tools.exec-host-shared.js"));
-  ({ sendExecApprovalFollowup } = await import("./bash-tools.exec-approval-followup.js"));
-  ({ logWarn } = await import("../logger.js"));
 });
 
 describe("sendExecApprovalFollowupResult", () => {
+  const sendExecApprovalFollowup = vi.fn();
+  const logWarn = vi.fn();
+
   beforeEach(() => {
-    vi.mocked(sendExecApprovalFollowup).mockReset();
-    vi.mocked(logWarn).mockReset();
+    sendExecApprovalFollowup.mockReset();
+    logWarn.mockReset();
     mocks.resolveExecApprovals.mockReset();
     mocks.resolveExecApprovals.mockReturnValue({
       defaults: {
@@ -83,14 +72,15 @@ describe("sendExecApprovalFollowupResult", () => {
   });
 
   it("logs repeated followup dispatch failures once per approval id and error message", async () => {
-    vi.mocked(sendExecApprovalFollowup).mockRejectedValue(new Error("Channel is required"));
+    sendExecApprovalFollowup.mockRejectedValue(new Error("Channel is required"));
 
     const target = {
       approvalId: "approval-log-once",
       sessionKey: "agent:main:main",
     };
-    await sendExecApprovalFollowupResult(target, "Exec finished");
-    await sendExecApprovalFollowupResult(target, "Exec finished");
+    const deps = { sendExecApprovalFollowup, logWarn };
+    await sendExecApprovalFollowupResult(target, "Exec finished", deps);
+    await sendExecApprovalFollowupResult(target, "Exec finished", deps);
 
     expect(logWarn).toHaveBeenCalledTimes(1);
     expect(logWarn).toHaveBeenCalledWith(
@@ -99,7 +89,8 @@ describe("sendExecApprovalFollowupResult", () => {
   });
 
   it("evicts oldest followup failure dedupe keys after reaching the cap", async () => {
-    vi.mocked(sendExecApprovalFollowup).mockRejectedValue(new Error("Channel is required"));
+    sendExecApprovalFollowup.mockRejectedValue(new Error("Channel is required"));
+    const deps = { sendExecApprovalFollowup, logWarn };
 
     for (let i = 0; i <= maxExecApprovalFollowupFailureLogKeys; i += 1) {
       await sendExecApprovalFollowupResult(
@@ -108,6 +99,7 @@ describe("sendExecApprovalFollowupResult", () => {
           sessionKey: "agent:main:main",
         },
         "Exec finished",
+        deps,
       );
     }
     await sendExecApprovalFollowupResult(
@@ -116,6 +108,7 @@ describe("sendExecApprovalFollowupResult", () => {
         sessionKey: "agent:main:main",
       },
       "Exec finished",
+      deps,
     );
 
     expect(logWarn).toHaveBeenCalledTimes(maxExecApprovalFollowupFailureLogKeys + 2);

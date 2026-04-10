@@ -1,7 +1,8 @@
 export type { Command } from "commander";
-export type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/core";
-export { definePluginEntry } from "openclaw/plugin-sdk/core";
+export type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+export { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 export { callGatewayFromCli } from "openclaw/plugin-sdk/browser-node-runtime";
+export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 export {
   buildQaTarget,
   createQaBusThread,

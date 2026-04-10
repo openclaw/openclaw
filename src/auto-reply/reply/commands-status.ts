@@ -3,6 +3,7 @@ import {
   resolveAgentDir,
   resolveDefaultAgentId,
   resolveSessionAgentId,
+  resolveAgentModelFallbacksOverride,
 } from "../../agents/agent-scope.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
@@ -110,6 +111,8 @@ export async function buildStatusReply(params: {
   isGroup: boolean;
   defaultGroupActivation: () => "always" | "mention";
   mediaDecisions?: MediaUnderstandingDecision[];
+  modelAuthOverride?: string;
+  activeModelAuthOverride?: string;
 }): Promise<ReplyPayload | undefined> {
   const { command } = params;
   if (!command.isAuthorizedSender) {
@@ -293,6 +296,7 @@ export async function buildStatusText(params: {
       agentId: statusAgentId,
       sessionEntry,
     }).enabled;
+  const agentFallbacksOverride = resolveAgentModelFallbacksOverride(cfg, statusAgentId);
   const statusText = buildStatusMessage({
     config: cfg,
     agent: {
@@ -300,6 +304,7 @@ export async function buildStatusText(params: {
       model: {
         ...toAgentModelListLike(agentDefaults.model),
         primary: params.primaryModelLabelOverride ?? `${provider}/${model}`,
+        ...(agentFallbacksOverride === undefined ? {} : { fallbacks: agentFallbacksOverride }),
       },
       ...(typeof contextTokens === "number" && contextTokens > 0 ? { contextTokens } : {}),
       thinkingDefault: agentConfig?.thinkingDefault ?? agentDefaults.thinkingDefault,

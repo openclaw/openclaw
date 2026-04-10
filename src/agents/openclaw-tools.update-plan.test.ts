@@ -1,63 +1,43 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import "./test-helpers/fast-core-tools.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+import { isUpdatePlanToolEnabledForOpenClawTools } from "./openclaw-tools.registration.js";
+import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
 
 describe("openclaw-tools update_plan gating", () => {
   it("keeps update_plan disabled by default", () => {
-    const tools = createOpenClawTools({
-      config: {} as OpenClawConfig,
-    });
-
-    expect(tools.map((tool) => tool.name)).not.toContain("update_plan");
+    expect(isUpdatePlanToolEnabledForOpenClawTools({} as OpenClawConfig)).toBe(false);
   });
 
   it("registers update_plan when explicitly enabled", () => {
-    const tools = createOpenClawTools({
-      config: {
-        tools: {
-          experimental: {
-            planTool: true,
-          },
+    const config = {
+      tools: {
+        experimental: {
+          planTool: true,
         },
-      } as OpenClawConfig,
-    });
+      },
+    } as OpenClawConfig;
 
-    const updatePlan = tools.find((tool) => tool.name === "update_plan");
-    expect(updatePlan?.displaySummary).toBe("Track a short structured work plan.");
+    expect(isUpdatePlanToolEnabledForOpenClawTools(config)).toBe(true);
+    expect(createUpdatePlanTool().displaySummary).toBe("Track a short structured work plan.");
   });
 
   it("auto-enables update_plan for OpenAI-family providers", () => {
-    const openaiTools = createOpenClawTools({
-      config: {} as OpenClawConfig,
-      modelProvider: "openai",
-    });
-    const codexTools = createOpenClawTools({
-      config: {} as OpenClawConfig,
-      modelProvider: "openai-codex",
-    });
-    const anthropicTools = createOpenClawTools({
-      config: {} as OpenClawConfig,
-      modelProvider: "anthropic",
-    });
-
-    expect(openaiTools.map((tool) => tool.name)).toContain("update_plan");
-    expect(codexTools.map((tool) => tool.name)).toContain("update_plan");
-    expect(anthropicTools.map((tool) => tool.name)).not.toContain("update_plan");
+    expect(isUpdatePlanToolEnabledForOpenClawTools({} as OpenClawConfig, "openai")).toBe(true);
+    expect(isUpdatePlanToolEnabledForOpenClawTools({} as OpenClawConfig, "openai-codex")).toBe(
+      true,
+    );
+    expect(isUpdatePlanToolEnabledForOpenClawTools({} as OpenClawConfig, "anthropic")).toBe(false);
   });
 
   it("lets config disable update_plan auto-enable", () => {
-    const tools = createOpenClawTools({
-      config: {
-        tools: {
-          experimental: {
-            planTool: false,
-          },
+    const config = {
+      tools: {
+        experimental: {
+          planTool: false,
         },
-      } as OpenClawConfig,
-      modelProvider: "openai",
-    });
+      },
+    } as OpenClawConfig;
 
-    expect(tools.map((tool) => tool.name)).not.toContain("update_plan");
+    expect(isUpdatePlanToolEnabledForOpenClawTools(config, "openai")).toBe(false);
   });
 });

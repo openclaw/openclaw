@@ -7,7 +7,14 @@ import {
   type SecretDefaults,
   type SecretTargetRegistryEntry,
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
 
 export const secretTargetRegistryEntries = [
   {
@@ -58,7 +65,7 @@ export const secretTargetRegistryEntries = [
 
 export function collectRuntimeConfigAssignments(params: {
   config: { channels?: Record<string, unknown> };
-  defaults: SecretDefaults | undefined;
+  defaults?: SecretDefaults;
   context: ResolverContext;
 }): void {
   const resolved = getChannelSurface(params.config, "telegram");

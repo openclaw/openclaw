@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -21,6 +21,8 @@ function createParams(baseEnv?: NodeJS.ProcessEnv) {
     xdgConfigHome: "/tmp/openclaw-qa/xdg-config",
     xdgDataHome: "/tmp/openclaw-qa/xdg-data",
     xdgCacheHome: "/tmp/openclaw-qa/xdg-cache",
+    bundledPluginsDir: "/tmp/openclaw-qa/bundled-plugins",
+    compatibilityHostVersion: "2026.4.8",
     baseEnv,
   };
 }
@@ -35,6 +37,8 @@ describe("buildQaRuntimeEnv", () => {
     expect(env.OPENCLAW_TEST_FAST).toBe("1");
     expect(env.OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER).toBe("1");
     expect(env.OPENCLAW_ALLOW_SLOW_REPLY_TESTS).toBe("1");
+    expect(env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBe("/tmp/openclaw-qa/bundled-plugins");
+    expect(env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("2026.4.8");
   });
 
   it("maps live frontier key aliases into provider env vars", () => {
@@ -64,6 +68,38 @@ describe("buildQaRuntimeEnv", () => {
     expect(env.OPENAI_API_KEY).toBe("openai-explicit");
   });
 
+  it("preserves Codex CLI auth home for live frontier runs while sandboxing OpenClaw home", async () => {
+    const hostHome = await mkdtemp(path.join(os.tmpdir(), "qa-host-home-"));
+    cleanups.push(async () => {
+      await rm(hostHome, { recursive: true, force: true });
+    });
+    const codexHome = path.join(hostHome, ".codex");
+    await mkdir(codexHome);
+
+    const env = buildQaRuntimeEnv({
+      ...createParams({
+        HOME: hostHome,
+      }),
+      providerMode: "live-frontier",
+    });
+
+    expect(env.HOME).toBe("/tmp/openclaw-qa/home");
+    expect(env.OPENCLAW_HOME).toBe("/tmp/openclaw-qa/home");
+    expect(env.CODEX_HOME).toBe(codexHome);
+  });
+
+  it("keeps explicit Codex CLI auth home for live frontier runs", () => {
+    const env = buildQaRuntimeEnv({
+      ...createParams({
+        CODEX_HOME: "/custom/codex-home",
+        HOME: "/host/home",
+      }),
+      providerMode: "live-frontier",
+    });
+
+    expect(env.CODEX_HOME).toBe("/custom/codex-home");
+  });
+
   it("scrubs direct and live provider keys in mock mode", () => {
     const env = buildQaRuntimeEnv({
       ...createParams({
@@ -74,6 +110,7 @@ describe("buildQaRuntimeEnv", () => {
         GOOGLE_API_KEY: "google-live",
         OPENAI_API_KEY: "openai-live",
         OPENAI_API_KEYS: "openai-a,openai-b",
+        CODEX_HOME: "/host/.codex",
         OPENCLAW_LIVE_ANTHROPIC_KEY: "anthropic-live",
         OPENCLAW_LIVE_ANTHROPIC_KEYS: "anthropic-a,anthropic-b",
         OPENCLAW_LIVE_GEMINI_KEY: "gemini-live",
@@ -84,6 +121,7 @@ describe("buildQaRuntimeEnv", () => {
 
     expect(env.OPENAI_API_KEY).toBeUndefined();
     expect(env.OPENAI_API_KEYS).toBeUndefined();
+    expect(env.CODEX_HOME).toBeUndefined();
     expect(env.ANTHROPIC_API_KEY).toBeUndefined();
     expect(env.ANTHROPIC_OAUTH_TOKEN).toBeUndefined();
     expect(env.GEMINI_API_KEY).toBeUndefined();
@@ -128,5 +166,238 @@ describe("resolveQaControlUiRoot", () => {
 
     expect(resolveQaControlUiRoot({ repoRoot })).toBeUndefined();
     expect(resolveQaControlUiRoot({ repoRoot, controlUiEnabled: false })).toBeUndefined();
+  });
+});
+
+describe("qa bundled plugin dir", () => {
+  it("prefers the built bundled plugin tree when present", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-root-"));
+    cleanups.push(async () => {
+      await rm(repoRoot, { recursive: true, force: true });
+    });
+    await mkdir(path.join(repoRoot, "dist", "extensions", "qa-channel"), {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(repoRoot, "dist", "extensions", "qa-channel", "package.json"),
+      "{}",
+      "utf8",
+    );
+    await mkdir(path.join(repoRoot, "dist-runtime", "extensions", "qa-channel"), {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(repoRoot, "dist-runtime", "extensions", "qa-channel", "package.json"),
+      "{}",
+      "utf8",
+    );
+    await mkdir(path.join(repoRoot, "extensions", "qa-channel"), { recursive: true });
+
+    expect(__testing.resolveQaBundledPluginsSourceRoot(repoRoot)).toBe(
+      path.join(repoRoot, "dist", "extensions"),
+    );
+  });
+
+  it("creates a scoped bundled plugin tree for the allowed plugins only", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-scope-"));
+    cleanups.push(async () => {
+      await rm(repoRoot, { recursive: true, force: true });
+    });
+    await mkdir(path.join(repoRoot, "dist", "extensions", "qa-channel"), { recursive: true });
+    await mkdir(path.join(repoRoot, "dist", "extensions", "memory-core"), { recursive: true });
+    await mkdir(path.join(repoRoot, "dist", "extensions", "unused-plugin"), { recursive: true });
+    await writeFile(path.join(repoRoot, "dist", "shared-chunk-abc123.js"), "export {};\n", "utf8");
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-target-"));
+    cleanups.push(async () => {
+      await rm(tempRoot, { recursive: true, force: true });
+    });
+
+    const { bundledPluginsDir, stagedRoot } = await __testing.createQaBundledPluginsDir({
+      repoRoot,
+      tempRoot,
+      allowedPluginIds: ["qa-channel", "memory-core"],
+    });
+
+    expect((await readdir(bundledPluginsDir)).toSorted()).toEqual(["memory-core", "qa-channel"]);
+    expect(bundledPluginsDir).toBe(
+      path.join(
+        repoRoot,
+        ".artifacts",
+        "qa-runtime",
+        path.basename(tempRoot),
+        "dist",
+        "extensions",
+      ),
+    );
+    expect(stagedRoot).toBe(
+      path.join(repoRoot, ".artifacts", "qa-runtime", path.basename(tempRoot)),
+    );
+    expect((await lstat(path.join(bundledPluginsDir, "qa-channel"))).isDirectory()).toBe(true);
+    expect((await lstat(path.join(bundledPluginsDir, "memory-core"))).isDirectory()).toBe(true);
+    await expect(
+      lstat(
+        path.join(
+          repoRoot,
+          ".artifacts",
+          "qa-runtime",
+          path.basename(tempRoot),
+          "dist",
+          "shared-chunk-abc123.js",
+        ),
+      ),
+    ).resolves.toBeTruthy();
+  });
+
+  it("maps cli backend provider ids to their owning bundled plugin ids", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-plugin-owner-"));
+    cleanups.push(async () => {
+      await rm(repoRoot, { recursive: true, force: true });
+    });
+    await mkdir(path.join(repoRoot, "dist", "extensions", "openai"), { recursive: true });
+    await writeFile(
+      path.join(repoRoot, "dist", "extensions", "openai", "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "openai",
+        providers: ["openai", "openai-codex"],
+        cliBackends: ["codex-cli"],
+      }),
+      "utf8",
+    );
+
+    await expect(
+      __testing.resolveQaOwnerPluginIdsForProviderIds({
+        repoRoot,
+        providerIds: ["codex-cli"],
+      }),
+    ).resolves.toEqual(["openai"]);
+  });
+
+  it("maps configured OpenAI Responses provider aliases to the OpenAI plugin", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-plugin-owner-"));
+    cleanups.push(async () => {
+      await rm(repoRoot, { recursive: true, force: true });
+    });
+    await mkdir(path.join(repoRoot, "dist", "extensions", "openai"), { recursive: true });
+    await writeFile(
+      path.join(repoRoot, "dist", "extensions", "openai", "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "openai",
+        providers: ["openai"],
+        cliBackends: ["codex-cli"],
+      }),
+      "utf8",
+    );
+
+    await expect(
+      __testing.resolveQaOwnerPluginIdsForProviderIds({
+        repoRoot,
+        providerIds: ["custom-openai"],
+        providerConfigs: {
+          "custom-openai": {
+            baseUrl: "https://api.example.test/v1",
+            api: "openai-responses",
+            models: [
+              {
+                id: "model-a",
+                name: "model-a",
+                api: "openai-responses",
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 4096,
+              },
+            ],
+          },
+        },
+      }),
+    ).resolves.toEqual(["openai"]);
+  });
+
+  it("copies selected live provider configs from the host config", async () => {
+    const configPath = path.join(
+      await mkdtemp(path.join(os.tmpdir(), "qa-provider-config-")),
+      "openclaw.json",
+    );
+    cleanups.push(async () => {
+      await rm(path.dirname(configPath), { recursive: true, force: true });
+    });
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        models: {
+          providers: {
+            "custom-openai": {
+              baseUrl: "https://api.example.test/v1",
+              api: "openai-responses",
+              models: [
+                {
+                  id: "model-a",
+                  name: "model-a",
+                  api: "openai-responses",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 4096,
+                },
+              ],
+            },
+            ignored: {
+              baseUrl: "https://ignored.example.test/v1",
+              api: "openai-responses",
+              models: [],
+            },
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    await expect(
+      __testing.readQaLiveProviderConfigOverrides({
+        providerIds: ["custom-openai"],
+        env: { OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH: configPath },
+      }),
+    ).resolves.toEqual({
+      "custom-openai": expect.objectContaining({
+        baseUrl: "https://api.example.test/v1",
+        api: "openai-responses",
+      }),
+    });
+  });
+
+  it("raises the QA runtime host version to the highest allowed plugin floor", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-runtime-version-"));
+    cleanups.push(async () => {
+      await rm(repoRoot, { recursive: true, force: true });
+    });
+    await writeFile(
+      path.join(repoRoot, "package.json"),
+      JSON.stringify({ version: "2026.4.7-1" }),
+      "utf8",
+    );
+    const bundledRoot = path.join(repoRoot, "extensions");
+    await mkdir(path.join(bundledRoot, "qa-channel"), { recursive: true });
+    await writeFile(
+      path.join(bundledRoot, "qa-channel", "package.json"),
+      JSON.stringify({ openclaw: { install: { minHostVersion: ">=2026.4.8" } } }),
+      "utf8",
+    );
+
+    await mkdir(path.join(bundledRoot, "memory-core"), { recursive: true });
+    await writeFile(
+      path.join(bundledRoot, "memory-core", "package.json"),
+      JSON.stringify({ openclaw: { install: { minHostVersion: ">=2026.4.7" } } }),
+      "utf8",
+    );
+
+    await expect(
+      __testing.resolveQaRuntimeHostVersion({
+        repoRoot,
+        bundledPluginsSourceRoot: bundledRoot,
+        allowedPluginIds: ["memory-core", "qa-channel"],
+      }),
+    ).resolves.toBe("2026.4.8");
   });
 });

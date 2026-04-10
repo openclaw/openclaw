@@ -280,17 +280,25 @@ const ConfiguredProviderRequestProxySchema = z
   ])
   .optional();
 
+const ConfiguredProviderRequestFields = {
+  headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
+  auth: ConfiguredProviderRequestAuthSchema,
+  proxy: ConfiguredProviderRequestProxySchema,
+  tls: ConfiguredProviderRequestTlsSchema,
+};
+
 const ConfiguredProviderRequestSchema = z
-  .object({
-    headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
-    auth: ConfiguredProviderRequestAuthSchema,
-    proxy: ConfiguredProviderRequestProxySchema,
-    tls: ConfiguredProviderRequestTlsSchema,
-  })
+  .object(ConfiguredProviderRequestFields)
   .strict()
   .optional();
 
-const ConfiguredModelProviderRequestSchema = ConfiguredProviderRequestSchema;
+const ConfiguredModelProviderRequestSchema = z
+  .object({
+    ...ConfiguredProviderRequestFields,
+    allowPrivateNetwork: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
 
 export const ModelDefinitionSchema = z
   .object({
@@ -535,6 +543,8 @@ export const CliBackendSchema = z
       .optional(),
     sessionIdFields: z.array(z.string()).optional(),
     systemPromptArg: z.string().optional(),
+    systemPromptFileConfigArg: z.string().optional(),
+    systemPromptFileConfigKey: z.string().optional(),
     systemPromptMode: z.union([z.literal("append"), z.literal("replace")]).optional(),
     systemPromptWhen: z
       .union([z.literal("first"), z.literal("always"), z.literal("never")])

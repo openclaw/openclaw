@@ -1,7 +1,12 @@
-import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { Mock } from "vitest";
 import { afterEach, beforeEach, vi } from "vitest";
-import { _setFetchGuardForTesting, normalizeBlueBubblesServerUrl } from "./types.js";
+import {
+  normalizeBlueBubblesAccountsMap,
+  normalizeBlueBubblesPrivateNetworkAliases,
+  resolveBlueBubblesEffectiveAllowPrivateNetworkFromConfig,
+  resolveBlueBubblesPrivateNetworkConfigValue as resolveBlueBubblesPrivateNetworkConfigValueFromConfig,
+} from "./accounts-normalization.js";
+import { _setFetchGuardForTesting } from "./types.js";
 
 export const BLUE_BUBBLES_PRIVATE_API_STATUS = {
   enabled: true,
@@ -26,69 +31,6 @@ export function mockBlueBubblesPrivateApiStatusOnce(
   value: boolean | null,
 ) {
   mock.mockReturnValueOnce(value);
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function normalizeBlueBubblesPrivateNetworkAliases(
-  config: Record<string, unknown> | undefined,
-): Record<string, unknown> | undefined {
-  const record = asRecord(config);
-  if (!record) {
-    return config;
-  }
-  const network = asRecord(record.network);
-  const canonicalValue =
-    typeof network?.dangerouslyAllowPrivateNetwork === "boolean"
-      ? network.dangerouslyAllowPrivateNetwork
-      : typeof network?.allowPrivateNetwork === "boolean"
-        ? network.allowPrivateNetwork
-        : typeof record.dangerouslyAllowPrivateNetwork === "boolean"
-          ? record.dangerouslyAllowPrivateNetwork
-          : typeof record.allowPrivateNetwork === "boolean"
-            ? record.allowPrivateNetwork
-            : undefined;
-
-  if (canonicalValue === undefined) {
-    return config;
-  }
-
-  const {
-    allowPrivateNetwork: _legacyFlatAllow,
-    dangerouslyAllowPrivateNetwork: _legacyFlatDanger,
-    ...rest
-  } = record;
-  const {
-    allowPrivateNetwork: _legacyNetworkAllow,
-    dangerouslyAllowPrivateNetwork: _legacyNetworkDanger,
-    ...restNetwork
-  } = network ?? {};
-
-  return {
-    ...rest,
-    network: {
-      ...restNetwork,
-      dangerouslyAllowPrivateNetwork: canonicalValue,
-    },
-  };
-}
-
-function normalizeBlueBubblesAccountsMap(
-  accounts: Record<string, Record<string, unknown> | undefined> | undefined,
-): Record<string, Record<string, unknown> | undefined> | undefined {
-  if (!accounts) {
-    return undefined;
-  }
-  return Object.fromEntries(
-    Object.entries(accounts).map(([accountKey, accountConfig]) => [
-      accountKey,
-      normalizeBlueBubblesPrivateNetworkAliases(accountConfig),
-    ]),
-  );
 }
 
 export function resolveBlueBubblesAccountFromConfig(params: {
@@ -125,48 +67,6 @@ export function resolveBlueBubblesAccountFromConfig(params: {
     configured: Boolean(config.serverUrl && config.password),
     config,
   };
-}
-
-function resolveBlueBubblesPrivateNetworkConfigValueFromConfig(
-  config: Record<string, unknown> | undefined,
-): boolean | undefined {
-  const record = asRecord(config);
-  if (!record) {
-    return undefined;
-  }
-  const network = asRecord(record.network);
-  if (typeof network?.dangerouslyAllowPrivateNetwork === "boolean") {
-    return network.dangerouslyAllowPrivateNetwork;
-  }
-  if (typeof network?.allowPrivateNetwork === "boolean") {
-    return network.allowPrivateNetwork;
-  }
-  if (typeof record.dangerouslyAllowPrivateNetwork === "boolean") {
-    return record.dangerouslyAllowPrivateNetwork;
-  }
-  if (typeof record.allowPrivateNetwork === "boolean") {
-    return record.allowPrivateNetwork;
-  }
-  return undefined;
-}
-
-function resolveBlueBubblesEffectiveAllowPrivateNetworkFromConfig(params: {
-  baseUrl?: string;
-  config?: Record<string, unknown>;
-}) {
-  const configuredValue = resolveBlueBubblesPrivateNetworkConfigValueFromConfig(params.config);
-  if (configuredValue !== undefined) {
-    return configuredValue;
-  }
-  if (!params.baseUrl) {
-    return false;
-  }
-  try {
-    const hostname = new URL(normalizeBlueBubblesServerUrl(params.baseUrl)).hostname.trim();
-    return Boolean(hostname) && isBlockedHostnameOrIp(hostname);
-  } catch {
-    return false;
-  }
 }
 
 export function createBlueBubblesAccountsMockModule() {

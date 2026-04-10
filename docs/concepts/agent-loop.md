@@ -151,6 +151,7 @@ See [Plugin hooks](/plugins/architecture#provider-runtime-hooks) for the hook AP
 
 - `agent.wait` default: 30s (just the wait). `timeoutMs` param overrides.
 - Agent runtime: `agents.defaults.timeoutSeconds` default 172800s (48 hours); enforced in `runEmbeddedPiAgent` abort timer.
+- LLM idle timeout: `agents.defaults.llm.idleTimeoutSeconds` aborts a model request when no response chunks arrive before the idle window. Set it explicitly for slow local models or reasoning/tool-call providers; set it to 0 to disable. If it is not set, OpenClaw uses `agents.defaults.timeoutSeconds` when configured, otherwise 60s. Cron-triggered runs with no explicit LLM or agent timeout disable the idle watchdog and rely on the cron outer timeout.
 
 ## Where things can end early
 

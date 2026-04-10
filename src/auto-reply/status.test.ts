@@ -11,8 +11,16 @@ import {
   buildCommandsMessage,
   buildCommandsMessagePaginated,
   buildHelpMessage,
-  buildStatusMessage,
+  buildStatusMessage as buildStatusMessageRaw,
 } from "./status.js";
+import type { buildStatusMessage as BuildStatusMessage } from "./status.js";
+
+const buildStatusMessage: typeof BuildStatusMessage = (args) =>
+  buildStatusMessageRaw({
+    modelAuth: "api-key",
+    activeModelAuth: "api-key",
+    ...args,
+  });
 
 const { listPluginCommands } = vi.hoisted(() => ({
   listPluginCommands: vi.fn(
@@ -113,6 +121,68 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Think: high");
     expect(normalized).toContain("verbose:full");
     expect(normalized).toContain("Reasoning: on");
+  });
+
+  it("shows plugin status lines only when verbose is enabled", () => {
+    const visible = normalizeTestText(
+      buildStatusMessage({
+        agent: {
+          model: "anthropic/pi:opus",
+        },
+        sessionEntry: {
+          sessionId: "abc",
+          updatedAt: 0,
+          verboseLevel: "on",
+          pluginDebugEntries: [
+            { pluginId: "active-memory", lines: ["🧩 Active Memory: timeout 15s recent"] },
+          ],
+        },
+        sessionKey: "agent:main:main",
+        queue: { mode: "collect", depth: 0 },
+      }),
+    );
+    const hidden = normalizeTestText(
+      buildStatusMessage({
+        agent: {
+          model: "anthropic/pi:opus",
+        },
+        sessionEntry: {
+          sessionId: "abc",
+          updatedAt: 0,
+          verboseLevel: "off",
+          pluginDebugEntries: [
+            { pluginId: "active-memory", lines: ["🧩 Active Memory: timeout 15s recent"] },
+          ],
+        },
+        sessionKey: "agent:main:main",
+        queue: { mode: "collect", depth: 0 },
+      }),
+    );
+
+    expect(visible).toContain("Active Memory: timeout 15s recent");
+    expect(hidden).not.toContain("Active Memory: timeout 15s recent");
+  });
+
+  it("shows structured plugin debug lines in verbose status", () => {
+    const visible = normalizeTestText(
+      buildStatusMessage({
+        agent: {
+          model: "anthropic/pi:opus",
+        },
+        sessionEntry: {
+          sessionId: "abc",
+          updatedAt: 0,
+          verboseLevel: "on",
+          pluginDebugEntries: [
+            { pluginId: "active-memory", lines: ["🧩 Active Memory: ok 842ms recent 34 chars"] },
+          ],
+        },
+        sessionKey: "agent:main:main",
+        queue: { mode: "collect", depth: 0 },
+      }),
+    );
+
+    expect(visible).toContain("Active Memory: ok 842ms recent 34 chars");
   });
 
   it("shows fast mode when enabled", () => {
@@ -221,7 +291,7 @@ describe("buildStatusMessage", () => {
         channel: "discord",
         groupId: "123",
       },
-      sessionKey: "agent:main:discord:channel:123",
+      sessionKey: "agent:main:main",
       sessionScope: "per-sender",
       queue: { mode: "collect", depth: 0 },
     });
@@ -784,6 +854,41 @@ describe("buildStatusMessage", () => {
 
     const normalized = normalizeTestText(text);
     expect(normalized).not.toContain("Fallback:");
+  });
+
+  it("shows configured fallback models when provided", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: {
+          primary: "anthropic/claude-opus-4-6",
+          fallbacks: ["google/gemini-2.5-flash", "openai/gpt-5-mini"],
+        },
+      },
+      sessionEntry: { sessionId: "fb1", updatedAt: 0 },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fallbacks: google/gemini-2.5-flash, openai/gpt-5-mini");
+  });
+
+  it("omits configured fallbacks line when no fallbacks provided", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-6",
+      },
+      sessionEntry: { sessionId: "fb2", updatedAt: 0 },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).not.toContain("Fallbacks:");
   });
 
   it("keeps provider prefix from configured model", () => {

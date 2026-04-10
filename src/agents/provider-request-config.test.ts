@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildProviderRequestDispatcherPolicy,
+  mergeModelProviderRequestOverrides,
   mergeProviderRequestOverrides,
   resolveProviderRequestPolicyConfig,
   resolveProviderRequestConfig,
@@ -9,6 +10,7 @@ import {
   sanitizeConfiguredProviderRequest,
   sanitizeRuntimeProviderRequestOverrides,
 } from "./provider-request-config.js";
+import type { ProviderRequestTransportOverrides } from "./provider-request-config.js";
 
 describe("provider request config", () => {
   it("merges discovered, provider, and model headers in precedence order", () => {
@@ -330,6 +332,35 @@ describe("provider request config", () => {
         url: "http://proxy.internal:8443",
       },
     });
+  });
+
+  it("preserves request.allowPrivateNetwork for operator-trusted LAN/overlay model bases", () => {
+    expect(sanitizeConfiguredModelProviderRequest({ allowPrivateNetwork: true })).toEqual({
+      allowPrivateNetwork: true,
+    });
+    expect(sanitizeConfiguredModelProviderRequest({ allowPrivateNetwork: false })).toEqual({
+      allowPrivateNetwork: false,
+    });
+    expect(
+      sanitizeConfiguredProviderRequest({
+        allowPrivateNetwork: true,
+      } as ProviderRequestTransportOverrides),
+    ).toBeUndefined();
+  });
+
+  it("merges allowPrivateNetwork with later override winning", () => {
+    expect(
+      mergeModelProviderRequestOverrides(
+        { allowPrivateNetwork: true },
+        { allowPrivateNetwork: false },
+      ),
+    ).toEqual({ allowPrivateNetwork: false });
+    expect(
+      mergeModelProviderRequestOverrides(
+        { allowPrivateNetwork: false },
+        { allowPrivateNetwork: true },
+      ),
+    ).toEqual({ allowPrivateNetwork: true });
   });
 
   it("merges configured request overrides with later entries winning", () => {
