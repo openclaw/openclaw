@@ -139,7 +139,7 @@ describe("msteams adaptive card action invoke", () => {
   it("forwards adaptive card invoke values to the agent as message text", async () => {
     const deps = createDeps();
     const { handler, run } = createActivityHandler();
-    const _registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
+    const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
       run: NonNullable<MSTeamsActivityHandler["run"]>;
     };
     const payload = {
