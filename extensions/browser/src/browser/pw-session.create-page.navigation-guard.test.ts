@@ -209,7 +209,7 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
       createPageViaPlaywright({
         cdpUrl: "http://127.0.0.1:18792",
         url: "https://example.com",
-        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false, allowedHostnames: ["127.0.0.1"] },
       }),
     ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
 

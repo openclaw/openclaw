@@ -1496,7 +1496,7 @@ export default definePluginEntry({
           agentId: effectiveAgentId,
           sessionKey: resolvedSessionKey,
         });
-        return;
+        return undefined;
       }
       if (!isEnabledForAgent(config, effectiveAgentId)) {
         await persistPluginStatusLines({
@@ -1504,7 +1504,7 @@ export default definePluginEntry({
           agentId: effectiveAgentId,
           sessionKey: resolvedSessionKey,
         });
-        return;
+        return undefined;
       }
       if (!isEligibleInteractiveSession(ctx)) {
         await persistPluginStatusLines({
@@ -1512,7 +1512,7 @@ export default definePluginEntry({
           agentId: effectiveAgentId,
           sessionKey: resolvedSessionKey,
         });
-        return;
+        return undefined;
       }
       if (
         !isAllowedChatType(config, {
@@ -1526,7 +1526,7 @@ export default definePluginEntry({
           agentId: effectiveAgentId,
           sessionKey: resolvedSessionKey,
         });
-        return;
+        return undefined;
       }
       const query = buildQuery({
         latestUserMessage: event.prompt,
@@ -1544,11 +1544,11 @@ export default definePluginEntry({
         currentModelId: ctx.modelId,
       });
       if (!result.summary) {
-        return;
+        return undefined;
       }
       const metadata = buildMetadata(result.summary);
       if (!metadata) {
-        return;
+        return undefined;
       }
       return {
         prependSystemContext: ACTIVE_MEMORY_PLUGIN_GUIDANCE,

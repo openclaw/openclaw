@@ -145,7 +145,7 @@ describe("QmdMemoryManager", () => {
   let cfg: OpenClawConfig;
   const agentId = "main";
   const openManagers = new Set<QmdMemoryManager>();
-  let embedStartupJitterSpy: ReturnType<typeof vi.spyOn> | null = null;
+  let embedStartupJitterSpy: { mockRestore: () => void } | null = null;
 
   function seedMemoryEmbeddingProviders(): void {
     (globalThis as Record<PropertyKey, unknown>)[MEMORY_EMBEDDING_PROVIDERS_KEY] = new Map([

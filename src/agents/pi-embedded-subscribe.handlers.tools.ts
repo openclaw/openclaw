@@ -523,8 +523,8 @@ async function emitToolResultOutput(params: {
 export function handleToolExecutionStart(
   ctx: ToolHandlerContext,
   evt: AgentEvent & { toolName: string; toolCallId: string; args: unknown },
-) {
-  const continueAfterBlockReplyFlush = () => {
+): void | Promise<void> {
+  const continueAfterBlockReplyFlush = (): void | Promise<void> => {
     const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
     if (isPromiseLike<void>(onBlockReplyFlushResult)) {
       return onBlockReplyFlushResult.then(() => {
@@ -532,12 +532,13 @@ export function handleToolExecutionStart(
       });
     }
     continueToolExecutionStart();
+    return undefined;
   };
 
   const continueToolExecutionStart = () => {
-    const rawToolName = String(evt.toolName);
+    const rawToolName = evt.toolName;
     const toolName = normalizeToolName(rawToolName);
-    const toolCallId = String(evt.toolCallId);
+    const toolCallId = evt.toolCallId;
     const args = evt.args;
     const runId = ctx.params.runId;
 
@@ -672,8 +673,8 @@ export function handleToolExecutionUpdate(
     partialResult?: unknown;
   },
 ) {
-  const toolName = normalizeToolName(String(evt.toolName));
-  const toolCallId = String(evt.toolCallId);
+  const toolName = normalizeToolName(evt.toolName);
+  const toolCallId = evt.toolCallId;
   const partial = evt.partialResult;
   const sanitized = sanitizeToolResult(partial);
   emitAgentEvent({
@@ -751,10 +752,10 @@ export async function handleToolExecutionEnd(
     result?: unknown;
   },
 ) {
-  const toolName = normalizeToolName(String(evt.toolName));
-  const toolCallId = String(evt.toolCallId);
+  const toolName = normalizeToolName(evt.toolName);
+  const toolCallId = evt.toolCallId;
   const runId = ctx.params.runId;
-  const isError = Boolean(evt.isError);
+  const isError = evt.isError;
   const result = evt.result;
   const isToolError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);

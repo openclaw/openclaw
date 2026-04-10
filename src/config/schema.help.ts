@@ -1088,6 +1088,18 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.model.primary": "Primary model (provider/model).",
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
+  "agents.defaults.embeddedHarness":
+    "Default embedded agent harness policy. Use runtime=auto for plugin harness selection, runtime=pi for built-in PI, or a registered harness id such as codex.",
+  "agents.defaults.embeddedHarness.runtime":
+    "Embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
+  "agents.defaults.embeddedHarness.fallback":
+    "Embedded harness fallback when no plugin harness matches or an auto-selected plugin harness fails before side effects. Set none to disable automatic PI fallback.",
+  "agents.list.*.embeddedHarness":
+    "Per-agent embedded harness policy override. Use fallback=none to make this agent fail instead of falling back to PI.",
+  "agents.list.*.embeddedHarness.runtime":
+    "Per-agent embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
+  "agents.list.*.embeddedHarness.fallback":
+    "Per-agent embedded harness fallback. Set none to disable automatic PI fallback for this agent.",
   "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agents.defaults.imageModel.fallbacks": "Ordered fallback image models (provider/model).",
