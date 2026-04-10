@@ -10,6 +10,36 @@ const describeNonWin = isWin ? describe.skip : describe;
 const describeWin = isWin ? describe : describe.skip;
 
 describeNonWin("exec script preflight", () => {
+  it("blocks raw gateway CLI restarts during live gateway-host sessions", async () => {
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      sessionKey: "agent:main:telegram:direct:8159253715",
+    });
+
+    await expect(
+      tool.execute("call-gateway-restart-cli", {
+        command: "openclaw gateway restart",
+      }),
+    ).rejects.toThrow(/exec cannot restart or stop the current OpenClaw gateway/);
+  });
+
+  it("blocks raw systemctl gateway restarts during live gateway-host sessions", async () => {
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      sessionKey: "agent:main:telegram:direct:8159253715",
+    });
+
+    await expect(
+      tool.execute("call-gateway-restart-systemctl", {
+        command: "systemctl --user restart openclaw-gateway-dali.service",
+      }),
+    ).rejects.toThrow(/Use the first-class gateway tool instead/);
+  });
+
   it("blocks shell env var injection tokens in python scripts before execution", async () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const pyPath = path.join(tmp, "bad.py");
