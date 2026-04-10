@@ -142,6 +142,30 @@ openclaw octo mission create \
   --grip "test-coverage"
 ```
 
+### Spawn arms to work on the mission
+
+```bash
+openclaw octo arm spawn \
+  --mission <mission_id> \
+  --adapter pty_tmux \
+  --runtime tmux:bash \
+  --agent-id default \
+  --cwd /path/to/repo
+
+# Or use cli_exec for tools with structured output:
+openclaw octo arm spawn \
+  --mission <mission_id> \
+  --adapter cli_exec \
+  --runtime claude-code \
+  --agent-id default \
+  --cwd /path/to/repo \
+  --command claude \
+  --args "-p" "--output-format" "stream-json"
+
+# Or provide a full ArmSpec as JSON:
+openclaw octo arm spawn --spec-file arm-spec.json
+```
+
 ### Monitor
 
 ```bash
@@ -176,6 +200,7 @@ openclaw octo mission abort <id>      # Abort a mission
 | `octo mission abort <id>`       | Abort a mission and terminate its arms              |
 | `octo arm list`                 | List all arms                                       |
 | `octo arm show <id>`            | Show arm details and event history                  |
+| `octo arm spawn`                | Spawn a new arm from an ArmSpec (flags or JSON)     |
 | `octo arm attach <id>`          | Attach to an arm's tmux session (interactive)       |
 | `octo arm terminate <id>`       | Terminate an arm                                    |
 | `octo arm restart <id>`         | Restart a failed arm                                |
@@ -184,6 +209,8 @@ openclaw octo mission abort <id>      # Abort a mission
 | `octo grip reassign <id> <arm>` | Reassign a grip to a different arm                  |
 | `octo claims`                   | List active resource claims                         |
 | `octo events`                   | Tail the event log                                  |
+| `octo runtimes`                 | Discover available agentic tools on this machine    |
+| `octo top`                      | Real-time TUI dashboard                             |
 | `octo node list`                | List cluster nodes                                  |
 | `octo node show <id>`           | Show node details                                   |
 
