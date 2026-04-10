@@ -742,6 +742,97 @@ describe("agents.update", () => {
     );
   });
 
+  it("preserves an existing destination identity file when workspace changes", async () => {
+    agentsTesting.setDepsForTests({
+      resolveAgentWorkspaceFilePath: async ({ workspaceDir, name }) => {
+        const ioPath = `${workspaceDir}/${name}`;
+        if (
+          workspaceDir === "/workspace/test-agent" ||
+          workspaceDir === "/resolved/new/workspace"
+        ) {
+          return {
+            kind: "ready",
+            requestPath: ioPath,
+            ioPath,
+            workspaceReal: workspaceDir,
+          };
+        }
+        return {
+          kind: "missing",
+          requestPath: ioPath,
+          ioPath,
+          workspaceReal: workspaceDir,
+        };
+      },
+      readLocalFileSafely: async ({ filePath }) => {
+        if (filePath === "/workspace/test-agent/IDENTITY.md") {
+          return {
+            buffer: Buffer.from(
+              [
+                "# IDENTITY.md - Agent Identity",
+                "",
+                "- **Name:** Current Agent",
+                "- **Creature:** Old Turtle",
+                "",
+                "## Role",
+                "",
+                "Old workspace role.",
+                "",
+              ].join("\n"),
+            ),
+            realPath: filePath,
+            stat: makeFileStat(),
+          };
+        }
+        if (filePath === "/resolved/new/workspace/IDENTITY.md") {
+          return {
+            buffer: Buffer.from(
+              [
+                "# IDENTITY.md - Agent Identity",
+                "",
+                "- **Name:** Destination Agent",
+                "- **Creature:** Destination Fox",
+                "",
+                "## Role",
+                "",
+                "Destination workspace role.",
+                "",
+              ].join("\n"),
+            ),
+            realPath: filePath,
+            stat: makeFileStat(),
+          };
+        }
+        throw createEnoentError();
+      },
+    });
+
+    const { respond, promise } = makeCall("agents.update", {
+      agentId: "test-agent",
+      workspace: "/new/workspace",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(true, { ok: true, agentId: "test-agent" }, undefined);
+    expect(mocks.writeFileWithinRoot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rootDir: "/resolved/new/workspace",
+        relativePath: "IDENTITY.md",
+        data: expect.stringContaining("- **Creature:** Destination Fox"),
+      }),
+    );
+    expect(mocks.writeFileWithinRoot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.stringContaining("Destination workspace role."),
+      }),
+    );
+    expect(mocks.writeFileWithinRoot).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.stringContaining("Old workspace role."),
+      }),
+    );
+  });
+
   it("does not persist config when IDENTITY.md write fails on update", async () => {
     const { SafeOpenError: SOE } = await import("../../infra/fs-safe.js");
     mocks.writeFileWithinRoot.mockRejectedValueOnce(

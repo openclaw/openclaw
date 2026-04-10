@@ -572,10 +572,10 @@ async function buildIdentityMarkdownForWrite(params: {
   fallbackWorkspaceDir?: string;
 }): Promise<string> {
   const baseContent =
+    (await readWorkspaceFileContent(params.workspaceDir, DEFAULT_IDENTITY_FILENAME)) ??
     (params.fallbackWorkspaceDir
       ? await readWorkspaceFileContent(params.fallbackWorkspaceDir, DEFAULT_IDENTITY_FILENAME)
-      : undefined) ??
-    (await readWorkspaceFileContent(params.workspaceDir, DEFAULT_IDENTITY_FILENAME));
+      : undefined);
 
   return mergeIdentityMarkdownContent(baseContent, params.identity);
 }
