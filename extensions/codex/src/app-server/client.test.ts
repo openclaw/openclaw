@@ -4,11 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type RawData } from "ws";
 import {
   CodexAppServerClient,
-  listCodexAppServerModels,
   MIN_CODEX_APP_SERVER_VERSION,
   readCodexVersionFromUserAgent,
-  resetSharedCodexAppServerClientForTests,
 } from "./client.js";
+import { listCodexAppServerModels } from "./models.js";
+import { resetSharedCodexAppServerClientForTests } from "./shared-client.js";
 
 function createClientHarness() {
   const stdout = new PassThrough();

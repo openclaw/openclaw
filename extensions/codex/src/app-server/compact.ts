@@ -4,14 +4,11 @@ import {
   type CompactEmbeddedPiSessionParams,
   type EmbeddedPiCompactResult,
 } from "openclaw/plugin-sdk/agent-harness";
-import {
-  getSharedCodexAppServerClient,
-  type CodexAppServerClient,
-  type CodexServerNotificationHandler,
-} from "./client.js";
+import type { CodexAppServerClient, CodexServerNotificationHandler } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
 import { isJsonObject, type CodexServerNotification, type JsonObject } from "./protocol.js";
 import { readCodexAppServerBinding } from "./session-binding.js";
+import { getSharedCodexAppServerClient } from "./shared-client.js";
 
 type CodexAppServerClientFactory = (
   startOptions?: CodexAppServerStartOptions,

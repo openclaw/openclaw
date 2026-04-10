@@ -1,11 +1,11 @@
 import type { AgentHarness } from "openclaw/plugin-sdk/agent-harness";
-import { listCodexAppServerModels } from "./src/app-server/client.js";
+import { maybeCompactCodexAppServerSession } from "./src/app-server/compact.js";
+import { listCodexAppServerModels } from "./src/app-server/models.js";
 import type {
   CodexAppServerListModelsOptions,
   CodexAppServerModel,
   CodexAppServerModelListResult,
-} from "./src/app-server/client.js";
-import { maybeCompactCodexAppServerSession } from "./src/app-server/compact.js";
+} from "./src/app-server/models.js";
 import { runCodexAppServerAttempt } from "./src/app-server/run-attempt.js";
 import { clearCodexAppServerBinding } from "./src/app-server/session-binding.js";
 

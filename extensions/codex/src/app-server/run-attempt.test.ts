@@ -9,7 +9,12 @@ import {
 } from "openclaw/plugin-sdk/agent-harness";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexServerNotification } from "./protocol.js";
-import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
+import {
+  buildThreadResumeParams,
+  buildTurnStartParams,
+  runCodexAppServerAttempt,
+  __testing,
+} from "./run-attempt.js";
 import { writeCodexAppServerBinding } from "./session-binding.js";
 
 let tempDir: string;
@@ -389,6 +394,46 @@ describe("runCodexAppServerAttempt", () => {
           }),
         },
       ]),
+    );
+  });
+
+  it("builds resume and turn params from the currently selected OpenClaw model", () => {
+    const params = createParams("/tmp/session.jsonl", "/tmp/workspace");
+    const appServer = {
+      start: {
+        transport: "stdio" as const,
+        command: "codex",
+        args: ["app-server", "--listen", "stdio://"],
+        headers: {},
+      },
+      requestTimeoutMs: 60_000,
+      approvalPolicy: "on-request" as const,
+      approvalsReviewer: "guardian_subagent" as const,
+      sandbox: "danger-full-access" as const,
+      serviceTier: "priority",
+    };
+
+    expect(buildThreadResumeParams(params, { threadId: "thread-1", appServer })).toEqual({
+      threadId: "thread-1",
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "guardian_subagent",
+      sandbox: "danger-full-access",
+      serviceTier: "priority",
+      persistExtendedHistory: true,
+    });
+    expect(
+      buildTurnStartParams(params, { threadId: "thread-1", cwd: "/tmp/workspace", appServer }),
+    ).toEqual(
+      expect.objectContaining({
+        threadId: "thread-1",
+        cwd: "/tmp/workspace",
+        model: "gpt-5.4-codex",
+        approvalPolicy: "on-request",
+        approvalsReviewer: "guardian_subagent",
+        serviceTier: "priority",
+      }),
     );
   });
 });

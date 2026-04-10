@@ -18,12 +18,7 @@ import {
   type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
-import {
-  clearSharedCodexAppServerClient,
-  getSharedCodexAppServerClient,
-  isCodexAppServerApprovalRequest,
-  type CodexAppServerClient,
-} from "./client.js";
+import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./client.js";
 import {
   resolveCodexAppServerRuntimeOptions,
   type CodexAppServerRuntimeOptions,
@@ -35,8 +30,10 @@ import {
   isJsonObject,
   type CodexServerNotification,
   type CodexDynamicToolCallParams,
+  type CodexThreadResumeParams,
   type CodexThreadResumeResponse,
   type CodexThreadStartResponse,
+  type CodexTurnStartParams,
   type CodexTurnStartResponse,
   type CodexUserInput,
   type JsonObject,
@@ -48,6 +45,7 @@ import {
   writeCodexAppServerBinding,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
+import { clearSharedCodexAppServerClient, getSharedCodexAppServerClient } from "./shared-client.js";
 import { mirrorCodexAppServerTranscript } from "./transcript-mirror.js";
 
 type CodexAppServerClientFactory = (
@@ -185,16 +183,14 @@ export async function runCodexAppServerAttempt(
 
   let turn: CodexTurnStartResponse;
   try {
-    turn = await client.request<CodexTurnStartResponse>("turn/start", {
-      threadId: thread.threadId,
-      input: buildUserInput(params),
-      cwd: effectiveWorkspace,
-      approvalPolicy: appServer.approvalPolicy,
-      approvalsReviewer: appServer.approvalsReviewer,
-      model: params.modelId,
-      ...(appServer.serviceTier ? { serviceTier: appServer.serviceTier } : {}),
-      effort: resolveReasoningEffort(params.thinkLevel),
-    });
+    turn = await client.request<CodexTurnStartResponse>(
+      "turn/start",
+      buildTurnStartParams(params, {
+        threadId: thread.threadId,
+        cwd: effectiveWorkspace,
+        appServer,
+      }),
+    );
   } catch (error) {
     notificationCleanup();
     requestCleanup();
@@ -426,16 +422,13 @@ async function startOrResumeThread(params: {
       await clearCodexAppServerBinding(params.params.sessionFile);
     } else {
       try {
-        const response = await params.client.request<CodexThreadResumeResponse>("thread/resume", {
-          threadId: binding.threadId,
-          model: params.params.modelId,
-          modelProvider: normalizeModelProvider(params.params.provider),
-          approvalPolicy: params.appServer.approvalPolicy,
-          approvalsReviewer: params.appServer.approvalsReviewer,
-          sandbox: params.appServer.sandbox,
-          ...(params.appServer.serviceTier ? { serviceTier: params.appServer.serviceTier } : {}),
-          persistExtendedHistory: true,
-        });
+        const response = await params.client.request<CodexThreadResumeResponse>(
+          "thread/resume",
+          buildThreadResumeParams(params.params, {
+            threadId: binding.threadId,
+            appServer: params.appServer,
+          }),
+        );
         await writeCodexAppServerBinding(params.params.sessionFile, {
           threadId: response.thread.id,
           cwd: params.cwd,
@@ -494,6 +487,45 @@ async function startOrResumeThread(params: {
     dynamicToolsFingerprint,
     createdAt,
     updatedAt: createdAt,
+  };
+}
+
+export function buildThreadResumeParams(
+  params: EmbeddedRunAttemptParams,
+  options: {
+    threadId: string;
+    appServer: CodexAppServerRuntimeOptions;
+  },
+): CodexThreadResumeParams {
+  return {
+    threadId: options.threadId,
+    model: params.modelId,
+    modelProvider: normalizeModelProvider(params.provider),
+    approvalPolicy: options.appServer.approvalPolicy,
+    approvalsReviewer: options.appServer.approvalsReviewer,
+    sandbox: options.appServer.sandbox,
+    ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
+    persistExtendedHistory: true,
+  };
+}
+
+export function buildTurnStartParams(
+  params: EmbeddedRunAttemptParams,
+  options: {
+    threadId: string;
+    cwd: string;
+    appServer: CodexAppServerRuntimeOptions;
+  },
+): CodexTurnStartParams {
+  return {
+    threadId: options.threadId,
+    input: buildUserInput(params),
+    cwd: options.cwd,
+    approvalPolicy: options.appServer.approvalPolicy,
+    approvalsReviewer: options.appServer.approvalsReviewer,
+    model: params.modelId,
+    ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
+    effort: resolveReasoningEffort(params.thinkLevel),
   };
 }
 
