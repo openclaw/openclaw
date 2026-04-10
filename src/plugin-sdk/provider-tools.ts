@@ -288,8 +288,7 @@ function normalizeOpenAIStrictCompatSchemaRecursive(schema: unknown): unknown {
   if (
     normalized.type === "object" &&
     hasEmptyProperties &&
-    !("additionalProperties" in normalized) &&
-    normalized.additionalProperties !== false
+    !("additionalProperties" in normalized)
   ) {
     normalized.additionalProperties = false;
     changed = true;
