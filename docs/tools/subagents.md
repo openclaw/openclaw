@@ -75,6 +75,16 @@ Cost note: each sub-agent has its **own** context and token usage. For heavy or 
 tasks, set a cheaper model for sub-agents and keep your main agent on a higher-quality model.
 You can configure this via `agents.defaults.subagents.model` or per-agent overrides.
 
+If sub-agents should not inherit the main agent's full AGENTS instructions, set
+`agents.defaults.subagents.agentsFile` (and optionally
+`agents.defaults.subagents.agentsFilesByModel`) to swap in a narrower Markdown
+file such as `SUBAGENTS.md` or `SUBAGENTS.gpt-5.4.md`.
+
+Migration note: if you previously used the SubAgent Context Limiter plugin only
+to swap `SubAgentMD` into sub-agent runs, prefer these core config fields
+instead. The core path now handles AGENTS selection directly during bootstrap
+and compaction reinjection.
+
 ## Tool
 
 Use `sessions_spawn`:
@@ -82,6 +92,7 @@ Use `sessions_spawn`:
 - Starts a sub-agent run (`deliver: false`, global lane: `subagent`)
 - Then runs an announce step and posts the announce reply to the requester chat channel
 - Default model: inherits the caller unless you set `agents.defaults.subagents.model` (or per-agent `agents.list[].subagents.model`); an explicit `sessions_spawn.model` still wins.
+- Default AGENTS source: uses the main agent's `AGENTS.md` unless you set `agents.defaults.subagents.agentsFile` (or per-agent `agents.list[].subagents.agentsFile`); exact model matches in `*.agentsFilesByModel` win over the base file.
 - Default thinking: inherits the caller unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.list[].subagents.thinking`); an explicit `sessions_spawn.thinking` still wins.
 - Default run timeout: if `sessions_spawn.runTimeoutSeconds` is omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` when set; otherwise it falls back to `0` (no timeout).
 

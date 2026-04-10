@@ -953,6 +953,39 @@ Controls when workspace bootstrap files are injected into the system prompt. Def
 }
 ```
 
+### `agents.defaults.agentsFile`
+
+Overrides the default AGENTS source for main/default runs. The value must stay
+within the agent workspace.
+
+```json5
+{
+  agents: {
+    defaults: {
+      agentsFile: "AGENTS.main.md",
+    },
+  },
+}
+```
+
+### `agents.defaults.agentsFilesByModel`
+
+Adds exact model-specific AGENTS overrides for main/default runs. Keys must be
+canonical `provider/model` refs.
+
+```json5
+{
+  agents: {
+    defaults: {
+      agentsFilesByModel: {
+        "openai/gpt-5.4": "AGENTS.gpt-5.4.md",
+        "anthropic/claude-sonnet-4-6": "AGENTS.claude.md",
+      },
+    },
+  },
+}
+```
+
 ### `agents.defaults.bootstrapMaxChars`
 
 Max characters per workspace bootstrap file before truncation. Default: `20000`.
@@ -2326,6 +2359,10 @@ Notes:
       subagents: {
         allowAgents: ["research"],
         model: "minimax/MiniMax-M2.7",
+        agentsFile: "SUBAGENTS.md",
+        agentsFilesByModel: {
+          "openai/gpt-5.4": "SUBAGENTS.gpt-5.4.md",
+        },
         maxConcurrent: 8,
         runTimeoutSeconds: 900,
         archiveAfterMinutes: 60,
@@ -2336,6 +2373,10 @@ Notes:
 ```
 
 - `model`: default model for spawned sub-agents. If omitted, sub-agents inherit the caller's model.
+- `agentsFile`: default AGENTS source for spawned sub-agent runs. Use this to
+  keep sub-agents on a narrower instruction file than the main agent.
+- `agentsFilesByModel`: exact model-specific AGENTS overrides for spawned
+  sub-agent runs keyed by canonical `provider/model` refs.
 - `allowAgents`: default allowlist of target agent ids for `sessions_spawn` when the requester agent does not set its own `subagents.allowAgents` (`["*"]` = any; default: same agent only).
 - `runTimeoutSeconds`: default timeout (seconds) for `sessions_spawn` when the tool call omits `runTimeoutSeconds`. `0` means no timeout.
 - Per-subagent tool policy: `tools.subagents.tools.allow` / `tools.subagents.tools.deny`.

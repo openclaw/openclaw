@@ -122,8 +122,12 @@ occurs, OpenClaw can inject a warning block in Project Context; control this wit
 `agents.defaults.bootstrapPromptTruncationWarning` (`off`, `once`, `always`;
 default: `once`).
 
-Sub-agent sessions only inject `AGENTS.md` and `TOOLS.md` (other bootstrap files
-are filtered out to keep the sub-agent context small).
+Sub-agent sessions use a reduced bootstrap allowlist to keep context smaller.
+Today that minimal set includes `AGENTS.md`, `TOOLS.md`, `SOUL.md`,
+`IDENTITY.md`, and `USER.md`. You can further narrow the AGENTS source with
+`agents.defaults.subagents.agentsFile` or exact model-specific
+`agents.defaults.subagents.agentsFilesByModel` overrides such as
+`SUBAGENTS.md` or `SUBAGENTS.gpt-5.4.md`.
 
 Internal hooks can intercept this step via `agent:bootstrap` to mutate or replace
 the injected bootstrap files (for example swapping `SOUL.md` for an alternate persona).
