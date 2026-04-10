@@ -103,7 +103,6 @@ describe("refreshActiveTab", () => {
   for (const panel of ["files", "skills", "channels", "tools"] as const) {
     it(`routes agents ${panel} panel refresh through the expected loaders`, async () => {
       const host = createHost();
-      host.tab = "agents";
       host.agentsPanel = panel;
 
       await refreshActiveTab(host as never);
@@ -129,7 +128,6 @@ describe("refreshActiveTab", () => {
 
   it("routes agents cron panel refresh through cron loaders", async () => {
     const host = createHost();
-    host.tab = "agents";
     host.agentsPanel = "cron";
     host.cronRunsScope = "job";
     host.cronRunsJobId = "job-123";
