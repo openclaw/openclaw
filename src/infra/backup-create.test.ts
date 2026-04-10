@@ -122,4 +122,12 @@ describe("buildExtensionsNodeModulesFilter", () => {
   it("does not exclude node_modules outside extensions", () => {
     expect(filter("/home/user/.openclaw/node_modules/something")).toBe(true);
   });
+
+  it("handles Windows-style backslash paths", () => {
+    const winFilter = buildExtensionsNodeModulesFilter("C:\\Users\\user\\.openclaw");
+    expect(winFilter("C:\\Users\\user\\.openclaw\\extensions\\my-plugin\\package.json")).toBe(true);
+    expect(
+      winFilter("C:\\Users\\user\\.openclaw\\extensions\\my-plugin\\node_modules\\foo\\index.js"),
+    ).toBe(false);
+  });
 });

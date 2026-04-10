@@ -375,12 +375,14 @@ export async function createBackupArchive(
  * them up only inflates the archive without adding restore value.
  */
 export function buildExtensionsNodeModulesFilter(stateDir: string): (filePath: string) => boolean {
-  const extensionsPrefix = `${path.join(stateDir, "extensions")}/`;
+  const normalised = stateDir.replaceAll("\\", "/");
+  const extensionsPrefix = `${normalised}/extensions/`;
   return (filePath: string): boolean => {
-    if (!filePath.startsWith(extensionsPrefix)) {
+    const fp = filePath.replaceAll("\\", "/");
+    if (!fp.startsWith(extensionsPrefix)) {
       return true;
     }
-    const relative = filePath.slice(extensionsPrefix.length);
+    const relative = fp.slice(extensionsPrefix.length);
     const segments = relative.split("/");
     return !segments.includes("node_modules");
   };
