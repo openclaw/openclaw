@@ -101,6 +101,7 @@ Docs: https://docs.openclaw.ai
 - Reply/skills: keep resolved skill and memory secret config stable through embedded reply runs so raw SecretRefs in secondary skill settings no longer crash replies when the gateway already has the live env. (#64249) Thanks @mbelinky.
 - Dreaming/startup: keep plugin-registered startup hooks alive across workspace hook reloads and include dreaming startup owners in the gateway startup plugin scope, so managed Dreaming cron registration comes back reliably after gateway boot. (#62327) Thanks @mbelinky.
 - Plugins: treat duplicate `registerService` calls from the same plugin id as idempotent so snapshot and activation loads no longer emit spurious `service already registered` diagnostics. (#62033, #64128) Thanks @ly85206559.
+- Discord/TTS: route auto voice replies through the native voice-note path so Discord receives Opus voice messages instead of regular audio attachments. (#64096) Thanks @LiuHuaize.
 
 ## 2026.4.9
 
