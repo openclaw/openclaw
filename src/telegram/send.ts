@@ -26,7 +26,7 @@ import { buildTelegramThreadParams } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
 import { resolveTelegramFetch } from "./fetch.js";
-import { renderTelegramHtmlText } from "./format.js";
+import { markdownToTelegramChunks, renderTelegramHtmlText } from "./format.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { makeProxyFetch } from "./proxy.js";
 import { recordSentMessage } from "./sent-message-cache.js";
@@ -513,13 +513,14 @@ export async function sendMessageTelegram(
     rawText: string,
     params?: Record<string, unknown>,
     fallbackText?: string,
+    preRenderedHtml?: string,
   ) => {
     return await withTelegramThreadFallback(
       params,
       "message",
       opts.verbose,
       async (effectiveParams, label) => {
-        const htmlText = renderHtmlText(rawText);
+        const htmlText = preRenderedHtml ?? renderHtmlText(rawText);
         const baseParams = effectiveParams ? { ...effectiveParams } : {};
         if (linkPreviewOptions) {
           baseParams.link_preview_options = linkPreviewOptions;
@@ -736,22 +737,60 @@ export async function sendMessageTelegram(
   if (!text || !text.trim()) {
     throw new Error("Message must be non-empty for Telegram sends");
   }
-  const textParams =
-    hasThreadParams || replyMarkup
-      ? {
-          ...threadParams,
-          ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-        }
+
+  // Pre-split long messages to avoid Telegram's 4096-char sendMessage limit.
+  // Only split in markdown mode; in html mode the caller controls the content.
+  const TELEGRAM_TEXT_LIMIT = 4096;
+  const chunks =
+    textMode === "markdown"
+      ? markdownToTelegramChunks(text, TELEGRAM_TEXT_LIMIT, { tableMode })
       : undefined;
-  const res = await sendTelegramText(text, textParams, opts.plainText);
-  const messageId = resolveTelegramMessageIdOrThrow(res, "text send");
-  recordSentMessage(chatId, messageId);
+  const needsSplit = chunks != null && chunks.length > 1;
+
+  if (!needsSplit) {
+    // Short message or html mode — use original single-send path.
+    const textParams =
+      hasThreadParams || replyMarkup
+        ? {
+            ...threadParams,
+            ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+          }
+        : undefined;
+    const res = await sendTelegramText(text, textParams, opts.plainText);
+    const messageId = resolveTelegramMessageIdOrThrow(res, "text send");
+    recordSentMessage(chatId, messageId);
+    recordChannelActivity({
+      channel: "telegram",
+      accountId: account.accountId,
+      direction: "outbound",
+    });
+    return { messageId: String(messageId), chatId: String(res?.chat?.id ?? chatId) };
+  }
+
+  // Multi-chunk: send each chunk with pre-rendered HTML.
+  let lastRes: TelegramMessageLike | undefined;
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    const isFirst = i === 0;
+    const isLast = i === chunks.length - 1;
+    // Thread/reply params on first chunk; inline buttons on last chunk.
+    const chunkParams: Record<string, unknown> = {
+      ...(isFirst && hasThreadParams ? threadParams : {}),
+      ...(isLast && replyMarkup ? { reply_markup: replyMarkup } : {}),
+    };
+    const effectiveParams = Object.keys(chunkParams).length > 0 ? chunkParams : undefined;
+    lastRes = await sendTelegramText(chunk.text, effectiveParams, chunk.text, chunk.html);
+    const mid = resolveTelegramMessageIdOrThrow(lastRes, "text send");
+    recordSentMessage(chatId, mid);
+  }
+
+  const messageId = resolveTelegramMessageIdOrThrow(lastRes, "text send");
   recordChannelActivity({
     channel: "telegram",
     accountId: account.accountId,
     direction: "outbound",
   });
-  return { messageId: String(messageId), chatId: String(res?.chat?.id ?? chatId) };
+  return { messageId: String(messageId), chatId: String(lastRes?.chat?.id ?? chatId) };
 }
 
 export async function reactMessageTelegram(

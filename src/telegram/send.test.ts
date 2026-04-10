@@ -1149,6 +1149,59 @@ describe("sendMessageTelegram", () => {
     });
     expect(res.messageId).toBe("59");
   });
+
+  it("splits long text messages into multiple sends when exceeding 4096 chars", async () => {
+    const chatId = "123";
+    // Generate text long enough to exceed 4096 chars after HTML rendering.
+    const longText = "Hello world. ".repeat(400); // ~5200 chars
+
+    botApi.sendMessage
+      .mockResolvedValueOnce({ message_id: 80, chat: { id: chatId } })
+      .mockResolvedValueOnce({ message_id: 81, chat: { id: chatId } });
+
+    const res = await sendMessageTelegram(chatId, longText, { token: "tok" });
+
+    // Should have called sendMessage more than once
+    expect(botApi.sendMessage.mock.calls.length).toBeGreaterThan(1);
+    // All calls target the same chat
+    for (const call of botApi.sendMessage.mock.calls) {
+      expect(call[0]).toBe(chatId);
+    }
+    // Returns the last message ID
+    expect(res.messageId).toBe("81");
+  });
+
+  it("sends short text as a single message without splitting", async () => {
+    const chatId = "456";
+    const shortText = "Short message";
+
+    botApi.sendMessage.mockResolvedValueOnce({ message_id: 90, chat: { id: chatId } });
+
+    const res = await sendMessageTelegram(chatId, shortText, { token: "tok" });
+
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(1);
+    expect(res.messageId).toBe("90");
+  });
+
+  it("attaches inline buttons to the last chunk when splitting long text", async () => {
+    const chatId = "123";
+    const longText = "Hello world. ".repeat(400);
+    const buttons = [[{ text: "Click", callback_data: "cmd:click" }]];
+
+    botApi.sendMessage
+      .mockResolvedValueOnce({ message_id: 91, chat: { id: chatId } })
+      .mockResolvedValueOnce({ message_id: 92, chat: { id: chatId } });
+
+    await sendMessageTelegram(chatId, longText, { token: "tok", buttons });
+
+    const calls = botApi.sendMessage.mock.calls;
+    expect(calls.length).toBeGreaterThan(1);
+    // First chunk should NOT have reply_markup
+    expect(calls[0][2]).not.toHaveProperty("reply_markup");
+    // Last chunk should have reply_markup
+    const lastCall = calls[calls.length - 1];
+    expect(lastCall[2]).toHaveProperty("reply_markup");
+  });
 });
 
 describe("reactMessageTelegram", () => {
