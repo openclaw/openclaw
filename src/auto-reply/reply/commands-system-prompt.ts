@@ -112,7 +112,6 @@ export async function resolveCommandsSystemPromptBundle(
     },
   });
   const fullAccessState = resolveEmbeddedFullAccessState({
-    sandboxEnabled: sandboxRuntime.sandboxed,
     execElevated: {
       enabled: params.elevated.enabled,
       allowed: params.elevated.allowed,

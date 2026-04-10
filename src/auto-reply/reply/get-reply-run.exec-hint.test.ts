@@ -48,7 +48,7 @@ describe("buildExecOverridePromptHint", () => {
 
     expect(result).toContain("Current elevated level: full.");
     expect(result).toContain(
-      "Auto-approved /elevated full is unavailable here (runtime). Use ask/on instead and do not ask the user to switch to /elevated full.",
+      "Auto-approved /elevated full is unavailable here (runtime). Do not ask the user to switch to /elevated full.",
     );
   });
 });

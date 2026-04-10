@@ -119,7 +119,6 @@ describe("resolveEmbeddedFullAccessState", () => {
   it("treats direct host runs with allowed elevation as full-access available", () => {
     expect(
       resolveEmbeddedFullAccessState({
-        sandboxEnabled: false,
         execElevated: {
           enabled: true,
           allowed: true,
@@ -132,7 +131,6 @@ describe("resolveEmbeddedFullAccessState", () => {
   it("keeps explicit runtime blocks even when host exec is allowed", () => {
     expect(
       resolveEmbeddedFullAccessState({
-        sandboxEnabled: false,
         execElevated: {
           enabled: true,
           allowed: true,
