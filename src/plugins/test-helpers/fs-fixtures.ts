@@ -16,14 +16,14 @@ export function mkdirSafeDir(dir: string) {
 }
 
 export function makeTrackedTempDir(prefix: string, trackedDirs: string[]) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix + "-"));
   chmodSafeDir(dir);
   trackedDirs.push(dir);
   return dir;
 }
 
 export async function makeTrackedTempDirAsync(prefix: string, trackedDirs: string[]) {
-  const dir = await fsPromises.mkdtemp(path.join(os.tmpdir(), `${prefix}-`));
+  const dir = await fsPromises.mkdtemp(path.join(os.tmpdir(), prefix + "-"));
   chmodSafeDir(dir);
   trackedDirs.push(dir);
   return dir;
