@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
+import { closeQaHttpServer } from "./bus-server.js";
 
 type ResponsesInputItem = Record<string, unknown>;
 
@@ -805,9 +806,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
   return {
     baseUrl: `http://${host}:${address.port}`,
     async stop() {
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await closeQaHttpServer(server);
     },
   };
 }
