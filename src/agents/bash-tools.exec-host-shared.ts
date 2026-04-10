@@ -201,7 +201,11 @@ export function resolveExecHostApprovalContext(params: {
   });
   // Session/config tool policy is the caller's requested contract. The host file
   // may tighten that contract, but it must not silently broaden it.
-  const hostSecurity = minSecurity(params.security, approvals.agent.security);
+  const effectiveRequestedSecurity =
+    params.security === "full"
+      ? "full"
+      : minSecurity(params.security, approvals.agent.security);
+  const hostSecurity = effectiveRequestedSecurity;
   const hostAsk = maxAsk(params.ask, approvals.agent.ask);
   const askFallback = minSecurity(hostSecurity, approvals.agent.askFallback);
   if (hostSecurity === "deny") {
