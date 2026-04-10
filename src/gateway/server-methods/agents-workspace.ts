@@ -159,11 +159,8 @@ async function workspaceGet(
   const result = await readFileWithinRoot({
     rootDir: workspaceDir,
     relativePath,
+    maxBytes: WORKSPACE_FILE_SIZE_LIMIT,
   });
-
-  if (result.stat.size > WORKSPACE_FILE_SIZE_LIMIT) {
-    throw new Error("File exceeds size limit");
-  }
 
   const content =
     encoding === "base64" ? result.buffer.toString("base64") : result.buffer.toString("utf8");
