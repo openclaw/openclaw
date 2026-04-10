@@ -77,10 +77,24 @@ export class CliExecAdapter implements Adapter {
       args?: string[];
     };
 
-    const command = rtOpts.command;
-    const args = rtOpts.args ?? [];
+    const rawCommand = rtOpts.command;
+    const rawArgs = rtOpts.args ?? [];
     const cwd = spec.worktree_path ?? spec.cwd;
     const env = spec.env ? { ...process.env, ...spec.env } : process.env;
+
+    // If the command contains spaces and no explicit args were provided,
+    // the user likely passed a shell command string (e.g. "echo hello",
+    // "codex exec prompt"). Wrap in sh -c so the shell handles parsing.
+    // When args are explicitly provided, use them directly.
+    let command: string;
+    let args: string[];
+    if (rawArgs.length === 0 && rawCommand.includes(" ")) {
+      command = "sh";
+      args = ["-c", rawCommand];
+    } else {
+      command = rawCommand;
+      args = rawArgs;
+    }
 
     let child: ChildProcess;
     try {
