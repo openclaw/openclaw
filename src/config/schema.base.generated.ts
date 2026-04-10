@@ -10802,6 +10802,28 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     ],
                   },
                 },
+                tools: {
+                  type: "object",
+                  properties: {
+                    allow: {
+                      minItems: 1,
+                      type: "array",
+                      items: {
+                        type: "string",
+                        minLength: 1,
+                      },
+                    },
+                    deny: {
+                      minItems: 1,
+                      type: "array",
+                      items: {
+                        type: "string",
+                        minLength: 1,
+                      },
+                    },
+                  },
+                  additionalProperties: false,
+                },
               },
               additionalProperties: {},
             },
