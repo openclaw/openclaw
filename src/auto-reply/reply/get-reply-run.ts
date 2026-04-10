@@ -228,7 +228,7 @@ export async function runPreparedReply(
   const fullAccessState = resolveEmbeddedFullAccessState({
     sandboxEnabled: resolveSandboxRuntimeStatus({
       cfg,
-      sessionKey: ctx.SessionKey,
+      sessionKey,
     }).sandboxed,
     execElevated: {
       enabled: elevatedEnabled,

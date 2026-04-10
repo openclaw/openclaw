@@ -111,6 +111,14 @@ export async function resolveCommandsSystemPromptBundle(
       defaultModel: defaultModelLabel,
     },
   });
+  const fullAccessState = resolveEmbeddedFullAccessState({
+    sandboxEnabled: true,
+    execElevated: {
+      enabled: params.elevated.enabled,
+      allowed: params.elevated.allowed,
+      defaultLevel: (params.resolvedElevatedLevel ?? "off") as "on" | "off" | "ask" | "full",
+    },
+  });
   const sandboxInfo = sandboxRuntime.sandboxed
     ? {
         enabled: true,
@@ -119,18 +127,10 @@ export async function resolveCommandsSystemPromptBundle(
         elevated: {
           allowed: params.elevated.allowed,
           defaultLevel: (params.resolvedElevatedLevel ?? "off") as "on" | "off" | "ask" | "full",
-          fullAccessAvailable: resolveEmbeddedFullAccessState({
-            sandboxEnabled: true,
-            execElevated: {
-              enabled: params.elevated.enabled,
-              allowed: params.elevated.allowed,
-              defaultLevel: (params.resolvedElevatedLevel ?? "off") as
-                | "on"
-                | "off"
-                | "ask"
-                | "full",
-            },
-          }).available,
+          fullAccessAvailable: fullAccessState.available,
+          ...(fullAccessState.blockedReason
+            ? { fullAccessBlockedReason: fullAccessState.blockedReason }
+            : {}),
         },
       }
     : { enabled: false };
