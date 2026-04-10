@@ -1,6 +1,6 @@
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAccountId } from "../routing/session-key.js";
-import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import {
@@ -41,6 +41,8 @@ import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.js";
 
 export { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
+
+const log = createSubsystemLogger("agents/announce");
 
 const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
 const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
@@ -172,8 +174,8 @@ export async function runAnnounceDeliveryWithRetry<T>(params: {
       }
       const nextAttempt = retryIndex + 2;
       const maxAttempts = retryDelaysMs.length + 1;
-      defaultRuntime.log(
-        `[warn] Subagent announce ${params.operation} transient failure, retrying ${nextAttempt}/${maxAttempts} in ${Math.round(delayMs / 1000)}s: ${summarizeDeliveryError(err)}`,
+      log.warn(
+        `${params.operation} transient failure, retrying ${nextAttempt}/${maxAttempts} in ${Math.round(delayMs / 1000)}s: ${summarizeDeliveryError(err)}`,
       );
       retryIndex += 1;
       await waitForAnnounceRetryDelay(delayMs, params.signal);

@@ -1,6 +1,6 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
-import { defaultRuntime } from "../runtime.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
@@ -39,6 +39,8 @@ import {
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.js";
 import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
+
+const log = createSubsystemLogger("agents/announce");
 
 type SubagentAnnounceDeps = {
   callGateway: typeof callGateway;
@@ -592,6 +594,19 @@ export async function runSubagentAnnounceFlow(params: {
             expectsCompletionMessage,
           })
         : targetRequesterOrigin;
+    const infoTask = params.label?.trim() || undefined;
+    log.info(
+      `announce delivery: type=${announceType}` +
+        (infoTask ? ` task=${infoTask}` : "") +
+        ` status=${outcome.status}` +
+        ` child=${params.childSessionKey} requester=${targetRequesterSessionKey}` +
+        ` announceId=${announceId}`,
+    );
+    log.debug(
+      `announce body: announceId=${announceId} task=${taskLabel}` +
+        ` findingsChars=${findings.length} triggerMessageChars=${triggerMessage.length}`,
+    );
+
     const directIdempotencyKey = buildAnnounceIdempotencyKey(announceId);
     const delivery = await deliverSubagentAnnouncement({
       requesterSessionKey: targetRequesterSessionKey,
@@ -619,12 +634,12 @@ export async function runSubagentAnnounceFlow(params: {
     });
     didAnnounce = delivery.delivered;
     if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
-      defaultRuntime.error?.(
-        `Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,
+      log.error(
+        `completion direct announce failed: run=${params.childRunId} error=${delivery.error}`,
       );
     }
   } catch (err) {
-    defaultRuntime.error?.(`Subagent announce failed: ${String(err)}`);
+    log.error(`announce failed: ${String(err)}`);
     // Best-effort follow-ups; ignore failures to avoid breaking the caller response.
   } finally {
     // Patch label after all writes complete

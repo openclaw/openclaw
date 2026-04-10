@@ -7,6 +7,53 @@ import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/c
 import { deliverAgentCommandResult, normalizeAgentCommandReplyPayloads } from "./delivery.js";
 import type { AgentCommandOpts } from "./types.js";
 
+const { announceLogInfoSpy, announceLogDebugSpy } = vi.hoisted(() => ({
+  announceLogInfoSpy: vi.fn(),
+  announceLogDebugSpy: vi.fn(),
+}));
+
+vi.mock("../../logging/subsystem.js", () => ({
+  createSubsystemLogger: (subsystem: string) => {
+    if (subsystem === "agents/announce") {
+      return {
+        subsystem,
+        isEnabled: () => true,
+        trace: vi.fn(),
+        debug: announceLogDebugSpy,
+        info: announceLogInfoSpy,
+        warn: vi.fn(),
+        error: vi.fn(),
+        fatal: vi.fn(),
+        raw: vi.fn(),
+        child: () => ({
+          subsystem: `${subsystem}/child`,
+          isEnabled: () => true,
+          trace: vi.fn(),
+          debug: vi.fn(),
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          fatal: vi.fn(),
+          raw: vi.fn(),
+          child: vi.fn(),
+        }),
+      };
+    }
+    return {
+      subsystem,
+      isEnabled: () => false,
+      trace: vi.fn(),
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      fatal: vi.fn(),
+      raw: vi.fn(),
+      child: vi.fn(),
+    };
+  },
+}));
+
 type NormalizeParams = Parameters<typeof normalizeAgentCommandReplyPayloads>[0];
 type RunResult = NormalizeParams["result"];
 
@@ -135,6 +182,47 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     expect(runtime.log).toHaveBeenCalledTimes(1);
     expect(runtime.log).toHaveBeenCalledWith("Options: on, off.");
     expect(delivered.payloads).toMatchObject([{ text: "Options: on, off." }]);
+  });
+
+  it("routes announce run output through subsystem logger instead of runtime.log", async () => {
+    announceLogInfoSpy.mockClear();
+    announceLogDebugSpy.mockClear();
+    const runtime = {
+      log: vi.fn(),
+    };
+
+    const longBody =
+      "Done.\n\nWhat changed\n- Found the false-success gap\n- Added a delivery contract\n" +
+      "Commit\n- edaf79fd3348f52e731931e8958f36821f01691c";
+
+    await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: runtime as never,
+      opts: {
+        message: "announce trigger",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:subagent:worker",
+          sourceChannel: "internal",
+          sourceTool: "subagent_announce",
+        },
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: longBody }],
+      result: createResult(),
+    });
+
+    // runtime.log must NOT be called at all — announce output routes through announceLog
+    expect(runtime.log).not.toHaveBeenCalled();
+    // subsystem logger info should get metadata-only line
+    expect(announceLogInfoSpy).toHaveBeenCalledTimes(1);
+    expect(announceLogInfoSpy).toHaveBeenCalledWith(expect.stringContaining("delivery:"));
+    expect(announceLogInfoSpy).toHaveBeenCalledWith(expect.stringContaining("chars="));
+    // subsystem logger debug should get full body
+    expect(announceLogDebugSpy).toHaveBeenCalledTimes(1);
+    expect(announceLogDebugSpy).toHaveBeenCalledWith(longBody);
   });
 
   it("keeps LINE directive-only replies intact for local preview when delivery is disabled", async () => {
