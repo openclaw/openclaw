@@ -297,7 +297,6 @@ Then run:
 - `providers.mistral.baseUrl`: override Mistral TTS endpoint (default `https://api.mistral.ai/v1`, env: `MISTRAL_TTS_BASE_URL`; also inherits `models.providers.mistral.baseUrl` when set).
 - `providers.mistral.model`: Voxtral TTS model (default `voxtral-mini-tts-2603`).
 - `providers.mistral.voice`: Voxtral voice name (e.g. `gb_oliver_excited`). See [Voxtral TTS docs](https://docs.mistral.ai/capabilities/audio/text_to_speech) for available voices.
-- `providers.mistral.speed`: playback speed multiplier (e.g. `1.0` = normal).
 - `providers.microsoft.enabled`: allow Microsoft speech usage (default `true`; no API key).
 - `providers.microsoft.voice`: Microsoft neural voice name (e.g. `en-US-MichelleNeural`).
 - `providers.microsoft.lang`: language code (e.g. `en-US`).
