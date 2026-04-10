@@ -191,20 +191,6 @@ describe("openrouter video generation provider", () => {
     ).rejects.toThrow("OpenRouter video generation failed");
   });
 
-  it("throws when API key is missing", async () => {
-    resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: undefined });
-
-    const provider = buildOpenrouterVideoGenerationProvider();
-    await expect(
-      provider.generateVideo({
-        provider: "openrouter",
-        model: "google/veo-3.1",
-        prompt: "test",
-        cfg: {},
-      }),
-    ).rejects.toThrow("OpenRouter API key missing");
-  });
-
   it("builds input_references for image-to-video", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: {
@@ -257,5 +243,19 @@ describe("openrouter video generation provider", () => {
         }),
       }),
     );
+  });
+
+  it("throws when API key is missing", async () => {
+    resolveApiKeyForProviderMock.mockResolvedValueOnce({ apiKey: "" });
+
+    const provider = buildOpenrouterVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "openrouter",
+        model: "google/veo-3.1",
+        prompt: "test",
+        cfg: {},
+      }),
+    ).rejects.toThrow("OpenRouter API key missing");
   });
 });

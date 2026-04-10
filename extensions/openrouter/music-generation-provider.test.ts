@@ -169,20 +169,6 @@ describe("openrouter music generation provider", () => {
     expect(audio.format).toBe("wav");
   });
 
-  it("throws when API key is missing", async () => {
-    resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: undefined });
-
-    const provider = buildOpenrouterMusicGenerationProvider();
-    await expect(
-      provider.generateMusic({
-        provider: "openrouter",
-        model: "openai/gpt-4o-audio-preview",
-        prompt: "test",
-        cfg: {},
-      }),
-    ).rejects.toThrow("OpenRouter API key missing");
-  });
-
   it("throws when stream contains no audio data", async () => {
     fetchWithTimeoutMock.mockResolvedValue(
       new Response(makeSseStream([]), {
@@ -200,5 +186,19 @@ describe("openrouter music generation provider", () => {
         cfg: {},
       }),
     ).rejects.toThrow("OpenRouter music generation response missing audio data");
+  });
+
+  it("throws when API key is missing", async () => {
+    resolveApiKeyForProviderMock.mockResolvedValueOnce({ apiKey: "" });
+
+    const provider = buildOpenrouterMusicGenerationProvider();
+    await expect(
+      provider.generateMusic({
+        provider: "openrouter",
+        model: "openai/gpt-4o-audio-preview",
+        prompt: "test",
+        cfg: {},
+      }),
+    ).rejects.toThrow("OpenRouter API key missing");
   });
 });

@@ -106,12 +106,12 @@ async function collectStreamedAudio(
       if (!audioDelta) {
         continue;
       }
-      const data = normalizeOptionalString(audioDelta.data);
-      if (data) {
+      const data = audioDelta.data;
+      if (typeof data === "string" && data.length > 0) {
         audioChunks.push(data);
       }
-      const transcript = normalizeOptionalString(audioDelta.transcript);
-      if (transcript) {
+      const transcript = audioDelta.transcript;
+      if (typeof transcript === "string" && transcript.length > 0) {
         transcriptParts.push(transcript);
       }
     }
@@ -161,7 +161,7 @@ export function buildOpenrouterMusicGenerationProvider(): MusicGenerationProvide
           Authorization: `Bearer ${auth.apiKey}`,
         },
         provider: "openrouter",
-        capability: "music",
+        capability: "audio",
         transport: "http",
       });
 

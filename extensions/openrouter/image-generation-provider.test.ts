@@ -145,20 +145,6 @@ describe("openrouter image generation provider", () => {
     );
   });
 
-  it("throws when API key is missing", async () => {
-    resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: undefined });
-
-    const provider = buildOpenrouterImageGenerationProvider();
-    await expect(
-      provider.generateImage({
-        provider: "openrouter",
-        model: "google/gemini-2.5-flash-image",
-        prompt: "a tree",
-        cfg: {},
-      }),
-    ).rejects.toThrow("OpenRouter API key missing");
-  });
-
   it("throws when response contains no images", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: {
@@ -178,5 +164,19 @@ describe("openrouter image generation provider", () => {
         cfg: {},
       }),
     ).rejects.toThrow("OpenRouter image generation response missing image data");
+  });
+
+  it("throws when API key is missing", async () => {
+    resolveApiKeyForProviderMock.mockResolvedValueOnce({ apiKey: "" });
+
+    const provider = buildOpenrouterImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "openrouter",
+        model: "google/gemini-2.5-flash-image",
+        prompt: "a tree",
+        cfg: {},
+      }),
+    ).rejects.toThrow("OpenRouter API key missing");
   });
 });
