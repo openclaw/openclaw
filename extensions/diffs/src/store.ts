@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
 import type { PluginLogger } from "../api.js";
 import type { DiffArtifactContext, DiffArtifactMeta, DiffOutputFormat } from "./types.js";
 
@@ -88,7 +89,7 @@ export class DiffArtifactStore {
     if (!meta) {
       return null;
     }
-    if (meta.token !== token) {
+    if (!safeEqualSecret(meta.token, token)) {
       return null;
     }
     if (isExpired(meta)) {
