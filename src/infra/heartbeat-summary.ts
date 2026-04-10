@@ -35,8 +35,16 @@ export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string
   const hasExplicit = hasExplicitHeartbeatAgents(cfg);
   if (hasExplicit) {
     return list.some(
-      (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry?.id) === resolvedAgentId,
+      (entry) =>
+        Boolean(entry?.heartbeat) &&
+        Object.keys(entry?.heartbeat ?? {}).length > 0 &&
+        normalizeAgentId(entry?.id) === resolvedAgentId,
     );
+  }
+  // If defaults heartbeat is an empty object, treat as disabled
+  const defaultsHeartbeat = cfg.agents?.defaults?.heartbeat;
+  if (defaultsHeartbeat != null && Object.keys(defaultsHeartbeat).length === 0) {
+    return false;
   }
   return resolvedAgentId === resolveDefaultAgentId(cfg);
 }
@@ -46,11 +54,16 @@ export function resolveHeartbeatIntervalMs(
   overrideEvery?: string,
   heartbeat?: HeartbeatConfig,
 ) {
+  // If heartbeat config was explicitly set to an empty object, treat it as
+  // disabled — do not fall through to DEFAULT_HEARTBEAT_EVERY.
+  const defaultsHeartbeat = cfg.agents?.defaults?.heartbeat;
+  const defaultsIsEmpty = defaultsHeartbeat != null && Object.keys(defaultsHeartbeat).length === 0;
+
   const raw =
     overrideEvery ??
     heartbeat?.every ??
-    cfg.agents?.defaults?.heartbeat?.every ??
-    DEFAULT_HEARTBEAT_EVERY;
+    (defaultsIsEmpty ? undefined : defaultsHeartbeat?.every) ??
+    (defaultsIsEmpty ? null : DEFAULT_HEARTBEAT_EVERY);
   if (!raw) {
     return null;
   }

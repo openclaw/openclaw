@@ -174,7 +174,7 @@ function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
   const list = cfg.agents?.list ?? [];
   if (hasExplicitHeartbeatAgents(cfg)) {
     return list
-      .filter((entry) => entry?.heartbeat)
+      .filter((entry) => entry?.heartbeat && Object.keys(entry.heartbeat).length > 0)
       .map((entry) => {
         const id = normalizeAgentId(entry.id);
         return { agentId: id, heartbeat: resolveHeartbeatConfig(cfg, id) };
