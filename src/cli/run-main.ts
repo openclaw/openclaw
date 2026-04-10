@@ -63,6 +63,15 @@ export function shouldUseRootHelpFastPath(argv: string[]): boolean {
   return resolveCliArgvInvocation(argv).isRootHelpInvocation;
 }
 
+/**
+ * Maps well-known runtime command names to the plugin that provides them.
+ * Used to give actionable guidance when users try to run a runtime slash
+ * command (e.g. `/dreaming`) as a CLI command (`openclaw dreaming`).
+ */
+const RUNTIME_COMMAND_TO_PLUGIN_ID: Record<string, string> = {
+  dreaming: "memory-core",
+};
+
 export function resolveMissingPluginCommandMessage(
   pluginId: string,
   config?: OpenClawConfig,
@@ -71,6 +80,17 @@ export function resolveMissingPluginCommandMessage(
   if (!normalizedPluginId) {
     return null;
   }
+
+  // Check if this is a runtime slash command rather than a CLI command.
+  const parentPluginId = RUNTIME_COMMAND_TO_PLUGIN_ID[normalizedPluginId];
+  if (parentPluginId) {
+    return (
+      `"${normalizedPluginId}" is a runtime slash command (/${normalizedPluginId}), not a CLI command. ` +
+      `It is provided by the "${parentPluginId}" plugin. ` +
+      `Use \`openclaw memory\` for CLI memory operations, or \`/${normalizedPluginId}\` in a chat session.`
+    );
+  }
+
   const allow =
     Array.isArray(config?.plugins?.allow) && config.plugins.allow.length > 0
       ? config.plugins.allow

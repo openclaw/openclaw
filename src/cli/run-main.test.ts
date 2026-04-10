@@ -105,4 +105,22 @@ describe("resolveMissingPluginCommandMessage", () => {
       }),
     ).toBeNull();
   });
+
+  it("explains that dreaming is a runtime slash command, not a CLI command", () => {
+    const message = resolveMissingPluginCommandMessage("dreaming", {});
+    expect(message).toContain("runtime slash command");
+    expect(message).toContain("/dreaming");
+    expect(message).toContain("memory-core");
+    expect(message).toContain("openclaw memory");
+  });
+
+  it("returns the runtime command message even when plugins.allow is set", () => {
+    const message = resolveMissingPluginCommandMessage("dreaming", {
+      plugins: {
+        allow: ["memory-core"],
+      },
+    });
+    expect(message).toContain("runtime slash command");
+    expect(message).not.toContain("plugins.allow");
+  });
 });
