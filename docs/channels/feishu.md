@@ -109,6 +109,8 @@ On **Permissions**, click **Batch import** and paste:
       "application:bot.menu:write",
       "cardkit:card:read",
       "cardkit:card:write",
+      "docx:document",
+      "docx:document.block:convert",
       "contact:user.employee_id:readonly",
       "corehr:file:download",
       "event:ip_list",
