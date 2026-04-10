@@ -369,14 +369,19 @@ export function setupCliRunnerTestRegistry() {
   hoisted.resolveBootstrapContextForRunMock.mockReset().mockResolvedValue({
     bootstrapFiles: [],
     contextFiles: [],
+    bootstrapSignature: "agents:AGENTS.md",
   });
 }
 
 export function stubBootstrapContext(params: {
   bootstrapFiles: WorkspaceBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
+  bootstrapSignature?: string;
 }) {
-  hoisted.resolveBootstrapContextForRunMock.mockResolvedValueOnce(params);
+  hoisted.resolveBootstrapContextForRunMock.mockResolvedValueOnce({
+    bootstrapSignature: "agents:AGENTS.md",
+    ...params,
+  });
 }
 
 export function restoreCliRunnerPrepareTestDeps() {
