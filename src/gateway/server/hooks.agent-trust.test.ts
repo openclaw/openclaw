@@ -95,6 +95,7 @@ describe("dispatchAgentHook trust handling", () => {
         {
           sessionKey: "main-session",
           trusted: false,
+          wakeRequested: true,
         },
       );
     });
@@ -112,6 +113,7 @@ describe("dispatchAgentHook trust handling", () => {
         {
           sessionKey: "main-session",
           trusted: false,
+          wakeRequested: true,
         },
       );
     });
