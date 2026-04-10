@@ -15,6 +15,7 @@ export type MeContextState = {
   currentUser: ControlUiMeContextResponse["user"] | null;
   visibleScopes: ScopeRef[];
   launchableSessionTypes: ControlUiMeContextResponse["launchableSessionTypes"];
+  currentSessionType: ControlUiMeContextResponse["currentSessionType"] | null;
   shareTargets: ScopeRef[];
   selectedScope: ScopeRef | null;
   selectedPrivacyMode: PrivacyMode | null;
@@ -52,6 +53,7 @@ export async function loadMeContext(state: MeContextState): Promise<void> {
     state.launchableSessionTypes = Array.isArray(context.launchableSessionTypes)
       ? context.launchableSessionTypes
       : [];
+    state.currentSessionType = context.currentSessionType ?? null;
     state.shareTargets = Array.isArray(context.shareTargets) ? context.shareTargets : [];
     state.selectedScope = context.selectedScope ?? state.visibleScopes[0] ?? null;
     state.selectedPrivacyMode =
@@ -67,4 +69,26 @@ export function selectMeContextScope(state: MeContextState, scopeId: string): vo
   const nextScope = state.visibleScopes.find((scope) => scope.id === scopeId) ?? null;
   state.selectedScope = nextScope;
   state.selectedPrivacyMode = nextScope?.privacyMode ?? null;
+  state.currentSessionType = nextScope
+    ? nextScope.type === "global"
+      ? "global_chat"
+      : nextScope.type === "group"
+        ? "group_chat"
+        : "private_chat"
+    : null;
+
+  const sessionState = state as MeContextState & {
+    sessionKey?: string;
+    currentUser?: { id: string } | null;
+  };
+  if (!nextScope || !sessionState.currentUser) {
+    return;
+  }
+
+  const agentPrefix =
+    typeof sessionState.sessionKey === "string" && sessionState.sessionKey.startsWith("agent:")
+      ? sessionState.sessionKey.split(":").slice(0, 3).join(":")
+      : "agent:main:main";
+
+  sessionState.sessionKey = `${agentPrefix}:${nextScope.id}`;
 }

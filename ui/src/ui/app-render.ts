@@ -1562,6 +1562,7 @@ export function renderApp(state: AppViewState) {
                   lastActiveSessionKey: next,
                 });
                 void state.loadAssistantIdentity();
+                void state.loadMeContext();
                 void loadChatHistory(state);
                 void refreshChatAvatar(state);
               },
@@ -1638,6 +1639,7 @@ export function renderApp(state: AppViewState) {
                 });
                 void loadChatHistory(state);
                 void state.loadAssistantIdentity();
+                void state.loadMeContext();
               },
               onNavigateToAgent: () => {
                 state.agentsSelectedId = resolvedAgentId;
