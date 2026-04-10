@@ -6,7 +6,8 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -76,6 +77,60 @@ function findOnPath(command: string, env: NodeJS.ProcessEnv): string | undefined
     }
   }
   return undefined;
+}
+
+// Windows CreateProcess has a 32767-character command line limit.
+// OpenClaw passes the full system prompt (bootstrap files, tool defs,
+// conversation history) as an argv element to `--system-prompt`, which
+// routinely exceeds that limit and fails with `spawn ENAMETOOLONG`.
+//
+// Claude Code accepts `--system-prompt-file <path>` as an alternative
+// that reads the prompt from a file, keeping argv small. On Windows,
+// if we spot a `--system-prompt <value>` pair in the args where the
+// value is large, we write the value to a temp file and swap in the
+// file variant. Returns a cleanup callback that deletes the temp file
+// once the spawned process exits.
+const SYSTEM_PROMPT_FILE_THRESHOLD = 4000;
+
+function materializeLongSystemPromptToFile(args: readonly string[]): {
+  args: string[];
+  cleanup: () => void;
+} {
+  const noop = () => {};
+  if (process.platform !== "win32") {
+    return { args: [...args], cleanup: noop };
+  }
+  const idx = args.findIndex((a) => a === "--system-prompt");
+  if (idx === -1 || idx + 1 >= args.length) {
+    return { args: [...args], cleanup: noop };
+  }
+  const value = args[idx + 1];
+  if (value.length < SYSTEM_PROMPT_FILE_THRESHOLD) {
+    return { args: [...args], cleanup: noop };
+  }
+  const tempPath = path.join(
+    os.tmpdir(),
+    `openclaw-system-prompt-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.txt`,
+  );
+  try {
+    writeFileSync(tempPath, value, "utf8");
+  } catch (err) {
+    log.warn(
+      `Failed to write system prompt to temp file ${tempPath}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return { args: [...args], cleanup: noop };
+  }
+  const rewritten = [...args];
+  rewritten[idx] = "--system-prompt-file";
+  rewritten[idx + 1] = tempPath;
+  const cleanup = () => {
+    try {
+      unlinkSync(tempPath);
+    } catch {
+      // ignore — temp file cleanup is best-effort
+    }
+  };
+  return { args: rewritten, cleanup };
 }
 
 // Parse an npm-generated .cmd shim to find the JS entry point and the
@@ -223,7 +278,8 @@ export async function runStreamingCli(options: StreamingCliOptions): Promise<{
     let settled = false;
 
     const resolved = resolveWindowsCommand(command, args, env ?? process.env);
-    const child = spawn(resolved.command, resolved.args, {
+    const prepped = materializeLongSystemPromptToFile(resolved.args);
+    const child = spawn(resolved.command, prepped.args, {
       cwd,
       env: env ?? process.env,
       stdio: ["pipe", "pipe", "pipe"],
@@ -280,6 +336,7 @@ export async function runStreamingCli(options: StreamingCliOptions): Promise<{
       }
       settled = true;
       clearTimeout(timer);
+      prepped.cleanup();
       reject(err);
     });
 
@@ -289,6 +346,7 @@ export async function runStreamingCli(options: StreamingCliOptions): Promise<{
       }
       settled = true;
       clearTimeout(timer);
+      prepped.cleanup();
 
       if (code !== 0 && !resultText) {
         onEvent?.({ type: "error", message: stderr || `CLI exited with code ${code}` });
