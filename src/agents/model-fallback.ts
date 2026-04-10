@@ -779,16 +779,27 @@ export async function runWithModelFallback<T>(params: {
       run: params.run,
       ...candidate,
       attempts,
-      options: {
-        ...runOptions,
-        // Expose prior failure reasons to the run callback so it can decide
-        // whether to persist a session-level model override.  Auth failures
-        // are config issues (not model health issues) and should not cause a
-        // sticky override that outlives the fix.
-        ...(attempts.length > 0
-          ? { previousFailureReasons: attempts.flatMap((a) => (a.reason ? [a.reason] : [])) }
-          : undefined),
-      },
+      // Expose prior failure reasons to the run callback so it can decide
+      // whether to persist a session-level model override.  Auth failures
+      // are config issues (not model health issues) and should not cause a
+      // sticky override that outlives the fix.
+      // Only pass options when there is something meaningful to convey, so
+      // that existing tests/callers that don't expect a third argument are
+      // not broken.
+      ...(runOptions !== undefined || attempts.length > 0
+        ? {
+            options: {
+              ...runOptions,
+              ...(attempts.length > 0
+                ? {
+                    previousFailureReasons: attempts.flatMap((a) =>
+                      a.reason ? [a.reason] : [],
+                    ),
+                  }
+                : undefined),
+            },
+          }
+        : undefined),
     });
     if ("success" in attemptRun) {
       if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {
