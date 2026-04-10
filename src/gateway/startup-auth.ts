@@ -137,6 +137,21 @@ function hasGatewayPasswordOverrideCandidate(params: {
   );
 }
 
+const KNOWN_WEAK_GATEWAY_TOKENS = new Set(["change-me-to-a-long-random-token"]);
+
+function assertGatewayTokenIsNotKnownWeakLiteral(token: string | undefined): void {
+  const normalized = normalizeOptionalString(token);
+  if (!normalized) {
+    return;
+  }
+  if (!KNOWN_WEAK_GATEWAY_TOKENS.has(normalized)) {
+    return;
+  }
+  throw new Error(
+    "Invalid gateway auth token: replace the example placeholder token before startup. Generate a real secret, for example with `openssl rand -hex 32`.",
+  );
+}
+
 export async function ensureGatewayStartupAuth(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -195,6 +210,7 @@ export async function ensureGatewayStartupAuth(params: {
     authOverride,
     tailscaleOverride: params.tailscaleOverride,
   });
+  assertGatewayTokenIsNotKnownWeakLiteral(resolved.mode === "token" ? resolved.token : undefined);
   if (resolved.mode !== "token" || (resolved.token?.trim().length ?? 0) > 0) {
     assertHooksTokenSeparateFromGatewayAuth({ cfg: params.cfg, auth: resolved });
     return { cfg: params.cfg, auth: resolved, persistedGeneratedToken: false };
@@ -229,6 +245,7 @@ export async function ensureGatewayStartupAuth(params: {
     authOverride: params.authOverride,
     tailscaleOverride: params.tailscaleOverride,
   });
+  assertGatewayTokenIsNotKnownWeakLiteral(nextAuth.mode === "token" ? nextAuth.token : undefined);
   assertHooksTokenSeparateFromGatewayAuth({ cfg: nextCfg, auth: nextAuth });
   return {
     cfg: nextCfg,

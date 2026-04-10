@@ -132,6 +132,35 @@ describe("ensureGatewayStartupAuth", () => {
     });
   });
 
+  it("rejects the known-weak literal token from config", async () => {
+    await expect(
+      ensureGatewayStartupAuth({
+        cfg: {
+          gateway: {
+            auth: {
+              mode: "token",
+              token: "change-me-to-a-long-random-token",
+            },
+          },
+        },
+        env: {} as NodeJS.ProcessEnv,
+        persist: true,
+      }),
+    ).rejects.toThrow(/replace the example placeholder token/i);
+  });
+
+  it("rejects the known-weak literal token from OPENCLAW_GATEWAY_TOKEN", async () => {
+    await expect(
+      ensureGatewayStartupAuth({
+        cfg: {},
+        env: {
+          OPENCLAW_GATEWAY_TOKEN: "change-me-to-a-long-random-token",
+        } as NodeJS.ProcessEnv,
+        persist: true,
+      }),
+    ).rejects.toThrow(/replace the example placeholder token/i);
+  });
+
   it("does not generate in password mode", async () => {
     await expectNoTokenGeneration(
       {
