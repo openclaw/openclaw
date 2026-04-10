@@ -79,10 +79,10 @@ Live transport lanes share one standard contract so new transports do not drift:
 `qa-channel` remains the broad synthetic QA suite and is not part of the live
 transport coverage matrix.
 
-| Lane | Canary | Mention gating | Allowlist block | Top-level reply | Restart resume | Thread follow-up | Thread isolation | Reaction observation | Help command |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Matrix | x | x | x | x | x | x | x | x |  |
-| Telegram | x |  |  |  |  |  |  |  | x |
+| Lane     | Canary | Mention gating | Allowlist block | Top-level reply | Restart resume | Thread follow-up | Thread isolation | Reaction observation | Help command |
+| -------- | ------ | -------------- | --------------- | --------------- | -------------- | ---------------- | ---------------- | -------------------- | ------------ |
+| Matrix   | x      | x              | x               | x               | x              | x                | x                | x                    |              |
+| Telegram | x      |                |                 |                 |                |                  |                  |                      | x            |
 
 ## Test suites (what runs where)
 
