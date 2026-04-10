@@ -106,7 +106,12 @@ export function resolvePluginActivationState(params: {
     };
   }
   const explicitlyAllowed = params.config.allow.includes(params.id);
-  if (params.origin === "workspace" && !explicitlyAllowed && entry?.enabled !== true) {
+  if (
+    params.origin === "workspace" &&
+    !explicitlyAllowed &&
+    entry?.enabled !== true &&
+    explicitSelection.reason !== "selected context engine slot"
+  ) {
     return {
       enabled: false,
       activated: false,

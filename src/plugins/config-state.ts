@@ -23,6 +23,7 @@ export type PluginExplicitSelectionCause =
   | "enabled-in-config"
   | "bundled-channel-enabled-in-config"
   | "selected-memory-slot"
+  | "selected-context-engine-slot"
   | "selected-in-allowlist";
 
 export type PluginActivationCause =
@@ -104,6 +105,7 @@ const PLUGIN_ACTIVATION_REASON_BY_CAUSE: Record<PluginActivationCause, string> =
   "enabled-in-config": "enabled in config",
   "bundled-channel-enabled-in-config": "channel enabled in config",
   "selected-memory-slot": "selected memory slot",
+  "selected-context-engine-slot": "selected context engine slot",
   "selected-in-allowlist": "selected in allowlist",
   "plugins-disabled": "plugins disabled",
   "blocked-by-denylist": "blocked by denylist",
@@ -291,7 +293,12 @@ export function resolvePluginActivationState(params: {
     });
   }
   const explicitlyAllowed = params.config.allow.includes(params.id);
-  if (params.origin === "workspace" && !explicitlyAllowed && entry?.enabled !== true) {
+  if (
+    params.origin === "workspace" &&
+    !explicitlyAllowed &&
+    entry?.enabled !== true &&
+    explicitSelection.cause !== "selected-context-engine-slot"
+  ) {
     return toPluginActivationState({
       enabled: false,
       activated: false,

@@ -442,6 +442,32 @@ describe("resolveEffectivePluginActivationState", () => {
       reason: "enabled by effective config",
     });
   });
+
+  it("treats an explicitly selected workspace context engine as explicit activation", () => {
+    const rawConfig = {
+      plugins: {
+        slots: {
+          contextEngine: "lossless-claw",
+        },
+      },
+    };
+
+    expect(
+      resolveEffectivePluginActivationState({
+        id: "lossless-claw",
+        origin: "workspace",
+        config: normalizePluginsConfig(rawConfig.plugins),
+        rootConfig: rawConfig,
+        activationSource: createPluginActivationSource({ config: rawConfig }),
+      }),
+    ).toEqual({
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: true,
+      source: "explicit",
+      reason: "selected context engine slot",
+    });
+  });
 });
 
 describe("resolveEnableState", () => {
@@ -532,6 +558,20 @@ describe("resolveEnableState", () => {
       expected: {
         enabled: false,
         reason: "workspace plugin (disabled by default)",
+      },
+    });
+  });
+
+  it("keeps an explicitly selected workspace context engine enabled when omitted from plugins.allow", () => {
+    expectNormalizedEnableState({
+      id: "lossless-claw",
+      origin: "workspace",
+      config: {
+        allow: ["telegram"],
+        slots: { contextEngine: "lossless-claw" },
+      },
+      expected: {
+        enabled: true,
       },
     });
   });
