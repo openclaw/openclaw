@@ -111,7 +111,7 @@ export default definePluginEntry({
           );
         }
 
-        if (!(parsed.target in config.models)) {
+        if (!Object.hasOwn(config.models, parsed.target)) {
           const available = Object.keys(config.models).join(", ");
           return textResult(`ERROR: Unknown model "${parsed.target}". Available: ${available}`);
         }
@@ -199,7 +199,7 @@ export default definePluginEntry({
 
         if (parsed.action === "capabilities") {
           const targetId = parsed.model ?? state.activeModelId;
-          if (!targetId || !(targetId in config.models)) {
+          if (!targetId || !Object.hasOwn(config.models, targetId)) {
             return textResult(
               `ERROR: Model "${targetId ?? "none"}" not found. Available: ${Object.keys(config.models).join(", ")}`,
             );
@@ -288,7 +288,7 @@ export default definePluginEntry({
         }
 
         const targetId = args.split(/\s+/)[0] ?? "";
-        if (!(targetId in config.models)) {
+        if (!Object.hasOwn(config.models, targetId)) {
           return {
             text: `Unknown model "${targetId}". Available: ${Object.keys(config.models).join(", ")}`,
           };
@@ -351,7 +351,11 @@ export default definePluginEntry({
     api.registerService({
       id: "model-switch-startup",
       async start(ctx) {
-        // Detect which model is currently active
+        // Recover interrupted switches FIRST — a stale marker means the
+        // active model might not be what detectActiveModel returns.
+        await recoverFromMarker(state, deps);
+
+        // Then detect which model is currently active
         const activeId = await detectActiveModel(config.models);
         if (activeId) {
           state.activeModelId = activeId;
@@ -362,9 +366,6 @@ export default definePluginEntry({
             `[model-switch] No active model detected. Defaulting to: ${state.activeModelId ?? "none"}`,
           );
         }
-
-        // Check for interrupted switches
-        await recoverFromMarker(state, deps);
       },
     });
   },

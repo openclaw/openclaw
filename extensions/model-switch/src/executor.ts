@@ -116,6 +116,8 @@ export async function executeSwitch(
       });
     } catch (err) {
       logger.error(`[model-switch] Start command failed: ${String(err)}`);
+      // Mark active model as unknown — source was stopped but target didn't start
+      state.activeModelId = null;
       return false;
     }
 
