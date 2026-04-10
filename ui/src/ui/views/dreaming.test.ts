@@ -115,6 +115,15 @@ describe("dreaming view", () => {
     expect(container.querySelector(".dreams__phase--off")?.textContent).toContain("off");
   });
 
+  it("shows unknown phase status when phase data is unavailable", () => {
+    const container = renderInto(buildProps({ phases: undefined }));
+    const statuses = [...container.querySelectorAll(".dreams__phase-next")].map((node) =>
+      node.textContent?.trim(),
+    );
+    expect(statuses).toEqual(["—", "—", "—"]);
+    expect(container.querySelectorAll(".dreams__phase--off").length).toBe(0);
+  });
+
   it("keeps maintenance controls out of the scene tab", () => {
     const container = renderInto(buildProps());
     const buttons = [...container.querySelectorAll("button")].map((node) =>

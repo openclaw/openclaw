@@ -309,15 +309,14 @@ export const id: TranslationMap = {
     },
     advanced: {
       eyebrow: "Tinjau",
-      title: "Putar Ulang Log Harian",
+      title: "Tinjauan Log Harian",
       description:
-        "Lihat apa yang diputar ulang dari log harian, apa yang menunggu untuk dipromosikan, dan apa yang sudah berhasil lolos.",
+        "Tinjau apa yang berasal dari log harian, apa yang menunggu untuk dipromosikan, dan apa yang baru-baru ini dipromosikan.",
       summaryFromDailyLog: "dari log harian",
       summaryWaiting: "menunggu",
       summaryPromotedToday: "dipromosikan hari ini",
       stagedTitle: "Dari Log Harian",
-      stagedDescription:
-        "Kandidat pemutaran ulang yang diambil dari entri log harian yang lebih lama.",
+      stagedDescription: "Putar ulang kandidat yang diambil dari entri log harian yang lebih lama.",
       shortTermTitle: "Menunggu Promosi",
       shortTermDescription:
         "Kandidat jangka pendek saat ini yang menunggu untuk naik menjadi memori nyata.",
@@ -327,8 +326,8 @@ export const id: TranslationMap = {
       originLive: "langsung",
       originMixed: "campuran",
       promotedTitle: "Promosi Terbaru",
-      promotedDescription: "Item yang baru-baru ini sudah berhasil melewati promosi.",
-      emptyGrounded: "Tidak ada entri pemutaran ulang grounded yang dipentaskan saat ini.",
+      promotedDescription: "Item yang sudah berhasil melewati promosi.",
+      emptyGrounded: "Tidak ada entri replay grounded yang dipentaskan saat ini.",
       emptyShortTerm: "Tidak ada entri jangka pendek untuk diperiksa.",
       emptyPromoted: "Tidak ada promosi terbaru untuk diperiksa.",
       updatedPrefix: "diperbarui",
