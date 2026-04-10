@@ -287,6 +287,14 @@ title: HEARTBEAT
     expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
   });
 
+  it("returns false for leading --- fenced prose that is not YAML frontmatter", () => {
+    const content = `---
+Check logs
+---
+`;
+    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(false);
+  });
+
   it("returns true for header with only empty lines", () => {
     expect(isHeartbeatContentEffectivelyEmpty("# HEARTBEAT.md\n\n\n")).toBe(true);
   });

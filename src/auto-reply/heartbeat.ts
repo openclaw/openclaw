@@ -47,12 +47,10 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
   // would defeat the skip path and trigger a full heartbeat API call.
   let stripped = content.replace(/<!--[\s\S]*?-->/g, "");
 
-  // Strip a leading YAML frontmatter block. Some templates wrap heartbeat
-  // metadata in `--- ... ---` even when there are no actionable tasks below.
-  // Allow leading whitespace so frontmatter is still detected when an HTML
-  // comment was stripped above (which can leave a leading blank line) or when
-  // the file starts with blank lines before the `---` fence.
-  stripped = stripped.replace(/^\s*---\r?\n[\s\S]*?\r?\n---\r?\n?/, "");
+  // Strip a leading YAML frontmatter block. Keep this narrow: a top-of-file
+  // `--- ... ---` block can also be ordinary markdown content, and treating
+  // that as frontmatter would incorrectly skip real heartbeat instructions.
+  stripped = stripLeadingYamlFrontmatter(stripped);
 
   const lines = stripped.split("\n");
   for (const line of lines) {
@@ -83,6 +81,49 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
   }
   // All lines were either empty or comments
   return true;
+}
+
+function stripLeadingYamlFrontmatter(content: string): string {
+  const lines = content.split(/\r?\n/);
+  let start = 0;
+  while (start < lines.length && !lines[start]?.trim()) {
+    start += 1;
+  }
+
+  if (lines[start]?.trim() !== "---") {
+    return content;
+  }
+
+  let end = start + 1;
+  while (end < lines.length && lines[end]?.trim() !== "---") {
+    end += 1;
+  }
+  if (end >= lines.length) {
+    return content;
+  }
+
+  const bodyLines = lines.slice(start + 1, end);
+  let sawYamlField = false;
+  for (const line of bodyLines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+    if (/^[A-Za-z0-9_-]+:\s*(?:.*)?$/.test(trimmed)) {
+      sawYamlField = true;
+      continue;
+    }
+    if (sawYamlField && (/^\s+.+$/.test(line) || /^-\s+.+$/.test(trimmed))) {
+      continue;
+    }
+    return content;
+  }
+
+  if (!sawYamlField && bodyLines.some((line) => line.trim())) {
+    return content;
+  }
+
+  return [...lines.slice(0, start), ...lines.slice(end + 1)].join("\n");
 }
 
 export function resolveHeartbeatPrompt(raw?: string): string {
