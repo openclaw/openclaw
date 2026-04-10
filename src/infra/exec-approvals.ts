@@ -12,7 +12,7 @@ import {
 import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
-import { expandHomePrefix, resolveRequiredHomeDir } from "./home-dir.js";
+import { expandHomePrefix } from "./home-dir.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
@@ -228,7 +228,7 @@ function mergeLegacyAgent(
 
 function ensureDir(filePath: string) {
   const dir = path.dirname(filePath);
-  assertNoSymlinkPathComponents(dir, resolveRequiredHomeDir());
+  assertNoSymlinkPathComponents(dir);
   fs.mkdirSync(dir, { recursive: true });
   const dirStat = fs.lstatSync(dir);
   if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
@@ -237,20 +237,14 @@ function ensureDir(filePath: string) {
   return dir;
 }
 
-function assertNoSymlinkPathComponents(targetPath: string, trustedRoot: string): void {
+function assertNoSymlinkPathComponents(targetPath: string): void {
   const resolvedTarget = path.resolve(targetPath);
-  const resolvedRoot = path.resolve(trustedRoot);
-  if (resolvedTarget !== resolvedRoot && !resolvedTarget.startsWith(`${resolvedRoot}${path.sep}`)) {
-    return;
-  }
-
-  const relative = path.relative(resolvedRoot, resolvedTarget);
-  const segments = relative && relative !== "." ? relative.split(path.sep) : [];
-  let current = resolvedRoot;
-  for (const segment of [".", ...segments]) {
-    if (segment !== ".") {
-      current = path.join(current, segment);
-    }
+  const parsedTarget = path.parse(resolvedTarget);
+  const relative = path.relative(parsedTarget.root, resolvedTarget);
+  const segments = relative && relative !== "." ? relative.split(path.sep).filter(Boolean) : [];
+  let current = parsedTarget.root;
+  for (const segment of segments) {
+    current = path.join(current, segment);
     try {
       const stat = fs.lstatSync(current);
       if (stat.isSymbolicLink()) {

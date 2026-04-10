@@ -236,7 +236,7 @@ describe("exec approvals store helpers", () => {
   it("refuses to traverse a symlinked parent component in the approvals path", () => {
     const realHome = makeTempDir();
     const linkedHome = `${realHome}-link`;
-    tempDirs.push(realHome);
+    tempDirs.push(realHome, linkedHome);
     fs.symlinkSync(realHome, linkedHome);
     process.env.OPENCLAW_HOME = linkedHome;
 
@@ -244,6 +244,20 @@ describe("exec approvals store helpers", () => {
       saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
     ).toThrow(/Refusing to traverse symlink in exec approvals path/);
     expect(fs.existsSync(path.join(realHome, ".openclaw"))).toBe(false);
+  });
+
+  it("refuses to traverse a symlinked parent component in OPENCLAW_STATE_DIR", () => {
+    createHomeDir();
+    const realStateRoot = makeTempDir();
+    const linkedStateRoot = `${realStateRoot}-link`;
+    tempDirs.push(realStateRoot, linkedStateRoot);
+    fs.symlinkSync(realStateRoot, linkedStateRoot);
+    process.env.OPENCLAW_STATE_DIR = path.join(linkedStateRoot, "state");
+
+    expect(() =>
+      saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
+    ).toThrow(/Refusing to traverse symlink in exec approvals path/);
+    expect(fs.existsSync(path.join(realStateRoot, "state"))).toBe(false);
   });
 
   it("adds trimmed allowlist entries once and persists generated ids", () => {
