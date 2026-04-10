@@ -340,13 +340,14 @@ export function resolveNextRegistrationAuth(params: {
   ]);
 
   for (const flow of params.response.flows ?? []) {
-    const stages = (flow.stages ?? []).filter(
-      (stage): stage is MatrixQaAuthStage =>
-        stage === "m.login.dummy" || stage === "m.login.registration_token",
-    );
-    if (stages.length === 0 || stages.some((stage) => !supportedStages.has(stage))) {
+    const flowStages = flow.stages ?? [];
+    if (
+      flowStages.length === 0 ||
+      flowStages.some((stage) => !supportedStages.has(stage as MatrixQaAuthStage))
+    ) {
       continue;
     }
+    const stages = flowStages as MatrixQaAuthStage[];
     const nextStage = stages.find((stage) => !completed.has(stage));
     if (!nextStage) {
       continue;

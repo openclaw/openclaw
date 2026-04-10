@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { startQaGatewayChild } from "../../gateway-child.js";
@@ -249,7 +250,7 @@ async function waitForMatrixChannelReady(
     } catch {
       // retry
     }
-    await new Promise((resolve) => setTimeout(resolve, pollMs));
+    await sleep(pollMs);
   }
   throw new Error(`matrix account "${accountId}" did not become ready`);
 }

@@ -172,6 +172,18 @@ describe("matrix driver client", () => {
     });
   });
 
+  it("rejects Matrix UIAA flows that require unsupported stages", () => {
+    expect(() =>
+      __testing.resolveNextRegistrationAuth({
+        registrationToken: "reg-token",
+        response: {
+          session: "uiaa-session",
+          flows: [{ stages: ["m.login.registration_token", "m.login.recaptcha", "m.login.dummy"] }],
+        },
+      }),
+    ).toThrow("Matrix registration requires unsupported auth stages:");
+  });
+
   it("returns a typed no-match result while preserving the latest sync token", async () => {
     const fetchImpl: typeof fetch = async () =>
       new Response(
