@@ -1054,12 +1054,18 @@ describe("createFollowupRunner CLI backend dispatch", () => {
 
     await runner(queued);
 
+    const cliCall = runCliAgentMock.mock.calls[0]?.[0] as
+      | {
+          abortSignal?: AbortSignal;
+        }
+      | undefined;
+    expect(cliCall?.abortSignal).toBeInstanceOf(AbortSignal);
+    expect(cliCall?.abortSignal).not.toBe(abortController.signal);
     expect(runCliAgentMock).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "claude-cli",
         model: "opus",
         prompt: queued.prompt,
-        abortSignal: abortController.signal,
         replyOperation: expect.objectContaining({
           setPhase: expect.any(Function),
           complete: expect.any(Function),

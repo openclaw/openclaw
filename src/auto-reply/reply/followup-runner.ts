@@ -288,7 +288,7 @@ export function createFollowupRunner(params: {
                   thinkLevel: queued.run.thinkLevel,
                   timeoutMs: queued.run.timeoutMs,
                   runId,
-                  abortSignal: opts?.abortSignal,
+                  abortSignal: replyOperation.abortSignal,
                   replyOperation,
                   extraSystemPrompt: queued.run.extraSystemPrompt,
                   ownerNumbers: queued.run.ownerNumbers,
