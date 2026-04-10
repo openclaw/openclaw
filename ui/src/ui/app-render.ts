@@ -457,6 +457,10 @@ export function renderApp(state: AppViewState) {
   const findAgentIndex = (agentId: string) =>
     findAgentConfigEntryIndex(getCurrentConfigValue(), agentId);
   const ensureAgentIndex = (agentId: string) => ensureAgentConfigEntry(state, agentId);
+  const resolveAgentToolsPath = (agentId: string, ensure: boolean) => {
+    const index = ensure ? ensureAgentIndex(agentId) : findAgentIndex(agentId);
+    return index >= 0 ? (["agents", "list", index, "tools"] as const) : null;
+  };
   const cronAgentSuggestions = sortLocaleStrings(
     new Set(
       [
@@ -712,17 +716,14 @@ export function renderApp(state: AppViewState) {
     if (!agentId) {
       return;
     }
-    if (state.agentsPanel === "files") {
-      void loadAgentFiles(state, agentId);
-      return;
-    }
-    if (state.agentsPanel === "skills") {
-      void loadAgentSkills(state, agentId);
-      return;
-    }
-    if (state.agentsPanel === "tools") {
-      void loadToolsCatalog(state, agentId);
-      void refreshVisibleToolsEffectiveForCurrentSession(state);
+    switch (state.agentsPanel) {
+      case "files":
+        return void loadAgentFiles(state, agentId);
+      case "skills":
+        return void loadAgentSkills(state, agentId);
+      case "tools":
+        void loadToolsCatalog(state, agentId);
+        return void refreshVisibleToolsEffectiveForCurrentSession(state);
     }
   };
   const refreshAgentsPanelSupplementalData = (panel: AppViewState["agentsPanel"]) => {
@@ -1456,12 +1457,10 @@ export function renderApp(state: AppViewState) {
                   void saveAgentFile(state, resolvedAgentId, name, content);
                 },
                 onToolsProfileChange: (agentId, profile, clearAllow) => {
-                  const index =
-                    profile || clearAllow ? ensureAgentIndex(agentId) : findAgentIndex(agentId);
-                  if (index < 0) {
+                  const basePath = resolveAgentToolsPath(agentId, Boolean(profile || clearAllow));
+                  if (!basePath) {
                     return;
                   }
-                  const basePath = ["agents", "list", index, "tools"];
                   if (profile) {
                     updateConfigFormValue(state, [...basePath, "profile"], profile);
                   } else {
@@ -1472,14 +1471,13 @@ export function renderApp(state: AppViewState) {
                   }
                 },
                 onToolsOverridesChange: (agentId, alsoAllow, deny) => {
-                  const index =
-                    alsoAllow.length > 0 || deny.length > 0
-                      ? ensureAgentIndex(agentId)
-                      : findAgentIndex(agentId);
-                  if (index < 0) {
+                  const basePath = resolveAgentToolsPath(
+                    agentId,
+                    alsoAllow.length > 0 || deny.length > 0,
+                  );
+                  if (!basePath) {
                     return;
                   }
-                  const basePath = ["agents", "list", index, "tools"];
                   if (alsoAllow.length > 0) {
                     updateConfigFormValue(state, [...basePath, "alsoAllow"], alsoAllow);
                   } else {
