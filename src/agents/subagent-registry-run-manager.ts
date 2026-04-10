@@ -441,12 +441,20 @@ export function createSubagentRunManager(params: {
           cleanup: entry.cleanup,
           completedAt: now,
         });
-        const cfg = loadConfig();
-        ensureRuntimePluginsLoaded({
-          config: cfg,
-          workspaceDir: entry.workspaceDir,
-          allowGatewaySubagentBinding: true,
-        });
+        try {
+          const cfg = loadConfig();
+          ensureRuntimePluginsLoaded({
+            config: cfg,
+            workspaceDir: entry.workspaceDir,
+            allowGatewaySubagentBinding: true,
+          });
+        } catch (err) {
+          log.warn("failed to initialize runtime plugins for killed subagent cleanup", {
+            err,
+            runId: entry.runId,
+            childSessionKey: entry.childSessionKey,
+          });
+        }
         void emitSubagentEndedHookOnce({
           entry,
           reason: SUBAGENT_ENDED_REASON_KILLED,
