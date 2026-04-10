@@ -7,6 +7,59 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "directSessions": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "providerOverride": {
+            "type": "string",
+            "minLength": 1
+          },
+          "modelOverride": {
+            "type": "string",
+            "minLength": 1
+          },
+          "prependSystemContext": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "": {
+      "label": "Telegram Plugin",
+      "help": "Telegram plugin-owned routing and prompt controls for direct-message sessions."
+    },
+    "directSessions": {
+      "label": "Telegram Direct Sessions",
+      "help": "DM-only routing overrides and stable prompt guidance owned by the Telegram plugin.",
+      "advanced": true
+    },
+    "directSessions.enabled": {
+      "label": "Telegram Direct Session Routing Enabled",
+      "help": "When false, Telegram direct-session plugin overrides stay disabled even if other directSessions fields are configured.",
+      "advanced": true
+    },
+    "directSessions.providerOverride": {
+      "label": "Telegram Direct Session Provider Override",
+      "help": "Optional provider override applied only to Telegram direct-message sessions, for example `ollama` or `openai-codex`.",
+      "advanced": true
+    },
+    "directSessions.modelOverride": {
+      "label": "Telegram Direct Session Model Override",
+      "help": "Optional model override applied only to Telegram direct-message sessions, for example `qwen3.5:27b`.",
+      "advanced": true
+    },
+    "directSessions.prependSystemContext": {
+      "label": "Telegram Direct Session System Context",
+      "help": "Stable system-prompt prefix prepended only for Telegram direct-message sessions. Use this for cached guidance instead of per-turn user-context injection.",
+      "advanced": true
+    }
   }
 }
