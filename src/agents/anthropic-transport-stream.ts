@@ -19,6 +19,7 @@ import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dyn
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import {
+  coerceTransportToolCallArguments,
   createEmptyTransportUsage,
   createWritableTransportEventStream,
   failTransportStream,
@@ -308,7 +309,7 @@ function convertAnthropicMessages(
             type: "tool_use",
             id: block.id,
             name: isOAuthToken ? toClaudeCodeName(block.name) : block.name,
-            input: block.arguments ?? {},
+            input: coerceTransportToolCallArguments(block.arguments),
           });
         }
       }
