@@ -29,6 +29,10 @@ import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { formatCliCommand } from "../command-format.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { forceFreePortAndWait, waitForPortBindable } from "../ports.js";
@@ -36,7 +40,6 @@ import { withProgress } from "../progress.js";
 import { ensureDevGatewayConfig } from "./dev.js";
 import { runGatewayLoop } from "./run-loop.js";
 import {
-  describeUnknownError,
   extractGatewayMiskeys,
   maybeExplainGatewayServiceStop,
   parsePort,
@@ -93,6 +96,13 @@ const GATEWAY_RUN_BOOLEAN_KEYS = [
 ] as const;
 
 const SUPERVISED_GATEWAY_LOCK_RETRY_MS = 5000;
+
+/**
+ * EX_CONFIG (78) from sysexits.h — used for configuration errors so systemd
+ * (via RestartPreventExitStatus=78) stops restarting instead of entering a
+ * restart storm that can render low-resource hosts unresponsive.
+ */
+const EXIT_CONFIG_ERROR = 78;
 
 const GATEWAY_AUTH_MODES: readonly GatewayAuthMode[] = [
   "none",
@@ -238,7 +248,7 @@ function isHealthyGatewayLockError(err: unknown): boolean {
 }
 
 async function runGatewayCommand(opts: GatewayRunOpts) {
-  const isDevProfile = process.env.OPENCLAW_PROFILE?.trim().toLowerCase() === "dev";
+  const isDevProfile = normalizeOptionalLowercaseString(process.env.OPENCLAW_PROFILE) === "dev";
   const devMode = Boolean(opts.dev) || isDevProfile;
   if (opts.reset && !devMode) {
     defaultRuntime.error("Use --reset with --dev.");
@@ -304,7 +314,9 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   // default is deferred until after Tailscale mode is known (see below)
   // so that Tailscale's loopback constraint is respected.
   const VALID_BIND_MODES = new Set<string>(["loopback", "lan", "auto", "custom", "tailnet"]);
-  const bindExplicitRawStr = (toOptionString(opts.bind) ?? cfg.gateway?.bind)?.trim() || undefined;
+  const bindExplicitRawStr = normalizeOptionalString(
+    toOptionString(opts.bind) ?? cfg.gateway?.bind,
+  );
   if (bindExplicitRawStr !== undefined && !VALID_BIND_MODES.has(bindExplicitRawStr)) {
     defaultRuntime.error('Invalid --bind (use "loopback", "lan", "tailnet", "auto", or "custom")');
     defaultRuntime.exit(1);
@@ -424,7 +436,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     for (const error of guardErrors) {
       defaultRuntime.error(error);
     }
-    defaultRuntime.exit(1);
+    defaultRuntime.exit(EXIT_CONFIG_ERROR);
     return;
   }
   const miskeys = extractGatewayMiskeys(snapshot?.parsed);
@@ -482,7 +494,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
         .filter(Boolean)
         .join("\n"),
     );
-    defaultRuntime.exit(1);
+    defaultRuntime.exit(EXIT_CONFIG_ERROR);
     return;
   }
   if (resolvedAuthMode === "none") {
@@ -512,7 +524,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
         .filter(Boolean)
         .join("\n"),
     );
-    defaultRuntime.exit(1);
+    defaultRuntime.exit(EXIT_CONFIG_ERROR);
     return;
   }
   const tailscaleOverride =
@@ -559,7 +571,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     }
   } catch (err) {
     if (isGatewayLockError(err)) {
-      const errMessage = describeUnknownError(err);
+      const errMessage = formatErrorMessage(err);
       defaultRuntime.error(
         `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: ${formatCliCommand("openclaw gateway stop")}`,
       );

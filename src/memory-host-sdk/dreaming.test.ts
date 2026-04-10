@@ -14,7 +14,8 @@ vi.mock("../agents/agent-scope.js", () => ({
 import {
   formatMemoryDreamingDay,
   isSameMemoryDreamingDay,
-  resolveMemoryCorePluginConfig,
+  resolveMemoryDreamingPluginConfig,
+  resolveMemoryDreamingPluginId,
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingWorkspaces,
 } from "./dreaming.js";
@@ -155,9 +156,111 @@ describe("memory dreaming host helpers", () => {
         "America/Los_Angeles",
       ),
     ).toBe(true);
+  });
+
+  it("resolves the configured memory-slot plugin id", () => {
     expect(
-      resolveMemoryCorePluginConfig({
+      resolveMemoryDreamingPluginId({
         plugins: {
+          slots: {
+            memory: "memos-local-openclaw-plugin",
+          },
+        },
+      } as OpenClawConfig),
+    ).toBe("memos-local-openclaw-plugin");
+  });
+
+  it("reads dreaming config from the configured memory-slot owner", () => {
+    expect(
+      resolveMemoryDreamingPluginConfig({
+        plugins: {
+          slots: {
+            memory: "memos-local-openclaw-plugin",
+          },
+          entries: {
+            "memos-local-openclaw-plugin": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig),
+    ).toEqual({
+      dreaming: {
+        enabled: true,
+      },
+    });
+  });
+
+  it("reads dreaming config from memory-lancedb when it owns the memory slot", () => {
+    expect(
+      resolveMemoryDreamingPluginConfig({
+        plugins: {
+          slots: {
+            memory: "memory-lancedb",
+          },
+          entries: {
+            "memory-lancedb": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "0 */6 * * *",
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig),
+    ).toEqual({
+      dreaming: {
+        enabled: true,
+        frequency: "0 */6 * * *",
+      },
+    });
+  });
+
+  it("falls back to memory-core when no memory slot override is configured", () => {
+    expect(
+      resolveMemoryDreamingPluginConfig({
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig),
+    ).toEqual({
+      dreaming: {
+        enabled: true,
+      },
+    });
+  });
+
+  it('falls back to memory-core when memory slot is "none" or blank', () => {
+    expect(
+      resolveMemoryDreamingPluginId({
+        plugins: {
+          slots: {
+            memory: "none",
+          },
+        },
+      } as OpenClawConfig),
+    ).toBe("memory-core");
+
+    expect(
+      resolveMemoryDreamingPluginConfig({
+        plugins: {
+          slots: {
+            memory: "   ",
+          },
           entries: {
             "memory-core": {
               config: {

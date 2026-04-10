@@ -112,7 +112,7 @@ export async function openaiTTS(params: {
   voice: string;
   speed?: number;
   instructions?: string;
-  responseFormat: "mp3" | "opus" | "pcm";
+  responseFormat: "mp3" | "opus" | "pcm" | "wav";
   timeoutMs: number;
 }): Promise<Buffer> {
   const { text, apiKey, baseUrl, model, voice, speed, instructions, responseFormat, timeoutMs } =

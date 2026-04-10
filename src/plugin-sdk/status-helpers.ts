@@ -2,6 +2,7 @@ import type { ChannelStatusAdapter } from "../channels/plugins/types.adapters.js
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.core.js";
 import type { ChannelStatusIssue } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 export type { ChannelAccountSnapshot } from "../channels/plugins/types.core.js";
 export type { ChannelStatusIssue } from "../channels/plugins/types.js";
 export { isRecord } from "../channels/plugins/status-issues/shared.js";
@@ -325,7 +326,10 @@ export function createDependentCredentialStatusIssueCollector(options: {
 }) {
   const isDependencyConfigured =
     options.isDependencyConfigured ??
-    ((value: unknown) => typeof value === "string" && value.trim().length > 0 && value !== "none");
+    ((value: unknown) => {
+      const normalized = typeof value === "string" ? normalizeOptionalString(value) : undefined;
+      return Boolean(normalized && normalized !== "none");
+    });
 
   return (accounts: ConfigIssueAccount[]): ChannelStatusIssue[] =>
     accounts.flatMap((account) => {

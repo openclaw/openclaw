@@ -112,6 +112,36 @@ describe("createAcpxRuntimeService", () => {
     await service.stop?.(ctx);
   });
 
+  it("passes the default runtime timeout to the embedded runtime factory", async () => {
+    const workspaceDir = await makeTempDir();
+    const ctx = createServiceContext(workspaceDir);
+    const runtime = {
+      ensureSession: vi.fn(),
+      runTurn: vi.fn(),
+      cancel: vi.fn(),
+      close: vi.fn(),
+      probeAvailability: vi.fn(async () => {}),
+      isHealthy: vi.fn(() => true),
+      doctor: vi.fn(async () => ({ ok: true, message: "ok" })),
+    };
+    const runtimeFactory = vi.fn(() => runtime as never);
+    const service = createAcpxRuntimeService({
+      runtimeFactory,
+    });
+
+    await service.start(ctx);
+
+    expect(runtimeFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginConfig: expect.objectContaining({
+          timeoutSeconds: 120,
+        }),
+      }),
+    );
+
+    await service.stop?.(ctx);
+  });
+
   it("warns when legacy compatibility config is explicitly ignored", async () => {
     const workspaceDir = await makeTempDir();
     const ctx = createServiceContext(workspaceDir);

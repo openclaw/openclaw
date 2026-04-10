@@ -115,7 +115,7 @@ async function resolveMemoryReadFailureResult(params: {
       return jsonResult(supplement);
     }
   }
-  const message = params.error instanceof Error ? params.error.message : String(params.error);
+  const message = formatErrorMessage(params.error);
   return jsonResult({ path: params.relPath, text: "", disabled: true, error: message });
 }
 

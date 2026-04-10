@@ -1,11 +1,11 @@
-import type { BaseProbeResult } from "../runtime-api.js";
+import type { BaseProbeResult } from "openclaw/plugin-sdk/core";
 import type {
   FeishuConfigSchema,
   FeishuGroupSchema,
   FeishuAccountConfigSchema,
   z,
 } from "./config-schema.js";
-import type { MentionTarget } from "./mention.js";
+import type { MentionTarget } from "./mention-target.types.js";
 
 export type FeishuConfig = z.infer<typeof FeishuConfigSchema>;
 export type FeishuGroupConfig = z.infer<typeof FeishuGroupSchema>;

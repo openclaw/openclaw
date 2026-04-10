@@ -40,6 +40,33 @@ export const EMPTY_PLUGIN_SCHEMA = {
   properties: {},
 };
 
+export function inlineChannelPluginEntryFactorySource(): string {
+  return `function defineChannelPluginEntry(options) {
+  return {
+    id: options.id,
+    name: options.name,
+    description: options.description,
+    configSchema: { schema: { type: "object" } },
+    channelPlugin: options.plugin,
+    setChannelRuntime: options.setRuntime,
+    register(api) {
+      if (api.registrationMode === "cli-metadata") {
+        options.registerCliMetadata?.(api);
+        return;
+      }
+      options.setRuntime?.(api.runtime);
+      api.registerChannel({ plugin: options.plugin });
+      if (api.registrationMode !== "full") {
+        return;
+      }
+      options.registerCliMetadata?.(api);
+      options.registerFull?.(api);
+    },
+  };
+}
+`;
+}
+
 export function makeTempDir() {
   const dir = path.join(fixtureRoot, `case-${tempDirIndex++}`);
   mkdirSafe(dir);

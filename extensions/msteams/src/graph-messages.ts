@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import {
@@ -289,7 +290,7 @@ export type ListReactionsMSTeamsResult = {
 };
 
 function validateReactionType(raw: string): TeamsReactionType {
-  const normalized = raw.toLowerCase().trim();
+  const normalized = normalizeLowercaseStringOrEmpty(raw);
   if (!TEAMS_REACTION_TYPES.includes(normalized as TeamsReactionType)) {
     throw new Error(
       `Invalid reaction type "${raw}". Valid types: ${TEAMS_REACTION_TYPES.join(", ")}`,
@@ -300,12 +301,17 @@ function validateReactionType(raw: string): TeamsReactionType {
 
 /**
  * Add an emoji reaction to a message via Graph API (beta).
+ *
+ * Writes (setReaction) require a Delegated token, so we pass
+ * `preferDelegated: true`. The resolver falls back to the app-only token when
+ * delegated auth is not configured, preserving today's behavior while letting
+ * delegated-auth-enabled deployments hit the user-scoped endpoint.
  */
 export async function reactMessageMSTeams(
   params: ReactMessageMSTeamsParams,
 ): Promise<{ ok: true }> {
   const reactionType = validateReactionType(params.reactionType);
-  const token = await resolveGraphToken(params.cfg);
+  const token = await resolveGraphToken(params.cfg, { preferDelegated: true });
   const conversationId = await resolveGraphConversationId(params.to);
   const { basePath } = resolveConversationPath(conversationId);
   const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}/setReaction`;
@@ -315,12 +321,15 @@ export async function reactMessageMSTeams(
 
 /**
  * Remove an emoji reaction from a message via Graph API (beta).
+ *
+ * Writes (unsetReaction) require a Delegated token, so we pass
+ * `preferDelegated: true`. See `reactMessageMSTeams` for fallback rules.
  */
 export async function unreactMessageMSTeams(
   params: ReactMessageMSTeamsParams,
 ): Promise<{ ok: true }> {
   const reactionType = validateReactionType(params.reactionType);
-  const token = await resolveGraphToken(params.cfg);
+  const token = await resolveGraphToken(params.cfg, { preferDelegated: true });
   const conversationId = await resolveGraphConversationId(params.to);
   const { basePath } = resolveConversationPath(conversationId);
   const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}/unsetReaction`;

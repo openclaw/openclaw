@@ -5,6 +5,7 @@ import { loadOpenClawPluginCliRegistry, loadOpenClawPlugins } from "./loader.js"
 import {
   cleanupPluginLoaderFixturesForTest,
   EMPTY_PLUGIN_SCHEMA,
+  inlineChannelPluginEntryFactorySource,
   makeTempDir,
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
@@ -162,7 +163,7 @@ describe("plugin loader CLI metadata", () => {
     );
     fs.writeFileSync(
       path.join(pluginDir, "index.cjs"),
-      `const { defineChannelPluginEntry } = require("openclaw/plugin-sdk/core");
+      `${inlineChannelPluginEntryFactorySource()}
 require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
 module.exports = {
   ...defineChannelPluginEntry({
@@ -485,7 +486,7 @@ module.exports = {
     );
     fs.writeFileSync(
       path.join(pluginDir, "index.cjs"),
-      `const { defineChannelPluginEntry } = require("openclaw/plugin-sdk/core");
+      `${inlineChannelPluginEntryFactorySource()}
 module.exports = {
   ...defineChannelPluginEntry({
     id: "full-cli-metadata-channel",

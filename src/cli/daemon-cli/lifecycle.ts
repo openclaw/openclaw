@@ -8,6 +8,7 @@ import {
   signalVerifiedGatewayPidSync,
 } from "../../infra/gateway-processes.js";
 import { defaultRuntime } from "../../runtime.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { theme } from "../../terminal/theme.js";
 import { formatCliCommand } from "../command-format.js";
 import { recoverInstalledLaunchAgent } from "./launchd-recovery.js";
@@ -77,8 +78,8 @@ async function assertUnmanagedGatewayRestartEnabled(port: number): Promise<void>
   const probe = await probeGateway({
     url: `${scheme}://127.0.0.1:${port}`,
     auth: {
-      token: process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined,
-      password: process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() || undefined,
+      token: normalizeOptionalString(process.env.OPENCLAW_GATEWAY_TOKEN),
+      password: normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD),
     },
     timeoutMs: 1_000,
   }).catch(() => null);
@@ -204,7 +205,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           delayMs: POST_RESTART_HEALTH_DELAY_MS,
         });
         if (health.healthy) {
-          return;
+          return undefined;
         }
 
         const diagnostics = renderGatewayPortHealthDiagnostics(health);
@@ -223,6 +224,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           formatCliCommand("openclaw gateway status --deep"),
           formatCliCommand("openclaw doctor"),
         ]);
+        throw new Error("unreachable after gateway restart health failure");
       }
 
       let health = await waitForGatewayHealthyRestart({
@@ -256,7 +258,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       }
 
       if (health.healthy) {
-        return;
+        return undefined;
       }
 
       const diagnostics = renderRestartDiagnostics(health);
@@ -289,6 +291,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         formatCliCommand("openclaw gateway status --deep"),
         formatCliCommand("openclaw doctor"),
       ]);
+      throw new Error("unreachable after gateway restart failure");
     },
   });
 }

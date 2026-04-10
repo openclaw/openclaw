@@ -1,13 +1,10 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildCapabilityProviderMaps,
-  normalizeCapabilityProviderId,
-} from "./provider-registry-shared.js";
+import { buildCapabilityProviderMaps } from "./provider-registry-shared.js";
 
 describe("provider registry shared", () => {
   it("normalizes provider ids case-insensitively", () => {
-    expect(normalizeCapabilityProviderId("  OpenAI  ")).toBe("openai");
-    expect(normalizeCapabilityProviderId("   ")).toBeUndefined();
+    const { canonical } = buildCapabilityProviderMaps([{ id: "  OpenAI  " }, { id: "   " }]);
+    expect([...canonical.keys()]).toEqual(["openai"]);
   });
 
   it("indexes providers by id and alias", () => {

@@ -20,6 +20,7 @@ import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import { splitMediaFromOutput } from "../media/parse.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
+import { normalizeOptionalLowercaseString, readStringValue } from "../shared/string-coerce.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
@@ -62,7 +63,7 @@ function isCronAddAction(args: unknown): boolean {
     return false;
   }
   const action = (args as Record<string, unknown>).action;
-  return typeof action === "string" && action.trim().toLowerCase() === "add";
+  return normalizeOptionalLowercaseString(action) === "add";
 }
 
 function buildToolCallSummary(toolName: string, args: unknown, meta?: string): ToolCallSummary {
@@ -179,7 +180,7 @@ function buildPatchSummaryText(summary: ApplyPatchSummary): string {
 }
 
 function extendExecMeta(toolName: string, args: unknown, meta?: string): string | undefined {
-  const normalized = toolName.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(toolName);
   if (normalized !== "exec" && normalized !== "bash") {
     return meta;
   }
@@ -341,8 +342,8 @@ function readExecApprovalPendingDetails(result: unknown): {
   if (details.status !== "approval-pending") {
     return null;
   }
-  const approvalId = typeof details.approvalId === "string" ? details.approvalId.trim() : "";
-  const approvalSlug = typeof details.approvalSlug === "string" ? details.approvalSlug.trim() : "";
+  const approvalId = readStringValue(details.approvalId) ?? "";
+  const approvalSlug = readStringValue(details.approvalSlug) ?? "";
   const command = typeof details.command === "string" ? details.command : "";
   const host = details.host === "node" ? "node" : details.host === "gateway" ? "gateway" : null;
   if (!approvalId || !approvalSlug || !command || !host) {
@@ -360,9 +361,9 @@ function readExecApprovalPendingDetails(result: unknown): {
       : undefined,
     host,
     command,
-    cwd: typeof details.cwd === "string" ? details.cwd : undefined,
-    nodeId: typeof details.nodeId === "string" ? details.nodeId : undefined,
-    warningText: typeof details.warningText === "string" ? details.warningText : undefined,
+    cwd: readStringValue(details.cwd),
+    nodeId: readStringValue(details.nodeId),
+    warningText: readStringValue(details.warningText),
   };
 }
 
@@ -396,10 +397,10 @@ function readExecApprovalUnavailableDetails(result: unknown): {
   }
   return {
     reason,
-    warningText: typeof details.warningText === "string" ? details.warningText : undefined,
-    channel: typeof details.channel === "string" ? details.channel : undefined,
-    channelLabel: typeof details.channelLabel === "string" ? details.channelLabel : undefined,
-    accountId: typeof details.accountId === "string" ? details.accountId : undefined,
+    warningText: readStringValue(details.warningText),
+    channel: readStringValue(details.channel),
+    channelLabel: readStringValue(details.channelLabel),
+    accountId: readStringValue(details.accountId),
     sentApproverDms: details.sentApproverDms === true,
   };
 }
@@ -428,6 +429,7 @@ async function emitToolResultOutput(params: {
     if (!ctx.params.onToolResult) {
       return;
     }
+    ctx.state.deterministicApprovalPromptPending = true;
     try {
       await ctx.params.onToolResult(
         buildExecApprovalPendingReplyPayload({
@@ -444,7 +446,9 @@ async function emitToolResultOutput(params: {
       );
       ctx.state.deterministicApprovalPromptSent = true;
     } catch {
-      // ignore delivery failures
+      ctx.state.deterministicApprovalPromptSent = false;
+    } finally {
+      ctx.state.deterministicApprovalPromptPending = false;
     }
     return;
   }
@@ -454,6 +458,7 @@ async function emitToolResultOutput(params: {
     if (!ctx.params.onToolResult) {
       return;
     }
+    ctx.state.deterministicApprovalPromptPending = true;
     try {
       await ctx.params.onToolResult?.(
         buildExecApprovalUnavailableReplyPayload({
@@ -467,7 +472,9 @@ async function emitToolResultOutput(params: {
       );
       ctx.state.deterministicApprovalPromptSent = true;
     } catch {
-      // ignore delivery failures
+      ctx.state.deterministicApprovalPromptSent = false;
+    } finally {
+      ctx.state.deterministicApprovalPromptPending = false;
     }
     return;
   }
@@ -516,8 +523,8 @@ async function emitToolResultOutput(params: {
 export function handleToolExecutionStart(
   ctx: ToolHandlerContext,
   evt: AgentEvent & { toolName: string; toolCallId: string; args: unknown },
-) {
-  const continueAfterBlockReplyFlush = () => {
+): void | Promise<void> {
+  const continueAfterBlockReplyFlush = (): void | Promise<void> => {
     const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
     if (isPromiseLike<void>(onBlockReplyFlushResult)) {
       return onBlockReplyFlushResult.then(() => {
@@ -525,12 +532,13 @@ export function handleToolExecutionStart(
       });
     }
     continueToolExecutionStart();
+    return undefined;
   };
 
   const continueToolExecutionStart = () => {
-    const rawToolName = String(evt.toolName);
+    const rawToolName = evt.toolName;
     const toolName = normalizeToolName(rawToolName);
-    const toolCallId = String(evt.toolCallId);
+    const toolCallId = evt.toolCallId;
     const args = evt.args;
     const runId = ctx.params.runId;
 
@@ -548,7 +556,7 @@ export function handleToolExecutionStart(
             : "";
       const filePath = filePathValue.trim();
       if (!filePath) {
-        const argsPreview = typeof args === "string" ? args.slice(0, 200) : undefined;
+        const argsPreview = readStringValue(args)?.slice(0, 200);
         ctx.log.warn(
           `read tool called without path: toolCallId=${toolCallId} argsType=${typeof args}${argsPreview ? ` argsPreview=${argsPreview}` : ""}`,
         );
@@ -665,8 +673,8 @@ export function handleToolExecutionUpdate(
     partialResult?: unknown;
   },
 ) {
-  const toolName = normalizeToolName(String(evt.toolName));
-  const toolCallId = String(evt.toolCallId);
+  const toolName = normalizeToolName(evt.toolName);
+  const toolCallId = evt.toolCallId;
   const partial = evt.partialResult;
   const sanitized = sanitizeToolResult(partial);
   emitAgentEvent({
@@ -744,10 +752,10 @@ export async function handleToolExecutionEnd(
     result?: unknown;
   },
 ) {
-  const toolName = normalizeToolName(String(evt.toolName));
-  const toolCallId = String(evt.toolCallId);
+  const toolName = normalizeToolName(evt.toolName);
+  const toolCallId = evt.toolCallId;
   const runId = ctx.params.runId;
-  const isError = Boolean(evt.isError);
+  const isError = evt.isError;
   const result = evt.result;
   const isToolError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
@@ -990,7 +998,9 @@ export async function handleToolExecutionEnd(
           const approvalData: AgentApprovalEventData = {
             phase: "resolved",
             kind: "exec",
-            status: parsedApprovalResult.metadata.toLowerCase().includes("approval-request-failed")
+            status: normalizeOptionalLowercaseString(parsedApprovalResult.metadata)?.includes(
+              "approval-request-failed",
+            )
               ? "failed"
               : "denied",
             title: "Command approval resolved",

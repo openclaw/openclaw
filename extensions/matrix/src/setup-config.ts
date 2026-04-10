@@ -5,6 +5,7 @@ import {
   normalizeSecretInputString,
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk/setup";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveMatrixEnvAuthReadiness } from "./matrix/client/env-auth.js";
 import { updateMatrixAccountConfig } from "./matrix/config-update.js";
 import { isSupportedMatrixAvatarSource } from "./matrix/profile.js";
@@ -210,7 +211,7 @@ export function applyMatrixSetupAccountConfig(params: {
         : typeof params.input.allowPrivateNetwork === "boolean"
           ? params.input.allowPrivateNetwork
           : undefined,
-    proxy: params.input.proxy?.trim() || undefined,
+    proxy: normalizeOptionalString(params.input.proxy),
     userId: password && !userId ? null : userId,
     accessToken: accessToken || (password ? null : undefined),
     password: password || (accessToken ? null : undefined),

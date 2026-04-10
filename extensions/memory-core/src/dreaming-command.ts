@@ -1,5 +1,6 @@
 import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/memory-core";
 import { resolveMemoryDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { asRecord } from "./dreaming-shared.js";
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
 
@@ -74,6 +75,10 @@ function formatUsage(includeStatus: string): string {
   ].join("\n");
 }
 
+function requiresAdminToMutateDreaming(gatewayClientScopes?: readonly string[]): boolean {
+  return Array.isArray(gatewayClientScopes) && !gatewayClientScopes.includes("operator.admin");
+}
+
 export function registerDreamingCommand(api: OpenClawPluginApi): void {
   api.registerCommand({
     name: "dreaming",
@@ -84,7 +89,7 @@ export function registerDreamingCommand(api: OpenClawPluginApi): void {
       const [firstToken = ""] = args
         .split(/\s+/)
         .filter(Boolean)
-        .map((token) => token.toLowerCase());
+        .map((token) => normalizeLowercaseStringOrEmpty(token));
       const currentConfig = api.runtime.config.loadConfig();
 
       if (
@@ -101,6 +106,9 @@ export function registerDreamingCommand(api: OpenClawPluginApi): void {
       }
 
       if (firstToken === "on" || firstToken === "off") {
+        if (requiresAdminToMutateDreaming(ctx.gatewayClientScopes)) {
+          return { text: "⚠️ /dreaming on|off requires operator.admin for gateway clients." };
+        }
         const enabled = firstToken === "on";
         const nextConfig = updateDreamingEnabledInConfig(currentConfig, enabled);
         await api.runtime.config.writeConfigFile(nextConfig);

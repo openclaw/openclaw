@@ -1,5 +1,10 @@
 import { parseFiniteNumber } from "openclaw/plugin-sdk/infra-runtime";
-import { asNullableRecord, readStringField } from "openclaw/plugin-sdk/text-runtime";
+import {
+  asNullableRecord,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  readStringField,
+} from "openclaw/plugin-sdk/text-runtime";
 import { extractHandleFromChatGuid, normalizeBlueBubblesHandle } from "./targets.js";
 import type { BlueBubblesAttachment } from "./types.js";
 
@@ -164,8 +169,8 @@ function extractReplyMetadata(message: Record<string, unknown>): {
       : undefined;
 
   return {
-    replyToId: (replyToId ?? fallbackReplyId)?.trim() || undefined,
-    replyToBody: replyToBody?.trim() || undefined,
+    replyToId: normalizeOptionalString(replyToId ?? fallbackReplyId),
+    replyToBody: normalizeOptionalString(replyToBody),
     replyToSender: normalizedSender || undefined,
   };
 }
@@ -336,7 +341,7 @@ function normalizeParticipantEntry(entry: unknown): BlueBubblesParticipant | nul
   if (!normalizedId) {
     return null;
   }
-  const name = nameRaw?.trim() || undefined;
+  const name = normalizeOptionalString(nameRaw);
   return { id: normalizedId, name };
 }
 
@@ -352,7 +357,7 @@ export function normalizeParticipantList(raw: unknown): BlueBubblesParticipant[]
     if (!normalized?.id) {
       continue;
     }
-    const key = normalized.id.toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(normalized.id);
     if (seen.has(key)) {
       continue;
     }
@@ -372,7 +377,7 @@ export function formatGroupMembers(params: {
     if (!entry?.id) {
       continue;
     }
-    const key = entry.id.toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(entry.id);
     if (seen.has(key)) {
       continue;
     }
@@ -563,7 +568,9 @@ export function resolveTapbackContext(message: NormalizedWebhookMessage): {
   if (!hasTapbackType && !hasTapbackMarker) {
     return null;
   }
-  const replyToId = message.associatedMessageGuid?.trim() || message.replyToId?.trim() || undefined;
+  const replyToId =
+    normalizeOptionalString(message.associatedMessageGuid) ??
+    normalizeOptionalString(message.replyToId);
   const actionHint = resolveTapbackActionHint(associatedType);
   const emojiHint =
     message.associatedMessageEmoji?.trim() || REACTION_TYPE_MAP.get(associatedType ?? -1)?.emoji;
@@ -582,7 +589,7 @@ export function parseTapbackText(params: {
   quotedText: string;
 } | null {
   const trimmed = params.text.trim();
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   if (!trimmed) {
     return null;
   }

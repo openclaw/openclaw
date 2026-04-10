@@ -10,6 +10,7 @@ import {
   type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { applyOpenAIConfig, OPENAI_DEFAULT_MODEL } from "./default-models.js";
 import { buildOpenAIReplayPolicy } from "./replay-policy.js";
 import {
@@ -106,7 +107,7 @@ function resolveOpenAIGpt54ForwardCompatModel(
   ctx: ProviderResolveDynamicModelContext,
 ): ProviderRuntimeModel | undefined {
   const trimmedModelId = ctx.modelId.trim();
-  const lower = trimmedModelId.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmedModelId);
   let templateIds: readonly string[];
   let patch: Partial<ProviderRuntimeModel>;
   if (lower === OPENAI_GPT_54_MODEL_ID) {
@@ -252,7 +253,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
     suppressBuiltInModel: (ctx) => {
       if (
         !SUPPRESSED_SPARK_PROVIDERS.has(normalizeProviderId(ctx.provider)) ||
-        ctx.modelId.toLowerCase() !== OPENAI_DIRECT_SPARK_MODEL_ID
+        normalizeLowercaseStringOrEmpty(ctx.modelId) !== OPENAI_DIRECT_SPARK_MODEL_ID
       ) {
         return undefined;
       }

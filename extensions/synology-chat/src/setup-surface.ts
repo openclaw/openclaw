@@ -11,6 +11,7 @@ import {
   type ChannelSetupWizard,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import type { SynologyChatAccountRaw, SynologyChatChannelConfig } from "./types.js";
 
@@ -212,11 +213,11 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
         const raw = getRawAccountConfig(cfg, accountId);
         return {
           accountConfigured: isSynologyChatConfigured(cfg, accountId),
-          hasConfiguredValue: Boolean(raw.token?.trim()),
-          resolvedValue: account.token.trim() || undefined,
+          hasConfiguredValue: Boolean(normalizeOptionalString(raw.token)),
+          resolvedValue: normalizeOptionalString(account.token),
           envValue:
             accountId === DEFAULT_ACCOUNT_ID
-              ? process.env.SYNOLOGY_CHAT_TOKEN?.trim() || undefined
+              ? normalizeOptionalString(process.env.SYNOLOGY_CHAT_TOKEN)
               : undefined,
         };
       },

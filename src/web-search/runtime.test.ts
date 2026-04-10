@@ -1,6 +1,10 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
+import {
+  createWebSearchTestProvider,
+  type WebSearchTestProviderParams,
+} from "../test-utils/web-provider-runtime.test-helpers.js";
 
 type TestPluginWebSearchConfig = {
   webSearch?: {
@@ -20,38 +24,76 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolveRuntimeWebSearchProviders: resolveRuntimeWebSearchProvidersMock,
 }));
 
-function createProvider(params: {
-  pluginId: string;
-  id: string;
-  credentialPath: string;
-  autoDetectOrder?: number;
-  requiresCredential?: boolean;
-  getCredentialValue?: PluginWebSearchProviderEntry["getCredentialValue"];
-  getConfiguredCredentialValue?: PluginWebSearchProviderEntry["getConfiguredCredentialValue"];
-  createTool?: PluginWebSearchProviderEntry["createTool"];
-}): PluginWebSearchProviderEntry {
+function createCustomSearchTool() {
   return {
-    pluginId: params.pluginId,
-    id: params.id,
-    label: params.id,
-    hint: `${params.id} runtime provider`,
-    envVars: [`${params.id.toUpperCase()}_API_KEY`],
-    placeholder: `${params.id}-...`,
-    signupUrl: `https://example.com/${params.id}`,
-    credentialPath: params.credentialPath,
-    autoDetectOrder: params.autoDetectOrder,
-    requiresCredential: params.requiresCredential,
-    getCredentialValue: params.getCredentialValue ?? (() => undefined),
-    setCredentialValue: () => {},
-    getConfiguredCredentialValue: params.getConfiguredCredentialValue,
-    createTool:
-      params.createTool ??
-      (() => ({
-        description: params.id,
-        parameters: {},
-        execute: async (args) => ({ ...args, provider: params.id }),
-      })),
+    description: "custom",
+    parameters: {},
+    execute: async (args: Record<string, unknown>) => ({ ...args, ok: true }),
   };
+}
+
+function getCustomSearchApiKey(config?: OpenClawConfig): unknown {
+  const pluginConfig = config?.plugins?.entries?.["custom-search"]?.config as
+    | TestPluginWebSearchConfig
+    | undefined;
+  return pluginConfig?.webSearch?.apiKey;
+}
+
+function createCustomSearchProvider(
+  overrides: Partial<WebSearchTestProviderParams> = {},
+): PluginWebSearchProviderEntry {
+  return createWebSearchTestProvider({
+    pluginId: "custom-search",
+    id: "custom",
+    credentialPath: "plugins.entries.custom-search.config.webSearch.apiKey",
+    autoDetectOrder: 1,
+    getConfiguredCredentialValue: getCustomSearchApiKey,
+    createTool: createCustomSearchTool,
+    ...overrides,
+  });
+}
+
+function createCustomSearchConfig(apiKey: unknown): OpenClawConfig {
+  return {
+    plugins: {
+      entries: {
+        "custom-search": {
+          enabled: true,
+          config: {
+            webSearch: {
+              apiKey,
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
+function createGoogleSearchProvider(
+  overrides: Partial<WebSearchTestProviderParams> = {},
+): PluginWebSearchProviderEntry {
+  return createWebSearchTestProvider({
+    pluginId: "google",
+    id: "google",
+    credentialPath: "tools.web.search.google.apiKey",
+    autoDetectOrder: 1,
+    getCredentialValue: () => "configured",
+    ...overrides,
+  });
+}
+
+function createDuckDuckGoSearchProvider(
+  overrides: Partial<WebSearchTestProviderParams> = {},
+): PluginWebSearchProviderEntry {
+  return createWebSearchTestProvider({
+    pluginId: "duckduckgo",
+    id: "duckduckgo",
+    credentialPath: "",
+    autoDetectOrder: 100,
+    requiresCredential: false,
+    ...overrides,
+  });
 }
 
 describe("web search runtime", () => {
@@ -78,17 +120,9 @@ describe("web search runtime", () => {
 
   it("executes searches through the active plugin registry", async () => {
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([
-      createProvider({
-        pluginId: "custom-search",
-        id: "custom",
+      createCustomSearchProvider({
         credentialPath: "tools.web.search.custom.apiKey",
-        autoDetectOrder: 1,
         getCredentialValue: () => "configured",
-        createTool: () => ({
-          description: "custom",
-          parameters: {},
-          execute: async (args) => ({ ...args, ok: true }),
-        }),
       }),
     ]);
 
@@ -104,40 +138,11 @@ describe("web search runtime", () => {
   });
 
   it("auto-detects a provider from canonical plugin-owned credentials", async () => {
-    const provider = createProvider({
-      pluginId: "custom-search",
-      id: "custom",
-      credentialPath: "plugins.entries.custom-search.config.webSearch.apiKey",
-      autoDetectOrder: 1,
-      getConfiguredCredentialValue: (config) => {
-        const pluginConfig = config?.plugins?.entries?.["custom-search"]?.config as
-          | TestPluginWebSearchConfig
-          | undefined;
-        return pluginConfig?.webSearch?.apiKey;
-      },
-      createTool: () => ({
-        description: "custom",
-        parameters: {},
-        execute: async (args) => ({ ...args, ok: true }),
-      }),
-    });
+    const provider = createCustomSearchProvider();
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
     resolvePluginWebSearchProvidersMock.mockReturnValue([provider]);
 
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          "custom-search": {
-            enabled: true,
-            config: {
-              webSearch: {
-                apiKey: "custom-config-key",
-              },
-            },
-          },
-        },
-      },
-    };
+    const config = createCustomSearchConfig("custom-config-key");
 
     await expect(
       runWebSearch({
@@ -151,44 +156,15 @@ describe("web search runtime", () => {
   });
 
   it("treats non-env SecretRefs as configured credentials for provider auto-detect", async () => {
-    const provider = createProvider({
-      pluginId: "custom-search",
-      id: "custom",
-      credentialPath: "plugins.entries.custom-search.config.webSearch.apiKey",
-      autoDetectOrder: 1,
-      getConfiguredCredentialValue: (config) => {
-        const pluginConfig = config?.plugins?.entries?.["custom-search"]?.config as
-          | TestPluginWebSearchConfig
-          | undefined;
-        return pluginConfig?.webSearch?.apiKey;
-      },
-      createTool: () => ({
-        description: "custom",
-        parameters: {},
-        execute: async (args) => ({ ...args, ok: true }),
-      }),
-    });
+    const provider = createCustomSearchProvider();
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
     resolvePluginWebSearchProvidersMock.mockReturnValue([provider]);
 
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          "custom-search": {
-            enabled: true,
-            config: {
-              webSearch: {
-                apiKey: {
-                  source: "file",
-                  provider: "vault",
-                  id: "/providers/custom-search/apiKey",
-                },
-              },
-            },
-          },
-        },
-      },
-    };
+    const config = createCustomSearchConfig({
+      source: "file",
+      provider: "vault",
+      id: "/providers/custom-search/apiKey",
+    });
 
     await expect(
       runWebSearch({
@@ -203,12 +179,7 @@ describe("web search runtime", () => {
 
   it("falls back to a keyless provider when no credentials are available", async () => {
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([
-      createProvider({
-        pluginId: "duckduckgo",
-        id: "duckduckgo",
-        credentialPath: "",
-        autoDetectOrder: 100,
-        requiresCredential: false,
+      createDuckDuckGoSearchProvider({
         getCredentialValue: () => "duckduckgo-no-key-needed",
       }),
     ]);
@@ -226,7 +197,7 @@ describe("web search runtime", () => {
 
   it("prefers the active runtime-selected provider when callers omit runtime metadata", async () => {
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([
-      createProvider({
+      createWebSearchTestProvider({
         pluginId: "alpha-search",
         id: "alpha",
         credentialPath: "tools.web.search.alpha.apiKey",
@@ -242,7 +213,7 @@ describe("web search runtime", () => {
           }),
         }),
       }),
-      createProvider({
+      createWebSearchTestProvider({
         pluginId: "beta-search",
         id: "beta",
         credentialPath: "tools.web.search.beta.apiKey",
@@ -288,5 +259,229 @@ describe("web search runtime", () => {
       provider: "beta",
       result: { query: "runtime", provider: "beta", runtimeSelectedProvider: "beta" },
     });
+  });
+
+  it("falls back to another provider when auto-selected search execution fails", async () => {
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createGoogleSearchProvider({
+        createTool: () => ({
+          description: "google",
+          parameters: {},
+          execute: async () => {
+            throw new Error("google aborted");
+          },
+        }),
+      }),
+      createDuckDuckGoSearchProvider(),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: {},
+        args: { query: "fallback" },
+      }),
+    ).resolves.toEqual({
+      provider: "duckduckgo",
+      result: { query: "fallback", provider: "duckduckgo" },
+    });
+  });
+
+  it("does not prebuild fallback provider tools before attempting the selected provider", async () => {
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createGoogleSearchProvider(),
+      createWebSearchTestProvider({
+        pluginId: "broken-fallback",
+        id: "broken-fallback",
+        credentialPath: "",
+        autoDetectOrder: 100,
+        requiresCredential: false,
+        createTool: () => {
+          throw new Error("fallback createTool exploded");
+        },
+      }),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: {},
+        args: { query: "selected-first" },
+      }),
+    ).resolves.toEqual({
+      provider: "google",
+      result: { query: "selected-first", provider: "google" },
+    });
+  });
+
+  it("does not fall back when the provider came from explicit config selection", async () => {
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createGoogleSearchProvider({
+        createTool: () => ({
+          description: "google",
+          parameters: {},
+          execute: async () => {
+            throw new Error("google aborted");
+          },
+        }),
+      }),
+      createDuckDuckGoSearchProvider(),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: {
+          tools: {
+            web: {
+              search: {
+                provider: "google",
+              },
+            },
+          },
+        },
+        args: { query: "configured" },
+      }),
+    ).rejects.toThrow("google aborted");
+  });
+
+  it("does not fall back when the caller explicitly selects a provider", async () => {
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createGoogleSearchProvider({
+        createTool: () => ({
+          description: "google",
+          parameters: {},
+          execute: async () => {
+            throw new Error("google aborted");
+          },
+        }),
+      }),
+      createDuckDuckGoSearchProvider(),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: {},
+        providerId: "google",
+        args: { query: "explicit" },
+      }),
+    ).rejects.toThrow("google aborted");
+  });
+
+  it("fails fast when an explicit provider cannot create a tool", async () => {
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createGoogleSearchProvider({
+        createTool: () => null,
+      }),
+      createDuckDuckGoSearchProvider(),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: {},
+        providerId: "google",
+        args: { query: "explicit-null-tool" },
+      }),
+    ).rejects.toThrow('web_search provider "google" is not available.');
+  });
+
+  it("fails fast when the caller explicitly selects an unknown provider", async () => {
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createGoogleSearchProvider(),
+      createDuckDuckGoSearchProvider(),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: {},
+        providerId: "missing-id",
+        args: { query: "explicit-missing" },
+      }),
+    ).rejects.toThrow('Unknown web_search provider "missing-id".');
+  });
+
+  it("still falls back when config names an unknown provider id", async () => {
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createGoogleSearchProvider({
+        createTool: () => {
+          throw new Error("google aborted");
+        },
+      }),
+      createDuckDuckGoSearchProvider(),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: {
+          tools: {
+            web: {
+              search: {
+                provider: "missing-id",
+              },
+            },
+          },
+        },
+        args: { query: "config-typo" },
+      }),
+    ).resolves.toMatchObject({
+      provider: "duckduckgo",
+      result: expect.objectContaining({
+        provider: "duckduckgo",
+        query: "config-typo",
+      }),
+    });
+  });
+
+  it("honors preferRuntimeProviders during execution", async () => {
+    const configuredProvider = createGoogleSearchProvider();
+    const runtimeProvider = createWebSearchTestProvider({
+      pluginId: "runtime-search",
+      id: "runtime-search",
+      credentialPath: "",
+      autoDetectOrder: 0,
+      requiresCredential: false,
+    });
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([configuredProvider, runtimeProvider]);
+    resolvePluginWebSearchProvidersMock.mockReturnValue([configuredProvider]);
+
+    await expect(
+      runWebSearch({
+        config: {
+          tools: {
+            web: {
+              search: {
+                provider: "google",
+              },
+            },
+          },
+        },
+        runtimeWebSearch: {
+          providerConfigured: "runtime-search",
+          selectedProvider: "runtime-search",
+          providerSource: "configured",
+          diagnostics: [],
+        },
+        preferRuntimeProviders: false,
+        args: { query: "prefer-config" },
+      }),
+    ).resolves.toEqual({
+      provider: "google",
+      result: { query: "prefer-config", provider: "google" },
+    });
+  });
+
+  it("returns a clear error when every fallback-capable provider is unavailable", async () => {
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createGoogleSearchProvider({
+        createTool: () => null,
+      }),
+      createDuckDuckGoSearchProvider({
+        createTool: () => null,
+      }),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: {},
+        args: { query: "all-null-tools" },
+      }),
+    ).rejects.toThrow("web_search is enabled but no provider is currently available.");
   });
 });

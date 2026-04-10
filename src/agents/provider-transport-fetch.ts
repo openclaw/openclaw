@@ -55,13 +55,15 @@ function buildManagedResponse(response: Response, release: () => Promise<void>):
 }
 
 function resolveModelRequestPolicy(model: Model<Api>) {
+  const request = getModelProviderRequestTransport(model);
   return resolveProviderRequestPolicyConfig({
     provider: model.provider,
     api: model.api,
     baseUrl: model.baseUrl,
     capability: "llm",
     transport: "stream",
-    request: getModelProviderRequestTransport(model),
+    request,
+    allowPrivateNetwork: request?.allowPrivateNetwork === true,
   });
 }
 
@@ -93,6 +95,9 @@ export function buildGuardedModelFetch(model: Model<Api>): typeof fetch {
       url,
       init: requestInit ?? init,
       dispatcherPolicy,
+      // Provider transport intentionally keeps the secure default and never
+      // replays unsafe request bodies across cross-origin redirects.
+      allowCrossOriginUnsafeRedirectReplay: false,
       ...(requestConfig.allowPrivateNetwork ? { policy: { allowPrivateNetwork: true } } : {}),
     });
     return buildManagedResponse(result.response, result.release);

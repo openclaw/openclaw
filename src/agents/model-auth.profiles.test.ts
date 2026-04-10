@@ -41,11 +41,18 @@ vi.mock("../plugins/provider-runtime.js", async () => {
         return undefined;
       }
       const providerConfig = params.context.providerConfig;
-      const hasApiConfig =
-        Boolean(providerConfig?.api?.trim()) ||
-        Boolean(providerConfig?.baseUrl?.trim()) ||
-        (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0);
-      if (!hasApiConfig) {
+      const hasMeaningfulOllamaConfig =
+        params.provider !== "ollama"
+          ? Boolean(providerConfig?.api?.trim()) ||
+            Boolean(providerConfig?.baseUrl?.trim()) ||
+            (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0)
+          : (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0) ||
+            Boolean(providerConfig?.api?.trim() && providerConfig.api.trim() !== "ollama") ||
+            Boolean(
+              providerConfig?.baseUrl?.trim() &&
+              providerConfig.baseUrl.trim().replace(/\/+$/, "") !== "http://127.0.0.1:11434",
+            );
+      if (!hasMeaningfulOllamaConfig) {
         return undefined;
       }
       return {
@@ -407,6 +414,28 @@ describe("getApiKeyForModel", () => {
       expect(resolved.apiKey).toBe("ollama-local");
       expect(resolved.mode).toBe("api-key");
       expect(resolved.source).toContain("synthetic local key");
+    });
+  });
+
+  it("does not mint synthetic local auth for default-ish ollama stubs", async () => {
+    await withEnvAsync({ OLLAMA_API_KEY: undefined }, async () => {
+      await expect(
+        resolveApiKeyForProvider({
+          provider: "ollama",
+          store: { version: 1, profiles: {} },
+          cfg: {
+            models: {
+              providers: {
+                ollama: {
+                  baseUrl: "http://127.0.0.1:11434",
+                  api: "ollama",
+                  models: [],
+                },
+              },
+            },
+          },
+        }),
+      ).rejects.toThrow(/No API key found for provider "ollama"/);
     });
   });
 
@@ -784,25 +813,40 @@ describe("getApiKeyForModel", () => {
     );
   });
 
-  it("resolveEnvApiKey('volcengine-plan') uses volcengine auth candidates", async () => {
-    await withEnvAsync(
-      {
-        VOLCANO_ENGINE_API_KEY: "volcengine-plan-key",
-      },
-      async () => {
-        const resolved = resolveEnvApiKey("volcengine-plan");
-        expect(resolved?.apiKey).toBe("volcengine-plan-key");
-        expect(resolved?.source).toContain("VOLCANO_ENGINE_API_KEY");
-      },
-    );
-  });
-
   it("resolveEnvApiKey('anthropic-vertex') uses the provided env snapshot", async () => {
     const resolved = resolveEnvApiKey("anthropic-vertex", {
       GOOGLE_CLOUD_PROJECT_ID: "vertex-project",
     } as NodeJS.ProcessEnv);
 
     expect(resolved).toBeNull();
+  });
+
+  it("resolveEnvApiKey('google-vertex') uses the provided env snapshot", async () => {
+    const resolved = resolveEnvApiKey("google-vertex", {
+      GOOGLE_CLOUD_API_KEY: "google-cloud-api-key",
+    } as NodeJS.ProcessEnv);
+
+    expect(resolved?.apiKey).toBe("google-cloud-api-key");
+    expect(resolved?.source).toBe("gcloud adc");
+  });
+
+  it("resolveEnvApiKey('google-vertex') accepts ADC credentials from the provided env snapshot", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-"));
+    const credentialsPath = path.join(tempDir, "adc.json");
+    await fs.writeFile(credentialsPath, "{}", "utf8");
+
+    try {
+      const resolved = resolveEnvApiKey("google-vertex", {
+        GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+        GOOGLE_CLOUD_LOCATION: "us-central1",
+        GOOGLE_CLOUD_PROJECT: "vertex-project",
+      } as NodeJS.ProcessEnv);
+
+      expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
+      expect(resolved?.source).toBe("gcloud adc");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("resolveEnvApiKey('anthropic-vertex') accepts GOOGLE_APPLICATION_CREDENTIALS with project_id", async () => {

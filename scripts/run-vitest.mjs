@@ -7,6 +7,7 @@ import {
 } from "./vitest-process-group.mjs";
 
 const TRUTHY_ENV_VALUES = new Set(["1", "true", "yes", "on"]);
+const SUPPRESSED_VITEST_STDERR_PATTERNS = ["[PLUGIN_TIMINGS] Warning:"];
 const require = createRequire(import.meta.url);
 
 function isTruthyEnvValue(value) {
@@ -30,7 +31,40 @@ export function resolveVitestSpawnParams(env = process.env, platform = process.p
   return {
     env,
     detached: shouldUseDetachedVitestProcessGroup(platform),
+    stdio: ["inherit", "pipe", "pipe"],
   };
+}
+
+export function shouldSuppressVitestStderrLine(line) {
+  return SUPPRESSED_VITEST_STDERR_PATTERNS.some((pattern) => line.includes(pattern));
+}
+
+function forwardVitestOutput(stream, target, shouldSuppressLine = () => false) {
+  if (!stream) {
+    return;
+  }
+
+  let buffered = "";
+  stream.setEncoding("utf8");
+  stream.on("data", (chunk) => {
+    buffered += chunk;
+    while (true) {
+      const newlineIndex = buffered.indexOf("\n");
+      if (newlineIndex === -1) {
+        break;
+      }
+      const line = buffered.slice(0, newlineIndex + 1);
+      buffered = buffered.slice(newlineIndex + 1);
+      if (!shouldSuppressLine(line)) {
+        target.write(line);
+      }
+    }
+  });
+  stream.on("end", () => {
+    if (buffered.length > 0 && !shouldSuppressLine(buffered)) {
+      target.write(buffered);
+    }
+  });
 }
 
 function main(argv = process.argv.slice(2), env = process.env) {
@@ -45,6 +79,8 @@ function main(argv = process.argv.slice(2), env = process.env) {
     ...spawnParams,
   });
   const teardownChildCleanup = installVitestProcessGroupCleanup({ child });
+  forwardVitestOutput(child.stdout, process.stdout);
+  forwardVitestOutput(child.stderr, process.stderr, shouldSuppressVitestStderrLine);
 
   child.on("exit", (code, signal) => {
     teardownChildCleanup();

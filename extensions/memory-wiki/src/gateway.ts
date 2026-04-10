@@ -102,7 +102,12 @@ export function registerMemoryWikiGatewayMethods(params: {
     async ({ respond }) => {
       try {
         await syncImportedSourcesIfNeeded(config, appConfig);
-        respond(true, await resolveMemoryWikiStatus(config));
+        respond(
+          true,
+          await resolveMemoryWikiStatus(config, {
+            appConfig,
+          }),
+        );
       } catch (error) {
         respondError(respond, error);
       }
@@ -127,7 +132,9 @@ export function registerMemoryWikiGatewayMethods(params: {
     async ({ respond }) => {
       try {
         await syncImportedSourcesIfNeeded(config, appConfig);
-        const status = await resolveMemoryWikiStatus(config);
+        const status = await resolveMemoryWikiStatus(config, {
+          appConfig,
+        });
         respond(true, buildMemoryWikiDoctorReport(status));
       } catch (error) {
         respondError(respond, error);

@@ -87,6 +87,7 @@ export const createOpenClawCodingToolsMock = vi.fn(() => []);
 export const resolveEmbeddedAgentStreamFnMock: Mock<
   (params?: unknown) => MockEmbeddedAgentStreamFn
 > = vi.fn((_params?: unknown) => vi.fn());
+export const registerProviderStreamForModelMock: Mock<(params?: unknown) => unknown> = vi.fn();
 export const applyExtraParamsToAgentMock = vi.fn(() => ({ effectiveExtraParams: {} }));
 export const resolveAgentTransportOverrideMock: Mock<(params?: unknown) => string | undefined> =
   vi.fn(() => undefined);
@@ -133,6 +134,8 @@ export function resetCompactSessionStateMocks(): void {
   sessionAbortCompactionMock.mockReset();
   resolveEmbeddedAgentStreamFnMock.mockReset();
   resolveEmbeddedAgentStreamFnMock.mockImplementation((_params?: unknown) => vi.fn());
+  registerProviderStreamForModelMock.mockReset();
+  registerProviderStreamForModelMock.mockReturnValue(undefined);
   applyExtraParamsToAgentMock.mockReset();
   applyExtraParamsToAgentMock.mockReturnValue({ effectiveExtraParams: {} });
   resolveAgentTransportOverrideMock.mockReset();
@@ -201,6 +204,10 @@ export async function loadCompactHooksHarness(): Promise<{
     ensureRuntimePluginsLoaded,
   }));
 
+  vi.doMock("../provider-stream.js", () => ({
+    registerProviderStreamForModel: registerProviderStreamForModelMock,
+  }));
+
   vi.doMock("../../hooks/internal-hooks.js", async () => {
     const actual = await vi.importActual<typeof import("../../hooks/internal-hooks.js")>(
       "../../hooks/internal-hooks.js",
@@ -262,6 +269,7 @@ export async function loadCompactHooksHarness(): Promise<{
       create: vi.fn(() => ({})),
     },
     estimateTokens: estimateTokensMock,
+    generateSummary: vi.fn(async () => "summary"),
   }));
 
   vi.doMock("../session-tool-result-guard-wrapper.js", () => ({
@@ -450,6 +458,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../agent-scope.js", () => ({
+    listAgentEntries: vi.fn(() => []),
     resolveSessionAgentId: resolveSessionAgentIdMock,
     resolveSessionAgentIds: vi.fn(() => ({ defaultAgentId: "main", sessionAgentId: "main" })),
   }));

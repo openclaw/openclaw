@@ -18,14 +18,18 @@ import {
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
 const getChromeWebSocketUrlSpy = vi.spyOn(chromeModule, "getChromeWebSocketUrl");
 
+type MockRoute = { continue: () => Promise<void>; abort: () => Promise<void> };
+type MockRequest = {
+  isNavigationRequest: () => boolean;
+  frame: () => object;
+  resourceType?: () => string;
+  url: () => string;
+};
+type MockRouteHandler = (route: MockRoute, request: MockRequest) => Promise<void>;
+
 function installBrowserMocks() {
   const pageOn = vi.fn();
-  let routeHandler:
-    | ((
-        route: { continue: () => Promise<void>; abort: () => Promise<void> },
-        request: unknown,
-      ) => Promise<void>)
-    | null = null;
+  let routeHandler: MockRouteHandler | null = null;
   const pageGoto = vi.fn<
     (...args: unknown[]) => Promise<null | { request: () => Record<string, unknown> }>
   >(async () => null);
@@ -110,6 +114,62 @@ function installBrowserMocks() {
   };
 }
 
+function createMockRoute(route?: Partial<MockRoute>): MockRoute {
+  return {
+    continue: vi.fn(async () => {}),
+    abort: vi.fn(async () => {}),
+    ...route,
+  };
+}
+
+async function dispatchMockNavigation(params: {
+  getRouteHandler: () => MockRouteHandler | null;
+  mainFrame: object;
+  url: string;
+  frame?: object;
+  isNavigationRequest?: boolean;
+  resourceType?: string;
+  route?: Partial<MockRoute>;
+}) {
+  const handler = params.getRouteHandler();
+  if (!handler) {
+    throw new Error("missing route handler");
+  }
+  const { resourceType } = params;
+  await handler(createMockRoute(params.route), {
+    isNavigationRequest: () => params.isNavigationRequest ?? true,
+    frame: () => params.frame ?? params.mainFrame,
+    ...(resourceType ? { resourceType: () => resourceType } : {}),
+    url: () => params.url,
+  });
+}
+
+function mockBlockedRedirectNavigation(params: {
+  pageGoto: ReturnType<typeof installBrowserMocks>["pageGoto"];
+  getRouteHandler: () => MockRouteHandler | null;
+  mainFrame: object;
+  startUrl?: string;
+  hopUrl?: string;
+  hopIsNavigationRequest?: boolean;
+  hopResourceType?: string;
+}) {
+  params.pageGoto.mockImplementationOnce(async () => {
+    await dispatchMockNavigation({
+      getRouteHandler: params.getRouteHandler,
+      mainFrame: params.mainFrame,
+      url: params.startUrl ?? "https://93.184.216.34/start",
+    });
+    await dispatchMockNavigation({
+      getRouteHandler: params.getRouteHandler,
+      mainFrame: params.mainFrame,
+      url: params.hopUrl ?? "http://127.0.0.1:18080/internal-hop",
+      isNavigationRequest: params.hopIsNavigationRequest,
+      resourceType: params.hopResourceType,
+    });
+    throw new Error("Navigation aborted");
+  });
+}
+
 afterEach(async () => {
   connectOverCdpSpy.mockClear();
   getChromeWebSocketUrlSpy.mockClear();
@@ -142,30 +202,43 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     expect(pageGoto).not.toHaveBeenCalled();
   });
 
+  it("blocks hostname navigation when strict SSRF policy is configured", async () => {
+    const { pageGoto } = installBrowserMocks();
+
+    await expect(
+      createPageViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        url: "https://example.com",
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false, allowedHostnames: ["127.0.0.1"] },
+      }),
+    ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
+
+    expect(pageGoto).not.toHaveBeenCalled();
+  });
+
   it("blocks private intermediate redirect hops", async () => {
     const { pageGoto, pageClose, getRouteHandler, mainFrame } = installBrowserMocks();
-    pageGoto.mockImplementationOnce(async () => {
-      const handler = getRouteHandler();
-      if (!handler) {
-        throw new Error("missing route handler");
-      }
-      await handler(
-        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
-        {
-          isNavigationRequest: () => true,
-          frame: () => mainFrame,
-          url: () => "https://93.184.216.34/start",
-        },
-      );
-      await handler(
-        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
-        {
-          isNavigationRequest: () => true,
-          frame: () => mainFrame,
-          url: () => "http://127.0.0.1:18080/internal-hop",
-        },
-      );
-      throw new Error("Navigation aborted");
+    mockBlockedRedirectNavigation({ pageGoto, getRouteHandler, mainFrame });
+
+    await expect(
+      createPageViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        url: "https://93.184.216.34/start",
+      }),
+    ).rejects.toBeInstanceOf(SsrFBlockedError);
+
+    expect(pageGoto).toHaveBeenCalledTimes(1);
+    expect(pageClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks private redirect hops even when Playwright marks hop as non-navigation", async () => {
+    const { pageGoto, pageClose, getRouteHandler, mainFrame } = installBrowserMocks();
+    mockBlockedRedirectNavigation({
+      pageGoto,
+      getRouteHandler,
+      mainFrame,
+      hopIsNavigationRequest: false,
+      hopResourceType: "document",
     });
 
     await expect(
@@ -177,6 +250,41 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
 
     expect(pageGoto).toHaveBeenCalledTimes(1);
     expect(pageClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts private subframe document hops without quarantining the page", async () => {
+    const { pageGoto, pageClose, getRouteHandler, mainFrame } = installBrowserMocks();
+    const subframe = {};
+    const subframeRoute = createMockRoute();
+    pageGoto.mockImplementationOnce(async () => {
+      await dispatchMockNavigation({
+        getRouteHandler,
+        mainFrame,
+        url: "https://93.184.216.34/start",
+      });
+      await dispatchMockNavigation({
+        getRouteHandler,
+        mainFrame,
+        frame: subframe,
+        url: "http://127.0.0.1:18080/internal-hop",
+        route: subframeRoute,
+      });
+      return {
+        request: () => ({
+          url: () => "https://93.184.216.34/start",
+          redirectedFrom: () => null,
+        }),
+      };
+    });
+
+    const created = await createPageViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      url: "https://93.184.216.34/start",
+    });
+
+    expect(created.targetId).toBe("TARGET_1");
+    expect(subframeRoute.abort).toHaveBeenCalledTimes(1);
+    expect(pageClose).not.toHaveBeenCalled();
   });
 
   it("preserves the created tab on ordinary navigation failure", async () => {
@@ -197,23 +305,16 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
   it("does not quarantine a tab when route.continue fails", async () => {
     const { pageGoto, pageClose, getRouteHandler, mainFrame } = installBrowserMocks();
     pageGoto.mockImplementationOnce(async () => {
-      const handler = getRouteHandler();
-      if (!handler) {
-        throw new Error("missing route handler");
-      }
-      await handler(
-        {
+      await dispatchMockNavigation({
+        getRouteHandler,
+        mainFrame,
+        url: "https://example.com",
+        route: {
           continue: vi.fn(async () => {
             throw new Error("page.goto: Frame has been detached");
           }),
-          abort: vi.fn(async () => {}),
         },
-        {
-          isNavigationRequest: () => true,
-          frame: () => mainFrame,
-          url: () => "https://example.com",
-        },
-      );
+      });
       throw new Error("page.goto: Frame has been detached");
     });
 
@@ -229,28 +330,11 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
 
   it("propagates unsupported redirect protocols as navigation errors", async () => {
     const { pageGoto, pageClose, getRouteHandler, mainFrame } = installBrowserMocks();
-    pageGoto.mockImplementationOnce(async () => {
-      const handler = getRouteHandler();
-      if (!handler) {
-        throw new Error("missing route handler");
-      }
-      await handler(
-        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
-        {
-          isNavigationRequest: () => true,
-          frame: () => mainFrame,
-          url: () => "https://93.184.216.34/start",
-        },
-      );
-      await handler(
-        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
-        {
-          isNavigationRequest: () => true,
-          frame: () => mainFrame,
-          url: () => "file:///etc/passwd",
-        },
-      );
-      throw new Error("Navigation aborted");
+    mockBlockedRedirectNavigation({
+      pageGoto,
+      getRouteHandler,
+      mainFrame,
+      hopUrl: "file:///etc/passwd",
     });
 
     await expect(
@@ -275,29 +359,7 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
         throw new Error("getaddrinfo EAI_AGAIN internal-hop");
       }
     });
-    pageGoto.mockImplementationOnce(async () => {
-      const handler = getRouteHandler();
-      if (!handler) {
-        throw new Error("missing route handler");
-      }
-      await handler(
-        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
-        {
-          isNavigationRequest: () => true,
-          frame: () => mainFrame,
-          url: () => "https://93.184.216.34/start",
-        },
-      );
-      await handler(
-        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
-        {
-          isNavigationRequest: () => true,
-          frame: () => mainFrame,
-          url: () => "http://127.0.0.1:18080/internal-hop",
-        },
-      );
-      throw new Error("Navigation aborted");
-    });
+    mockBlockedRedirectNavigation({ pageGoto, getRouteHandler, mainFrame });
 
     try {
       const created = await createPageViaPlaywright({
@@ -324,18 +386,11 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
       new Error("getaddrinfo EAI_AGAIN postcheck.example"),
     );
     pageGoto.mockImplementationOnce(async () => {
-      const handler = getRouteHandler();
-      if (!handler) {
-        throw new Error("missing route handler");
-      }
-      await handler(
-        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
-        {
-          isNavigationRequest: () => true,
-          frame: () => mainFrame,
-          url: () => "https://93.184.216.34/start",
-        },
-      );
+      await dispatchMockNavigation({
+        getRouteHandler,
+        mainFrame,
+        url: "https://93.184.216.34/start",
+      });
       return {
         request: () => ({
           url: () => "https://93.184.216.34/final",
@@ -367,29 +422,7 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
   it("keeps blocked tab quarantined if close fails", async () => {
     const { pageGoto, pageClose, getRouteHandler, mainFrame } = installBrowserMocks();
     pageClose.mockRejectedValueOnce(new Error("close failed"));
-    pageGoto.mockImplementationOnce(async () => {
-      const handler = getRouteHandler();
-      if (!handler) {
-        throw new Error("missing route handler");
-      }
-      await handler(
-        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
-        {
-          isNavigationRequest: () => true,
-          frame: () => mainFrame,
-          url: () => "https://93.184.216.34/start",
-        },
-      );
-      await handler(
-        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
-        {
-          isNavigationRequest: () => true,
-          frame: () => mainFrame,
-          url: () => "http://127.0.0.1:18080/internal-hop",
-        },
-      );
-      throw new Error("Navigation aborted");
-    });
+    mockBlockedRedirectNavigation({ pageGoto, getRouteHandler, mainFrame });
 
     await expect(
       createPageViaPlaywright({
@@ -417,29 +450,7 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
   it("preserves blocked-target quarantine across forced reconnects", async () => {
     const { pageGoto, pageClose, getRouteHandler, mainFrame } = installBrowserMocks();
     pageClose.mockRejectedValueOnce(new Error("close failed"));
-    pageGoto.mockImplementationOnce(async () => {
-      const handler = getRouteHandler();
-      if (!handler) {
-        throw new Error("missing route handler");
-      }
-      await handler(
-        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
-        {
-          isNavigationRequest: () => true,
-          frame: () => mainFrame,
-          url: () => "https://93.184.216.34/start",
-        },
-      );
-      await handler(
-        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
-        {
-          isNavigationRequest: () => true,
-          frame: () => mainFrame,
-          url: () => "http://127.0.0.1:18080/internal-hop",
-        },
-      );
-      throw new Error("Navigation aborted");
-    });
+    mockBlockedRedirectNavigation({ pageGoto, getRouteHandler, mainFrame });
 
     await expect(
       createPageViaPlaywright({
@@ -465,29 +476,7 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     const { pageGoto, pageClose, getBrowserDisconnectedHandler, getRouteHandler, mainFrame } =
       installBrowserMocks();
     pageClose.mockRejectedValueOnce(new Error("close failed"));
-    pageGoto.mockImplementationOnce(async () => {
-      const handler = getRouteHandler();
-      if (!handler) {
-        throw new Error("missing route handler");
-      }
-      await handler(
-        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
-        {
-          isNavigationRequest: () => true,
-          frame: () => mainFrame,
-          url: () => "https://93.184.216.34/start",
-        },
-      );
-      await handler(
-        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
-        {
-          isNavigationRequest: () => true,
-          frame: () => mainFrame,
-          url: () => "http://127.0.0.1:18080/internal-hop",
-        },
-      );
-      throw new Error("Navigation aborted");
-    });
+    mockBlockedRedirectNavigation({ pageGoto, getRouteHandler, mainFrame });
 
     await expect(
       createPageViaPlaywright({
@@ -511,29 +500,7 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
   it("keeps blocked tabs inaccessible when target lookup fails", async () => {
     const { pageGoto, pageClose, sessionSend, getRouteHandler, mainFrame } = installBrowserMocks();
     pageClose.mockRejectedValueOnce(new Error("close failed"));
-    pageGoto.mockImplementationOnce(async () => {
-      const handler = getRouteHandler();
-      if (!handler) {
-        throw new Error("missing route handler");
-      }
-      await handler(
-        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
-        {
-          isNavigationRequest: () => true,
-          frame: () => mainFrame,
-          url: () => "https://93.184.216.34/start",
-        },
-      );
-      await handler(
-        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
-        {
-          isNavigationRequest: () => true,
-          frame: () => mainFrame,
-          url: () => "http://127.0.0.1:18080/internal-hop",
-        },
-      );
-      throw new Error("Navigation aborted");
-    });
+    mockBlockedRedirectNavigation({ pageGoto, getRouteHandler, mainFrame });
 
     await expect(
       createPageViaPlaywright({
@@ -553,29 +520,7 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
   it("does not fall back to another tab when explicit target lookup misses", async () => {
     const { pageGoto, pageClose, sessionSend, getRouteHandler, mainFrame } = installBrowserMocks();
     pageClose.mockRejectedValueOnce(new Error("close failed"));
-    pageGoto.mockImplementationOnce(async () => {
-      const handler = getRouteHandler();
-      if (!handler) {
-        throw new Error("missing route handler");
-      }
-      await handler(
-        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
-        {
-          isNavigationRequest: () => true,
-          frame: () => mainFrame,
-          url: () => "https://93.184.216.34/start",
-        },
-      );
-      await handler(
-        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
-        {
-          isNavigationRequest: () => true,
-          frame: () => mainFrame,
-          url: () => "http://127.0.0.1:18080/internal-hop",
-        },
-      );
-      throw new Error("Navigation aborted");
-    });
+    mockBlockedRedirectNavigation({ pageGoto, getRouteHandler, mainFrame });
 
     await expect(
       createPageViaPlaywright({
@@ -629,18 +574,11 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     });
 
     pageGoto.mockImplementationOnce(async () => {
-      const handler = getRouteHandler();
-      if (!handler) {
-        throw new Error("missing route handler");
-      }
-      await handler(
-        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
-        {
-          isNavigationRequest: () => true,
-          frame: () => mainFrame,
-          url: () => "http://127.0.0.1:18080/internal-hop",
-        },
-      );
+      await dispatchMockNavigation({
+        getRouteHandler,
+        mainFrame,
+        url: "http://127.0.0.1:18080/internal-hop",
+      });
       throw new Error("Navigation aborted");
     });
 
@@ -678,18 +616,11 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     });
 
     first.pageGoto.mockImplementationOnce(async () => {
-      const handler = first.getRouteHandler();
-      if (!handler) {
-        throw new Error("missing route handler");
-      }
-      await handler(
-        { continue: vi.fn(async () => {}), abort: vi.fn(async () => {}) },
-        {
-          isNavigationRequest: () => true,
-          frame: () => first.mainFrame,
-          url: () => "http://127.0.0.1:18080/internal-hop",
-        },
-      );
+      await dispatchMockNavigation({
+        getRouteHandler: first.getRouteHandler,
+        mainFrame: first.mainFrame,
+        url: "http://127.0.0.1:18080/internal-hop",
+      });
       throw new Error("Navigation aborted");
     });
 

@@ -1,14 +1,15 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { EmbeddedRunTrigger } from "./params.js";
 
 /**
  * Default idle timeout for LLM streaming responses in milliseconds.
  * If no token is received within this time, the request is aborted.
  * Set to 0 to disable (never timeout).
- * Default: 60 seconds.
+ * Default: 120 seconds.
  */
-export const DEFAULT_LLM_IDLE_TIMEOUT_MS = 60_000;
+export const DEFAULT_LLM_IDLE_TIMEOUT_MS = 120_000;
 
 /**
  * Maximum safe timeout value (approximately 24.8 days).
@@ -17,18 +18,34 @@ const MAX_SAFE_TIMEOUT_MS = 2_147_000_000;
 
 /**
  * Resolves the LLM idle timeout from configuration.
- * @param cfg - OpenClaw configuration
  * @returns Idle timeout in milliseconds, or 0 to disable
  */
-export function resolveLlmIdleTimeoutMs(cfg?: OpenClawConfig): number {
-  const raw = cfg?.agents?.defaults?.llm?.idleTimeoutSeconds;
-  // 0 means disabled (no timeout)
+export function resolveLlmIdleTimeoutMs(params?: {
+  cfg?: OpenClawConfig;
+  trigger?: EmbeddedRunTrigger;
+}): number {
+  const raw = params?.cfg?.agents?.defaults?.llm?.idleTimeoutSeconds;
+  // 0 means explicitly disabled (no timeout).
   if (raw === 0) {
     return 0;
   }
   if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
     return Math.min(Math.floor(raw) * 1000, MAX_SAFE_TIMEOUT_MS);
   }
+
+  const agentTimeoutSeconds = params?.cfg?.agents?.defaults?.timeoutSeconds;
+  if (
+    typeof agentTimeoutSeconds === "number" &&
+    Number.isFinite(agentTimeoutSeconds) &&
+    agentTimeoutSeconds > 0
+  ) {
+    return Math.min(Math.floor(agentTimeoutSeconds) * 1000, MAX_SAFE_TIMEOUT_MS);
+  }
+
+  if (params?.trigger === "cron") {
+    return 0;
+  }
+
   return DEFAULT_LLM_IDLE_TIMEOUT_MS;
 }
 

@@ -1,11 +1,13 @@
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import type { ConfiguredBindingRule } from "../../config/bindings.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import type { LegacyConfigRule } from "../../config/legacy.shared.js";
+import type { AgentBinding } from "../../config/types.agents.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
+import type { ChannelApprovalNativeRuntimeAdapter } from "../../infra/approval-handler-runtime-types.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "../../infra/exec-approvals.js";
-import type { OutboundDeliveryResult, OutboundSendDeps } from "../../infra/outbound/deliver.js";
-import type { OutboundIdentity } from "../../infra/outbound/identity.js";
+import type { OutboundDeliveryResult } from "../../infra/outbound/deliver-types.js";
+import type { OutboundIdentity } from "../../infra/outbound/identity-types.js";
+import type { OutboundSendDeps } from "../../infra/outbound/send-deps.js";
 import type {
   PluginApprovalRequest,
   PluginApprovalResolved,
@@ -32,6 +34,8 @@ import type {
   ChannelSetupInput,
   ChannelStatusIssue,
 } from "./types.core.js";
+
+type ConfiguredBindingRule = AgentBinding;
 
 export type ChannelActionAvailabilityState =
   | { kind: "enabled" }
@@ -391,6 +395,8 @@ export type ChannelGatewayContext<ResolvedAccount = unknown> = {
    * - Built-in channels (slack, discord, etc.) typically don't use this field
    *   because they can directly import internal modules
    * - External plugins should check for undefined before using
+   * - When provided, this must be a full `createPluginRuntime().channel` surface;
+   *   partial stubs are not supported
    *
    * @since Plugin SDK 2026.2.19
    * @see {@link https://docs.openclaw.ai/plugins/developing-plugins | Plugin SDK documentation}
@@ -458,22 +464,6 @@ export type ChannelAuthAdapter = {
     verbose?: boolean;
     channelInput?: string | null;
   }) => Promise<void>;
-  authorizeActorAction?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    senderId?: string | null;
-    action: "approve";
-    approvalKind: "exec" | "plugin";
-  }) => {
-    authorized: boolean;
-    reason?: string;
-  };
-  getActionAvailabilityState?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    action: "approve";
-  }) => ChannelActionAvailabilityState;
-  resolveApproveCommandBehavior?: ChannelApprovalCapability["resolveApproveCommandBehavior"];
 };
 
 export type ChannelHeartbeatAdapter = {
@@ -755,6 +745,7 @@ export type ChannelApprovalRenderAdapter = {
 
 export type ChannelApprovalAdapter = {
   delivery?: ChannelApprovalDeliveryAdapter;
+  nativeRuntime?: ChannelApprovalNativeRuntimeAdapter;
   render?: ChannelApprovalRenderAdapter;
   native?: ChannelApprovalNativeAdapter;
   describeExecApprovalSetup?: (params: {
@@ -765,8 +756,28 @@ export type ChannelApprovalAdapter = {
 };
 
 export type ChannelApprovalCapability = ChannelApprovalAdapter & {
-  authorizeActorAction?: ChannelAuthAdapter["authorizeActorAction"];
-  getActionAvailabilityState?: ChannelAuthAdapter["getActionAvailabilityState"];
+  authorizeActorAction?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    senderId?: string | null;
+    action: "approve";
+    approvalKind: "exec" | "plugin";
+  }) => {
+    authorized: boolean;
+    reason?: string;
+  };
+  getActionAvailabilityState?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    action: "approve";
+    approvalKind?: ChannelApprovalKind;
+  }) => ChannelActionAvailabilityState;
+  /** Exec-native client availability for the initiating surface; distinct from same-chat auth. */
+  getExecInitiatingSurfaceState?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    action: "approve";
+  }) => ChannelActionAvailabilityState;
   resolveApproveCommandBehavior?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
@@ -847,6 +858,8 @@ export type ChannelCommandConversationContext = {
   senderId?: string;
   sessionKey?: string;
   parentSessionKey?: string;
+  from?: string;
+  chatType?: string;
   originatingTo?: string;
   commandTo?: string;
   fallbackTo?: string;

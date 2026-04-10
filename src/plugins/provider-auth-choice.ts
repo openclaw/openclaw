@@ -78,9 +78,30 @@ function restoreConfiguredPrimaryModel(
   };
 }
 
+type ProviderAuthChoiceRuntime = typeof import("./provider-auth-choice.runtime.js");
+
+const defaultProviderAuthChoiceDeps = {
+  loadPluginProviderRuntime: async (): Promise<ProviderAuthChoiceRuntime> =>
+    import("./provider-auth-choice.runtime.js"),
+};
+
+let providerAuthChoiceDeps = defaultProviderAuthChoiceDeps;
+
 async function loadPluginProviderRuntime() {
-  return import("./provider-auth-choice.runtime.js");
+  return await providerAuthChoiceDeps.loadPluginProviderRuntime();
 }
+
+export const __testing = {
+  resetDepsForTest(): void {
+    providerAuthChoiceDeps = defaultProviderAuthChoiceDeps;
+  },
+  setDepsForTest(deps: Partial<typeof defaultProviderAuthChoiceDeps>): void {
+    providerAuthChoiceDeps = {
+      ...defaultProviderAuthChoiceDeps,
+      ...deps,
+    };
+  },
+} as const;
 
 export async function runProviderPluginAuthMethod(params: {
   config: OpenClawConfig;

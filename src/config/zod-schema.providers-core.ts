@@ -6,6 +6,7 @@ import {
   normalizeTelegramCommandName,
   resolveTelegramCustomCommands,
 } from "../plugin-sdk/telegram-command-config.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
 import {
   ChannelHealthMonitorSchema,
@@ -645,10 +646,10 @@ export const DiscordAccountSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
-    const activityText = typeof value.activity === "string" ? value.activity.trim() : "";
+    const activityText = normalizeOptionalString(value.activity) ?? "";
     const hasActivity = Boolean(activityText);
     const hasActivityType = value.activityType !== undefined;
-    const activityUrl = typeof value.activityUrl === "string" ? value.activityUrl.trim() : "";
+    const activityUrl = normalizeOptionalString(value.activityUrl) ?? "";
     const hasActivityUrl = Boolean(activityUrl);
 
     if ((hasActivityType || hasActivityUrl) && !hasActivity) {
@@ -1583,6 +1584,13 @@ export const MSTeamsConfigSchema = z
       })
       .strict()
       .optional(),
+    sso: z
+      .object({
+        enabled: z.boolean().optional(),
+        connectionName: z.string().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -1602,4 +1610,12 @@ export const MSTeamsConfigSchema = z
       message:
         'channels.msteams.dmPolicy="allowlist" requires channels.msteams.allowFrom to contain at least one sender ID',
     });
+    if (value.sso?.enabled === true && !value.sso.connectionName?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["sso", "connectionName"],
+        message:
+          "channels.msteams.sso.enabled=true requires channels.msteams.sso.connectionName to identify the Bot Framework OAuth connection",
+      });
+    }
   });

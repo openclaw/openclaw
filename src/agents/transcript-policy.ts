@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { shouldPreserveThinkingBlocks } from "../plugins/provider-replay-helpers.js";
 import { resolveProviderRuntimePlugin } from "../plugins/provider-runtime.js";
 import type { ProviderReplayPolicy, ProviderRuntimeModel } from "../plugins/types.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./model-selection.js";
 import { isGoogleModelApi } from "./pi-embedded-helpers/google.js";
 import type { ToolCallIdMode } from "./tool-call-id.js";
@@ -76,7 +77,7 @@ function buildUnownedProviderTransportReplayFallback(params: {
     return undefined;
   }
 
-  const modelId = params.modelId?.toLowerCase() ?? "";
+  const modelId = normalizeLowercaseStringOrEmpty(params.modelId);
   return {
     ...(isGoogle || isAnthropic ? { sanitizeMode: "full" as const } : {}),
     ...(isGoogle || isAnthropic || requiresOpenAiCompatibleToolIdSanitization

@@ -6,6 +6,7 @@
  */
 
 import { matchPluginCommand, executePluginCommand } from "../../plugins/commands.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 
 /**
@@ -40,6 +41,7 @@ export const handlePluginCommand: CommandHandler = async (
     gatewayClientScopes: params.ctx.GatewayClientScopes,
     sessionKey: params.sessionKey,
     sessionId: params.sessionEntry?.sessionId,
+    sessionFile: params.sessionEntry?.sessionFile,
     commandBody: command.commandBodyNormalized,
     config: cfg,
     from: command.from,
@@ -50,7 +52,7 @@ export const handlePluginCommand: CommandHandler = async (
       typeof params.ctx.MessageThreadId === "number"
         ? params.ctx.MessageThreadId
         : undefined,
-    threadParentId: params.ctx.ThreadParentId?.trim() || undefined,
+    threadParentId: normalizeOptionalString(params.ctx.ThreadParentId),
   });
 
   return {

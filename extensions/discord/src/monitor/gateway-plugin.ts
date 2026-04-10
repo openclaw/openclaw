@@ -5,6 +5,7 @@ import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import * as undici from "undici";
 import * as ws from "ws";
 import { validateDiscordProxyUrl } from "../proxy-fetch.js";
@@ -57,7 +58,7 @@ function isTransientDiscordGatewayResponse(status: number, body: string): boolea
   if (status >= 500) {
     return true;
   }
-  const normalized = body.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(body);
   return (
     normalized.includes("upstream connect error") ||
     normalized.includes("disconnect/reset before headers") ||
@@ -211,7 +212,7 @@ function resolveGatewayInfoWithFallback(params: { runtime?: RuntimeEnv; error: u
   if (!isTransientGatewayMetadataError(params.error)) {
     throw params.error;
   }
-  const message = params.error instanceof Error ? params.error.message : String(params.error);
+  const message = formatErrorMessage(params.error);
   params.runtime?.log?.(
     `discord: gateway metadata lookup failed transiently; using default gateway url (${message})`,
   );

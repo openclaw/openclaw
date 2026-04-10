@@ -26,16 +26,28 @@ export {
   shouldDebounceTextInbound,
 } from "../channels/inbound-debounce-policy.js";
 export type {
+  InboundMentionFacts,
+  InboundMentionPolicy,
+  InboundImplicitMentionKind,
+  InboundMentionDecision,
   MentionGateParams,
   MentionGateResult,
   MentionGateWithBypassParams,
   MentionGateWithBypassResult,
+  ResolveInboundMentionDecisionFlatParams,
+  ResolveInboundMentionDecisionNestedParams,
+  ResolveInboundMentionDecisionParams,
 } from "../channels/mention-gating.js";
 export {
+  implicitMentionKindWhen,
+  resolveInboundMentionDecision,
+  // @deprecated Prefer `resolveInboundMentionDecision({ facts, policy })`.
   resolveMentionGating,
+  // @deprecated Prefer `resolveInboundMentionDecision({ facts, policy })`.
   resolveMentionGatingWithBypass,
 } from "../channels/mention-gating.js";
 export type { NormalizedLocation } from "../channels/location.js";
 export { formatLocationText, toLocationContext } from "../channels/location.js";
 export { logInboundDrop } from "../channels/logging.js";
 export { resolveInboundSessionEnvelopeContext } from "../channels/session-envelope.js";
+export { mergeInboundPathRoots } from "../media/inbound-path-policy.js";

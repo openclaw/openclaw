@@ -8,6 +8,7 @@
 import { resolveConversationBindingContext } from "../channels/conversation-binding-context.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   clearPluginCommands,
   clearPluginCommandsForPlugin,
@@ -67,7 +68,7 @@ export function matchPluginCommand(
   const commandName = spaceIndex === -1 ? trimmed : trimmed.slice(0, spaceIndex);
   const args = spaceIndex === -1 ? undefined : trimmed.slice(spaceIndex + 1).trim();
 
-  const key = commandName.toLowerCase();
+  const key = normalizeLowercaseStringOrEmpty(commandName);
   const command =
     pluginCommands.get(key) ??
     Array.from(pluginCommands.values()).find((candidate) =>
@@ -161,6 +162,7 @@ export async function executePluginCommand(params: {
   gatewayClientScopes?: PluginCommandContext["gatewayClientScopes"];
   sessionKey?: PluginCommandContext["sessionKey"];
   sessionId?: PluginCommandContext["sessionId"];
+  sessionFile?: PluginCommandContext["sessionFile"];
   commandBody: string;
   config: OpenClawConfig;
   from?: PluginCommandContext["from"];
@@ -201,6 +203,7 @@ export async function executePluginCommand(params: {
     gatewayClientScopes: params.gatewayClientScopes,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
+    sessionFile: params.sessionFile,
     args: sanitizedArgs,
     commandBody,
     config,
@@ -271,11 +274,13 @@ export function listPluginCommands(): Array<{
   name: string;
   description: string;
   pluginId: string;
+  acceptsArgs: boolean;
 }> {
   return Array.from(pluginCommands.values()).map((cmd) => ({
     name: cmd.name,
     description: cmd.description,
     pluginId: cmd.pluginId,
+    acceptsArgs: cmd.acceptsArgs ?? false,
   }));
 }
 

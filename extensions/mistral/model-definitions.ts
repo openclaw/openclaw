@@ -61,7 +61,7 @@ const MISTRAL_MODEL_CATALOG = [
   {
     id: "mistral-small-latest",
     name: "Mistral Small (latest)",
-    reasoning: false,
+    reasoning: true,
     input: ["text", "image"],
     cost: { input: 0.1, output: 0.3, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 128000,

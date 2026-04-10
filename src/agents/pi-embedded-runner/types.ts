@@ -36,6 +36,7 @@ export type EmbeddedPiRunMeta = {
   agentMeta?: EmbeddedPiAgentMeta;
   aborted?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
+  finalAssistantVisibleText?: string;
   error?: {
     kind:
       | "context_overflow"
@@ -63,6 +64,7 @@ export type EmbeddedPiRunResult = {
     replyToId?: string;
     isError?: boolean;
     isReasoning?: boolean;
+    audioAsVoice?: boolean;
   }>;
   meta: EmbeddedPiRunMeta;
   // True if a messaging tool (telegram, whatsapp, discord, slack, sessions_send)
@@ -98,7 +100,6 @@ export type EmbeddedSandboxInfo = {
   workspaceAccess?: "none" | "ro" | "rw";
   agentWorkspaceMount?: string;
   browserBridgeUrl?: string;
-  browserNoVncUrl?: string;
   hostBrowserAllowed?: boolean;
   elevated?: {
     allowed: boolean;

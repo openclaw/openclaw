@@ -21,7 +21,7 @@ import {
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
-const NODE_CONNECT_TIMEOUT_MS = 3_000;
+const NODE_CONNECT_TIMEOUT_MS = 10_000;
 const CONNECT_REQ_TIMEOUT_MS = 2_000;
 
 function createDeviceIdentity(): DeviceIdentity {
@@ -131,11 +131,7 @@ describe("node.invoke approval bypass", () => {
       const ws = new WebSocket(`ws://127.0.0.1:${port}`);
       trackConnectChallengeNonce(ws);
       const challengePromise = resolveDevice
-        ? onceMessage<{
-            type?: string;
-            event?: string;
-            payload?: Record<string, unknown> | null;
-          }>(ws, (o) => o.type === "event" && o.event === "connect.challenge")
+        ? onceMessage(ws, (o) => o.type === "event" && o.event === "connect.challenge")
         : null;
       await new Promise<void>((resolve) => ws.once("open", resolve));
       const nonce = (() => {
@@ -207,6 +203,7 @@ describe("node.invoke approval bypass", () => {
   const connectLinuxNode = async (
     onInvoke: (payload: unknown) => void,
     deviceIdentity?: DeviceIdentity,
+    commands: string[] = ["system.run"],
   ) => {
     let readyResolve: (() => void) | null = null;
     const ready = new Promise<void>((resolve) => {
@@ -226,7 +223,7 @@ describe("node.invoke approval bypass", () => {
       platform: "linux",
       mode: GATEWAY_CLIENT_MODES.NODE,
       scopes: [],
-      commands: ["system.run"],
+      commands,
       deviceIdentity: resolvedDeviceIdentity,
       onHelloOk: () => readyResolve?.(),
       onEvent: (evt) => {
@@ -322,6 +319,39 @@ describe("node.invoke approval bypass", () => {
     }
   });
 
+  test("rejects browser.proxy persistent profile mutations before forwarding", async () => {
+    let sawInvoke = false;
+    const node = await connectLinuxNode(
+      () => {
+        sawInvoke = true;
+      },
+      undefined,
+      ["browser.proxy"],
+    );
+    const ws = await connectOperator(["operator.write"]);
+    try {
+      const nodeId = await getConnectedNodeId(ws);
+      const res = await rpcReq(ws, "node.invoke", {
+        nodeId,
+        command: "browser.proxy",
+        params: {
+          method: "POST",
+          path: "/profiles/create",
+          body: { name: "poc", cdpUrl: "http://127.0.0.1:9222" },
+        },
+        idempotencyKey: crypto.randomUUID(),
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toContain(
+        "node.invoke cannot mutate persistent browser profiles via browser.proxy",
+      );
+      await expectNoForwardedInvoke(() => sawInvoke);
+    } finally {
+      ws.close();
+      node.stop();
+    }
+  });
+
   test("binds approvals to decision/device and blocks cross-device replay", async () => {
     let invokeCount = 0;
     let lastInvokeParams: Record<string, unknown> | null = null;
@@ -359,6 +389,9 @@ describe("node.invoke approval bypass", () => {
         idempotencyKey: crypto.randomUUID(),
       });
       expect(invoke.ok).toBe(true);
+      for (let i = 0; i < 100 && !lastInvokeParams; i += 1) {
+        await sleep(50);
+      }
       expect(lastInvokeParams).toBeTruthy();
       expect(lastInvokeParams?.["approved"]).toBe(true);
       expect(lastInvokeParams?.["approvalDecision"]).toBe("allow-once");

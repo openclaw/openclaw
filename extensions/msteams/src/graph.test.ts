@@ -88,11 +88,21 @@ function mockGraphCollection<T>(...items: T[]) {
 }
 
 function requestUrl(input: string | URL | Request) {
-  return typeof input === "string" ? input : String(input);
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.toString();
+  }
+  return input.url;
 }
 
 function fetchCallUrl(index: number) {
-  return String(vi.mocked(globalThis.fetch).mock.calls[index]?.[0]);
+  const input = vi.mocked(globalThis.fetch).mock.calls[index]?.[0];
+  if (!input) {
+    return "";
+  }
+  return requestUrl(input);
 }
 
 function expectFetchPathContains(index: number, expectedPath: string) {

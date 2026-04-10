@@ -25,8 +25,10 @@ import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export type {
+  AgentHarness,
   AnyAgentTool,
   MediaUnderstandingProviderPlugin,
   OpenClawPluginApi,
@@ -83,6 +85,11 @@ export type {
   SpeechProviderPlugin,
 } from "./plugin-entry.js";
 export type { OpenClawPluginToolContext, OpenClawPluginToolFactory } from "../plugins/types.js";
+export type {
+  MemoryPluginCapability,
+  MemoryPluginPublicArtifact,
+  MemoryPluginPublicArtifactsProvider,
+} from "../plugins/memory-state.js";
 export type {
   PluginHookReplyDispatchContext,
   PluginHookReplyDispatchEvent,
@@ -146,7 +153,10 @@ export { buildPluginConfigSchema, emptyPluginConfigSchema } from "../plugins/con
 export { KeyedAsyncQueue, enqueueKeyedTask } from "./keyed-async-queue.js";
 export { createDedupeCache, resolveGlobalDedupeCache } from "../infra/dedupe.js";
 export { generateSecureToken, generateSecureUuid } from "../infra/secure-random.js";
-export { delegateCompactionToRuntime } from "../context-engine/delegate.js";
+export {
+  buildMemorySystemPromptAddition,
+  delegateCompactionToRuntime,
+} from "../context-engine/delegate.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 export {
   buildChannelConfigSchema,
@@ -229,8 +239,8 @@ export function getChatChannelMeta(id: ChatChannelId): ChannelMeta {
 export function stripChannelTargetPrefix(raw: string, ...providers: string[]): string {
   const trimmed = raw.trim();
   for (const provider of providers) {
-    const prefix = `${provider.toLowerCase()}:`;
-    if (trimmed.toLowerCase().startsWith(prefix)) {
+    const prefix = `${normalizeLowercaseStringOrEmpty(provider)}:`;
+    if (normalizeLowercaseStringOrEmpty(trimmed).startsWith(prefix)) {
       return trimmed.slice(prefix.length).trim();
     }
   }

@@ -2,6 +2,7 @@ import type { TSchema } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeAnyChannelId } from "../registry.js";
 import { getChannelPlugin, listChannelPlugins } from "./index.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
@@ -24,6 +25,7 @@ export type ChannelMessageActionDiscoveryInput = {
   sessionId?: string | null;
   agentId?: string | null;
   requesterSenderId?: string | null;
+  senderIsOwner?: boolean;
 };
 
 type ChannelActions = NonNullable<NonNullable<ReturnType<typeof getChannelPlugin>>["actions"]>;
@@ -31,12 +33,7 @@ type ChannelActions = NonNullable<NonNullable<ReturnType<typeof getChannelPlugin
 const loggedMessageActionErrors = new Set<string>();
 
 export function resolveMessageActionDiscoveryChannelId(raw?: string | null): string | undefined {
-  const normalized = normalizeAnyChannelId(raw);
-  if (normalized) {
-    return normalized;
-  }
-  const trimmed = raw?.trim();
-  return trimmed || undefined;
+  return normalizeAnyChannelId(raw) ?? normalizeOptionalString(raw);
 }
 
 export function createMessageActionDiscoveryContext(
@@ -56,6 +53,7 @@ export function createMessageActionDiscoveryContext(
     sessionId: params.sessionId,
     agentId: params.agentId,
     requesterSenderId: params.requesterSenderId,
+    senderIsOwner: params.senderIsOwner,
   };
 }
 
@@ -188,6 +186,7 @@ export function listChannelMessageCapabilitiesForChannel(params: {
   sessionId?: string | null;
   agentId?: string | null;
   requesterSenderId?: string | null;
+  senderIsOwner?: boolean;
 }): ChannelMessageCapability[] {
   const channelId = resolveMessageActionDiscoveryChannelId(params.channel);
   if (!channelId) {
@@ -231,6 +230,7 @@ export function resolveChannelMessageToolSchemaProperties(params: {
   sessionId?: string | null;
   agentId?: string | null;
   requesterSenderId?: string | null;
+  senderIsOwner?: boolean;
 }): Record<string, TSchema> {
   const properties: Record<string, TSchema> = {};
   const currentChannel = resolveMessageActionDiscoveryChannelId(params.channel);

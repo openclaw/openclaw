@@ -322,7 +322,7 @@ export async function resolveDmAllowState(params: {
     .map((value) => normalizeEntry(value))
     .map((value) => value.trim())
     .filter(Boolean);
-  const allowCount = Array.from(new Set([...normalizedCfg, ...normalizedStore])).length;
+  const allowCount = new Set([...normalizedCfg, ...normalizedStore]).size;
   return {
     configAllowFrom,
     hasWildcard,

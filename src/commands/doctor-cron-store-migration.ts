@@ -1,7 +1,13 @@
+import { normalizeCronJobIdentityFields } from "../cron/normalize-job-identity.js";
 import { parseAbsoluteTimeMs } from "../cron/parse.js";
 import { coerceFiniteScheduleNumber } from "../cron/schedule.js";
-import { inferLegacyName, normalizeOptionalText } from "../cron/service/normalize.js";
+import { inferLegacyName } from "../cron/service/normalize.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../cron/stagger.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { normalizeLegacyDeliveryInput } from "./doctor-cron-legacy-delivery.js";
 import { migrateLegacyCronPayload } from "./doctor-cron-payload-migration.js";
 
@@ -28,7 +34,7 @@ function incrementIssue(issues: CronStoreIssues, key: CronStoreIssueKey) {
 }
 
 function normalizePayloadKind(payload: Record<string, unknown>) {
-  const raw = typeof payload.kind === "string" ? payload.kind.trim().toLowerCase() : "";
+  const raw = normalizeOptionalLowercaseString(payload.kind) ?? "";
   if (raw === "agentturn") {
     if (payload.kind !== "agentTurn") {
       payload.kind = "agentTurn";
@@ -47,9 +53,9 @@ function normalizePayloadKind(payload: Record<string, unknown>) {
 }
 
 function inferPayloadIfMissing(raw: Record<string, unknown>) {
-  const message = typeof raw.message === "string" ? raw.message.trim() : "";
-  const text = typeof raw.text === "string" ? raw.text.trim() : "";
-  const command = typeof raw.command === "string" ? raw.command.trim() : "";
+  const message = normalizeOptionalString(raw.message) ?? "";
+  const text = normalizeOptionalString(raw.text) ?? "";
+  const command = normalizeOptionalString(raw.command) ?? "";
   if (message) {
     raw.payload = { kind: "agentTurn", message };
     return true;
@@ -72,13 +78,13 @@ function copyTopLevelAgentTurnFields(
   let mutated = false;
 
   const copyTrimmedString = (field: "model" | "thinking") => {
-    const existing = payload[field];
-    if (typeof existing === "string" && existing.trim()) {
+    const existing = normalizeOptionalString(payload[field]);
+    if (existing) {
       return;
     }
-    const value = raw[field];
-    if (typeof value === "string" && value.trim()) {
-      payload[field] = value.trim();
+    const value = normalizeOptionalString(raw[field]);
+    if (value) {
+      payload[field] = value;
       mutated = true;
     }
   };
@@ -106,24 +112,22 @@ function copyTopLevelAgentTurnFields(
     payload.deliver = raw.deliver;
     mutated = true;
   }
-  if (
-    typeof payload.channel !== "string" &&
-    typeof raw.channel === "string" &&
-    raw.channel.trim()
-  ) {
-    payload.channel = raw.channel.trim();
+  const channel = normalizeOptionalString(raw.channel);
+  if (typeof payload.channel !== "string" && channel) {
+    payload.channel = channel;
     mutated = true;
   }
-  if (typeof payload.to !== "string" && typeof raw.to === "string" && raw.to.trim()) {
-    payload.to = raw.to.trim();
+  const to = normalizeOptionalString(raw.to);
+  if (typeof payload.to !== "string" && to) {
+    payload.to = to;
     mutated = true;
   }
+  const rawThreadId = normalizeOptionalString(raw.threadId);
   if (
     !("threadId" in payload) &&
-    ((typeof raw.threadId === "number" && Number.isFinite(raw.threadId)) ||
-      (typeof raw.threadId === "string" && raw.threadId.trim()))
+    ((typeof raw.threadId === "number" && Number.isFinite(raw.threadId)) || Boolean(rawThreadId))
   ) {
-    payload.threadId = typeof raw.threadId === "string" ? raw.threadId.trim() : raw.threadId;
+    payload.threadId = rawThreadId ?? raw.threadId;
     mutated = true;
   }
   if (
@@ -133,12 +137,9 @@ function copyTopLevelAgentTurnFields(
     payload.bestEffortDeliver = raw.bestEffortDeliver;
     mutated = true;
   }
-  if (
-    typeof payload.provider !== "string" &&
-    typeof raw.provider === "string" &&
-    raw.provider.trim()
-  ) {
-    payload.provider = raw.provider.trim();
+  const provider = normalizeOptionalString(raw.provider);
+  if (typeof payload.provider !== "string" && provider) {
+    payload.provider = provider;
     mutated = true;
   }
 
@@ -212,19 +213,11 @@ export function normalizeStoredCronJobs(
       mutated = true;
     }
 
-    const rawId = typeof raw.id === "string" ? raw.id.trim() : "";
-    const legacyJobId = typeof raw.jobId === "string" ? raw.jobId.trim() : "";
-    if (!rawId && legacyJobId) {
-      raw.id = legacyJobId;
-      mutated = true;
-      trackIssue("jobId");
-    } else if (rawId && raw.id !== rawId) {
-      raw.id = rawId;
+    const idNorm = normalizeCronJobIdentityFields(raw);
+    if (idNorm.mutated) {
       mutated = true;
     }
-    if ("jobId" in raw) {
-      delete raw.jobId;
-      mutated = true;
+    if (idNorm.legacyJobIdIssue) {
       trackIssue("jobId");
     }
 
@@ -246,7 +239,7 @@ export function normalizeStoredCronJobs(
       raw.name = nameRaw.trim();
     }
 
-    const desc = normalizeOptionalText(raw.description);
+    const desc = normalizeOptionalString(raw.description);
     if (raw.description !== desc) {
       raw.description = desc;
       mutated = true;
@@ -254,7 +247,7 @@ export function normalizeStoredCronJobs(
 
     if ("sessionKey" in raw) {
       const sessionKey =
-        typeof raw.sessionKey === "string" ? normalizeOptionalText(raw.sessionKey) : undefined;
+        typeof raw.sessionKey === "string" ? normalizeOptionalString(raw.sessionKey) : undefined;
       if (raw.sessionKey !== sessionKey) {
         raw.sessionKey = sessionKey;
         mutated = true;
@@ -266,7 +259,7 @@ export function normalizeStoredCronJobs(
       mutated = true;
     }
 
-    const wakeModeRaw = typeof raw.wakeMode === "string" ? raw.wakeMode.trim().toLowerCase() : "";
+    const wakeModeRaw = normalizeOptionalLowercaseString(raw.wakeMode) ?? "";
     if (wakeModeRaw === "next-heartbeat") {
       if (raw.wakeMode !== "next-heartbeat") {
         raw.wakeMode = "next-heartbeat";
@@ -302,11 +295,11 @@ export function normalizeStoredCronJobs(
         trackIssue("legacyPayloadKind");
       }
       if (!payloadRecord.kind) {
-        if (typeof payloadRecord.message === "string" && payloadRecord.message.trim()) {
+        if (normalizeOptionalString(payloadRecord.message)) {
           payloadRecord.kind = "agentTurn";
           mutated = true;
           trackIssue("legacyPayloadKind");
-        } else if (typeof payloadRecord.text === "string" && payloadRecord.text.trim()) {
+        } else if (normalizeOptionalString(payloadRecord.text)) {
           payloadRecord.kind = "systemEvent";
           mutated = true;
           trackIssue("legacyPayloadKind");
@@ -345,8 +338,7 @@ export function normalizeStoredCronJobs(
     }
 
     if (payloadRecord) {
-      const hadLegacyPayloadProvider =
-        typeof payloadRecord.provider === "string" && payloadRecord.provider.trim().length > 0;
+      const hadLegacyPayloadProvider = Boolean(normalizeOptionalString(payloadRecord.provider));
       if (migrateLegacyCronPayload(payloadRecord)) {
         mutated = true;
         if (hadLegacyPayloadProvider) {
@@ -358,12 +350,12 @@ export function normalizeStoredCronJobs(
     const schedule = raw.schedule;
     if (schedule && typeof schedule === "object" && !Array.isArray(schedule)) {
       const sched = schedule as Record<string, unknown>;
-      const kind = typeof sched.kind === "string" ? sched.kind.trim().toLowerCase() : "";
+      const kind = normalizeOptionalLowercaseString(sched.kind) ?? "";
       if (!kind && ("at" in sched || "atMs" in sched)) {
         sched.kind = "at";
         mutated = true;
       }
-      const atRaw = typeof sched.at === "string" ? sched.at.trim() : "";
+      const atRaw = normalizeOptionalString(sched.at) ?? "";
       const atMsRaw = sched.atMs;
       const parsedAtMs =
         typeof atMsRaw === "number"
@@ -405,8 +397,8 @@ export function normalizeStoredCronJobs(
         }
       }
 
-      const exprRaw = typeof sched.expr === "string" ? sched.expr.trim() : "";
-      const legacyCronRaw = typeof sched.cron === "string" ? sched.cron.trim() : "";
+      const exprRaw = normalizeOptionalString(sched.expr) ?? "";
+      const legacyCronRaw = normalizeOptionalString(sched.cron) ?? "";
       let normalizedExpr = exprRaw;
       if (!normalizedExpr && legacyCronRaw) {
         normalizedExpr = legacyCronRaw;
@@ -443,7 +435,7 @@ export function normalizeStoredCronJobs(
     if (delivery && typeof delivery === "object" && !Array.isArray(delivery)) {
       const modeRaw = (delivery as { mode?: unknown }).mode;
       if (typeof modeRaw === "string") {
-        const lowered = modeRaw.trim().toLowerCase();
+        const lowered = normalizeOptionalLowercaseString(modeRaw) ?? "";
         if (lowered === "deliver") {
           (delivery as { mode?: unknown }).mode = "announce";
           mutated = true;
@@ -463,8 +455,8 @@ export function normalizeStoredCronJobs(
 
     const payloadKind =
       payloadRecord && typeof payloadRecord.kind === "string" ? payloadRecord.kind : "";
-    const rawSessionTarget = typeof raw.sessionTarget === "string" ? raw.sessionTarget.trim() : "";
-    const loweredSessionTarget = rawSessionTarget.toLowerCase();
+    const rawSessionTarget = normalizeOptionalString(raw.sessionTarget) ?? "";
+    const loweredSessionTarget = normalizeLowercaseStringOrEmpty(rawSessionTarget);
     if (loweredSessionTarget === "main" || loweredSessionTarget === "isolated") {
       if (raw.sessionTarget !== loweredSessionTarget) {
         raw.sessionTarget = loweredSessionTarget;
@@ -492,8 +484,7 @@ export function normalizeStoredCronJobs(
       }
     }
 
-    const sessionTarget =
-      typeof raw.sessionTarget === "string" ? raw.sessionTarget.trim().toLowerCase() : "";
+    const sessionTarget = normalizeOptionalLowercaseString(raw.sessionTarget) ?? "";
     const isIsolatedAgentTurn =
       sessionTarget === "isolated" ||
       sessionTarget === "current" ||

@@ -1,10 +1,10 @@
-import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
+import "./agent-command.test-mocks.js";
 import "../cron/isolated-agent.mocks.js";
 import { __testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import { __testing as agentCommandTesting } from "../agents/agent-command.js";
+import { resolveSession } from "../agents/command/session.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
@@ -15,25 +15,11 @@ import { clearSessionStoreCacheForTest } from "../config/sessions.js";
 import { resetAgentEventsForTest, resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { agentCommand } from "./agent.js";
-
-vi.mock("../logging/subsystem.js", () => {
-  const createMockLogger = () => ({
-    subsystem: "test",
-    isEnabled: vi.fn(() => true),
-    trace: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-    fatal: vi.fn(),
-    raw: vi.fn(),
-    child: vi.fn(() => createMockLogger()),
-  });
-  return {
-    createSubsystemLogger: vi.fn(() => createMockLogger()),
-  };
-});
+import {
+  createDefaultAgentCommandResult,
+  mockAgentCommandConfig,
+  withAgentCommandTempHome,
+} from "./agent-command.test-support.js";
 
 vi.mock("../agents/auth-profiles.js", async () => {
   const actual = await vi.importActual<typeof import("../agents/auth-profiles.js")>(
@@ -42,17 +28,6 @@ vi.mock("../agents/auth-profiles.js", async () => {
   return {
     ...actual,
     ensureAuthProfileStore: vi.fn(() => ({ version: 1, profiles: {} })),
-  };
-});
-
-vi.mock("../agents/workspace.js", () => {
-  const resolveDefaultAgentWorkspaceDir = () => "/tmp/openclaw-workspace";
-  return {
-    DEFAULT_AGENT_WORKSPACE_DIR: "/tmp/openclaw-workspace",
-    DEFAULT_AGENTS_FILENAME: "AGENTS.md",
-    DEFAULT_IDENTITY_FILENAME: "IDENTITY.md",
-    resolveDefaultAgentWorkspaceDir,
-    ensureAgentWorkspace: vi.fn(async ({ dir }: { dir: string }) => ({ dir })),
   };
 });
 
@@ -66,15 +41,6 @@ vi.mock("../agents/command/session-store.js", async () => {
   };
 });
 
-vi.mock("../agents/skills.js", () => ({
-  buildWorkspaceSkillSnapshot: vi.fn(() => undefined),
-  loadWorkspaceSkillEntries: vi.fn(() => []),
-}));
-
-vi.mock("../agents/skills/refresh.js", () => ({
-  getSkillsSnapshotVersion: vi.fn(() => 0),
-}));
-
 const runtime: RuntimeEnv = {
   log: vi.fn(),
   error: vi.fn(),
@@ -87,37 +53,15 @@ const configSpy = vi.spyOn(configModule, "loadConfig");
 const readConfigFileSnapshotForWriteSpy = vi.spyOn(configModule, "readConfigFileSnapshotForWrite");
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, { prefix: "openclaw-agent-" });
+  return withAgentCommandTempHome("openclaw-agent-", fn);
 }
 
 function mockConfig(
   home: string,
   storePath: string,
-  agentOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>>,
+  agentOverrides?: Parameters<typeof mockAgentCommandConfig>[3],
 ) {
-  const cfg = {
-    agents: {
-      defaults: {
-        model: { primary: "anthropic/claude-opus-4-6" },
-        models: { "anthropic/claude-opus-4-6": {} },
-        workspace: path.join(home, "openclaw"),
-        ...agentOverrides,
-      },
-    },
-    session: { store: storePath, mainKey: "main" },
-  } as OpenClawConfig;
-  configSpy.mockReturnValue(cfg);
-  return cfg;
-}
-
-function createDefaultAgentResult() {
-  return {
-    payloads: [{ text: "ok" }],
-    meta: {
-      durationMs: 5,
-      agentMeta: { sessionId: "s", provider: "p", model: "m" },
-    },
-  };
+  return mockAgentCommandConfig(configSpy, home, storePath, agentOverrides);
 }
 
 beforeEach(() => {
@@ -128,7 +72,7 @@ beforeEach(() => {
   resetPluginRuntimeStateForTest();
   acpManagerTesting.resetAcpSessionManagerForTests();
   configModule.clearRuntimeConfigSnapshot();
-  vi.mocked(runEmbeddedPiAgent).mockResolvedValue(createDefaultAgentResult());
+  vi.mocked(runEmbeddedPiAgent).mockResolvedValue(createDefaultAgentCommandResult());
   vi.mocked(loadModelCatalog).mockResolvedValue([]);
   vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => false);
   readConfigFileSnapshotForWriteSpy.mockResolvedValue({
@@ -239,19 +183,17 @@ describe("agentCommand runtime config", () => {
     });
   });
 
-  it("creates a session entry when deriving from --to", async () => {
+  it("derives a fresh session from --to", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
-      mockConfig(home, store);
+      const cfg = mockConfig(home, store);
 
-      await agentCommand({ message: "hello", to: "+1555" }, runtime);
+      const resolved = resolveSession({ cfg, to: "+1555" });
 
-      const saved = JSON.parse(fs.readFileSync(store, "utf-8")) as Record<
-        string,
-        { sessionId: string }
-      >;
-      const entry = Object.values(saved)[0];
-      expect(entry.sessionId).toBeTruthy();
+      expect(resolved.storePath).toBe(store);
+      expect(resolved.sessionKey).toBeTruthy();
+      expect(resolved.sessionId).toBeTruthy();
+      expect(resolved.isNewSession).toBe(true);
     });
   });
 });

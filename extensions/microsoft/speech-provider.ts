@@ -144,11 +144,11 @@ export async function listMicrosoftVoices(): Promise<SpeechVoiceOption[]> {
     ? voices
         .map((voice) => ({
           id: voice.ShortName?.trim() ?? "",
-          name: voice.FriendlyName?.trim() || voice.ShortName?.trim() || undefined,
+          name: trimToUndefined(voice.FriendlyName) ?? trimToUndefined(voice.ShortName),
           category: voice.VoiceTag?.ContentCategories?.find((value) => value.trim().length > 0),
           description: formatMicrosoftVoiceDescription(voice),
-          locale: voice.Locale?.trim() || undefined,
-          gender: voice.Gender?.trim() || undefined,
+          locale: trimToUndefined(voice.Locale),
+          gender: trimToUndefined(voice.Gender),
           personalities: voice.VoiceTag?.VoicePersonalities?.filter(
             (value): value is string => value.trim().length > 0,
           ),

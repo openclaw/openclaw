@@ -5,6 +5,10 @@ import { resolveChannelApprovalCapability } from "../channels/plugins/approvals.
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
@@ -40,6 +44,8 @@ const CONTEXT_FILE_ORDER = new Map<string, number>([
 ]);
 
 const DYNAMIC_CONTEXT_FILE_BASENAMES = new Set(["heartbeat.md"]);
+const DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK =
+  "Default heartbeat prompt:\n`Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`";
 
 function normalizeContextFilePath(pathValue: string): string {
   return pathValue.trim().replace(/\\/g, "/");
@@ -47,11 +53,18 @@ function normalizeContextFilePath(pathValue: string): string {
 
 function getContextFileBasename(pathValue: string): string {
   const normalizedPath = normalizeContextFilePath(pathValue);
-  return (normalizedPath.split("/").pop() ?? normalizedPath).toLowerCase();
+  return normalizeLowercaseStringOrEmpty(normalizedPath.split("/").pop() ?? normalizedPath);
 }
 
 function isDynamicContextFile(pathValue: string): boolean {
   return DYNAMIC_CONTEXT_FILE_BASENAMES.has(getContextFileBasename(pathValue));
+}
+
+function sanitizeContextFileContentForPrompt(content: string): string {
+  // Claude Code subscription mode rejects this exact prompt-policy quote when it
+  // appears in system context. The live heartbeat user turn still carries the
+  // actual instruction, and the generated heartbeat section below covers behavior.
+  return content.replaceAll(DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK, "").replace(/\n{3,}/g, "\n\n");
 }
 
 function sortContextFilesForPrompt(contextFiles: EmbeddedContextFile[]): EmbeddedContextFile[] {
@@ -99,9 +112,22 @@ function buildProjectContextSection(params: {
     lines.push("");
   }
   for (const file of params.files) {
-    lines.push(`## ${file.path}`, "", file.content, "");
+    lines.push(`## ${file.path}`, "", sanitizeContextFileContentForPrompt(file.content), "");
   }
   return lines;
+}
+
+function buildHeartbeatSection(params: { isMinimal: boolean; heartbeatPrompt?: string }) {
+  if (params.isMinimal || !params.heartbeatPrompt) {
+    return [];
+  }
+  return [
+    "## Heartbeats",
+    "If the current user message is a heartbeat poll and nothing needs attention, reply exactly:",
+    "HEARTBEAT_OK",
+    'If something needs attention, do NOT include "HEARTBEAT_OK"; reply with the alert text instead.',
+    "",
+  ];
 }
 
 function buildSkillsSection(params: { skillsPrompt?: string; readToolName: string }) {
@@ -124,10 +150,11 @@ function buildSkillsSection(params: { skillsPrompt?: string; readToolName: strin
 
 function buildMemorySection(params: {
   isMinimal: boolean;
+  includeMemorySection?: boolean;
   availableTools: Set<string>;
   citationsMode?: MemoryCitationsMode;
 }) {
-  if (params.isMinimal) {
+  if (params.isMinimal || params.includeMemorySection === false) {
     return [];
   }
   return buildMemoryPromptSection({
@@ -185,7 +212,7 @@ function buildReplyTagsSection(isMinimal: boolean) {
     "- [[reply_to_current]] replies to the triggering message.",
     "- Prefer [[reply_to_current]]. Use [[reply_to:<id>]] only when an id was explicitly provided (e.g. by the user or a tool).",
     "Whitespace inside the tag is allowed (e.g. [[ reply_to_current ]] / [[ reply_to: 123 ]]).",
-    "Tags are stripped before sending; support depends on the current channel config.",
+    "Tags are removed before sending; support depends on the current channel config.",
     "",
   ];
 }
@@ -296,7 +323,7 @@ function buildExecApprovalPromptGuidance(params: {
   runtimeChannel?: string;
   inlineButtonsEnabled?: boolean;
 }) {
-  const runtimeChannel = params.runtimeChannel?.trim().toLowerCase();
+  const runtimeChannel = normalizeOptionalLowercaseString(params.runtimeChannel);
   const usesNativeApprovalUi =
     runtimeChannel === "webchat" ||
     params.inlineButtonsEnabled === true ||
@@ -354,6 +381,8 @@ export function buildAgentSystemPrompt(params: {
     level: "minimal" | "extensive";
     channel: string;
   };
+  /** Whether to include the active memory plugin prompt guidance in the base system prompt. Defaults to true. */
+  includeMemorySection?: boolean;
   memoryCitationsMode?: MemoryCitationsMode;
   promptContribution?: ProviderSystemPromptContribution;
 }) {
@@ -365,7 +394,7 @@ export function buildAgentSystemPrompt(params: {
   // Preserve caller casing while deduping tool names by lowercase.
   const canonicalByNormalized = new Map<string, string>();
   for (const name of canonicalToolNames) {
-    const normalized = name.toLowerCase();
+    const normalized = normalizeLowercaseStringOrEmpty(name);
     if (!canonicalByNormalized.has(normalized)) {
       canonicalByNormalized.set(normalized, name);
     }
@@ -373,7 +402,7 @@ export function buildAgentSystemPrompt(params: {
   const resolveToolName = (normalized: string) =>
     canonicalByNormalized.get(normalized) ?? normalized;
 
-  const normalizedTools = canonicalToolNames.map((tool) => tool.toLowerCase());
+  const normalizedTools = canonicalToolNames.map((tool) => normalizeLowercaseStringOrEmpty(tool));
   const availableTools = new Set(normalizedTools);
   const hasSessionsSpawn = availableTools.has("sessions_spawn");
   const hasUpdatePlanTool = availableTools.has("update_plan");
@@ -427,10 +456,10 @@ export function buildAgentSystemPrompt(params: {
       ? normalizeStructuredPromptSection(params.heartbeatPrompt)
       : undefined;
   const runtimeInfo = params.runtimeInfo;
-  const runtimeChannel = runtimeInfo?.channel?.trim().toLowerCase();
+  const runtimeChannel = normalizeOptionalLowercaseString(runtimeInfo?.channel);
   const runtimeCapabilities = runtimeInfo?.capabilities ?? [];
   const runtimeCapabilitiesLower = new Set(
-    runtimeCapabilities.map((cap) => String(cap).trim().toLowerCase()).filter(Boolean),
+    runtimeCapabilities.map((cap) => normalizeLowercaseStringOrEmpty(String(cap))).filter(Boolean),
   );
   const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
   const messageChannelOptions = listDeliverableMessageChannels().join("|");
@@ -462,6 +491,7 @@ export function buildAgentSystemPrompt(params: {
   });
   const memorySection = buildMemorySection({
     isMinimal,
+    includeMemorySection: params.includeMemorySection,
     availableTools,
     citationsMode: params.memoryCitationsMode,
   });
@@ -572,7 +602,7 @@ export function buildAgentSystemPrompt(params: {
           "Get Updates (self-update) is ONLY allowed when the user explicitly asks for it.",
           "Do not run config.apply or update.run unless the user explicitly requests an update or config change; if it's not explicit, ask first.",
           "Use config.schema.lookup with a specific dot path to inspect only the relevant config subtree before making config changes or answering config-field questions; avoid guessing field names/types.",
-          "Actions: config.schema.lookup, config.get, config.apply (validate + write full config, then restart), config.patch (partial update, merges with existing), update.run (update deps or git, then restart).",
+          "Actions: config.schema.lookup, config.get, config.apply (validate + write full config, then hot-reload or restart as needed), config.patch (partial update, merges with existing), update.run (update deps or git, then restart).",
           "After restart, OpenClaw pings the last active session automatically.",
         ].join("\n")
       : "",
@@ -617,9 +647,6 @@ export function buildAgentSystemPrompt(params: {
               }`
             : "",
           params.sandboxInfo.browserBridgeUrl ? "Sandbox browser: enabled." : "",
-          params.sandboxInfo.browserNoVncUrl
-            ? `Sandbox browser observer (noVNC): ${sanitizeForPromptLiteral(params.sandboxInfo.browserNoVncUrl)}`
-            : "",
           params.sandboxInfo.hostBrowserAllowed === true
             ? "Host browser control: allowed."
             : params.sandboxInfo.hostBrowserAllowed === false
@@ -746,18 +773,7 @@ export function buildAgentSystemPrompt(params: {
     lines.push(providerDynamicSuffix, "");
   }
 
-  // Skip heartbeats for subagent/none modes
-  if (!isMinimal && heartbeatPrompt) {
-    lines.push(
-      "## Heartbeats",
-      `Heartbeat prompt: ${heartbeatPrompt}`,
-      "If you receive a heartbeat poll (a user message matching the heartbeat prompt above), and there is nothing that needs attention, reply exactly:",
-      "HEARTBEAT_OK",
-      'OpenClaw treats a leading/trailing "HEARTBEAT_OK" as a heartbeat ack (and may discard it).',
-      'If something needs attention, do NOT include "HEARTBEAT_OK"; reply with the alert text instead.',
-      "",
-    );
-  }
+  lines.push(...buildHeartbeatSection({ isMinimal, heartbeatPrompt }));
 
   lines.push(
     "## Runtime",

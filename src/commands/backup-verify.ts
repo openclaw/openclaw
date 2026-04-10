@@ -1,6 +1,7 @@
 import path from "node:path";
 import * as tar from "tar";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { readStringValue } from "../shared/string-coerce.js";
 import { isRecord, resolveUserPath } from "../utils.js";
 
 const WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
@@ -150,10 +151,9 @@ function parseManifest(raw: string): BackupManifest {
       : undefined,
     paths: isRecord(parsed.paths)
       ? {
-          stateDir: typeof parsed.paths.stateDir === "string" ? parsed.paths.stateDir : undefined,
-          configPath:
-            typeof parsed.paths.configPath === "string" ? parsed.paths.configPath : undefined,
-          oauthDir: typeof parsed.paths.oauthDir === "string" ? parsed.paths.oauthDir : undefined,
+          stateDir: readStringValue(parsed.paths.stateDir),
+          configPath: readStringValue(parsed.paths.configPath),
+          oauthDir: readStringValue(parsed.paths.oauthDir),
           workspaceDirs: Array.isArray(parsed.paths.workspaceDirs)
             ? parsed.paths.workspaceDirs.filter(
                 (entry): entry is string => typeof entry === "string",

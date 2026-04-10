@@ -123,6 +123,105 @@ describe("generic current-conversation bindings", () => {
     });
   });
 
+  it("drops self-parent conversation refs when storing generic current bindings", async () => {
+    const bound = await bindGenericCurrentConversation({
+      targetSessionKey: "agent:codex:acp:telegram-dm",
+      targetKind: "session",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "6098642967",
+        parentConversationId: "6098642967",
+      },
+    });
+
+    expect(bound).toMatchObject({
+      bindingId: "generic:telegram\u241fdefault\u241f\u241f6098642967",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "6098642967",
+      },
+    });
+    expect(bound?.conversation.parentConversationId).toBeUndefined();
+    expect(
+      resolveGenericCurrentConversationBinding({
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "6098642967",
+      }),
+    ).toMatchObject({
+      bindingId: "generic:telegram\u241fdefault\u241f\u241f6098642967",
+      targetSessionKey: "agent:codex:acp:telegram-dm",
+    });
+  });
+
+  it("migrates persisted legacy self-parent binding ids on load", async () => {
+    const filePath = __testing.resolveBindingsFilePath();
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({
+        version: 1,
+        bindings: [
+          {
+            bindingId: "generic:telegram\u241fdefault\u241f6098642967\u241f6098642967",
+            targetSessionKey: "agent:codex:acp:telegram-dm",
+            targetKind: "session",
+            conversation: {
+              channel: "telegram",
+              accountId: "default",
+              conversationId: "6098642967",
+              parentConversationId: "6098642967",
+            },
+            status: "active",
+            boundAt: 1234,
+            metadata: {
+              label: "telegram-dm",
+            },
+          },
+        ],
+      }),
+    );
+
+    const resolved = resolveGenericCurrentConversationBinding({
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "6098642967",
+    });
+
+    expect(resolved).toMatchObject({
+      bindingId: "generic:telegram\u241fdefault\u241f\u241f6098642967",
+      targetSessionKey: "agent:codex:acp:telegram-dm",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "6098642967",
+      },
+    });
+    expect(resolved?.conversation.parentConversationId).toBeUndefined();
+
+    await expect(
+      unbindGenericCurrentConversationBindings({
+        bindingId: resolved?.bindingId,
+        reason: "test cleanup",
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        bindingId: "generic:telegram\u241fdefault\u241f\u241f6098642967",
+      }),
+    ]);
+
+    __testing.resetCurrentConversationBindingsForTests();
+    expect(
+      resolveGenericCurrentConversationBinding({
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "6098642967",
+      }),
+    ).toBeNull();
+  });
+
   it("removes persisted bindings on unbind", async () => {
     await bindGenericCurrentConversation({
       targetSessionKey: "agent:codex:acp:googlechat-room",
