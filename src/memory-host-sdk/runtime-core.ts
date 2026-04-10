@@ -12,11 +12,11 @@ export { loadConfig } from "../config/config.js";
 export { resolveStateDir } from "../config/paths.js";
 export { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
-export {
-  buildMemoryPromptSection as buildActiveMemoryPromptSection,
-  listActiveMemoryPublicArtifacts,
-} from "../plugins/memory-state.js";
+import { resolveRuntimePluginRegistry } from "../plugins/loader.js";
+export { buildMemoryPromptSection as buildActiveMemoryPromptSection } from "../plugins/memory-state.js";
+import { listActiveMemoryPublicArtifacts as listActiveMemoryPublicArtifactsFromState } from "../plugins/memory-state.js";
 export { parseAgentSessionKey } from "../routing/session-key.js";
+import type { OpenClawConfig } from "../config/config.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { MemoryCitationsMode } from "../config/types.memory.js";
 export type {
@@ -29,3 +29,18 @@ export type {
   MemoryPromptSectionBuilder,
 } from "../plugins/memory-state.js";
 export type { OpenClawPluginApi } from "../plugins/types.js";
+
+export async function listActiveMemoryPublicArtifacts(params: { cfg: OpenClawConfig }) {
+  const current = await listActiveMemoryPublicArtifactsFromState(params);
+  if (current.length > 0) {
+    return current;
+  }
+  resolveRuntimePluginRegistry({
+    config: params.cfg,
+    workspaceDir: params.cfg.agents?.defaults?.workspace,
+    runtimeOptions: {
+      allowGatewaySubagentBinding: true,
+    },
+  });
+  return listActiveMemoryPublicArtifactsFromState(params);
+}
