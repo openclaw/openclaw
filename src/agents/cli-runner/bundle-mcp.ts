@@ -38,6 +38,48 @@ async function readExternalMcpConfig(configPath: string): Promise<BundleMcpConfi
   }
 }
 
+/**
+ * Strip the port from an http(s) URL so session-identity hashes stay stable
+ * across gateway restarts that re-bind the loopback MCP bridge to a new
+ * ephemeral port. Non-URL strings and non-http schemes are returned as-is.
+ */
+function stripPortFromHttpUrl(value: string): string {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return value;
+    }
+    if (parsed.port === "") {
+      return value;
+    }
+    parsed.port = "";
+    return parsed.toString();
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * Canonicalize an MCP config for hashing into CLI session identity. Strips
+ * ephemeral transport details (currently: ports from http(s) URLs on server
+ * entries) while preserving everything else — server names, types, headers,
+ * stdio command/args/env — so the hash still invalidates sessions when the
+ * real tool surface changes (e.g. the loopback bridge fails to start, or a
+ * user adds/removes a plugin MCP server).
+ */
+function canonicalizeBundleMcpConfigForHash(config: BundleMcpConfig): BundleMcpConfig {
+  const canonicalServers: Record<string, BundleMcpServerConfig> = {};
+  for (const [serverName, server] of Object.entries(config.mcpServers)) {
+    const canonicalServer: BundleMcpServerConfig = { ...server };
+    const url = canonicalServer.url;
+    if (typeof url === "string") {
+      canonicalServer.url = stripPortFromHttpUrl(url);
+    }
+    canonicalServers[serverName] = canonicalServer;
+  }
+  return { mcpServers: canonicalServers };
+}
+
 async function readJsonObject(filePath: string): Promise<Record<string, unknown>> {
   try {
     const raw = JSON.parse(await fs.readFile(filePath, "utf-8")) as unknown;
@@ -350,20 +392,21 @@ export async function prepareCliBundleMcpConfig(params: {
     params.warn?.(`bundle MCP skipped for ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
   mergedConfig = applyMergePatch(mergedConfig, bundleConfig.config) as BundleMcpConfig;
-  // Snapshot user-authored MCP state for session-identity hashing *before* merging
-  // `additionalConfig`. `additionalConfig` carries gateway-internal runtime state
-  // (the loopback MCP bridge) whose URL embeds an ephemeral port assigned on every
-  // gateway start. Hashing it would invalidate every persisted CLI session binding
-  // on every restart, forcing `claude -p` fresh instead of `claude --resume` and
-  // wiping the agent's conversation memory. The loopback presence is still part of
-  // the config written to `mcp.json` and passed to the CLI — only the session
-  // identity hash is port-agnostic.
-  const hashSource: BundleMcpConfig = {
-    mcpServers: { ...mergedConfig.mcpServers },
-  };
   if (params.additionalConfig) {
     mergedConfig = applyMergePatch(mergedConfig, params.additionalConfig) as BundleMcpConfig;
   }
+
+  // `additionalConfig` carries gateway-internal runtime state (the loopback MCP
+  // bridge) whose URL embeds an ephemeral port assigned on every gateway start.
+  // Hashing that port verbatim would invalidate every persisted CLI session
+  // binding on every restart, wiping agent memory. But we *do* still need the
+  // loopback's presence/absence and its non-ephemeral identity (server name,
+  // type, headers) to contribute to session identity, because
+  // `startGatewayEarlyRuntime` continues after a loopback startup failure — so a
+  // session bound while the bridge was up must be invalidated if the next run
+  // has no bridge (and vice versa). Canonicalize URL ports to zero for the hash
+  // source only; the on-disk mcp.json / CLI args still use the live port.
+  const hashSource = canonicalizeBundleMcpConfigForHash(mergedConfig);
 
   return await prepareModeSpecificBundleMcpConfig({
     mode,

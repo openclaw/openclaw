@@ -327,6 +327,92 @@ describe("prepareCliBundleMcpConfig", () => {
     }
   });
 
+  it("changes mcpConfigHash when the loopback overlay disappears across runs", async () => {
+    // `startGatewayEarlyRuntime` catches loopback startup failures and
+    // continues, so `prepareCliBundleMcpConfig` can run with `additionalConfig`
+    // on one gateway start and without it on the next. A session whose tool
+    // surface included the `openclaw` bridge must not be silently resumed
+    // against a run that no longer has the bridge — the hash must differ even
+    // though we strip the ephemeral port.
+    const workspaceDir = await tempHarness.createTempDir(
+      "openclaw-cli-bundle-mcp-loopback-toggle-",
+    );
+
+    const loopback = {
+      mcpServers: {
+        openclaw: {
+          type: "http" as const,
+          url: "http://127.0.0.1:62949/mcp",
+          headers: { Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}" },
+        },
+      },
+    };
+
+    const preparedWithLoopback = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: { command: "node", args: ["./fake-claude.mjs"] },
+      workspaceDir,
+      config: {},
+      additionalConfig: loopback,
+    });
+    const preparedWithoutLoopback = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: { command: "node", args: ["./fake-claude.mjs"] },
+      workspaceDir,
+      config: {},
+    });
+
+    expect(preparedWithLoopback.mcpConfigHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(preparedWithoutLoopback.mcpConfigHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(preparedWithLoopback.mcpConfigHash).not.toBe(preparedWithoutLoopback.mcpConfigHash);
+
+    await preparedWithLoopback.cleanup?.();
+    await preparedWithoutLoopback.cleanup?.();
+  });
+
+  it("changes mcpConfigHash when the loopback overlay headers change", async () => {
+    // Non-ephemeral fields on the loopback overlay (server name, type, headers)
+    // must still contribute to session identity so a real transport change
+    // (e.g. auth header shape) invalidates the stored CLI session.
+    const workspaceDir = await tempHarness.createTempDir(
+      "openclaw-cli-bundle-mcp-loopback-headers-",
+    );
+
+    const makeLoopbackWithHeader = (authHeader: string) => ({
+      mcpServers: {
+        openclaw: {
+          type: "http" as const,
+          url: "http://127.0.0.1:62949/mcp",
+          headers: { Authorization: authHeader },
+        },
+      },
+    });
+
+    const preparedA = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: { command: "node", args: ["./fake-claude.mjs"] },
+      workspaceDir,
+      config: {},
+      additionalConfig: makeLoopbackWithHeader("Bearer ${OPENCLAW_MCP_TOKEN}"),
+    });
+    const preparedB = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: { command: "node", args: ["./fake-claude.mjs"] },
+      workspaceDir,
+      config: {},
+      additionalConfig: makeLoopbackWithHeader("Bearer ${OPENCLAW_MCP_V2_TOKEN}"),
+    });
+
+    expect(preparedA.mcpConfigHash).not.toBe(preparedB.mcpConfigHash);
+
+    await preparedA.cleanup?.();
+    await preparedB.cleanup?.();
+  });
+
   it("preserves extra env values alongside generated MCP config", async () => {
     const workspaceDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-env-");
 
