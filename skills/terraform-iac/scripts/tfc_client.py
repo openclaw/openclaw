@@ -1505,7 +1505,16 @@ resource "aws_organizations_account" "audit" {{
     trail_block = ""
     trail_bucket_block = ""
     if org_trail:
-        trail_bucket = f"{name}-org-trail-logs".lower().replace(" ", "-").replace("_", "-")
+        landing_zone_name = name.strip().lower().replace(" ", "-").replace("_", "-")
+        if not landing_zone_name:
+            print("❌ Landing zone name cannot be empty")
+            sys.exit(1)
+        if landing_zone_name != name.lower().replace(" ", "-").replace("_", "-"):
+            print(f"  ℹ️  Normalized landing zone name to '{landing_zone_name}' before deriving the trail bucket")
+        name = landing_zone_name
+        if not validate_azure_rg_name(name):
+            pass
+        trail_bucket = f"{name}-org-trail-logs"
         errors = validate_s3_bucket_name(trail_bucket)
         if errors:
             print(f"  ⚠️  Auto-derived trail bucket name '{trail_bucket}' is invalid:")
@@ -1707,20 +1716,20 @@ resource "aws_guardduty_organization_admin_account" "audit" {{
 }}
 
 # NOTE: aws_guardduty_organization_configuration must be applied from the
-# delegated admin (Audit) account, not the management account.
-# Deploy the following in a separate workspace with Audit account credentials:
+# delegated admin (Audit) account, and it must target the delegated admin
+# detector created in that account. Use the Audit account workspace for the
+# org-wide configuration below after creating an Audit-account detector.
 #
 #   resource "aws_guardduty_detector" "admin" {{
 #     enable = true
 #   }}
 #
 #   resource "aws_guardduty_organization_configuration" "this" {{
+#     detector_id = aws_guardduty_detector.admin.id
 #     auto_enable_organization_members = "ALL"
-#     detector_id                      = aws_guardduty_detector.admin.id
 #   }}
 #
-# Also configure the Audit account to enable the detector and organization
-# configuration itself; the management workspace only delegates admin.
+# The management workspace only creates the detector and assigns delegated admin.
 """
 
     # Security Hub
