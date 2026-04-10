@@ -159,6 +159,7 @@ export const mockedIsTimeoutErrorMessage = vi.fn(() => false);
 export const mockedPickFallbackThinkingLevel = vi.fn<(params?: unknown) => ThinkLevel | null>(
   () => null,
 );
+export const mockedSanitizeUserFacingText = vi.fn((text?: string) => text);
 export const mockedEvaluateContextWindowGuard = vi.fn(() => ({
   shouldWarn: false,
   shouldBlock: false,
@@ -288,6 +289,8 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedIsTimeoutErrorMessage.mockReturnValue(false);
   mockedPickFallbackThinkingLevel.mockReset();
   mockedPickFallbackThinkingLevel.mockReturnValue(null);
+  mockedSanitizeUserFacingText.mockReset();
+  mockedSanitizeUserFacingText.mockImplementation((text?: string) => text);
   mockedEvaluateContextWindowGuard.mockReset();
   mockedEvaluateContextWindowGuard.mockReturnValue({
     shouldWarn: false,
@@ -392,6 +395,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     isRateLimitAssistantError: mockedIsRateLimitAssistantError,
     isTimeoutErrorMessage: mockedIsTimeoutErrorMessage,
     pickFallbackThinkingLevel: mockedPickFallbackThinkingLevel,
+    sanitizeUserFacingText: mockedSanitizeUserFacingText,
   }));
 
   vi.doMock("./run/attempt.js", () => ({

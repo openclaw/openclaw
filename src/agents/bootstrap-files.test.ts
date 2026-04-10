@@ -13,6 +13,7 @@ import {
   resolveBootstrapContextForRun,
   resolveBootstrapFilesForRun,
   resolveContextInjectionMode,
+  resolveMemoryInjectionMode,
 } from "./bootstrap-files.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
@@ -177,6 +178,61 @@ describe("resolveBootstrapContextForRun", () => {
 
     expect(files.some((file) => file.name === "HEARTBEAT.md")).toBe(false);
     expect(files.some((file) => file.name === "AGENTS.md")).toBe(true);
+  });
+
+  it("keeps MEMORY.md bootstrap injection enabled by default", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "durable memory", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: {
+        agents: {
+          defaults: {},
+        },
+      },
+    });
+
+    expect(files.some((file) => file.name === "MEMORY.md")).toBe(true);
+  });
+
+  it("drops MEMORY.md bootstrap injection in recall-only mode", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "durable memory", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: {
+        agents: {
+          defaults: {
+            memoryInjection: "recall-only",
+          },
+        },
+      },
+    });
+
+    expect(files.some((file) => file.name === "MEMORY.md")).toBe(false);
+  });
+
+  it("keeps MEMORY.md on the current normal truncation path in core-only mode", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "0123456789".repeat(20), "utf8");
+
+    const result = await resolveBootstrapContextForRun({
+      workspaceDir,
+      config: {
+        agents: {
+          defaults: {
+            memoryInjection: "core-only",
+            bootstrapMaxChars: 40,
+            bootstrapTotalMaxChars: 2000,
+          },
+        },
+      },
+    });
+    const memory = result.contextFiles.find((file) => path.basename(file.path) === "MEMORY.md");
+
+    expect(memory?.content).toContain("[...truncated, read MEMORY.md for full content...]");
   });
 
   it("keeps HEARTBEAT.md for actual heartbeat runs even when the prompt section is disabled", async () => {
@@ -359,6 +415,33 @@ describe("hasCompletedBootstrapTurn", () => {
     );
     await fs.symlink(realFile, linkFile);
     expect(await hasCompletedBootstrapTurn(linkFile)).toBe(false);
+  });
+});
+
+describe("resolveMemoryInjectionMode", () => {
+  it("defaults to full", () => {
+    expect(resolveMemoryInjectionMode(undefined)).toBe("full");
+  });
+
+  it("returns explicit configured modes", () => {
+    expect(
+      resolveMemoryInjectionMode({
+        agents: {
+          defaults: {
+            memoryInjection: "core-only",
+          },
+        },
+      }),
+    ).toBe("core-only");
+    expect(
+      resolveMemoryInjectionMode({
+        agents: {
+          defaults: {
+            memoryInjection: "recall-only",
+          },
+        },
+      }),
+    ).toBe("recall-only");
   });
 });
 

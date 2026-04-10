@@ -832,6 +832,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Default workspace path exposed to agent runtime tools for filesystem context and repo-aware behavior. Set this explicitly when running from wrappers so path resolution stays deterministic.",
   "agents.defaults.contextInjection":
     'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
+  "agents.defaults.memoryInjection":
+    'Controls how MEMORY.md is injected into workspace bootstrap context: "full" (default), "core-only", or "recall-only". Today, "full" and "core-only" follow the same bounded bootstrap path; use "core-only" when you want to declare that intent explicitly, and use "recall-only" when memory context should come only from per-turn recall instead of eager bootstrap injection.',
   "agents.defaults.bootstrapMaxChars":
     "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
   "agents.defaults.bootstrapTotalMaxChars":
@@ -874,6 +876,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Sets the maximum bytes allowed per multimodal file before it is skipped during memory indexing. Use this to cap upload cost and indexing latency, or raise it for short high-quality audio clips.",
   "agents.defaults.memorySearch.experimental.sessionMemory":
     "Indexes session transcripts into memory search so responses can reference prior chat turns. Keep this off unless transcript recall is needed, because indexing cost and storage usage both increase.",
+  "agents.defaults.memorySearch.autoRecall":
+    "Automatically runs memory recall before prompt build and prepends the strongest matches into the current turn. Keep this off by default for backward compatibility, or enable it when tool-driven recall is too inconsistent.",
+  "agents.defaults.memorySearch.autoRecall.enabled":
+    "Turns on per-turn automatic recall injection before the model sees the current user prompt. Enable this when you want memory context even if the model forgets to call memory_search itself.",
+  "agents.defaults.memorySearch.autoRecall.topK":
+    "Maximum number of recalled memory hits injected into each turn (default: 5). Lower this to keep prompts tighter, or raise it when recall quality is good and you need broader context.",
+  "agents.defaults.memorySearch.autoRecall.minScore":
+    "Minimum relevance score required for an auto-recalled memory to be injected (default: 0.3). Raise this to suppress weak matches, or lower it when recall is too sparse.",
   "agents.defaults.memorySearch.provider":
     'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "bedrock", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
   "agents.defaults.memorySearch.model":

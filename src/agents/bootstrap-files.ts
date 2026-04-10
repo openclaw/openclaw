@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import type { OpenClawConfig } from "../config/config.js";
-import type { AgentContextInjection } from "../config/types.agent-defaults.js";
+import type { AgentContextInjection, MemoryInjectionMode } from "../config/types.agent-defaults.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
@@ -13,6 +13,8 @@ import {
   resolveBootstrapTotalMaxChars,
 } from "./pi-embedded-helpers.js";
 import {
+  DEFAULT_MEMORY_ALT_FILENAME,
+  DEFAULT_MEMORY_FILENAME,
   DEFAULT_HEARTBEAT_FILENAME,
   filterBootstrapFilesForSession,
   loadWorkspaceBootstrapFiles,
@@ -28,6 +30,30 @@ export const FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE = "openclaw:bootstrap-context:
 
 export function resolveContextInjectionMode(config?: OpenClawConfig): AgentContextInjection {
   return config?.agents?.defaults?.contextInjection ?? "always";
+}
+
+export function resolveMemoryInjectionMode(config?: OpenClawConfig): MemoryInjectionMode {
+  const mode = config?.agents?.defaults?.memoryInjection;
+  if (mode === "core-only" || mode === "recall-only") {
+    return mode;
+  }
+  return "full";
+}
+
+function applyMemoryInjectionFilter(
+  files: WorkspaceBootstrapFile[],
+  config?: OpenClawConfig,
+): WorkspaceBootstrapFile[] {
+  // Today, "full" and "core-only" intentionally share the same bootstrap path.
+  // "core-only" remains a distinct config value so users can opt into explicit
+  // bounded bootstrap behavior without changing runtime semantics later when the
+  // modes diverge. Only "recall-only" changes file selection now.
+  if (resolveMemoryInjectionMode(config) !== "recall-only") {
+    return files;
+  }
+  return files.filter(
+    (file) => file.name !== DEFAULT_MEMORY_FILENAME && file.name !== DEFAULT_MEMORY_ALT_FILENAME,
+  );
 }
 
 export async function hasCompletedBootstrapTurn(sessionFile: string): Promise<boolean> {
@@ -214,7 +240,10 @@ export async function resolveBootstrapFilesForRun(params: {
     agentId: params.agentId,
   });
   return sanitizeBootstrapFiles(
-    filterHeartbeatBootstrapFile(updated, excludeHeartbeatBootstrapFile),
+    filterHeartbeatBootstrapFile(
+      applyMemoryInjectionFilter(updated, params.config),
+      excludeHeartbeatBootstrapFile,
+    ),
     params.warn,
   );
 }

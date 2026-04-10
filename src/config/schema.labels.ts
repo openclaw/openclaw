@@ -332,6 +332,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.workspace": "Workspace",
   "agents.defaults.repoRoot": "Repo Root",
   "agents.defaults.contextInjection": "Context Injection",
+  "agents.defaults.memoryInjection": "Memory Injection",
   "agents.defaults.bootstrapMaxChars": "Bootstrap Max Chars",
   "agents.defaults.bootstrapTotalMaxChars": "Bootstrap Total Max Chars",
   "agents.defaults.bootstrapPromptTruncationWarning": "Bootstrap Prompt Truncation Warning",
@@ -353,6 +354,10 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.multimodal.maxFileBytes": "Memory Search Multimodal Max File Bytes",
   "agents.defaults.memorySearch.experimental.sessionMemory":
     "Memory Search Session Index (Experimental)",
+  "agents.defaults.memorySearch.autoRecall": "Memory Search Auto Recall",
+  "agents.defaults.memorySearch.autoRecall.enabled": "Enable Memory Search Auto Recall",
+  "agents.defaults.memorySearch.autoRecall.topK": "Memory Search Auto Recall Top K",
+  "agents.defaults.memorySearch.autoRecall.minScore": "Memory Search Auto Recall Min Score",
   "agents.defaults.memorySearch.provider": "Memory Search Provider",
   "agents.defaults.memorySearch.remote.baseUrl": "Remote Embedding Base URL",
   "agents.defaults.memorySearch.remote.apiKey": "Remote Embedding API Key",

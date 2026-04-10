@@ -47,6 +47,9 @@ export const AgentDefaultsSchema = z
     systemPromptOverride: z.string().optional(),
     skipBootstrap: z.boolean().optional(),
     contextInjection: z.union([z.literal("always"), z.literal("continuation-skip")]).optional(),
+    memoryInjection: z
+      .union([z.literal("full"), z.literal("core-only"), z.literal("recall-only")])
+      .optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
     bootstrapPromptTruncationWarning: z

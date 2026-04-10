@@ -18,6 +18,11 @@ export type ResolvedMemorySearchConfig = {
   sources: Array<"memory" | "sessions">;
   extraPaths: string[];
   multimodal: MemoryMultimodalSettings;
+  autoRecall: {
+    enabled: boolean;
+    topK: number;
+    minScore: number;
+  };
   provider: string;
   remote?: {
     baseUrl?: string;
@@ -110,6 +115,9 @@ const DEFAULT_MMR_LAMBDA = 0.7;
 const DEFAULT_TEMPORAL_DECAY_ENABLED = false;
 const DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS = 30;
 const DEFAULT_CACHE_ENABLED = true;
+const DEFAULT_AUTO_RECALL_ENABLED = false;
+const DEFAULT_AUTO_RECALL_TOP_K = 5;
+const DEFAULT_AUTO_RECALL_MIN_SCORE = 0.3;
 const DEFAULT_SOURCES: Array<"memory" | "sessions"> = ["memory"];
 
 function normalizeSources(
@@ -207,6 +215,17 @@ function mergeConfig(
     modalities: overrides?.multimodal?.modalities ?? defaults?.multimodal?.modalities,
     maxFileBytes: overrides?.multimodal?.maxFileBytes ?? defaults?.multimodal?.maxFileBytes,
   });
+  const autoRecall = {
+    enabled:
+      overrides?.autoRecall?.enabled ??
+      defaults?.autoRecall?.enabled ??
+      DEFAULT_AUTO_RECALL_ENABLED,
+    topK: overrides?.autoRecall?.topK ?? defaults?.autoRecall?.topK ?? DEFAULT_AUTO_RECALL_TOP_K,
+    minScore:
+      overrides?.autoRecall?.minScore ??
+      defaults?.autoRecall?.minScore ??
+      DEFAULT_AUTO_RECALL_MIN_SCORE,
+  };
   const vector = {
     enabled: overrides?.store?.vector?.enabled ?? defaults?.store?.vector?.enabled ?? true,
     extensionPath:
@@ -297,6 +316,11 @@ function mergeConfig(
     sources,
     extraPaths,
     multimodal,
+    autoRecall: {
+      enabled: Boolean(autoRecall.enabled),
+      topK: clampInt(autoRecall.topK, 1, 20),
+      minScore: clampNumber(autoRecall.minScore, 0, 1),
+    },
     provider,
     remote,
     experimental: {
