@@ -417,6 +417,49 @@ describe("TelegramPollingSession", () => {
     expect(createTelegramTransport).toHaveBeenCalledTimes(1);
   });
 
+  it("does not trigger stall restart shortly after a getUpdates error", async () => {
+    const abort = new AbortController();
+    const botStop = vi.fn(async () => undefined);
+    const runnerStop = vi.fn(async () => undefined);
+    const getApiMiddleware = mockBotCapturingApiMiddleware(botStop);
+    const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
+
+    const watchdogHarness = installPollingStallWatchdogHarness([0, 0, 1, 30_000], 119_999);
+
+    const log = vi.fn();
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      log,
+    });
+
+    try {
+      const runPromise = session.runUntilAbort();
+      const watchdog = await watchdogHarness.waitForWatchdog();
+
+      const apiMiddleware = getApiMiddleware();
+      if (apiMiddleware) {
+        const failedGetUpdates = vi.fn(async () => {
+          throw new Error("Network request for 'getUpdates' failed!");
+        });
+        await expect(apiMiddleware(failedGetUpdates, "getUpdates", { offset: 1 })).rejects.toThrow(
+          "Network request for 'getUpdates' failed!",
+        );
+      }
+
+      watchdog?.();
+
+      expect(runnerStop).not.toHaveBeenCalled();
+      expect(botStop).not.toHaveBeenCalled();
+      expect(log).not.toHaveBeenCalledWith(expect.stringContaining("Polling stall detected"));
+
+      abort.abort();
+      resolveFirstTask();
+      await runPromise;
+    } finally {
+      watchdogHarness.restore();
+    }
+  });
+
   it("does not trigger stall restart when non-getUpdates API calls are active", async () => {
     const abort = new AbortController();
     const botStop = vi.fn(async () => undefined);

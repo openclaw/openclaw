@@ -265,6 +265,7 @@ export class TelegramPollingSession {
         lastGetUpdatesFinishedAt = finishedAt;
         lastGetUpdatesDurationMs = finishedAt - startedAt;
         lastGetUpdatesOutcome = Array.isArray(result) ? `ok:${result.length}` : "ok";
+        lastApiActivityAt = finishedAt;
         return result;
       } catch (err) {
         const finishedAt = Date.now();
@@ -272,6 +273,7 @@ export class TelegramPollingSession {
         lastGetUpdatesDurationMs = finishedAt - startedAt;
         lastGetUpdatesOutcome = "error";
         lastGetUpdatesError = formatErrorMessage(err);
+        lastApiActivityAt = finishedAt;
         throw err;
       } finally {
         inFlightGetUpdates = Math.max(0, inFlightGetUpdates - 1);
