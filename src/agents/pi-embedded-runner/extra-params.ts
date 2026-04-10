@@ -392,6 +392,9 @@ function applyPrePluginStreamWrappers(ctx: ApplyExtraParamsContext): void {
 function applyPostPluginStreamWrappers(
   ctx: ApplyExtraParamsContext & { providerWrapperHandled: boolean },
 ): void {
+  // AEP governance headers — applied to ALL providers when AEP env vars are set.
+  ctx.agent.streamFn = createAepHeadersWrapper(ctx.agent.streamFn);
+
   ctx.agent.streamFn = createOpenRouterSystemCacheWrapper(ctx.agent.streamFn);
   ctx.agent.streamFn = createOpenAIStringContentWrapper(ctx.agent.streamFn);
 
