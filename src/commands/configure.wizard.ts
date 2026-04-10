@@ -2,11 +2,12 @@ import fsPromises from "node:fs/promises";
 import nodePath from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { readConfigFileSnapshot, resolveGatewayPort, writeConfigFile } from "../config/config.js";
+import { readConfigFileSnapshot, replaceConfigFile, resolveGatewayPort } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
@@ -158,43 +159,20 @@ async function promptChannelMode(runtime: RuntimeEnv): Promise<ChannelsWizardMod
 async function promptWebToolsConfig(
   nextConfig: OpenClawConfig,
   runtime: RuntimeEnv,
+  prompter: ReturnType<typeof createClackPrompter>,
 ): Promise<OpenClawConfig> {
+  type WebSearchConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"];
   const existingSearch = nextConfig.tools?.web?.search;
   const existingFetch = nextConfig.tools?.web?.fetch;
-  const {
-    resolveSearchProviderOptions,
-    resolveExistingKey,
-    hasExistingKey,
-    applySearchKey,
-    applySearchProviderSelection,
-    hasKeyInEnv,
-  } = await import("./onboard-search.js");
+  const { resolveSearchProviderOptions, setupSearch } = await import("./onboard-search.js");
+  const { describeCodexNativeWebSearch, isCodexNativeWebSearchRelevant } =
+    await import("../agents/codex-native-web-search.js");
   const searchProviderOptions = resolveSearchProviderOptions(nextConfig);
-  const defaultProvider = searchProviderOptions[0]?.id;
-
-  const hasKeyForProvider = (provider: string): boolean => {
-    const entry = searchProviderOptions.find((e) => e.id === provider);
-    if (!entry) {
-      return false;
-    }
-    if (entry.requiresCredential === false) {
-      return true;
-    }
-    return hasExistingKey(nextConfig, provider) || hasKeyInEnv(entry);
-  };
-
-  const existingProvider = (() => {
-    const stored = existingSearch?.provider;
-    if (stored && searchProviderOptions.some((e) => e.id === stored)) {
-      return stored;
-    }
-    return searchProviderOptions.find((e) => hasKeyForProvider(e.id))?.id ?? defaultProvider;
-  })();
 
   note(
     [
       "Web search lets your agent look things up online using the `web_search` tool.",
-      "Choose a provider. Some providers need an API key, and some work key-free.",
+      "Choose a managed provider now, and Codex-capable models can also use native Codex web search.",
       "Docs: https://docs.openclaw.ai/tools/web",
     ].join("\n"),
     "Web search",
@@ -203,112 +181,115 @@ async function promptWebToolsConfig(
   const enableSearch = guardCancel(
     await confirm({
       message: "Enable web_search?",
-      initialValue:
-        existingSearch?.enabled ?? searchProviderOptions.some((e) => hasKeyForProvider(e.id)),
+      initialValue: existingSearch?.enabled ?? searchProviderOptions.length > 0,
     }),
     runtime,
   );
 
-  let nextSearch: Record<string, unknown> = {
+  let nextSearch: WebSearchConfig = {
     ...existingSearch,
     enabled: enableSearch,
   };
   let workingConfig = nextConfig;
 
   if (enableSearch) {
-    if (searchProviderOptions.length === 0) {
+    const codexRelevant = isCodexNativeWebSearchRelevant({ config: nextConfig });
+    let configureManagedProvider = true;
+
+    if (codexRelevant) {
       note(
         [
-          "No web search providers are currently available under this plugin policy.",
-          "Enable plugins or remove deny rules, then rerun configure.",
-          "Docs: https://docs.openclaw.ai/tools/web",
+          "Codex-capable models can optionally use native Codex web search.",
+          "Managed web_search still controls non-Codex models.",
+          "If no managed provider is configured, non-Codex models still rely on provider auto-detect and may have no search available.",
+          ...(describeCodexNativeWebSearch(nextConfig)
+            ? [describeCodexNativeWebSearch(nextConfig)!]
+            : ["Recommended mode: cached."]),
         ].join("\n"),
-        "Web search",
+        "Codex native search",
       );
-      nextSearch = {
-        ...existingSearch,
-        enabled: false,
-      };
-    } else {
-      const providerOptions = searchProviderOptions.map((entry) => {
-        const configured = hasKeyForProvider(entry.id);
-        return {
-          value: entry.id,
-          label: entry.label,
-          hint:
-            entry.requiresCredential === false
-              ? `${entry.hint} · key-free`
-              : configured
-                ? `${entry.hint} · configured`
-                : entry.hint,
-        };
-      });
 
-      const providerChoice = guardCancel(
-        await select({
-          message: "Choose web search provider",
-          options: providerOptions,
-          initialValue: existingProvider,
+      const enableCodexNative = guardCancel(
+        await confirm({
+          message: "Enable native Codex web search for Codex-capable models?",
+          initialValue: existingSearch?.openaiCodex?.enabled === true,
         }),
         runtime,
       );
 
-      nextSearch = { ...nextSearch, provider: providerChoice };
-
-      const entry = searchProviderOptions.find((e) => e.id === providerChoice)!;
-      const credentialLabel = entry.credentialLabel?.trim() || `${entry.label} API key`;
-      const existingKey = resolveExistingKey(nextConfig, providerChoice);
-      const keyConfigured = hasExistingKey(nextConfig, providerChoice);
-      const envAvailable = entry.envVars.some((k) => Boolean(process.env[k]?.trim()));
-      const envVarNames = entry.envVars.join(" / ");
-      const needsCredential = entry.requiresCredential !== false;
-
-      if (!needsCredential) {
-        workingConfig = applySearchProviderSelection(workingConfig, providerChoice);
-        nextSearch = { ...workingConfig.tools?.web?.search };
-        note(
-          [
-            `${entry.label} works without an API key.`,
-            "OpenClaw enabled the plugin and selected it as your web_search provider.",
-            `Docs: ${entry.docsUrl ?? "https://docs.openclaw.ai/tools/web"}`,
-          ].join("\n"),
-          "Web search",
-        );
-      } else {
-        const keyInput = guardCancel(
-          await text({
-            message: keyConfigured
-              ? envAvailable
-                ? `${credentialLabel} (leave blank to keep current or use ${envVarNames})`
-                : `${credentialLabel} (leave blank to keep current)`
-              : envAvailable
-                ? `${credentialLabel} (paste it here; leave blank to use ${envVarNames})`
-                : credentialLabel,
-            placeholder: keyConfigured ? "Leave blank to keep current" : entry.placeholder,
+      if (enableCodexNative) {
+        const codexMode = guardCancel(
+          await select({
+            message: "Codex native web search mode",
+            options: [
+              {
+                value: "cached",
+                label: "cached (recommended)",
+                hint: "Uses cached web content",
+              },
+              {
+                value: "live",
+                label: "live",
+                hint: "Allows live external web access",
+              },
+            ],
+            initialValue: existingSearch?.openaiCodex?.mode ?? "cached",
           }),
           runtime,
         );
-        const key = String(keyInput ?? "").trim();
-
-        if (key || existingKey) {
-          workingConfig = applySearchKey(workingConfig, providerChoice, (key || existingKey)!);
-          nextSearch = { ...workingConfig.tools?.web?.search };
-        } else if (keyConfigured || envAvailable) {
-          workingConfig = applySearchProviderSelection(workingConfig, providerChoice);
-          nextSearch = { ...workingConfig.tools?.web?.search };
-        } else {
-          nextSearch = { ...nextSearch, provider: providerChoice };
-          note(
-            [
-              "No key stored yet — web_search won't work until a key is available.",
-              `Store your ${credentialLabel} here or set ${envVarNames} in the Gateway environment.`,
-              `Get your API key at: ${entry.signupUrl}`,
-              "Docs: https://docs.openclaw.ai/tools/web",
-            ].join("\n"),
-            "Web search",
-          );
-        }
+        nextSearch = {
+          ...nextSearch,
+          openaiCodex: {
+            ...existingSearch?.openaiCodex,
+            enabled: true,
+            mode: codexMode,
+          },
+        };
+        configureManagedProvider = guardCancel(
+          await confirm({
+            message: "Configure or change a managed web search provider now?",
+            initialValue: Boolean(existingSearch?.provider),
+          }),
+          runtime,
+        );
+      } else {
+        nextSearch = {
+          ...nextSearch,
+          openaiCodex: {
+            ...existingSearch?.openaiCodex,
+            enabled: false,
+          },
+        };
       }
+    }
+
+    if (searchProviderOptions.length === 0) {
+      if (configureManagedProvider) {
+        note(
+          [
+            "No web search providers are currently available under this plugin policy.",
+            "Enable plugins or remove deny rules, then rerun configure.",
+            "Docs: https://docs.openclaw.ai/tools/web",
+          ].join("\n"),
+          "Web search",
+        );
+      }
+      if (nextSearch.openaiCodex?.enabled !== true) {
+        nextSearch = {
+          ...existingSearch,
+          enabled: false,
+        };
+      }
+    } else if (configureManagedProvider) {
+      workingConfig = await setupSearch(workingConfig, runtime, prompter);
+      nextSearch = {
+        ...workingConfig.tools?.web?.search,
+        enabled: workingConfig.tools?.web?.search?.provider ? true : existingSearch?.enabled,
+        openaiCodex: {
+          ...existingSearch?.openaiCodex,
+          ...(nextSearch.openaiCodex as Record<string, unknown> | undefined),
+        },
+      };
     }
   }
 
@@ -347,7 +328,10 @@ export async function runConfigureWizard(
     const prompter = createClackPrompter();
 
     const snapshot = await readConfigFileSnapshot();
-    const baseConfig: OpenClawConfig = snapshot.valid ? snapshot.config : {};
+    let currentBaseHash = snapshot.hash;
+    const baseConfig: OpenClawConfig = snapshot.valid
+      ? (snapshot.sourceConfig ?? snapshot.config)
+      : {};
 
     if (snapshot.exists) {
       const title = snapshot.valid ? "Existing config detected" : "Invalid config";
@@ -387,7 +371,7 @@ export async function runConfigureWizard(
       token: process.env.OPENCLAW_GATEWAY_TOKEN ?? baseLocalProbeToken,
       password: process.env.OPENCLAW_GATEWAY_PASSWORD ?? baseLocalProbePassword,
     });
-    const remoteUrl = baseConfig.gateway?.remote?.url?.trim() ?? "";
+    const remoteUrl = normalizeOptionalString(baseConfig.gateway?.remote?.url) ?? "";
     const baseRemoteProbeToken = await resolveGatewaySecretInputForWizard({
       cfg: baseConfig,
       value: baseConfig.gateway?.remote?.token,
@@ -431,7 +415,11 @@ export async function runConfigureWizard(
         command: opts.command,
         mode,
       });
-      await writeConfigFile(remoteConfig);
+      await replaceConfigFile({
+        nextConfig: remoteConfig,
+        ...(currentBaseHash !== undefined ? { baseHash: currentBaseHash } : {}),
+      });
+      currentBaseHash = undefined;
       logConfigUpdated(runtime);
       outro("Remote gateway configured.");
       return;
@@ -460,7 +448,11 @@ export async function runConfigureWizard(
         command: opts.command,
         mode,
       });
-      await writeConfigFile(nextConfig);
+      await replaceConfigFile({
+        nextConfig,
+        ...(currentBaseHash !== undefined ? { baseHash: currentBaseHash } : {}),
+      });
+      currentBaseHash = undefined;
       logConfigUpdated(runtime);
     };
 
@@ -472,7 +464,9 @@ export async function runConfigureWizard(
         }),
         runtime,
       );
-      workspaceDir = resolveUserPath(String(workspaceInput ?? "").trim() || DEFAULT_WORKSPACE);
+      workspaceDir = resolveUserPath(
+        normalizeOptionalString(String(workspaceInput ?? "")) || DEFAULT_WORKSPACE,
+      );
       if (!snapshot.exists) {
         const indicators = ["MEMORY.md", "memory", ".git"].map((name) =>
           nodePath.join(workspaceDir, name),
@@ -555,7 +549,7 @@ export async function runConfigureWizard(
       }
 
       if (selected.includes("web")) {
-        nextConfig = await promptWebToolsConfig(nextConfig, runtime);
+        nextConfig = await promptWebToolsConfig(nextConfig, runtime, prompter);
       }
 
       if (selected.includes("gateway")) {
@@ -566,6 +560,15 @@ export async function runConfigureWizard(
 
       if (selected.includes("channels")) {
         await configureChannelsSection();
+      }
+
+      if (selected.includes("plugins")) {
+        const { configurePluginConfig } = await import("../wizard/setup.plugin-config.js");
+        nextConfig = await configurePluginConfig({
+          config: nextConfig,
+          prompter,
+          workspaceDir: resolveUserPath(workspaceDir),
+        });
       }
 
       if (selected.includes("skills")) {
@@ -608,7 +611,7 @@ export async function runConfigureWizard(
         }
 
         if (choice === "web") {
-          nextConfig = await promptWebToolsConfig(nextConfig, runtime);
+          nextConfig = await promptWebToolsConfig(nextConfig, runtime, prompter);
           await persistConfig();
         }
 
@@ -622,6 +625,16 @@ export async function runConfigureWizard(
 
         if (choice === "channels") {
           await configureChannelsSection();
+          await persistConfig();
+        }
+
+        if (choice === "plugins") {
+          const { configurePluginConfig } = await import("../wizard/setup.plugin-config.js");
+          nextConfig = await configurePluginConfig({
+            config: nextConfig,
+            prompter,
+            workspaceDir: resolveUserPath(workspaceDir),
+          });
           await persistConfig();
         }
 
@@ -669,7 +682,6 @@ export async function runConfigureWizard(
       customBindHost: nextConfig.gateway?.customBindHost,
       basePath: nextConfig.gateway?.controlUi?.basePath,
     });
-    // Try both newly written and preexisting passwords while the gateway restarts.
     const newPassword =
       process.env.OPENCLAW_GATEWAY_PASSWORD ??
       (await resolveGatewaySecretInputForWizard({
@@ -697,7 +709,6 @@ export async function runConfigureWizard(
       token,
       password: newPassword,
     });
-    // If new password failed and it's different from old password, try old too.
     if (!gatewayProbe.ok && newPassword !== oldPassword && oldPassword) {
       gatewayProbe = await probeGatewayReachable({
         url: links.wsUrl,

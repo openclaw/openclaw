@@ -1,10 +1,10 @@
 import { vi } from "vitest";
-import { monitorWebChannel } from "./auto-reply.js";
 import {
   createWebInboundDeliverySpies,
   createWebListenerFactoryCapture,
   sendWebDirectInboundMessage,
 } from "./auto-reply.test-harness.js";
+import { monitorWebChannel } from "./auto-reply/monitor.js";
 import type { WebInboundMessage } from "./inbound.js";
 
 export async function monitorWebChannelWithCapture(resolver: unknown): Promise<{

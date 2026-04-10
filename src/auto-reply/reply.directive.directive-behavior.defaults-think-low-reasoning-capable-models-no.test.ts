@@ -5,6 +5,7 @@ import {
   DEFAULT_TEST_MODEL_CATALOG,
   assertModelSelection,
   installDirectiveBehaviorE2EHooks,
+  installFreshDirectiveBehaviorReplyMocks,
   makeEmbeddedTextResult,
   makeWhatsAppDirectiveConfig,
   mockEmbeddedTextResult,
@@ -21,25 +22,11 @@ import { runModelDirectiveText } from "./reply.directive.directive-behavior.mode
 
 let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
 
-function installFreshDirectiveBehaviorReplyMocks() {
-  vi.doMock("../agents/pi-embedded.js", () => ({
-    abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-    runEmbeddedPiAgent: (...args: unknown[]) => runEmbeddedPiAgentMock(...args),
-    queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-    resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-    isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
-    isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
-  }));
-  vi.doMock("../agents/model-catalog.js", () => ({
-    loadModelCatalog: loadModelCatalogMock,
-  }));
-}
-
 function makeDefaultModelConfig(home: string) {
   return makeWhatsAppDirectiveConfig(home, {
-    model: { primary: "anthropic/claude-opus-4-5" },
+    model: { primary: "anthropic/claude-opus-4-6" },
     models: {
-      "anthropic/claude-opus-4-5": {},
+      "anthropic/claude-opus-4-6": {},
       "openai/gpt-4.1-mini": {},
     },
   });
@@ -56,7 +43,7 @@ async function runReplyToCurrentCase(home: string, text: string) {
       MessageSid: "msg-123",
     },
     {},
-    makeWhatsAppDirectiveConfig(home, { model: "anthropic/claude-opus-4-5" }),
+    makeWhatsAppDirectiveConfig(home, { model: "anthropic/claude-opus-4-6" }),
   );
 
   return Array.isArray(res) ? res[0] : res;
@@ -69,7 +56,7 @@ async function expectThinkStatusForReasoningModel(params: {
 }): Promise<void> {
   loadModelCatalogMock.mockResolvedValueOnce([
     {
-      id: "claude-opus-4-5",
+      id: "claude-opus-4-6",
       name: "Opus 4.5",
       provider: "anthropic",
       reasoning: params.reasoning,
@@ -79,7 +66,7 @@ async function expectThinkStatusForReasoningModel(params: {
   const res = await getReplyFromConfig(
     { Body: "/think", From: "+1222", To: "+1222", CommandAuthorized: true },
     {},
-    makeWhatsAppDirectiveConfig(params.home, { model: "anthropic/claude-opus-4-5" }),
+    makeWhatsAppDirectiveConfig(params.home, { model: "anthropic/claude-opus-4-6" }),
   );
 
   const text = replyText(res);
@@ -90,7 +77,7 @@ async function expectThinkStatusForReasoningModel(params: {
 function mockReasoningCapableCatalog() {
   loadModelCatalogMock.mockResolvedValueOnce([
     {
-      id: "claude-opus-4-5",
+      id: "claude-opus-4-6",
       name: "Opus 4.5",
       provider: "anthropic",
       reasoning: true,
@@ -116,7 +103,7 @@ async function runReasoningDefaultCase(params: {
     },
     {},
     makeWhatsAppDirectiveConfig(params.home, {
-      model: { primary: "anthropic/claude-opus-4-5" },
+      model: { primary: "anthropic/claude-opus-4-6" },
       ...(params.thinkingDefault ? { thinkingDefault: params.thinkingDefault } : {}),
     }),
   );
@@ -183,7 +170,7 @@ describe("directive behavior", () => {
 
       loadModelCatalogMock.mockResolvedValueOnce([]);
       const unavailableCatalogText = await runModelDirectiveText(home, "/model");
-      expect(unavailableCatalogText).toContain("Current: anthropic/claude-opus-4-5");
+      expect(unavailableCatalogText).toContain("Current: anthropic/claude-opus-4-6");
       expect(unavailableCatalogText).toContain("Switch: /model <provider/model>");
       expect(unavailableCatalogText).toContain(
         "Browse: /models (providers) or /models <provider> (models)",
@@ -193,20 +180,20 @@ describe("directive behavior", () => {
       const allowlistedStatusText = await runModelDirectiveText(home, "/model status", {
         includeSessionStore: false,
       });
-      expect(allowlistedStatusText).toContain("anthropic/claude-opus-4-5");
+      expect(allowlistedStatusText).toContain("anthropic/claude-opus-4-6");
       expect(allowlistedStatusText).toContain("openai/gpt-4.1-mini");
       expect(allowlistedStatusText).not.toContain("claude-sonnet-4-1");
       expect(allowlistedStatusText).toContain("auth:");
 
       loadModelCatalogMock.mockResolvedValue([
-        { id: "claude-opus-4-5", name: "Opus 4.5", provider: "anthropic" },
+        { id: "claude-opus-4-6", name: "Opus 4.5", provider: "anthropic" },
         { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
         { id: "grok-4", name: "Grok 4", provider: "xai" },
       ]);
       const noAllowlistText = await runModelDirectiveText(home, "/model list", {
         defaults: {
           model: {
-            primary: "anthropic/claude-opus-4-5",
+            primary: "anthropic/claude-opus-4-6",
             fallbacks: ["openai/gpt-4.1-mini"],
           },
           imageModel: { primary: "minimax/MiniMax-M2.7" },
@@ -222,7 +209,7 @@ describe("directive behavior", () => {
       loadModelCatalogMock.mockResolvedValueOnce([
         {
           provider: "anthropic",
-          id: "claude-opus-4-5",
+          id: "claude-opus-4-6",
           name: "Claude Opus 4.5",
         },
         { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 mini" },
@@ -230,7 +217,7 @@ describe("directive behavior", () => {
       const configOnlyProviderText = await runModelDirectiveText(home, "/models minimax", {
         defaults: {
           models: {
-            "anthropic/claude-opus-4-5": {},
+            "anthropic/claude-opus-4-6": {},
             "openai/gpt-4.1-mini": {},
             "minimax/MiniMax-M2.7": { alias: "minimax" },
           },
@@ -244,7 +231,7 @@ describe("directive behavior", () => {
                 api: "anthropic-messages",
                 models: [
                   { id: "MiniMax-M2.7", name: "MiniMax M2.7" },
-                  { id: "MiniMax-M2.5", name: "MiniMax M2.5" },
+                  { id: "MiniMax-M2.7-highspeed", name: "MiniMax M2.7 Highspeed" },
                 ],
               },
             },
@@ -257,7 +244,7 @@ describe("directive behavior", () => {
       const missingAuthText = await runModelDirectiveText(home, "/model list", {
         defaults: {
           models: {
-            "anthropic/claude-opus-4-5": {},
+            "anthropic/claude-opus-4-6": {},
           },
         },
       });
@@ -276,9 +263,9 @@ describe("directive behavior", () => {
         makeWhatsAppDirectiveConfig(
           home,
           {
-            model: { primary: "anthropic/claude-opus-4-5" },
+            model: { primary: "anthropic/claude-opus-4-6" },
             models: {
-              "anthropic/claude-opus-4-5": {},
+              "anthropic/claude-opus-4-6": {},
               "openai/gpt-4.1-mini": {},
             },
           },
@@ -312,7 +299,7 @@ describe("directive behavior", () => {
       expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
       const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
       expect(call?.provider).toBe("anthropic");
-      expect(call?.model).toBe("claude-opus-4-5");
+      expect(call?.model).toBe("claude-opus-4-6");
       runEmbeddedPiAgentMock.mockClear();
 
       mockEmbeddedTextResult("done");
@@ -323,7 +310,7 @@ describe("directive behavior", () => {
           To: "+2000",
         },
         {},
-        makeWhatsAppDirectiveConfig(home, { model: { primary: "anthropic/claude-opus-4-5" } }),
+        makeWhatsAppDirectiveConfig(home, { model: { primary: "anthropic/claude-opus-4-6" } }),
       );
 
       expect(replyTexts(inlineThinkRes)).toContain("done");
@@ -345,7 +332,7 @@ describe("directive behavior", () => {
         {},
         makeWhatsAppDirectiveConfig(
           home,
-          { model: { primary: "anthropic/claude-opus-4-5" } },
+          { model: { primary: "anthropic/claude-opus-4-6" } },
           {
             tools: {
               elevated: {
@@ -449,7 +436,7 @@ describe("directive behavior", () => {
           MessageSid: "msg-123",
         },
         {},
-        makeWhatsAppDirectiveConfig(home, { model: { primary: "anthropic/claude-opus-4-5" } }),
+        makeWhatsAppDirectiveConfig(home, { model: { primary: "anthropic/claude-opus-4-6" } }),
       );
 
       const payload = Array.isArray(res) ? res[0] : res;

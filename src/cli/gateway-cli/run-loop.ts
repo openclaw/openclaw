@@ -3,7 +3,9 @@ import {
   getActiveEmbeddedRunCount,
   waitForActiveEmbeddedRuns,
 } from "../../agents/pi-embedded-runner/runs.js";
+import { loadConfig } from "../../config/config.js";
 import type { startGatewayServer } from "../../gateway/server.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { restartGatewayProcessWithFreshPid } from "../../infra/process-respawn.js";
 import {
@@ -12,6 +14,7 @@ import {
   markGatewaySigusr1RestartHandled,
   scheduleGatewaySigusr1Restart,
 } from "../../infra/restart.js";
+import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   getActiveTaskCount,
@@ -23,14 +26,19 @@ import { createRestartIterationHook } from "../../process/restart-recovery.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
 const gatewayLog = createSubsystemLogger("gateway");
+const LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS = 1500;
+const DEFAULT_RESTART_DRAIN_TIMEOUT_MS = 300_000;
 
 type GatewayRunSignalAction = "stop" | "restart";
 
 export async function runGatewayLoop(params: {
-  start: () => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
+  start: (params?: {
+    startupStartedAt?: number;
+  }) => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
   runtime: RuntimeEnv;
   lockPort?: number;
 }) {
+  let startupStartedAt = Date.now();
   let lock = await acquireGatewayLock({ port: params.lockPort });
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
   let shuttingDown = false;
@@ -55,6 +63,7 @@ export async function runGatewayLoop(params: {
   };
   const reacquireLockForInProcessRestart = async (): Promise<boolean> => {
     try {
+      startupStartedAt = Date.now();
       lock = await acquireGatewayLock({ port: params.lockPort });
       return true;
     } catch (err) {
@@ -73,6 +82,16 @@ export async function runGatewayLoop(params: {
           ? `spawned pid ${respawn.pid ?? "unknown"}`
           : "supervisor restart";
       gatewayLog.info(`restart mode: full process restart (${modeLabel})`);
+      if (
+        respawn.mode === "supervised" &&
+        detectRespawnSupervisor(process.env, process.platform) === "launchd"
+      ) {
+        // A short clean-exit pause keeps rapid SIGUSR1/config restarts from
+        // tripping launchd crash-loop throttling before KeepAlive relaunches.
+        await new Promise((resolve) => {
+          setTimeout(resolve, LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS);
+        });
+      }
       exitProcess(0);
       return;
     }
@@ -96,9 +115,18 @@ export async function runGatewayLoop(params: {
     exitProcess(0);
   };
 
-  const DRAIN_TIMEOUT_MS = 90_000;
   const SUPERVISOR_STOP_TIMEOUT_MS = 30_000;
   const SHUTDOWN_TIMEOUT_MS = SUPERVISOR_STOP_TIMEOUT_MS - 5_000;
+  const resolveRestartDrainTimeoutMs = () => {
+    try {
+      const timeoutMs = loadConfig().gateway?.reload?.deferralTimeoutMs;
+      return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs >= 0
+        ? timeoutMs
+        : DEFAULT_RESTART_DRAIN_TIMEOUT_MS;
+    } catch {
+      return DEFAULT_RESTART_DRAIN_TIMEOUT_MS;
+    }
+  };
 
   const request = (action: GatewayRunSignalAction, signal: string) => {
     if (shuttingDown) {
@@ -107,10 +135,13 @@ export async function runGatewayLoop(params: {
     }
     shuttingDown = true;
     const isRestart = action === "restart";
+    const restartDrainTimeoutMs = isRestart ? resolveRestartDrainTimeoutMs() : 0;
     gatewayLog.info(`received ${signal}; ${isRestart ? "restarting" : "shutting down"}`);
 
     // Allow extra time for draining active turns on restart.
-    const forceExitMs = isRestart ? DRAIN_TIMEOUT_MS + SHUTDOWN_TIMEOUT_MS : SHUTDOWN_TIMEOUT_MS;
+    const forceExitMs = isRestart
+      ? restartDrainTimeoutMs + SHUTDOWN_TIMEOUT_MS
+      : SHUTDOWN_TIMEOUT_MS;
     const forceExitTimer = setTimeout(() => {
       gatewayLog.error("shutdown timed out; exiting without full cleanup");
       // Keep the in-process watchdog below the supervisor stop budget so this
@@ -138,14 +169,14 @@ export async function runGatewayLoop(params: {
 
           if (activeTasks > 0 || activeRuns > 0) {
             gatewayLog.info(
-              `draining ${activeTasks} active task(s) and ${activeRuns} active embedded run(s) before restart (timeout ${DRAIN_TIMEOUT_MS}ms)`,
+              `draining ${activeTasks} active task(s) and ${activeRuns} active embedded run(s) before restart (timeout ${restartDrainTimeoutMs}ms)`,
             );
             const [tasksDrain, runsDrain] = await Promise.all([
               activeTasks > 0
-                ? waitForActiveTasks(DRAIN_TIMEOUT_MS)
+                ? waitForActiveTasks(restartDrainTimeoutMs)
                 : Promise.resolve({ drained: true }),
               activeRuns > 0
-                ? waitForActiveEmbeddedRuns(DRAIN_TIMEOUT_MS)
+                ? waitForActiveEmbeddedRuns(restartDrainTimeoutMs)
                 : Promise.resolve({ drained: true }),
             ]);
             if (tasksDrain.drained && runsDrain.drained) {
@@ -226,11 +257,10 @@ export async function runGatewayLoop(params: {
     // Keep process alive; SIGUSR1 triggers an in-process restart (no supervisor required).
     // SIGTERM/SIGINT still exit after a graceful shutdown.
     let isFirstStart = true;
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
+    for (;;) {
       onIteration();
       try {
-        server = await params.start();
+        server = await params.start({ startupStartedAt });
         isFirstStart = false;
       } catch (err) {
         // On initial startup, let the error propagate so the outer handler
@@ -246,7 +276,7 @@ export async function runGatewayLoop(params: {
         // Without this, the process holds the lock but is not listening,
         // forcing manual cleanup. (#35862)
         await releaseLockIfHeld();
-        const errMsg = err instanceof Error ? err.message : String(err);
+        const errMsg = formatErrorMessage(err);
         const errStack = err instanceof Error && err.stack ? `\n${err.stack}` : "";
         gatewayLog.error(
           `gateway startup failed: ${errMsg}. ` +

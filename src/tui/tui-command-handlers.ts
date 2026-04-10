@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Component, SelectItem, TUI } from "@mariozechner/pi-tui";
+import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   formatThinkingLevels,
   normalizeUsageDisplay,
@@ -71,7 +72,6 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     setActivityStatus,
     formatSessionKey,
     applySessionInfoFromPatch,
-    noteLocalRunId,
     noteLocalBtwRunId,
     forgetLocalRunId,
     forgetLocalBtwRunId,
@@ -255,9 +255,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           }),
         );
         break;
-      case "status":
+      case "gateway-status":
         try {
-          const status = await client.getStatus();
+          const status = await client.getGatewayStatus();
           if (typeof status === "string") {
             chatLog.addSystem(status);
             break;
@@ -440,12 +440,17 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.addSystem("usage: /activation <mention|always>");
           break;
         }
+        const activation = normalizeGroupActivation(args);
+        if (!activation) {
+          chatLog.addSystem("usage: /activation <mention|always>");
+          break;
+        }
         try {
           const result = await client.patchSession({
             key: state.currentSessionKey,
-            groupActivation: args === "always" ? "always" : "mention",
+            groupActivation: activation,
           });
-          chatLog.addSystem(`activation set to ${args}`);
+          chatLog.addSystem(`activation set to ${activation}`);
           applySessionInfoFromPatch(result);
           await refreshSessionInfo();
         } catch (err) {
@@ -514,8 +519,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     try {
       if (!isBtw) {
         chatLog.addUser(text);
-        noteLocalRunId(runId);
-        state.activeChatRunId = runId;
+        state.pendingOptimisticUserMessage = true;
         setActivityStatus("sending");
       } else {
         noteLocalBtwRunId?.(runId);
@@ -541,6 +545,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         forgetLocalRunId?.(state.activeChatRunId);
       }
       if (!isBtw) {
+        state.pendingOptimisticUserMessage = false;
         state.activeChatRunId = null;
       }
       chatLog.addSystem(`${isBtw ? "btw failed" : "send failed"}: ${String(err)}`);

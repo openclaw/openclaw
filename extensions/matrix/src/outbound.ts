@@ -1,10 +1,13 @@
 import { sendMessageMatrix, sendPollMatrix } from "./matrix/send.js";
-import { resolveOutboundSendDep, type ChannelOutboundAdapter } from "./runtime-api.js";
-import { getMatrixRuntime } from "./runtime.js";
+import {
+  chunkTextForOutbound,
+  resolveOutboundSendDep,
+  type ChannelOutboundAdapter,
+} from "./runtime-api.js";
 
 export const matrixOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
-  chunker: (text, limit) => getMatrixRuntime().channel.text.chunkMarkdownText(text, limit),
+  chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
   sendText: async ({ cfg, to, text, deps, replyToId, threadId, accountId, audioAsVoice }) => {
@@ -31,6 +34,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
     text,
     mediaUrl,
     mediaLocalRoots,
+    mediaReadFile,
     deps,
     replyToId,
     threadId,
@@ -45,6 +49,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       cfg,
       mediaUrl,
       mediaLocalRoots,
+      mediaReadFile,
       replyToId: replyToId ?? undefined,
       threadId: resolvedThreadId,
       accountId: accountId ?? undefined,

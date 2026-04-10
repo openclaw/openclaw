@@ -11,6 +11,7 @@ import {
   hasAssistantVisibleReply,
 } from "./pi-embedded-subscribe.handlers.messages.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
+import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
 import { isAssistantMessage } from "./pi-embedded-utils.js";
 
 export {
@@ -34,9 +35,10 @@ export function handleAgentStart(ctx: EmbeddedPiSubscribeContext) {
   });
 }
 
-export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
+export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<void> {
   const lastAssistant = ctx.state.lastAssistant;
   const isError = isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error";
+  let lifecycleErrorText: string | undefined;
 
   if (isError && lastAssistant) {
     const friendlyError = formatAssistantErrorText(lastAssistant, {
@@ -46,11 +48,14 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
       model: lastAssistant.model,
     });
     const rawError = lastAssistant.errorMessage?.trim();
-    const failoverReason = classifyFailoverReason(rawError ?? "");
+    const failoverReason = classifyFailoverReason(rawError ?? "", {
+      provider: lastAssistant.provider,
+    });
     const errorText = (friendlyError || lastAssistant.errorMessage || "LLM request failed.").trim();
     const observedError = buildApiErrorObservationFields(rawError);
     const safeErrorText =
       buildTextObservationFields(errorText).textPreview ?? "LLM request failed.";
+    lifecycleErrorText = safeErrorText;
     const safeRunId = sanitizeForConsole(ctx.params.runId) ?? "-";
     const safeModel = sanitizeForConsole(lastAssistant.model) ?? "unknown";
     const safeProvider = sanitizeForConsole(lastAssistant.provider) ?? "unknown";
@@ -68,24 +73,30 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
       ...observedError,
       consoleMessage: `embedded run agent end: runId=${safeRunId} isError=true model=${safeModel} provider=${safeProvider} error=${safeErrorText}${rawErrorConsoleSuffix}`,
     });
-    emitAgentEvent({
-      runId: ctx.params.runId,
-      stream: "lifecycle",
-      data: {
-        phase: "error",
-        error: safeErrorText,
-        endedAt: Date.now(),
-      },
-    });
-    void ctx.params.onAgentEvent?.({
-      stream: "lifecycle",
-      data: {
-        phase: "error",
-        error: safeErrorText,
-      },
-    });
   } else {
     ctx.log.debug(`embedded run agent end: runId=${ctx.params.runId} isError=${isError}`);
+  }
+
+  const emitLifecycleTerminal = () => {
+    if (isError) {
+      emitAgentEvent({
+        runId: ctx.params.runId,
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          error: lifecycleErrorText ?? "LLM request failed.",
+          endedAt: Date.now(),
+        },
+      });
+      void ctx.params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          error: lifecycleErrorText ?? "LLM request failed.",
+        },
+      });
+      return;
+    }
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "lifecycle",
@@ -98,26 +109,70 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
       stream: "lifecycle",
       data: { phase: "end" },
     });
+  };
+
+  const finalizeAgentEnd = () => {
+    ctx.state.blockState.thinking = false;
+    ctx.state.blockState.final = false;
+    ctx.state.blockState.inlineCode = createInlineCodeState();
+
+    if (ctx.state.pendingCompactionRetry > 0) {
+      ctx.resolveCompactionRetry();
+    } else {
+      ctx.maybeResolveCompactionWait();
+    }
+  };
+
+  const flushPendingMediaAndChannel = () => {
+    const pendingToolMediaReply = consumePendingToolMediaReply(ctx.state);
+    if (pendingToolMediaReply && hasAssistantVisibleReply(pendingToolMediaReply)) {
+      ctx.emitBlockReply(pendingToolMediaReply);
+    }
+
+    const postMediaFlushResult = ctx.flushBlockReplyBuffer();
+    if (isPromiseLike<void>(postMediaFlushResult)) {
+      return postMediaFlushResult.then(() => {
+        const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
+        if (isPromiseLike<void>(onBlockReplyFlushResult)) {
+          return onBlockReplyFlushResult;
+        }
+        return undefined;
+      });
+    }
+
+    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
+    if (isPromiseLike<void>(onBlockReplyFlushResult)) {
+      return onBlockReplyFlushResult;
+    }
+    return undefined;
+  };
+
+  let lifecycleTerminalEmitted = false;
+  const emitLifecycleTerminalOnce = () => {
+    if (lifecycleTerminalEmitted) {
+      return;
+    }
+    lifecycleTerminalEmitted = true;
+    emitLifecycleTerminal();
+  };
+
+  try {
+    const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();
+    finalizeAgentEnd();
+    const flushPendingMediaAndChannelResult = isPromiseLike<void>(flushBlockReplyBufferResult)
+      ? Promise.resolve(flushBlockReplyBufferResult).then(() => flushPendingMediaAndChannel())
+      : flushPendingMediaAndChannel();
+
+    if (isPromiseLike<void>(flushPendingMediaAndChannelResult)) {
+      return Promise.resolve(flushPendingMediaAndChannelResult).finally(() => {
+        emitLifecycleTerminalOnce();
+      });
+    }
+  } catch (error) {
+    emitLifecycleTerminalOnce();
+    throw error;
   }
 
-  ctx.flushBlockReplyBuffer();
-  const pendingToolMediaReply = consumePendingToolMediaReply(ctx.state);
-  if (pendingToolMediaReply && hasAssistantVisibleReply(pendingToolMediaReply)) {
-    ctx.emitBlockReply(pendingToolMediaReply);
-  }
-  // Flush the reply pipeline so the response reaches the channel before
-  // compaction wait blocks the run.  This mirrors the pattern used by
-  // handleToolExecutionStart and ensures delivery is not held hostage to
-  // long-running compaction (#35074).
-  void ctx.params.onBlockReplyFlush?.();
-
-  ctx.state.blockState.thinking = false;
-  ctx.state.blockState.final = false;
-  ctx.state.blockState.inlineCode = createInlineCodeState();
-
-  if (ctx.state.pendingCompactionRetry > 0) {
-    ctx.resolveCompactionRetry();
-  } else {
-    ctx.maybeResolveCompactionWait();
-  }
+  emitLifecycleTerminalOnce();
+  return undefined;
 }

@@ -68,14 +68,12 @@ describe("isAuthPermanentErrorMessage", () => {
     {
       name: "matches permanent auth failure patterns",
       samples: [
-        "invalid_api_key",
         "api key revoked",
         "api key deactivated",
         "key has been disabled",
         "key has been revoked",
         "account has been deactivated",
-        "could not authenticate api key",
-        "could not validate credentials",
+        "OAuth authentication is currently not allowed for this organization",
         "API_KEY_REVOKED",
         "api_key_deleted",
       ],
@@ -84,6 +82,8 @@ describe("isAuthPermanentErrorMessage", () => {
     {
       name: "does not match transient auth errors",
       samples: [
+        "invalid_api_key",
+        "permission_error",
         "unauthorized",
         "invalid token",
         "authentication failed",
@@ -102,8 +102,13 @@ describe("isAuthErrorMessage", () => {
   it.each([
     'No credentials found for profile "anthropic:default".',
     "No API key found for profile openai.",
+    "invalid_api_key",
+    "permission_error",
     "OAuth token refresh failed for anthropic: Failed to refresh OAuth token for anthropic. Please try again or re-authenticate.",
     "Please re-authenticate to continue.",
+    "could not authenticate api key",
+    "could not validate credentials",
+    "Failed to extract accountId from token",
   ])("matches auth errors for %j", (sample) => {
     expect(isAuthErrorMessage(sample)).toBe(true);
   });
@@ -122,6 +127,8 @@ describe("isBillingErrorMessage", () => {
         "Insufficient USD or Diem balance to complete request. Visit https://venice.ai/settings/api to add credits.",
         "This model requires more credits to use",
         "This endpoint require more credits",
+        "You're out of extra usage. Add more at claude.ai/settings/usage and keep going.",
+        "Extra usage is required for long context requests.",
       ],
       expected: true,
     },
@@ -209,6 +216,21 @@ describe("isBillingErrorMessage", () => {
       "402 Payment Required: The account associated with this API key has reached its maximum allowed monthly spending limit.";
     expect(isBillingErrorMessage(sample)).toBe(true);
     expect(classifyFailoverReason(sample)).toBe("billing");
+  });
+
+  it("classifies Anthropic extra-usage exhaustion variants as billing", () => {
+    const samples = [
+      "You're out of extra usage. Add more at claude.ai/settings/usage and keep going.",
+      "Extra usage is required for long context requests.",
+      "Third-party apps now draw from your extra usage, not your plan limits. We've added a $200 credit to get you started. Claim it at claude.ai/settings/usage and keep going.",
+      '{"type":"error","error":{"type":"invalid_request_error","message":"You\'re out of extra usage. Add more at claude.ai/settings/usage and keep going."}}',
+      '{"type":"error","error":{"type":"invalid_request_error","message":"Extra usage is required for long context requests."}}',
+    ];
+
+    for (const sample of samples) {
+      expect(isBillingErrorMessage(sample)).toBe(true);
+      expect(classifyFailoverReason(sample, { provider: "anthropic" })).toBe("billing");
+    }
   });
 });
 
@@ -527,8 +549,8 @@ describe("isTransientHttpError", () => {
 });
 
 describe("classifyFailoverReasonFromHttpStatus", () => {
-  it("treats HTTP 401 permanent auth failures as auth_permanent", () => {
-    expect(classifyFailoverReasonFromHttpStatus(401, "invalid_api_key")).toBe("auth_permanent");
+  it("treats HTTP 401 invalid_api_key as ambiguous auth", () => {
+    expect(classifyFailoverReasonFromHttpStatus(401, "invalid_api_key")).toBe("auth");
   });
 
   it("treats HTTP 422 as format error", () => {
@@ -547,6 +569,38 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
     expect(classifyFailoverReasonFromHttpStatus(400, INSUFFICIENT_QUOTA_PAYLOAD)).toBe("billing");
   });
 
+  it("keeps HTTP 400 provider-specific rate limits out of the generic format bucket", () => {
+    expect(
+      classifyFailoverReasonFromHttpStatus(
+        400,
+        "ThrottlingException: Too many concurrent requests",
+      ),
+    ).toBe("rate_limit");
+  });
+
+  it("does not force HTTP 400 context-overflow payloads into format", () => {
+    expect(
+      classifyFailoverReasonFromHttpStatus(
+        400,
+        "INVALID_ARGUMENT: input exceeds the maximum number of tokens",
+      ),
+    ).toBeNull();
+  });
+
+  it("lets OpenRouter billing-classified HTTP 401 responses bypass generic auth", () => {
+    expect(
+      classifyFailoverReasonFromHttpStatus(401, "401 Key limit exceeded (monthly limit)", {
+        provider: "openrouter",
+      }),
+    ).toBe("billing");
+  });
+
+  it("keeps generic HTTP 401 key-limit text on the auth path without provider context", () => {
+    expect(
+      classifyFailoverReasonFromHttpStatus(401, "401 Key limit exceeded (monthly limit)"),
+    ).toBe("auth");
+  });
+
   it("treats HTTP 499 as transient for structured errors", () => {
     expect(classifyFailoverReasonFromHttpStatus(499)).toBe("timeout");
     expect(classifyFailoverReasonFromHttpStatus(499, "499 Client Closed Request")).toBe("timeout");
@@ -556,6 +610,99 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
         '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
       ),
     ).toBe("overloaded");
+  });
+
+  it("treats generic HTTP 410 responses as retryable timeouts", () => {
+    expect(classifyFailoverReasonFromHttpStatus(410)).toBe("timeout");
+    expect(classifyFailoverReasonFromHttpStatus(410, "")).toBe("timeout");
+    expect(classifyFailoverReasonFromHttpStatus(410, "No body response")).toBe("timeout");
+  });
+
+  it("treats session-specific HTTP 410 responses as session_expired", () => {
+    expect(classifyFailoverReasonFromHttpStatus(410, "session not found")).toBe("session_expired");
+    expect(classifyFailoverReasonFromHttpStatus(410, "conversation expired")).toBe(
+      "session_expired",
+    );
+  });
+
+  it("preserves explicit billing and auth signals on HTTP 410", () => {
+    expect(classifyFailoverReasonFromHttpStatus(410, "invalid_api_key")).toBe("auth");
+    expect(classifyFailoverReasonFromHttpStatus(410, "authentication failed")).toBe("auth");
+    expect(classifyFailoverReasonFromHttpStatus(410, "insufficient credits")).toBe("billing");
+  });
+});
+
+describe("classifyFailoverReason", () => {
+  it("treats generic 410 text as retryable timeout", () => {
+    expect(classifyFailoverReason("410")).toBe("timeout");
+    expect(classifyFailoverReason("HTTP 410")).toBe("timeout");
+    expect(classifyFailoverReason("410 Gone")).toBe("timeout");
+    expect(classifyFailoverReason("410: No body")).toBe("timeout");
+    expect(classifyFailoverReason("HTTP 410: No body")).toBe("timeout");
+    expect(classifyFailoverReason("HTTP 410 Gone")).toBe("timeout");
+  });
+
+  it("keeps session-specific 410 text mapped to session_expired", () => {
+    expect(classifyFailoverReason("HTTP 410: session not found")).toBe("session_expired");
+    expect(classifyFailoverReason("410 conversation expired")).toBe("session_expired");
+  });
+
+  it("keeps explicit billing and auth signals on 410 text", () => {
+    expect(classifyFailoverReason("HTTP 410: invalid_api_key")).toBe("auth");
+    expect(classifyFailoverReason("HTTP 410: authentication failed")).toBe("auth");
+    expect(classifyFailoverReason("HTTP 410: insufficient credits")).toBe("billing");
+  });
+
+  it("classifies HTTP 404 assistant errors as model_not_found so model fallback can continue", () => {
+    expect(classifyFailoverReason("404 status code (no body)")).toBe("model_not_found");
+    expect(classifyFailoverReason("HTTP 404: No body")).toBe("model_not_found");
+  });
+
+  it("preserves session and auth billing signals on HTTP 404 text", () => {
+    expect(classifyFailoverReason("HTTP 404: session not found")).toBe("session_expired");
+    expect(classifyFailoverReason("HTTP 404: invalid_api_key")).toBe("auth");
+    expect(classifyFailoverReason("HTTP 404: insufficient credits")).toBe("billing");
+  });
+
+  it("does not map HTTP 404 plus context-overflow text to model_not_found", () => {
+    expect(
+      classifyFailoverReason(
+        "HTTP 404: INVALID_ARGUMENT: input exceeds the maximum number of tokens",
+      ),
+    ).toBeNull();
+  });
+
+  it("keeps raw HTTP 400 wrappers aligned with structured provider classification", () => {
+    expect(
+      classifyFailoverReason("HTTP 400: ThrottlingException: Too many concurrent requests"),
+    ).toBe("rate_limit");
+    expect(
+      classifyFailoverReason(
+        "HTTP 400: INVALID_ARGUMENT: input exceeds the maximum number of tokens",
+      ),
+    ).toBeNull();
+  });
+
+  it("classifies provider-scoped generic upstream messages", () => {
+    expect(classifyFailoverReason("An unknown error occurred", { provider: "anthropic" })).toBe(
+      "timeout",
+    );
+    expect(classifyFailoverReason("Provider returned error", { provider: "openrouter" })).toBe(
+      "timeout",
+    );
+    expect(classifyFailoverReason("Key limit exceeded", { provider: "openrouter" })).toBe(
+      "billing",
+    );
+  });
+
+  it("does not classify provider-scoped generic upstream messages without provider context", () => {
+    expect(classifyFailoverReason("An unknown error occurred")).toBeNull();
+    expect(
+      classifyFailoverReason("An unknown error occurred", { provider: "openrouter" }),
+    ).toBeNull();
+    expect(classifyFailoverReason("Provider returned error")).toBeNull();
+    expect(classifyFailoverReason("Provider returned error", { provider: "anthropic" })).toBeNull();
+    expect(classifyFailoverReason("Key limit exceeded")).toBeNull();
   });
 });
 
@@ -582,6 +729,18 @@ describe("isFailoverErrorMessage", () => {
       "stop reason: error",
       "reason: abort",
       "reason: error",
+    ]);
+  });
+
+  it("matches AbortError / stream-abort messages as timeout (#58315)", () => {
+    expectTimeoutFailoverSamples([
+      "The operation was aborted",
+      "This operation was aborted",
+      "the operation was aborted",
+      "stream closed",
+      "stream was closed",
+      "stream aborted",
+      "stream was aborted",
     ]);
   });
 
@@ -793,6 +952,11 @@ describe("classifyFailoverReason", () => {
         "521 <!DOCTYPE html><html><head><title>Web server is down</title></head><body>Cloudflare</body></html>",
       ),
     ).toBe("timeout");
+    expect(
+      classifyFailoverReason(
+        'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}',
+      ),
+    ).toBe("timeout");
     expect(classifyFailoverReason("string should match pattern")).toBe("format");
     expect(classifyFailoverReason("bad request")).toBeNull();
     expect(
@@ -847,11 +1011,15 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("LLM error: monthly limit reached")).toBe("rate_limit");
     expect(classifyFailoverReason("LLM error: daily limit exceeded")).toBe("rate_limit");
   });
-  it("classifies permanent auth errors as auth_permanent", () => {
-    expect(classifyFailoverReason("invalid_api_key")).toBe("auth_permanent");
+  it("keeps only high-confidence auth failures in auth_permanent", () => {
+    expect(classifyFailoverReason("invalid_api_key")).toBe("auth");
+    expect(classifyFailoverReason("permission_error")).toBe("auth");
     expect(classifyFailoverReason("Your api key has been revoked")).toBe("auth_permanent");
     expect(classifyFailoverReason("key has been disabled")).toBe("auth_permanent");
     expect(classifyFailoverReason("account has been deactivated")).toBe("auth_permanent");
+    expect(
+      classifyFailoverReason("OAuth authentication is currently not allowed for this organization"),
+    ).toBe("auth_permanent");
   });
   it("classifies JSON api_error with transient signal as timeout", () => {
     expect(
@@ -867,6 +1035,12 @@ describe("classifyFailoverReason", () => {
     expect(
       classifyFailoverReason(
         '{"type":"error","error":{"type":"api_error","message":"Service temporarily unavailable"}}',
+      ),
+    ).toBe("timeout");
+    // Anthropic "unexpected error" variant (#57010)
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"api_error","message":"An unexpected error occurred while processing the response"}}',
       ),
     ).toBe("timeout");
   });
@@ -918,6 +1092,11 @@ describe("classifyFailoverReason", () => {
     expect(
       classifyFailoverReason(
         '{"type":"error","error":{"type":"api_error","message":"permission_error"}}',
+      ),
+    ).toBe("auth");
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"api_error","message":"permission_error: OAuth authentication is currently not allowed for this organization"}}',
       ),
     ).toBe("auth_permanent");
   });

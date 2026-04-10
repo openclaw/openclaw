@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const sendMessageSlackMock = vi.fn();
-const hasHooksMock = vi.fn();
-const runMessageSendingMock = vi.fn();
+const sendMessageSlackMock = vi.hoisted(() => vi.fn());
+const hasHooksMock = vi.hoisted(() => vi.fn());
+const runMessageSendingMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./send.js", () => ({
   sendMessageSlack: (...args: unknown[]) => sendMessageSlackMock(...args),
@@ -15,7 +15,8 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
   }),
 }));
 
-import { slackOutbound } from "./outbound-adapter.js";
+let slackOutbound: typeof import("./outbound-adapter.js").slackOutbound;
+({ slackOutbound } = await import("./outbound-adapter.js"));
 
 describe("slackOutbound", () => {
   const cfg = {

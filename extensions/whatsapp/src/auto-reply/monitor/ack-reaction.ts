@@ -1,6 +1,8 @@
 import { shouldAckReactionForWhatsApp } from "openclaw/plugin-sdk/channel-feedback";
 import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { getSenderIdentity } from "../../identity.js";
+import { resolveWhatsAppReactionLevel } from "../../reaction-level.js";
 import { sendReactionWhatsApp } from "../../send.js";
 import { formatError } from "../../session.js";
 import type { WebInboundMsg } from "../types.js";
@@ -18,6 +20,16 @@ export function maybeSendAckReaction(params: {
   warn: (obj: unknown, msg: string) => void;
 }) {
   if (!params.msg.id) {
+    return;
+  }
+
+  // Keep ackReaction as the emoji/scope control, while letting reactionLevel
+  // suppress all automatic reactions when it is explicitly set to "off".
+  const reactionLevel = resolveWhatsAppReactionLevel({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  if (reactionLevel.level === "off") {
     return;
   }
 
@@ -55,10 +67,11 @@ export function maybeSendAckReaction(params: {
     { chatId: params.msg.chatId, messageId: params.msg.id, emoji },
     "sending ack reaction",
   );
+  const sender = getSenderIdentity(params.msg);
   sendReactionWhatsApp(params.msg.chatId, params.msg.id, emoji, {
     verbose: params.verbose,
     fromMe: false,
-    participant: params.msg.senderJid,
+    participant: sender.jid ?? undefined,
     accountId: params.accountId,
   }).catch((err) => {
     params.warn(

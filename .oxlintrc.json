@@ -13,20 +13,24 @@
     "eslint/no-new": "off",
     "eslint/no-shadow": "off",
     "eslint/no-unmodified-loop-condition": "off",
+    "eslint-plugin-unicorn/prefer-set-size": "off",
     "oxc/no-accumulating-spread": "off",
     "oxc/no-async-endpoint-handlers": "off",
     "oxc/no-map-spread": "off",
+    "typescript/consistent-return": "error",
     "typescript/no-explicit-any": "error",
     "typescript/no-extraneous-class": "off",
+    "typescript/no-unnecessary-type-conversion": "off",
     "typescript/no-unsafe-type-assertion": "off",
     "unicorn/consistent-function-scoping": "off",
+    "unicorn/prefer-set-size": "off",
     "unicorn/require-post-message-target-origin": "off"
   },
   "ignorePatterns": [
     "assets/",
     "dist/",
+    "dist-runtime/",
     "docs/_layouts/",
-    "extensions/",
     "node_modules/",
     "patches/",
     "pnpm-lock.yaml",
@@ -34,6 +38,30 @@
     "src/auto-reply/reply/export-html/template.js",
     "src/canvas-host/a2ui/a2ui.bundle.js",
     "Swabble/",
-    "vendor/"
+    "vendor/",
+    "**/.cache/**",
+    "**/build/**",
+    "**/coverage/**",
+    "**/dist/**",
+    "**/dist-runtime/**",
+    "**/node_modules/**"
+  ],
+  "overrides": [
+    {
+      "files": [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/*.e2e.test.ts",
+        "**/*.live.test.ts",
+        "**/*test-harness.ts",
+        "**/*test-helpers.ts",
+        "**/*test-support.ts"
+      ],
+      "rules": {
+        "typescript/no-explicit-any": "off",
+        "typescript/unbound-method": "off",
+        "eslint/no-unsafe-optional-chaining": "off"
+      }
+    }
   ]
 }

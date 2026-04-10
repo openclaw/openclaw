@@ -2,16 +2,12 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   createGatewayCredentialPlan,
   type GatewayCredentialPlan,
-  readGatewayPasswordEnv,
-  readGatewayTokenEnv,
   trimCredentialToUndefined,
   trimToUndefined,
 } from "./credential-planner.js";
 export {
   hasGatewayPasswordEnvCandidate,
   hasGatewayTokenEnvCandidate,
-  readGatewayPasswordEnv,
-  readGatewayTokenEnv,
   trimCredentialToUndefined,
   trimToUndefined,
 } from "./credential-planner.js";
@@ -84,8 +80,8 @@ export function resolveGatewayCredentialsFromValues(params: {
   passwordPrecedence?: GatewayCredentialPrecedence;
 }): ResolvedGatewayCredentials {
   const env = params.env ?? process.env;
-  const envToken = readGatewayTokenEnv(env);
-  const envPassword = readGatewayPasswordEnv(env);
+  const envToken = trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN);
+  const envPassword = trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD);
   const configToken = trimCredentialToUndefined(params.configToken);
   const configPassword = trimCredentialToUndefined(params.configPassword);
   const tokenPrecedence = params.tokenPrecedence ?? "env-first";

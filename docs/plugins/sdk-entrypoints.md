@@ -4,7 +4,7 @@ sidebarTitle: "Entry Points"
 summary: "Reference for definePluginEntry, defineChannelPluginEntry, and defineSetupPluginEntry"
 read_when:
   - You need the exact type signature of definePluginEntry or defineChannelPluginEntry
-  - You want to understand registration mode (full vs setup)
+  - You want to understand registration mode (full vs setup vs CLI metadata)
   - You are looking up entry point options
 ---
 
@@ -55,16 +55,19 @@ export default definePluginEntry({
 - `id` must match your `openclaw.plugin.json` manifest.
 - `kind` is for exclusive slots: `"memory"` or `"context-engine"`.
 - `configSchema` can be a function for lazy evaluation.
+- OpenClaw resolves and memoizes that schema on first access, so expensive schema
+  builders only run once.
 
 ## `defineChannelPluginEntry`
 
-**Import:** `openclaw/plugin-sdk/core`
+**Import:** `openclaw/plugin-sdk/channel-core`
 
 Wraps `definePluginEntry` with channel-specific wiring. Automatically calls
-`api.registerChannel({ plugin })` and gates `registerFull` on registration mode.
+`api.registerChannel({ plugin })`, exposes an optional root-help CLI metadata
+seam, and gates `registerFull` on registration mode.
 
 ```typescript
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
 
 export default defineChannelPluginEntry({
   id: "my-channel",
@@ -72,37 +75,56 @@ export default defineChannelPluginEntry({
   description: "Short summary",
   plugin: myChannelPlugin,
   setRuntime: setMyRuntime,
-  registerFull(api) {
+  registerCliMetadata(api) {
     api.registerCli(/* ... */);
+  },
+  registerFull(api) {
     api.registerGatewayMethod(/* ... */);
   },
 });
 ```
 
-| Field          | Type                                                             | Required | Default             |
-| -------------- | ---------------------------------------------------------------- | -------- | ------------------- |
-| `id`           | `string`                                                         | Yes      | —                   |
-| `name`         | `string`                                                         | Yes      | —                   |
-| `description`  | `string`                                                         | Yes      | —                   |
-| `plugin`       | `ChannelPlugin`                                                  | Yes      | —                   |
-| `configSchema` | `OpenClawPluginConfigSchema \| () => OpenClawPluginConfigSchema` | No       | Empty object schema |
-| `setRuntime`   | `(runtime: PluginRuntime) => void`                               | No       | —                   |
-| `registerFull` | `(api: OpenClawPluginApi) => void`                               | No       | —                   |
+| Field                 | Type                                                             | Required | Default             |
+| --------------------- | ---------------------------------------------------------------- | -------- | ------------------- |
+| `id`                  | `string`                                                         | Yes      | —                   |
+| `name`                | `string`                                                         | Yes      | —                   |
+| `description`         | `string`                                                         | Yes      | —                   |
+| `plugin`              | `ChannelPlugin`                                                  | Yes      | —                   |
+| `configSchema`        | `OpenClawPluginConfigSchema \| () => OpenClawPluginConfigSchema` | No       | Empty object schema |
+| `setRuntime`          | `(runtime: PluginRuntime) => void`                               | No       | —                   |
+| `registerCliMetadata` | `(api: OpenClawPluginApi) => void`                               | No       | —                   |
+| `registerFull`        | `(api: OpenClawPluginApi) => void`                               | No       | —                   |
 
 - `setRuntime` is called during registration so you can store the runtime reference
-  (typically via `createPluginRuntimeStore`).
+  (typically via `createPluginRuntimeStore`). It is skipped during CLI metadata
+  capture.
+- `registerCliMetadata` runs during both `api.registrationMode === "cli-metadata"`
+  and `api.registrationMode === "full"`.
+  Use it as the canonical place for channel-owned CLI descriptors so root help
+  stays non-activating while normal CLI command registration remains compatible
+  with full plugin loads.
 - `registerFull` only runs when `api.registrationMode === "full"`. It is skipped
   during setup-only loading.
+- Like `definePluginEntry`, `configSchema` can be a lazy factory and OpenClaw
+  memoizes the resolved schema on first access.
+- For plugin-owned root CLI commands, prefer `api.registerCli(..., { descriptors: [...] })`
+  when you want the command to stay lazy-loaded without disappearing from the
+  root CLI parse tree. For channel plugins, prefer registering those descriptors
+  from `registerCliMetadata(...)` and keep `registerFull(...)` focused on runtime-only work.
+- If `registerFull(...)` also registers gateway RPC methods, keep them on a
+  plugin-specific prefix. Reserved core admin namespaces (`config.*`,
+  `exec.approvals.*`, `wizard.*`, `update.*`) are always coerced to
+  `operator.admin`.
 
 ## `defineSetupPluginEntry`
 
-**Import:** `openclaw/plugin-sdk/core`
+**Import:** `openclaw/plugin-sdk/channel-core`
 
 For the lightweight `setup-entry.ts` file. Returns just `{ plugin }` with no
 runtime or CLI wiring.
 
 ```typescript
-import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
+import { defineSetupPluginEntry } from "openclaw/plugin-sdk/channel-core";
 
 export default defineSetupPluginEntry(myChannelPlugin);
 ```
@@ -111,29 +133,60 @@ OpenClaw loads this instead of the full entry when a channel is disabled,
 unconfigured, or when deferred loading is enabled. See
 [Setup and Config](/plugins/sdk-setup#setup-entry) for when this matters.
 
+In practice, pair `defineSetupPluginEntry(...)` with the narrow setup helper
+families:
+
+- `openclaw/plugin-sdk/setup-runtime` for runtime-safe setup helpers such as
+  import-safe setup patch adapters, lookup-note output,
+  `promptResolvedAllowFrom`, `splitSetupEntries`, and delegated setup proxies
+- `openclaw/plugin-sdk/channel-setup` for optional-install setup surfaces
+- `openclaw/plugin-sdk/setup-tools` for setup/install CLI/archive/docs helpers
+
+Keep heavy SDKs, CLI registration, and long-lived runtime services in the full
+entry.
+
 ## Registration mode
 
 `api.registrationMode` tells your plugin how it was loaded:
 
-| Mode              | When                              | What to register              |
-| ----------------- | --------------------------------- | ----------------------------- |
-| `"full"`          | Normal gateway startup            | Everything                    |
-| `"setup-only"`    | Disabled/unconfigured channel     | Channel registration only     |
-| `"setup-runtime"` | Setup flow with runtime available | Channel + lightweight runtime |
+| Mode              | When                              | What to register                                                                          |
+| ----------------- | --------------------------------- | ----------------------------------------------------------------------------------------- |
+| `"full"`          | Normal gateway startup            | Everything                                                                                |
+| `"setup-only"`    | Disabled/unconfigured channel     | Channel registration only                                                                 |
+| `"setup-runtime"` | Setup flow with runtime available | Channel registration plus only the lightweight runtime needed before the full entry loads |
+| `"cli-metadata"`  | Root help / CLI metadata capture  | CLI descriptors only                                                                      |
 
 `defineChannelPluginEntry` handles this split automatically. If you use
 `definePluginEntry` directly for a channel, check mode yourself:
 
 ```typescript
 register(api) {
+  if (api.registrationMode === "cli-metadata" || api.registrationMode === "full") {
+    api.registerCli(/* ... */);
+    if (api.registrationMode === "cli-metadata") return;
+  }
+
   api.registerChannel({ plugin: myPlugin });
   if (api.registrationMode !== "full") return;
 
   // Heavy runtime-only registrations
-  api.registerCli(/* ... */);
   api.registerService(/* ... */);
 }
 ```
+
+Treat `"setup-runtime"` as the window where setup-only startup surfaces must
+exist without re-entering the full bundled channel runtime. Good fits are
+channel registration, setup-safe HTTP routes, setup-safe gateway methods, and
+delegated setup helpers. Heavy background services, CLI registrars, and
+provider/client SDK bootstraps still belong in `"full"`.
+
+For CLI registrars specifically:
+
+- use `descriptors` when the registrar owns one or more root commands and you
+  want OpenClaw to lazy-load the real CLI module on first invocation
+- make sure those descriptors cover every top-level command root exposed by the
+  registrar
+- use `commands` alone only for eager compatibility paths
 
 ## Plugin shapes
 

@@ -7,16 +7,19 @@ import {
   resolveModelRefFromString,
   type ModelRef,
 } from "../agents/model-selection.js";
-import { normalizeGoogleModelId, normalizeXaiModelId } from "../agents/models-config.providers.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolvePluginWebSearchConfig } from "../config/plugin-web-search-config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-
-export type CachedModelPricing = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-};
+import { resolveManifestContractPluginIds } from "../plugins/manifest-registry.js";
+import { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
+import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/string-coerce.js";
+import {
+  clearGatewayModelPricingCacheState,
+  getCachedGatewayModelPricing,
+  getGatewayModelPricingCacheMeta as getGatewayModelPricingCacheMetaState,
+  replaceGatewayModelPricingCache,
+  type CachedModelPricing,
+} from "./model-pricing-cache-state.js";
 
 type OpenRouterPricingEntry = {
   id: string;
@@ -30,6 +33,8 @@ type OpenRouterModelPayload = {
   pricing?: unknown;
 };
 
+export { getCachedGatewayModelPricing };
+
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const CACHE_TTL_MS = 24 * 60 * 60_000;
 const FETCH_TIMEOUT_MS = 15_000;
@@ -40,8 +45,6 @@ const PROVIDER_ALIAS_TO_OPENROUTER: Record<string, string> = {
   moonshot: "moonshotai",
   moonshotai: "moonshotai",
   "openai-codex": "openai",
-  qwen: "qwen",
-  "qwen-portal": "qwen",
   xai: "x-ai",
   zai: "z-ai",
 };
@@ -51,11 +54,8 @@ const WRAPPER_PROVIDERS = new Set([
   "openrouter",
   "vercel-ai-gateway",
 ]);
-
 const log = createSubsystemLogger("gateway").child("model-pricing");
 
-let cachedPricing = new Map<string, CachedModelPricing>();
-let cachedAt = 0;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 let inFlightRefresh: Promise<void> | null = null;
 
@@ -67,15 +67,6 @@ function clearRefreshTimer(): void {
   refreshTimer = null;
 }
 
-function listLikePrimary(value: ModelListLike): string | undefined {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed || undefined;
-  }
-  const trimmed = value?.primary?.trim();
-  return trimmed || undefined;
-}
-
 function listLikeFallbacks(value: ModelListLike): string[] {
   if (!value || typeof value !== "object") {
     return [];
@@ -83,8 +74,8 @@ function listLikeFallbacks(value: ModelListLike): string[] {
   return Array.isArray(value.fallbacks)
     ? value.fallbacks
         .filter((entry): entry is string => typeof entry === "string")
-        .map((entry) => entry.trim())
-        .filter(Boolean)
+        .map((entry) => normalizeOptionalString(entry))
+        .filter((entry): entry is string => Boolean(entry))
     : [];
 }
 
@@ -152,12 +143,14 @@ function canonicalizeOpenRouterLookupId(id: string): string {
       .replace(/^claude-(\d+)\.(\d+)-/u, "claude-$1-$2-")
       .replace(/^claude-([a-z]+)-(\d+)\.(\d+)$/u, "claude-$1-$2-$3");
   }
-  if (provider === "google") {
-    model = normalizeGoogleModelId(model);
-  }
-  if (provider === "x-ai") {
-    model = normalizeXaiModelId(model);
-  }
+  model =
+    normalizeProviderModelIdWithPlugin({
+      provider,
+      context: {
+        provider,
+        modelId: model,
+      },
+    }) ?? model;
   return `${provider}/${model}`;
 }
 
@@ -224,7 +217,7 @@ function addModelListLike(params: {
   refs: Map<string, ModelRef>;
 }): void {
   addResolvedModelRef({
-    raw: listLikePrimary(params.value),
+    raw: resolvePrimaryStringValue(params.value),
     aliasIndex: params.aliasIndex,
     refs: params.refs,
   });
@@ -249,6 +242,23 @@ function addProviderModelPair(params: {
   }
   const normalized = normalizeModelRef(provider, model);
   params.refs.set(modelKey(normalized.provider, normalized.model), normalized);
+}
+
+function addConfiguredWebSearchPluginModels(params: {
+  config: OpenClawConfig;
+  aliasIndex: ReturnType<typeof buildModelAliasIndex>;
+  refs: Map<string, ModelRef>;
+}): void {
+  for (const pluginId of resolveManifestContractPluginIds({
+    contract: "webSearchProviders",
+    config: params.config,
+  })) {
+    addResolvedModelRef({
+      raw: resolvePluginWebSearchConfig(params.config, pluginId)?.model as string | undefined,
+      aliasIndex: params.aliasIndex,
+      refs: params.refs,
+    });
+  }
 }
 
 export function collectConfiguredModelPricingRefs(config: OpenClawConfig): ModelRef[] {
@@ -290,10 +300,7 @@ export function collectConfiguredModelPricingRefs(config: OpenClawConfig): Model
     }
   }
 
-  addResolvedModelRef({ raw: config.tools?.web?.search?.gemini?.model, aliasIndex, refs });
-  addResolvedModelRef({ raw: config.tools?.web?.search?.grok?.model, aliasIndex, refs });
-  addResolvedModelRef({ raw: config.tools?.web?.search?.kimi?.model, aliasIndex, refs });
-  addResolvedModelRef({ raw: config.tools?.web?.search?.perplexity?.model, aliasIndex, refs });
+  addConfiguredWebSearchPluginModels({ config, aliasIndex, refs });
 
   for (const entry of config.tools?.media?.models ?? []) {
     addProviderModelPair({ provider: entry.provider, model: entry.model, refs });
@@ -326,7 +333,7 @@ async function fetchOpenRouterPricingCatalog(
   const catalog = new Map<string, OpenRouterPricingEntry>();
   for (const entry of entries) {
     const obj = entry as OpenRouterModelPayload;
-    const id = typeof obj.id === "string" ? obj.id.trim() : "";
+    const id = normalizeOptionalString(obj.id) ?? "";
     const pricing = parseOpenRouterPricing(obj.pricing);
     if (!id || !pricing) {
       continue;
@@ -381,8 +388,7 @@ export async function refreshGatewayModelPricingCache(params: {
   inFlightRefresh = (async () => {
     const refs = collectConfiguredModelPricingRefs(params.config);
     if (refs.length === 0) {
-      cachedPricing = new Map();
-      cachedAt = Date.now();
+      replaceGatewayModelPricingCache(new Map());
       clearRefreshTimer();
       return;
     }
@@ -410,8 +416,7 @@ export async function refreshGatewayModelPricingCache(params: {
       nextPricing.set(modelKey(ref.provider, ref.model), pricing);
     }
 
-    cachedPricing = nextPricing;
-    cachedAt = Date.now();
+    replaceGatewayModelPricingCache(nextPricing);
     scheduleRefresh({ config: params.config, fetchImpl });
   })();
 
@@ -434,46 +439,16 @@ export function startGatewayModelPricingRefresh(params: {
   };
 }
 
-export function getCachedGatewayModelPricing(params: {
-  provider?: string;
-  model?: string;
-}): CachedModelPricing | undefined {
-  const provider = params.provider?.trim();
-  const model = params.model?.trim();
-  if (!provider || !model) {
-    return undefined;
-  }
-  const normalized = normalizeModelRef(provider, model);
-  return cachedPricing.get(modelKey(normalized.provider, normalized.model));
-}
-
 export function getGatewayModelPricingCacheMeta(): {
   cachedAt: number;
   ttlMs: number;
   size: number;
 } {
-  return {
-    cachedAt,
-    ttlMs: CACHE_TTL_MS,
-    size: cachedPricing.size,
-  };
+  return { ...getGatewayModelPricingCacheMetaState(), ttlMs: CACHE_TTL_MS };
 }
 
 export function __resetGatewayModelPricingCacheForTest(): void {
-  cachedPricing = new Map();
-  cachedAt = 0;
+  clearGatewayModelPricingCacheState();
   clearRefreshTimer();
   inFlightRefresh = null;
-}
-
-export function __setGatewayModelPricingForTest(
-  entries: Array<{ provider: string; model: string; pricing: CachedModelPricing }>,
-): void {
-  cachedPricing = new Map(
-    entries.map((entry) => {
-      const normalized = normalizeModelRef(entry.provider, entry.model);
-      return [modelKey(normalized.provider, normalized.model), entry.pricing] as const;
-    }),
-  );
-  cachedAt = Date.now();
 }

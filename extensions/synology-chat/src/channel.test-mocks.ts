@@ -92,6 +92,7 @@ vi.mock("./runtime.js", () => ({
       },
     },
   })),
+  setSynologyRuntime: vi.fn(),
 }));
 
 export function makeSecurityAccount(

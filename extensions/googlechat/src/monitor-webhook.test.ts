@@ -1,5 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WebhookTarget } from "./monitor-types.js";
+import type { GoogleChatEvent } from "./types.js";
 
 const readJsonWebhookBodyOrReject = vi.hoisted(() => vi.fn());
 const resolveWebhookTargetWithAuthOrReject = vi.hoisted(() => vi.fn());
@@ -15,6 +17,9 @@ vi.mock("../runtime-api.js", () => ({
 vi.mock("./auth.js", () => ({
   verifyGoogleChatRequest,
 }));
+
+type ProcessEventFn = (event: GoogleChatEvent, target: WebhookTarget) => Promise<void>;
+let createGoogleChatWebhookRequestHandler: typeof import("./monitor-webhook.js").createGoogleChatWebhookRequestHandler;
 
 function createRequest(authorization?: string): IncomingMessage {
   return {
@@ -66,7 +71,32 @@ function installSimplePipeline(targets: unknown[]) {
   );
 }
 
+async function runWebhookHandler(options?: {
+  processEvent?: ProcessEventFn;
+  authorization?: string;
+}) {
+  const processEvent: ProcessEventFn =
+    options?.processEvent ?? (vi.fn(async () => {}) as ProcessEventFn);
+  const handler = createGoogleChatWebhookRequestHandler({
+    webhookTargets: new Map(),
+    webhookInFlightLimiter: {} as never,
+    processEvent,
+  });
+  const req = createRequest(options?.authorization);
+  const res = createResponse();
+  await expect(handler(req, res)).resolves.toBe(true);
+  return { processEvent, res };
+}
+
 describe("googlechat monitor webhook", () => {
+  beforeAll(async () => {
+    ({ createGoogleChatWebhookRequestHandler } = await import("./monitor-webhook.js"));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("accepts add-on payloads that carry systemIdToken in the body", async () => {
     installSimplePipeline([
       {
@@ -104,18 +134,7 @@ describe("googlechat monitor webhook", () => {
       return null;
     });
     verifyGoogleChatRequest.mockResolvedValue({ ok: true });
-    const processEvent = vi.fn(async () => {});
-
-    const { createGoogleChatWebhookRequestHandler } = await import("./monitor-webhook.js");
-    const handler = createGoogleChatWebhookRequestHandler({
-      webhookTargets: new Map(),
-      webhookInFlightLimiter: {} as never,
-      processEvent,
-    });
-
-    const req = createRequest();
-    const res = createResponse();
-    await expect(handler(req, res)).resolves.toBe(true);
+    const { processEvent, res } = await runWebhookHandler();
 
     expect(verifyGoogleChatRequest).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -156,18 +175,7 @@ describe("googlechat monitor webhook", () => {
         },
       },
     });
-    const processEvent = vi.fn(async () => {});
-
-    const { createGoogleChatWebhookRequestHandler } = await import("./monitor-webhook.js");
-    const handler = createGoogleChatWebhookRequestHandler({
-      webhookTargets: new Map(),
-      webhookInFlightLimiter: {} as never,
-      processEvent,
-    });
-
-    const req = createRequest();
-    const res = createResponse();
-    await expect(handler(req, res)).resolves.toBe(true);
+    const { processEvent, res } = await runWebhookHandler();
 
     expect(processEvent).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(401);

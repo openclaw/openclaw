@@ -1,23 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayService } from "../daemon/service.js";
 import type { GatewayServiceEnvArgs } from "../daemon/service.js";
+import { createMockGatewayService } from "../daemon/service.test-helpers.js";
 import { readServiceStatusSummary } from "./status.service-summary.js";
 
 function createService(overrides: Partial<GatewayService>): GatewayService {
-  return {
+  return createMockGatewayService({
     label: "systemd",
     loadedText: "enabled",
     notLoadedText: "disabled",
-    stage: vi.fn(async () => {}),
-    install: vi.fn(async () => {}),
-    uninstall: vi.fn(async () => {}),
-    stop: vi.fn(async () => {}),
-    restart: vi.fn(async () => ({ outcome: "completed" as const })),
-    isLoaded: vi.fn(async () => false),
-    readCommand: vi.fn(async () => null),
-    readRuntime: vi.fn(async () => ({ status: "stopped" as const })),
     ...overrides,
-  };
+  });
 }
 
 describe("readServiceStatusSummary", () => {

@@ -1,16 +1,53 @@
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
-import { registerLineCardCommand } from "./src/card-command.js";
-import { linePlugin } from "./src/channel.js";
-import { setLineRuntime } from "./src/runtime.js";
+import {
+  defineBundledChannelEntry,
+  type OpenClawPluginApi,
+} from "openclaw/plugin-sdk/channel-entry-contract";
 
-export { linePlugin } from "./src/channel.js";
-export { setLineRuntime } from "./src/runtime.js";
+type RegisteredLineCardCommand = Parameters<OpenClawPluginApi["registerCommand"]>[0];
 
-export default defineChannelPluginEntry({
+let lineCardCommandPromise: Promise<RegisteredLineCardCommand> | null = null;
+
+async function loadLineCardCommand(api: OpenClawPluginApi): Promise<RegisteredLineCardCommand> {
+  lineCardCommandPromise ??= (async () => {
+    let registered: RegisteredLineCardCommand | null = null;
+    const { registerLineCardCommand } = await import("./src/card-command.js");
+    registerLineCardCommand({
+      ...api,
+      registerCommand(command: RegisteredLineCardCommand) {
+        registered = command;
+      },
+    });
+    if (!registered) {
+      throw new Error("LINE card command registration unavailable");
+    }
+    return registered;
+  })();
+  return await lineCardCommandPromise;
+}
+
+export default defineBundledChannelEntry({
   id: "line",
   name: "LINE",
   description: "LINE Messaging API channel plugin",
-  plugin: linePlugin,
-  setRuntime: setLineRuntime,
-  registerFull: registerLineCardCommand,
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./api.js",
+    exportName: "linePlugin",
+  },
+  runtime: {
+    specifier: "./runtime-api.js",
+    exportName: "setLineRuntime",
+  },
+  registerFull(api) {
+    api.registerCommand({
+      name: "card",
+      description: "Send a rich card message (LINE).",
+      acceptsArgs: true,
+      requireAuth: false,
+      async handler(ctx) {
+        const command = await loadLineCardCommand(api);
+        return await command.handler(ctx);
+      },
+    });
+  },
 });

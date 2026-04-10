@@ -1,21 +1,52 @@
 import type { OpenClawConfig } from "../config/config.js";
-import type { ResolvedTtsConfig, TtsDirectiveOverrides } from "./tts.js";
+import type { TalkProviderConfig } from "../config/types.gateway.js";
 
 export type SpeechProviderId = string;
 
 export type SpeechSynthesisTarget = "audio-file" | "voice-note";
 
+export type SpeechProviderConfig = Record<string, unknown>;
+
+export type SpeechProviderOverrides = Record<string, unknown>;
+
+export type SpeechModelOverridePolicy = {
+  enabled: boolean;
+  allowText: boolean;
+  allowProvider: boolean;
+  allowVoice: boolean;
+  allowModelId: boolean;
+  allowVoiceSettings: boolean;
+  allowNormalization: boolean;
+  allowSeed: boolean;
+};
+
+export type TtsDirectiveOverrides = {
+  ttsText?: string;
+  provider?: SpeechProviderId;
+  providerOverrides?: Record<string, SpeechProviderOverrides>;
+};
+
+export type TtsDirectiveParseResult = {
+  cleanedText: string;
+  ttsText?: string;
+  hasDirective: boolean;
+  overrides: TtsDirectiveOverrides;
+  warnings: string[];
+};
+
 export type SpeechProviderConfiguredContext = {
   cfg?: OpenClawConfig;
-  config: ResolvedTtsConfig;
+  providerConfig: SpeechProviderConfig;
+  timeoutMs: number;
 };
 
 export type SpeechSynthesisRequest = {
   text: string;
   cfg: OpenClawConfig;
-  config: ResolvedTtsConfig;
+  providerConfig: SpeechProviderConfig;
   target: SpeechSynthesisTarget;
-  overrides?: TtsDirectiveOverrides;
+  providerOverrides?: SpeechProviderOverrides;
+  timeoutMs: number;
 };
 
 export type SpeechSynthesisResult = {
@@ -28,7 +59,8 @@ export type SpeechSynthesisResult = {
 export type SpeechTelephonySynthesisRequest = {
   text: string;
   cfg: OpenClawConfig;
-  config: ResolvedTtsConfig;
+  providerConfig: SpeechProviderConfig;
+  timeoutMs: number;
 };
 
 export type SpeechTelephonySynthesisResult = {
@@ -49,7 +81,39 @@ export type SpeechVoiceOption = {
 
 export type SpeechListVoicesRequest = {
   cfg?: OpenClawConfig;
-  config?: ResolvedTtsConfig;
+  providerConfig?: SpeechProviderConfig;
   apiKey?: string;
   baseUrl?: string;
+};
+
+export type SpeechProviderResolveConfigContext = {
+  cfg: OpenClawConfig;
+  rawConfig: Record<string, unknown>;
+  timeoutMs: number;
+};
+
+export type SpeechDirectiveTokenParseContext = {
+  key: string;
+  value: string;
+  policy: SpeechModelOverridePolicy;
+  providerConfig?: SpeechProviderConfig;
+  currentOverrides?: SpeechProviderOverrides;
+};
+
+export type SpeechDirectiveTokenParseResult = {
+  handled: boolean;
+  overrides?: SpeechProviderOverrides;
+  warnings?: string[];
+};
+
+export type SpeechProviderResolveTalkConfigContext = {
+  cfg: OpenClawConfig;
+  baseTtsConfig: Record<string, unknown>;
+  talkProviderConfig: TalkProviderConfig;
+  timeoutMs: number;
+};
+
+export type SpeechProviderResolveTalkOverridesContext = {
+  talkProviderConfig: TalkProviderConfig;
+  params: Record<string, unknown>;
 };

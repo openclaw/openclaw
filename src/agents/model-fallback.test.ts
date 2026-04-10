@@ -5,12 +5,19 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
-import type { AuthProfileStore } from "./auth-profiles.js";
-import { saveAuthProfileStore } from "./auth-profiles.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
+import { saveAuthProfileStore } from "./auth-profiles/store.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { isAnthropicBillingError } from "./live-auth-keys.js";
+import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import { runWithImageModelFallback, runWithModelFallback } from "./model-fallback.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  buildProviderMissingAuthMessageWithPlugin: () => undefined,
+  resolveExternalAuthProfilesWithPlugins: () => [],
+}));
 
 const makeCfg = makeModelFallbackCfg;
 
@@ -261,6 +268,50 @@ describe("runWithModelFallback", () => {
       }),
     ).rejects.toThrow("something weird");
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats LiveSessionModelSwitchError as failover on last candidate (#58466)", async () => {
+    const cfg = makeCfg();
+    const switchError = new LiveSessionModelSwitchError({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
+    const run = vi.fn().mockRejectedValue(switchError);
+
+    // With no fallbacks, the single candidate is also the last one.
+    // Previously this would re-throw LiveSessionModelSwitchError, causing
+    // the outer retry loop to restart with the overloaded model indefinitely.
+    // Now it should surface as a FailoverError instead.
+    const err = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      run,
+      fallbacksOverride: [],
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    // Should NOT be a LiveSessionModelSwitchError — the outer retry loop must
+    // not restart with the conflicting model.
+    expect(err).not.toBeInstanceOf(LiveSessionModelSwitchError);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("continues fallback chain past LiveSessionModelSwitchError to next candidate (#58466)", async () => {
+    const cfg = makeCfg();
+    const switchError = new LiveSessionModelSwitchError({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
+    const run = vi.fn().mockRejectedValueOnce(switchError).mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
   });
 
   it("falls back on auth errors", async () => {
@@ -519,8 +570,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("sanitizes model identifiers in model_not_found warnings", async () => {
-    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warnLogs = createWarnLogCapture("openclaw-model-fallback-test");
     try {
       const cfg = makeCfg();
       const run = vi
@@ -536,16 +586,12 @@ describe("runWithModelFallback", () => {
       });
 
       expect(result.result).toBe("ok");
-      const warning = warnSpy.mock.calls
-        .map((call) => call[0] as string)
-        .find((value) => value.includes('Model "openai/gpt-6spoof" not found'));
+      const warning = warnLogs.findText('Model "openai/gpt-6spoof" not found');
       expect(warning).toContain('Model "openai/gpt-6spoof" not found');
       expect(warning).not.toContain("\u001B");
       expect(warning).not.toContain("\n");
     } finally {
-      warnSpy.mockRestore();
-      setLoggerOverride(null);
-      resetLogger();
+      warnLogs.cleanup();
     }
   });
 
@@ -677,6 +723,119 @@ describe("runWithModelFallback", () => {
       ["anthropic", "claude-opus-4-5"],
       ["anthropic", "claude-haiku-3-5"],
     ]);
+  });
+
+  it("refreshes cooldown expiry from persisted auth state before fallback summary", async () => {
+    const expiry = Date.now() + 120_000;
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-5",
+            fallbacks: ["openai/gpt-5.2"],
+          },
+        },
+      },
+    });
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "anthropic:default": { type: "api_key", provider: "anthropic", key: "anthropic-key" },
+        "openai:default": { type: "api_key", provider: "openai", key: "openai-key" },
+      },
+    };
+
+    await withTempAuthStore(store, async (tempDir) => {
+      const run = vi.fn().mockImplementation(async (provider: string, model: string) => {
+        if (provider === "anthropic" && model === "claude-opus-4-5") {
+          saveAuthProfileStore(
+            {
+              ...store,
+              usageStats: {
+                "anthropic:default": {
+                  cooldownUntil: expiry,
+                  cooldownReason: "rate_limit",
+                  cooldownModel: "claude-opus-4-5",
+                  failureCounts: { rate_limit: 1 },
+                },
+              },
+            },
+            tempDir,
+          );
+        }
+
+        throw Object.assign(new Error("rate limited"), { status: 429 });
+      });
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-opus-4-5",
+          agentDir: tempDir,
+          run,
+        }),
+      ).rejects.toMatchObject({
+        name: "FallbackSummaryError",
+        soonestCooldownExpiry: expiry,
+      });
+    });
+  });
+
+  it("filters fallback summary cooldown expiry to attempted model scopes", async () => {
+    const now = Date.now();
+    const unrelatedExpiry = now + 15_000;
+    const relevantExpiry = now + 90_000;
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-5",
+            fallbacks: ["openai/gpt-5.2"],
+          },
+        },
+      },
+    });
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "anthropic:default": { type: "api_key", provider: "anthropic", key: "anthropic-key" },
+        "openai:default": { type: "api_key", provider: "openai", key: "openai-key" },
+      },
+      usageStats: {
+        "anthropic:default": {
+          cooldownUntil: unrelatedExpiry,
+          cooldownReason: "rate_limit",
+          cooldownModel: "claude-haiku-3-5",
+          failureCounts: { rate_limit: 1 },
+        },
+        "openai:default": {
+          cooldownUntil: relevantExpiry,
+          cooldownReason: "rate_limit",
+          cooldownModel: "gpt-5.2",
+          failureCounts: { rate_limit: 1 },
+        },
+      },
+    };
+
+    await withTempAuthStore(store, async (tempDir) => {
+      const run = vi
+        .fn()
+        .mockRejectedValue(Object.assign(new Error("rate limited"), { status: 429 }));
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-opus-4-5",
+          agentDir: tempDir,
+          run,
+        }),
+      ).rejects.toMatchObject({
+        name: "FallbackSummaryError",
+        soonestCooldownExpiry: relevantExpiry,
+      });
+    });
   });
 
   it("uses fallbacksOverride instead of agents.defaults.model.fallbacks", async () => {
@@ -1118,11 +1277,10 @@ describe("runWithModelFallback", () => {
     });
   });
 
-  // Tests for Bug B fix: Rate limit vs auth/billing cooldown distinction
   describe("fallback behavior with provider cooldowns", () => {
     async function makeAuthStoreWithCooldown(
       provider: string,
-      reason: "rate_limit" | "overloaded" | "auth" | "billing",
+      reason: "rate_limit" | "overloaded" | "timeout" | "auth" | "billing",
     ): Promise<{ store: AuthProfileStore; dir: string }> {
       const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
       const now = Date.now();
@@ -1133,15 +1291,12 @@ describe("runWithModelFallback", () => {
         },
         usageStats: {
           [`${provider}:default`]:
-            reason === "rate_limit" || reason === "overloaded"
+            reason === "rate_limit" || reason === "overloaded" || reason === "timeout"
               ? {
-                  // Transient cooldown reasons are tracked through
-                  // cooldownUntil and failureCounts, not disabledReason.
                   cooldownUntil: now + 300000,
                   failureCounts: { [reason]: 1 },
                 }
               : {
-                  // Auth/billing issues use disabledUntil
                   disabledUntil: now + 300000,
                   disabledReason: reason,
                 },
@@ -1164,7 +1319,7 @@ describe("runWithModelFallback", () => {
         },
       });
 
-      const run = vi.fn().mockResolvedValueOnce("sonnet success"); // Fallback succeeds
+      const run = vi.fn().mockResolvedValueOnce("sonnet success");
 
       const result = await runWithModelFallback({
         cfg,
@@ -1175,7 +1330,7 @@ describe("runWithModelFallback", () => {
       });
 
       expect(result.result).toBe("sonnet success");
-      expect(run).toHaveBeenCalledTimes(1); // Primary skipped, fallback attempted
+      expect(run).toHaveBeenCalledTimes(1);
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
         allowTransientCooldownProbe: true,
       });
@@ -1183,6 +1338,36 @@ describe("runWithModelFallback", () => {
 
     it("attempts same-provider fallbacks during overloaded cooldown", async () => {
       const { dir } = await makeAuthStoreWithCooldown("anthropic", "overloaded");
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-opus-4-6",
+              fallbacks: ["anthropic/claude-sonnet-4-5", "groq/llama-3.3-70b-versatile"],
+            },
+          },
+        },
+      });
+
+      const run = vi.fn().mockResolvedValueOnce("sonnet success");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        run,
+        agentDir: dir,
+      });
+
+      expect(result.result).toBe("sonnet success");
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
+        allowTransientCooldownProbe: true,
+      });
+    });
+
+    it("attempts same-provider fallbacks during timeout cooldown", async () => {
+      const { dir } = await makeAuthStoreWithCooldown("anthropic", "timeout");
       const cfg = makeCfg({
         agents: {
           defaults: {
@@ -1268,7 +1453,6 @@ describe("runWithModelFallback", () => {
     });
 
     it("tries cross-provider fallbacks when same provider has rate limit", async () => {
-      // Anthropic in rate limit cooldown, Groq available
       const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
       const store: AuthProfileStore = {
         version: AUTH_STORE_VERSION,
@@ -1278,11 +1462,9 @@ describe("runWithModelFallback", () => {
         },
         usageStats: {
           "anthropic:default": {
-            // Rate-limit reason is inferred from failureCounts for cooldown windows.
             cooldownUntil: Date.now() + 300000,
             failureCounts: { rate_limit: 2 },
           },
-          // Groq not in cooldown
         },
       };
       saveAuthProfileStore(store, tmpDir);
@@ -1300,8 +1482,8 @@ describe("runWithModelFallback", () => {
 
       const run = vi
         .fn()
-        .mockRejectedValueOnce(new Error("Still rate limited")) // Sonnet still fails
-        .mockResolvedValueOnce("groq success"); // Groq works
+        .mockRejectedValueOnce(new Error("Still rate limited"))
+        .mockResolvedValueOnce("groq success");
 
       const result = await runWithModelFallback({
         cfg,
@@ -1315,8 +1497,8 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenCalledTimes(2);
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
         allowTransientCooldownProbe: true,
-      }); // Rate limit allows attempt
-      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile"); // Cross-provider works
+      });
+      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile");
     });
 
     it("limits cooldown probes to one per provider before moving to cross-provider fallback", async () => {
@@ -1338,8 +1520,8 @@ describe("runWithModelFallback", () => {
 
       const run = vi
         .fn()
-        .mockRejectedValueOnce(new Error("Still rate limited")) // First same-provider probe fails
-        .mockResolvedValueOnce("groq success"); // Next provider succeeds
+        .mockRejectedValueOnce(new Error("Still rate limited"))
+        .mockResolvedValueOnce("groq success");
 
       const result = await runWithModelFallback({
         cfg,
@@ -1350,8 +1532,6 @@ describe("runWithModelFallback", () => {
       });
 
       expect(result.result).toBe("groq success");
-      // Primary is skipped, first same-provider fallback is probed, second same-provider fallback
-      // is skipped (probe already attempted), then cross-provider fallback runs.
       expect(run).toHaveBeenCalledTimes(2);
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
         allowTransientCooldownProbe: true,

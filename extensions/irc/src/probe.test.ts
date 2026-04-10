@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { probeIrc } from "./probe.js";
 
 const resolveIrcAccountMock = vi.hoisted(() => vi.fn());
 const buildIrcConnectOptionsMock = vi.hoisted(() => vi.fn());
@@ -16,9 +17,17 @@ vi.mock("./client.js", () => ({
   connectIrcClient: connectIrcClientMock,
 }));
 
-import { probeIrc } from "./probe.js";
-
 describe("probeIrc", () => {
+  beforeEach(() => {
+    resolveIrcAccountMock.mockReset();
+    buildIrcConnectOptionsMock.mockReset();
+    connectIrcClientMock.mockReset();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("returns a configuration error when the IRC account is incomplete", async () => {
     resolveIrcAccountMock.mockReturnValue({
       configured: false,

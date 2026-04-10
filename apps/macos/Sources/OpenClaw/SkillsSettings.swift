@@ -259,9 +259,12 @@ private struct SkillRow: View {
         guard let raw = self.skill.homepage?.trimmingCharacters(in: .whitespacesAndNewlines) else {
             return nil
         }
-        guard !raw.isEmpty, let url = URL(string: raw),
-              let scheme = url.scheme?.lowercased(),
-              scheme == "http" || scheme == "https" else {
+        guard
+            !raw.isEmpty,
+            let url = URL(string: raw),
+            let scheme = url.scheme?.lowercased(),
+            scheme == "http" || scheme == "https"
+        else {
             return nil
         }
         return url
@@ -481,9 +484,12 @@ private struct EnvEditorView: View {
         guard let raw = self.editor.homepage?.trimmingCharacters(in: .whitespacesAndNewlines) else {
             return nil
         }
-        guard !raw.isEmpty, let url = URL(string: raw),
-              let scheme = url.scheme?.lowercased(),
-              scheme == "http" || scheme == "https" else {
+        guard
+            !raw.isEmpty,
+            let url = URL(string: raw),
+            let scheme = url.scheme?.lowercased(),
+            scheme == "http" || scheme == "https"
+        else {
             return nil
         }
         return url

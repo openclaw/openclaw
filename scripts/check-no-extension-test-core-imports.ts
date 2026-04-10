@@ -17,15 +17,15 @@ const FORBIDDEN_PATTERNS: Array<{ pattern: RegExp; hint: string }> = [
   },
   {
     pattern: /["'](?:\.\.\/)+(?:test-utils\/)[^"']+["']/,
-    hint: "Use test/helpers/extensions/* for repo-only bundled extension test helpers.",
+    hint: "Use test/helpers/plugins/* for repo-only bundled extension test helpers.",
   },
   {
     pattern: /["'](?:\.\.\/)+(?:src\/test-utils\/)[^"']+["']/,
-    hint: "Use test/helpers/extensions/* for repo-only helpers, or openclaw/plugin-sdk/testing for public surfaces.",
+    hint: "Use test/helpers/plugins/* for repo-only helpers, or openclaw/plugin-sdk/testing for public surfaces.",
   },
   {
     pattern: /["'](?:\.\.\/)+(?:src\/plugins\/types\.js)["']/,
-    hint: "Use public plugin-sdk/core types or test/helpers/extensions/* instead.",
+    hint: "Use public plugin-sdk/core types or test/helpers/plugins/* instead.",
   },
 ];
 

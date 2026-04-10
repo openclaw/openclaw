@@ -172,14 +172,14 @@ describe("sendControlledSubagentMessage", () => {
 
     __testing.setDepsForTest({
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
+        if (request.method === "chat.history") {
+          return { messages: [] } as T;
+        }
         if (request.method === "agent") {
           return { runId: "run-followup-send" } as T;
         }
         if (request.method === "agent.wait") {
           return { status: "done" } as T;
-        }
-        if (request.method === "chat.history") {
-          return { messages: [] } as T;
         }
         throw new Error(`unexpected method: ${request.method}`);
       },
@@ -247,14 +247,14 @@ describe("sendControlledSubagentMessage", () => {
 
     __testing.setDepsForTest({
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
+        if (request.method === "chat.history") {
+          return { messages: [] } as T;
+        }
         if (request.method === "agent") {
           return { runId: "run-followup-stale-send" } as T;
         }
         if (request.method === "agent.wait") {
           return { status: "done" } as T;
-        }
-        if (request.method === "chat.history") {
-          return { messages: [] } as T;
         }
         throw new Error(`unexpected method: ${request.method}`);
       },
@@ -289,6 +289,77 @@ describe("sendControlledSubagentMessage", () => {
     expect(result).toEqual({
       status: "ok",
       runId: "run-followup-stale-send",
+      replyText: undefined,
+    });
+  });
+
+  it("does not return the previous assistant reply when no new assistant message appears", async () => {
+    addSubagentRunForTests({
+      runId: "run-owned-stale-reply",
+      childSessionKey: "agent:main:subagent:owned-stale-reply",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "continue work",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+      endedAt: Date.now() - 1_000,
+      outcome: { status: "ok" },
+    });
+
+    let historyCalls = 0;
+    const staleAssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "older reply from a previous run" }],
+    };
+
+    __testing.setDepsForTest({
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
+        if (request.method === "chat.history") {
+          historyCalls += 1;
+          return { messages: [staleAssistantMessage] } as T;
+        }
+        if (request.method === "agent") {
+          return { runId: "run-followup-stale-reply" } as T;
+        }
+        if (request.method === "agent.wait") {
+          return { status: "done" } as T;
+        }
+        throw new Error(`unexpected method: ${request.method}`);
+      },
+    });
+
+    const result = await sendControlledSubagentMessage({
+      cfg: {
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry: {
+        runId: "run-owned-stale-reply",
+        childSessionKey: "agent:main:subagent:owned-stale-reply",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        controllerSessionKey: "agent:main:main",
+        task: "continue work",
+        cleanup: "keep",
+        createdAt: Date.now() - 5_000,
+        startedAt: Date.now() - 4_000,
+        endedAt: Date.now() - 1_000,
+        outcome: { status: "ok" },
+      },
+      message: "continue",
+    });
+
+    expect(historyCalls).toBe(2);
+    expect(result).toEqual({
+      status: "ok",
+      runId: "run-followup-stale-reply",
       replyText: undefined,
     });
   });

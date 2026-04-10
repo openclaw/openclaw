@@ -1,5 +1,6 @@
 import type {
   BlockStreamingCoalesceConfig,
+  ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
   MarkdownConfig,
@@ -17,6 +18,33 @@ export type MSTeamsWebhookConfig = {
   port?: number;
   /** Path for the messages endpoint. Default: /api/messages. */
   path?: string;
+};
+
+/**
+ * Bot Framework OAuth SSO configuration for Microsoft Teams.
+ *
+ * When enabled, the plugin handles the `signin/tokenExchange` and
+ * `signin/verifyState` invoke activities that Teams sends after an
+ * `oauthCard` is presented to the user. The exchanged user token is
+ * persisted via the Bot Framework User Token service so downstream
+ * tools can call Microsoft Graph with delegated permissions.
+ *
+ * Prerequisites (Azure portal):
+ * - The bot's Azure AD (Entra) app is configured with an exposed API
+ *   scope (for example `access_as_user`) and lists the Teams client
+ *   IDs in `knownClientApplications`.
+ * - The Bot Framework channel registration has an OAuth Connection
+ *   Setting whose name matches `connectionName` below, pointing at
+ *   the same Azure AD app.
+ */
+export type MSTeamsSsoConfig = {
+  /** If true, handle signin/tokenExchange + signin/verifyState invokes. Default: false. */
+  enabled?: boolean;
+  /**
+   * Name of the OAuth connection configured on the Bot Framework channel
+   * registration (Azure Bot resource). Required when `enabled` is true.
+   */
+  connectionName?: string;
 };
 
 /** Reply style for MS Teams messages. */
@@ -83,10 +111,16 @@ export type MSTeamsConfig = {
    * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
    */
   groupPolicy?: GroupPolicy;
+  /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
+  contextVisibility?: ContextVisibilityMode;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
   chunkMode?: "length" | "newline";
+  /** Send native Teams typing indicator before replies. Default: true for groups/channels; DMs use informative stream status. */
+  typingIndicator?: boolean;
+  /** Enable progressive block-by-block message delivery instead of a single reply. */
+  blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /**
@@ -133,4 +167,12 @@ export type MSTeamsConfig = {
   feedbackReflection?: boolean;
   /** Minimum interval (ms) between reflections per session. Default: 300000 (5 min). */
   feedbackReflectionCooldownMs?: number;
+  /** Bot Framework OAuth SSO (signin/tokenExchange + signin/verifyState) settings. */
+  sso?: MSTeamsSsoConfig;
 };
+
+declare module "./types.channels.js" {
+  interface ChannelsConfig {
+    msteams?: MSTeamsConfig;
+  }
+}

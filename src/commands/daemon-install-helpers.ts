@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import {
   loadAuthProfileStoreForSecretsRuntime,
   type AuthProfileStore,
@@ -8,6 +10,11 @@ import type { OpenClawConfig } from "../config/types.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
+import {
+  isDangerousHostEnvOverrideVarName,
+  isDangerousHostEnvVarName,
+  normalizeEnvVarKey,
+} from "../infra/host-env-security.js";
 import {
   emitDaemonInstallRuntimeWarning,
   resolveDaemonInstallRuntimeInputs,
@@ -24,9 +31,12 @@ export type GatewayInstallPlan = {
   environment: Record<string, string | undefined>;
 };
 
+const MANAGED_SERVICE_ENV_KEYS_VAR = "OPENCLAW_SERVICE_MANAGED_ENV_KEYS";
+
 function collectAuthProfileServiceEnvVars(params: {
   env: Record<string, string | undefined>;
   authStore?: AuthProfileStore;
+  warn?: DaemonInstallWarnFn;
 }): Record<string, string> {
   const authStore = params.authStore ?? loadAuthProfileStoreForSecretsRuntime();
   const entries: Record<string, string> = {};
@@ -41,23 +51,147 @@ function collectAuthProfileServiceEnvVars(params: {
     if (!ref || ref.source !== "env") {
       continue;
     }
-    const value = params.env[ref.id]?.trim();
+    const key = normalizeEnvVarKey(ref.id, { portable: true });
+    if (!key) {
+      continue;
+    }
+    if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
+      params.warn?.(
+        `Auth profile env ref "${key}" blocked by host-env security policy`,
+        "Auth profile",
+      );
+      continue;
+    }
+    const value = params.env[key]?.trim();
     if (!value) {
       continue;
     }
-    entries[ref.id] = value;
+    entries[key] = value;
   }
 
   return entries;
+}
+
+function mergeServicePath(
+  nextPath: string | undefined,
+  existingPath: string | undefined,
+  tmpDir: string | undefined,
+): string | undefined {
+  const segments: string[] = [];
+  const seen = new Set<string>();
+  const normalizedTmpDirs = [tmpDir, os.tmpdir()]
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value))
+    .map((value) => path.resolve(value));
+  const shouldPreservePathSegment = (segment: string) => {
+    if (!path.isAbsolute(segment)) {
+      return false;
+    }
+    const resolved = path.resolve(segment);
+    return !normalizedTmpDirs.some(
+      (tmpRoot) => resolved === tmpRoot || resolved.startsWith(`${tmpRoot}${path.sep}`),
+    );
+  };
+  const addPath = (value: string | undefined, options?: { preserve?: boolean }) => {
+    if (typeof value !== "string" || value.trim().length === 0) {
+      return;
+    }
+    for (const segment of value.split(path.delimiter)) {
+      const trimmed = segment.trim();
+      if (options?.preserve && !shouldPreservePathSegment(trimmed)) {
+        continue;
+      }
+      if (!trimmed || seen.has(trimmed)) {
+        continue;
+      }
+      seen.add(trimmed);
+      segments.push(trimmed);
+    }
+  };
+  addPath(nextPath);
+  addPath(existingPath, { preserve: true });
+  return segments.length > 0 ? segments.join(path.delimiter) : undefined;
+}
+
+function readManagedServiceEnvKeys(
+  existingEnvironment: Record<string, string | undefined> | undefined,
+): Set<string> {
+  if (!existingEnvironment) {
+    return new Set();
+  }
+  for (const [rawKey, rawValue] of Object.entries(existingEnvironment)) {
+    const key = normalizeEnvVarKey(rawKey, { portable: true });
+    if (!key || key.toUpperCase() !== MANAGED_SERVICE_ENV_KEYS_VAR) {
+      continue;
+    }
+    return new Set(
+      rawValue?.split(",").flatMap((value) => {
+        const normalized = normalizeEnvVarKey(value, { portable: true });
+        return normalized ? [normalized.toUpperCase()] : [];
+      }) ?? [],
+    );
+  }
+  return new Set();
+}
+
+function formatManagedServiceEnvKeys(
+  managedEnvironment: Record<string, string | undefined>,
+): string | undefined {
+  const keys = Object.keys(managedEnvironment)
+    .flatMap((key) => {
+      const normalized = normalizeEnvVarKey(key, { portable: true });
+      return normalized ? [normalized.toUpperCase()] : [];
+    })
+    .toSorted();
+  return keys.length > 0 ? keys.join(",") : undefined;
+}
+
+function collectPreservedExistingServiceEnvVars(
+  existingEnvironment: Record<string, string | undefined> | undefined,
+  managedServiceEnvKeys: Set<string>,
+): Record<string, string | undefined> {
+  if (!existingEnvironment) {
+    return {};
+  }
+  const preserved: Record<string, string | undefined> = {};
+  for (const [rawKey, rawValue] of Object.entries(existingEnvironment)) {
+    const key = normalizeEnvVarKey(rawKey, { portable: true });
+    if (!key) {
+      continue;
+    }
+    const upper = key.toUpperCase();
+    if (
+      upper === "HOME" ||
+      upper === "PATH" ||
+      upper === "TMPDIR" ||
+      upper.startsWith("OPENCLAW_")
+    ) {
+      continue;
+    }
+    if (managedServiceEnvKeys.has(upper)) {
+      continue;
+    }
+    if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
+      continue;
+    }
+    const value = rawValue?.trim();
+    if (!value) {
+      continue;
+    }
+    preserved[key] = value;
+  }
+  return preserved;
 }
 
 function buildGatewayInstallEnvironment(params: {
   env: Record<string, string | undefined>;
   config?: OpenClawConfig;
   authStore?: AuthProfileStore;
+  warn?: DaemonInstallWarnFn;
   serviceEnvironment: Record<string, string | undefined>;
+  existingEnvironment?: Record<string, string | undefined>;
 }): Record<string, string | undefined> {
-  const environment: Record<string, string | undefined> = {
+  const managedEnvironment: Record<string, string | undefined> = {
     ...collectDurableServiceEnvVars({
       env: params.env,
       config: params.config,
@@ -65,9 +199,29 @@ function buildGatewayInstallEnvironment(params: {
     ...collectAuthProfileServiceEnvVars({
       env: params.env,
       authStore: params.authStore,
+      warn: params.warn,
     }),
   };
+  const environment: Record<string, string | undefined> = {
+    ...collectPreservedExistingServiceEnvVars(
+      params.existingEnvironment,
+      readManagedServiceEnvKeys(params.existingEnvironment),
+    ),
+    ...managedEnvironment,
+  };
   Object.assign(environment, params.serviceEnvironment);
+  const mergedPath = mergeServicePath(
+    params.serviceEnvironment.PATH,
+    params.existingEnvironment?.PATH,
+    params.serviceEnvironment.TMPDIR,
+  );
+  if (mergedPath) {
+    environment.PATH = mergedPath;
+  }
+  const managedServiceEnvKeys = formatManagedServiceEnvKeys(managedEnvironment);
+  if (managedServiceEnvKeys) {
+    environment[MANAGED_SERVICE_ENV_KEYS_VAR] = managedServiceEnvKeys;
+  }
   return environment;
 }
 
@@ -75,6 +229,7 @@ export async function buildGatewayInstallPlan(params: {
   env: Record<string, string | undefined>;
   port: number;
   runtime: GatewayDaemonRuntime;
+  existingEnvironment?: Record<string, string | undefined>;
   devMode?: boolean;
   nodePath?: string;
   warn?: DaemonInstallWarnFn;
@@ -108,16 +263,10 @@ export async function buildGatewayInstallPlan(params: {
       process.platform === "darwin"
         ? resolveGatewayLaunchAgentLabel(params.env.OPENCLAW_PROFILE)
         : undefined,
-    // Keep npm/pnpm available to the service when the selected daemon node comes from
-    // a version-manager bin directory that isn't covered by static PATH guesses.
     extraPathDirs: resolveDaemonNodeBinDir(nodePath),
   });
 
-  // Merge env sources into the service environment in ascending priority:
-  //   1. ~/.openclaw/.env file vars  (lowest — user secrets / fallback keys)
-  //   2. Config env vars              (openclaw.json env.vars + inline keys)
-  //   3. Auth-profile env refs        (credential store → env var lookups)
-  //   4. Service environment          (HOME, PATH, OPENCLAW_* — highest)
+  // Lowest to highest: preserved custom vars, durable config, auth env refs, generated service env.
   return {
     programArguments,
     workingDirectory,
@@ -125,7 +274,9 @@ export async function buildGatewayInstallPlan(params: {
       env: params.env,
       config: params.config,
       authStore: params.authStore,
+      warn: params.warn,
       serviceEnvironment,
+      existingEnvironment: params.existingEnvironment,
     }),
   };
 }

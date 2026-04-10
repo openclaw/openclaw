@@ -15,6 +15,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { detectMime } from "../media/mime.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { lowercasePreservingWhitespace, normalizeOptionalString } from "../shared/string-coerce.js";
 import { ensureDir, resolveUserPath } from "../utils.js";
 import {
   CANVAS_HOST_PATH,
@@ -121,11 +122,18 @@ function defaultIndexHTML() {
         typeof window.openclawCanvasA2UIAction.postMessage === "function")
     );
   const hasHelper = () => typeof window.openclawSendUserAction === "function";
-  statusEl.innerHTML =
-    "Bridge: " +
-    (hasHelper() ? "<span class='ok'>ready</span>" : "<span class='bad'>missing</span>") +
-    " · iOS=" + (hasIOS() ? "yes" : "no") +
-    " · Android=" + (hasAndroid() ? "yes" : "no");
+  const helperReady = hasHelper();
+  statusEl.textContent = "";
+  statusEl.appendChild(document.createTextNode("Bridge: "));
+  const bridgeStatus = document.createElement("span");
+  bridgeStatus.className = helperReady ? "ok" : "bad";
+  bridgeStatus.textContent = helperReady ? "ready" : "missing";
+  statusEl.appendChild(bridgeStatus);
+  statusEl.appendChild(
+    document.createTextNode(
+      " · iOS=" + (hasIOS() ? "yes" : "no") + " · Android=" + (hasAndroid() ? "yes" : "no"),
+    ),
+  );
 
   const onStatus = (ev) => {
     const d = ev && ev.detail || {};
@@ -285,7 +293,9 @@ export async function createCanvasHostHandler(
       debounce = null;
       broadcastReload();
     }, reloadDebounceMs);
-    debounce.unref?.();
+    if (!testMode) {
+      debounce.unref?.();
+    }
   };
 
   let watcherClosed = false;
@@ -384,7 +394,7 @@ export async function createCanvasHostHandler(
         await handle.close().catch(() => {});
       }
 
-      const lower = realPath.toLowerCase();
+      const lower = lowercasePreservingWhitespace(realPath);
       const mime =
         lower.endsWith(".html") || lower.endsWith(".htm")
           ? "text/html"
@@ -453,9 +463,9 @@ export async function startCanvasHost(opts: CanvasHostServerOpts): Promise<Canva
     }));
   const ownsHandler = opts.ownsHandler ?? opts.handler === undefined;
 
-  const bindHost = opts.listenHost?.trim() || "127.0.0.1";
+  const bindHost = normalizeOptionalString(opts.listenHost) || "127.0.0.1";
   const server: Server = http.createServer((req, res) => {
-    if (String(req.headers.upgrade ?? "").toLowerCase() === "websocket") {
+    if (lowercasePreservingWhitespace(String(req.headers.upgrade ?? "")) === "websocket") {
       return;
     }
     void (async () => {

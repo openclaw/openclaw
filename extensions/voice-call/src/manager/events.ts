@@ -1,17 +1,14 @@
 import crypto from "node:crypto";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isAllowlistedCaller, normalizePhoneNumber } from "../allowlist.js";
-import type { CallRecord, CallState, NormalizedEvent } from "../types.js";
+import type { CallRecord, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
+import { finalizeCall } from "./lifecycle.js";
 import { findCall } from "./lookup.js";
 import { endCall } from "./outbound.js";
 import { addTranscriptEntry, transitionState } from "./state.js";
 import { persistCallRecord } from "./store.js";
-import {
-  clearMaxDurationTimer,
-  rejectTranscriptWaiter,
-  resolveTranscriptWaiter,
-  startMaxDurationTimer,
-} from "./timers.js";
+import { resolveTranscriptWaiter, startMaxDurationTimer } from "./timers.js";
 
 type EventContext = Pick<
   CallManagerContext,
@@ -141,7 +138,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
           reason: "hangup-bot",
         })
         .catch((err) => {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = formatErrorMessage(err);
           console.warn(`[voice-call] Failed to reject inbound call ${pid}:`, message);
         });
       return;
@@ -193,7 +190,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
         ctx,
         callId: call.callId,
         onTimeout: async (callId) => {
-          await endCall(ctx, callId);
+          await endCall(ctx, callId, { reason: "timeout" });
         },
       });
       ctx.onCallAnswered?.(call);
@@ -228,28 +225,24 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
       break;
 
     case "call.ended":
-      call.endedAt = event.timestamp;
-      call.endReason = event.reason;
-      transitionState(call, event.reason as CallState);
-      clearMaxDurationTimer(ctx, call.callId);
-      rejectTranscriptWaiter(ctx, call.callId, `Call ended: ${event.reason}`);
-      ctx.activeCalls.delete(call.callId);
-      if (call.providerCallId) {
-        ctx.providerCallIdMap.delete(call.providerCallId);
-      }
-      break;
+      finalizeCall({
+        ctx,
+        call,
+        endReason: event.reason,
+        endedAt: event.timestamp,
+      });
+      return;
 
     case "call.error":
       if (!event.retryable) {
-        call.endedAt = event.timestamp;
-        call.endReason = "error";
-        transitionState(call, "error");
-        clearMaxDurationTimer(ctx, call.callId);
-        rejectTranscriptWaiter(ctx, call.callId, `Call error: ${event.error}`);
-        ctx.activeCalls.delete(call.callId);
-        if (call.providerCallId) {
-          ctx.providerCallIdMap.delete(call.providerCallId);
-        }
+        finalizeCall({
+          ctx,
+          call,
+          endReason: "error",
+          endedAt: event.timestamp,
+          transcriptRejectReason: `Call error: ${event.error}`,
+        });
+        return;
       }
       break;
   }

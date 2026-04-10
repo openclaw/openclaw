@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 
 const mocks = vi.hoisted(() => ({
   resolveSessionAgentId: vi.fn(() => "agent-from-key"),
@@ -15,14 +16,23 @@ const mocks = vi.hoisted(() => ({
   formatRestartSentinelMessage: vi.fn(() => "restart message"),
   summarizeRestartSentinel: vi.fn(() => "restart summary"),
   resolveMainSessionKeyFromConfig: vi.fn(() => "agent:main:main"),
-  parseSessionThreadInfo: vi.fn(() => ({ baseSessionKey: null, threadId: undefined })),
+  parseSessionThreadInfo: vi.fn(
+    (): { baseSessionKey: string | null | undefined; threadId: string | undefined } => ({
+      baseSessionKey: null,
+      threadId: undefined,
+    }),
+  ),
   loadSessionEntry: vi.fn(() => ({ cfg: {}, entry: {} })),
-  resolveAnnounceTargetFromKey: vi.fn(() => null),
-  deliveryContextFromSession: vi.fn(() => undefined),
+  deliveryContextFromSession: vi.fn(
+    ():
+      | { channel?: string; to?: string; accountId?: string; threadId?: string | number }
+      | undefined => undefined,
+  ),
   mergeDeliveryContext: vi.fn((a?: Record<string, unknown>, b?: Record<string, unknown>) => ({
     ...b,
     ...a,
   })),
+  getChannelPlugin: vi.fn(() => undefined),
   normalizeChannelId: vi.fn((channel: string) => channel),
   resolveOutboundTarget: vi.fn(() => ({ ok: true as const, to: "+15550002" })),
   deliverOutboundPayloads: vi.fn(async () => [{ channel: "whatsapp", messageId: "msg-1" }]),
@@ -48,16 +58,12 @@ vi.mock("../config/sessions.js", () => ({
   resolveMainSessionKeyFromConfig: mocks.resolveMainSessionKeyFromConfig,
 }));
 
-vi.mock("../config/sessions/delivery-info.js", () => ({
+vi.mock("../config/sessions/thread-info.js", () => ({
   parseSessionThreadInfo: mocks.parseSessionThreadInfo,
 }));
 
 vi.mock("./session-utils.js", () => ({
   loadSessionEntry: mocks.loadSessionEntry,
-}));
-
-vi.mock("../agents/tools/sessions-send-helpers.js", () => ({
-  resolveAnnounceTargetFromKey: mocks.resolveAnnounceTargetFromKey,
 }));
 
 vi.mock("../utils/delivery-context.js", () => ({
@@ -66,6 +72,7 @@ vi.mock("../utils/delivery-context.js", () => ({
 }));
 
 vi.mock("../channels/plugins/index.js", () => ({
+  getChannelPlugin: mocks.getChannelPlugin,
   normalizeChannelId: mocks.normalizeChannelId,
 }));
 
@@ -87,9 +94,16 @@ vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: mocks.enqueueSystemEvent,
 }));
 
-vi.mock("../infra/heartbeat-wake.js", () => ({
-  requestHeartbeatNow: mocks.requestHeartbeatNow,
-}));
+vi.mock("../infra/heartbeat-wake.js", async () => {
+  return await mergeMockedModule(
+    await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
+      "../infra/heartbeat-wake.js",
+    ),
+    () => ({
+      requestHeartbeatNow: mocks.requestHeartbeatNow,
+    }),
+  );
+});
 
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: vi.fn(() => ({
@@ -100,6 +114,10 @@ vi.mock("../logging/subsystem.js", () => ({
 const { scheduleRestartSentinelWake } = await import("./server-restart-sentinel.js");
 
 describe("scheduleRestartSentinelWake", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
     vi.useRealTimers();
     mocks.consumeRestartSentinel.mockResolvedValue({
@@ -112,6 +130,14 @@ describe("scheduleRestartSentinelWake", () => {
         },
       },
     });
+    mocks.parseSessionThreadInfo.mockReset();
+    mocks.parseSessionThreadInfo.mockReturnValue({ baseSessionKey: null, threadId: undefined });
+    mocks.loadSessionEntry.mockReset();
+    mocks.loadSessionEntry.mockReturnValue({ cfg: {}, entry: {} });
+    mocks.deliveryContextFromSession.mockReset();
+    mocks.deliveryContextFromSession.mockReturnValue(undefined);
+    mocks.resolveOutboundTarget.mockReset();
+    mocks.resolveOutboundTarget.mockReturnValue({ ok: true as const, to: "+15550002" });
     mocks.deliverOutboundPayloads.mockReset();
     mocks.deliverOutboundPayloads.mockResolvedValue([{ channel: "whatsapp", messageId: "msg-1" }]);
     mocks.enqueueDelivery.mockReset();
@@ -132,7 +158,7 @@ describe("scheduleRestartSentinelWake", () => {
       expect.objectContaining({
         channel: "whatsapp",
         to: "+15550002",
-        session: { key: "agent:main:main", agentId: "main" },
+        session: { key: "agent:main:main", agentId: "agent-from-key" },
         deps,
         bestEffort: false,
         skipQueue: true,
@@ -168,7 +194,9 @@ describe("scheduleRestartSentinelWake", () => {
       .mockResolvedValueOnce([{ channel: "whatsapp", messageId: "msg-2" }]);
 
     const wakePromise = scheduleRestartSentinelWake({ deps: {} as never });
-    await vi.runAllTimersAsync();
+    await Promise.resolve();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(750);
     await wakePromise;
 
     expect(mocks.enqueueDelivery).toHaveBeenCalledTimes(1);
@@ -208,7 +236,9 @@ describe("scheduleRestartSentinelWake", () => {
       .mockRejectedValueOnce(new Error("transport still not ready"));
 
     const wakePromise = scheduleRestartSentinelWake({ deps: {} as never });
-    await vi.runAllTimersAsync();
+    await Promise.resolve();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(750);
     await wakePromise;
 
     expect(mocks.enqueueDelivery).toHaveBeenCalledTimes(1);
@@ -259,5 +289,82 @@ describe("scheduleRestartSentinelWake", () => {
     });
     expect(mocks.requestHeartbeatNow).not.toHaveBeenCalled();
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("skips outbound restart notice when no canonical delivery context survives restart", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValue({
+      payload: {
+        sessionKey: "agent:main:matrix:channel:!lowercased:example.org",
+      },
+    } as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>);
+    mocks.parseSessionThreadInfo.mockReturnValue({
+      baseSessionKey: "agent:main:matrix:channel:!lowercased:example.org",
+      threadId: undefined,
+    });
+    mocks.deliveryContextFromSession.mockReturnValue(undefined);
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      "restart message",
+      expect.objectContaining({
+        sessionKey: "agent:main:matrix:channel:!lowercased:example.org",
+      }),
+    );
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(mocks.enqueueDelivery).not.toHaveBeenCalled();
+    expect(mocks.resolveOutboundTarget).not.toHaveBeenCalled();
+  });
+
+  it("merges base session routing into partial thread metadata", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValue({
+      payload: {
+        sessionKey: "agent:main:matrix:channel:!lowercased:example.org:thread:$thread-event",
+      },
+    } as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>);
+    mocks.parseSessionThreadInfo.mockReturnValue({
+      baseSessionKey: "agent:main:matrix:channel:!lowercased:example.org",
+      threadId: "$thread-event",
+    });
+    mocks.loadSessionEntry
+      .mockReturnValueOnce({
+        cfg: {},
+        entry: {
+          origin: { provider: "matrix", accountId: "acct-thread", threadId: "$thread-event" },
+        },
+      })
+      .mockReturnValueOnce({
+        cfg: {},
+        entry: { lastChannel: "matrix", lastTo: "room:!MixedCase:example.org" },
+      });
+    mocks.deliveryContextFromSession
+      .mockReturnValueOnce({
+        channel: "matrix",
+        accountId: "acct-thread",
+        threadId: "$thread-event",
+      })
+      .mockReturnValueOnce({ channel: "matrix", to: "room:!MixedCase:example.org" });
+    mocks.resolveOutboundTarget.mockReturnValue({
+      ok: true as const,
+      to: "room:!MixedCase:example.org",
+    });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.resolveOutboundTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "matrix",
+        to: "room:!MixedCase:example.org",
+        accountId: "acct-thread",
+      }),
+    );
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "matrix",
+        to: "room:!MixedCase:example.org",
+        accountId: "acct-thread",
+        threadId: "$thread-event",
+      }),
+    );
   });
 });

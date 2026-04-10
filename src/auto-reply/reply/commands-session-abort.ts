@@ -2,6 +2,7 @@ import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   resolveAbortCutoffFromContext,
   shouldPersistAbortCutoff,
@@ -18,6 +19,7 @@ import { rejectUnauthorizedCommand } from "./command-gates.js";
 import { persistAbortTargetEntry } from "./commands-session-store.js";
 import type { CommandHandler } from "./commands-types.js";
 import { clearSessionQueues } from "./queue.js";
+import { replyRunRegistry } from "./reply-run-registry.js";
 
 type AbortTarget = {
   entry?: SessionEntry;
@@ -31,19 +33,29 @@ function resolveAbortTarget(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
 }): AbortTarget {
-  const targetSessionKey = params.ctx.CommandTargetSessionKey?.trim() || params.sessionKey;
+  const targetSessionKey =
+    normalizeOptionalString(params.ctx.CommandTargetSessionKey) || params.sessionKey;
   const { entry, key } = resolveSessionEntryForKey(params.sessionStore, targetSessionKey);
   if (entry && key) {
-    return { entry, key, sessionId: entry.sessionId };
+    return {
+      entry,
+      key,
+      sessionId: replyRunRegistry.resolveSessionId(key) ?? entry.sessionId,
+    };
   }
   if (params.sessionEntry && params.sessionKey) {
     return {
       entry: params.sessionEntry,
       key: params.sessionKey,
-      sessionId: params.sessionEntry.sessionId,
+      sessionId:
+        replyRunRegistry.resolveSessionId(params.sessionKey) ?? params.sessionEntry.sessionId,
     };
   }
-  return { entry: undefined, key: targetSessionKey, sessionId: undefined };
+  return {
+    entry: undefined,
+    key: targetSessionKey,
+    sessionId: targetSessionKey ? replyRunRegistry.resolveSessionId(targetSessionKey) : undefined,
+  };
 }
 
 function resolveAbortCutoffForTarget(params: {
@@ -70,6 +82,9 @@ async function applyAbortTarget(params: {
   abortCutoff?: AbortCutoff;
 }) {
   const { abortTarget } = params;
+  if (abortTarget.key) {
+    replyRunRegistry.abort(abortTarget.key);
+  }
   if (abortTarget.sessionId) {
     abortEmbeddedPiRun(abortTarget.sessionId);
   }

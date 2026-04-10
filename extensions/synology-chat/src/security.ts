@@ -2,7 +2,7 @@
  * Security module: token validation, rate limiting, input sanitization, user allowlist.
  */
 
-import * as crypto from "node:crypto";
+import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
 import {
   createFixedWindowRateLimiter,
   type FixedWindowRateLimiter,
@@ -14,18 +14,13 @@ export type DmAuthorizationResult =
 
 /**
  * Validate webhook token using constant-time comparison.
- * Prevents timing attacks that could leak token bytes.
+ * Reject empty tokens explicitly; use shared constant-time comparison otherwise.
  */
 export function validateToken(received: string, expected: string): boolean {
-  if (!received || !expected) return false;
-
-  // Use HMAC to normalize lengths before comparison,
-  // preventing timing side-channel on token length.
-  const key = "openclaw-token-cmp";
-  const a = crypto.createHmac("sha256", key).update(received).digest();
-  const b = crypto.createHmac("sha256", key).update(expected).digest();
-
-  return crypto.timingSafeEqual(a, b);
+  if (!received || !expected) {
+    return false;
+  }
+  return safeEqualSecret(received, expected);
 }
 
 /**
@@ -33,7 +28,9 @@ export function validateToken(received: string, expected: string): boolean {
  * Allowlist mode must be explicit; empty lists should not match any user.
  */
 export function checkUserAllowed(userId: string, allowedUserIds: string[]): boolean {
-  if (allowedUserIds.length === 0) return false;
+  if (allowedUserIds.length === 0) {
+    return false;
+  }
   return allowedUserIds.includes(userId);
 }
 

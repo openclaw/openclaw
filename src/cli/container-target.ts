@@ -1,6 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
-import { getPrimaryCommand } from "./argv.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { resolveCliArgvInvocation } from "./argv-invocation.js";
+import { forwardConsumedCliRootOption } from "./root-option-forward.js";
 import { takeCliRootOptionValue } from "./root-option-value.js";
 
 type CliContainerParseResult =
@@ -56,14 +58,8 @@ export function parseCliContainerArgs(argv: string[]): CliContainerParseResult {
       continue;
     }
 
-    const consumedRootOption = consumeRootOptionToken(args, i);
+    const consumedRootOption = forwardConsumedCliRootOption(args, i, out);
     if (consumedRootOption > 0) {
-      for (let offset = 0; offset < consumedRootOption; offset += 1) {
-        const token = args[i + offset];
-        if (token !== undefined) {
-          out.push(token);
-        }
-      }
       i += consumedRootOption - 1;
       continue;
     }
@@ -82,7 +78,7 @@ export function resolveCliContainerTarget(
   if (!parsed.ok) {
     throw new Error(parsed.error);
   }
-  return parsed.container ?? env.OPENCLAW_CONTAINER?.trim() ?? null;
+  return parsed.container ?? normalizeOptionalString(env.OPENCLAW_CONTAINER) ?? null;
 }
 
 function isContainerRunning(params: {
@@ -188,7 +184,7 @@ function buildContainerExecEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 }
 
 function isBlockedContainerCommand(argv: string[]): boolean {
-  if (getPrimaryCommand(["node", "openclaw", ...argv]) === "update") {
+  if (resolveCliArgvInvocation(["node", "openclaw", ...argv]).primary === "update") {
     return true;
   }
   for (let i = 0; i < argv.length; i += 1) {
