@@ -48,11 +48,17 @@ function hasSelectedAgentMismatch(state: AgentsState, agentId: string): boolean 
   return Boolean(state.agentsSelectedId && state.agentsSelectedId !== agentId);
 }
 
+function resolveToolsErrorMessage(
+  err: unknown,
+  target: "tools catalog" | "effective tools",
+): string {
+  return isMissingOperatorReadScopeError(err)
+    ? formatMissingOperatorReadScopeMessage(target)
+    : String(err);
+}
+
 export async function loadAgents(state: AgentsState) {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  if (state.agentsLoading) {
+  if (!state.client || !state.connected || state.agentsLoading) {
     return;
   }
   state.agentsLoading = true;
@@ -62,8 +68,7 @@ export async function loadAgents(state: AgentsState) {
     if (res) {
       state.agentsList = res;
       const selected = state.agentsSelectedId;
-      const known = res.agents.some((entry) => entry.id === selected);
-      if (!selected || !known) {
+      if (!selected || !res.agents.some((entry) => entry.id === selected)) {
         state.agentsSelectedId = res.defaultId ?? res.agents[0]?.id ?? null;
       }
     }
@@ -81,15 +86,17 @@ export async function loadAgents(state: AgentsState) {
 
 export async function loadToolsCatalog(state: AgentsState, agentId: string) {
   const resolvedAgentId = agentId.trim();
-  if (!state.client || !state.connected || !resolvedAgentId) {
+  if (
+    !state.client ||
+    !state.connected ||
+    !resolvedAgentId ||
+    (state.toolsCatalogLoading && state.toolsCatalogLoadingAgentId === resolvedAgentId)
+  ) {
     return;
   }
   const shouldIgnoreResponse = () =>
     state.toolsCatalogLoadingAgentId !== resolvedAgentId ||
     hasSelectedAgentMismatch(state, resolvedAgentId);
-  if (state.toolsCatalogLoading && state.toolsCatalogLoadingAgentId === resolvedAgentId) {
-    return;
-  }
   state.toolsCatalogLoading = true;
   state.toolsCatalogLoadingAgentId = resolvedAgentId;
   state.toolsCatalogError = null;
@@ -107,10 +114,7 @@ export async function loadToolsCatalog(state: AgentsState, agentId: string) {
     if (shouldIgnoreResponse()) {
       return;
     }
-    state.toolsCatalogResult = null;
-    state.toolsCatalogError = isMissingOperatorReadScopeError(err)
-      ? formatMissingOperatorReadScopeMessage("tools catalog")
-      : String(err);
+    state.toolsCatalogError = resolveToolsErrorMessage(err, "tools catalog");
   } finally {
     if (state.toolsCatalogLoadingAgentId === resolvedAgentId) {
       state.toolsCatalogLoadingAgentId = null;
@@ -129,15 +133,18 @@ export async function loadToolsEffective(
     agentId: resolvedAgentId,
     sessionKey: resolvedSessionKey,
   });
-  if (!state.client || !state.connected || !resolvedAgentId || !resolvedSessionKey) {
+  if (
+    !state.client ||
+    !state.connected ||
+    !resolvedAgentId ||
+    !resolvedSessionKey ||
+    (state.toolsEffectiveLoading && state.toolsEffectiveLoadingKey === requestKey)
+  ) {
     return;
   }
   const shouldIgnoreResponse = () =>
     state.toolsEffectiveLoadingKey !== requestKey ||
     hasSelectedAgentMismatch(state, resolvedAgentId);
-  if (state.toolsEffectiveLoading && state.toolsEffectiveLoadingKey === requestKey) {
-    return;
-  }
   state.toolsEffectiveLoading = true;
   state.toolsEffectiveLoadingKey = requestKey;
   state.toolsEffectiveResultKey = null;
@@ -157,11 +164,7 @@ export async function loadToolsEffective(
     if (shouldIgnoreResponse()) {
       return;
     }
-    state.toolsEffectiveResult = null;
-    state.toolsEffectiveResultKey = null;
-    state.toolsEffectiveError = isMissingOperatorReadScopeError(err)
-      ? formatMissingOperatorReadScopeMessage("effective tools")
-      : String(err);
+    state.toolsEffectiveError = resolveToolsErrorMessage(err, "effective tools");
   } finally {
     if (state.toolsEffectiveLoadingKey === requestKey) {
       state.toolsEffectiveLoadingKey = null;
