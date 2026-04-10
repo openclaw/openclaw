@@ -170,15 +170,58 @@ describe("StepFun provider catalog", () => {
             "stepfun-plan:intl": { provider: "stepfun-plan", mode: "api_key" },
           },
           order: {
-            stepfun: ["stepfun:cn", "stepfun:intl"], // intl is latest
-            "stepfun-plan": ["stepfun-plan:cn", "stepfun-plan:intl"], // intl is latest
+            stepfun: ["stepfun:intl", "stepfun:cn"], // latest profile first
+            "stepfun-plan": ["stepfun-plan:intl", "stepfun-plan:cn"], // latest profile first
           },
         },
       },
     });
 
-    // Should prefer intl (latest in auth.order) over cn (oldest)
+    // Should prefer the first profile in auth.order for each provider.
     expect(providers?.stepfun?.baseUrl).toBe("https://api.stepfun.ai/v1");
+    expect(providers?.["stepfun-plan"]?.baseUrl).toBe("https://api.stepfun.ai/step_plan/v1");
+  });
+
+  it("prefers provider-specific profile region over cross-surface auth.order hints", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+
+    upsertAuthProfile({
+      profileId: "stepfun:cn",
+      credential: {
+        type: "api_key",
+        provider: "stepfun",
+        key: "sk-stepfun-cn", // pragma: allowlist secret
+      },
+      agentDir,
+    });
+    upsertAuthProfile({
+      profileId: "stepfun-plan:intl",
+      credential: {
+        type: "api_key",
+        provider: "stepfun-plan",
+        key: "sk-stepfun-intl", // pragma: allowlist secret
+      },
+      agentDir,
+    });
+
+    const providers = await resolveImplicitProvidersForTest({
+      agentDir,
+      env: {},
+      config: {
+        auth: {
+          profiles: {
+            "stepfun:cn": { provider: "stepfun", mode: "api_key" },
+            "stepfun-plan:intl": { provider: "stepfun-plan", mode: "api_key" },
+          },
+          order: {
+            stepfun: ["stepfun:cn"],
+            "stepfun-plan": ["stepfun-plan:intl"],
+          },
+        },
+      },
+    });
+
+    expect(providers?.stepfun?.baseUrl).toBe("https://api.stepfun.com/v1");
     expect(providers?.["stepfun-plan"]?.baseUrl).toBe("https://api.stepfun.ai/step_plan/v1");
   });
 });

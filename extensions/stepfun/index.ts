@@ -66,34 +66,46 @@ function inferRegionFromProfileId(profileId: string | undefined): StepFunRegion 
   return undefined;
 }
 
-function inferLatestConfiguredRegion(ctx: ProviderCatalogContext): StepFunRegion | undefined {
+function resolvePairedProviderId(providerId: string): string {
+  return providerId === STEPFUN_PROVIDER_ID ? STEPFUN_PLAN_PROVIDER_ID : STEPFUN_PROVIDER_ID;
+}
+
+function inferOrderedRegionForProvider(
+  ctx: ProviderCatalogContext,
+  providerId: string,
+): StepFunRegion | undefined {
   const configuredOrder = ctx.config.auth?.order;
   if (!configuredOrder || typeof configuredOrder !== "object") {
-    // Without explicit ordering, defer to other inference methods
-    // (env vars, profile ID patterns, etc.) which have clearer semantics
     return undefined;
   }
 
-  // Use auth.order to find the most recently configured StepFun profile
-  for (const providerId of STEPFUN_PROVIDER_IDS) {
-    const matchingOrder = Object.entries(configuredOrder).find(
-      ([key]) => key.trim().toLowerCase() === providerId,
-    )?.[1];
-    if (!Array.isArray(matchingOrder)) {
-      continue;
-    }
-    // auth.order is an array where later entries are more recent
-    // Iterate in reverse to find the most recent matching profile
-    for (let i = matchingOrder.length - 1; i >= 0; i--) {
-      const profileId = matchingOrder[i];
-      const region = inferRegionFromProfileId(typeof profileId === "string" ? profileId : "");
-      if (region) {
-        return region;
-      }
-    }
+  const matchingOrder = Object.entries(configuredOrder).find(
+    ([key]) => key.trim().toLowerCase() === providerId,
+  )?.[1];
+  if (!Array.isArray(matchingOrder)) {
+    return undefined;
   }
 
+  // applyAuthProfileConfig writes the latest selected profile first.
+  for (const profileId of matchingOrder) {
+    const region = inferRegionFromProfileId(typeof profileId === "string" ? profileId : "");
+    if (region) {
+      return region;
+    }
+  }
   return undefined;
+}
+
+function inferLatestConfiguredRegion(
+  ctx: ProviderCatalogContext,
+  providerId: string,
+  profileId: string | undefined,
+): StepFunRegion | undefined {
+  return (
+    inferOrderedRegionForProvider(ctx, providerId) ??
+    inferRegionFromProfileId(profileId) ??
+    inferOrderedRegionForProvider(ctx, resolvePairedProviderId(providerId))
+  );
 }
 
 function inferRegionFromEnv(env: NodeJS.ProcessEnv): StepFunRegion | undefined {
@@ -105,10 +117,13 @@ function inferRegionFromEnv(env: NodeJS.ProcessEnv): StepFunRegion | undefined {
 }
 
 function inferRegionFromExplicitBaseUrls(ctx: ProviderCatalogContext): StepFunRegion | undefined {
-  return (
-    inferRegionFromBaseUrl(trimExplicitBaseUrl(ctx, STEPFUN_PROVIDER_ID)) ??
-    inferRegionFromBaseUrl(trimExplicitBaseUrl(ctx, STEPFUN_PLAN_PROVIDER_ID))
-  );
+  for (const providerId of STEPFUN_PROVIDER_IDS) {
+    const region = inferRegionFromBaseUrl(trimExplicitBaseUrl(ctx, providerId));
+    if (region) {
+      return region;
+    }
+  }
+  return undefined;
 }
 
 function resolveDefaultBaseUrl(surface: StepFunSurface, region: StepFunRegion): string {
@@ -132,8 +147,7 @@ function resolveStepFunCatalog(
   const region =
     inferRegionFromBaseUrl(explicitBaseUrl) ??
     inferRegionFromExplicitBaseUrls(ctx) ??
-    inferLatestConfiguredRegion(ctx) ??
-    inferRegionFromProfileId(auth.profileId) ??
+    inferLatestConfiguredRegion(ctx, params.providerId, auth.profileId) ??
     inferRegionFromEnv(ctx.env);
   // Keep discovery working for legacy/manual auth profiles that resolved a
   // key but do not encode region in the profile id.
