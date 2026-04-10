@@ -104,14 +104,14 @@ function buildModelPickerCatalog(params: {
     const modelFallbacks =
       modelConfig && typeof modelConfig === "object" ? (modelConfig.fallbacks ?? []) : [];
     for (const fallback of modelFallbacks) {
-      pushRaw(String(fallback ?? ""));
+      pushRaw(fallback ?? "");
     }
 
     const imageConfig = params.cfg.agents?.defaults?.imageModel;
     if (imageConfig && typeof imageConfig === "object") {
       pushRaw(imageConfig.primary);
       for (const fallback of imageConfig.fallbacks ?? []) {
-        pushRaw(String(fallback ?? ""));
+        pushRaw(fallback ?? "");
       }
     }
 
@@ -130,7 +130,7 @@ function buildModelPickerCatalog(params: {
       keys,
       out,
       provider: entry.provider,
-      id: String(entry.id ?? ""),
+      id: entry.id ?? "",
       name: entry.name,
       fallbackNameToId: false,
     });
@@ -164,7 +164,7 @@ function buildModelPickerCatalog(params: {
   // Merge any configured allowlist keys that the catalog doesn't know about.
   for (const raw of Object.keys(params.cfg.agents?.defaults?.models ?? {})) {
     const resolved = resolveModelRefFromString({
-      raw: String(raw),
+      raw,
       defaultProvider: params.defaultProvider,
       aliasIndex: params.aliasIndex,
     });
