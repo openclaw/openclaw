@@ -7,7 +7,7 @@ import { toSanitizedMarkdownHtml } from "../markdown.ts";
 import { openExternalUrlSafe } from "../open-external-url.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import { detectTextDirection } from "../text-direction.ts";
-import type { MessageGroup, ToolCard } from "../types/chat-types.ts";
+import type { MessageGroup, StreamRunPart, ToolCard } from "../types/chat-types.ts";
 import { agentLogoUrl } from "../views/agents-utils.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
 import {
@@ -15,7 +15,11 @@ import {
   extractThinkingCached,
   formatReasoningMarkdown,
 } from "./message-extract.ts";
-import { isToolResultMessage, normalizeRoleForGrouping } from "./message-normalizer.ts";
+import {
+  isToolResultMessage,
+  normalizeMessage,
+  normalizeRoleForGrouping,
+} from "./message-normalizer.ts";
 import { isTtsSupported, speakText, stopTts, isTtsSpeaking } from "./speech.ts";
 import { extractToolCards, renderToolCardSidebar } from "./tool-cards.ts";
 
@@ -91,47 +95,97 @@ function extractAudioClips(message: unknown): AudioClip[] {
   return clips;
 }
 
-export function renderReadingIndicatorGroup(assistant?: AssistantIdentity, basePath?: string) {
-  return html`
-    <div class="chat-group assistant">
-      ${renderAvatar("assistant", assistant, basePath)}
-      <div class="chat-group-messages">
-        <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
-          <span class="chat-reading-indicator__dots">
-            <span></span><span></span><span></span>
-          </span>
-        </div>
-      </div>
-    </div>
-  `;
+type StreamRunLive = { type: "text"; text: string; startedAt: number } | { type: "reading" } | null;
+
+function streamRunFooterTimestamp(parts: StreamRunPart[], live: StreamRunLive): number {
+  let ts = 0;
+  for (const p of parts) {
+    if (p.type === "text") {
+      ts = Math.max(ts, p.startedAt);
+    } else {
+      ts = Math.max(ts, normalizeMessage(p.message).timestamp);
+    }
+  }
+  if (live?.type === "text") {
+    ts = Math.max(ts, live.startedAt);
+  }
+  return ts > 0 ? ts : Date.now();
 }
 
-export function renderStreamingGroup(
-  text: string,
-  startedAt: number,
-  onOpenSidebar?: (content: string) => void,
-  assistant?: AssistantIdentity,
-  basePath?: string,
+/**
+ * Renders one in-flight assistant turn: a single outer chat-group with interleaved
+ * inner bubbles (text chunks, tool cards, live tail) so streaming does not spawn
+ * multiple assistant rows with repeated avatars.
+ */
+export function renderStreamingRun(
+  parts: StreamRunPart[],
+  live: StreamRunLive,
+  opts: {
+    onOpenSidebar?: (content: string) => void;
+    assistant?: AssistantIdentity;
+    basePath?: string;
+    showToolCalls: boolean;
+    showReasoning: boolean;
+    assistantName?: string;
+  },
 ) {
-  const timestamp = new Date(startedAt).toLocaleTimeString([], {
+  const name = opts.assistantName ?? opts.assistant?.name ?? "Assistant";
+  const footerTs = streamRunFooterTimestamp(parts, live);
+  const timestamp = new Date(footerTs).toLocaleTimeString([], {
     hour: "numeric",
     minute: "2-digit",
   });
-  const name = assistant?.name ?? "Assistant";
 
   return html`
     <div class="chat-group assistant">
-      ${renderAvatar("assistant", assistant, basePath)}
+      ${renderAvatar("assistant", opts.assistant, opts.basePath)}
       <div class="chat-group-messages">
-        ${renderGroupedMessage(
-          {
-            role: "assistant",
-            content: [{ type: "text", text }],
-            timestamp: startedAt,
-          },
-          { isStreaming: true, showReasoning: false },
-          onOpenSidebar,
+        ${parts.map((p) =>
+          p.type === "text"
+            ? renderGroupedMessage(
+                {
+                  role: "assistant",
+                  content: [{ type: "text", text: p.text }],
+                  timestamp: p.startedAt,
+                },
+                {
+                  isStreaming: false,
+                  showReasoning: opts.showReasoning,
+                  showToolCalls: opts.showToolCalls,
+                },
+                opts.onOpenSidebar,
+              )
+            : renderGroupedMessage(
+                p.message,
+                {
+                  isStreaming: false,
+                  showReasoning: opts.showReasoning,
+                  showToolCalls: opts.showToolCalls,
+                },
+                opts.onOpenSidebar,
+              ),
         )}
+        ${live?.type === "text"
+          ? renderGroupedMessage(
+              {
+                role: "assistant",
+                content: [{ type: "text", text: live.text }],
+                timestamp: live.startedAt,
+              },
+              {
+                isStreaming: true,
+                showReasoning: false,
+                showToolCalls: opts.showToolCalls,
+              },
+              opts.onOpenSidebar,
+            )
+          : live?.type === "reading"
+            ? html` <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
+                <span class="chat-reading-indicator__dots">
+                  <span></span><span></span><span></span>
+                </span>
+              </div>`
+            : nothing}
         <div class="chat-group-footer">
           <span class="chat-sender-name">${name}</span>
           <span class="chat-group-timestamp">${timestamp}</span>

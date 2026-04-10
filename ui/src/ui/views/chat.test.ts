@@ -321,6 +321,54 @@ describe("chat view", () => {
     expect(container.textContent).not.toContain("757.3k / 200k");
   });
 
+  it("uses one assistant chat-group for streaming with segments, tools, and live text", async () => {
+    const container = document.createElement("div");
+    const toolMsg = {
+      role: "assistant",
+      toolCallId: "call-1",
+      content: [{ type: "toolcall", name: "demo", arguments: {} }],
+      timestamp: 10,
+    };
+    render(
+      renderChat(
+        createProps({
+          streamSegments: [{ text: "Before tool.", ts: 1 }],
+          toolMessages: [toolMsg],
+          stream: " After tool.",
+          streamStartedAt: 2,
+          showToolCalls: true,
+        }),
+      ),
+      container,
+    );
+    await flushTasks();
+    expect(container.querySelectorAll(".chat-group.assistant").length).toBe(1);
+  });
+
+  it("uses one assistant chat-group when tool calls are hidden and streamed text is merged", async () => {
+    const container = document.createElement("div");
+    const toolMsg = {
+      role: "assistant",
+      toolCallId: "call-2",
+      content: [{ type: "toolcall", name: "demo", arguments: {} }],
+      timestamp: 10,
+    };
+    render(
+      renderChat(
+        createProps({
+          streamSegments: [{ text: "Part one", ts: 1 }],
+          toolMessages: [toolMsg],
+          stream: " part two",
+          streamStartedAt: 2,
+          showToolCalls: false,
+        }),
+      ),
+      container,
+    );
+    await flushTasks();
+    expect(container.querySelectorAll(".chat-group.assistant").length).toBe(1);
+  });
+
   it("uses totalTokens for the context notice detail when current usage is high", () => {
     const container = document.createElement("div");
     render(

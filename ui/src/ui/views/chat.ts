@@ -11,11 +11,7 @@ import {
 } from "../chat/attachment-support.ts";
 import { DeletedMessages } from "../chat/deleted-messages.ts";
 import { exportChatMarkdown } from "../chat/export.ts";
-import {
-  renderMessageGroup,
-  renderReadingIndicatorGroup,
-  renderStreamingGroup,
-} from "../chat/grouped-render.ts";
+import { renderMessageGroup, renderStreamingRun } from "../chat/grouped-render.ts";
 import { InputHistory } from "../chat/input-history.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
 import { PinnedMessages } from "../chat/pinned-messages.ts";
@@ -34,7 +30,7 @@ import { icons } from "../icons.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../types.ts";
-import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
+import type { ChatItem, MessageGroup, StreamRunPart } from "../types/chat-types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { agentLogoUrl, resolveAgentAvatarUrl } from "./agents-utils.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
@@ -1000,17 +996,15 @@ export function renderChat(props: ChatProps) {
                 </div>
               `;
             }
-            if (item.kind === "reading-indicator") {
-              return renderReadingIndicatorGroup(assistantIdentity, props.basePath);
-            }
-            if (item.kind === "stream") {
-              return renderStreamingGroup(
-                item.text,
-                item.startedAt,
-                props.onOpenSidebar,
-                assistantIdentity,
-                props.basePath,
-              );
+            if (item.kind === "stream-run") {
+              return renderStreamingRun(item.parts, item.live, {
+                onOpenSidebar: props.onOpenSidebar,
+                assistant: assistantIdentity,
+                basePath: props.basePath,
+                showToolCalls: props.showToolCalls,
+                showReasoning,
+                assistantName: props.assistantName,
+              });
             }
             if (item.kind === "group") {
               if (deleted.has(item.key)) {
@@ -1503,40 +1497,79 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       message: msg,
     });
   }
-  // Interleave stream segments and tool cards in order. Each segment
-  // contains text that was streaming before the corresponding tool started.
-  // This ensures correct visual ordering: text → tool → text → tool → ...
+  // One assistant row for the whole in-flight turn: inner bubbles interleave
+  // streamed text and tool cards (when tool calls are visible). When tool calls
+  // are hidden, merge segment + live text into a single updating bubble.
   const segments = props.streamSegments ?? [];
-  const maxLen = Math.max(segments.length, tools.length);
-  for (let i = 0; i < maxLen; i++) {
-    if (i < segments.length && segments[i].text.trim().length > 0) {
-      items.push({
-        kind: "stream" as const,
-        key: `stream-seg:${props.sessionKey}:${i}`,
-        text: segments[i].text,
-        startedAt: segments[i].ts,
-      });
-    }
-    if (i < tools.length && props.showToolCalls) {
-      items.push({
-        kind: "message",
-        key: messageKey(tools[i], i + history.length),
-        message: tools[i],
-      });
-    }
-  }
+  const shouldShowStreamRun = segments.length > 0 || props.stream !== null;
+  if (shouldShowStreamRun) {
+    const streamRunKey = `stream-run:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
 
-  if (props.stream !== null) {
-    const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
-    if (props.stream.trim().length > 0) {
-      items.push({
-        kind: "stream",
-        key,
-        text: props.stream,
-        startedAt: props.streamStartedAt ?? Date.now(),
-      });
+    if (!props.showToolCalls) {
+      const merged = segments.map((s) => s.text).join("") + (props.stream ?? "");
+      let live: { type: "text"; text: string; startedAt: number } | { type: "reading" } | null =
+        null;
+      if (props.stream !== null) {
+        if (!merged.trim()) {
+          live = { type: "reading" };
+        } else {
+          live = {
+            type: "text",
+            text: merged,
+            startedAt: props.streamStartedAt ?? segments[0]?.ts ?? Date.now(),
+          };
+        }
+      }
+      if (live !== null) {
+        items.push({
+          kind: "stream-run",
+          key: streamRunKey,
+          parts: [],
+          live,
+        });
+      }
     } else {
-      items.push({ kind: "reading-indicator", key });
+      const parts: StreamRunPart[] = [];
+      const maxLen = Math.max(segments.length, tools.length);
+      for (let i = 0; i < maxLen; i++) {
+        if (i < segments.length && segments[i].text.trim().length > 0) {
+          parts.push({
+            type: "text",
+            text: segments[i].text,
+            startedAt: segments[i].ts,
+          });
+        }
+        if (i < tools.length) {
+          parts.push({
+            type: "tool",
+            message: tools[i],
+            key: messageKey(tools[i], i + history.length),
+          });
+        }
+      }
+
+      let live: { type: "text"; text: string; startedAt: number } | { type: "reading" } | null =
+        null;
+      if (props.stream !== null) {
+        if (props.stream.trim().length > 0) {
+          live = {
+            type: "text",
+            text: props.stream,
+            startedAt: props.streamStartedAt ?? Date.now(),
+          };
+        } else {
+          live = { type: "reading" };
+        }
+      }
+
+      if (parts.length > 0 || live !== null) {
+        items.push({
+          kind: "stream-run",
+          key: streamRunKey,
+          parts,
+          live,
+        });
+      }
     }
   }
 
