@@ -3,11 +3,7 @@ import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { waitForAgentRun, readLatestAssistantReply } from "../run-wait.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
-import {
-  registerOutputCaptureGate,
-  signalOutputCaptured,
-  subagentRuns,
-} from "../subagent-registry-memory.js";
+import { signalOutputCaptured, subagentRuns } from "../subagent-registry-memory.js";
 import { spawnSubagentDirect } from "../subagent-spawn.js";
 import {
   describeSessionsDelegateTool,
@@ -186,47 +182,51 @@ async function executeSingleDelegate(
   const childSessionKey = spawnResult.childSessionKey!;
   const runId = spawnResult.runId!;
 
-  // Register a gate so the lifecycle cleanup fast path waits for us to
-  // finish reading the child output before deleting the session/entry.
-  registerOutputCaptureGate(runId);
+  // The output capture gate was already registered by registerSubagentRun
+  // (for expectsCompletionMessage: false runs) before any completion
+  // listener can fire. We signal it after reading output below.
 
   const waitResult = await waitForAgentRun({
     runId,
     timeoutMs: timeoutSeconds * 1000,
   });
 
-  if (waitResult.status === "timeout") {
-    signalOutputCaptured(runId);
+  // Use try/finally so signalOutputCaptured fires on every exit path
+  // (including readChildOutput throwing). Without this the lifecycle
+  // cleanup fast path blocks on waitForOutputCaptureGate for 30s.
+  try {
+    if (waitResult.status === "timeout") {
+      return {
+        status: "timeout",
+        runId,
+        childSessionKey,
+        runtimeMs: Date.now() - startedAt,
+        error: "Child run did not complete within the timeout.",
+      };
+    }
+
+    if (waitResult.status === "error") {
+      return {
+        status: "error",
+        runId,
+        childSessionKey,
+        runtimeMs: Date.now() - startedAt,
+        error: waitResult.error ?? "Child run failed.",
+      };
+    }
+
+    const output = await readChildOutput({ runId, childSessionKey });
+
     return {
-      status: "timeout",
+      status: "ok",
+      output: output ?? undefined,
       runId,
       childSessionKey,
       runtimeMs: Date.now() - startedAt,
-      error: "Child run did not complete within the timeout.",
     };
-  }
-
-  if (waitResult.status === "error") {
+  } finally {
     signalOutputCaptured(runId);
-    return {
-      status: "error",
-      runId,
-      childSessionKey,
-      runtimeMs: Date.now() - startedAt,
-      error: waitResult.error ?? "Child run failed.",
-    };
   }
-
-  const output = await readChildOutput({ runId, childSessionKey });
-  signalOutputCaptured(runId);
-
-  return {
-    status: "ok",
-    output: output ?? undefined,
-    runId,
-    childSessionKey,
-    runtimeMs: Date.now() - startedAt,
-  };
 }
 
 export function createSessionsDelegateTool(opts?: DelegateToolOpts): AnyAgentTool {

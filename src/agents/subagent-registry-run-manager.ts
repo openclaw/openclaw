@@ -21,6 +21,7 @@ import {
   resolveArchiveAfterMs,
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
+import { registerOutputCaptureGate } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const log = createSubsystemLogger("agents/subagent-registry");
@@ -313,6 +314,13 @@ export function createSubagentRunManager(params: {
       attachmentsRootDir: registerParams.attachmentsRootDir,
       retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
     });
+    // For delegate runs, register the output capture gate before any
+    // completion listener can fire. The delegate tool signals the gate
+    // after reading the child output, and the cleanup fast path awaits
+    // it before deleting the session/entry.
+    if (registerParams.expectsCompletionMessage === false) {
+      registerOutputCaptureGate(registerParams.runId);
+    }
     try {
       createRunningTaskRun({
         runtime: "subagent",
