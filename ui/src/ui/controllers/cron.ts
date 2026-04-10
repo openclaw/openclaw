@@ -344,21 +344,12 @@ export function updateCronJobsFilter(
   if (typeof patch.cronJobsQuery === "string") {
     state.cronJobsQuery = patch.cronJobsQuery;
   }
-  if (patch.cronJobsEnabledFilter) {
-    state.cronJobsEnabledFilter = patch.cronJobsEnabledFilter;
-  }
-  if (patch.cronJobsScheduleKindFilter) {
-    state.cronJobsScheduleKindFilter = patch.cronJobsScheduleKindFilter;
-  }
-  if (patch.cronJobsLastStatusFilter) {
-    state.cronJobsLastStatusFilter = patch.cronJobsLastStatusFilter;
-  }
-  if (patch.cronJobsSortBy) {
-    state.cronJobsSortBy = patch.cronJobsSortBy;
-  }
-  if (patch.cronJobsSortDir) {
-    state.cronJobsSortDir = patch.cronJobsSortDir;
-  }
+  state.cronJobsEnabledFilter = patch.cronJobsEnabledFilter ?? state.cronJobsEnabledFilter;
+  state.cronJobsScheduleKindFilter =
+    patch.cronJobsScheduleKindFilter ?? state.cronJobsScheduleKindFilter;
+  state.cronJobsLastStatusFilter = patch.cronJobsLastStatusFilter ?? state.cronJobsLastStatusFilter;
+  state.cronJobsSortBy = patch.cronJobsSortBy ?? state.cronJobsSortBy;
+  state.cronJobsSortDir = patch.cronJobsSortDir ?? state.cronJobsSortDir;
 }
 
 export function getVisibleCronJobs(
@@ -828,9 +819,7 @@ export function updateCronRunsFilter(
     >
   >,
 ) {
-  if (patch.cronRunsScope) {
-    state.cronRunsScope = patch.cronRunsScope;
-  }
+  state.cronRunsScope = patch.cronRunsScope ?? state.cronRunsScope;
   if (Array.isArray(patch.cronRunsStatuses)) {
     state.cronRunsStatuses = patch.cronRunsStatuses;
     state.cronRunsStatusFilter =
@@ -847,9 +836,7 @@ export function updateCronRunsFilter(
   if (typeof patch.cronRunsQuery === "string") {
     state.cronRunsQuery = patch.cronRunsQuery;
   }
-  if (patch.cronRunsSortDir) {
-    state.cronRunsSortDir = patch.cronRunsSortDir;
-  }
+  state.cronRunsSortDir = patch.cronRunsSortDir ?? state.cronRunsSortDir;
 }
 
 export function startCronEdit(state: CronState, job: CronJob) {
