@@ -1,9 +1,7 @@
 import fs from "node:fs";
-import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext, FileOperations } from "@mariozechner/pi-coding-agent";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
-import { resolveEffectiveAgentsBootstrapFileForRun } from "../bootstrap-files.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isAbortError } from "../../infra/unhandled-rejections.js";
@@ -12,6 +10,7 @@ import {
   getCompactionProvider,
   type CompactionProvider,
 } from "../../plugins/compaction-provider.js";
+import { resolveEffectiveAgentsBootstrapFileForRun } from "../bootstrap-files.js";
 import {
   hasMeaningfulConversationContent,
   isRealConversationMessage,
