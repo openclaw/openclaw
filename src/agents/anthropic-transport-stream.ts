@@ -403,7 +403,7 @@ function translateServerToolResultBlock(contentBlock: Record<string, unknown>): 
     return null;
   }
   const toolName = blockType.replace(/_tool_result$/, "");
-  const label = toolName.charAt(0).toUpperCase() + toolName.slice(1);
+  const label = sanitizeTransportPayloadText(toolName.charAt(0).toUpperCase() + toolName.slice(1));
   const content = contentBlock.content as Record<string, unknown> | undefined;
   if (content && typeof content === "object") {
     const contentType = content.type as string | undefined;
@@ -790,7 +790,11 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             // No round-tripping — the API continues fine without these blocks
             // since the model's text response already incorporates the output.
             // Encrypted content round-tripping is deferred to a follow-up.
-            const rawBlock = contentBlock as Record<string, unknown>;
+            if (!contentBlock || typeof contentBlock !== "object") {
+              // Malformed or missing content_block — skip safely instead of crashing
+              continue;
+            }
+            const rawBlock = contentBlock;
             if (isServerToolUseBlock(rawBlock)) {
               // server_tool_use: silently drop (invocation marker only)
               continue;
