@@ -18,7 +18,7 @@ export function createRuntimeLlm(): PluginRuntimeCore["llm"] {
       ]);
 
       const cfg = loadConfig();
-      const agentId = resolveDefaultAgentId(cfg);
+      const agentId = params.agentId ?? resolveDefaultAgentId(cfg);
 
       const prepared = await prepareSimpleCompletionModelForAgent({
         cfg,
