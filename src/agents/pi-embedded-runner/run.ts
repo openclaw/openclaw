@@ -14,7 +14,12 @@ import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
-import { hasConfiguredModelFallbacks } from "../agent-scope.js";
+import {
+  hasConfiguredModelFallbacks,
+  isStrictAgenticExecutionContractActive,
+  resolveAgentExecutionContract,
+  resolveSessionAgentIds,
+} from "../agent-scope.js";
 import {
   type AuthProfileFailureReason,
   markAuthProfileFailure,
@@ -93,7 +98,9 @@ import {
   resolveAckExecutionFastPathInstruction,
   resolveIncompleteTurnPayloadText,
   extractPlanningOnlyPlanDetails,
+  resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
+  STRICT_AGENTIC_BLOCKED_TEXT,
 } from "./run/incomplete-turn.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
@@ -386,6 +393,22 @@ export async function runEmbeddedPiAgent(
       });
 
       await initializeAuthProfile();
+      const { sessionAgentId } = resolveSessionAgentIds({
+        sessionKey: params.sessionKey,
+        config: params.config,
+        agentId: params.agentId,
+      });
+      const configuredExecutionContract =
+        resolveAgentExecutionContract(params.config, sessionAgentId) ?? "default";
+      const strictAgenticActive = isStrictAgenticExecutionContractActive({
+        config: params.config,
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+        provider,
+        modelId,
+      });
+      const executionContract = strictAgenticActive ? "strict-agentic" : "default";
+      const maxPlanningOnlyRetryAttempts = resolvePlanningOnlyRetryLimit(executionContract);
 
       const MAX_TIMEOUT_COMPACTION_ATTEMPTS = 2;
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
@@ -1501,7 +1524,7 @@ export async function runEmbeddedPiAgent(
           if (
             !incompleteTurnText &&
             nextPlanningOnlyRetryInstruction &&
-            planningOnlyRetryAttempts < 1
+            planningOnlyRetryAttempts < maxPlanningOnlyRetryAttempts
           ) {
             const planningOnlyText = attempt.assistantTexts.join("\n\n").trim();
             const planDetails = extractPlanningOnlyPlanDetails(planningOnlyText);
@@ -1532,9 +1555,37 @@ export async function runEmbeddedPiAgent(
             planningOnlyRetryInstruction = nextPlanningOnlyRetryInstruction;
             log.warn(
               `planning-only turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
-                `provider=${provider}/${modelId} — retrying once with act-now steer`,
+                `provider=${provider}/${modelId} contract=${executionContract} configured=${configuredExecutionContract} — retrying ` +
+                `${planningOnlyRetryAttempts}/${maxPlanningOnlyRetryAttempts} with act-now steer`,
             );
             continue;
+          }
+          if (!incompleteTurnText && nextPlanningOnlyRetryInstruction && strictAgenticActive) {
+            log.warn(
+              `strict-agentic run exhausted planning-only retries: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${provider}/${modelId} configured=${configuredExecutionContract} — surfacing blocked state`,
+            );
+            return {
+              payloads: [
+                {
+                  text: STRICT_AGENTIC_BLOCKED_TEXT,
+                  isError: true,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta,
+                aborted,
+                systemPromptReport: attempt.systemPromptReport,
+                finalAssistantVisibleText,
+              },
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+              successfulCronAdds: attempt.successfulCronAdds,
+            };
           }
           if (incompleteTurnText) {
             const incompleteStopReason = attempt.lastAssistant?.stopReason;

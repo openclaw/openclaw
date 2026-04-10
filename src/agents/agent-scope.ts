@@ -56,6 +56,7 @@ type ResolvedAgentConfig = {
   identity?: AgentEntry["identity"];
   groupChat?: AgentEntry["groupChat"];
   subagents?: AgentEntry["subagents"];
+  embeddedPi?: AgentEntry["embeddedPi"];
   sandbox?: AgentEntry["sandbox"];
   tools?: AgentEntry["tools"];
 };
@@ -163,9 +164,45 @@ export function resolveAgentConfig(
     identity: entry.identity,
     groupChat: entry.groupChat,
     subagents: typeof entry.subagents === "object" && entry.subagents ? entry.subagents : undefined,
+    embeddedPi:
+      typeof entry.embeddedPi === "object" && entry.embeddedPi ? entry.embeddedPi : undefined,
     sandbox: entry.sandbox,
     tools: entry.tools,
   };
+}
+
+export function resolveAgentExecutionContract(
+  cfg: OpenClawConfig | undefined,
+  agentId?: string | null,
+): NonNullable<NonNullable<AgentDefaultsConfig["embeddedPi"]>["executionContract"]> | undefined {
+  const defaultContract = cfg?.agents?.defaults?.embeddedPi?.executionContract;
+  if (!cfg || !agentId) {
+    return defaultContract;
+  }
+  const agentContract = resolveAgentConfig(cfg, agentId)?.embeddedPi?.executionContract;
+  return agentContract ?? defaultContract;
+}
+
+export function isStrictAgenticExecutionContractActive(params: {
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  agentId?: string | null;
+  provider?: string | null;
+  modelId?: string | null;
+}): boolean {
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+    agentId: params.agentId ?? undefined,
+  });
+  if (resolveAgentExecutionContract(params.config, sessionAgentId) !== "strict-agentic") {
+    return false;
+  }
+  const provider = normalizeLowercaseStringOrEmpty(params.provider ?? "");
+  if (provider !== "openai" && provider !== "openai-codex") {
+    return false;
+  }
+  return /^gpt-5(?:[.-]|$)/i.test(params.modelId?.trim() ?? "");
 }
 
 export function resolveAgentSkillsFilter(

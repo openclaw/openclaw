@@ -829,6 +829,12 @@ export const AgentEntrySchema = z
       })
       .strict()
       .optional(),
+    embeddedPi: z
+      .object({
+        executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
+      })
+      .strict()
+      .optional(),
     sandbox: AgentSandboxSchema,
     params: z.record(z.string(), z.unknown()).optional(),
     tools: AgentToolsSchema,

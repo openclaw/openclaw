@@ -4485,6 +4485,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     description:
                       'How embedded Pi handles workspace-local `.pi/config/settings.json`: "sanitize" (default) strips shellPath/shellCommandPrefix, "ignore" disables project settings entirely, and "trusted" applies project settings as-is.',
                   },
+                  executionContract: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        const: "default",
+                      },
+                      {
+                        type: "string",
+                        const: "strict-agentic",
+                      },
+                    ],
+                    title: "Embedded Pi Execution Contract",
+                    description:
+                      'Embedded Pi execution contract: "default" keeps the standard runner behavior, while "strict-agentic" keeps OpenAI/OpenAI Codex GPT-5-family runs acting until they hit a real blocker instead of stopping at plans or filler.',
+                  },
                 },
                 additionalProperties: false,
                 title: "Embedded Pi",
@@ -6120,6 +6135,30 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     },
                   },
                   additionalProperties: false,
+                },
+                embeddedPi: {
+                  type: "object",
+                  properties: {
+                    executionContract: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "default",
+                        },
+                        {
+                          type: "string",
+                          const: "strict-agentic",
+                        },
+                      ],
+                      title: "Agent Embedded Pi Execution Contract",
+                      description:
+                        'Optional per-agent embedded Pi execution contract override. Set "strict-agentic" to keep that agent acting through plan-only turns on OpenAI/OpenAI Codex GPT-5-family runs, or "default" to inherit the standard runner behavior.',
+                    },
+                  },
+                  additionalProperties: false,
+                  title: "Agent Embedded Pi",
+                  description:
+                    "Optional per-agent embedded Pi overrides. Use this to opt specific agents into stricter GPT-5 execution behavior without changing the global default.",
                 },
                 sandbox: {
                   type: "object",
@@ -17251,7 +17290,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 type: "boolean",
                 title: "Enable Structured Plan Tool",
                 description:
-                  "Enable or disable the experimental structured `update_plan` tool for non-trivial multi-step work tracking. OpenAI and OpenAI Codex runs auto-enable it when this flag is unset; set false to disable that auto-enable.",
+                  "Enable the experimental structured `update_plan` tool for non-trivial multi-step work tracking. Leave this off unless you explicitly want the tool outside strict-agentic embedded Pi runs.",
               },
             },
             additionalProperties: false,
@@ -23657,7 +23696,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "tools.experimental.planTool": {
       label: "Enable Structured Plan Tool",
-      help: "Enable or disable the experimental structured `update_plan` tool for non-trivial multi-step work tracking. OpenAI and OpenAI Codex runs auto-enable it when this flag is unset; set false to disable that auto-enable.",
+      help: "Enable the experimental structured `update_plan` tool for non-trivial multi-step work tracking. Leave this off unless you explicitly want the tool outside strict-agentic embedded Pi runs.",
       tags: ["security", "tools", "advanced"],
     },
     "tools.elevated": {
@@ -25341,6 +25380,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: 'How embedded Pi handles workspace-local `.pi/config/settings.json`: "sanitize" (default) strips shellPath/shellCommandPrefix, "ignore" disables project settings entirely, and "trusted" applies project settings as-is.',
       tags: ["access"],
     },
+    "agents.defaults.embeddedPi.executionContract": {
+      label: "Embedded Pi Execution Contract",
+      help: 'Embedded Pi execution contract: "default" keeps the standard runner behavior, while "strict-agentic" keeps OpenAI/OpenAI Codex GPT-5-family runs acting until they hit a real blocker instead of stopping at plans or filler.',
+      tags: ["advanced"],
+    },
     "agents.defaults.heartbeat.includeSystemPromptSection": {
       label: "Heartbeat Include System Prompt Section",
       help: "Includes the default agent's ## Heartbeats system prompt section when true. Turn this off to keep heartbeat runtime behavior while omitting the heartbeat prompt instructions from the agent system prompt.",
@@ -25350,6 +25394,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Heartbeat Include System Prompt Section",
       help: "Per-agent override for whether the default agent's ## Heartbeats system prompt section is injected. Use false to keep heartbeat runtime behavior but omit the heartbeat prompt instructions from that agent's system prompt.",
       tags: ["automation"],
+    },
+    "agents.list[].embeddedPi": {
+      label: "Agent Embedded Pi",
+      help: "Optional per-agent embedded Pi overrides. Use this to opt specific agents into stricter GPT-5 execution behavior without changing the global default.",
+      tags: ["advanced"],
+    },
+    "agents.list[].embeddedPi.executionContract": {
+      label: "Agent Embedded Pi Execution Contract",
+      help: 'Optional per-agent embedded Pi execution contract override. Set "strict-agentic" to keep that agent acting through plan-only turns on OpenAI/OpenAI Codex GPT-5-family runs, or "default" to inherit the standard runner behavior.',
+      tags: ["advanced"],
     },
     "agents.defaults.heartbeat.directPolicy": {
       label: "Heartbeat Direct Policy",
