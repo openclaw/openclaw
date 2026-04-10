@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { OpenClawPluginApi } from "./api.js";
 import { listDevicePairing } from "./api.js";
@@ -279,9 +280,7 @@ async function notifySubscriber(params: {
     return true;
   } catch (err) {
     params.api.logger.warn(
-      `device-pair: failed to send pairing notification to ${params.subscriber.to}: ${String(
-        (err as Error)?.message ?? err,
-      )}`,
+      `device-pair: failed to send pairing notification to ${params.subscriber.to}: ${formatErrorMessage(err)}`,
     );
     return false;
   }
@@ -476,16 +475,12 @@ export function registerPairingNotifierService(api: OpenClawPluginApi): void {
       };
 
       await tick().catch((err) => {
-        api.logger.warn(
-          `device-pair: initial notify poll failed: ${String((err as Error)?.message ?? err)}`,
-        );
+        api.logger.warn(`device-pair: initial notify poll failed: ${formatErrorMessage(err)}`);
       });
 
       notifyInterval = setInterval(() => {
         tick().catch((err) => {
-          api.logger.warn(
-            `device-pair: notify poll failed: ${String((err as Error)?.message ?? err)}`,
-          );
+          api.logger.warn(`device-pair: notify poll failed: ${formatErrorMessage(err)}`);
         });
       }, NOTIFY_POLL_INTERVAL_MS);
       notifyInterval.unref?.();
