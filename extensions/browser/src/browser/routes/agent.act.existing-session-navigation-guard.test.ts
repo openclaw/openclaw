@@ -178,6 +178,30 @@ describe("existing-session interaction navigation guard", () => {
     );
   });
 
+  it("fails closed when location probes never return a usable url", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript
+      .mockResolvedValueOnce("result" as never)
+      .mockResolvedValueOnce(undefined as never)
+      .mockResolvedValueOnce(null as never)
+      .mockResolvedValueOnce("   " as never);
+
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    const pending =
+      handler?.(
+        { params: {}, query: {}, body: { kind: "evaluate", fn: "() => 1" } },
+        response.res,
+      ) ?? Promise.resolve();
+    void pending.catch(() => {});
+    const completion = (async () => {
+      await vi.runAllTimersAsync();
+      await pending;
+    })();
+
+    await expect(completion).rejects.toThrow("Unable to verify post-interaction navigation");
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
+  });
+
   it("skips the guard when no SSRF policy is configured", async () => {
     const response = await runAction({ kind: "press", key: "Enter" }, null);
 

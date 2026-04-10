@@ -56,7 +56,14 @@ async function readExistingSessionLocationHref(params: {
     targetId: params.targetId,
     fn: "() => window.location.href",
   });
-  return typeof currentUrl === "string" ? currentUrl : "";
+  if (typeof currentUrl !== "string") {
+    throw new Error("Location probe returned a non-string result");
+  }
+  const normalizedUrl = currentUrl.trim();
+  if (!normalizedUrl) {
+    throw new Error("Location probe returned an empty URL");
+  }
+  return normalizedUrl;
 }
 
 async function assertExistingSessionPostInteractionNavigationAllowed(params: {
@@ -340,6 +347,13 @@ export function registerBrowserAgentActRoutes(
         const isExistingSession = getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp;
         const profileName = profileCtx.profile.name;
         if (isExistingSession) {
+          const existingSessionNavigationGuard = {
+            profileName,
+            userDataDir: profileCtx.profile.userDataDir,
+            targetId: tab.targetId,
+            baselineUrl: tab.url,
+            ssrfPolicy,
+          };
           const unsupportedMessage = getExistingSessionUnsupportedMessage(action);
           if (unsupportedMessage) {
             return jsonActError(
@@ -360,13 +374,7 @@ export function registerBrowserAgentActRoutes(
                     uid: action.ref!,
                     doubleClick: action.doubleClick ?? false,
                   }),
-                guard: {
-                  profileName,
-                  userDataDir: profileCtx.profile.userDataDir,
-                  targetId: tab.targetId,
-                  baselineUrl: tab.url,
-                  ssrfPolicy,
-                },
+                guard: existingSessionNavigationGuard,
               });
               return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
             case "type":
@@ -388,13 +396,7 @@ export function registerBrowserAgentActRoutes(
                     });
                   }
                 },
-                guard: {
-                  profileName,
-                  userDataDir: profileCtx.profile.userDataDir,
-                  targetId: tab.targetId,
-                  baselineUrl: tab.url,
-                  ssrfPolicy,
-                },
+                guard: existingSessionNavigationGuard,
               });
               return res.json({ ok: true, targetId: tab.targetId });
             case "press":
@@ -406,13 +408,7 @@ export function registerBrowserAgentActRoutes(
                     targetId: tab.targetId,
                     key: action.key,
                   }),
-                guard: {
-                  profileName,
-                  userDataDir: profileCtx.profile.userDataDir,
-                  targetId: tab.targetId,
-                  baselineUrl: tab.url,
-                  ssrfPolicy,
-                },
+                guard: existingSessionNavigationGuard,
               });
               return res.json({ ok: true, targetId: tab.targetId });
             case "hover":
@@ -424,13 +420,7 @@ export function registerBrowserAgentActRoutes(
                     targetId: tab.targetId,
                     uid: action.ref!,
                   }),
-                guard: {
-                  profileName,
-                  userDataDir: profileCtx.profile.userDataDir,
-                  targetId: tab.targetId,
-                  baselineUrl: tab.url,
-                  ssrfPolicy,
-                },
+                guard: existingSessionNavigationGuard,
               });
               return res.json({ ok: true, targetId: tab.targetId });
             case "scrollIntoView":
@@ -443,13 +433,7 @@ export function registerBrowserAgentActRoutes(
                     fn: `(el) => { el.scrollIntoView({ block: "center", inline: "center" }); return true; }`,
                     args: [action.ref!],
                   }),
-                guard: {
-                  profileName,
-                  userDataDir: profileCtx.profile.userDataDir,
-                  targetId: tab.targetId,
-                  baselineUrl: tab.url,
-                  ssrfPolicy,
-                },
+                guard: existingSessionNavigationGuard,
               });
               return res.json({ ok: true, targetId: tab.targetId });
             case "drag":
@@ -462,13 +446,7 @@ export function registerBrowserAgentActRoutes(
                     fromUid: action.startRef!,
                     toUid: action.endRef!,
                   }),
-                guard: {
-                  profileName,
-                  userDataDir: profileCtx.profile.userDataDir,
-                  targetId: tab.targetId,
-                  baselineUrl: tab.url,
-                  ssrfPolicy,
-                },
+                guard: existingSessionNavigationGuard,
               });
               return res.json({ ok: true, targetId: tab.targetId });
             case "select":
@@ -481,13 +459,7 @@ export function registerBrowserAgentActRoutes(
                     uid: action.ref!,
                     value: action.values[0] ?? "",
                   }),
-                guard: {
-                  profileName,
-                  userDataDir: profileCtx.profile.userDataDir,
-                  targetId: tab.targetId,
-                  baselineUrl: tab.url,
-                  ssrfPolicy,
-                },
+                guard: existingSessionNavigationGuard,
               });
               return res.json({ ok: true, targetId: tab.targetId });
             case "fill":
@@ -502,13 +474,7 @@ export function registerBrowserAgentActRoutes(
                       value: String(field.value ?? ""),
                     })),
                   }),
-                guard: {
-                  profileName,
-                  userDataDir: profileCtx.profile.userDataDir,
-                  targetId: tab.targetId,
-                  baselineUrl: tab.url,
-                  ssrfPolicy,
-                },
+                guard: existingSessionNavigationGuard,
               });
               return res.json({ ok: true, targetId: tab.targetId });
             case "resize":
@@ -545,13 +511,7 @@ export function registerBrowserAgentActRoutes(
                     fn: action.fn,
                     args: action.ref ? [action.ref] : undefined,
                   }),
-                guard: {
-                  profileName,
-                  userDataDir: profileCtx.profile.userDataDir,
-                  targetId: tab.targetId,
-                  baselineUrl: tab.url,
-                  ssrfPolicy,
-                },
+                guard: existingSessionNavigationGuard,
               });
               return res.json({
                 ok: true,
