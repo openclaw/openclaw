@@ -4,6 +4,7 @@ import type { MSTeamsConversationStore } from "../conversation-store.js";
 import type { GraphThreadMessage } from "../graph-thread.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
 import { setMSTeamsRuntime } from "../runtime.js";
+import { _resetThreadParentContextCachesForTest } from "../thread-parent-context.js";
 import { createMSTeamsMessageHandler } from "./message-handler.js";
 
 type HandlerInput = Parameters<ReturnType<typeof createMSTeamsMessageHandler>>[0];
@@ -160,6 +161,9 @@ describe("msteams monitor handler authz", () => {
     graphThreadMockState.resolveTeamGroupId.mockClear();
     graphThreadMockState.fetchChannelMessage.mockReset();
     graphThreadMockState.fetchThreadReplies.mockReset();
+    // Parent-context LRU + per-session dedupe are module-level; clear between
+    // cases so stale parent fetches from earlier tests don't bleed in.
+    _resetThreadParentContextCachesForTest();
   }
 
   function createThreadMessage(params: {

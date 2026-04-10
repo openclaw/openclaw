@@ -17,11 +17,9 @@
     "oxc/no-accumulating-spread": "off",
     "oxc/no-async-endpoint-handlers": "off",
     "oxc/no-map-spread": "off",
-    "typescript/consistent-return": "off",
+    "typescript/consistent-return": "error",
     "typescript/no-explicit-any": "error",
     "typescript/no-extraneous-class": "off",
-    "typescript/no-unnecessary-type-arguments": "off",
-    "typescript/no-unnecessary-type-assertion": "off",
     "typescript/no-unnecessary-type-conversion": "off",
     "typescript/no-unsafe-type-assertion": "off",
     "unicorn/consistent-function-scoping": "off",
@@ -60,13 +58,7 @@
         "**/*test-support.ts"
       ],
       "rules": {
-        "typescript/await-thenable": "off",
-        "typescript/no-base-to-string": "off",
         "typescript/no-explicit-any": "off",
-        "typescript/no-floating-promises": "off",
-        "typescript/no-misused-spread": "off",
-        "typescript/no-redundant-type-constituents": "off",
-        "typescript/no-unnecessary-template-expression": "off",
         "typescript/unbound-method": "off",
         "eslint/no-unsafe-optional-chaining": "off"
       }

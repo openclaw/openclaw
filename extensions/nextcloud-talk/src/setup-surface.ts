@@ -64,7 +64,7 @@ export const nextcloudTalkSetupWizard: ChannelSetupWizard = {
       initialValue: hasApiCredentials,
     });
     if (!configureApiCredentials) {
-      return;
+      return undefined;
     }
     return {
       credentialValues: {

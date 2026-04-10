@@ -72,14 +72,8 @@ export async function assertCdpEndpointAllowed(
     await resolvePinnedHostnameWithPolicy(parsed.hostname, {
       policy: ssrfPolicy,
     });
-  } catch (err) {
-    // Rethrow SSRF policy failures against the CDP endpoint itself as a
-    // browser-endpoint-scoped error so the route mapping does not confuse
-    // them with navigation-target policy blocks.
-    if (err instanceof SsrFBlockedError) {
-      throw new BrowserCdpEndpointBlockedError({ cause: err });
-    }
-    throw err;
+  } catch (error) {
+    throw new BrowserCdpEndpointBlockedError({ cause: error });
   }
 }
 
@@ -168,6 +162,11 @@ export function normalizeCdpHttpBaseForJsonEndpoints(cdpUrl: string): string {
   }
 }
 
+type CdpFetchResult = {
+  response: Response;
+  release: () => Promise<void>;
+};
+
 function createCdpSender(ws: WebSocket) {
   let nextId = 1;
   const pending = new Map<number, Pending>();
@@ -233,39 +232,47 @@ export async function fetchJson<T>(
   url: string,
   timeoutMs = CDP_HTTP_REQUEST_TIMEOUT_MS,
   init?: RequestInit,
+  ssrfPolicy?: SsrFPolicy,
 ): Promise<T> {
-  const res = await fetchCdpChecked(url, timeoutMs, init);
-  return (await res.json()) as T;
+  const { response, release } = await fetchCdpChecked(url, timeoutMs, init, ssrfPolicy);
+  try {
+    return (await response.json()) as T;
+  } finally {
+    await release();
+  }
 }
 
 export async function fetchCdpChecked(
   url: string,
   timeoutMs = CDP_HTTP_REQUEST_TIMEOUT_MS,
   init?: RequestInit,
-): Promise<Response> {
+  ssrfPolicy?: SsrFPolicy,
+): Promise<CdpFetchResult> {
   const ctrl = new AbortController();
   const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
-  let release: (() => Promise<void>) | undefined;
+  let guardedRelease: (() => Promise<void>) | undefined;
+  let released = false;
+  const release = async () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    clearTimeout(t);
+    await guardedRelease?.();
+  };
   try {
     const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
-    // Block redirects on all CDP HTTP paths (not just probes) because a
-    // redirect to an internal host is an SSRF vector regardless of whether
-    // the call is /json/version, /json/list, /json/activate, or /json/close.
-    const guarded = await withNoProxyForCdpUrl(url, () =>
-      fetchWithSsrFGuard({
+    const res = await withNoProxyForCdpUrl(url, async () => {
+      const guarded = await fetchWithSsrFGuard({
         url,
         init: { ...init, headers },
-        maxRedirects: 0,
-        policy: { allowPrivateNetwork: true },
         signal: ctrl.signal,
+        policy: ssrfPolicy ?? { allowPrivateNetwork: true },
         auditContext: "browser-cdp",
-      }),
-    );
-    release = guarded.release;
-    const res = guarded.response;
-    if (res.status >= 300 && res.status < 400) {
-      throw new Error("CDP endpoint redirects are not allowed");
-    }
+      });
+      guardedRelease = guarded.release;
+      return guarded.response;
+    });
     if (!res.ok) {
       if (res.status === 429) {
         // Do not reflect upstream response text into the error surface (log/agent injection risk)
@@ -273,23 +280,13 @@ export async function fetchCdpChecked(
       }
       throw new Error(`HTTP ${res.status}`);
     }
-    if (typeof res.arrayBuffer !== "function") {
-      return res;
-    }
-    const body = await res.arrayBuffer();
-    return new Response(body, {
-      headers: res.headers,
-      status: res.status,
-      statusText: res.statusText,
-    });
+    return { response: res, release };
   } catch (error) {
-    if (error instanceof Error && error.message.startsWith("Too many redirects")) {
-      throw new Error("CDP endpoint redirects are not allowed", { cause: error });
+    await release();
+    if (error instanceof SsrFBlockedError) {
+      throw new BrowserCdpEndpointBlockedError({ cause: error });
     }
     throw error;
-  } finally {
-    clearTimeout(t);
-    await release?.();
   }
 }
 
@@ -297,8 +294,10 @@ export async function fetchOk(
   url: string,
   timeoutMs = CDP_HTTP_REQUEST_TIMEOUT_MS,
   init?: RequestInit,
+  ssrfPolicy?: SsrFPolicy,
 ): Promise<void> {
-  await fetchCdpChecked(url, timeoutMs, init);
+  const { release } = await fetchCdpChecked(url, timeoutMs, init, ssrfPolicy);
+  await release();
 }
 
 export function openCdpWebSocket(

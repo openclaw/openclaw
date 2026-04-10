@@ -523,8 +523,8 @@ async function emitToolResultOutput(params: {
 export function handleToolExecutionStart(
   ctx: ToolHandlerContext,
   evt: AgentEvent & { toolName: string; toolCallId: string; args: unknown },
-) {
-  const continueAfterBlockReplyFlush = () => {
+): void | Promise<void> {
+  const continueAfterBlockReplyFlush = (): void | Promise<void> => {
     const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
     if (isPromiseLike<void>(onBlockReplyFlushResult)) {
       return onBlockReplyFlushResult.then(() => {
@@ -532,6 +532,7 @@ export function handleToolExecutionStart(
       });
     }
     continueToolExecutionStart();
+    return undefined;
   };
 
   const continueToolExecutionStart = () => {

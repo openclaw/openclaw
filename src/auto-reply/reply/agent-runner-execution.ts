@@ -172,6 +172,7 @@ function setFallbackSelectionStateField(
       }
       return false;
   }
+  throw new Error("Unsupported fallback selection state key");
 }
 
 function snapshotFallbackSelectionState(entry: SessionEntry): FallbackSelectionState {
@@ -628,19 +629,22 @@ export async function runAgentTurnWithFallback(params: {
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.getActiveSessionEntry()?.systemPromptReport,
   );
-  const persistFallbackCandidateSelection = async (provider: string, model: string) => {
+  const persistFallbackCandidateSelection = async (
+    provider: string,
+    model: string,
+  ): Promise<(() => Promise<void>) | undefined> => {
     if (
       !params.sessionKey ||
       !params.activeSessionStore ||
       (provider === params.followupRun.run.provider && model === params.followupRun.run.model)
     ) {
-      return;
+      return undefined;
     }
 
     const activeSessionEntry =
       params.getActiveSessionEntry() ?? params.activeSessionStore[params.sessionKey];
     if (!activeSessionEntry) {
-      return;
+      return undefined;
     }
 
     const previousState = snapshotFallbackSelectionState(activeSessionEntry);
@@ -652,7 +656,7 @@ export async function runAgentTurnWithFallback(params: {
     });
     const nextState = applied.nextState;
     if (!applied.updated || !nextState) {
-      return;
+      return undefined;
     }
     params.activeSessionStore[params.sessionKey] = activeSessionEntry;
 

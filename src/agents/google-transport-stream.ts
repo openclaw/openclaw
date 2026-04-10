@@ -209,6 +209,7 @@ function resolveThinkingLevel(level: ThinkingLevel, modelId: string): GoogleThin
     case "xhigh":
       return "HIGH";
   }
+  throw new Error("Unsupported thinking level");
 }
 
 function getDisabledThinkingConfig(modelId: string): Record<string, unknown> {

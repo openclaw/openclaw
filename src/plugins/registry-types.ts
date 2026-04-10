@@ -1,3 +1,4 @@
+import type { AgentHarness } from "../agents/harness/types.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OperatorScope } from "../gateway/method-scopes.js";
 import type { GatewayRequestHandlers } from "../gateway/server-methods/types.js";
@@ -132,6 +133,13 @@ export type PluginWebSearchProviderRegistration =
   PluginOwnedProviderRegistration<WebSearchProviderPlugin>;
 export type PluginMemoryEmbeddingProviderRegistration =
   PluginOwnedProviderRegistration<MemoryEmbeddingProviderAdapter>;
+export type PluginAgentHarnessRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  harness: AgentHarness;
+  source: string;
+  rootDir?: string;
+};
 
 export type PluginHookRegistration = {
   pluginId: string;
@@ -228,6 +236,7 @@ export type PluginRecord = {
   webFetchProviderIds: string[];
   webSearchProviderIds: string[];
   memoryEmbeddingProviderIds: string[];
+  agentHarnessIds: string[];
   gatewayMethods: string[];
   cliCommands: string[];
   services: string[];
@@ -260,6 +269,7 @@ export type PluginRegistry = {
   webFetchProviders: PluginWebFetchProviderRegistration[];
   webSearchProviders: PluginWebSearchProviderRegistration[];
   memoryEmbeddingProviders: PluginMemoryEmbeddingProviderRegistration[];
+  agentHarnesses: PluginAgentHarnessRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
   gatewayMethodScopes?: Partial<Record<string, OperatorScope>>;
   httpRoutes: PluginHttpRouteRegistration[];
