@@ -184,6 +184,7 @@ async function fetchGeminiEmbeddingPayload(params: {
       return await withRemoteHttpResponse({
         url: params.endpoint,
         ssrfPolicy: params.client.ssrfPolicy,
+        fetchImpl: params.client.fetchImpl,
         init: {
           method: "POST",
           headers,
