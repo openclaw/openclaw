@@ -146,6 +146,15 @@ describe("dreaming view", () => {
     ).toContain("grounded-led");
   });
 
+  it("keeps the tab bar above the scene trace shell", () => {
+    const container = renderInto(buildProps());
+    const page = container.querySelector(".dreams-page");
+    expect(page?.firstElementChild?.matches("nav.dreams__tabs")).toBe(true);
+    expect(page?.children[1]?.matches("section.dreams")).toBe(true);
+    expect(container.querySelector(".dreams__trace")).not.toBeNull();
+    expect(container.querySelectorAll(".dreams__trace-section")).toHaveLength(4);
+  });
+
   it("renders scene backfill, reset, and clear grounded controls", () => {
     const container = renderInto(buildProps());
     const buttons = [...container.querySelectorAll("button")].map((node) =>
@@ -264,6 +273,10 @@ describe("dreaming view", () => {
       "Reflections",
       "Candidates + Possible Lasting Updates",
     ]);
+    expect(container.querySelector(".dreams-diary__grid")).not.toBeNull();
+    expect(container.querySelectorAll(".dreams-diary__grid > .dreams-diary__panel")).toHaveLength(
+      3,
+    );
     expect(container.querySelector(".dreams-diary__panel-subtitle")?.textContent).toContain(
       "Candidates",
     );

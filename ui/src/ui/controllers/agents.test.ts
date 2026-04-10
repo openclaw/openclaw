@@ -223,6 +223,66 @@ describe("loadToolsEffective", () => {
     expect(state.toolsEffectiveError).toContain("gateway unavailable");
     expect(state.toolsEffectiveLoading).toBe(false);
   });
+
+  it("uses the catalog provider when the active session reports a stale provider", async () => {
+    const { state, request } = createState();
+    const sessionsResult = state.sessionsResult!;
+    state.sessionsResult = {
+      ts: sessionsResult.ts,
+      path: sessionsResult.path,
+      count: 1,
+      defaults: sessionsResult.defaults,
+      sessions: [
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: 0,
+          model: "deepseek-chat",
+          modelProvider: "zai",
+        },
+      ],
+    };
+    state.chatModelCatalog = [{ id: "deepseek-chat", name: "DeepSeek Chat", provider: "deepseek" }];
+    request.mockResolvedValue({
+      agentId: "main",
+      profile: "coding",
+      groups: [],
+    });
+
+    await loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
+
+    expect(state.toolsEffectiveResultKey).toBe("main:main:model=deepseek/deepseek-chat");
+  });
+
+  it("preserves already-qualified session models when the active session provider is stale and the catalog is empty", async () => {
+    const { state, request } = createState();
+    const sessionsResult = state.sessionsResult!;
+    state.sessionsResult = {
+      ts: sessionsResult.ts,
+      path: sessionsResult.path,
+      count: 1,
+      defaults: sessionsResult.defaults,
+      sessions: [
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: 0,
+          model: "openai/gpt-5-mini",
+          modelProvider: "zai",
+        },
+      ],
+    };
+    state.chatModelCatalog = [];
+    request.mockResolvedValue({
+      agentId: "main",
+      profile: "coding",
+      groups: [],
+    });
+
+    await loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
+
+    expect(state.toolsEffectiveResultKey).toBe("main:main:model=openai/gpt-5-mini");
+  });
 });
 
 describe("saveAgentsConfig", () => {
