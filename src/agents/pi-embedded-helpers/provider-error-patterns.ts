@@ -37,6 +37,9 @@ export const PROVIDER_CONTEXT_OVERFLOW_PATTERNS: readonly RegExp[] = [
 
   // Generic "input too long" pattern that isn't covered by existing checks
   /\binput (?:is )?too long for (?:the )?model\b/i,
+
+  // ZhipuAI/GLM-4.7 returns "Input length X exceeds the maximum length Y" format.
+  /\binput length \d+ exceeds the maximum length \d+\b/i,
 ];
 
 /**

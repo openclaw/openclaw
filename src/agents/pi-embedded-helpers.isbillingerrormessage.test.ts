@@ -363,6 +363,20 @@ describe("isContextOverflowError", () => {
     }
   });
 
+  it("matches ZhipuAI/Volcano Engine 'Input length X exceeds maximum length Y' format", () => {
+    // ZhipuAI GLM-4.7 and Volcano Engine DeepSeek V3.2 return this specific format.
+    // Example: "HTTP 400: Input length 139796 exceeds the maximum length 131072"
+    const samples = [
+      "HTTP 400: Input length 139796 exceeds the maximum length 131072",
+      "Input length 139796 exceeds the maximum length 131072",
+      "Input length 200000 exceeds the maximum length 128000",
+      "HTTP 400: Input length 500 exceeds the maximum length 400",
+    ];
+    for (const sample of samples) {
+      expect(isContextOverflowError(sample)).toBe(true);
+    }
+  });
+
   it("ignores normal conversation text mentioning context overflow", () => {
     // These are legitimate conversation snippets, not error messages
     expect(isContextOverflowError("Let's investigate the context overflow bug")).toBe(false);
