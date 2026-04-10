@@ -1,6 +1,6 @@
 {
   "id": "aep-safety",
-  "skills": ["../../skills/aep-safety"],
+  "skills": ["."],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
