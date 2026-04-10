@@ -1408,6 +1408,7 @@ export async function runEmbeddedAttempt(
         buildEmbeddedSubscriptionParams({
           session: activeSession,
           runId: params.runId,
+          initialReplayInvalid: params.initialReplayInvalid,
           hookRunner: getGlobalHookRunner() ?? undefined,
           verboseLevel: params.verboseLevel,
           reasoningMode: params.reasoningLevel ?? "off",

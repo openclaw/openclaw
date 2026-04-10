@@ -792,6 +792,8 @@ export async function handleToolExecutionEnd(
     } else {
       ctx.state.lastToolError = undefined;
     }
+  } else if (callSummary?.mutatingAction) {
+    ctx.state.replayInvalid = true;
   }
 
   // Commit messaging tool text on success, discard on error.

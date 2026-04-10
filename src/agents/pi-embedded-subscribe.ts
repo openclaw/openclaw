@@ -105,7 +105,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     compactionRetryReject: undefined,
     compactionRetryPromise: null,
     unsubscribed: false,
-    replayInvalid: false,
+    replayInvalid: params.initialReplayInvalid === true,
     livenessState: "working",
     messagingToolSentTexts: [],
     messagingToolSentTextsNormalized: [],
@@ -694,7 +694,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.pendingToolAudioAsVoice = false;
     state.deterministicApprovalPromptPending = false;
     state.deterministicApprovalPromptSent = false;
-    state.replayInvalid = false;
+    state.replayInvalid = params.initialReplayInvalid === true;
     state.livenessState = "working";
     resetAssistantMessageState(0);
   };
