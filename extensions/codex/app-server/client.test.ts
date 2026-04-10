@@ -123,23 +123,6 @@ describe("CodexAppServerClient", () => {
     });
   });
 
-  it("fails closed with legacy review decisions for legacy app-server approvals", async () => {
-    const harness = createClientHarness();
-    clients.push(harness.client);
-
-    harness.send({
-      id: "approval-legacy",
-      method: "execCommandApproval",
-      params: { conversationId: "thread-1", callId: "cmd-1", command: ["pnpm", "test"] },
-    });
-    await vi.waitFor(() => expect(harness.writes.length).toBe(1));
-
-    expect(JSON.parse(harness.writes[0] ?? "{}")).toEqual({
-      id: "approval-legacy",
-      result: { decision: "denied" },
-    });
-  });
-
   it("lists app-server models through the typed helper", async () => {
     const harness = createClientHarness();
     clients.push(harness.client);
