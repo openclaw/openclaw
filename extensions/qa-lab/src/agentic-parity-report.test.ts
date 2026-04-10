@@ -137,6 +137,7 @@ describe("qa agentic parity report", () => {
       candidateSummary: {
         scenarios: [
           { name: "Approval turn tool followthrough", status: "pass" },
+          { name: "Compaction retry after mutating tool", status: "pass" },
           { name: "Model switch with tool continuity", status: "pass" },
           { name: "Source and docs discovery report", status: "pass" },
           { name: "Image understanding from attachment", status: "pass" },
@@ -145,6 +146,7 @@ describe("qa agentic parity report", () => {
       baselineSummary: {
         scenarios: [
           { name: "Approval turn tool followthrough", status: "pass" },
+          { name: "Compaction retry after mutating tool", status: "pass" },
           { name: "Model switch with tool continuity", status: "pass" },
           { name: "Source and docs discovery report", status: "pass" },
           { name: "Image understanding from attachment", status: "pass" },

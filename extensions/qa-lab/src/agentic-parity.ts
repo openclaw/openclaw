@@ -17,6 +17,10 @@ export const QA_AGENTIC_PARITY_SCENARIOS = [
     id: "image-understanding-attachment",
     title: "Image understanding from attachment",
   },
+  {
+    id: "compaction-retry-mutating-tool",
+    title: "Compaction retry after mutating tool",
+  },
 ] as const;
 
 export const QA_AGENTIC_PARITY_SCENARIO_IDS = QA_AGENTIC_PARITY_SCENARIOS.map(({ id }) => id);

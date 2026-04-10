@@ -105,6 +105,7 @@ PR D is the proof layer. It should not be the reason runtime-correctness PRs are
 ### PR D
 
 - the scenario pack is understandable and reproducible
+- the pack includes a mutating replay-safety lane, not only read-only flows
 - reports are readable by humans and automation
 - parity claims are evidence-backed, not anecdotal
 
@@ -141,6 +142,16 @@ The parity harness is not the only evidence source. Keep this split explicit in 
 
 - PR D owns the scenario-based GPT-5.4 vs Opus 4.6 comparison
 - PR B deterministic suites still own auth/proxy/DNS and full-access truthfulness evidence
+
+## Goal-to-evidence map
+
+| Completion gate item                     | Primary owner | Review artifact                                                     |
+| ---------------------------------------- | ------------- | ------------------------------------------------------------------- |
+| No plan-only stalls                      | PR A          | strict-agentic runtime tests and `approval-turn-tool-followthrough` |
+| No fake progress or fake tool completion | PR A + PR D   | parity fake-success count plus scenario-level report details        |
+| No false `/elevated full` guidance       | PR B          | deterministic runtime-truthfulness suites                           |
+| Replay/liveness failures remain explicit | PR C + PR D   | lifecycle/replay suites plus `compaction-retry-mutating-tool`       |
+| GPT-5.4 matches or beats Opus 4.6        | PR D          | `qa-agentic-parity-report.md` and `qa-agentic-parity-summary.json`  |
 
 ## Reviewer shorthand: before vs after
 

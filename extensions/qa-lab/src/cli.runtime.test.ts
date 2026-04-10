@@ -334,6 +334,7 @@ describe("qa cli runtime", () => {
           "model-switch-tool-continuity",
           "source-docs-discovery-report",
           "image-understanding-attachment",
+          "compaction-retry-mutating-tool",
         ],
       }),
     );
