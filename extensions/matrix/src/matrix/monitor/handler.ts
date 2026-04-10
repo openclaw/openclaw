@@ -412,6 +412,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     const eventId = typeof event.event_id === "string" ? event.event_id.trim() : "";
     let claimedInboundEvent = false;
     let draftStreamRef: ReturnType<typeof createMatrixDraftStream> | undefined;
+    let draftConsumed = false;
     try {
       const eventType = event.type;
       if (eventType === EventType.RoomMessageEncrypted) {
@@ -1330,9 +1331,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const pendingDraftBoundaries: PendingDraftBoundary[] = [];
       const latestQueuedDraftBoundaryOffsets = new Map<number, number>();
       let currentDraftReplyToId = draftReplyToId;
-      // Set after the first final payload consumes the draft event so
-      // subsequent finals go through normal delivery.
-      let draftConsumed = false;
+      // Set after the first final payload consumes or discards the draft event
+      // so subsequent finals go through normal delivery.
 
       const getDisplayableDraftText = () => {
         const nextDraftBoundaryOffset = pendingDraftBoundaries.find(
@@ -1533,6 +1533,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                   mediaLocalRoots,
                   tableMode,
                 });
+                if (draftEventId) {
+                  draftConsumed = true;
+                }
               }
 
               if (info.kind === "block") {
@@ -1662,7 +1665,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       // model run throws or times out mid-stream.
       if (draftStreamRef) {
         const draftEventId = await draftStreamRef.stop().catch(() => undefined);
-        if (draftEventId && draftStreamRef.mustDeliverFinalNormally()) {
+        if (draftEventId && !draftConsumed) {
           await redactMatrixDraftEvent(client, roomId, draftEventId);
         }
       }

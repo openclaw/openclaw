@@ -2531,11 +2531,13 @@ describe("matrix monitor handler draft streaming", () => {
         .mockResolvedValue({ messageId: "$draft1", roomId: "!room" });
       editMessageMatrixMock.mockReset().mockResolvedValue("$edited");
       deliverMatrixRepliesMock.mockReset().mockResolvedValue(undefined);
+      const redactEventMock = vi.fn(async () => "$redacted");
 
       let capturedReplyOpts: ReplyOpts | undefined;
 
       const { handler } = createMatrixHandlerTestHarness({
         streaming: "quiet",
+        client: { redactEvent: redactEventMock },
         createReplyDispatcherWithTyping: () => ({
           dispatcher: { markComplete: () => {}, waitForIdle: async () => {} },
           replyOptions: {},
@@ -2568,6 +2570,8 @@ describe("matrix monitor handler draft streaming", () => {
         createMatrixTextMessageEvent({ eventId: "$msg1", body: "hello" }),
       );
 
+      expect(redactEventMock).toHaveBeenCalledWith("!room:example.org", "$draft1");
+
       // After handler exits, draft stream timer must not fire.
       sendSingleTextMessageMatrixMock.mockClear();
       editMessageMatrixMock.mockClear();
@@ -2577,6 +2581,52 @@ describe("matrix monitor handler draft streaming", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("redacts partial live drafts when generation aborts mid-stream", async () => {
+    sendSingleTextMessageMatrixMock
+      .mockReset()
+      .mockResolvedValue({ messageId: "$draft1", roomId: "!room" });
+    editMessageMatrixMock.mockReset().mockResolvedValue("$edited");
+    deliverMatrixRepliesMock.mockReset().mockResolvedValue(undefined);
+
+    const redactEventMock = vi.fn(async () => "$redacted");
+    let capturedReplyOpts: ReplyOpts | undefined;
+
+    const { handler } = createMatrixHandlerTestHarness({
+      streaming: "partial",
+      client: { redactEvent: redactEventMock },
+      createReplyDispatcherWithTyping: () => ({
+        dispatcher: { markComplete: () => {}, waitForIdle: async () => {} },
+        replyOptions: {},
+        markDispatchIdle: () => {},
+        markRunComplete: () => {},
+      }),
+      dispatchReplyFromConfig: vi.fn(async (args: { replyOptions?: ReplyOpts }) => {
+        capturedReplyOpts = args?.replyOptions;
+        capturedReplyOpts?.onPartialReply?.({ text: "partial" });
+        await vi.waitFor(() => {
+          expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+        });
+        throw new Error("model timeout");
+      }) as never,
+      withReplyDispatcher: async <T>(params: {
+        dispatcher: { markComplete?: () => void; waitForIdle?: () => Promise<void> };
+        run: () => Promise<T>;
+        onSettled?: () => void | Promise<void>;
+      }) => {
+        const result = await params.run();
+        await params.onSettled?.();
+        return result;
+      },
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({ eventId: "$msg1", body: "hello" }),
+    );
+
+    expect(redactEventMock).toHaveBeenCalledWith("!room:example.org", "$draft1");
   });
 
   it("skips compaction notices in draft finalization", async () => {
