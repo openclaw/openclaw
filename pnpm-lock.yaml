@@ -973,6 +973,12 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/qwen:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/roam:
     dependencies:
       zod:
@@ -985,12 +991,6 @@ importers:
       openclaw:
         specifier: workspace:*
         version: link:../..
-
-  extensions/qwen:
-    devDependencies:
-      '@openclaw/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
 
   extensions/runway:
     devDependencies:
