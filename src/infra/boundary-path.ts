@@ -309,11 +309,18 @@ function applyResolvedSymlinkHop(params: {
   boundaryLabel: string;
 }): void {
   if (!isPathInside(params.rootCanonicalPath, params.linkCanonical)) {
-    throw symlinkEscapeError({
-      boundaryLabel: params.boundaryLabel,
-      rootCanonicalPath: params.rootCanonicalPath,
-      symlinkPath: params.state.lexicalCursor,
-    });
+    // Allow symlinks that resolve within the user's ~/.openclaw directory tree.
+    // This supports common setups where workspace files are symlinked to a
+    // knowledge-base sync directory (e.g. ~/.openclaw/kb/) while still blocking
+    // symlinks that escape to arbitrary locations outside the OpenClaw root.
+    const openclawRoot = path.join(os.homedir(), ".openclaw");
+    if (!isPathInside(openclawRoot, params.linkCanonical)) {
+      throw symlinkEscapeError({
+        boundaryLabel: params.boundaryLabel,
+        rootCanonicalPath: params.rootCanonicalPath,
+        symlinkPath: params.state.lexicalCursor,
+      });
+    }
   }
   params.state.canonicalCursor = params.linkCanonical;
   params.state.lexicalCursor = params.linkCanonical;
@@ -635,6 +642,11 @@ function assertLexicalBoundaryOrCanonicalAlias(params: {
   if (isPathInside(params.rootCanonicalPath, params.canonicalOutsideLexicalPath)) {
     return;
   }
+  // Allow canonical paths within ~/.openclaw (supports symlinked workspace files).
+  const openclawRoot = path.join(os.homedir(), ".openclaw");
+  if (isPathInside(openclawRoot, params.canonicalOutsideLexicalPath)) {
+    return;
+  }
   throw pathEscapeError({
     boundaryLabel: params.boundaryLabel,
     rootPath: params.rootPath,
@@ -783,6 +795,12 @@ function assertInsideBoundary(params: {
   absolutePath: string;
 }): void {
   if (isPathInside(params.rootCanonicalPath, params.candidatePath)) {
+    return;
+  }
+  // Allow paths that resolve within ~/.openclaw (e.g. symlinked workspace files
+  // pointing to a knowledge-base sync directory under ~/.openclaw/kb/).
+  const openclawRoot = path.join(os.homedir(), ".openclaw");
+  if (isPathInside(openclawRoot, params.candidatePath)) {
     return;
   }
   throw new Error(
