@@ -21,8 +21,10 @@ vi.mock("../agents/bootstrap-files.js", () => ({
   resolveBootstrapContextForRun,
 }));
 
-vi.mock("../agents/pi-embedded-helpers.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/pi-embedded-helpers.js")>();
+vi.mock("../agents/pi-embedded-helpers.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/pi-embedded-helpers.js")>(
+    "../agents/pi-embedded-helpers.js",
+  );
   return {
     ...actual,
     resolveBootstrapMaxChars,

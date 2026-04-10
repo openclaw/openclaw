@@ -39,8 +39,8 @@ describe("doctor missing default account binding warning", () => {
             channels: {
               telegram: {
                 accounts: {
-                  alerts: {},
-                  work: {},
+                  alerts: { botToken: "test-alerts-token" },
+                  work: { botToken: "test-work-token" },
                 },
               },
             },
@@ -69,8 +69,8 @@ describe("doctor missing default account binding warning", () => {
             channels: {
               telegram: {
                 accounts: {
-                  alerts: {},
-                  work: {},
+                  alerts: { botToken: "test-alerts-token" },
+                  work: { botToken: "test-work-token" },
                 },
               },
             },
@@ -101,8 +101,8 @@ describe("doctor missing default account binding warning", () => {
               telegram: {
                 defaultAccount: "missing",
                 accounts: {
-                  alerts: {},
-                  work: {},
+                  alerts: { botToken: "test-alerts-token" },
+                  work: { botToken: "test-work-token" },
                 },
               },
             },
