@@ -286,20 +286,25 @@ function resolveSlackRoutingContext(params: {
   const threadContext = resolveSlackThreadContext({ message, replyToMode });
   const threadTs = threadContext.incomingThreadTs;
   const isThreadReply = threadContext.isThreadReply;
-  // Keep true thread replies thread-scoped, but preserve channel-level sessions
-  // for top-level room turns when replyToMode is off.
-  // For DMs, preserve existing auto-thread behavior when replyToMode="all".
+  // Derive a single canonical thread id used for both session routing and reply
+  // delivery so they always point at the same conversation.
+  //
+  // For true thread replies (thread_ts present and differs from message ts),
+  // route into the parent thread session.
+  //
+  // For top-level messages when replyToMode="all", use the message ts as the
+  // thread id. This ensures the session key (`baseKey:thread:<messageTs>`)
+  // matches the `messageThreadId` used for reply delivery, preventing dual
+  // processing through both a parent channel session and a thread session.
+  //
+  // When replyToMode is "off" (or "first" without a thread), top-level channel
+  // messages stay on the shared per-channel session for continuity.
   const autoThreadId =
     !isThreadReply && replyToMode === "all" && threadContext.messageTs
       ? threadContext.messageTs
       : undefined;
-  // Only fork channel/group messages into thread-specific sessions when they are
-  // actual thread replies (thread_ts present, different from message ts).
-  // Top-level channel messages must stay on the per-channel session for continuity.
-  // Before this fix, every channel message used its own ts as threadId, creating
-  // isolated sessions per message (regression from #10686).
-  const roomThreadId = isThreadReply && threadTs ? threadTs : undefined;
-  const canonicalThreadId = isRoomish ? roomThreadId : isThreadReply ? threadTs : autoThreadId;
+  const canonicalThreadId =
+    isThreadReply && threadTs ? threadTs : autoThreadId;
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey: route.sessionKey,
     threadId: canonicalThreadId,
