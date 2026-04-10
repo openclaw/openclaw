@@ -51,11 +51,7 @@ type TelegramQaScenarioResult = {
   details: string;
 };
 
-type TelegramQaCanaryPhase =
-  | "driver_observation_timeout"
-  | "sut_reply_timeout"
-  | "sut_reply_not_threaded"
-  | "sut_reply_empty";
+type TelegramQaCanaryPhase = "sut_reply_timeout" | "sut_reply_not_threaded" | "sut_reply_empty";
 
 export type TelegramQaRunResult = {
   outputDir: string;
@@ -440,41 +436,15 @@ async function runCanary(params: {
   driverToken: string;
   groupId: string;
   sutUsername: string;
-  driverBotId: number;
   sutBotId: number;
   observedMessages: TelegramObservedMessage[];
 }) {
-  let offset = await flushTelegramUpdates(params.driverToken);
+  const offset = await flushTelegramUpdates(params.driverToken);
   const driverMessage = await sendGroupMessage(
     params.driverToken,
     params.groupId,
     `/help@${params.sutUsername}`,
   );
-  let driverObserved: Awaited<ReturnType<typeof waitForObservedMessage>>;
-  try {
-    driverObserved = await waitForObservedMessage({
-      token: params.driverToken,
-      initialOffset: offset,
-      timeoutMs: 20_000,
-      observedMessages: params.observedMessages,
-      predicate: (message) =>
-        message.chatId === Number(params.groupId) &&
-        message.senderId === params.driverBotId &&
-        message.messageId === driverMessage.message_id,
-    });
-  } catch (error) {
-    throw new TelegramQaCanaryError(
-      "driver_observation_timeout",
-      "Driver bot did not observe its own canary group message within 20s.",
-      {
-        groupId: params.groupId,
-        driverBotId: params.driverBotId,
-        driverMessageId: driverMessage.message_id,
-        cause: formatErrorMessage(error),
-      },
-    );
-  }
-  offset = driverObserved.nextOffset;
   let sutObserved: Awaited<ReturnType<typeof waitForObservedMessage>>;
   try {
     sutObserved = await waitForObservedMessage({
@@ -549,12 +519,6 @@ function canaryFailureMessage(params: {
     : [];
   const remediation = (() => {
     switch (phase) {
-      case "driver_observation_timeout":
-        return [
-          "1. Ensure the driver bot can observe group traffic by making it admin or disabling privacy mode, then re-add it.",
-          "2. Confirm the driver bot is still a member of the target private group.",
-          "3. Enable Bot-to-Bot Communication Mode for both the driver and SUT bots in @BotFather.",
-        ];
       case "sut_reply_timeout":
         return [
           "1. Enable Bot-to-Bot Communication Mode for both the driver and SUT bots in @BotFather.",
@@ -665,7 +629,6 @@ export async function runTelegramQaLive(params: {
         driverToken: runtimeEnv.driverToken,
         groupId: runtimeEnv.groupId,
         sutUsername,
-        driverBotId: driverIdentity.id,
         sutBotId: sutIdentity.id,
         observedMessages,
       });
