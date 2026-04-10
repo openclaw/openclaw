@@ -233,8 +233,18 @@ export function createWeComMcpTool(accountId = "default") {
     },
     async execute(_toolCallId: string, params: unknown) {
       const p = params as WeComToolsParams;
-      // Use per-request accountId if provided; otherwise fall back to the default from createWeComMcpTool
-      const resolvedAccountId = p.accountId?.trim() || accountId;
+      // Resolve accountId dynamically: per-request param → runtime default → factory fallback
+      let resolvedAccountId = p.accountId?.trim() || "";
+      if (!resolvedAccountId) {
+        try {
+          const { getWeComRuntime } = await import("../runtime.js");
+          const { resolveDefaultWeComAccountId } = await import("../accounts.js");
+          const cfg = getWeComRuntime().config.readConfigFile();
+          resolvedAccountId = resolveDefaultWeComAccountId(cfg);
+        } catch {
+          resolvedAccountId = accountId; // factory fallback
+        }
+      }
       console.log(
         `[mcp] execute: action=${p.action}, category=${p.category}` +
           (p.method ? `, method=${p.method}` : "") +

@@ -28,6 +28,7 @@
  */
 
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import type { CallInterceptor, CallContext, BeforeCallOptions } from "./types.js";
 
 // ============================================================================
@@ -113,7 +114,19 @@ async function resolvePages(
 
       let fileContent: string;
       try {
-        fileContent = await fs.readFile(filePath, "utf-8");
+        // Validate path against trusted roots to prevent arbitrary file reads
+        const resolved = path.resolve(filePath);
+        const trustedRoots = [process.cwd(), "/tmp"];
+        const inTrustedRoot = trustedRoots.some((root) => {
+          const r = path.resolve(root);
+          return resolved === r || resolved.startsWith(r + path.sep);
+        });
+        if (!inTrustedRoot) {
+          throw new Error(
+            `路径 "${filePath}" 不在允许的目录范围内（仅允许工作目录和 /tmp）`,
+          );
+        }
+        fileContent = await fs.readFile(resolved, "utf-8");
       } catch (err) {
         throw new Error(
           `smartpage_create: pages[${index}] 无法读取文件 "${filePath}": ${err instanceof Error ? err.message : String(err)}`,
