@@ -85,4 +85,48 @@ describe("createChannelOutboundRuntimeSend", () => {
       }),
     );
   });
+
+  it("falls back to sendText when media is present but sendMedia is unavailable", async () => {
+    const sendText = vi.fn(async () => ({ channel: "whatsapp", messageId: "wa-3" }));
+    mocks.loadChannelOutboundAdapter.mockResolvedValue({
+      sendText,
+    });
+
+    const { createChannelOutboundRuntimeSend } = await import("./channel-outbound-send.js");
+    const mediaReadFile = vi.fn(async () => Buffer.from("pdf"));
+    const runtimeSend = createChannelOutboundRuntimeSend({
+      channelId: "whatsapp" as never,
+      unavailableMessage: "unavailable",
+    });
+
+    await runtimeSend.sendMessage("+15551234567", "caption", {
+      cfg: {},
+      mediaUrl: "file:///tmp/test.pdf",
+      mediaAccess: {
+        localRoots: ["/tmp/workspace"],
+        readFile: mediaReadFile,
+      },
+      mediaLocalRoots: ["/tmp/fallback-root"],
+      mediaReadFile,
+      accountId: "default",
+      forceDocument: true,
+    });
+
+    expect(sendText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: {},
+        to: "+15551234567",
+        text: "caption",
+        mediaUrl: "file:///tmp/test.pdf",
+        mediaAccess: {
+          localRoots: ["/tmp/workspace"],
+          readFile: mediaReadFile,
+        },
+        mediaLocalRoots: ["/tmp/fallback-root"],
+        mediaReadFile,
+        accountId: "default",
+        forceDocument: true,
+      }),
+    );
+  });
 });
