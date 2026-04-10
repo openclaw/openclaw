@@ -455,7 +455,7 @@ hook instead.
 - If plugin config exists but the plugin is **disabled**, the config is kept and
   a **warning** is surfaced in Doctor + logs.
 
-See [Configuration reference](/gateway/configuration) for the full `plugins.*` schema.
+See [Configuration reference](/gateway/configuration-reference) for the full `plugins.*` schema.
 
 ## Notes
 
