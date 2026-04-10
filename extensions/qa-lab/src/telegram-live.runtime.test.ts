@@ -135,25 +135,19 @@ describe("telegram live qa runtime", () => {
       },
     });
 
-    expect(
-      __testing.canaryFailureMessage({
-        error,
-        groupId: "-100123",
-        driverBotId: 42,
-        driverUsername: "driver_bot",
-        sutBotId: 88,
-        sutUsername: "sut_bot",
-      }),
-    ).toContain("Phase: sut_reply_timeout");
-    expect(
-      __testing.canaryFailureMessage({
-        error,
-        groupId: "-100123",
-        driverBotId: 42,
-        driverUsername: "driver_bot",
-        sutBotId: 88,
-        sutUsername: "sut_bot",
-      }),
-    ).toContain("- driverMessageId: 55");
+    const message = __testing.canaryFailureMessage({
+      error,
+      groupId: "-100123",
+      driverBotId: 42,
+      driverUsername: "driver_bot",
+      sutBotId: 88,
+      sutUsername: "sut_bot",
+    });
+    expect(message).toContain("Phase: sut_reply_timeout");
+    expect(message).toContain("- driverMessageId: 55");
+    expect(message).not.toContain("- sutBotId: 88\n- sutBotId: 88");
+    expect(message).toContain(
+      "Confirm the SUT bot is present in the target private group and can receive /help@BotUsername commands there.",
+    );
   });
 });

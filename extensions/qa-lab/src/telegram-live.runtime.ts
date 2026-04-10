@@ -535,11 +535,53 @@ function canaryFailureMessage(params: {
   const error = params.error;
   const details = formatErrorMessage(error);
   const phase = isTelegramQaCanaryError(error) ? error.phase : "unknown";
+  const canonicalContext = new Set([
+    "groupId",
+    "driverBotId",
+    "driverUsername",
+    "sutBotId",
+    "sutUsername",
+  ]);
   const context = isTelegramQaCanaryError(error)
     ? Object.entries(error.context)
-        .filter(([, value]) => value !== undefined && value !== "")
+        .filter(([key, value]) => value !== undefined && value !== "" && !canonicalContext.has(key))
         .map(([key, value]) => `- ${key}: ${String(value)}`)
     : [];
+  const remediation = (() => {
+    switch (phase) {
+      case "driver_observation_timeout":
+        return [
+          "1. Ensure the driver bot can observe group traffic by making it admin or disabling privacy mode, then re-add it.",
+          "2. Confirm the driver bot is still a member of the target private group.",
+          "3. Enable Bot-to-Bot Communication Mode for both the driver and SUT bots in @BotFather.",
+        ];
+      case "sut_reply_timeout":
+        return [
+          "1. Enable Bot-to-Bot Communication Mode for both the driver and SUT bots in @BotFather.",
+          "2. Confirm the SUT bot is present in the target private group and can receive /help@BotUsername commands there.",
+          "3. Confirm the QA child gateway started the SUT Telegram account with the expected token.",
+        ];
+      case "sut_reply_not_threaded":
+        return [
+          "1. Check whether the SUT bot is replying in the group without threading to the driver message.",
+          "2. Confirm the Telegram native command path preserves reply-to behavior for group commands.",
+          "3. Inspect the observed messages artifact for the mismatched SUT message id and reply target.",
+        ];
+      case "sut_reply_empty":
+        return [
+          "1. Inspect the observed messages artifact to confirm whether the SUT sent media-only or blank text.",
+          "2. Check whether the Telegram native command response path produced an empty or suppressed reply.",
+          "3. Confirm the SUT command completed successfully in gateway logs.",
+        ];
+      default:
+        return [
+          "1. Enable Bot-to-Bot Communication Mode for both the driver and SUT bots in @BotFather.",
+          "2. Ensure the driver bot can observe bot traffic in the private group by making it admin or disabling privacy mode, then re-add it.",
+          "3. Ensure both bots are members of the same private group.",
+          "4. Confirm the SUT bot is allowed to receive /help@BotUsername commands in that group.",
+        ];
+    }
+  })();
   return [
     "Telegram QA canary failed.",
     `Phase: ${phase}`,
@@ -552,10 +594,7 @@ function canaryFailureMessage(params: {
     `- sutUsername: ${params.sutUsername}`,
     ...context,
     "Remediation:",
-    "1. Enable Bot-to-Bot Communication Mode for both the driver and SUT bots in @BotFather.",
-    "2. Ensure the driver bot can observe bot traffic in the private group by making it admin or disabling privacy mode, then re-add it.",
-    "3. Ensure both bots are members of the same private group.",
-    "4. Confirm the SUT bot is allowed to receive /help@BotUsername commands in that group.",
+    ...remediation,
   ].join("\n");
 }
 
