@@ -1,5 +1,10 @@
 import { CDP_JSON_NEW_TIMEOUT_MS } from "./cdp-timeouts.js";
-import { fetchJson, fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js";
+import {
+  assertCdpEndpointAllowed,
+  fetchJson,
+  fetchOk,
+  normalizeCdpHttpBaseForJsonEndpoints,
+} from "./cdp.helpers.js";
 import { appendCdpPath, createTargetViaCdp, normalizeCdpWsUrl } from "./cdp.js";
 import { listChromeMcpTabs, openChromeMcpTab } from "./chrome-mcp.js";
 import type { ResolvedBrowserProfile } from "./config.js";
@@ -64,6 +69,9 @@ export function createProfileTabOps({
 }: TabOpsDeps): ProfileTabOps {
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(profile.cdpUrl);
   const capabilities = getBrowserProfileCapabilities(profile);
+  const assertProfileCdpEndpointAllowed = async (): Promise<void> => {
+    await assertCdpEndpointAllowed(profile.cdpUrl, state().resolved.ssrfPolicy);
+  };
 
   const listTabs = async (): Promise<BrowserTab[]> => {
     if (capabilities.usesChromeMcp) {
@@ -74,7 +82,13 @@ export function createProfileTabOps({
       const mod = await getPwAiModule({ mode: "strict" });
       const listPagesViaPlaywright = (mod as Partial<PwAiModule> | null)?.listPagesViaPlaywright;
       if (typeof listPagesViaPlaywright === "function") {
-        const pages = await listPagesViaPlaywright({ cdpUrl: profile.cdpUrl });
+        // SSRF check runs inside connectBrowser on cache miss; skip the
+        // redundant pre-call DNS lookup so cached sessions are not broken
+        // by transient resolver failures.
+        const pages = await listPagesViaPlaywright({
+          cdpUrl: profile.cdpUrl,
+          ssrfPolicy: state().resolved.ssrfPolicy,
+        });
         return pages.map((p) => ({
           targetId: p.targetId,
           title: p.title,
@@ -84,6 +98,7 @@ export function createProfileTabOps({
       }
     }
 
+    await assertProfileCdpEndpointAllowed();
     const raw = await fetchJson<
       Array<{
         id?: string;
@@ -123,6 +138,7 @@ export function createProfileTabOps({
 
     const candidates = pageTabs.filter((tab) => tab.targetId !== keepTargetId);
     const excessCount = pageTabs.length - MANAGED_BROWSER_PAGE_TAB_LIMIT;
+    await assertProfileCdpEndpointAllowed();
     for (const tab of candidates.slice(0, excessCount)) {
       void fetchOk(appendCdpPath(cdpHttpBase, `/json/close/${tab.targetId}`)).catch(() => {
         // best-effort cleanup only
@@ -210,6 +226,7 @@ export function createProfileTabOps({
           return endpointUrl.toString();
         })()
       : `${endpointUrl.toString()}?${encoded}`;
+    await assertProfileCdpEndpointAllowed();
     const created = await fetchJson<CdpTarget>(endpoint, CDP_JSON_NEW_TIMEOUT_MS, {
       method: "PUT",
     }).catch(async (err) => {

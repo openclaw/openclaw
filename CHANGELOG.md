@@ -110,6 +110,7 @@ Docs: https://docs.openclaw.ai
 - Assistant text: strip Qwen-style XML tool call payloads from visible replies so web and channel messages no longer show raw `<tool_call><function=...>` output. (#64214) Thanks @MoerAI.
 - Daemon/gateway: prevent systemd restart storms on configuration errors by exiting with `EX_CONFIG` and adding generated unit restart-prevention guards. (#63913) Thanks @neo1027144-creator.
 - Agents/exec: prevent gateway crash ("Agent listener invoked outside active run") when a subagent exec tool produces stdout/stderr after the agent run has ended or been aborted. (#62821) Thanks @openperf.
+- Browser/tabs: route `/tabs/action` close/select through the same browser endpoint reachability and policy checks as list/new (including Playwright-backed remote tab operations), reject CDP HTTP redirects on probe requests, and sanitize blocked-endpoint error responses so tab list/focus/close flows fail closed without echoing raw policy details back to callers. (#63332)
 
 ## 2026.4.9
 

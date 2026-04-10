@@ -1,9 +1,7 @@
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { isChromeReachable, resolveOpenClawUserDataDir } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { resolveProfile } from "./config.js";
 import { BrowserProfileNotFoundError, toBrowserErrorResponse } from "./errors.js";
-import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import {
   refreshResolvedBrowserConfigFromDisk,
@@ -87,6 +85,7 @@ function createProfileContext(
 
   const { ensureTabAvailable, focusTab, closeTab } = createProfileSelectionOps({
     profile,
+    state,
     getProfileState,
     ensureBrowserAvailable,
     listTabs,
@@ -228,12 +227,6 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
     const browserMapped = toBrowserErrorResponse(err);
     if (browserMapped) {
       return browserMapped;
-    }
-    if (err instanceof SsrFBlockedError) {
-      return { status: 400, message: err.message };
-    }
-    if (err instanceof InvalidBrowserNavigationUrlError) {
-      return { status: 400, message: err.message };
     }
     return null;
   };
