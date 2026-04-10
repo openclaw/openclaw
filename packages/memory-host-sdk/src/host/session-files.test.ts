@@ -22,6 +22,21 @@ afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
+function expectNoUnpairedSurrogates(value: string): void {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      expect(index + 1).toBeLessThan(value.length);
+      const next = value.charCodeAt(index + 1);
+      expect(next).toBeGreaterThanOrEqual(0xdc00);
+      expect(next).toBeLessThanOrEqual(0xdfff);
+      index += 1;
+      continue;
+    }
+    expect(code < 0xdc00 || code > 0xdfff).toBe(true);
+  }
+}
+
 describe("listSessionFilesForAgent", () => {
   it("includes reset and deleted transcripts in session file listing", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
@@ -149,5 +164,72 @@ describe("buildSessionEntry", () => {
     const entry = await buildSessionEntry(filePath);
     expect(entry).not.toBeNull();
     expect(entry!.content).toBe("User: Actual user text");
+  });
+
+  it("wraps pathological long messages into multiple exported lines and repeats lineMap", async () => {
+    const longWordyLine = Array.from({ length: 260 }, (_, idx) => `segment-${idx}`).join(" ");
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: longWordyLine },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "wrapped-session.jsonl");
+    await fs.writeFile(filePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(filePath);
+    expect(entry).not.toBeNull();
+
+    const contentLines = entry!.content.split("\n");
+    expect(contentLines.length).toBeGreaterThan(1);
+    expect(contentLines.every((line) => line.startsWith("User: "))).toBe(true);
+    expect(contentLines.every((line) => line.length <= 810)).toBe(true);
+    expect(entry!.lineMap).toEqual(contentLines.map(() => 1));
+  });
+
+  it("hard-wraps pathological long tokens without spaces", async () => {
+    const giantToken = "x".repeat(1800);
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: giantToken },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "hard-wrapped-session.jsonl");
+    await fs.writeFile(filePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(filePath);
+    expect(entry).not.toBeNull();
+
+    const contentLines = entry!.content.split("\n");
+    expect(contentLines.length).toBe(3);
+    expect(contentLines.every((line) => line.startsWith("Assistant: "))).toBe(true);
+    expect(contentLines[0].length).toBeLessThanOrEqual(811);
+    expect(contentLines[1].length).toBeLessThanOrEqual(811);
+    expect(entry!.lineMap).toEqual([1, 1, 1]);
+  });
+
+  it("does not split surrogate pairs when hard-wrapping astral unicode without spaces", async () => {
+    const astralChar = "\u{20000}";
+    const giantToken = astralChar.repeat(1200);
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: giantToken },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "surrogate-safe-session.jsonl");
+    await fs.writeFile(filePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(filePath);
+    expect(entry).not.toBeNull();
+
+    const contentLines = entry!.content.split("\n");
+    expect(contentLines.length).toBeGreaterThan(1);
+    expect(entry!.lineMap).toEqual(contentLines.map(() => 1));
+    for (const line of contentLines) {
+      expect(line.startsWith("Assistant: ")).toBe(true);
+      expectNoUnpairedSurrogates(line);
+    }
   });
 });
