@@ -62,18 +62,18 @@ vi.mock("./docker-up.runtime.js", () => ({
   runQaDockerUp,
 }));
 
+import { resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import {
-  __testing,
   runQaLabSelfCheckCommand,
   runQaDockerBuildImageCommand,
   runQaDockerScaffoldCommand,
   runQaDockerUpCommand,
   runQaCharacterEvalCommand,
-  runQaMatrixCommand,
   runQaManualLaneCommand,
   runQaSuiteCommand,
-  runQaTelegramCommand,
 } from "./cli.runtime.js";
+import { runQaMatrixCommand } from "./live-transports/matrix/cli.runtime.js";
+import { runQaTelegramCommand } from "./live-transports/telegram/cli.runtime.js";
 
 describe("qa cli runtime", () => {
   let stdoutWrite: ReturnType<typeof vi.spyOn>;
@@ -226,12 +226,12 @@ describe("qa cli runtime", () => {
   });
 
   it("rejects output dirs that escape the repo root", () => {
-    expect(() =>
-      __testing.resolveRepoRelativeOutputDir("/tmp/openclaw-repo", "../outside"),
-    ).toThrow("--output-dir must stay within the repo root.");
-    expect(() =>
-      __testing.resolveRepoRelativeOutputDir("/tmp/openclaw-repo", "/tmp/outside"),
-    ).toThrow("--output-dir must be a relative path inside the repo root.");
+    expect(() => resolveRepoRelativeOutputDir("/tmp/openclaw-repo", "../outside")).toThrow(
+      "--output-dir must stay within the repo root.",
+    );
+    expect(() => resolveRepoRelativeOutputDir("/tmp/openclaw-repo", "/tmp/outside")).toThrow(
+      "--output-dir must be a relative path inside the repo root.",
+    );
   });
 
   it("defaults telegram qa runs onto the live provider lane", async () => {
