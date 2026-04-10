@@ -78,15 +78,77 @@ describe("qa agentic parity report", () => {
     );
   });
 
+  it("fails the parity gate when required first-wave scenarios are missing on both sides", () => {
+    const comparison = buildQaAgenticParityComparison({
+      candidateLabel: "openai/gpt-5.4",
+      baselineLabel: "anthropic/claude-opus-4-6",
+      candidateSummary: {
+        scenarios: [{ name: "Approval turn tool followthrough", status: "pass" }],
+      },
+      baselineSummary: {
+        scenarios: [{ name: "Approval turn tool followthrough", status: "pass" }],
+      },
+      comparedAt: "2026-04-11T00:00:00.000Z",
+    });
+
+    expect(comparison.pass).toBe(false);
+    expect(comparison.failures).toContain(
+      "Missing required first-wave parity scenario coverage for Image understanding from attachment: openai/gpt-5.4=missing, anthropic/claude-opus-4-6=missing.",
+    );
+  });
+
+  it("fails the parity gate when the baseline contains suspicious pass results", () => {
+    const comparison = buildQaAgenticParityComparison({
+      candidateLabel: "openai/gpt-5.4",
+      baselineLabel: "anthropic/claude-opus-4-6",
+      candidateSummary: {
+        scenarios: [
+          { name: "Approval turn tool followthrough", status: "pass" },
+          { name: "Model switch with tool continuity", status: "pass" },
+          { name: "Source and docs discovery report", status: "pass" },
+          { name: "Image understanding from attachment", status: "pass" },
+        ],
+      },
+      baselineSummary: {
+        scenarios: [
+          {
+            name: "Approval turn tool followthrough",
+            status: "pass",
+            details: "timed out before it continued",
+          },
+          { name: "Model switch with tool continuity", status: "pass" },
+          { name: "Source and docs discovery report", status: "pass" },
+          { name: "Image understanding from attachment", status: "pass" },
+        ],
+      },
+      comparedAt: "2026-04-11T00:00:00.000Z",
+    });
+
+    expect(comparison.pass).toBe(false);
+    expect(comparison.failures).toContain(
+      "anthropic/claude-opus-4-6 produced 1 suspicious pass result(s); baseline fake-success count must also be 0.",
+    );
+  });
+
   it("renders a readable markdown parity report", () => {
     const comparison = buildQaAgenticParityComparison({
       candidateLabel: "openai/gpt-5.4",
       baselineLabel: "anthropic/claude-opus-4-6",
       candidateSummary: {
-        scenarios: [{ name: "Scenario A", status: "pass" }],
+        scenarios: [
+          { name: "Approval turn tool followthrough", status: "pass" },
+          { name: "Model switch with tool continuity", status: "pass" },
+          { name: "Source and docs discovery report", status: "pass" },
+          { name: "Image understanding from attachment", status: "pass" },
+        ],
       },
       baselineSummary: {
-        scenarios: [{ name: "Scenario A", status: "pass" }],
+        scenarios: [
+          { name: "Approval turn tool followthrough", status: "pass" },
+          { name: "Model switch with tool continuity", status: "pass" },
+          { name: "Source and docs discovery report", status: "pass" },
+          { name: "Image understanding from attachment", status: "pass" },
+        ],
       },
       comparedAt: "2026-04-11T00:00:00.000Z",
     });
@@ -95,7 +157,7 @@ describe("qa agentic parity report", () => {
 
     expect(report).toContain("# OpenClaw GPT-5.4 / Opus 4.6 Agentic Parity Report");
     expect(report).toContain("| Completion rate | 100.0% | 100.0% |");
-    expect(report).toContain("### Scenario A");
+    expect(report).toContain("### Approval turn tool followthrough");
     expect(report).toContain("- Verdict: pass");
   });
 });

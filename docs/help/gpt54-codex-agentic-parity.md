@@ -51,7 +51,7 @@ The parity pack is the proof layer. It does not change runtime behavior by itsel
 After you have two `qa-suite-summary.json` artifacts, generate the release-gate comparison with:
 
 ```bash
-pnpm qa parity-report \
+pnpm openclaw qa parity-report \
   --repo-root . \
   --candidate-summary .artifacts/qa-e2e/gpt54/qa-suite-summary.json \
   --baseline-summary .artifacts/qa-e2e/opus46/qa-suite-summary.json \
@@ -118,7 +118,7 @@ flowchart LR
     A --> C["Run Opus 4.6 parity pack"]
     B --> D["qa-suite-summary.json"]
     C --> E["qa-suite-summary.json"]
-    D --> F["qa parity-report"]
+    D --> F["openclaw qa parity-report"]
     E --> F
     F --> G["qa-agentic-parity-report.md"]
     F --> H["qa-agentic-parity-summary.json"]

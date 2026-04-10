@@ -1,3 +1,5 @@
+import { QA_AGENTIC_PARITY_SCENARIO_TITLES } from "./agentic-parity.js";
+
 export type QaParityReportStep = {
   name: string;
   status: "pass" | "fail" | "skip";
@@ -170,6 +172,14 @@ export function buildQaAgenticParityComparison(params: {
     });
 
   const failures: string[] = [];
+  const requiredScenarioCoverage = QA_AGENTIC_PARITY_SCENARIO_TITLES.filter(
+    (name) => !candidateByName.has(name) || !baselineByName.has(name),
+  );
+  for (const name of requiredScenarioCoverage) {
+    failures.push(
+      `Missing required first-wave parity scenario coverage for ${name}: ${params.candidateLabel}=${candidateByName.has(name) ? "present" : "missing"}, ${params.baselineLabel}=${baselineByName.has(name) ? "present" : "missing"}.`,
+    );
+  }
   const coverageMismatch = scenarioComparisons.filter(
     (scenario) => scenario.candidateStatus === "missing" || scenario.baselineStatus === "missing",
   );
@@ -196,6 +206,11 @@ export function buildQaAgenticParityComparison(params: {
   if (candidateMetrics.fakeSuccessCount > 0) {
     failures.push(
       `${params.candidateLabel} produced ${candidateMetrics.fakeSuccessCount} suspicious pass result(s); fake-success count must be 0.`,
+    );
+  }
+  if (baselineMetrics.fakeSuccessCount > 0) {
+    failures.push(
+      `${params.baselineLabel} produced ${baselineMetrics.fakeSuccessCount} suspicious pass result(s); baseline fake-success count must also be 0.`,
     );
   }
 

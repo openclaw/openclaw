@@ -1,11 +1,28 @@
 export const QA_AGENTIC_PARITY_PACK = "agentic";
 
-export const QA_AGENTIC_PARITY_SCENARIO_IDS = [
-  "approval-turn-tool-followthrough",
-  "model-switch-tool-continuity",
-  "source-docs-discovery-report",
-  "image-understanding-attachment",
+export const QA_AGENTIC_PARITY_SCENARIOS = [
+  {
+    id: "approval-turn-tool-followthrough",
+    title: "Approval turn tool followthrough",
+  },
+  {
+    id: "model-switch-tool-continuity",
+    title: "Model switch with tool continuity",
+  },
+  {
+    id: "source-docs-discovery-report",
+    title: "Source and docs discovery report",
+  },
+  {
+    id: "image-understanding-attachment",
+    title: "Image understanding from attachment",
+  },
 ] as const;
+
+export const QA_AGENTIC_PARITY_SCENARIO_IDS = QA_AGENTIC_PARITY_SCENARIOS.map(({ id }) => id);
+export const QA_AGENTIC_PARITY_SCENARIO_TITLES = QA_AGENTIC_PARITY_SCENARIOS.map(
+  ({ title }) => title,
+);
 
 export function resolveQaParityPackScenarioIds(params: {
   parityPack?: string;
