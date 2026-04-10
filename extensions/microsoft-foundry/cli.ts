@@ -1,4 +1,8 @@
 import { execFile, execFileSync, spawn } from "node:child_process";
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import type { AzAccessToken, AzAccount } from "./shared.js";
 import { COGNITIVE_SERVICES_RESOURCE } from "./shared.js";
 
@@ -38,11 +42,15 @@ function buildAzCommandError(error: Error, stderr: string, stdout: string): Erro
 }
 
 export function execAz(args: string[]): string {
-  return execFileSync("az", args, {
-    encoding: "utf-8",
-    timeout: 30_000,
-    shell: process.platform === "win32",
-  }).trim();
+  return (
+    normalizeOptionalString(
+      execFileSync("az", args, {
+        encoding: "utf-8",
+        timeout: 30_000,
+        shell: process.platform === "win32",
+      }),
+    ) ?? ""
+  );
 }
 
 export async function execAzAsync(args: string[]): Promise<string> {
@@ -60,7 +68,7 @@ export async function execAzAsync(args: string[]): Promise<string> {
           reject(buildAzCommandError(error, String(stderr ?? ""), String(stdout ?? "")));
           return;
         }
-        resolve(String(stdout).trim());
+        resolve(normalizeStringifiedOptionalString(stdout) ?? "");
       },
     );
   });
@@ -177,7 +185,7 @@ export async function azLoginDeviceCodeWithOptions(params: {
         resolve();
         return;
       }
-      const output = [...stderrChunks, ...stdoutChunks].join("").trim();
+      const output = normalizeOptionalString([...stderrChunks, ...stdoutChunks].join("")) ?? "";
       reject(
         new Error(
           output

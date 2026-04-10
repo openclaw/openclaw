@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { collectDockerFlagValues, findDockerArgsCall } from "./test-args.js";
 import type { SandboxConfig } from "./types.js";
 import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
@@ -25,8 +25,8 @@ const bridgeMocks = vi.hoisted(() => ({
   stopBrowserBridgeServer: vi.fn(),
 }));
 
-vi.mock("./docker.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./docker.js")>();
+vi.mock("./docker.js", async () => {
+  const actual = await vi.importActual<typeof import("./docker.js")>("./docker.js");
   return {
     ...actual,
     dockerContainerState: dockerMocks.dockerContainerState,
@@ -42,7 +42,7 @@ vi.mock("./registry.js", () => ({
   updateBrowserRegistry: registryMocks.updateBrowserRegistry,
 }));
 
-vi.mock("../../browser/bridge-server.js", () => ({
+vi.mock("../../plugin-sdk/browser-bridge.js", () => ({
   startBrowserBridgeServer: bridgeMocks.startBrowserBridgeServer,
   stopBrowserBridgeServer: bridgeMocks.stopBrowserBridgeServer,
 }));
@@ -103,8 +103,12 @@ function buildConfig(enableNoVnc: boolean): SandboxConfig {
 }
 
 describe("ensureSandboxBrowser create args", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     await loadFreshBrowserModulesForTest();
+  });
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
     BROWSER_BRIDGES.clear();
     resetNoVncObserverTokensForTests();
     dockerMocks.dockerContainerState.mockClear();
@@ -235,5 +239,40 @@ describe("ensureSandboxBrowser create args", () => {
     const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
     const labels = collectDockerFlagValues(createArgs ?? [], "--label");
     expect(labels).toContain(`openclaw.mountFormatVersion=${SANDBOX_MOUNT_FORMAT_VERSION}`);
+  });
+
+  it("force-removes the browser container when CDP never becomes reachable", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("timeout"));
+    bridgeMocks.startBrowserBridgeServer.mockImplementationOnce(async (params) => {
+      await params.onEnsureAttachTarget?.({});
+      return {
+        server: {} as never,
+        port: 19000,
+        baseUrl: "http://127.0.0.1:19000",
+        state: {
+          server: null,
+          port: 19000,
+          resolved: { profiles: {} },
+          profiles: new Map(),
+        },
+      };
+    });
+
+    const cfg = buildConfig(false);
+    cfg.browser.autoStartTimeoutMs = 1;
+
+    await expect(
+      ensureSandboxBrowser({
+        scopeKey: "session:test",
+        workspaceDir: "/tmp/workspace",
+        agentWorkspaceDir: "/tmp/workspace",
+        cfg,
+      }),
+    ).rejects.toThrow("hung container has been forcefully removed");
+
+    expect(dockerMocks.execDocker).toHaveBeenCalledWith(
+      ["rm", "-f", expect.stringMatching(/^openclaw-sbx-browser-session-test-/)],
+      { allowFailure: true },
+    );
   });
 });

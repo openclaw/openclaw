@@ -9,7 +9,7 @@ import {
   type ExecTarget,
 } from "../infra/exec-approvals.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
-import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
+import { isDangerousHostInheritedEnvVarName } from "../infra/host-env-security.js";
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
@@ -72,7 +72,7 @@ export function sanitizeHostBaseEnv(env: Record<string, string>): Record<string,
       sanitized[key] = value;
       continue;
     }
-    if (isDangerousHostEnvVarName(upperKey)) {
+    if (isDangerousHostInheritedEnvVarName(upperKey)) {
       continue;
     }
     sanitized[key] = value;
@@ -86,7 +86,7 @@ export function validateHostEnv(env: Record<string, string>): void {
     const upperKey = key.toUpperCase();
 
     // 1. Block known dangerous variables (Fail Closed)
-    if (isDangerousHostEnvVarName(upperKey)) {
+    if (isDangerousHostInheritedEnvVarName(upperKey)) {
       throw new Error(
         `Security Violation: Environment variable '${key}' is forbidden during host execution.`,
       );
@@ -220,11 +220,18 @@ export function renderExecTargetLabel(target: ExecTarget) {
 export function isRequestedExecTargetAllowed(params: {
   configuredTarget: ExecTarget;
   requestedTarget: ExecTarget;
+  sandboxAvailable?: boolean;
 }) {
-  // `auto` is a routing strategy, not a wildcard allowlist. Keep per-call host
-  // selection pinned to the configured/session-selected target so a sandboxed
-  // session cannot silently hop to gateway or node.
-  return params.requestedTarget === params.configuredTarget;
+  if (params.requestedTarget === params.configuredTarget) {
+    return true;
+  }
+  if (params.configuredTarget === "auto") {
+    if (params.sandboxAvailable && params.requestedTarget === "gateway") {
+      return false;
+    }
+    return true;
+  }
+  return false;
 }
 
 export function resolveExecTarget(params: {
@@ -235,36 +242,39 @@ export function resolveExecTarget(params: {
 }) {
   const configuredTarget = params.configuredTarget ?? "auto";
   const requestedTarget = params.requestedTarget ?? null;
-  if (params.elevatedRequested) {
-    return {
-      configuredTarget,
-      requestedTarget,
-      selectedTarget: "gateway" as const,
-      effectiveHost: "gateway" as const,
-    };
-  }
   if (
     requestedTarget &&
     !isRequestedExecTargetAllowed({
       configuredTarget,
       requestedTarget,
+      sandboxAvailable: params.sandboxAvailable,
     })
   ) {
+    const allowedConfig = Array.from(
+      new Set(
+        requestedTarget === "gateway" && !params.sandboxAvailable
+          ? ["gateway", "auto"]
+          : [renderExecTargetLabel(requestedTarget), "auto"],
+      ),
+    ).join(" or ");
     throw new Error(
       `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; ` +
-        `configure tools.exec.host=${renderExecTargetLabel(requestedTarget)} to allow).`,
+        `configured host is ${renderExecTargetLabel(configuredTarget)}; ` +
+        `set tools.exec.host=${allowedConfig} to allow this override).`,
     );
   }
   const selectedTarget = requestedTarget ?? configuredTarget;
-  // `auto` preserves the no-config "just work" default: sandbox when available,
-  // otherwise gateway. The YOLO part comes from security/ask defaults, not from
-  // `auto` itself.
+  const resolvedTarget = params.elevatedRequested
+    ? selectedTarget === "node"
+      ? "node"
+      : "gateway"
+    : selectedTarget;
   const effectiveHost =
-    selectedTarget === "auto" ? (params.sandboxAvailable ? "sandbox" : "gateway") : selectedTarget;
+    resolvedTarget === "auto" ? (params.sandboxAvailable ? "sandbox" : "gateway") : resolvedTarget;
   return {
     configuredTarget,
     requestedTarget,
-    selectedTarget,
+    selectedTarget: resolvedTarget,
     effectiveHost,
   };
 }
@@ -324,10 +334,8 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   const summary = output
     ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
-  enqueueSystemEvent(summary, { sessionKey });
-  requestHeartbeatNow(
-    scopedHeartbeatWakeOptions(sessionKey, { reason: `exec:${session.id}:exit` }),
-  );
+  enqueueSystemEvent(summary, { sessionKey, trusted: false });
+  requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event" }));
 }
 
 export function createApprovalSlug(id: string) {
@@ -439,8 +447,8 @@ export function formatExecFailureReason(params: {
       return "Command not executable (permission denied)";
     case "overall-timeout":
       return typeof params.timeoutSec === "number" && params.timeoutSec > 0
-        ? `Command timed out after ${params.timeoutSec} seconds. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300).`
-        : "Command timed out. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300).";
+        ? `Command timed out after ${params.timeoutSec} seconds. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300). If it should keep running, start it with exec background=true or yieldMs so OpenClaw can register a pollable process session. Do not rely on shell backgrounding with a trailing &.`
+        : "Command timed out. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300). If it should keep running, start it with exec background=true or yieldMs so OpenClaw can register a pollable process session. Do not rely on shell backgrounding with a trailing &.";
     case "no-output-timeout":
       return "Command timed out waiting for output";
     case "signal":
@@ -574,6 +582,9 @@ export async function runExecProcess(opts: {
 
   const emitUpdate = () => {
     if (!opts.onUpdate) {
+      return;
+    }
+    if (session.backgrounded || session.exited) {
       return;
     }
     const tailText = session.tail || session.aggregated;

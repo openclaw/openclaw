@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { installedPluginRoot } from "../../test/helpers/bundled-plugin-paths.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -165,6 +164,35 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     expect(cmd?.dispatch).toEqual({ kind: "tool", toolName: "sessions_send", argMode: "raw" });
   });
 
+  it("inherits agents.defaults.skills when agentId is provided", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "alpha-skill"),
+      name: "alpha-skill",
+      description: "Alpha skill",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "beta-skill"),
+      name: "beta-skill",
+      description: "Beta skill",
+    });
+
+    const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
+      ...resolveTestSkillDirs(workspaceDir),
+      config: {
+        agents: {
+          defaults: {
+            skills: ["alpha-skill"],
+          },
+          list: [{ id: "writer", workspace: workspaceDir }],
+        },
+      },
+      agentId: "writer",
+    });
+
+    expect(commands.map((entry) => entry.skillName)).toEqual(["alpha-skill"]);
+  });
+
   it("includes enabled Claude bundle markdown commands as native OpenClaw slash commands", async () => {
     const workspaceDir = await makeWorkspace();
     const pluginRoot = path.join(tempHome!.home, ".openclaw", "extensions", "compound-bundle");
@@ -211,13 +239,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     );
     expect(
       commands.find((entry) => entry.skillName === "workflows:review")?.sourceFilePath,
-    ).toContain(
-      path.join(
-        installedPluginRoot(path.join(workspaceDir, ".openclaw"), "compound-bundle"),
-        "commands",
-        "workflows-review.md",
-      ),
-    );
+    ).toContain(path.join(pluginRoot, "commands", "workflows-review.md"));
   });
 });
 
@@ -309,6 +331,24 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).toContain("demo-skill");
     expect(prompt).toContain("Does demo things");
     expect(prompt).toContain(path.join(skillDir, "SKILL.md"));
+  });
+
+  it("omits disable-model-invocation skills from available_skills for freshly loaded entries", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "hidden-skill");
+
+    await writeSkill({
+      dir: skillDir,
+      name: "hidden-skill",
+      description: "Hidden from the prompt",
+      frontmatterExtra: "disable-model-invocation: true",
+    });
+
+    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, resolveTestSkillDirs(workspaceDir));
+
+    expect(prompt).not.toContain("hidden-skill");
+    expect(prompt).not.toContain("Hidden from the prompt");
+    expect(prompt).not.toContain(path.join(skillDir, "SKILL.md"));
   });
 });
 
@@ -426,6 +466,85 @@ describe("applySkillEnvOverrides", () => {
       } finally {
         restore();
         expect(process.env.ENV_KEY).toBeUndefined();
+      }
+    });
+  });
+
+  it("prefers resolved caller skill config when the active runtime snapshot is still raw", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeEnvSkill(workspaceDir);
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
+    const sourceConfig: OpenClawConfig = {
+      skills: {
+        entries: {
+          "env-skill": {
+            apiKey: {
+              source: "file",
+              provider: "default",
+              id: "/skills/entries/env-skill/apiKey",
+            },
+          },
+        },
+      },
+    };
+    const callerConfig: OpenClawConfig = {
+      skills: {
+        entries: {
+          "env-skill": {
+            apiKey: "resolved-key",
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(sourceConfig, sourceConfig);
+
+    withClearedEnv(["ENV_KEY"], () => {
+      const restore = applySkillEnvOverrides({
+        skills: entries,
+        config: callerConfig,
+      });
+
+      try {
+        expect(process.env.ENV_KEY).toBe("resolved-key");
+      } finally {
+        restore();
+        expect(process.env.ENV_KEY).toBeUndefined();
+      }
+    });
+  });
+
+  it("does not resolve raw skill apiKey refs when the host already provides primaryEnv", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeEnvSkill(workspaceDir);
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
+
+    withClearedEnv(["ENV_KEY"], () => {
+      process.env.ENV_KEY = "host-key";
+      const restore = applySkillEnvOverrides({
+        skills: entries,
+        config: {
+          skills: {
+            entries: {
+              "env-skill": {
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "OPENAI_API_KEY",
+                },
+              },
+            },
+          },
+        },
+      });
+
+      try {
+        expect(process.env.ENV_KEY).toBe("host-key");
+      } finally {
+        restore();
+        expect(process.env.ENV_KEY).toBe("host-key");
+        delete process.env.ENV_KEY;
       }
     });
   });

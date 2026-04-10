@@ -12,7 +12,6 @@ import {
 } from "./pairing-security.test-harness.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
-// oxlint-disable-next-line typescript/no-explicit-any
 type AnyMockFn = any;
 
 export const DEFAULT_ACCOUNT_ID = "default";
@@ -29,7 +28,7 @@ export const DEFAULT_WEB_INBOX_CONFIG = {
     responsePrefix: undefined,
   },
 } as const;
-export const mockLoadConfig = loadConfigMock;
+export const mockLoadConfig: typeof loadConfigMock = loadConfigMock;
 export const readAllowFromStoreMock = pairingReadAllowFromStoreMock;
 export const upsertPairingRequestMock = pairingUpsertPairingRequestMock;
 
@@ -78,10 +77,8 @@ function createMockSock(): MockSock {
   };
 }
 
-vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
+vi.mock("./inbound/save-media.runtime.js", () => {
   return {
-    ...actual,
     saveMediaBuffer: vi.fn().mockResolvedValue({
       id: "mid",
       path: "/tmp/mid",
@@ -115,6 +112,7 @@ export function getSock(): MockSock {
 
 type MonitorWebInbox = typeof import("./inbound.js").monitorWebInbox;
 export type InboxOnMessage = NonNullable<Parameters<MonitorWebInbox>[0]["onMessage"]>;
+export type InboxMonitorOptions = Parameters<MonitorWebInbox>[0];
 let monitorWebInbox: MonitorWebInbox;
 
 function expectInboxPairingReplyText(
@@ -159,7 +157,7 @@ export async function waitForMessageCalls(onMessage: ReturnType<typeof vi.fn>, c
 
 export async function startInboxMonitor(
   onMessage: InboxOnMessage,
-  options: { selfChatMode?: boolean } = {},
+  extraOptions: Partial<InboxMonitorOptions> = {},
 ) {
   if (!monitorWebInbox) {
     ({ monitorWebInbox } = await import("./inbound.js"));
@@ -169,7 +167,7 @@ export async function startInboxMonitor(
     onMessage,
     accountId: DEFAULT_ACCOUNT_ID,
     authDir: getAuthDir(),
-    selfChatMode: options.selfChatMode,
+    ...extraOptions,
   });
   return { listener, sock: getSock() };
 }

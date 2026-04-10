@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
-import { NODE_SYSTEM_RUN_COMMANDS } from "./node-commands.js";
+import { normalizeArrayBackedTrimmedStringList } from "../shared/string-normalization.js";
+import { type NodeApprovalScope, resolveNodePairApprovalScopes } from "./node-pairing-authz.js";
 import {
   createAsyncLock,
   pruneExpiredPending,
@@ -39,6 +40,10 @@ export type NodePairingPendingRequest = NodePairingRequestInput & {
   ts: number;
 };
 
+export type NodePairingPendingEntry = NodePairingPendingRequest & {
+  requiredApproveScopes: NodeApprovalScope[];
+};
+
 export type NodePairingPairedNode = NodeApprovedSurface & {
   token: string;
   bins?: string[];
@@ -48,7 +53,7 @@ export type NodePairingPairedNode = NodeApprovedSurface & {
 };
 
 export type NodePairingList = {
-  pending: NodePairingPendingRequest[];
+  pending: NodePairingPendingEntry[];
   paired: NodePairingPairedNode[];
 };
 
@@ -59,18 +64,8 @@ type NodePairingStateFile = {
 
 const PENDING_TTL_MS = 5 * 60 * 1000;
 const OPERATOR_ROLE = "operator";
-const OPERATOR_WRITE_SCOPE = "operator.write";
-const OPERATOR_ADMIN_SCOPE = "operator.admin";
 
 const withLock = createAsyncLock();
-
-function normalizeStringList(values?: string[]): string[] | undefined {
-  if (!Array.isArray(values)) {
-    return undefined;
-  }
-  const normalized = values.map((value) => value.trim()).filter(Boolean);
-  return normalized.length > 0 ? normalized : [];
-}
 
 function buildPendingNodePairingRequest(params: {
   requestId?: string;
@@ -86,8 +81,8 @@ function buildPendingNodePairingRequest(params: {
     uiVersion: params.req.uiVersion,
     deviceFamily: params.req.deviceFamily,
     modelIdentifier: params.req.modelIdentifier,
-    caps: normalizeStringList(params.req.caps),
-    commands: normalizeStringList(params.req.commands),
+    caps: normalizeArrayBackedTrimmedStringList(params.req.caps),
+    commands: normalizeArrayBackedTrimmedStringList(params.req.commands),
     permissions: params.req.permissions,
     remoteIp: params.req.remoteIp,
     silent: params.req.silent,
@@ -108,8 +103,8 @@ function refreshPendingNodePairingRequest(
     uiVersion: incoming.uiVersion ?? existing.uiVersion,
     deviceFamily: incoming.deviceFamily ?? existing.deviceFamily,
     modelIdentifier: incoming.modelIdentifier ?? existing.modelIdentifier,
-    caps: normalizeStringList(incoming.caps) ?? existing.caps,
-    commands: normalizeStringList(incoming.commands) ?? existing.commands,
+    caps: normalizeArrayBackedTrimmedStringList(incoming.caps) ?? existing.caps,
+    commands: normalizeArrayBackedTrimmedStringList(incoming.commands) ?? existing.commands,
     permissions: incoming.permissions ?? existing.permissions,
     remoteIp: incoming.remoteIp ?? existing.remoteIp,
     // Preserve interactive visibility if either request needs attention.
@@ -118,15 +113,18 @@ function refreshPendingNodePairingRequest(
   };
 }
 
-function resolveNodeApprovalRequiredScope(pending: NodePairingPendingRequest): string | null {
+function resolveNodeApprovalRequiredScopes(
+  pending: NodePairingPendingRequest,
+): NodeApprovalScope[] {
   const commands = Array.isArray(pending.commands) ? pending.commands : [];
-  if (commands.some((command) => NODE_SYSTEM_RUN_COMMANDS.some((allowed) => allowed === command))) {
-    return OPERATOR_ADMIN_SCOPE;
-  }
-  if (commands.length > 0) {
-    return OPERATOR_WRITE_SCOPE;
-  }
-  return null;
+  return resolveNodePairApprovalScopes(commands);
+}
+
+function toPendingNodePairingEntry(pending: NodePairingPendingRequest): NodePairingPendingEntry {
+  return {
+    ...pending,
+    requiredApproveScopes: resolveNodeApprovalRequiredScopes(pending),
+  };
 }
 
 type ApprovedNodePairingResult = { requestId: string; node: NodePairingPairedNode };
@@ -165,7 +163,9 @@ function newToken() {
 
 export async function listNodePairing(baseDir?: string): Promise<NodePairingList> {
   const state = await loadState(baseDir);
-  const pending = Object.values(state.pendingById).toSorted((a, b) => b.ts - a.ts);
+  const pending = Object.values(state.pendingById)
+    .toSorted((a, b) => b.ts - a.ts)
+    .map(toPendingNodePairingEntry);
   const paired = Object.values(state.pairedByNodeId).toSorted(
     (a, b) => b.approvedAtMs - a.approvedAtMs,
   );
@@ -222,39 +222,23 @@ export async function requestNodePairing(
 
 export async function approveNodePairing(
   requestId: string,
-  baseDir?: string,
-): Promise<ApprovedNodePairingResult | null>;
-export async function approveNodePairing(
-  requestId: string,
   options: { callerScopes?: readonly string[] },
   baseDir?: string,
-): Promise<ApproveNodePairingResult>;
-export async function approveNodePairing(
-  requestId: string,
-  optionsOrBaseDir?: { callerScopes?: readonly string[] } | string,
-  maybeBaseDir?: string,
 ): Promise<ApproveNodePairingResult> {
-  const options =
-    typeof optionsOrBaseDir === "string" || optionsOrBaseDir === undefined
-      ? undefined
-      : optionsOrBaseDir;
-  const baseDir = typeof optionsOrBaseDir === "string" ? optionsOrBaseDir : maybeBaseDir;
   return await withLock(async () => {
     const state = await loadState(baseDir);
     const pending = state.pendingById[requestId];
     if (!pending) {
       return null;
     }
-    const requiredScope = resolveNodeApprovalRequiredScope(pending);
-    if (requiredScope && options !== undefined) {
-      const missingScope = resolveMissingRequestedScope({
-        role: OPERATOR_ROLE,
-        requestedScopes: [requiredScope],
-        allowedScopes: options.callerScopes ?? [],
-      });
-      if (missingScope) {
-        return { status: "forbidden", missingScope };
-      }
+    const requiredScopes = resolveNodeApprovalRequiredScopes(pending);
+    const missingScope = resolveMissingRequestedScope({
+      role: OPERATOR_ROLE,
+      requestedScopes: requiredScopes,
+      allowedScopes: options.callerScopes ?? [],
+    });
+    if (missingScope) {
+      return { status: "forbidden", missingScope };
     }
 
     const now = Date.now();

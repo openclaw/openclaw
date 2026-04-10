@@ -6,7 +6,7 @@ import { createMockServerResponse } from "../../../test/helpers/plugins/mock-htt
 import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
 import type { OpenClawConfig } from "../api.js";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
-import plugin from "../index.js";
+import { registerDiffsPlugin } from "./plugin.js";
 import { createTempDiffRoot } from "./test-helpers.js";
 
 const { launchMock } = vi.hoisted(() => ({
@@ -106,7 +106,7 @@ describe("PlaywrightDiffScreenshotter", () => {
   });
 
   it("renders PDF output when format is pdf", async () => {
-    const { pages, browser, screenshotter } = await createScreenshotterHarness();
+    const { pages, screenshotter } = await createScreenshotterHarness();
     const pdfPath = path.join(rootDir, "preview.pdf");
 
     await screenshotter.screenshotHtml({
@@ -239,7 +239,7 @@ describe("diffs plugin registration", () => {
       on,
     });
 
-    plugin.register?.(api as unknown as OpenClawPluginApi);
+    registerDiffsPlugin(api as unknown as OpenClawPluginApi);
 
     expect(on).toHaveBeenCalledTimes(1);
     expect(on.mock.calls[0]?.[0]).toBe("before_prompt_build");

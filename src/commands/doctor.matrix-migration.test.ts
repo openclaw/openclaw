@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createDoctorRuntime,
   mockDoctorConfigSnapshot,
-  runStartupMatrixMigration,
+  runChannelPluginStartupMaintenance,
 } from "./doctor.e2e-harness.js";
 import "./doctor.fast-path-mocks.js";
 import { doctorCommand } from "./doctor.js";
@@ -41,8 +41,8 @@ describe("doctor command", () => {
 
       await doctorCommand(createDoctorRuntime(), { nonInteractive: true, repair: true });
 
-      expect(runStartupMatrixMigration).toHaveBeenCalledTimes(1);
-      expect(runStartupMatrixMigration).toHaveBeenCalledWith(
+      expect(runChannelPluginStartupMaintenance).toHaveBeenCalledTimes(1);
+      expect(runChannelPluginStartupMaintenance).toHaveBeenCalledWith(
         expect.objectContaining({
           cfg: expect.objectContaining({
             channels: {

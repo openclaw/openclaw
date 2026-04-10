@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 
 const mocks = vi.hoisted(() => ({
@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
     ...b,
     ...a,
   })),
+  getChannelPlugin: vi.fn(() => undefined),
   normalizeChannelId: vi.fn((channel: string) => channel),
   resolveOutboundTarget: vi.fn(() => ({ ok: true as const, to: "+15550002" })),
   deliverOutboundPayloads: vi.fn(async () => [{ channel: "whatsapp", messageId: "msg-1" }]),
@@ -67,6 +68,7 @@ vi.mock("../utils/delivery-context.js", () => ({
 }));
 
 vi.mock("../channels/plugins/index.js", () => ({
+  getChannelPlugin: mocks.getChannelPlugin,
   normalizeChannelId: mocks.normalizeChannelId,
 }));
 
@@ -88,9 +90,11 @@ vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: mocks.enqueueSystemEvent,
 }));
 
-vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => {
+vi.mock("../infra/heartbeat-wake.js", async () => {
   return await mergeMockedModule(
-    await importOriginal<typeof import("../infra/heartbeat-wake.js")>(),
+    await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
+      "../infra/heartbeat-wake.js",
+    ),
     () => ({
       requestHeartbeatNow: mocks.requestHeartbeatNow,
     }),
@@ -106,6 +110,10 @@ vi.mock("../logging/subsystem.js", () => ({
 const { scheduleRestartSentinelWake } = await import("./server-restart-sentinel.js");
 
 describe("scheduleRestartSentinelWake", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
     vi.useRealTimers();
     mocks.consumeRestartSentinel.mockResolvedValue({
@@ -138,7 +146,7 @@ describe("scheduleRestartSentinelWake", () => {
       expect.objectContaining({
         channel: "whatsapp",
         to: "+15550002",
-        session: { key: "agent:main:main", agentId: "main" },
+        session: { key: "agent:main:main", agentId: "agent-from-key" },
         deps,
         bestEffort: false,
         skipQueue: true,
@@ -174,7 +182,9 @@ describe("scheduleRestartSentinelWake", () => {
       .mockResolvedValueOnce([{ channel: "whatsapp", messageId: "msg-2" }]);
 
     const wakePromise = scheduleRestartSentinelWake({ deps: {} as never });
-    await vi.runAllTimersAsync();
+    await Promise.resolve();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(750);
     await wakePromise;
 
     expect(mocks.enqueueDelivery).toHaveBeenCalledTimes(1);
@@ -214,7 +224,9 @@ describe("scheduleRestartSentinelWake", () => {
       .mockRejectedValueOnce(new Error("transport still not ready"));
 
     const wakePromise = scheduleRestartSentinelWake({ deps: {} as never });
-    await vi.runAllTimersAsync();
+    await Promise.resolve();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(750);
     await wakePromise;
 
     expect(mocks.enqueueDelivery).toHaveBeenCalledTimes(1);

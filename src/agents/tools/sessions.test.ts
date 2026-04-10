@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelMessagingAdapter } from "../../channels/plugins/types.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { extractAssistantText, sanitizeTextContent } from "./sessions-helpers.js";
 
@@ -22,8 +23,9 @@ const loadConfigMock = vi.fn<() => SessionsToolTestConfig>(() => ({
   tools: { agentToAgent: { enabled: false } },
 }));
 
-vi.mock("../../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/config.js")>();
+vi.mock("../../config/config.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
   return {
     ...actual,
     loadConfig: () => loadConfigMock() as never,
@@ -39,13 +41,22 @@ let resolveAnnounceTarget: (typeof import("./sessions-announce-target.js"))["res
 let setActivePluginRegistry: (typeof import("../../plugins/runtime.js"))["setActivePluginRegistry"];
 const MAIN_AGENT_SESSION_KEY = "agent:main:main";
 const MAIN_AGENT_CHANNEL = "whatsapp";
+const resolveSessionConversationStub: NonNullable<
+  ChannelMessagingAdapter["resolveSessionConversation"]
+> = ({ rawId }) => ({
+  id: rawId,
+});
+const resolveSessionTargetStub: NonNullable<ChannelMessagingAdapter["resolveSessionTarget"]> = ({
+  kind,
+  id,
+  threadId,
+}) => (threadId ? `${kind}:${id}:thread:${threadId}` : `${kind}:${id}`);
 
 type SessionsListResult = Awaited<
   ReturnType<ReturnType<typeof import("./sessions-list-tool.js").createSessionsListTool>["execute"]>
 >;
 
 beforeAll(async () => {
-  vi.resetModules();
   ({ createSessionsListTool } = await import("./sessions-list-tool.js"));
   ({ createSessionsSendTool } = await import("./sessions-send-tool.js"));
   ({ resolveAnnounceTarget } = await import("./sessions-announce-target.js"));
@@ -68,6 +79,10 @@ const installRegistry = async () => {
             blurb: "Discord test stub.",
           },
           capabilities: { chatTypes: ["direct", "channel", "thread"] },
+          messaging: {
+            resolveSessionConversation: resolveSessionConversationStub,
+            resolveSessionTarget: resolveSessionTargetStub,
+          },
           config: {
             listAccountIds: () => ["default"],
             resolveAccount: () => ({}),
@@ -88,6 +103,10 @@ const installRegistry = async () => {
             preferSessionLookupForAnnounceTarget: true,
           },
           capabilities: { chatTypes: ["direct", "group"] },
+          messaging: {
+            resolveSessionConversation: resolveSessionConversationStub,
+            resolveSessionTarget: resolveSessionTargetStub,
+          },
           config: {
             listAccountIds: () => ["default"],
             resolveAccount: () => ({}),
@@ -155,6 +174,13 @@ describe("sanitizeTextContent", () => {
     expect(result).not.toContain("Tool Call");
   });
 
+  it("strips tool_result XML via the shared assistant-visible sanitizer", () => {
+    const input = 'Prefix\n<tool_result>{"output":"hidden"}</tool_result>\nSuffix';
+    const result = sanitizeTextContent(input).trim();
+    expect(result).toBe("Prefix\n\nSuffix");
+    expect(result).not.toContain("tool_result");
+  });
+
   it("strips thinking tags", () => {
     const input = "Before <think>secret</think> after";
     const result = sanitizeTextContent(input).trim();
@@ -217,6 +243,25 @@ describe("extractAssistantText", () => {
     };
     expect(extractAssistantText(message)).toBe("Handle payment required errors in your API.");
   });
+
+  it("prefers final_answer text when phased assistant history is present", () => {
+    const message = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "internal reasoning",
+          textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
+        },
+        {
+          type: "text",
+          text: "Done.",
+          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+        },
+      ],
+    };
+    expect(extractAssistantText(message)).toBe("Done.");
+  });
 });
 
 describe("resolveAnnounceTarget", () => {
@@ -243,6 +288,7 @@ describe("resolveAnnounceTarget", () => {
             channel: "whatsapp",
             to: "123@g.us",
             accountId: "work",
+            threadId: 99,
           },
         },
       ],
@@ -256,6 +302,7 @@ describe("resolveAnnounceTarget", () => {
       channel: "whatsapp",
       to: "123@g.us",
       accountId: "work",
+      threadId: "99",
     });
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
     const first = callGatewayMock.mock.calls[0]?.[0] as { method?: string } | undefined;
@@ -273,6 +320,7 @@ describe("resolveAnnounceTarget", () => {
             accountId: "work",
           },
           lastTo: "123@g.us",
+          lastThreadId: 271,
         },
       ],
     });
@@ -285,6 +333,7 @@ describe("resolveAnnounceTarget", () => {
       channel: "whatsapp",
       to: "123@g.us",
       accountId: "work",
+      threadId: "271",
     });
   });
 });

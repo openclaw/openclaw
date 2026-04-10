@@ -1,6 +1,6 @@
-import type { RuntimeEnv } from "../../api.js";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import type { Foreigns } from "../urbit/foreigns.js";
-import { formatChangesDate } from "./utils.js";
+import { asRecord, formatChangesDate, formatErrorMessage } from "./utils.js";
 
 export async function fetchGroupChanges(
   api: { scry: (path: string) => Promise<unknown> },
@@ -16,9 +16,9 @@ export async function fetchGroupChanges(
       return changes;
     }
     return null;
-  } catch (error: any) {
+  } catch (error: unknown) {
     runtime.log?.(
-      `[tlon] Failed to fetch changes (falling back to full init): ${error?.message ?? String(error)}`,
+      `[tlon] Failed to fetch changes (falling back to full init): ${formatErrorMessage(error)}`,
     );
     return null;
   }
@@ -39,13 +39,16 @@ export async function fetchInitData(
 ): Promise<InitData> {
   try {
     runtime.log?.("[tlon] Fetching groups-ui init data...");
-    const initData = (await api.scry("/groups-ui/v6/init.json")) as any;
+    const initData = asRecord(await api.scry("/groups-ui/v6/init.json"));
 
     const channels: string[] = [];
-    if (initData?.groups) {
-      for (const groupData of Object.values(initData.groups as Record<string, any>)) {
-        if (groupData && typeof groupData === "object" && groupData.channels) {
-          for (const channelNest of Object.keys(groupData.channels)) {
+    const groups = asRecord(initData?.groups);
+    if (groups) {
+      for (const groupData of Object.values(groups)) {
+        const typedGroupData = asRecord(groupData);
+        const groupChannels = asRecord(typedGroupData?.channels);
+        if (groupChannels) {
+          for (const channelNest of Object.keys(groupChannels)) {
             if (channelNest.startsWith("chat/")) {
               channels.push(channelNest);
             }
@@ -60,7 +63,8 @@ export async function fetchInitData(
       runtime.log?.("[tlon] No chat channels found via auto-discovery");
     }
 
-    const foreigns = (initData?.foreigns as Foreigns) || null;
+    const foreignsValue = asRecord(initData?.foreigns);
+    const foreigns = foreignsValue ? (foreignsValue as Foreigns) : null;
     if (foreigns) {
       const pendingCount = Object.values(foreigns).filter((f) =>
         f.invites?.some((i) => i.valid),
@@ -71,8 +75,8 @@ export async function fetchInitData(
     }
 
     return { channels, foreigns };
-  } catch (error: any) {
-    runtime.log?.(`[tlon] Init data fetch failed: ${error?.message ?? String(error)}`);
+  } catch (error: unknown) {
+    runtime.log?.(`[tlon] Init data fetch failed: ${formatErrorMessage(error)}`);
     return { channels: [], foreigns: null };
   }
 }

@@ -5,12 +5,16 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
+import {
+  extractAssistantText as extractAssistantHistoryText,
+  hasAssistantPhaseMetadata,
+} from "../../agents/tools/chat-history-text.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
@@ -19,6 +23,11 @@ import { normalizeInputProvenance, type InputProvenance } from "../../sessions/i
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { resolveAssistantMessagePhase } from "../../shared/chat-message-content.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import {
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
@@ -44,6 +53,7 @@ import {
 } from "../chat-attachments.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
+import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -74,6 +84,7 @@ import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
+import { buildWebchatAudioContentBlocksFromReplyPayloads } from "./chat-webchat-media.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
@@ -102,7 +113,7 @@ type ChatAbortRequester = {
   isAdmin: boolean;
 };
 
-const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
+export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
 const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 let chatHistoryPlaceholderEmitCount = 0;
@@ -220,9 +231,9 @@ function resolveChatSendOriginatingRoute(params: {
     .filter(Boolean);
   const sessionScopeHead = sessionScopeParts[0];
   const sessionChannelHint = normalizeMessageChannel(sessionScopeHead);
-  const normalizedSessionScopeHead = (sessionScopeHead ?? "").trim().toLowerCase();
+  const normalizedSessionScopeHead = normalizeLowercaseStringOrEmpty(sessionScopeHead);
   const sessionPeerShapeCandidates = [sessionScopeParts[1], sessionScopeParts[2]]
-    .map((part) => (part ?? "").trim().toLowerCase())
+    .map((part) => normalizeLowercaseStringOrEmpty(part))
     .filter(Boolean);
   const isChannelAgnosticSessionScope = CHANNEL_AGNOSTIC_SESSION_SCOPES.has(
     normalizedSessionScopeHead,
@@ -239,7 +250,7 @@ function resolveChatSendOriginatingRoute(params: {
   const hasClientMetadata =
     (typeof params.client?.mode === "string" && params.client.mode.trim().length > 0) ||
     (typeof params.client?.id === "string" && params.client.id.trim().length > 0);
-  const configuredMainKey = (params.mainKey ?? "main").trim().toLowerCase();
+  const configuredMainKey = normalizeLowercaseStringOrEmpty(params.mainKey ?? "main");
   const isConfiguredMainSessionScope =
     normalizedSessionScopeHead.length > 0 && normalizedSessionScopeHead === configuredMainKey;
   const canInheritConfiguredMainRoute =
@@ -658,8 +669,21 @@ function sanitizeChatHistoryMessage(
     changed ||= stripped.changed || res.truncated;
   } else if (Array.isArray(entry.content)) {
     const updated = entry.content.map((block) => sanitizeChatHistoryContentBlock(block, maxChars));
-    if (updated.some((item) => item.changed)) {
-      entry.content = updated.map((item) => item.block);
+    const sanitizedBlocks = updated.map((item) => item.block);
+    const hasPhaseMetadata = hasAssistantPhaseMetadata(entry);
+    if (hasPhaseMetadata) {
+      const stripped = stripInlineDirectiveTagsForDisplay(extractAssistantHistoryText(entry) ?? "");
+      const res = truncateChatHistoryText(stripped.text, maxChars);
+      const nonTextBlocks = sanitizedBlocks.filter(
+        (block) =>
+          !block || typeof block !== "object" || (block as { type?: unknown }).type !== "text",
+      );
+      entry.content = res.text
+        ? [{ type: "text", text: res.text }, ...nonTextBlocks]
+        : nonTextBlocks;
+      changed = true;
+    } else if (updated.some((item) => item.changed)) {
+      entry.content = sanitizedBlocks;
       changed = true;
     }
   }
@@ -681,52 +705,61 @@ function sanitizeChatHistoryMessage(
  * dropping messages that carry real text alongside a stale `content: "NO_REPLY"`.
  */
 function extractAssistantTextForSilentCheck(message: unknown): string | undefined {
-  if (!message || typeof message !== "object") {
-    return undefined;
-  }
-  const entry = message as Record<string, unknown>;
-  if (entry.role !== "assistant") {
-    return undefined;
-  }
-  if (typeof entry.text === "string") {
-    return entry.text;
-  }
-  if (typeof entry.content === "string") {
-    return entry.content;
-  }
-  if (!Array.isArray(entry.content) || entry.content.length === 0) {
-    return undefined;
-  }
-
-  const texts: string[] = [];
-  for (const block of entry.content) {
-    if (!block || typeof block !== "object") {
-      return undefined;
-    }
-    const typed = block as { type?: unknown; text?: unknown };
-    if (typed.type !== "text" || typeof typed.text !== "string") {
-      return undefined;
-    }
-    texts.push(typed.text);
-  }
-  return texts.length > 0 ? texts.join("\n") : undefined;
+  return extractAssistantHistoryText(message);
 }
 
-function sanitizeChatHistoryMessages(messages: unknown[], maxChars: number): unknown[] {
+function hasAssistantNonTextContent(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some(
+    (block) => block && typeof block === "object" && (block as { type?: unknown }).type !== "text",
+  );
+}
+
+function shouldDropAssistantHistoryMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  if ((message as { role?: unknown }).role !== "assistant") {
+    return false;
+  }
+  if (resolveAssistantMessagePhase(message) === "commentary") {
+    return true;
+  }
+  const text = extractAssistantTextForSilentCheck(message);
+  if (text === undefined || !isSuppressedControlReplyText(text)) {
+    return false;
+  }
+  return !hasAssistantNonTextContent(message);
+}
+
+export function sanitizeChatHistoryMessages(messages: unknown[], maxChars: number): unknown[] {
   if (messages.length === 0) {
     return messages;
   }
   let changed = false;
   const next: unknown[] = [];
   for (const message of messages) {
-    // Drop assistant messages whose entire visible text is the silent reply token.
-    const text = extractAssistantTextForSilentCheck(message);
-    if (text !== undefined && isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+    // Drop raw control-token replies before any maxChars truncation can make
+    // an exact token look like partial user-visible text.
+    if (shouldDropAssistantHistoryMessage(message)) {
       changed = true;
       continue;
     }
     const res = sanitizeChatHistoryMessage(message, maxChars);
     changed ||= res.changed;
+    // Drop assistant commentary-only entries and exact control replies, but
+    // keep mixed assistant entries that still carry non-text content. Run this
+    // again after sanitizing so display-only cleanup can still suppress stale tokens.
+    if (shouldDropAssistantHistoryMessage(res.message)) {
+      changed = true;
+      continue;
+    }
     next.push(res.message);
   }
   return changed ? next : messages;
@@ -838,7 +871,7 @@ function ensureTranscriptFile(params: { transcriptPath: string; sessionId: strin
     });
     return { ok: true };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return { ok: false, error: formatErrorMessage(err) };
   }
 }
 
@@ -862,6 +895,8 @@ function transcriptHasIdempotencyKey(transcriptPath: string, idempotencyKey: str
 
 function appendAssistantTranscriptMessage(params: {
   message: string;
+  /** Rich Pi message blocks (text, embedded audio, etc.). Overrides plain `message` when set. */
+  content?: Array<Record<string, unknown>>;
   label?: string;
   sessionId: string;
   storePath: string | undefined;
@@ -906,6 +941,7 @@ function appendAssistantTranscriptMessage(params: {
     transcriptPath,
     message: params.message,
     label: params.label,
+    content: params.content,
     idempotencyKey: params.idempotencyKey,
     abortMeta: params.abortMeta,
   });
@@ -982,18 +1018,13 @@ function createChatAbortOps(context: GatewayRequestContext): ChatAbortOps {
   };
 }
 
-function normalizeOptionalText(value?: string | null): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed || undefined;
-}
-
 function normalizeExplicitChatSendOrigin(
   params: ChatSendExplicitOrigin,
 ): { ok: true; value?: ChatSendExplicitOrigin } | { ok: false; error: string } {
-  const originatingChannel = normalizeOptionalText(params.originatingChannel);
-  const originatingTo = normalizeOptionalText(params.originatingTo);
-  const accountId = normalizeOptionalText(params.accountId);
-  const messageThreadId = normalizeOptionalText(params.messageThreadId);
+  const originatingChannel = normalizeOptionalString(params.originatingChannel);
+  const originatingTo = normalizeOptionalString(params.originatingTo);
+  const accountId = normalizeOptionalString(params.accountId);
+  const messageThreadId = normalizeOptionalString(params.messageThreadId);
   const hasAnyExplicitOriginField = Boolean(
     originatingChannel || originatingTo || accountId || messageThreadId,
   );
@@ -1029,8 +1060,8 @@ function resolveChatAbortRequester(
 ): ChatAbortRequester {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   return {
-    connId: normalizeOptionalText(client?.connId),
-    deviceId: normalizeOptionalText(client?.connect?.device?.id),
+    connId: normalizeOptionalString(client?.connId),
+    deviceId: normalizeOptionalString(client?.connect?.device?.id),
     isAdmin: scopes.includes(ADMIN_SCOPE),
   };
 }
@@ -1042,8 +1073,8 @@ function canRequesterAbortChatRun(
   if (requester.isAdmin) {
     return true;
   }
-  const ownerDeviceId = normalizeOptionalText(entry.ownerDeviceId);
-  const ownerConnId = normalizeOptionalText(entry.ownerConnId);
+  const ownerDeviceId = normalizeOptionalString(entry.ownerDeviceId);
+  const ownerConnId = normalizeOptionalString(entry.ownerConnId);
   if (!ownerDeviceId && !ownerConnId) {
     return true;
   }
@@ -1265,11 +1296,16 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
+      const sessionAgentId = resolveSessionAgentId({
+        sessionKey,
+        config: cfg,
+      });
+      const resolvedModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
       const catalog = await context.loadGatewayModelCatalog();
       thinkingLevel = resolveThinkingDefault({
         cfg,
-        provider: resolvedSessionModel.provider,
-        model: resolvedSessionModel.model,
+        provider: resolvedModel.provider,
+        model: resolvedModel.model,
         catalog,
       });
     }
@@ -1564,8 +1600,8 @@ export const chatHandlers: GatewayRequestHandlers = {
         sessionKey: rawSessionKey,
         startedAtMs: now,
         expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs }),
-        ownerConnId: normalizeOptionalText(client?.connId),
-        ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
+        ownerConnId: normalizeOptionalString(client?.connId),
+        ownerDeviceId: normalizeOptionalString(client?.connect?.device?.id),
       });
       const ackPayload = {
         runId: clientRunId,
@@ -1635,7 +1671,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         SenderId: clientInfo?.id,
         SenderName: clientInfo?.displayName,
         SenderUsername: clientInfo?.displayName,
-        GatewayClientScopes: client?.connect?.scopes,
+        GatewayClientScopes: client?.connect?.scopes ?? [],
       };
 
       const agentId = resolveSessionAgentId({
@@ -1795,20 +1831,33 @@ export const chatHandlers: GatewayRequestHandlers = {
                 sessionKey,
               });
             } else {
-              const combinedReply = deliveredReplies
+              const finalPayloads = deliveredReplies
                 .filter((entry) => entry.kind === "final")
-                .map((entry) => entry.payload)
+                .map((entry) => entry.payload);
+              const combinedReply = finalPayloads
                 .map((part) => part.text?.trim() ?? "")
                 .filter(Boolean)
                 .join("\n\n")
                 .trim();
-              let message: Record<string, unknown> | undefined;
+              const audioBlocks = buildWebchatAudioContentBlocksFromReplyPayloads(finalPayloads);
+              const assistantContent: Array<Record<string, unknown>> = [];
               if (combinedReply) {
+                assistantContent.push({ type: "text", text: combinedReply });
+              } else if (audioBlocks.length > 0) {
+                assistantContent.push({ type: "text", text: "Audio reply" });
+              }
+              assistantContent.push(...audioBlocks);
+
+              let message: Record<string, unknown> | undefined;
+              if (assistantContent.length > 0) {
                 const { storePath: latestStorePath, entry: latestEntry } =
                   loadSessionEntry(sessionKey);
                 const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
+                const transcriptFallbackText =
+                  combinedReply || (audioBlocks.length > 0 ? "Audio reply" : "");
                 const appended = appendAssistantTranscriptMessage({
-                  message: combinedReply,
+                  message: transcriptFallbackText,
+                  content: assistantContent,
                   sessionId,
                   storePath: latestStorePath,
                   sessionFile: latestEntry?.sessionFile,
@@ -1824,7 +1873,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                   const now = Date.now();
                   message = {
                     role: "assistant",
-                    content: [{ type: "text", text: combinedReply }],
+                    content: assistantContent,
                     timestamp: now,
                     // Keep this compatible with Pi stopReason enums even though this message isn't
                     // persisted to the transcript due to the append failure.

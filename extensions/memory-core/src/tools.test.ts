@@ -1,8 +1,5 @@
 import { beforeEach, describe, it } from "vitest";
-import {
-  resetMemoryToolMockState,
-  setMemorySearchImpl,
-} from "../../../test/helpers/memory-tool-manager-mock.js";
+import { resetMemoryToolMockState, setMemorySearchImpl } from "./memory-tool-manager-mock.js";
 import {
   createMemorySearchToolOrThrow,
   expectUnavailableMemorySearchDetails,

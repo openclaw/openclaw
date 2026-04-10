@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type {
   CreateSandboxBackendParams,
   SandboxBackendCommandParams,
@@ -291,8 +292,7 @@ function resolveSshRuntimePaths(workspaceRoot: string, scopeKey: string): Resolv
 
 function buildSshSandboxRuntimeId(scopeKey: string): string {
   const trimmed = scopeKey.trim() || "session";
-  const safe = trimmed
-    .toLowerCase()
+  const safe = normalizeLowercaseStringOrEmpty(trimmed)
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 32);

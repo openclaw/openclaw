@@ -1,6 +1,7 @@
 import type { KilocodeModelCatalogEntry } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 const log = createSubsystemLogger("kilocode-models");
 
@@ -77,7 +78,9 @@ function parseModality(entry: GatewayModelEntry): Array<"text" | "image"> {
   if (!Array.isArray(modalities)) {
     return ["text"];
   }
-  const hasImage = modalities.some((m) => typeof m === "string" && m.toLowerCase() === "image");
+  const hasImage = modalities.some(
+    (m) => typeof m === "string" && normalizeLowercaseStringOrEmpty(m) === "image",
+  );
   return hasImage ? ["text", "image"] : ["text"];
 }
 

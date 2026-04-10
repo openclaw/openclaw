@@ -1,4 +1,7 @@
-import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
+import {
+  createMcpLoopbackServerConfig,
+  getActiveMcpLoopbackRuntime,
+} from "../../gateway/mcp-http.loopback-runtime.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import {
   buildBootstrapInjectionStats,
@@ -10,14 +13,17 @@ import {
   makeBootstrapWarn as makeBootstrapWarnImpl,
   resolveBootstrapContextForRun as resolveBootstrapContextForRunImpl,
 } from "../bootstrap-files.js";
+import { resolveCliAuthEpoch } from "../cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
-import { resolveOpenClawDocsPath } from "../docs-path.js";
+import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
 } from "../pi-embedded-helpers.js";
+import { resolveSkillsPromptForRun } from "../skills.js";
+import { resolveSystemPromptOverride } from "../system-prompt-override.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
@@ -28,6 +34,11 @@ import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 const prepareDeps = {
   makeBootstrapWarn: makeBootstrapWarnImpl,
   resolveBootstrapContextForRun: resolveBootstrapContextForRunImpl,
+  getActiveMcpLoopbackRuntime,
+  createMcpLoopbackServerConfig,
+  resolveOpenClawDocsPath: async (
+    params: Parameters<typeof import("../docs-path.js").resolveOpenClawDocsPath>[0],
+  ) => (await import("../docs-path.js")).resolveOpenClawDocsPath(params),
 };
 
 export function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDeps>): void {
@@ -59,30 +70,14 @@ export async function prepareCliRunContext(
   if (!backendResolved) {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
-  const preparedBackend = await prepareCliBundleMcpConfig({
-    enabled: backendResolved.bundleMcp,
-    backend: backendResolved.config,
-    workspaceDir,
-    config: params.config,
-    warn: (message) => cliBackendLog.warn(message),
+  const authEpoch = await resolveCliAuthEpoch({
+    provider: params.provider,
+    authProfileId: params.authProfileId,
   });
   const extraSystemPrompt = params.extraSystemPrompt?.trim() ?? "";
   const extraSystemPromptHash = hashCliSessionText(extraSystemPrompt);
-  const reusableCliSession = resolveCliSessionReuse({
-    binding:
-      params.cliSessionBinding ??
-      (params.cliSessionId ? { sessionId: params.cliSessionId } : undefined),
-    authProfileId: params.authProfileId,
-    extraSystemPromptHash,
-    mcpConfigHash: preparedBackend.mcpConfigHash,
-  });
-  if (reusableCliSession.invalidatedReason) {
-    cliBackendLog.info(
-      `cli session reset: provider=${params.provider} reason=${reusableCliSession.invalidatedReason}`,
-    );
-  }
   const modelId = (params.model ?? "default").trim() || "default";
-  const normalizedModel = normalizeCliModel(modelId, preparedBackend.backend);
+  const normalizedModel = normalizeCliModel(modelId, backendResolved.config);
   const modelDisplay = `${params.provider}/${modelId}`;
 
   const sessionLabel = params.sessionKey ?? params.sessionId;
@@ -118,29 +113,81 @@ export async function prepareCliRunContext(
     config: params.config,
     agentId: params.agentId,
   });
-  const heartbeatPrompt =
-    sessionAgentId === defaultAgentId
-      ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
-      : undefined;
-  const docsPath = await resolveOpenClawDocsPath({
+  const mcpLoopbackRuntime = backendResolved.bundleMcp
+    ? prepareDeps.getActiveMcpLoopbackRuntime()
+    : undefined;
+  const preparedBackend = await prepareCliBundleMcpConfig({
+    enabled: backendResolved.bundleMcp,
+    mode: backendResolved.bundleMcpMode,
+    backend: backendResolved.config,
+    workspaceDir,
+    config: params.config,
+    additionalConfig: mcpLoopbackRuntime
+      ? prepareDeps.createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)
+      : undefined,
+    env: mcpLoopbackRuntime
+      ? {
+          OPENCLAW_MCP_TOKEN: mcpLoopbackRuntime.token,
+          OPENCLAW_MCP_AGENT_ID: sessionAgentId ?? "",
+          OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
+          OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
+          OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageProvider ?? "",
+        }
+      : undefined,
+    warn: (message) => cliBackendLog.warn(message),
+  });
+  const reusableCliSession = params.cliSessionBinding
+    ? resolveCliSessionReuse({
+        binding: params.cliSessionBinding,
+        authProfileId: params.authProfileId,
+        authEpoch,
+        extraSystemPromptHash,
+        mcpConfigHash: preparedBackend.mcpConfigHash,
+      })
+    : params.cliSessionId
+      ? { sessionId: params.cliSessionId }
+      : {};
+  if (reusableCliSession.invalidatedReason) {
+    cliBackendLog.info(
+      `cli session reset: provider=${params.provider} reason=${reusableCliSession.invalidatedReason}`,
+    );
+  }
+  const heartbeatPrompt = resolveHeartbeatPromptForSystemPrompt({
+    config: params.config,
+    agentId: sessionAgentId,
+    defaultAgentId,
+  });
+  const docsPath = await prepareDeps.resolveOpenClawDocsPath({
     workspaceDir,
     argv1: process.argv[1],
     cwd: process.cwd(),
     moduleUrl: import.meta.url,
   });
-  const systemPrompt = buildSystemPrompt({
+  const skillsPrompt = resolveSkillsPromptForRun({
+    skillsSnapshot: params.skillsSnapshot,
     workspaceDir,
     config: params.config,
-    defaultThinkLevel: params.thinkLevel,
-    extraSystemPrompt,
-    ownerNumbers: params.ownerNumbers,
-    heartbeatPrompt,
-    docsPath: docsPath ?? undefined,
-    tools: [],
-    contextFiles,
-    modelDisplay,
     agentId: sessionAgentId,
   });
+  const systemPrompt =
+    resolveSystemPromptOverride({
+      config: params.config,
+      agentId: sessionAgentId,
+    }) ??
+    buildSystemPrompt({
+      workspaceDir,
+      config: params.config,
+      defaultThinkLevel: params.thinkLevel,
+      extraSystemPrompt,
+      ownerNumbers: params.ownerNumbers,
+      heartbeatPrompt,
+      docsPath: docsPath ?? undefined,
+      skillsPrompt,
+      tools: [],
+      contextFiles,
+      modelDisplay,
+      agentId: sessionAgentId,
+    });
   const systemPromptReport = buildSystemPromptReport({
     source: "run",
     generatedAt: Date.now(),
@@ -160,7 +207,7 @@ export async function prepareCliRunContext(
     systemPrompt,
     bootstrapFiles,
     injectedFiles: contextFiles,
-    skillsPrompt: "",
+    skillsPrompt,
     tools: [],
   });
 
@@ -177,6 +224,7 @@ export async function prepareCliRunContext(
     systemPromptReport,
     bootstrapPromptWarningLines: bootstrapPromptWarning.lines,
     heartbeatPrompt,
+    authEpoch,
     extraSystemPromptHash,
   };
 }

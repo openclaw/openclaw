@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { collectDurableServiceEnvVars } from "../config/state-dir-dotenv.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 type GatewayInstallAuthMode = NonNullable<NonNullable<OpenClawConfig["gateway"]>["auth"]>["mode"];
 
@@ -26,8 +27,8 @@ function hasDurableGatewayPasswordEnvForInstall(
 ): boolean {
   const durableServiceEnv = collectDurableServiceEnvVars({ env, config: cfg });
   return Boolean(
-    durableServiceEnv.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
-    durableServiceEnv.CLAWDBOT_GATEWAY_PASSWORD?.trim(),
+    normalizeOptionalString(durableServiceEnv.OPENCLAW_GATEWAY_PASSWORD) ||
+    normalizeOptionalString(durableServiceEnv.CLAWDBOT_GATEWAY_PASSWORD),
   );
 }
 

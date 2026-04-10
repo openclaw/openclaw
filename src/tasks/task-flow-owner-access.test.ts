@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   findLatestTaskFlowForOwner,
   getTaskFlowByIdForOwner,
@@ -10,11 +10,6 @@ import { createManagedTaskFlow, resetTaskFlowRegistryForTests } from "./task-flo
 beforeEach(() => {
   resetTaskFlowRegistryForTests();
 });
-
-afterEach(() => {
-  resetTaskFlowRegistryForTests();
-});
-
 describe("task flow owner access", () => {
   it("returns owner-scoped flows for direct and owner-key lookups", () => {
     const older = createManagedTaskFlow({

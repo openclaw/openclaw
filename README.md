@@ -34,7 +34,7 @@ New install? Start here: [Getting started](https://docs.openclaw.ai/start/gettin
 
 <table>
   <tr>
-    <td align="center" width="20%">
+    <td align="center" width="16.66%">
       <a href="https://openai.com/">
         <picture>
           <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/sponsors/openai-light.svg">
@@ -42,7 +42,15 @@ New install? Start here: [Getting started](https://docs.openclaw.ai/start/gettin
         </picture>
       </a>
     </td>
-    <td align="center" width="20%">
+    <td align="center" width="16.66%">
+      <a href="https://github.com/">
+        <picture>
+          <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/sponsors/github-light.svg">
+          <img src="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/sponsors/github.svg" alt="GitHub" height="28">
+        </picture>
+      </a>
+    </td>
+    <td align="center" width="16.66%">
       <a href="https://www.nvidia.com/">
         <picture>
           <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/sponsors/nvidia.svg">
@@ -50,7 +58,7 @@ New install? Start here: [Getting started](https://docs.openclaw.ai/start/gettin
         </picture>
       </a>
     </td>
-    <td align="center" width="20%">
+    <td align="center" width="16.66%">
       <a href="https://vercel.com/">
         <picture>
           <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/sponsors/vercel-light.svg">
@@ -58,7 +66,7 @@ New install? Start here: [Getting started](https://docs.openclaw.ai/start/gettin
         </picture>
       </a>
     </td>
-    <td align="center" width="20%">
+    <td align="center" width="16.66%">
       <a href="https://blacksmith.sh/">
         <picture>
           <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/sponsors/blacksmith-light.svg">
@@ -66,7 +74,7 @@ New install? Start here: [Getting started](https://docs.openclaw.ai/start/gettin
         </picture>
       </a>
     </td>
-    <td align="center" width="20%">
+    <td align="center" width="16.66%">
       <a href="https://www.convex.dev/">
         <picture>
           <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/sponsors/convex-light.svg">
@@ -81,7 +89,7 @@ New install? Start here: [Getting started](https://docs.openclaw.ai/start/gettin
 
 - **[OpenAI](https://openai.com/)** (ChatGPT/Codex)
 
-Model note: while many providers/models are supported, for the best experience and lower prompt-injection risk use the strongest latest-generation model available to you. See [Onboarding](https://docs.openclaw.ai/start/onboarding).
+Model note: while many providers and models are supported, prefer a current flagship model from the provider you trust and already use. See [Onboarding](https://docs.openclaw.ai/start/onboarding).
 
 ## Models (selection + auth)
 
@@ -363,7 +371,7 @@ Minimal `~/.openclaw/openclaw.json` (model + defaults):
 ```json5
 {
   agent: {
-    model: "anthropic/claude-opus-4-6",
+    model: "<provider>/<model-id>",
   },
 }
 ```

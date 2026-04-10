@@ -1,6 +1,15 @@
 import { listPotentialConfiguredChannelIds } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
+import {
+  resolveMemoryDreamingConfig,
+  resolveMemoryDreamingPluginConfig,
+  resolveMemoryDreamingPluginId,
+} from "../memory-host-sdk/dreaming.js";
+import {
+  createPluginActivationSource,
+  normalizePluginsConfig,
+  resolveEffectivePluginActivationState,
+} from "./config-state.js";
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
 import { hasKind } from "./slots.js";
 
@@ -11,14 +20,28 @@ function hasRuntimeContractSurface(plugin: PluginManifestRecord): boolean {
     plugin.contracts?.speechProviders?.length ||
     plugin.contracts?.mediaUnderstandingProviders?.length ||
     plugin.contracts?.imageGenerationProviders?.length ||
+    plugin.contracts?.videoGenerationProviders?.length ||
+    plugin.contracts?.musicGenerationProviders?.length ||
     plugin.contracts?.webFetchProviders?.length ||
     plugin.contracts?.webSearchProviders?.length ||
+    plugin.contracts?.memoryEmbeddingProviders?.length ||
     hasKind(plugin.kind, "memory"),
   );
 }
 
 function isGatewayStartupSidecar(plugin: PluginManifestRecord): boolean {
   return plugin.channels.length === 0 && !hasRuntimeContractSurface(plugin);
+}
+
+function resolveGatewayStartupDreamingPluginIds(config: OpenClawConfig): Set<string> {
+  const dreamingConfig = resolveMemoryDreamingConfig({
+    pluginConfig: resolveMemoryDreamingPluginConfig(config),
+    cfg: config,
+  });
+  if (!dreamingConfig.enabled) {
+    return new Set();
+  }
+  return new Set(["memory-core", resolveMemoryDreamingPluginId(config)]);
 }
 
 export function resolveChannelPluginIds(params: {
@@ -75,6 +98,7 @@ export function resolveConfiguredDeferredChannelPluginIds(params: {
 
 export function resolveGatewayStartupPluginIds(params: {
   config: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): string[] {
@@ -82,6 +106,13 @@ export function resolveGatewayStartupPluginIds(params: {
     listPotentialConfiguredChannelIds(params.config, params.env).map((id) => id.trim()),
   );
   const pluginsConfig = normalizePluginsConfig(params.config.plugins);
+  // Startup must classify allowlist exceptions against the raw config snapshot,
+  // not the auto-enabled effective snapshot, or configured-only channels can be
+  // misclassified as explicit enablement.
+  const activationSource = createPluginActivationSource({
+    config: params.activationSourceConfig ?? params.config,
+  });
+  const startupDreamingPluginIds = resolveGatewayStartupDreamingPluginIds(params.config);
   return loadPluginManifestRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -91,23 +122,30 @@ export function resolveGatewayStartupPluginIds(params: {
       if (plugin.channels.some((channelId) => configuredChannelIds.has(channelId))) {
         return true;
       }
-      if (!isGatewayStartupSidecar(plugin)) {
-        return false;
-      }
       const activationState = resolveEffectivePluginActivationState({
         id: plugin.id,
         origin: plugin.origin,
         config: pluginsConfig,
         rootConfig: params.config,
         enabledByDefault: plugin.enabledByDefault,
+        activationSource,
       });
-      if (!activationState.enabled) {
+      const isAllowedStartupActivation = (): boolean => {
+        if (!activationState.enabled) {
+          return false;
+        }
+        if (plugin.origin !== "bundled") {
+          return activationState.explicitlyEnabled;
+        }
+        return activationState.source === "explicit" || activationState.source === "default";
+      };
+      if (startupDreamingPluginIds.has(plugin.id)) {
+        return isAllowedStartupActivation();
+      }
+      if (!isGatewayStartupSidecar(plugin)) {
         return false;
       }
-      if (plugin.origin !== "bundled") {
-        return activationState.explicitlyEnabled;
-      }
-      return activationState.source === "explicit" || activationState.source === "default";
+      return isAllowedStartupActivation();
     })
     .map((plugin) => plugin.id);
 }

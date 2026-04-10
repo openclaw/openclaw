@@ -13,7 +13,10 @@ import {
   restoreGatewayToken,
   startGatewayServer,
   testState,
+  installGatewayTestHooks,
 } from "./server.auth.shared.js";
+
+installGatewayTestHooks({ scope: "suite" });
 
 function expectAuthErrorDetails(params: {
   details: unknown;

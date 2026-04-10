@@ -1,7 +1,12 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import { isProxyReasoningUnsupportedModelHint } from "../../plugin-sdk/provider-model-shared.js";
+import { normalizeOptionalLowercaseString, readStringValue } from "../../shared/string-coerce.js";
+import { resolveProviderRequestPolicy } from "../provider-attribution.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
+import { applyAnthropicEphemeralCacheControlMarkers } from "./anthropic-cache-control-payload.js";
+import { isAnthropicModelRef } from "./anthropic-family-cache-semantics.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 const KILOCODE_FEATURE_HEADER = "X-KILOCODE-FEATURE";
 const KILOCODE_FEATURE_DEFAULT = "openclaw";
@@ -10,10 +15,6 @@ const KILOCODE_FEATURE_ENV_VAR = "KILOCODE_FEATURE";
 function resolveKilocodeAppHeaders(): Record<string, string> {
   const feature = process.env[KILOCODE_FEATURE_ENV_VAR]?.trim() || KILOCODE_FEATURE_DEFAULT;
   return { [KILOCODE_FEATURE_HEADER]: feature };
-}
-
-function isOpenRouterAnthropicModel(provider: string, modelId: string): boolean {
-  return provider.toLowerCase() === "openrouter" && modelId.toLowerCase().startsWith("anthropic/");
 }
 
 function mapThinkingLevelToOpenRouterReasoningEffort(
@@ -59,48 +60,30 @@ function normalizeProxyReasoningPayload(payload: unknown, thinkingLevel?: ThinkL
 export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
+    const provider = readStringValue(model.provider);
+    const modelId = readStringValue(model.id);
+    // Keep OpenRouter-specific cache markers on verified OpenRouter routes
+    // (or the provider's default route), but not on arbitrary OpenAI proxies.
+    const endpointClass = resolveProviderRequestPolicy({
+      provider,
+      api: readStringValue(model.api),
+      baseUrl: readStringValue(model.baseUrl),
+      capability: "llm",
+      transport: "stream",
+    }).endpointClass;
     if (
-      typeof model.provider !== "string" ||
-      typeof model.id !== "string" ||
-      !isOpenRouterAnthropicModel(model.provider, model.id)
+      !modelId ||
+      !isAnthropicModelRef(modelId) ||
+      !(
+        endpointClass === "openrouter" ||
+        (endpointClass === "default" && normalizeOptionalLowercaseString(provider) === "openrouter")
+      )
     ) {
       return underlying(model, context, options);
     }
 
     return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
-      const messages = payloadObj.messages;
-      if (Array.isArray(messages)) {
-        for (const msg of messages as Array<{ role?: string; content?: unknown }>) {
-          if (msg.role === "system" || msg.role === "developer") {
-            if (typeof msg.content === "string") {
-              msg.content = [
-                { type: "text", text: msg.content, cache_control: { type: "ephemeral" } },
-              ];
-            } else if (Array.isArray(msg.content) && msg.content.length > 0) {
-              const last = msg.content[msg.content.length - 1];
-              if (last && typeof last === "object") {
-                const record = last as Record<string, unknown>;
-                if (record.type !== "thinking" && record.type !== "redacted_thinking") {
-                  record.cache_control = { type: "ephemeral" };
-                }
-              }
-            }
-            continue;
-          }
-
-          if (msg.role === "assistant" && Array.isArray(msg.content)) {
-            for (const block of msg.content) {
-              if (!block || typeof block !== "object") {
-                continue;
-              }
-              const record = block as Record<string, unknown>;
-              if (record.type === "thinking" || record.type === "redacted_thinking") {
-                delete record.cache_control;
-              }
-            }
-          }
-        }
-      }
+      applyAnthropicEphemeralCacheControlMarkers(payloadObj);
     });
   };
 }
@@ -112,9 +95,9 @@ export function createOpenRouterWrapper(
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     const headers = resolveProviderRequestPolicyConfig({
-      provider: typeof model.provider === "string" ? model.provider : "openrouter",
-      api: typeof model.api === "string" ? model.api : undefined,
-      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+      provider: readStringValue(model.provider) ?? "openrouter",
+      api: readStringValue(model.api),
+      baseUrl: readStringValue(model.baseUrl),
       capability: "llm",
       transport: "stream",
       callerHeaders: options?.headers,
@@ -136,7 +119,7 @@ export function createOpenRouterWrapper(
 }
 
 export function isProxyReasoningUnsupported(modelId: string): boolean {
-  return modelId.toLowerCase().startsWith("x-ai/");
+  return isProxyReasoningUnsupportedModelHint(modelId);
 }
 
 export function createKilocodeWrapper(
@@ -146,9 +129,9 @@ export function createKilocodeWrapper(
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     const headers = resolveProviderRequestPolicyConfig({
-      provider: typeof model.provider === "string" ? model.provider : "kilocode",
-      api: typeof model.api === "string" ? model.api : undefined,
-      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+      provider: readStringValue(model.provider) ?? "kilocode",
+      api: readStringValue(model.api),
+      baseUrl: readStringValue(model.baseUrl),
       capability: "llm",
       transport: "stream",
       callerHeaders: options?.headers,

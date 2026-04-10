@@ -6,7 +6,9 @@ import { onAgentEvent } from "../infra/agent-events.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { recordTaskRunProgressByRunId } from "../tasks/task-executor.js";
+import { type DeliveryContext } from "../utils/delivery-context.js";
 
 const DEFAULT_STREAM_FLUSH_MS = 2_500;
 const DEFAULT_NO_OUTPUT_NOTICE_MS = 60_000;
@@ -29,14 +31,6 @@ function truncate(value: string, maxChars: number): string {
   return `${value.slice(0, maxChars - 1)}…`;
 }
 
-function toTrimmedString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
-
 function toFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
@@ -49,14 +43,14 @@ function resolveAcpStreamLogPathFromSessionFile(sessionFile: string, sessionId: 
 export function resolveAcpSpawnStreamLogPath(params: {
   childSessionKey: string;
 }): string | undefined {
-  const childSessionKey = params.childSessionKey.trim();
+  const childSessionKey = normalizeOptionalString(params.childSessionKey);
   if (!childSessionKey) {
     return undefined;
   }
   const storeEntry = readAcpSessionEntry({
     sessionKey: childSessionKey,
   });
-  const sessionId = storeEntry?.entry?.sessionId?.trim();
+  const sessionId = normalizeOptionalString(storeEntry?.entry?.sessionId);
   if (!storeEntry || !sessionId) {
     return undefined;
   }
@@ -80,6 +74,7 @@ export function startAcpSpawnParentStreamRelay(params: {
   childSessionKey: string;
   agentId: string;
   logPath?: string;
+  deliveryContext?: DeliveryContext;
   surfaceUpdates?: boolean;
   streamFlushMs?: number;
   noOutputNoticeMs?: number;
@@ -87,8 +82,8 @@ export function startAcpSpawnParentStreamRelay(params: {
   maxRelayLifetimeMs?: number;
   emitStartNotice?: boolean;
 }): AcpSpawnParentRelayHandle {
-  const runId = params.runId.trim();
-  const parentSessionKey = params.parentSessionKey.trim();
+  const runId = normalizeOptionalString(params.runId) ?? "";
+  const parentSessionKey = normalizeOptionalString(params.parentSessionKey) ?? "";
   if (!runId || !parentSessionKey) {
     return {
       dispose: () => {},
@@ -115,7 +110,7 @@ export function startAcpSpawnParentStreamRelay(params: {
 
   const relayLabel = truncate(compactWhitespace(params.agentId), 40) || "ACP child";
   const contextPrefix = `acp-spawn:${runId}`;
-  const logPath = toTrimmedString(params.logPath);
+  const logPath = normalizeOptionalString(params.logPath);
   let logDirReady = false;
   let pendingLogLines = "";
   let logFlushScheduled = false;
@@ -200,7 +195,12 @@ export function startAcpSpawnParentStreamRelay(params: {
     if (!shouldSurfaceUpdates) {
       return;
     }
-    enqueueSystemEvent(cleaned, { sessionKey: parentSessionKey, contextKey });
+    enqueueSystemEvent(cleaned, {
+      sessionKey: parentSessionKey,
+      contextKey,
+      deliveryContext: params.deliveryContext,
+      trusted: false,
+    });
     wake();
   };
   const emitStartNotice = () => {
@@ -348,7 +348,7 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
 
-    const phase = toTrimmedString((event.data as { phase?: unknown } | undefined)?.phase);
+    const phase = normalizeOptionalString((event.data as { phase?: unknown } | undefined)?.phase);
     logEvent("lifecycle", { phase: phase ?? "unknown", data: event.data });
     if (phase === "end") {
       flushPending();
@@ -374,7 +374,9 @@ export function startAcpSpawnParentStreamRelay(params: {
 
     if (phase === "error") {
       flushPending();
-      const errorText = toTrimmedString((event.data as { error?: unknown } | undefined)?.error);
+      const errorText = normalizeOptionalString(
+        (event.data as { error?: unknown } | undefined)?.error,
+      );
       if (errorText) {
         emit(`${relayLabel} run failed: ${errorText}`, `${contextPrefix}:error`);
       } else {

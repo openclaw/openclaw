@@ -1,7 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
-import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
-import type { OpenClawPluginApi } from "../runtime-api.js";
+import type { OpenClawPluginApi, PluginRuntime } from "../runtime-api.js";
 
 const createFeishuToolClientMock = vi.hoisted(() => vi.fn());
 const resolveAnyEnabledFeishuToolsConfigMock = vi.hoisted(() => vi.fn());
@@ -13,6 +12,10 @@ vi.mock("./tool-account.js", () => ({
 
 let registerFeishuDriveTools: typeof import("./drive.js").registerFeishuDriveTools;
 
+function createFeishuToolRuntime(): PluginRuntime {
+  return {} as PluginRuntime;
+}
+
 function createDriveToolApi(params: {
   config: OpenClawPluginApi["config"];
   registerTool: OpenClawPluginApi["registerTool"];
@@ -22,7 +25,7 @@ function createDriveToolApi(params: {
     name: "Feishu Test",
     source: "local",
     config: params.config,
-    runtime: createPluginRuntimeMock(),
+    runtime: createFeishuToolRuntime(),
     logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     registerTool: params.registerTool,
   });

@@ -1,4 +1,5 @@
 import { normalizeConversationText } from "../../../acp/conversation-id.js";
+import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import type { HandleCommandsParams } from "../commands-types.js";
 import {
   resolveConversationBindingAccountIdFromMessage,
@@ -9,11 +10,15 @@ import {
 
 export function resolveAcpCommandChannel(params: HandleCommandsParams): string {
   const resolved = resolveConversationBindingChannelFromMessage(params.ctx, params.command.channel);
-  return normalizeConversationText(resolved).toLowerCase();
+  return normalizeLowercaseStringOrEmpty(normalizeConversationText(resolved));
 }
 
 export function resolveAcpCommandAccountId(params: HandleCommandsParams): string {
-  return resolveConversationBindingAccountIdFromMessage(params.ctx);
+  return resolveConversationBindingAccountIdFromMessage({
+    ctx: params.ctx,
+    cfg: params.cfg,
+    commandChannel: params.command.channel,
+  });
 }
 
 export function resolveAcpCommandThreadId(params: HandleCommandsParams): string | undefined {

@@ -1,35 +1,34 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
-import type { IMessageProbe } from "../../../extensions/imessage/runtime-api.js";
-import {
-  listTelegramDirectoryGroupsFromConfig,
-  listTelegramDirectoryPeersFromConfig,
-  type TelegramProbe,
-  type TelegramTokenResolution,
-} from "../../../extensions/telegram/api.js";
 import type {
   BaseProbeResult,
   BaseTokenResolution,
   ChannelDirectoryEntry,
 } from "../../../src/channels/plugins/types.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
-import {
-  listDiscordDirectoryGroupsFromConfig,
-  listDiscordDirectoryPeersFromConfig,
-  type DiscordProbe,
-  type DiscordTokenResolution,
-} from "../../../src/plugin-sdk/discord-surface.js";
 import type { LineProbeResult } from "../../../src/plugin-sdk/line.js";
-import type { SignalProbe } from "../../../src/plugin-sdk/signal-surface.js";
-import {
-  listSlackDirectoryGroupsFromConfig,
-  listSlackDirectoryPeersFromConfig,
-  type SlackProbe,
-} from "../../../src/plugin-sdk/slack-surface.js";
-import {
-  listWhatsAppDirectoryGroupsFromConfig,
-  listWhatsAppDirectoryPeersFromConfig,
-} from "../../../src/plugin-sdk/whatsapp-surface.js";
+import { loadBundledPluginApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import { withEnvAsync } from "../../../src/test-utils/env.js";
+
+type DiscordApiSurface = typeof import("@openclaw/discord/api.js");
+type DiscordProbe = import("@openclaw/discord/api.js").DiscordProbe;
+type DiscordTokenResolution = import("@openclaw/discord/api.js").DiscordTokenResolution;
+type IMessageProbe = import("@openclaw/imessage/runtime-api.js").IMessageProbe;
+type SignalProbe = import("@openclaw/signal/api.js").SignalProbe;
+type SlackApiSurface = typeof import("@openclaw/slack/api.js");
+type SlackProbe = import("@openclaw/slack/api.js").SlackProbe;
+type TelegramApiSurface = typeof import("@openclaw/telegram/api.js");
+type TelegramProbe = import("@openclaw/telegram/api.js").TelegramProbe;
+type TelegramTokenResolution = import("@openclaw/telegram/api.js").TelegramTokenResolution;
+type WhatsAppApiSurface = typeof import("@openclaw/whatsapp/api.js");
+
+const { listDiscordDirectoryGroupsFromConfig, listDiscordDirectoryPeersFromConfig } =
+  loadBundledPluginApiSync<DiscordApiSurface>("discord");
+const { listSlackDirectoryGroupsFromConfig, listSlackDirectoryPeersFromConfig } =
+  loadBundledPluginApiSync<SlackApiSurface>("slack");
+const { listTelegramDirectoryGroupsFromConfig, listTelegramDirectoryPeersFromConfig } =
+  loadBundledPluginApiSync<TelegramApiSurface>("telegram");
+const { listWhatsAppDirectoryGroupsFromConfig, listWhatsAppDirectoryPeersFromConfig } =
+  loadBundledPluginApiSync<WhatsAppApiSurface>("whatsapp");
 
 type DirectoryListFn = (params: {
   cfg: OpenClawConfig;

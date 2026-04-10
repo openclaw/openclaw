@@ -406,7 +406,7 @@ describe("group policy warning builders", () => {
       cfg: {
         channels?: {
           defaults?: { groupPolicy?: "open" | "allowlist" | "disabled" };
-          example?: unknown;
+          example?: Record<string, unknown>;
         };
       };
       channelLabel: string;
@@ -505,7 +505,7 @@ describe("group policy warning builders", () => {
 
   it("builds config-aware open-provider collectors", () => {
     const collectWarnings = createOpenProviderGroupPolicyWarningCollector<{
-      cfg: { channels?: { example?: unknown } };
+      cfg: { channels?: { example?: Record<string, unknown> } };
       configuredGroupPolicy?: "open" | "allowlist" | "disabled";
     }>({
       providerConfigPresent: (cfg) => cfg.channels?.example !== undefined,

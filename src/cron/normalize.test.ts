@@ -593,6 +593,23 @@ describe("normalizeCronJobCreate", () => {
 
     expect(normalized.sessionTarget).toBe("session:MySessionID");
   });
+
+  it("rejects custom session ids with path separators", () => {
+    expect(() =>
+      normalizeCronJobCreate({
+        name: "bad-custom-session",
+        schedule: { kind: "cron", expr: "* * * * *" },
+        sessionTarget: "session:../../outside",
+        payload: { kind: "agentTurn", message: "hello" },
+      }),
+    ).toThrow("invalid cron sessionTarget session id");
+
+    expect(() =>
+      normalizeCronJobPatch({
+        sessionTarget: "session:..\\outside",
+      }),
+    ).toThrow("invalid cron sessionTarget session id");
+  });
 });
 
 describe("normalizeCronJobPatch", () => {
@@ -609,13 +626,13 @@ describe("normalizeCronJobPatch", () => {
   it("infers agentTurn kind for model-only payload patches", () => {
     const normalized = normalizeCronJobPatch({
       payload: {
-        model: "anthropic/claude-sonnet-4-5",
+        model: "anthropic/claude-sonnet-4-6",
       },
     }) as unknown as Record<string, unknown>;
 
     const payload = normalized.payload as Record<string, unknown>;
     expect(payload.kind).toBe("agentTurn");
-    expect(payload.model).toBe("anthropic/claude-sonnet-4-5");
+    expect(payload.model).toBe("anthropic/claude-sonnet-4-6");
   });
 
   it("infers agentTurn kind for lightContext-only payload patches", () => {

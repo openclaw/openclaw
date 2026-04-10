@@ -2,6 +2,7 @@ import { execFileSync, execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { formatErrorMessage } from "../infra/errors.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
@@ -75,6 +76,26 @@ type ClaudeCliWriteOptions = ClaudeCliFileOptions & {
   writeFile?: (credentials: OAuthCredentials, options?: ClaudeCliFileOptions) => boolean;
 };
 
+type CodexCliFileOptions = {
+  codexHome?: string;
+};
+
+type CodexCliWriteOptions = CodexCliFileOptions & {
+  platform?: NodeJS.Platform;
+  execSync?: ExecSyncFn;
+  execFileSync?: ExecFileSyncFn;
+  writeKeychain?: (
+    credentials: OAuthCredentials,
+    options?: {
+      codexHome?: string;
+      platform?: NodeJS.Platform;
+      execSync?: ExecSyncFn;
+      execFileSync?: ExecFileSyncFn;
+    },
+  ) => boolean;
+  writeFile?: (credentials: OAuthCredentials, options?: CodexCliFileOptions) => boolean;
+};
+
 type ExecSyncFn = typeof execSync;
 type ExecFileSyncFn = typeof execFileSync;
 
@@ -114,12 +135,8 @@ function parseClaudeCliOauthCredential(claudeOauth: unknown): ClaudeCliCredentia
   };
 }
 
-function resolveCodexCliAuthPath() {
-  return path.join(resolveCodexHomePath(), CODEX_CLI_AUTH_FILENAME);
-}
-
-function resolveCodexHomePath() {
-  const configured = process.env.CODEX_HOME;
+function resolveCodexHomePath(codexHome?: string) {
+  const configured = codexHome ?? process.env.CODEX_HOME;
   const home = configured ? resolveUserPath(configured) : resolveUserPath("~/.codex");
   try {
     return fs.realpathSync.native(home);
@@ -185,6 +202,18 @@ function computeCodexKeychainAccount(codexHome: string) {
   return `cli|${hash.slice(0, 16)}`;
 }
 
+function resolveCodexKeychainParams(options?: {
+  codexHome?: string;
+  platform?: NodeJS.Platform;
+  execSync?: ExecSyncFn;
+}) {
+  return {
+    platform: options?.platform ?? process.platform,
+    execSyncImpl: options?.execSync ?? execSync,
+    codexHome: resolveCodexHomePath(options?.codexHome),
+  };
+}
+
 function decodeJwtExpiryMs(token: string): number | null {
   const parts = token.split(".");
   if (parts.length < 2) {
@@ -201,17 +230,15 @@ function decodeJwtExpiryMs(token: string): number | null {
   }
 }
 
-function readCodexKeychainCredentials(options?: {
+function readCodexKeychainAuthRecord(options?: {
+  codexHome?: string;
   platform?: NodeJS.Platform;
   execSync?: ExecSyncFn;
-}): CodexCliCredential | null {
-  const platform = options?.platform ?? process.platform;
+}): Record<string, unknown> | null {
+  const { platform, execSyncImpl, codexHome } = resolveCodexKeychainParams(options);
   if (platform !== "darwin") {
     return null;
   }
-  const execSyncImpl = options?.execSync ?? execSync;
-
-  const codexHome = resolveCodexHomePath();
   const account = computeCodexKeychainAccount(codexHome);
 
   try {
@@ -225,7 +252,23 @@ function readCodexKeychainCredentials(options?: {
     ).trim();
 
     const parsed = JSON.parse(secret) as Record<string, unknown>;
-    const tokens = parsed.tokens as Record<string, unknown> | undefined;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function readCodexKeychainCredentials(options?: {
+  codexHome?: string;
+  platform?: NodeJS.Platform;
+  execSync?: ExecSyncFn;
+}): CodexCliCredential | null {
+  const parsed = readCodexKeychainAuthRecord(options);
+  if (!parsed) {
+    return null;
+  }
+  const tokens = parsed.tokens as Record<string, unknown> | undefined;
+  try {
     const accessToken = tokens?.access_token;
     const refreshToken = tokens?.refresh_token;
     if (typeof accessToken !== "string" || !accessToken) {
@@ -419,7 +462,7 @@ export function writeClaudeCliKeychainCredentials(
     return true;
   } catch (error) {
     log.warn("failed to write credentials to claude cli keychain", {
-      error: error instanceof Error ? error.message : String(error),
+      error: formatErrorMessage(error),
     });
     return false;
   }
@@ -461,7 +504,7 @@ export function writeClaudeCliFileCredentials(
     return true;
   } catch (error) {
     log.warn("failed to write credentials to claude cli file", {
-      error: error instanceof Error ? error.message : String(error),
+      error: formatErrorMessage(error),
     });
     return false;
   }
@@ -487,11 +530,129 @@ export function writeClaudeCliCredentials(
   return writeFile(newCredentials, { homeDir: options?.homeDir });
 }
 
+function buildUpdatedCodexAuthRecord(
+  existing: Record<string, unknown> | null,
+  newCredentials: OAuthCredentials,
+): Record<string, unknown> {
+  const next = existing ? { ...existing } : {};
+  const existingTokens =
+    next.tokens && typeof next.tokens === "object" ? (next.tokens as Record<string, unknown>) : {};
+  next.auth_mode = next.auth_mode ?? "chatgpt";
+  next.tokens = {
+    ...existingTokens,
+    access_token: newCredentials.access,
+    refresh_token: newCredentials.refresh,
+    ...(typeof newCredentials.accountId === "string" && newCredentials.accountId.trim().length > 0
+      ? { account_id: newCredentials.accountId }
+      : {}),
+  };
+  next.last_refresh = new Date().toISOString();
+  return next;
+}
+
+export function writeCodexCliKeychainCredentials(
+  newCredentials: OAuthCredentials,
+  options?: {
+    codexHome?: string;
+    platform?: NodeJS.Platform;
+    execSync?: ExecSyncFn;
+    execFileSync?: ExecFileSyncFn;
+  },
+): boolean {
+  const { platform, codexHome } = resolveCodexKeychainParams(options);
+  if (platform !== "darwin") {
+    return false;
+  }
+  const existing = readCodexKeychainAuthRecord(options);
+  if (!existing) {
+    return false;
+  }
+
+  const execFileSyncImpl = options?.execFileSync ?? execFileSync;
+  const account = computeCodexKeychainAccount(codexHome);
+  const next = buildUpdatedCodexAuthRecord(existing, newCredentials);
+
+  try {
+    execFileSyncImpl(
+      "security",
+      ["add-generic-password", "-U", "-s", "Codex Auth", "-a", account, "-w", JSON.stringify(next)],
+      { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
+    );
+    codexCliCache = null;
+    log.info("wrote refreshed credentials to codex cli keychain", {
+      expires: new Date(newCredentials.expires).toISOString(),
+    });
+    return true;
+  } catch (error) {
+    log.warn("failed to write credentials to codex cli keychain", {
+      error: formatErrorMessage(error),
+    });
+    return false;
+  }
+}
+
+export function writeCodexCliFileCredentials(
+  newCredentials: OAuthCredentials,
+  options?: CodexCliFileOptions,
+): boolean {
+  const codexHome = resolveCodexHomePath(options?.codexHome);
+  const authPath = path.join(codexHome, CODEX_CLI_AUTH_FILENAME);
+  if (!fs.existsSync(authPath)) {
+    return false;
+  }
+
+  try {
+    const raw = loadJsonFile(authPath);
+    if (!raw || typeof raw !== "object") {
+      return false;
+    }
+    const next = buildUpdatedCodexAuthRecord(raw as Record<string, unknown>, newCredentials);
+    saveJsonFile(authPath, next);
+    codexCliCache = null;
+    log.info("wrote refreshed credentials to codex cli file", {
+      expires: new Date(newCredentials.expires).toISOString(),
+    });
+    return true;
+  } catch (error) {
+    log.warn("failed to write credentials to codex cli file", {
+      error: formatErrorMessage(error),
+    });
+    return false;
+  }
+}
+
+export function writeCodexCliCredentials(
+  newCredentials: OAuthCredentials,
+  options?: CodexCliWriteOptions,
+): boolean {
+  const platform = options?.platform ?? process.platform;
+  const writeKeychain = options?.writeKeychain ?? writeCodexCliKeychainCredentials;
+  const writeFile =
+    options?.writeFile ??
+    ((credentials, fileOptions) => writeCodexCliFileCredentials(credentials, fileOptions));
+
+  if (
+    platform === "darwin" &&
+    writeKeychain(newCredentials, {
+      codexHome: options?.codexHome,
+      platform,
+      execSync: options?.execSync,
+      execFileSync: options?.execFileSync,
+    })
+  ) {
+    return true;
+  }
+
+  return writeFile(newCredentials, { codexHome: options?.codexHome });
+}
+
 export function readCodexCliCredentials(options?: {
+  codexHome?: string;
   platform?: NodeJS.Platform;
   execSync?: ExecSyncFn;
 }): CodexCliCredential | null {
   const keychain = readCodexKeychainCredentials({
+    codexHome: options?.codexHome,
     platform: options?.platform,
     execSync: options?.execSync,
   });
@@ -499,7 +660,7 @@ export function readCodexCliCredentials(options?: {
     return keychain;
   }
 
-  const authPath = resolveCodexCliAuthPath();
+  const authPath = path.join(resolveCodexHomePath(options?.codexHome), CODEX_CLI_AUTH_FILENAME);
   const raw = loadJsonFile(authPath);
   if (!raw || typeof raw !== "object") {
     return null;
@@ -541,17 +702,19 @@ export function readCodexCliCredentials(options?: {
 }
 
 export function readCodexCliCredentialsCached(options?: {
+  codexHome?: string;
   ttlMs?: number;
   platform?: NodeJS.Platform;
   execSync?: ExecSyncFn;
 }): CodexCliCredential | null {
-  const authPath = resolveCodexCliAuthPath();
+  const authPath = path.join(resolveCodexHomePath(options?.codexHome), CODEX_CLI_AUTH_FILENAME);
   return readCachedCliCredential({
     ttlMs: options?.ttlMs ?? 0,
     cache: codexCliCache,
     cacheKey: `${options?.platform ?? process.platform}|${authPath}`,
     read: () =>
       readCodexCliCredentials({
+        codexHome: options?.codexHome,
         platform: options?.platform,
         execSync: options?.execSync,
       }),

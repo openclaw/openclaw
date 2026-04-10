@@ -1,23 +1,27 @@
-import { type OpenClawConfig, type RuntimeEnv } from "../runtime-api.js";
-import type { MSTeamsConversationStore } from "./conversation-store.js";
+import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { formatUnknownError } from "./errors.js";
 import { buildFeedbackEvent, runFeedbackReflection } from "./feedback-reflection.js";
 import { buildFileInfoCard, parseFileConsentInvoke, uploadToConsentUrl } from "./file-consent.js";
-import { normalizeMSTeamsConversationId } from "./inbound.js";
-import type { MSTeamsAdapter } from "./messenger.js";
+import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } from "./inbound.js";
 import { resolveMSTeamsSenderAccess } from "./monitor-handler/access.js";
 import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
+export type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
+import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import { getPendingUpload, removePendingUpload } from "./pending-uploads.js";
-import type { MSTeamsPollStore } from "./polls.js";
 import { withRevokedProxyFallback } from "./revoked-context.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
+import {
+  handleSigninTokenExchangeInvoke,
+  handleSigninVerifyStateInvoke,
+  parseSigninTokenExchangeValue,
+  parseSigninVerifyStateValue,
+} from "./sso.js";
 import { buildGroupWelcomeText, buildWelcomeCard } from "./welcome-card.js";
-
-export type MSTeamsAccessTokenProvider = {
-  getAccessToken: (scope: string) => Promise<string>;
-};
+export type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
+import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 
 export type MSTeamsActivityHandler = {
   onMessage: (
@@ -35,18 +39,20 @@ export type MSTeamsActivityHandler = {
   run?: (context: unknown) => Promise<void>;
 };
 
-export type MSTeamsMessageHandlerDeps = {
-  cfg: OpenClawConfig;
-  runtime: RuntimeEnv;
-  appId: string;
-  adapter: MSTeamsAdapter;
-  tokenProvider: MSTeamsAccessTokenProvider;
-  textLimit: number;
-  mediaMaxBytes: number;
-  conversationStore: MSTeamsConversationStore;
-  pollStore: MSTeamsPollStore;
-  log: MSTeamsMonitorLogger;
-};
+function serializeAdaptiveCardActionValue(value: unknown): string | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+  if (value === undefined) {
+    return null;
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return null;
+  }
+}
 
 async function isFeedbackInvokeAuthorized(
   context: MSTeamsTurnContext,
@@ -241,14 +247,15 @@ async function handleFeedbackInvoke(
   }
 
   // Strip ;messageid=... suffix to match the normalized ID used by the message handler.
-  const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "unknown");
+  const rawConversationId = activity.conversation?.id ?? "unknown";
+  const conversationId = normalizeMSTeamsConversationId(rawConversationId);
   const senderId = activity.from?.aadObjectId ?? activity.from?.id ?? "unknown";
   const messageId = value.replyToId ?? activity.replyToId ?? "unknown";
   const isNegative = reaction === "dislike";
 
   // Route feedback using the same chat-type logic as normal messages
   // so session keys, agent IDs, and transcript paths match.
-  const convType = activity.conversation?.conversationType?.toLowerCase();
+  const convType = normalizeOptionalLowercaseString(activity.conversation?.conversationType);
   const isDirectMessage = convType === "personal" || (!convType && !activity.conversation?.isGroup);
   const isChannel = convType === "channel";
 
@@ -261,6 +268,22 @@ async function handleFeedbackInvoke(
       id: isDirectMessage ? senderId : conversationId,
     },
   });
+
+  // Match the thread-aware session key used by the message handler so feedback
+  // events land in the correct per-thread transcript. For channel threads, the
+  // thread root ID comes from the ;messageid= suffix on the conversation ID or
+  // from activity.replyToId.
+  const feedbackThreadId = isChannel
+    ? (extractMSTeamsConversationMessageId(rawConversationId) ?? activity.replyToId ?? undefined)
+    : undefined;
+  if (feedbackThreadId) {
+    const threadKeys = resolveThreadSessionKeys({
+      baseSessionKey: route.sessionKey,
+      threadId: feedbackThreadId,
+      parentSessionKey: route.sessionKey,
+    });
+    route.sessionKey = threadKeys.sessionKey;
+  }
 
   // Log feedback event to session JSONL
   const feedbackEvent = buildFeedbackEvent({
@@ -389,6 +412,106 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
         }
       }
 
+      if (ctx.activity?.type === "invoke" && ctx.activity?.name === "adaptiveCard/action") {
+        const text = serializeAdaptiveCardActionValue(ctx.activity?.value);
+        if (text) {
+          await handleTeamsMessage({
+            ...ctx,
+            activity: {
+              ...ctx.activity,
+              type: "message",
+              text,
+            },
+          });
+          return;
+        }
+        deps.log.debug?.("skipping adaptive card action invoke without value payload");
+      }
+
+      // Bot Framework OAuth SSO: Teams sends signin/tokenExchange (with a
+      // Teams-provided exchangeable token) or signin/verifyState (magic
+      // code fallback) after an oauthCard is presented. We must ack with
+      // HTTP 200 and, if configured, exchange the token with the Bot
+      // Framework User Token service and persist it for downstream tools.
+      if (
+        ctx.activity?.type === "invoke" &&
+        (ctx.activity?.name === "signin/tokenExchange" ||
+          ctx.activity?.name === "signin/verifyState")
+      ) {
+        // Always ack immediately — silently dropping the invoke causes
+        // the Teams card UI to report "Something went wrong".
+        await ctx.sendActivity({ type: "invokeResponse", value: { status: 200, body: {} } });
+
+        if (!deps.sso) {
+          deps.log.debug?.("signin invoke received but msteams.sso is not configured", {
+            name: ctx.activity.name,
+          });
+          return;
+        }
+
+        const user = {
+          userId: ctx.activity.from?.aadObjectId ?? ctx.activity.from?.id ?? "",
+          channelId: ctx.activity.channelId ?? "msteams",
+        };
+
+        try {
+          if (ctx.activity.name === "signin/tokenExchange") {
+            const parsed = parseSigninTokenExchangeValue(ctx.activity.value);
+            if (!parsed) {
+              deps.log.debug?.("invalid signin/tokenExchange invoke value");
+              return;
+            }
+            const result = await handleSigninTokenExchangeInvoke({
+              value: parsed,
+              user,
+              deps: deps.sso,
+            });
+            if (result.ok) {
+              deps.log.info("msteams sso token exchanged", {
+                userId: user.userId,
+                hasExpiry: Boolean(result.expiresAt),
+              });
+            } else {
+              deps.log.error("msteams sso token exchange failed", {
+                code: result.code,
+                status: result.status,
+                message: result.message,
+              });
+            }
+            return;
+          }
+
+          // signin/verifyState
+          const parsed = parseSigninVerifyStateValue(ctx.activity.value);
+          if (!parsed) {
+            deps.log.debug?.("invalid signin/verifyState invoke value");
+            return;
+          }
+          const result = await handleSigninVerifyStateInvoke({
+            value: parsed,
+            user,
+            deps: deps.sso,
+          });
+          if (result.ok) {
+            deps.log.info("msteams sso verifyState succeeded", {
+              userId: user.userId,
+              hasExpiry: Boolean(result.expiresAt),
+            });
+          } else {
+            deps.log.error("msteams sso verifyState failed", {
+              code: result.code,
+              status: result.status,
+              message: result.message,
+            });
+          }
+        } catch (err) {
+          deps.log.error("msteams sso invoke handler error", {
+            error: formatUnknownError(err),
+          });
+        }
+        return;
+      }
+
       return originalRun.call(handler, context);
     };
   }
@@ -412,7 +535,8 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
       if (member.id === botId) {
         // Bot was added to a conversation — send welcome card if configured.
         const conversationType =
-          ctx.activity?.conversation?.conversationType?.toLowerCase() ?? "personal";
+          normalizeOptionalLowercaseString(ctx.activity?.conversation?.conversationType) ??
+          "personal";
         const isPersonal = conversationType === "personal";
 
         if (isPersonal && msteamsCfg?.welcomeCard !== false) {

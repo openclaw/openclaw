@@ -3,12 +3,18 @@ import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import {
   approveDevicePairing,
+  formatDevicePairingForbiddenMessage,
   listDevicePairing,
   summarizeDeviceTokens,
   type PairedDevice as InfraPairedDevice,
 } from "../infra/device-pairing.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "../shared/string-coerce.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -100,7 +106,7 @@ function normalizeErrorMessage(error: unknown): string {
 }
 
 function shouldUseLocalPairingFallback(opts: DevicesRpcOpts, error: unknown): boolean {
-  const message = normalizeErrorMessage(error).toLowerCase();
+  const message = normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error));
   if (!message.includes("pairing required")) {
     return false;
   }
@@ -168,7 +174,7 @@ async function approvePairingWithFallback(
       return null;
     }
     if (approved.status === "forbidden") {
-      throw new Error(`missing scope: ${approved.missingScope}`, { cause: error });
+      throw new Error(formatDevicePairingForbiddenMessage(approved), { cause: error });
     }
     return {
       requestId,
@@ -207,7 +213,7 @@ function formatTokenSummary(tokens: DeviceTokenSummary[] | undefined) {
 }
 
 function formatPendingRoles(request: PendingDevice): string {
-  const role = typeof request.role === "string" ? request.role.trim() : "";
+  const role = normalizeOptionalString(request.role) ?? "";
   if (role) {
     return role;
   }
@@ -233,8 +239,8 @@ function formatPendingScopes(request: PendingDevice): string {
 function resolveRequiredDeviceRole(
   opts: DevicesRpcOpts,
 ): { deviceId: string; role: string } | null {
-  const deviceId = String(opts.device ?? "").trim();
-  const role = String(opts.role ?? "").trim();
+  const deviceId = normalizeStringifiedOptionalString(opts.device) ?? "";
+  const role = normalizeStringifiedOptionalString(opts.role) ?? "";
   if (deviceId && role) {
     return { deviceId, role };
   }
@@ -354,7 +360,7 @@ export function registerDevicesCli(program: Command) {
         const rejectedRequestIds: string[] = [];
         const paired = Array.isArray(list.paired) ? list.paired : [];
         for (const device of paired) {
-          const deviceId = typeof device.deviceId === "string" ? device.deviceId.trim() : "";
+          const deviceId = normalizeOptionalString(device.deviceId) ?? "";
           if (!deviceId) {
             continue;
           }
@@ -364,7 +370,7 @@ export function registerDevicesCli(program: Command) {
         if (opts.pending) {
           const pending = Array.isArray(list.pending) ? list.pending : [];
           for (const req of pending) {
-            const requestId = typeof req.requestId === "string" ? req.requestId.trim() : "";
+            const requestId = normalizeOptionalString(req.requestId) ?? "";
             if (!requestId) {
               continue;
             }

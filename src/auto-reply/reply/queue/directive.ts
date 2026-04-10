@@ -1,4 +1,5 @@
 import { parseDurationMs } from "../../../cli/parse-duration.js";
+import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { skipDirectiveArgPrefix, takeDirectiveToken } from "../directive-parsing.js";
 import { normalizeQueueDropPolicy, normalizeQueueMode } from "./normalize.js";
 import type { QueueDropPolicy, QueueMode } from "./types.js";
@@ -69,7 +70,10 @@ function parseQueueDirectiveArgs(raw: string): {
     if (!token) {
       break;
     }
-    const lowered = token.trim().toLowerCase();
+    const lowered = normalizeOptionalLowercaseString(token);
+    if (!lowered) {
+      break;
+    }
     if (lowered === "default" || lowered === "reset" || lowered === "clear") {
       queueReset = true;
       consumed = i;
