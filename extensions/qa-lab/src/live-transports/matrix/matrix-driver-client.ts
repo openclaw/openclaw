@@ -266,6 +266,7 @@ export function normalizeMatrixQaObservedEvent(
     typeof mentionsRaw === "object" && mentionsRaw !== null
       ? (mentionsRaw as Record<string, unknown>)
       : null;
+  const mentionUserIds = normalizeMentionUserIds(mentions?.user_ids);
   const reactionKey =
     type === "m.reaction" && typeof relatesTo?.key === "string" ? relatesTo.key : undefined;
   const reactionEventId =
@@ -302,9 +303,7 @@ export function normalizeMatrixQaObservedEvent(
       ? {
           mentions: {
             ...(mentions.room === true ? { room: true } : {}),
-            ...(normalizeMentionUserIds(mentions.user_ids)
-              ? { userIds: normalizeMentionUserIds(mentions.user_ids) }
-              : {}),
+            ...(mentionUserIds ? { userIds: mentionUserIds } : {}),
           },
         }
       : {}),
