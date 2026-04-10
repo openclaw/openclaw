@@ -51,11 +51,14 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
     );
     return { shouldContinue: false };
   }
+  const agentId = params.sessionKey
+    ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
+    : params.agentId;
   const skillCommands =
     params.skillCommands ??
     listSkillCommandsForAgents({
       cfg: params.cfg,
-      agentIds: params.agentId ? [params.agentId] : undefined,
+      agentIds: agentId ? [agentId] : undefined,
     });
   const surface = params.ctx.Surface;
   const commandPlugin = surface ? getChannelPlugin(surface) : null;
@@ -66,7 +69,7 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
   const channelData = commandPlugin?.commands?.buildCommandsListChannelData?.({
     currentPage: paginated.currentPage,
     totalPages: paginated.totalPages,
-    agentId: params.agentId,
+    agentId,
   });
   if (channelData) {
     return {

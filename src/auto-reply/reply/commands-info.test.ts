@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 import { handleContextCommand } from "./commands-context-command.js";
@@ -8,6 +9,10 @@ import type { HandleCommandsParams } from "./commands-types.js";
 import { handleWhoamiCommand } from "./commands-whoami.js";
 
 const buildContextReplyMock = vi.hoisted(() => vi.fn());
+const listSkillCommandsForAgentsMock = vi.hoisted(() => vi.fn(() => []));
+const buildCommandsMessagePaginatedMock = vi.hoisted(() =>
+  vi.fn(() => ({ text: "/commands", currentPage: 1, totalPages: 1 })),
+);
 
 vi.mock("./commands-context-report.js", () => ({
   buildContextReply: buildContextReplyMock,
@@ -16,6 +21,28 @@ vi.mock("./commands-context-report.js", () => ({
 vi.mock("./commands-status.js", () => ({
   buildStatusReply: vi.fn(async () => ({ text: "status reply" })),
 }));
+
+vi.mock("../../agents/agent-scope.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/agent-scope.js")>(
+    "../../agents/agent-scope.js",
+  );
+  return {
+    ...actual,
+    resolveSessionAgentId: vi.fn(actual.resolveSessionAgentId),
+  };
+});
+
+vi.mock("../skill-commands.js", () => ({
+  listSkillCommandsForAgents: listSkillCommandsForAgentsMock,
+}));
+
+vi.mock("../status.js", async () => {
+  const actual = await vi.importActual<typeof import("../status.js")>("../status.js");
+  return {
+    ...actual,
+    buildCommandsMessagePaginated: buildCommandsMessagePaginatedMock,
+  };
+});
 
 function buildInfoParams(
   commandBodyNormalized: string,
@@ -69,6 +96,11 @@ describe("info command handlers", () => {
         return { text: "Context breakdown (detailed)\nTop tools (schema size):" };
       }
       return { text: "/context\n- /context list\nInline shortcut" };
+    });
+    buildCommandsMessagePaginatedMock.mockReturnValue({
+      text: "/commands",
+      currentPage: 1,
+      totalPages: 1,
     });
   });
 
@@ -165,6 +197,26 @@ describe("info command handlers", () => {
     expect(vi.mocked(buildStatusReply)).toHaveBeenCalledWith(
       expect.objectContaining({
         parentSessionKey: "discord:group:parent-room",
+      }),
+    );
+  });
+
+  it("uses the canonical target session agent when listing /commands", async () => {
+    const { handleCommandsListCommand } = await import("./commands-info.js");
+    const params = buildInfoParams("/commands", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    params.agentId = "main";
+    params.sessionKey = "agent:target:whatsapp:direct:12345";
+    vi.mocked(resolveSessionAgentId).mockReturnValue("target");
+
+    const result = await handleCommandsListCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(listSkillCommandsForAgentsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentIds: ["target"],
       }),
     );
   });
