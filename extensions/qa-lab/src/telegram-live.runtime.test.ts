@@ -73,6 +73,7 @@ describe("telegram live qa runtime", () => {
           enabled: true,
           botToken: "sut-token",
           dmPolicy: "disabled",
+          replyToMode: "first",
           groups: {
             "-100123": {
               groupPolicy: "allowlist",
