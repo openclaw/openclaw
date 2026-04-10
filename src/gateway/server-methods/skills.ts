@@ -236,6 +236,11 @@ export const skillsHandlers: GatewayRequestHandlers = {
     }
     const skillsDir = path.join(CONFIG_DIR, "skills");
     const targetDir = path.join(skillsDir, p.slug);
+    const resolvedTarget = path.resolve(targetDir);
+    if (!resolvedTarget.startsWith(path.resolve(skillsDir) + path.sep)) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "path traversal detected"));
+      return;
+    }
     if (fs.existsSync(targetDir) && !p.force) {
       respond(
         false,
@@ -287,7 +292,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         {
           ok: true,
           slug: p.slug,
-          version: p.version || "latest",
+          version: p.version ?? undefined,
           path: targetDir,
           stdout: result.stdout.trim(),
         },
@@ -341,8 +346,24 @@ export const skillsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    // When force is not set, require the skill to be disabled in config first.
+    if (!p.force) {
+      const cfg = loadConfig();
+      const entry = cfg.skills?.entries?.[p.skillKey];
+      if (entry?.enabled === true) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `skill "${p.skillKey}" is still enabled. Disable it first or use force: true.`,
+          ),
+        );
+        return;
+      }
+    }
     try {
-      fs.rmSync(targetDir, { recursive: true, force: true });
+      fs.rmSync(targetDir, { recursive: true, force: !!p.force });
       // Clean up config entry.
       const cfg = loadConfig();
       const skills = cfg.skills ? { ...cfg.skills } : {};
