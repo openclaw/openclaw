@@ -113,21 +113,6 @@ export function resolveConversationDeliveryTarget(params: {
       : typeof params.parentConversationId === "string"
         ? normalizeOptionalString(params.parentConversationId)
         : undefined;
-  const pluginTarget =
-    channel && conversationId
-      ? getChannelPlugin(
-          normalizeChannelId(channel) ?? channel,
-        )?.messaging?.resolveDeliveryTarget?.({
-          conversationId,
-          parentConversationId,
-        })
-      : null;
-  if (pluginTarget) {
-    return {
-      ...(pluginTarget.to?.trim() ? { to: pluginTarget.to.trim() } : {}),
-      ...(pluginTarget.threadId?.trim() ? { threadId: pluginTarget.threadId.trim() } : {}),
-    };
-  }
   const isThreadChild =
     conversationId && parentConversationId && parentConversationId !== conversationId;
   if (channel && isThreadChild) {
@@ -145,6 +130,21 @@ export function resolveConversationDeliveryTarget(params: {
         threadId: conversationId,
       };
     }
+  }
+  const pluginTarget =
+    channel && conversationId
+      ? getChannelPlugin(
+          normalizeChannelId(channel) ?? channel,
+        )?.messaging?.resolveDeliveryTarget?.({
+          conversationId,
+          parentConversationId,
+        })
+      : null;
+  if (pluginTarget) {
+    return {
+      ...(pluginTarget.to?.trim() ? { to: pluginTarget.to.trim() } : {}),
+      ...(pluginTarget.threadId?.trim() ? { threadId: pluginTarget.threadId.trim() } : {}),
+    };
   }
   const to = formatConversationTarget(params);
   return { to };
