@@ -111,7 +111,7 @@ class GatewaySessionInvokeTest {
   }
 
   @Test
-  fun connect_prefersBootstrapTokenOverStoredDeviceToken() = runBlocking {
+  fun connect_prefersStoredDeviceTokenOverBootstrapToken() = runBlocking {
     val json = testJson()
     val connected = CompletableDeferred<Unit>()
     val connectAuth = CompletableDeferred<JsonObject?>()
@@ -148,8 +148,72 @@ class GatewaySessionInvokeTest {
       awaitConnectedOrThrow(connected, lastDisconnect, server)
 
       val auth = withTimeout(TEST_TIMEOUT_MS) { connectAuth.await() }
-      assertEquals("bootstrap-token", auth?.get("bootstrapToken")?.jsonPrimitive?.content)
-      assertNull(auth?.get("token"))
+      assertEquals("device-token", auth?.get("token")?.jsonPrimitive?.content)
+      assertNull(auth?.get("bootstrapToken"))
+    } finally {
+      shutdownHarness(harness, server)
+    }
+  }
+
+  @Test
+  fun reconnect_prefersStoredDeviceTokenAfterBootstrapHandoff() = runBlocking {
+    val json = testJson()
+    val connected = CompletableDeferred<Unit>()
+    val firstConnectAuth = CompletableDeferred<JsonObject?>()
+    val secondConnectAuth = CompletableDeferred<JsonObject?>()
+    val connectAttempts = AtomicInteger(0)
+    val lastDisconnect = AtomicReference("")
+    val server =
+      startGatewayServer(json) { webSocket, id, method, frame ->
+        when (method) {
+          "connect" -> {
+            val auth = frame["params"]?.jsonObject?.get("auth")?.jsonObject
+            when (connectAttempts.incrementAndGet()) {
+              1 -> {
+                if (!firstConnectAuth.isCompleted) {
+                  firstConnectAuth.complete(auth)
+                }
+                webSocket.send(
+                  connectResponseFrame(
+                    id,
+                    authJson = """{"deviceToken":"bootstrap-node-token","role":"node","scopes":[]}""",
+                  ),
+                )
+                webSocket.close(1000, "retry")
+              }
+              else -> {
+                if (!secondConnectAuth.isCompleted) {
+                  secondConnectAuth.complete(auth)
+                }
+                webSocket.send(connectResponseFrame(id))
+                webSocket.close(1000, "done")
+              }
+            }
+          }
+        }
+      }
+
+    val harness =
+      createNodeHarness(
+        connected = connected,
+        lastDisconnect = lastDisconnect,
+      ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+
+    try {
+      connectNodeSession(
+        session = harness.session,
+        port = server.port,
+        token = null,
+        bootstrapToken = "bootstrap-token",
+      )
+      awaitConnectedOrThrow(connected, lastDisconnect, server)
+
+      val firstAuth = withTimeout(TEST_TIMEOUT_MS) { firstConnectAuth.await() }
+      val secondAuth = withTimeout(TEST_TIMEOUT_MS) { secondConnectAuth.await() }
+      assertEquals("bootstrap-token", firstAuth?.get("bootstrapToken")?.jsonPrimitive?.content)
+      assertNull(firstAuth?.get("token"))
+      assertEquals("bootstrap-node-token", secondAuth?.get("token")?.jsonPrimitive?.content)
+      assertNull(secondAuth?.get("bootstrapToken"))
     } finally {
       shutdownHarness(harness, server)
     }
