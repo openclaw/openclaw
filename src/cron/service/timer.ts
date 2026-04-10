@@ -100,6 +100,13 @@ export async function executeJobCoreWithTimeout(
   }
 }
 
+export async function jobExists(state: CronServiceState, jobId: string): Promise<boolean> {
+  return await locked(state, async () => {
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    return Boolean(state.store?.jobs.some((entry) => entry.id === jobId));
+  });
+}
+
 function resolveRunConcurrency(state: CronServiceState): number {
   const raw = state.deps.cronConfig?.maxConcurrentRuns;
   if (typeof raw !== "number" || !Number.isFinite(raw)) {
@@ -720,13 +727,21 @@ export async function onTimer(state: CronServiceState) {
 
       try {
         const result = await executeJobCoreWithTimeout(state, job);
-        return {
-          jobId: id,
-          taskRunId,
-          ...result,
-          startedAt,
-          endedAt: state.deps.nowMs(),
-        };
+        // return {
+        //   jobId: id,
+        //   taskRunId,
+        //   ...result,
+        //   startedAt,
+        //   endedAt: state.deps.nowMs(),
+        // };
+        if (!(await jobExists(state, id))) {
+          state.deps.log.info(
+            { jobId: id, jobName: job.name },
+            "cron: dropping completed run for job removed during execution",
+          );
+          return { jobId: id, taskRunId, status: "skipped", startedAt, endedAt: state.deps.nowMs() };
+        }
+        return { jobId: id, taskRunId, ...result, startedAt, endedAt: state.deps.nowMs() };
       } catch (err) {
         const errorText = normalizeCronRunErrorText(err);
         state.deps.log.warn(
