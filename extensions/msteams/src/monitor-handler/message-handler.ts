@@ -26,10 +26,10 @@ import { isRecord } from "../attachments/shared.js";
 import type { StoredConversationReference } from "../conversation-store.js";
 import { formatUnknownError } from "../errors.js";
 import {
-  fetchChannelMessage,
   fetchThreadReplies,
   formatThreadContext,
   resolveTeamGroupId,
+  type GraphThreadMessage,
 } from "../graph-thread.js";
 import { resolveGraphChatId } from "../graph-upload.js";
 import {
@@ -41,6 +41,13 @@ import {
   translateMSTeamsDmConversationIdForGraph,
   wasMSTeamsBotMentioned,
 } from "../inbound.js";
+import {
+  fetchParentMessageCached,
+  formatParentContextEvent,
+  markParentContextInjected,
+  shouldInjectParentContext,
+  summarizeParentMessage,
+} from "../thread-parent-context.js";
 
 function extractTextFromHtmlAttachments(attachments: MSTeamsAttachmentLike[]): string {
   for (const attachment of attachments) {
@@ -597,15 +604,64 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     // Fetch thread history when the message is a reply inside a Teams channel thread.
     // This is a best-effort enhancement; errors are logged and do not block the reply.
+    //
+    // We also enqueue a compact `Replying to @sender: …` system event when the parent
+    // is resolvable. On brand-new thread sessions (see PR #62713), this gives the agent
+    // immediate parent context even before the fuller `[Thread history]` block is assembled.
+    // Parent fetches are cached (5 min LRU, 100 entries) and per-session deduped so
+    // consecutive replies in the same thread do not re-inject identical context.
     let threadContext: string | undefined;
     if (activity.replyToId && isChannel && teamId) {
       try {
         const graphToken = await tokenProvider.getAccessToken("https://graph.microsoft.com");
         const groupId = await resolveTeamGroupId(graphToken, teamId);
-        const [parentMsg, replies] = await Promise.all([
-          fetchChannelMessage(graphToken, groupId, conversationId, activity.replyToId),
+        // Use allSettled so a failure in one fetch does not discard the other.
+        // For example, reply-fetch 403 should not throw away a successful parent fetch.
+        const [parentResult, repliesResult] = await Promise.allSettled([
+          fetchParentMessageCached(graphToken, groupId, conversationId, activity.replyToId),
           fetchThreadReplies(graphToken, groupId, conversationId, activity.replyToId),
         ]);
+        const parentMsg = parentResult.status === "fulfilled" ? parentResult.value : undefined;
+        const replies = repliesResult.status === "fulfilled" ? repliesResult.value : [];
+        if (parentResult.status === "rejected") {
+          log.debug?.("failed to fetch parent message", {
+            error: formatUnknownError(parentResult.reason),
+          });
+        }
+        if (repliesResult.status === "rejected") {
+          log.debug?.("failed to fetch thread replies", {
+            error: formatUnknownError(repliesResult.reason),
+          });
+        }
+        const isThreadSenderAllowed = (msg: GraphThreadMessage) =>
+          groupPolicy === "allowlist"
+            ? resolveMSTeamsAllowlistMatch({
+                allowFrom: effectiveGroupAllowFrom,
+                senderId: msg.from?.user?.id ?? "",
+                senderName: msg.from?.user?.displayName,
+                allowNameMatching,
+              }).allowed
+            : true;
+        const parentSummary = summarizeParentMessage(parentMsg);
+        const visibleParentMessages = parentMsg
+          ? filterSupplementalContextItems({
+              items: [parentMsg],
+              mode: contextVisibilityMode,
+              kind: "thread",
+              isSenderAllowed: isThreadSenderAllowed,
+            }).items
+          : [];
+        if (
+          parentSummary &&
+          visibleParentMessages.length > 0 &&
+          shouldInjectParentContext(route.sessionKey, activity.replyToId)
+        ) {
+          core.system.enqueueSystemEvent(formatParentContextEvent(parentSummary), {
+            sessionKey: route.sessionKey,
+            contextKey: `msteams:thread-parent:${conversationId}:${activity.replyToId}`,
+          });
+          markParentContextInjected(route.sessionKey, activity.replyToId);
+        }
         const allMessages = parentMsg ? [parentMsg, ...replies] : replies;
         quoteSenderId = parentMsg?.from?.user?.id ?? parentMsg?.from?.application?.id ?? undefined;
         quoteSenderName =
@@ -616,15 +672,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           items: allMessages,
           mode: contextVisibilityMode,
           kind: "thread",
-          isSenderAllowed: (msg) =>
-            groupPolicy === "allowlist"
-              ? resolveMSTeamsAllowlistMatch({
-                  allowFrom: effectiveGroupAllowFrom,
-                  senderId: msg.from?.user?.id ?? "",
-                  senderName: msg.from?.user?.displayName,
-                  allowNameMatching,
-                }).allowed
-              : true,
+          isSenderAllowed: isThreadSenderAllowed,
         });
         const formatted = formatThreadContext(threadMessages, activity.id);
         if (formatted) {

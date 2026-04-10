@@ -22,6 +22,7 @@ import {
 } from "./graph-upload.js";
 import { extractFilename, extractMessageId, getMimeType, isLocalPath } from "./media-helpers.js";
 import { parseMentions } from "./mentions.js";
+import { setPendingUploadActivityId } from "./pending-uploads.js";
 import { withRevokedProxyFallback } from "./revoked-context.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 
@@ -342,11 +343,14 @@ export async function buildActivity(
       ) {
         // Large file or non-image in personal chat: use FileConsentCard flow
         const conversationId = conversationRef.conversation?.id ?? "unknown";
-        const { activity: consentActivity } = prepareFileConsentActivity({
+        const { activity: consentActivity, uploadId } = prepareFileConsentActivity({
           media: { buffer: media.buffer, filename: fileName, contentType },
           conversationId,
           description: msg.text || undefined,
         });
+
+        // Tag the activity so the caller can store the activity ID after sending
+        consentActivity._pendingUploadId = uploadId;
 
         // Return the consent activity (caller sends it)
         return consentActivity;
@@ -485,21 +489,37 @@ export async function sendMSTeamsMessages(params: {
     message: MSTeamsRenderedMessage,
     messageIndex: number,
   ): Promise<string> => {
-    const response = await sendWithRetry(
-      async () =>
-        await ctx.sendActivity(
-          await buildActivity(
-            message,
-            params.conversationRef,
-            params.tokenProvider,
-            params.sharePointSiteId,
-            params.mediaMaxBytes,
-            { feedbackLoopEnabled: params.feedbackLoopEnabled },
-          ),
-        ),
-      { messageIndex, messageCount: messages.length },
-    );
-    return extractMessageId(response) ?? "unknown";
+    let pendingUploadId: string | undefined;
+    const response = await sendWithRetry(async () => {
+      const activity = await buildActivity(
+        message,
+        params.conversationRef,
+        params.tokenProvider,
+        params.sharePointSiteId,
+        params.mediaMaxBytes,
+        { feedbackLoopEnabled: params.feedbackLoopEnabled },
+      );
+
+      // Extract and strip the internal-only pending upload tag before sending.
+      pendingUploadId =
+        typeof activity._pendingUploadId === "string" ? activity._pendingUploadId : undefined;
+      if (pendingUploadId) {
+        delete activity._pendingUploadId;
+      }
+
+      return await ctx.sendActivity(activity);
+    }, {
+      messageIndex,
+      messageCount: messages.length,
+    });
+    const messageId = extractMessageId(response) ?? "unknown";
+
+    // Store the activity ID so the accept handler can replace the consent card in-place
+    if (pendingUploadId && messageId !== "unknown") {
+      setPendingUploadActivityId(pendingUploadId, messageId);
+    }
+
+    return messageId;
   };
 
   const sendMessageBatchInContext = async (

@@ -2,6 +2,11 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { createJiti } from "jiti";
+import {
+  clearAgentHarnesses,
+  listRegisteredAgentHarnesses,
+  restoreRegisteredAgentHarnesses,
+} from "../agents/harness/registry.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -149,6 +154,7 @@ export class PluginLoadReentryError extends Error {
 type CachedPluginState = {
   registry: PluginRegistry;
   memoryCorpusSupplements: ReturnType<typeof listMemoryCorpusSupplements>;
+  agentHarnesses: ReturnType<typeof listRegisteredAgentHarnesses>;
   compactionProviders: ReturnType<typeof listRegisteredCompactionProviders>;
   memoryEmbeddingProviders: ReturnType<typeof listRegisteredMemoryEmbeddingProviders>;
   memoryFlushPlanResolver: ReturnType<typeof getMemoryFlushPlanResolver>;
@@ -182,6 +188,7 @@ export function clearPluginLoaderCache(): void {
   registryCache.clear();
   inFlightPluginRegistryLoads.clear();
   openAllowlistWarningCache.clear();
+  clearAgentHarnesses();
   clearCompactionProviders();
   clearMemoryEmbeddingProviders();
   clearMemoryPluginState();
@@ -715,6 +722,7 @@ function createPluginRecord(params: {
     webFetchProviderIds: [],
     webSearchProviderIds: [],
     memoryEmbeddingProviderIds: [],
+    agentHarnessIds: [],
     gatewayMethods: [],
     cliCommands: [],
     services: [],
@@ -1106,6 +1114,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   if (cacheEnabled) {
     const cached = getCachedPluginRegistry(cacheKey);
     if (cached) {
+      restoreRegisteredAgentHarnesses(cached.agentHarnesses);
       restoreRegisteredCompactionProviders(cached.compactionProviders);
       restoreRegisteredMemoryEmbeddingProviders(cached.memoryEmbeddingProviders);
       restoreMemoryPluginState({
@@ -1134,6 +1143,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     // Clear previously registered plugin state before reloading.
     // Skip for non-activating (snapshot) loads to avoid wiping commands from other plugins.
     if (shouldActivate) {
+      clearAgentHarnesses();
       clearPluginCommands();
       clearPluginInteractiveHandlers();
       clearMemoryPluginState();
@@ -1710,6 +1720,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         hookPolicy: entry?.hooks,
         registrationMode,
       });
+      const previousAgentHarnesses = listRegisteredAgentHarnesses();
       const previousCompactionProviders = listRegisteredCompactionProviders();
       const previousMemoryEmbeddingProviders = listRegisteredMemoryEmbeddingProviders();
       const previousMemoryFlushPlanResolver = getMemoryFlushPlanResolver();
@@ -1730,6 +1741,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         }
         // Snapshot loads should not replace process-global runtime prompt state.
         if (!shouldActivate) {
+          restoreRegisteredAgentHarnesses(previousAgentHarnesses);
           restoreRegisteredCompactionProviders(previousCompactionProviders);
           restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
           restoreMemoryPluginState({
@@ -1743,6 +1755,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         registry.plugins.push(record);
         seenIds.set(pluginId, candidate.origin);
       } catch (err) {
+        restoreRegisteredAgentHarnesses(previousAgentHarnesses);
         restoreRegisteredCompactionProviders(previousCompactionProviders);
         restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
         restoreMemoryPluginState({
@@ -1802,6 +1815,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       setCachedPluginRegistry(cacheKey, {
         memoryCorpusSupplements: listMemoryCorpusSupplements(),
         registry,
+        agentHarnesses: listRegisteredAgentHarnesses(),
         compactionProviders: listRegisteredCompactionProviders(),
         memoryEmbeddingProviders: listRegisteredMemoryEmbeddingProviders(),
         memoryFlushPlanResolver: getMemoryFlushPlanResolver(),

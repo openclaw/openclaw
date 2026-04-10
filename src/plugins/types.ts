@@ -10,6 +10,7 @@ import type {
   OAuthCredential,
   AuthProfileStore,
 } from "../agents/auth-profiles/types.js";
+import type { AgentHarness } from "../agents/harness/types.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { FailoverReason } from "../agents/pi-embedded-helpers/types.js";
 import type { ModelProviderRequestTransportOverrides } from "../agents/provider-request-config.js";
@@ -85,6 +86,7 @@ import type { PluginRuntime } from "./runtime/types.js";
 
 export type { PluginRuntime } from "./runtime/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
+export type { AgentHarness } from "../agents/harness/types.js";
 
 export type ProviderAuthOptionBag = {
   token?: string;
@@ -2238,6 +2240,8 @@ export type OpenClawPluginApi = {
   registerCompactionProvider: (
     provider: import("./compaction-provider.js").CompactionProvider,
   ) => void;
+  /** Register an agent harness implementation. */
+  registerAgentHarness: (harness: AgentHarness) => void;
   /** Register the active memory capability for this memory plugin (exclusive slot). */
   registerMemoryCapability: (
     capability: import("./memory-state.js").MemoryPluginCapability,

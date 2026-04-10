@@ -315,6 +315,7 @@ function describeUnsupportedSearchFilter(name: UnsupportedWebSearchFilterName): 
     case "date_before":
       return "date_after/date_before filtering";
   }
+  throw new Error("Unsupported web search filter");
 }
 
 export function buildUnsupportedSearchFilterResponse(
