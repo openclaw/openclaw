@@ -291,8 +291,8 @@ function finalizeRecords(records: TopologyRecord[]) {
       return byRefs;
     }
     return (
-      left.publicSpecifiers[0]!.localeCompare(right.publicSpecifiers[0]) ||
-      left.exportNames[0]!.localeCompare(right.exportNames[0])
+      left.publicSpecifiers[0].localeCompare(right.publicSpecifiers[0]) ||
+      left.exportNames[0].localeCompare(right.exportNames[0])
     );
   });
 }

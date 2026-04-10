@@ -206,6 +206,11 @@ const handlers = resolveGlobalSingleton<Map<string, InternalHookHandler[]>>(
   INTERNAL_HOOK_HANDLERS_KEY,
   () => new Map<string, InternalHookHandler[]>(),
 );
+const INTERNAL_HOOKS_ENABLED_KEY = Symbol.for("openclaw.internalHooksEnabled");
+const internalHooksEnabledState = resolveGlobalSingleton<{ enabled: boolean }>(
+  INTERNAL_HOOKS_ENABLED_KEY,
+  () => ({ enabled: true }),
+);
 const log = createSubsystemLogger("internal-hooks");
 
 /**
@@ -264,6 +269,10 @@ export function clearInternalHooks(): void {
   handlers.clear();
 }
 
+export function setInternalHooksEnabled(enabled: boolean): void {
+  internalHooksEnabledState.enabled = enabled;
+}
+
 /**
  * Get all registered event keys (useful for debugging)
  */
@@ -290,6 +299,9 @@ export function hasInternalHookListeners(type: InternalHookEventType, action: st
  * @param event - The event to trigger
  */
 export async function triggerInternalHook(event: InternalHookEvent): Promise<void> {
+  if (!internalHooksEnabledState.enabled) {
+    return;
+  }
   if (!hasInternalHookListeners(event.type, event.action)) {
     return;
   }

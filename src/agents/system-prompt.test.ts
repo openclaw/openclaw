@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { typedCases } from "../test-utils/typed-cases.js";
-import { buildSubagentSystemPrompt } from "./subagent-announce.js";
+import { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import { buildAgentSystemPrompt, buildRuntimeLine } from "./system-prompt.js";
 

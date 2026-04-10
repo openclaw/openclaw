@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildTelegramModelsProviderChannelData } from "../../../test/helpers/channels/command-contract.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -40,7 +39,16 @@ const telegramModelsTestPlugin: ChannelPlugin = {
     },
   }),
   commands: {
-    buildModelsProviderChannelData: buildTelegramModelsProviderChannelData,
+    buildModelsProviderChannelData: ({ providers }) => ({
+      telegram: {
+        buttons: providers.map((provider) => [
+          {
+            text: provider.id,
+            callback_data: `models:${provider.id}`,
+          },
+        ]),
+      },
+    }),
   },
 };
 

@@ -1,3 +1,4 @@
+import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import { loadConfig } from "../config/config.js";
 import type { ensureContextEnginesInitialized as ensureContextEnginesInitializedFn } from "../context-engine/init.js";
 import type { resolveContextEngine as resolveContextEngineFn } from "../context-engine/registry.js";
@@ -64,6 +65,7 @@ const log = createSubsystemLogger("agents/subagent-registry");
 type SubagentRegistryDeps = {
   callGateway: typeof callGateway;
   captureSubagentCompletionReply: typeof subagentAnnounceModule.captureSubagentCompletionReply;
+  cleanupBrowserSessionsForLifecycleEnd: typeof cleanupBrowserSessionsForLifecycleEnd;
   getSubagentRunsSnapshotForRead: typeof getSubagentRunsSnapshotForRead;
   loadConfig: typeof loadConfig;
   onAgentEvent: typeof onAgentEvent;
@@ -80,6 +82,7 @@ const defaultSubagentRegistryDeps: SubagentRegistryDeps = {
   callGateway,
   captureSubagentCompletionReply: (sessionKey) =>
     subagentAnnounceModule.captureSubagentCompletionReply(sessionKey),
+  cleanupBrowserSessionsForLifecycleEnd,
   getSubagentRunsSnapshotForRead,
   loadConfig,
   onAgentEvent,
@@ -313,6 +316,8 @@ const subagentLifecycleController = createSubagentRegistryLifecycleController({
   resumeSubagentRun,
   captureSubagentCompletionReply: (sessionKey) =>
     subagentRegistryDeps.captureSubagentCompletionReply(sessionKey),
+  cleanupBrowserSessionsForLifecycleEnd: (args) =>
+    subagentRegistryDeps.cleanupBrowserSessionsForLifecycleEnd(args),
   runSubagentAnnounceFlow: (params) => subagentRegistryDeps.runSubagentAnnounceFlow(params),
   warn: (message, meta) => log.warn(message, meta),
 });

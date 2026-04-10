@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createCommandsLightVitestConfig } from "../vitest.commands-light.config.ts";
-import { createPluginSdkLightVitestConfig } from "../vitest.plugin-sdk-light.config.ts";
+import { createCommandsLightVitestConfig } from "./vitest/vitest.commands-light.config.ts";
+import { createPluginSdkLightVitestConfig } from "./vitest/vitest.plugin-sdk-light.config.ts";
 import {
   classifyUnitFastTestFileContent,
   collectBroadUnitFastTestCandidates,
@@ -9,8 +9,8 @@ import {
   isUnitFastTestFile,
   unitFastTestFiles,
   resolveUnitFastTestIncludePattern,
-} from "../vitest.unit-fast-paths.mjs";
-import { createUnitFastVitestConfig } from "../vitest.unit-fast.config.ts";
+} from "./vitest/vitest.unit-fast-paths.mjs";
+import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
 
 describe("unit-fast vitest lane", () => {
   it("runs cache-friendly tests without the reset-heavy runner or runtime setup", () => {
@@ -19,6 +19,18 @@ describe("unit-fast vitest lane", () => {
     expect(config.test?.isolate).toBe(false);
     expect(config.test?.runner).toBeUndefined();
     expect(config.test?.setupFiles).toEqual([]);
+    expect(config.test?.include).toContain("src/plugin-sdk/provider-entry.test.ts");
+    expect(config.test?.include).toContain("src/commands/status-overview-values.test.ts");
+  });
+
+  it("does not treat moved config paths as CLI include filters", () => {
+    const config = createUnitFastVitestConfig(
+      {},
+      {
+        argv: ["node", "vitest", "run", "--config", "test/vitest/vitest.unit-fast.config.ts"],
+      },
+    );
+
     expect(config.test?.include).toContain("src/plugin-sdk/provider-entry.test.ts");
     expect(config.test?.include).toContain("src/commands/status-overview-values.test.ts");
   });

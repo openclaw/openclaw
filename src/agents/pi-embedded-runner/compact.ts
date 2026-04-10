@@ -681,6 +681,7 @@ export async function compactEmbeddedPiSessionDirect(
             sessionId: params.sessionId,
             agentId: sessionAgentId,
             senderId: params.senderId,
+            senderIsOwner: params.senderIsOwner,
           }),
         )
       : undefined;

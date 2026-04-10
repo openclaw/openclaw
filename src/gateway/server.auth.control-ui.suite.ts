@@ -346,11 +346,10 @@ export function registerControlUiAndPairingSuite(): void {
             "x-forwarded-for": "203.0.113.10",
           },
         });
-        const challengePromise = onceMessage<{
-          type?: string;
-          event?: string;
-          payload?: Record<string, unknown> | null;
-        }>(ws, (o) => o.type === "event" && o.event === "connect.challenge");
+        const challengePromise = onceMessage(
+          ws,
+          (o) => o.type === "event" && o.event === "connect.challenge",
+        );
         await new Promise<void>((resolve) => ws.once("open", resolve));
         const challenge = await challengePromise;
         const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;
@@ -1074,11 +1073,10 @@ export function registerControlUiAndPairingSuite(): void {
       const socket = new WebSocket(`ws://127.0.0.1:${port}`, {
         headers: { host: "gateway.example" },
       });
-      const challengePromise = onceMessage<{
-        type?: string;
-        event?: string;
-        payload?: Record<string, unknown> | null;
-      }>(socket, (o) => o.type === "event" && o.event === "connect.challenge");
+      const challengePromise = onceMessage(
+        socket,
+        (o) => o.type === "event" && o.event === "connect.challenge",
+      );
       await new Promise<void>((resolve) => socket.once("open", resolve));
       const challenge = await challengePromise;
       const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;

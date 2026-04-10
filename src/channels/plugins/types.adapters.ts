@@ -1,12 +1,13 @@
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import type { ConfiguredBindingRule } from "../../config/bindings.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import type { LegacyConfigRule } from "../../config/legacy.shared.js";
+import type { AgentBinding } from "../../config/types.agents.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
-import type { ChannelApprovalNativeRuntimeAdapter } from "../../infra/approval-handler-runtime.js";
+import type { ChannelApprovalNativeRuntimeAdapter } from "../../infra/approval-handler-runtime-types.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "../../infra/exec-approvals.js";
-import type { OutboundDeliveryResult, OutboundSendDeps } from "../../infra/outbound/deliver.js";
-import type { OutboundIdentity } from "../../infra/outbound/identity.js";
+import type { OutboundDeliveryResult } from "../../infra/outbound/deliver-types.js";
+import type { OutboundIdentity } from "../../infra/outbound/identity-types.js";
+import type { OutboundSendDeps } from "../../infra/outbound/send-deps.js";
 import type {
   PluginApprovalRequest,
   PluginApprovalResolved,
@@ -33,6 +34,8 @@ import type {
   ChannelSetupInput,
   ChannelStatusIssue,
 } from "./types.core.js";
+
+type ConfiguredBindingRule = AgentBinding;
 
 export type ChannelActionAvailabilityState =
   | { kind: "enabled" }

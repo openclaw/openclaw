@@ -396,6 +396,7 @@ vi.mock("../config/config.js", async () => {
           Object.keys(state.cfgProfiles).length > 0
             ? state.cfgProfiles
             : defaultProfilesForState(state.testPort),
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
       },
     };
   };

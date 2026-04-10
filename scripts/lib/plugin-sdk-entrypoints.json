@@ -125,6 +125,7 @@
   "channel-contract",
   "channel-feedback",
   "channel-inbound",
+  "channel-inbound-roots",
   "channel-lifecycle",
   "channel-pairing",
   "channel-policy",

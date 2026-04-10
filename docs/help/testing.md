@@ -48,6 +48,10 @@ These commands sit beside the main test suites when you need QA-lab realism:
 
 - `pnpm openclaw qa suite`
   - Runs repo-backed QA scenarios directly on the host.
+  - Runs multiple selected scenarios in parallel by default with isolated
+    gateway workers, up to 64 workers or the selected scenario count. Use
+    `--concurrency <count>` to tune the worker count, or `--concurrency 1` for
+    the older serial lane.
 - `pnpm openclaw qa suite --runner multipass`
   - Runs the same QA suite inside a disposable Multipass Linux VM.
   - Keeps the same scenario-selection behavior as `qa suite` on the host.
