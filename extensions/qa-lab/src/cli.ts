@@ -23,6 +23,11 @@ async function runQaSuite(opts: {
   alternateModel?: string;
   fastMode?: boolean;
   scenarioIds?: string[];
+  runner?: string;
+  image?: string;
+  cpus?: number;
+  memory?: string;
+  disk?: string;
 }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaSuiteCommand(opts);
@@ -138,6 +143,7 @@ export function registerQaLabCli(program: Command) {
     .description("Run repo-backed QA scenarios against the QA gateway lane")
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--output-dir <path>", "Suite artifact directory")
+    .option("--runner <kind>", "Execution runner: host or multipass", "host")
     .option(
       "--provider-mode <mode>",
       "Provider mode: mock-openai or live-frontier (legacy live-openai still works)",
@@ -147,24 +153,38 @@ export function registerQaLabCli(program: Command) {
     .option("--alt-model <ref>", "Alternate provider/model ref")
     .option("--scenario <id>", "Run only the named QA scenario (repeatable)", collectString, [])
     .option("--fast", "Enable provider fast mode where supported", false)
+    .option("--image <alias>", "Multipass image alias")
+    .option("--cpus <count>", "Multipass vCPU count", (value: string) => Number(value))
+    .option("--memory <size>", "Multipass memory size")
+    .option("--disk <size>", "Multipass disk size")
     .action(
       async (opts: {
         repoRoot?: string;
         outputDir?: string;
+        runner?: string;
         providerMode?: QaProviderModeInput;
         model?: string;
         altModel?: string;
         scenario?: string[];
         fast?: boolean;
+        image?: string;
+        cpus?: number;
+        memory?: string;
+        disk?: string;
       }) => {
         await runQaSuite({
           repoRoot: opts.repoRoot,
           outputDir: opts.outputDir,
+          runner: opts.runner,
           providerMode: opts.providerMode,
           primaryModel: opts.model,
           alternateModel: opts.altModel,
           fastMode: opts.fast,
           scenarioIds: opts.scenario,
+          image: opts.image,
+          cpus: opts.cpus,
+          memory: opts.memory,
+          disk: opts.disk,
         });
       },
     );

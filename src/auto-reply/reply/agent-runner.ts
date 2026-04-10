@@ -4,7 +4,12 @@ import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
-import { type SessionEntry, updateSessionStoreEntry } from "../../config/sessions.js";
+import {
+  loadSessionStore,
+  resolveSessionPluginDebugLines,
+  type SessionEntry,
+  updateSessionStoreEntry,
+} from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
@@ -64,6 +69,39 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+
+function buildInlinePluginStatusPayload(entry: SessionEntry | undefined): ReplyPayload | undefined {
+  const lines = resolveSessionPluginDebugLines(entry);
+  if (lines.length === 0) {
+    return undefined;
+  }
+  return { text: lines.join("\n") };
+}
+
+function refreshSessionEntryFromStore(params: {
+  storePath?: string;
+  sessionKey?: string;
+  fallbackEntry?: SessionEntry;
+  activeSessionStore?: Record<string, SessionEntry>;
+}): SessionEntry | undefined {
+  const { storePath, sessionKey, fallbackEntry, activeSessionStore } = params;
+  if (!storePath || !sessionKey) {
+    return fallbackEntry;
+  }
+  try {
+    const latestStore = loadSessionStore(storePath, { skipCache: true });
+    const latestEntry = latestStore?.[sessionKey];
+    if (!latestEntry) {
+      return fallbackEntry;
+    }
+    if (activeSessionStore) {
+      activeSessionStore[sessionKey] = latestEntry;
+    }
+    return latestEntry;
+  } catch {
+    return fallbackEntry;
+  }
+}
 
 export async function runReplyAgent(params: {
   commandBody: string;
@@ -652,6 +690,15 @@ export async function runReplyAgent(params: {
       }
     }
 
+    if (verboseEnabled) {
+      activeSessionEntry = refreshSessionEntryFromStore({
+        storePath,
+        sessionKey,
+        fallbackEntry: activeSessionEntry,
+        activeSessionStore,
+      });
+    }
+
     // If verbose is enabled, prepend operational run notices.
     let finalPayloads = guardedReplyPayloads;
     const verboseNotices: ReplyPayload[] = [];
@@ -758,8 +805,15 @@ export async function runReplyAgent(params: {
         verboseNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
       }
     }
-    if (verboseNotices.length > 0) {
-      finalPayloads = [...verboseNotices, ...finalPayloads];
+    const prefixPayloads = [...verboseNotices];
+    if (verboseEnabled) {
+      const pluginStatusPayload = buildInlinePluginStatusPayload(activeSessionEntry);
+      if (pluginStatusPayload) {
+        prefixPayloads.push(pluginStatusPayload);
+      }
+    }
+    if (prefixPayloads.length > 0) {
+      finalPayloads = [...prefixPayloads, ...finalPayloads];
     }
     if (responseUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);

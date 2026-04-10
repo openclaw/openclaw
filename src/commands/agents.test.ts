@@ -77,6 +77,39 @@ describe("agents helpers", () => {
     expect(work?.model).toBe("anthropic/claude");
   });
 
+  it("applyAgentConfig merges identity with existing", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "work", identity: { name: "Old", theme: "chill", emoji: "🐢" } }],
+      },
+    };
+
+    const next = applyAgentConfig(cfg, {
+      agentId: "work",
+      identity: { name: "New", emoji: "🦀" },
+    });
+
+    const work = next.agents?.list?.find((agent) => agent.id === "work");
+    expect(work?.identity?.name).toBe("New");
+    expect(work?.identity?.emoji).toBe("🦀");
+    expect(work?.identity?.theme).toBe("chill");
+  });
+
+  it("applyAgentConfig skips identity when not provided", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "work", identity: { name: "Keep", emoji: "🐢" } }],
+      },
+    };
+
+    const next = applyAgentConfig(cfg, { agentId: "work", name: "Renamed" });
+
+    const work = next.agents?.list?.find((agent) => agent.id === "work");
+    expect(work?.name).toBe("Renamed");
+    expect(work?.identity?.name).toBe("Keep");
+    expect(work?.identity?.emoji).toBe("🐢");
+  });
+
   it("applyAgentBindings skips duplicates and reports conflicts", () => {
     const cfg: OpenClawConfig = {
       bindings: [
