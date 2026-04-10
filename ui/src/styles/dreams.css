@@ -680,6 +680,8 @@
   min-height: 320px;
   min-width: 0;
   overflow: auto;
+  position: relative;
+  isolation: isolate;
 }
 
 /* ---- Diary header ---- */
@@ -690,6 +692,8 @@
   gap: 16px;
   margin-bottom: 20px;
   flex-shrink: 0;
+  position: relative;
+  z-index: 2;
 }
 
 .dreams-diary__title {
@@ -706,12 +710,14 @@
 
 .dreams-diary__entry {
   position: relative;
+  z-index: 1;
   max-width: 680px;
   width: min(100%, 680px);
   min-width: 0;
   padding: 0 0 0 16px;
   flex-shrink: 0;
   overflow-x: clip;
+  contain: paint;
   animation: diary-entry-reveal 1.4s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
@@ -776,6 +782,8 @@
   scrollbar-width: none;
   -ms-overflow-style: none;
   padding-bottom: 2px;
+  position: relative;
+  z-index: 2;
 }
 
 .dreams-diary__daychips::-webkit-scrollbar {
