@@ -35,6 +35,20 @@ async function runQaSuite(opts: {
   await runtime.runQaSuiteCommand(opts);
 }
 
+async function runQaTelegram(opts: {
+  repoRoot?: string;
+  outputDir?: string;
+  providerMode?: QaProviderModeInput;
+  primaryModel?: string;
+  alternateModel?: string;
+  fastMode?: boolean;
+  scenarioIds?: string[];
+  sutAccountId?: string;
+}) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaTelegramCommand(opts);
+}
+
 async function runQaCharacterEval(opts: {
   repoRoot?: string;
   outputDir?: string;
@@ -198,6 +212,53 @@ export function registerQaLabCli(program: Command) {
           cpus: opts.cpus,
           memory: opts.memory,
           disk: opts.disk,
+        });
+      },
+    );
+
+  qa.command("telegram")
+    .description("Run the manual Telegram live QA lane against a private bot-to-bot group harness")
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+    .option("--output-dir <path>", "Telegram QA artifact directory")
+    .option(
+      "--provider-mode <mode>",
+      "Provider mode: mock-openai or live-frontier (legacy live-openai still works)",
+      "mock-openai",
+    )
+    .option("--model <ref>", "Primary provider/model ref")
+    .option("--alt-model <ref>", "Alternate provider/model ref")
+    .option(
+      "--scenario <id>",
+      "Run only the named Telegram QA scenario (repeatable)",
+      collectString,
+      [],
+    )
+    .option("--fast", "Enable provider fast mode where supported", false)
+    .option(
+      "--sut-account <id>",
+      "Temporary Telegram account id inside the QA gateway config",
+      "sut",
+    )
+    .action(
+      async (opts: {
+        repoRoot?: string;
+        outputDir?: string;
+        providerMode?: QaProviderModeInput;
+        model?: string;
+        altModel?: string;
+        scenario?: string[];
+        fast?: boolean;
+        sutAccount?: string;
+      }) => {
+        await runQaTelegram({
+          repoRoot: opts.repoRoot,
+          outputDir: opts.outputDir,
+          providerMode: opts.providerMode,
+          primaryModel: opts.model,
+          alternateModel: opts.altModel,
+          fastMode: opts.fast,
+          scenarioIds: opts.scenario,
+          sutAccountId: opts.sutAccount,
         });
       },
     );

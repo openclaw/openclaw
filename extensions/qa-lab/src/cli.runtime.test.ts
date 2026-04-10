@@ -6,6 +6,7 @@ const {
   runQaSuiteFromRuntime,
   runQaCharacterEval,
   runQaMultipass,
+  runTelegramQaLive,
   startQaLabServer,
   writeQaDockerHarnessFiles,
   buildQaDockerHarnessImage,
@@ -15,6 +16,7 @@ const {
   runQaSuiteFromRuntime: vi.fn(),
   runQaCharacterEval: vi.fn(),
   runQaMultipass: vi.fn(),
+  runTelegramQaLive: vi.fn(),
   startQaLabServer: vi.fn(),
   writeQaDockerHarnessFiles: vi.fn(),
   buildQaDockerHarnessImage: vi.fn(),
@@ -35,6 +37,10 @@ vi.mock("./character-eval.js", () => ({
 
 vi.mock("./multipass.runtime.js", () => ({
   runQaMultipass,
+}));
+
+vi.mock("./telegram-live.runtime.js", () => ({
+  runTelegramQaLive,
 }));
 
 vi.mock("./lab-server.js", () => ({
@@ -58,6 +64,7 @@ import {
   runQaCharacterEvalCommand,
   runQaManualLaneCommand,
   runQaSuiteCommand,
+  runQaTelegramCommand,
 } from "./cli.runtime.js";
 
 describe("qa cli runtime", () => {
@@ -69,6 +76,7 @@ describe("qa cli runtime", () => {
     runQaCharacterEval.mockReset();
     runQaManualLane.mockReset();
     runQaMultipass.mockReset();
+    runTelegramQaLive.mockReset();
     startQaLabServer.mockReset();
     writeQaDockerHarnessFiles.mockReset();
     buildQaDockerHarnessImage.mockReset();
@@ -97,6 +105,13 @@ describe("qa cli runtime", () => {
       guestScriptPath: "/tmp/multipass/multipass-guest-run.sh",
       vmName: "openclaw-qa-test",
       scenarioIds: ["channel-chat-baseline"],
+    });
+    runTelegramQaLive.mockResolvedValue({
+      outputDir: "/tmp/telegram",
+      reportPath: "/tmp/telegram/report.md",
+      summaryPath: "/tmp/telegram/summary.json",
+      observedMessagesPath: "/tmp/telegram/observed.json",
+      scenarios: [],
     });
     startQaLabServer.mockResolvedValue({
       baseUrl: "http://127.0.0.1:58000",
@@ -143,6 +158,30 @@ describe("qa cli runtime", () => {
       alternateModel: "anthropic/claude-sonnet-4-6",
       fastMode: true,
       scenarioIds: ["approval-turn-tool-followthrough"],
+    });
+  });
+
+  it("resolves telegram qa repo-root-relative paths before dispatching", async () => {
+    await runQaTelegramCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      outputDir: ".artifacts/qa/telegram",
+      providerMode: "live-frontier",
+      primaryModel: "openai/gpt-5.4",
+      alternateModel: "openai/gpt-5.4",
+      fastMode: true,
+      scenarioIds: ["telegram-help-command"],
+      sutAccountId: "sut-live",
+    });
+
+    expect(runTelegramQaLive).toHaveBeenCalledWith({
+      repoRoot: path.resolve("/tmp/openclaw-repo"),
+      outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/telegram"),
+      providerMode: "live-frontier",
+      primaryModel: "openai/gpt-5.4",
+      alternateModel: "openai/gpt-5.4",
+      fastMode: true,
+      scenarioIds: ["telegram-help-command"],
+      sutAccountId: "sut-live",
     });
   });
 

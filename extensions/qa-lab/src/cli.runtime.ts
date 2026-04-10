@@ -15,6 +15,7 @@ import {
   type QaProviderModeInput,
 } from "./run-config.js";
 import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
+import { runTelegramQaLive } from "./telegram-live.runtime.js";
 
 type InterruptibleServer = {
   baseUrl: string;
@@ -278,6 +279,32 @@ export async function runQaSuiteCommand(opts: {
   process.stdout.write(`QA suite watch: ${result.watchUrl}\n`);
   process.stdout.write(`QA suite report: ${result.reportPath}\n`);
   process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
+}
+
+export async function runQaTelegramCommand(opts: {
+  repoRoot?: string;
+  outputDir?: string;
+  providerMode?: QaProviderModeInput;
+  primaryModel?: string;
+  alternateModel?: string;
+  fastMode?: boolean;
+  scenarioIds?: string[];
+  sutAccountId?: string;
+}) {
+  const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
+  const result = await runTelegramQaLive({
+    repoRoot,
+    outputDir: opts.outputDir ? path.resolve(repoRoot, opts.outputDir) : undefined,
+    providerMode: opts.providerMode,
+    primaryModel: opts.primaryModel,
+    alternateModel: opts.alternateModel,
+    fastMode: opts.fastMode,
+    scenarioIds: opts.scenarioIds,
+    sutAccountId: opts.sutAccountId,
+  });
+  process.stdout.write(`Telegram QA report: ${result.reportPath}\n`);
+  process.stdout.write(`Telegram QA summary: ${result.summaryPath}\n`);
+  process.stdout.write(`Telegram QA observed messages: ${result.observedMessagesPath}\n`);
 }
 
 export async function runQaCharacterEvalCommand(opts: {
