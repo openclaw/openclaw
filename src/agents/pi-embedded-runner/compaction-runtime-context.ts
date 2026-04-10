@@ -1,6 +1,7 @@
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
+import { buildModelAliasIndex, resolveModelRefFromString } from "../model-selection.js";
 import type { SkillSnapshot } from "../skills.js";
 
 export type EmbeddedCompactionRuntimeContext = {
@@ -49,12 +50,36 @@ export function resolveEmbeddedCompactionTarget(params: {
       authProfileId: params.authProfileId ?? undefined,
     };
   }
+  const defaultProvider = provider;
+  if (defaultProvider) {
+    const resolvedOverride = resolveModelRefFromString({
+      raw: override,
+      defaultProvider,
+      aliasIndex: params.config
+        ? buildModelAliasIndex({
+            cfg: params.config,
+            defaultProvider,
+          })
+        : undefined,
+    });
+    if (resolvedOverride) {
+      // When switching provider via override, drop the primary auth profile to
+      // avoid sending the wrong credentials.
+      const authProfileId =
+        resolvedOverride.ref.provider !== (params.provider ?? "")?.trim()
+          ? undefined
+          : (params.authProfileId ?? undefined);
+      return {
+        provider: resolvedOverride.ref.provider,
+        model: resolvedOverride.ref.model,
+        authProfileId,
+      };
+    }
+  }
   const slashIdx = override.indexOf("/");
   if (slashIdx > 0) {
     const overrideProvider = override.slice(0, slashIdx).trim();
     const overrideModel = override.slice(slashIdx + 1).trim() || params.defaultModel;
-    // When switching provider via override, drop the primary auth profile to
-    // avoid sending the wrong credentials.
     const authProfileId =
       overrideProvider !== (params.provider ?? "")?.trim()
         ? undefined

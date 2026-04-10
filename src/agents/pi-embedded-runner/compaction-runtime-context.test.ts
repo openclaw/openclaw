@@ -112,6 +112,29 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.authProfileId).toBe("openai:p1");
   });
 
+  it("resolves compaction.model aliases from the configured model catalog", () => {
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      config: {
+        agents: {
+          defaults: {
+            compaction: { model: "spark" },
+            models: {
+              "openai-codex/gpt-5.3-codex-spark": { alias: "spark" },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      authProfileId: "openai:p1",
+    });
+    expect(result.provider).toBe("openai-codex");
+    expect(result.model).toBe("gpt-5.3-codex-spark");
+    expect(result.authProfileId).toBe("openai:p1");
+  });
+
   it("uses session model when no compaction.model override configured", () => {
     const result = buildEmbeddedCompactionRuntimeContext({
       workspaceDir: "/tmp/workspace",
