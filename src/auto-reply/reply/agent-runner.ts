@@ -792,8 +792,8 @@ export async function runReplyAgent(params: {
           sessionKey: followupRun.run.sessionKey,
           sessionId: followupRun.run.sessionId,
           agentId: followupRun.run.agentId,
-          modelProviderId: providerUsed,
-          modelId: modelUsed,
+          modelProviderId: followupRun.run.provider,
+          modelId: followupRun.run.model,
         })
           .then((contextContent) => {
             if (contextContent) {

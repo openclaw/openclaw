@@ -13,6 +13,7 @@ import {
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
   filterBootstrapFilesForSession,
+  loadWorkspaceBootstrapFileFromPath,
   loadWorkspaceBootstrapFiles,
   resolveDefaultAgentWorkspaceDir,
   type WorkspaceBootstrapFile,
@@ -242,6 +243,27 @@ describe("loadWorkspaceBootstrapFiles", () => {
     } finally {
       await fs.rm(rootDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("loadWorkspaceBootstrapFileFromPath", () => {
+  it("resolves relative paths against the workspace root", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({
+      dir: workspaceDir,
+      name: DEFAULT_AGENTS_FILENAME,
+      content: "repo rules",
+    });
+
+    const file = await loadWorkspaceBootstrapFileFromPath({
+      workspaceDir,
+      filePath: DEFAULT_AGENTS_FILENAME,
+      name: DEFAULT_AGENTS_FILENAME,
+    });
+
+    expect(file.path).toBe(path.join(workspaceDir, DEFAULT_AGENTS_FILENAME));
+    expect(file.content).toBe("repo rules");
+    expect(file.missing).toBe(false);
   });
 });
 

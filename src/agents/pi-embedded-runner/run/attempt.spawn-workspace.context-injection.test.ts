@@ -114,7 +114,11 @@ describe("embedded attempt context injection", () => {
   });
 
   it("passes the resolved bootstrap signature into continuation checks", async () => {
-    const { hasCompletedBootstrapTurn, resolveBootstrapSignatureForRun } =
+    const {
+      hasCompletedBootstrapTurn,
+      resolveBootstrapContextForRun,
+      resolveBootstrapSignatureForRun,
+    } =
       await resolveBootstrapContext({
         contextInjectionMode: "continuation-skip",
         completed: true,
@@ -122,6 +126,7 @@ describe("embedded attempt context injection", () => {
       });
 
     expect(resolveBootstrapSignatureForRun).toHaveBeenCalledTimes(1);
+    expect(resolveBootstrapContextForRun).not.toHaveBeenCalled();
     expect(hasCompletedBootstrapTurn).toHaveBeenNthCalledWith(1, "/tmp/session.jsonl");
     expect(hasCompletedBootstrapTurn).toHaveBeenNthCalledWith(
       2,

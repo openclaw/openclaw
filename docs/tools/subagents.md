@@ -75,17 +75,87 @@ Cost note: each sub-agent has its **own** context and token usage. For heavy or 
 tasks, set a cheaper model for sub-agents and keep your main agent on a higher-quality model.
 You can configure this via `agents.defaults.subagents.model` or per-agent overrides.
 
-If sub-agents should not inherit the main agent's full AGENTS instructions, set
-the shared workspace bootstrap files so the reduced sub-agent bootstrap set
-already contains the narrower guidance you want. The sub-agent AGENTS source is
-not currently configurable through documented `agents.defaults.subagents.*`
-settings.
+## Model-aware AGENTS selection
+
+OpenClaw can now choose a different `AGENTS.md` source for sub-agent runs than
+it uses for the main/orchestrator run.
+
+That matters for two reasons:
+
+- **Security and least privilege:** the main agent can keep a broader
+  orchestrator prompt while sub-agents receive a narrower `SUBAGENTS.md`
+  variant instead of the full top-level `AGENTS.md`.
+- **Model tuning:** different models often respond better to different prompt
+  shapes. You can keep a sharper, shorter `AGENTS.gpt-5.4.md` for
+  `openai/gpt-5.4` while keeping a different style for
+  `anthropic/claude-opus-4-6`, without rewriting your main workspace prompt
+  every time you switch models.
+
+Use the core config keys below:
+
+- `agents.defaults.agentsFile`
+- `agents.defaults.agentsFilesByModel`
+- `agents.defaults.subagents.agentsFile`
+- `agents.defaults.subagents.agentsFilesByModel`
+- matching per-agent overrides under `agents.list[]` and `agents.list[].subagents`
+
+Example:
+
+```json5
+{
+  agents: {
+    defaults: {
+      agentsFile: "AGENTS.opus.md",
+      agentsFilesByModel: {
+        "openai/gpt-5.4": "AGENTS.gpt-5.4.md",
+        "anthropic/claude-opus-4-6": "AGENTS.opus.md",
+      },
+      subagents: {
+        model: "openai/gpt-5.4",
+        agentsFile: "SUBAGENTS.md",
+        agentsFilesByModel: {
+          "openai/gpt-5.4": "SUBAGENTS.gpt-5.4.md",
+        },
+      },
+    },
+    list: [
+      {
+        id: "research",
+        subagents: {
+          agentsFile: "SUBAGENTS.research.md",
+        },
+      },
+    ],
+  },
+}
+```
+
+Common pattern:
+
+- Main/orchestrator on `anthropic/claude-opus-4-6` keeps a broad planning file.
+- Spawned workers on `openai/gpt-5.4` get a tighter worker-specific file with
+  strict task boundaries, fewer global instructions, and no extra orchestrator
+  policy.
+- If the resolved runtime model changes, OpenClaw re-selects the matching file
+  for that model on the next bootstrap pass.
+
+Selection order:
+
+1. Decide whether this is a main run or a sub-agent run.
+2. Resolve the actual runtime model used for the run.
+3. Try per-agent model-specific override.
+4. Try defaults model-specific override.
+5. Try per-agent base override.
+6. Try defaults base override.
+7. Fall back to workspace `AGENTS.md`.
+
+Paths must stay inside the workspace root. Invalid or missing overrides warn and
+fall back safely.
 
 Migration note: if you previously used the SubAgent Context Limiter plugin only
-to swap `SubAgentMD` into sub-agent runs, keep that plugin or hook-based setup
-for now. OpenClaw does not yet expose a documented core config replacement for
-that exact AGENTS-file swap.
-
+to swap `SubAgentMD` into sub-agent runs, the core config above is the direct
+replacement. The plugin is still useful for more custom hook behavior, but it is
+no longer required just to give sub-agents a different AGENTS file.
 ## Tool
 
 Use `sessions_spawn`:
@@ -93,7 +163,8 @@ Use `sessions_spawn`:
 - Starts a sub-agent run (`deliver: false`, global lane: `subagent`)
 - Then runs an announce step and posts the announce reply to the requester chat channel
 - Default model: inherits the caller unless you set `agents.defaults.subagents.model` (or per-agent `agents.list[].subagents.model`); an explicit `sessions_spawn.model` still wins.
-- Default AGENTS source: inherits from the workspace bootstrap set, but sub-agents use a reduced internal allowlist rather than a separately configurable `agents.defaults.subagents.agentsFile` setting.
+- Default AGENTS source: `agents.defaults.subagents.agentsFile` when set, otherwise `AGENTS.md`.
+- Model-specific sub-agent AGENTS source: `agents.defaults.subagents.agentsFilesByModel["provider/model"]` or the matching per-agent `agents.list[].subagents.agentsFilesByModel["provider/model"]`.
 - Default thinking: inherits the caller unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.list[].subagents.thinking`); an explicit `sessions_spawn.thinking` still wins.
 - Default run timeout: if `sessions_spawn.runTimeoutSeconds` is omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` when set; otherwise it falls back to `0` (no timeout).
 
@@ -211,6 +282,40 @@ Operational guidance:
   `exec` sleep commands.
 - If a child completion event arrives after you already sent the final answer,
   the correct follow-up is the exact silent token `NO_REPLY` / `no_reply`.
+
+## Prompt flow
+
+```mermaid
+flowchart TD
+    A["Run starts"] --> B["Role: main or subagent?"]
+    B --> C["Resolve actual runtime model"]
+    C --> D["Check per-agent model override"]
+    D --> E["Check default model override"]
+    E --> F["Check per-agent base AGENTS file"]
+    F --> G["Check default base AGENTS file"]
+    G --> H["Fallback to workspace AGENTS.md"]
+    H --> I["Inject reduced bootstrap set for subagents"]
+    I --> J["Reuse same effective AGENTS source after compaction and reinjection"]
+```
+
+This reuse is important for security. If you configure sub-agents to use
+`SUBAGENTS.md`, they do not silently regain the broader orchestrator
+`AGENTS.md` later during compaction or continuation handling.
+
+### GPT-5.4 vs Opus example
+
+This feature is not about claiming one model is universally better. It gives
+you a clean way to tune prompt shape for how each model tends to respond:
+
+- `openai/gpt-5.4`: many teams prefer concise task protocol, explicit output
+  format, strict handoff rules, and fewer repeated narrative instructions.
+- `anthropic/claude-opus-4-6`: many teams prefer a slightly richer planning file
+  with more prose, broader collaboration guidance, and higher-level quality
+  framing.
+
+Instead of rewriting your one true `AGENTS.md` every time you switch models,
+OpenClaw lets you keep those variants side by side and select the right one at
+runtime.
 
 ### Tool policy by depth
 
@@ -348,6 +453,8 @@ Sub-agents use a dedicated in-process queue lane:
 - Sub-agent announce is **best-effort**. If the gateway restarts, pending "announce back" work is lost.
 - Sub-agents still share the same gateway process resources; treat `maxConcurrent` as a safety valve.
 - `sessions_spawn` is always non-blocking: it returns `{ status: "accepted", runId, childSessionKey }` immediately.
-- Sub-agent context only injects `AGENTS.md` + `TOOLS.md` (no `SOUL.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, or `BOOTSTRAP.md`).
+- Sub-agent context uses the reduced allowlist `AGENTS.md`, `TOOLS.md`,
+  `SOUL.md`, `IDENTITY.md`, and `USER.md`. The AGENTS entry in that reduced set
+  can still be replaced by `agentsFile` / `agentsFilesByModel`.
 - Maximum nesting depth is 5 (`maxSpawnDepth` range: 1–5). Depth 2 is recommended for most use cases.
 - `maxChildrenPerAgent` caps active children per session (default: 5, range: 1–20).

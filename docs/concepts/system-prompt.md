@@ -122,11 +122,41 @@ occurs, OpenClaw can inject a warning block in Project Context; control this wit
 `agents.defaults.bootstrapPromptTruncationWarning` (`off`, `once`, `always`;
 default: `once`).
 
-Sub-agent sessions use a reduced bootstrap allowlist to keep context smaller.
-Today that minimal set includes `AGENTS.md`, `TOOLS.md`, `SOUL.md`,
-`IDENTITY.md`, and `USER.md`. This reduced bootstrap set is currently
-implementation-defined rather than configurable through documented
-`agents.defaults.subagents.*` settings.
+OpenClaw can replace the `AGENTS.md` entry in that bootstrap set before
+injection:
+
+- Main/default runs can use `agents.defaults.agentsFile` or
+  `agents.defaults.agentsFilesByModel`.
+- Sub-agent runs can use `agents.defaults.subagents.agentsFile` or
+  `agents.defaults.subagents.agentsFilesByModel`.
+- Matching per-agent overrides exist under `agents.list[]` and
+  `agents.list[].subagents`.
+
+Sub-agent sessions still use a reduced bootstrap allowlist to keep context
+smaller. Today that minimal set includes `AGENTS.md`, `TOOLS.md`, `SOUL.md`,
+`IDENTITY.md`, and `USER.md`. The selected AGENTS *content* can change by run
+role and model, but the reduced sub-agent allowlist still applies around it.
+
+Selection is exact-match and runtime-aware:
+
+- OpenClaw resolves the actual model used for the run first.
+- Model-specific keys must use canonical `provider/model` refs such as
+  `openai/gpt-5.4`.
+- If no matching override is available, OpenClaw falls back safely to the base
+  configured file and then to workspace `AGENTS.md`.
+
+This makes it practical to keep a broader orchestrator prompt for the main
+agent while handing sub-agents a narrower file such as `SUBAGENTS.md` or
+`SUBAGENTS.gpt-5.4.md`.
+
+```mermaid
+flowchart LR
+    A["Bootstrap snapshot"] --> B["Role-aware AGENTS selection"]
+    B --> C["Model-specific override"]
+    C --> D["agent:bootstrap hooks"]
+    D --> E["Project Context injection"]
+    E --> F["Continuation / compaction reuse same effective AGENTS source"]
+```
 
 Internal hooks can intercept this step via `agent:bootstrap` to mutate or replace
 the injected bootstrap files (for example swapping `SOUL.md` for an alternate persona).

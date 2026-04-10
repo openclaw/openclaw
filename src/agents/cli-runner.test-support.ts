@@ -26,6 +26,7 @@ type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type BootstrapContext = {
   bootstrapFiles: WorkspaceBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
+  bootstrapSignature: string;
 };
 type ResolveBootstrapContextForRunMock = Mock<() => Promise<BootstrapContext>>;
 
@@ -44,6 +45,7 @@ const hoisted = vi.hoisted(
       resolveBootstrapContextForRunMock: vi.fn<() => Promise<BootstrapContext>>(async () => ({
         bootstrapFiles: [],
         contextFiles: [],
+        bootstrapSignature: "agents:AGENTS.md",
       })),
     };
   },
@@ -367,14 +369,19 @@ export function setupCliRunnerTestRegistry() {
   hoisted.resolveBootstrapContextForRunMock.mockReset().mockResolvedValue({
     bootstrapFiles: [],
     contextFiles: [],
+    bootstrapSignature: "agents:AGENTS.md",
   });
 }
 
 export function stubBootstrapContext(params: {
   bootstrapFiles: WorkspaceBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
+  bootstrapSignature?: string;
 }) {
-  hoisted.resolveBootstrapContextForRunMock.mockResolvedValueOnce(params);
+  hoisted.resolveBootstrapContextForRunMock.mockResolvedValueOnce({
+    bootstrapSignature: "agents:AGENTS.md",
+    ...params,
+  });
 }
 
 export function restoreCliRunnerPrepareTestDeps() {
