@@ -232,7 +232,13 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
     try {
       const parsed = new URL(finalUrl);
       const base = path.basename(parsed.pathname);
-      fileNameFromUrl = base || undefined;
+      // Decode URI-encoded filenames (e.g. Chinese characters: %E4%B9%A6 → 书)
+      // so downstream consumers see the original human-readable name.
+      try {
+        fileNameFromUrl = base ? decodeURIComponent(base) : undefined;
+      } catch {
+        fileNameFromUrl = base || undefined;
+      }
     } catch {
       // ignore parse errors; leave undefined
     }
