@@ -810,6 +810,21 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
       formatArgs: COMMAND_ARG_FORMATTERS.queue,
     }),
     defineChatCommand({
+      key: "jenni",
+      description: "Run fixed Jenni Admin jobs.",
+      textAlias: "/jenni",
+      scope: "text",
+      category: "tools",
+      args: [
+        {
+          name: "job",
+          description: "inspect or benchmark",
+          type: "string",
+          choices: ["inspect", "benchmark"],
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "bash",
       description: "Run host shell commands (host-only).",
       textAlias: "/bash",

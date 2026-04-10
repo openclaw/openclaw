@@ -180,6 +180,111 @@ function buildUsageReply(): ReplyPayload {
   };
 }
 
+type ExecuteTrackedChatCommandParams = {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  elevated: {
+    enabled: boolean;
+    allowed: boolean;
+    failures: Array<{ gate: string; key: string }>;
+  };
+  commandText: string;
+  workdir?: string;
+  displayLabel: string;
+  busyText?: string;
+  runningText?: (sessionId: string) => string;
+};
+
+export async function executeTrackedChatCommand(
+  params: ExecuteTrackedChatCommandParams,
+): Promise<ReplyPayload> {
+  const liveJob = ensureActiveJobState();
+  if (liveJob) {
+    return {
+      text:
+        params.busyText ??
+        "⚠️ A bash job is already running (starting). Use !poll / !stop (or /bash poll / /bash stop).",
+    };
+  }
+
+  activeJob = {
+    state: "starting",
+    startedAt: Date.now(),
+    command: params.commandText,
+  };
+
+  try {
+    const foregroundMs = resolveForegroundMs(params.cfg);
+    const shouldBackgroundImmediately = foregroundMs <= 0;
+    const timeoutSec = params.cfg.tools?.exec?.timeoutSec;
+    const notifyOnExit = params.cfg.tools?.exec?.notifyOnExit;
+    const notifyOnExitEmptySuccess = params.cfg.tools?.exec?.notifyOnExitEmptySuccess;
+    const execTool = createExecTool({
+      scopeKey: CHAT_BASH_SCOPE_KEY,
+      allowBackground: true,
+      timeoutSec,
+      sessionKey: params.sessionKey,
+      notifyOnExit,
+      notifyOnExitEmptySuccess,
+      elevated: {
+        enabled: params.elevated.enabled,
+        allowed: params.elevated.allowed,
+        defaultLevel: "on",
+      },
+    });
+    const result = await execTool.execute("chat-bash", {
+      command: params.commandText,
+      workdir: params.workdir,
+      background: shouldBackgroundImmediately,
+      yieldMs: shouldBackgroundImmediately ? undefined : foregroundMs,
+      timeout: timeoutSec,
+      elevated: true,
+    });
+
+    if (result.details?.status === "running") {
+      const sessionId = result.details.sessionId;
+      activeJob = {
+        state: "running",
+        sessionId,
+        startedAt: result.details.startedAt,
+        command: params.commandText,
+        watcherAttached: false,
+      };
+      attachActiveWatcher(sessionId);
+      const snippet = formatSessionSnippet(sessionId);
+      logVerbose(`Started bash session ${snippet}: ${params.commandText}`);
+      return {
+        text:
+          params.runningText?.(sessionId) ??
+          `⚙️ ${params.displayLabel} started (session ${sessionId}). Still running; use !poll / !stop (or /bash poll / /bash stop).`,
+      };
+    }
+
+    activeJob = null;
+    const exitCode = result.details?.status === "completed" ? result.details.exitCode : 0;
+    const output =
+      result.details?.status === "completed"
+        ? result.details.aggregated
+        : result.content.map((chunk) => (chunk.type === "text" ? chunk.text : "")).join("\n");
+    return {
+      text: [
+        `⚙️ ${params.displayLabel}: ${params.commandText}`,
+        `Exit: ${exitCode}`,
+        formatOutputBlock(output || "(no output)"),
+      ].join("\n"),
+    };
+  } catch (err) {
+    activeJob = null;
+    const message = formatErrorMessage(err);
+    return {
+      text: [
+        `⚠️ ${params.displayLabel} failed: ${params.commandText}`,
+        formatOutputBlock(message),
+      ].join("\n"),
+    };
+  }
+}
+
 export async function handleBashChatCommand(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
@@ -317,90 +422,24 @@ export async function handleBashChatCommand(params: {
   }
 
   // request.action === "run"
-  if (liveJob) {
-    const label =
-      liveJob.state === "running" ? formatSessionSnippet(liveJob.sessionId) : "starting";
-    return {
-      text: `⚠️ A bash job is already running (${label}). Use !poll / !stop (or /bash poll / /bash stop).`,
-    };
-  }
-
   const commandText = request.command.trim();
   if (!commandText) {
     return buildUsageReply();
   }
 
-  activeJob = {
-    state: "starting",
-    startedAt: Date.now(),
-    command: commandText,
-  };
-
-  try {
-    const foregroundMs = resolveForegroundMs(params.cfg);
-    const shouldBackgroundImmediately = foregroundMs <= 0;
-    const timeoutSec = params.cfg.tools?.exec?.timeoutSec;
-    const notifyOnExit = params.cfg.tools?.exec?.notifyOnExit;
-    const notifyOnExitEmptySuccess = params.cfg.tools?.exec?.notifyOnExitEmptySuccess;
-    const execTool = createExecTool({
-      scopeKey: CHAT_BASH_SCOPE_KEY,
-      allowBackground: true,
-      timeoutSec,
-      sessionKey: params.sessionKey,
-      notifyOnExit,
-      notifyOnExitEmptySuccess,
-      elevated: {
-        enabled: params.elevated.enabled,
-        allowed: params.elevated.allowed,
-        defaultLevel: "on",
-      },
-    });
-    const result = await execTool.execute("chat-bash", {
-      command: commandText,
-      background: shouldBackgroundImmediately,
-      yieldMs: shouldBackgroundImmediately ? undefined : foregroundMs,
-      timeout: timeoutSec,
-      elevated: true,
-    });
-
-    if (result.details?.status === "running") {
-      const sessionId = result.details.sessionId;
-      activeJob = {
-        state: "running",
-        sessionId,
-        startedAt: result.details.startedAt,
-        command: commandText,
-        watcherAttached: false,
-      };
-      attachActiveWatcher(sessionId);
-      const snippet = formatSessionSnippet(sessionId);
-      logVerbose(`Started bash session ${snippet}: ${commandText}`);
-      return {
-        text: `⚙️ bash started (session ${sessionId}). Still running; use !poll / !stop (or /bash poll / /bash stop).`,
-      };
-    }
-
-    // Completed in foreground.
-    activeJob = null;
-    const exitCode = result.details?.status === "completed" ? result.details.exitCode : 0;
-    const output =
-      result.details?.status === "completed"
-        ? result.details.aggregated
-        : result.content.map((chunk) => (chunk.type === "text" ? chunk.text : "")).join("\n");
-    return {
-      text: [
-        `⚙️ bash: ${commandText}`,
-        `Exit: ${exitCode}`,
-        formatOutputBlock(output || "(no output)"),
-      ].join("\n"),
-    };
-  } catch (err) {
-    activeJob = null;
-    const message = formatErrorMessage(err);
-    return {
-      text: [`⚠️ bash failed: ${commandText}`, formatOutputBlock(message)].join("\n"),
-    };
-  }
+  const busyText = liveJob
+    ? `⚠️ A bash job is already running (${liveJob.state === "running" ? formatSessionSnippet(liveJob.sessionId) : "starting"}). Use !poll / !stop (or /bash poll / /bash stop).`
+    : undefined;
+  return executeTrackedChatCommand({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    elevated: params.elevated,
+    commandText,
+    displayLabel: "bash",
+    busyText,
+    runningText: (sessionId) =>
+      `⚙️ bash started (session ${sessionId}). Still running; use !poll / !stop (or /bash poll / /bash stop).`,
+  });
 }
 
 export function resetBashChatCommandForTests() {

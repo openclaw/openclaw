@@ -1,5 +1,9 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+const formatJenniBridgeExecOutputMock = vi.hoisted(() =>
+  vi.fn<(value: string) => string | null>(() => null),
+);
+
 const INLINE_EVAL_HIT = {
   executable: "python3",
   normalizedExecutable: "python3",
@@ -146,6 +150,10 @@ vi.mock("../logger.js", () => ({
   logInfo: vi.fn(),
 }));
 
+vi.mock("./bash-tools.exec-jenni-result.js", () => ({
+  formatJenniBridgeExecOutput: formatJenniBridgeExecOutputMock,
+}));
+
 let executeNodeHostCommand: typeof import("./bash-tools.exec-host-node.js").executeNodeHostCommand;
 
 type MockNodeInvokeParams = {
@@ -228,6 +236,8 @@ describe("executeNodeHostCommand", () => {
       details: { status: "approval-pending" },
     });
     sendExecApprovalFollowupResultMock.mockReset();
+    formatJenniBridgeExecOutputMock.mockReset();
+    formatJenniBridgeExecOutputMock.mockImplementation(() => null);
     enforceStrictInlineEvalApprovalBoundaryMock.mockReset();
     enforceStrictInlineEvalApprovalBoundaryMock.mockImplementation(
       (value: { approvedByAsk: boolean; deniedReason: string | null }) => value,
@@ -318,5 +328,71 @@ describe("executeNodeHostCommand", () => {
       );
     });
     expect(callGatewayToolMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("formats Jenni bridge output in node followups", async () => {
+    callGatewayToolMock.mockImplementation(
+      async (method: string, _options: unknown, params: MockNodeInvokeParams | undefined) => {
+        if (method !== "node.invoke") {
+          throw new Error(`unexpected gateway method: ${method}`);
+        }
+        if (params?.command === "system.run.prepare") {
+          return { payload: { plan: preparedPlan } };
+        }
+        if (params?.command === "system.run") {
+          return {
+            payload: {
+              stdout: [
+                "DB_ID=49",
+                "JOB_ID=benchmark.basic.20260410-065217",
+                "STATUS=success",
+                "LOG=benchmark.basic.20260410-065217.log",
+              ].join("\n"),
+              stderr: "",
+              exitCode: 0,
+              timedOut: false,
+            },
+          };
+        }
+        throw new Error(`unexpected node invoke command: ${String(params?.command)}`);
+      },
+    );
+    formatJenniBridgeExecOutputMock.mockReturnValue(
+      [
+        "Jenni Admin job completed.",
+        "DB ID: 49",
+        "Job ID: benchmark.basic.20260410-065217",
+        "Status: success",
+        "Log: benchmark.basic.20260410-065217.log",
+      ].join("\n"),
+    );
+
+    const result = await executeNodeHostCommand({
+      command: "python app/bridge.py --spec app/jobs/benchmark_basic.yaml",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    expect(result.details?.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
+        { approvalId: "approval-1" },
+        [
+          "Exec finished (node=node-1 id=approval-1, code 0)",
+          "Jenni Admin job completed.",
+          "DB ID: 49",
+          "Job ID: benchmark.basic.20260410-065217",
+          "Status: success",
+          "Log: benchmark.basic.20260410-065217.log",
+        ].join("\n"),
+      );
+    });
   });
 });
