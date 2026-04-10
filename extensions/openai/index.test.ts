@@ -263,6 +263,84 @@ describe("openai plugin", () => {
     ).toBeLessThan(runtimeMocks.refreshOpenAICodexToken.mock.invocationCallOrder[0]);
   });
 
+  it("registers provider-owned OpenAI tool compat hooks for openai and codex", async () => {
+    const { providers } = await registerOpenAIPluginWithHook();
+    const openaiProvider = requireRegisteredProvider(providers, "openai");
+    const codexProvider = requireRegisteredProvider(providers, "openai-codex");
+    const noParamsTool = {
+      name: "ping",
+      description: "",
+      parameters: {},
+      execute: vi.fn(),
+    } as never;
+
+    const normalizedOpenAI = openaiProvider.normalizeToolSchemas?.({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+      model: {
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        id: "gpt-5.4",
+      } as never,
+      tools: [noParamsTool],
+    } as never);
+    const normalizedCodex = codexProvider.normalizeToolSchemas?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      modelApi: "openai-codex-responses",
+      model: {
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api",
+        id: "gpt-5.4",
+      } as never,
+      tools: [noParamsTool],
+    } as never);
+
+    expect(normalizedOpenAI?.[0]?.parameters).toEqual({
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: false,
+    });
+    expect(normalizedCodex?.[0]?.parameters).toEqual({
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: false,
+    });
+    expect(
+      openaiProvider.inspectToolSchemas?.({
+        provider: "openai",
+        modelId: "gpt-5.4",
+        modelApi: "openai-responses",
+        model: {
+          provider: "openai",
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          id: "gpt-5.4",
+        } as never,
+        tools: [noParamsTool],
+      } as never),
+    ).toEqual([]);
+    expect(
+      codexProvider.inspectToolSchemas?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.4",
+        modelApi: "openai-codex-responses",
+        model: {
+          provider: "openai-codex",
+          api: "openai-codex-responses",
+          baseUrl: "https://chatgpt.com/backend-api",
+          id: "gpt-5.4",
+        } as never,
+        tools: [noParamsTool],
+      } as never),
+    ).toEqual([]);
+  });
+
   it("registers GPT-5 system prompt contributions when the friendly overlay is enabled", async () => {
     const { on, providers } = await registerOpenAIPluginWithHook({
       pluginConfig: { personality: "friendly" },
