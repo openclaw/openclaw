@@ -49,6 +49,9 @@ export function createSlackActions(
         ? {
             properties: {
               blocks: Type.Optional(createSlackMessageToolBlocksSchema()),
+              replyBroadcast: Type.Optional(Type.Boolean({
+                description: "Slack only: broadcast this thread reply to the parent channel. Only effective when threadTs is also set.",
+              })),
             },
           }
         : null,
