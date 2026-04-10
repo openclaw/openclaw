@@ -160,7 +160,7 @@ describe("delivery context helpers", () => {
       channel: "telegram",
       conversationId: "42",
       parentConversationId: "-10099",
-      expected: { to: "channel:-10099", threadId: "42" },
+      expected: { to: "-10099", threadId: "42" },
     },
     {
       channel: "mattermost",
