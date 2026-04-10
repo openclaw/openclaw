@@ -223,6 +223,29 @@ describe("loadWorkspaceBootstrapFiles", () => {
     expectSingleMemoryEntry(files, "alt");
   });
 
+  it("loads bootstrap files correctly when the workspace dir is relative", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-relative-"));
+    try {
+      const workspaceDir = path.join(root, "repo");
+      const relativeWorkspaceDir = path.relative(process.cwd(), workspaceDir);
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.writeFile(
+        path.join(workspaceDir, DEFAULT_AGENTS_FILENAME),
+        "relative rules",
+        "utf8",
+      );
+
+      const files = await loadWorkspaceBootstrapFiles(relativeWorkspaceDir);
+      const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
+
+      expect(agents?.missing).toBe(false);
+      expect(agents?.content).toBe("relative rules");
+      expect(agents?.path).toBe(path.join(workspaceDir, DEFAULT_AGENTS_FILENAME));
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("omits memory entries when no memory files exist", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
 
