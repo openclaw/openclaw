@@ -107,19 +107,19 @@ vi.mock("node:fs/promises", async () => {
   const wrapped = {
     ...actual,
     access: vi.fn(async (p: string) => {
-      const key = String(p);
+      const key = p;
       if (state.files.has(key) || state.dirs.has(key)) {
         return;
       }
       throw new Error(`ENOENT: no such file or directory, access '${key}'`);
     }),
     mkdir: vi.fn(async (p: string, opts?: { mode?: number }) => {
-      const key = String(p);
+      const key = p;
       state.dirs.add(key);
       state.dirModes.set(key, opts?.mode ?? 0o777);
     }),
     stat: vi.fn(async (p: string) => {
-      const key = String(p);
+      const key = p;
       if (state.dirs.has(key)) {
         return { mode: state.dirModes.get(key) ?? 0o777 };
       }
@@ -129,7 +129,7 @@ vi.mock("node:fs/promises", async () => {
       throw new Error(`ENOENT: no such file or directory, stat '${key}'`);
     }),
     chmod: vi.fn(async (p: string, mode: number) => {
-      const key = String(p);
+      const key = p;
       if (state.dirs.has(key)) {
         state.dirModes.set(key, mode);
         return;
@@ -141,12 +141,12 @@ vi.mock("node:fs/promises", async () => {
       throw new Error(`ENOENT: no such file or directory, chmod '${key}'`);
     }),
     unlink: vi.fn(async (p: string) => {
-      state.files.delete(String(p));
+      state.files.delete(p);
     }),
     writeFile: vi.fn(async (p: string, data: string, opts?: { mode?: number }) => {
-      const key = String(p);
+      const key = p;
       state.files.set(key, data);
-      state.dirs.add(String(key.split("/").slice(0, -1).join("/")));
+      state.dirs.add(key.split("/").slice(0, -1).join("/"));
       state.fileModes.set(key, opts?.mode ?? 0o666);
     }),
   };
