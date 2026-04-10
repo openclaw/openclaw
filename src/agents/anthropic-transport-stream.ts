@@ -35,6 +35,7 @@ const CLAUDE_CODE_TOOLS = [
   "Bash",
   "Grep",
   "Glob",
+  "LS",
   "AskUserQuestion",
   "EnterPlanMode",
   "ExitPlanMode",
@@ -49,6 +50,16 @@ const CLAUDE_CODE_TOOLS = [
 ] as const;
 const CLAUDE_CODE_TOOL_LOOKUP = new Map(
   CLAUDE_CODE_TOOLS.map((tool) => [normalizeLowercaseStringOrEmpty(tool), tool]),
+);
+
+// Alias map: Claude Code tool name → local pi-coding-agent tool name.
+// Only needed when the names truly differ (not just casing). "Grep"→"grep",
+// "LS"→"ls", "Read"→"read" etc. are handled by case-insensitive matching
+// in fromClaudeCodeName; only genuine renames need entries here.
+const CLAUDE_CODE_ALIAS_TO_LOCAL = new Map<string, string>([["Glob", "find"]]);
+// Reverse: local tool name → Claude Code name (for outbound schema mapping).
+const LOCAL_TO_CLAUDE_CODE_ALIAS = new Map<string, string>(
+  [...CLAUDE_CODE_ALIAS_TO_LOCAL.entries()].map(([cc, local]) => [local, cc]),
 );
 
 type AnthropicTransportModel = Model<"anthropic-messages"> & {
@@ -155,10 +166,23 @@ function isAnthropicOAuthToken(apiKey: string): boolean {
 }
 
 function toClaudeCodeName(name: string): string {
+  // Check explicit alias first (e.g. "find" → "Glob").
+  const alias = LOCAL_TO_CLAUDE_CODE_ALIAS.get(name);
+  if (alias) {
+    return alias;
+  }
   return CLAUDE_CODE_TOOL_LOOKUP.get(normalizeLowercaseStringOrEmpty(name)) ?? name;
 }
 
 function fromClaudeCodeName(name: string, tools: Context["tools"] | undefined): string {
+  // Resolve alias first (e.g. "Glob" → "find") before searching registered tools.
+  const aliasLocal = CLAUDE_CODE_ALIAS_TO_LOCAL.get(name);
+  if (aliasLocal && tools && tools.length > 0) {
+    const matched = tools.find((tool) => normalizeLowercaseStringOrEmpty(tool.name) === aliasLocal);
+    if (matched) {
+      return matched.name;
+    }
+  }
   if (tools && tools.length > 0) {
     const lowerName = normalizeLowercaseStringOrEmpty(name);
     const matchedTool = tools.find(
