@@ -436,8 +436,6 @@ Details: [Security guide](https://docs.openclaw.ai/gateway/security) · [Docker 
 {
   channels: {
     feishu: {
-      enabled: true,
-      dmPolicy: "pairing",
       accounts: {
         main: {
           appId: "cli_xxx",
