@@ -8,6 +8,7 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { recordTaskRunProgressByRunId } from "../tasks/task-executor.js";
+import { type DeliveryContext } from "../utils/delivery-context.js";
 
 const DEFAULT_STREAM_FLUSH_MS = 2_500;
 const DEFAULT_NO_OUTPUT_NOTICE_MS = 60_000;
@@ -73,6 +74,7 @@ export function startAcpSpawnParentStreamRelay(params: {
   childSessionKey: string;
   agentId: string;
   logPath?: string;
+  deliveryContext?: DeliveryContext;
   surfaceUpdates?: boolean;
   streamFlushMs?: number;
   noOutputNoticeMs?: number;
@@ -196,6 +198,7 @@ export function startAcpSpawnParentStreamRelay(params: {
     enqueueSystemEvent(cleaned, {
       sessionKey: parentSessionKey,
       contextKey,
+      deliveryContext: params.deliveryContext,
       trusted: false,
     });
     wake();

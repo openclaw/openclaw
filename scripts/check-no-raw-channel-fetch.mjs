@@ -48,7 +48,7 @@ const allowedRawFetchCallsites = new Set([
   bundledPluginCallsite("qa-channel", "src/bus-client.ts", 41),
   bundledPluginCallsite("qa-channel", "src/bus-client.ts", 221),
   bundledPluginCallsite("qa-lab", "src/docker-up.runtime.ts", 274),
-  bundledPluginCallsite("qa-lab", "src/gateway-child.ts", 488),
+  bundledPluginCallsite("qa-lab", "src/gateway-child.ts", 489),
   bundledPluginCallsite("qa-lab", "src/suite.ts", 330),
   bundledPluginCallsite("qa-lab", "src/suite.ts", 341),
   bundledPluginCallsite("qa-lab", "web/src/app.ts", 15),
