@@ -115,6 +115,12 @@ type GatewayHostWithSideResults = GatewayHost & {
   chatSideResultTerminalRuns?: Set<string>;
 };
 
+function isTerminalChatState(
+  state: ChatEventPayload["state"] | ReturnType<typeof handleChatEvent> | null | undefined,
+): state is "final" | "aborted" | "error" {
+  return state === "final" || state === "aborted" || state === "error";
+}
+
 type ConnectGatewayOptions = {
   reason?: "initial" | "seq-gap";
 };
@@ -251,6 +257,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       host.chatRunId = null;
       (host as unknown as { chatStream: string | null }).chatStream = null;
       (host as unknown as { chatStreamStartedAt: number | null }).chatStreamStartedAt = null;
+      (host as GatewayHostWithSideResults).chatSideResultTerminalRuns?.clear();
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
       if (shutdownHost.resumeChatQueueAfterReconnect) {
         // The interrupted run will never emit its terminal event now that the
@@ -328,7 +335,6 @@ function handleTerminalChatEvent(
   host: GatewayHost,
   payload: ChatEventPayload | undefined,
   state: ReturnType<typeof handleChatEvent>,
-  opts?: { skipHistoryReload?: boolean },
 ): boolean {
   if (state !== "final" && state !== "error" && state !== "aborted") {
     return false;
@@ -353,7 +359,7 @@ function handleTerminalChatEvent(
   }
   // Reload history when tools were used so the persisted tool results
   // replace the now-cleared streaming state.
-  if (hadToolEvents && state === "final" && !opts?.skipHistoryReload) {
+  if (hadToolEvents && state === "final") {
     void loadChatHistory(host as unknown as ChatState);
     return true;
   }
@@ -367,24 +373,18 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
       payload.sessionKey,
     );
   }
-  const state = handleChatEvent(host as unknown as ChatState, payload);
   const sideResultHost = host as GatewayHostWithSideResults;
-  const skipHistoryReloadForSideResult =
-    state === "final" &&
+  const isTrackedSideResultTerminalEvent =
+    isTerminalChatState(payload?.state) &&
     typeof payload?.runId === "string" &&
     sideResultHost.chatSideResultTerminalRuns?.has(payload.runId) === true;
-  if (skipHistoryReloadForSideResult && payload?.runId) {
+  if (isTrackedSideResultTerminalEvent && payload?.runId) {
     sideResultHost.chatSideResultTerminalRuns?.delete(payload.runId);
+    return;
   }
-  const historyReloaded = handleTerminalChatEvent(host, payload, state, {
-    skipHistoryReload: skipHistoryReloadForSideResult,
-  });
-  if (
-    state === "final" &&
-    !skipHistoryReloadForSideResult &&
-    !historyReloaded &&
-    shouldReloadHistoryForFinalEvent(payload)
-  ) {
+  const state = handleChatEvent(host as unknown as ChatState, payload);
+  const historyReloaded = handleTerminalChatEvent(host, payload, state);
+  if (state === "final" && !historyReloaded && shouldReloadHistoryForFinalEvent(payload)) {
     void loadChatHistory(host as unknown as ChatState);
   }
 }
