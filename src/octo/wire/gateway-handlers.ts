@@ -531,70 +531,123 @@ export class OctoGatewayHandlers {
       }
     }
 
-    // Step 12 — cli_exec exit monitoring. For pty_tmux arms, ProcessWatcher
-    // handles exit detection via sentinel files. cli_exec arms use raw
-    // subprocesses with no tmux session, so we register an onExit callback
-    // directly on the adapter to transition the arm FSM on process exit.
+    // Step 12 — cli_exec immediate exit handling. For fast-exiting cli_exec
+    // commands (e.g. `echo`), the process may already be dead by the time
+    // we reach this step. Check the adapter's health and cascade if done.
+    // For long-running cli_exec commands, the NodeAgent's poll loop handles
+    // exit detection. For pty_tmux, ProcessWatcher + sentinel files handle it.
     if (adapter instanceof CliExecAdapter && adapterRef.session_id) {
-      adapter.onExit(adapterRef.session_id, async (exitCode) => {
+      const health = await adapter.health(adapterRef);
+      if (health === "dead") {
+        // Process already exited. Read exit code and cascade.
+        const checkpoint = await adapter.checkpoint(adapterRef);
+        const exitCode =
+          (checkpoint as { pid?: number }).pid !== undefined
+            ? await new Promise<number | null>((resolve) => {
+                adapter.onExit(adapterRef.session_id, resolve);
+              })
+            : null;
+        const targetState = exitCode === 0 ? "completed" : "failed";
+        const now = this.now();
+
         try {
-          const arm = this.registry.getArm(arm_id);
-          if (!arm) {
-            return;
-          }
-          const terminalStates = new Set(["completed", "failed", "terminated", "archived"]);
-          if (terminalStates.has(arm.state)) {
-            return;
-          }
-
-          const targetState = exitCode === 0 ? "completed" : "failed";
-          const now = this.now();
-
-          // Drive starting → active first if needed.
-          let currentArm = arm;
+          // Drive starting → active → target.
+          let currentArm = this.registry.getArm(arm_id)!;
           if (currentArm.state === "starting") {
-            try {
-              const active = applyArmTransition(
-                { state: currentArm.state, updated_at: currentArm.updated_at },
-                "active",
-                { now, arm_id },
-              );
-              currentArm = this.registry.casUpdateArm(arm_id, currentArm.version, {
-                state: active.state,
-                updated_at: active.updated_at,
-              });
-            } catch {
-              // If transition fails, try to go directly to target state.
-            }
-          }
-
-          try {
-            const next = applyArmTransition(
+            const active = applyArmTransition(
               { state: currentArm.state, updated_at: currentArm.updated_at },
-              targetState,
+              "active",
               { now, arm_id },
             );
-            this.registry.casUpdateArm(arm_id, currentArm.version, {
-              state: next.state,
-              updated_at: next.updated_at,
+            currentArm = this.registry.casUpdateArm(arm_id, currentArm.version, {
+              state: active.state,
+              updated_at: active.updated_at,
             });
+          }
+          const next = applyArmTransition(
+            { state: currentArm.state, updated_at: currentArm.updated_at },
+            targetState,
+            { now, arm_id },
+          );
+          this.registry.casUpdateArm(arm_id, currentArm.version, {
+            state: next.state,
+            updated_at: next.updated_at,
+          });
 
-            await this.eventLog.append({
-              schema_version: 1,
-              entity_type: "arm",
-              entity_id: arm_id,
-              event_type: targetState === "completed" ? "arm.completed" : "arm.failed",
-              ts: new Date(now).toISOString(),
-              actor: `node-agent:${this.nodeId}`,
-              payload: { exit_code: exitCode, adapter_type: "cli_exec" },
-            });
-          } catch {
-            // Best-effort — don't crash on FSM/CAS failures.
+          await this.eventLog.append({
+            schema_version: 1,
+            entity_type: "arm",
+            entity_id: arm_id,
+            event_type: targetState === "completed" ? "arm.completed" : "arm.failed",
+            ts: new Date(now).toISOString(),
+            actor: `node-agent:${this.nodeId}`,
+            payload: { exit_code: exitCode, adapter_type: "cli_exec" },
+          });
+
+          // Grip + mission cascade.
+          if (targetState === "completed") {
+            const doneArm = this.registry.getArm(arm_id);
+            if (doneArm?.current_grip_id) {
+              const g = this.registry.getGrip(doneArm.current_grip_id);
+              if (
+                g &&
+                g.status !== "completed" &&
+                g.status !== "abandoned" &&
+                g.status !== "archived"
+              ) {
+                let gs = g.status;
+                let gv = g.version;
+                let gu = g.updated_at;
+                if (gs === "assigned") {
+                  const r = applyGripTransition({ state: gs, updated_at: gu }, "running", {
+                    now,
+                    grip_id: g.grip_id,
+                  });
+                  const ru = this.registry.casUpdateGrip(g.grip_id, gv, {
+                    status: r.state,
+                    updated_at: r.updated_at,
+                  });
+                  gs = ru.status;
+                  gv = ru.version;
+                  gu = ru.updated_at;
+                }
+                if (gs === "running") {
+                  const c = applyGripTransition({ state: gs, updated_at: gu }, "completed", {
+                    now,
+                    grip_id: g.grip_id,
+                  });
+                  this.registry.casUpdateGrip(g.grip_id, gv, {
+                    status: c.state,
+                    updated_at: c.updated_at,
+                  });
+                }
+
+                const { applyMissionTransition } = await import("../head/mission-fsm.js");
+                const mission = this.registry.getMission(spec.mission_id);
+                if (mission && mission.status === "active") {
+                  const allGrips = this.registry.listGrips({ mission_id: spec.mission_id });
+                  if (
+                    allGrips.length > 0 &&
+                    allGrips.every((gr) => gr.status === "completed" || gr.status === "archived")
+                  ) {
+                    const mn = applyMissionTransition(
+                      { state: mission.status, updated_at: mission.updated_at },
+                      "completed",
+                      { now, mission_id: mission.mission_id },
+                    );
+                    this.registry.casUpdateMission(mission.mission_id, mission.version, {
+                      status: mn.state,
+                      updated_at: mn.updated_at,
+                    });
+                  }
+                }
+              }
+            }
           }
         } catch {
-          // Swallow all errors in the exit callback.
+          // Best-effort — don't block arm spawn return on cascade failures.
         }
-      });
+      }
     }
 
     // Step 13 — return.
