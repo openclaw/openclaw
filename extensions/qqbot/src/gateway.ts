@@ -773,6 +773,22 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
           }
         }
 
+        // Include voice attachment type in MediaTypes so the framework's
+        // isInboundAudioContext() can detect audio input and TTS auto "inbound" mode works.
+        // Do NOT add voice paths to MediaPaths — the framework's applyMediaUnderstanding
+        // would run extractFileBlocks on them, injecting audio binary into context.
+        const hasVoiceAttachments = uniqueVoicePaths.length > 0 || uniqueVoiceUrls.length > 0;
+
+        // Merge all MIME types from images (local + remote) and voice into a single array.
+        // MediaType is the primary type (first image wins); "audio" is appended to MediaTypes
+        // so isInboundAudioContext() can detect it without reclassifying image entries.
+        const allMediaTypes = [...localMediaTypes, ...remoteMediaTypes];
+        if (hasVoiceAttachments) {
+          allMediaTypes.push("audio");
+        }
+        const resolvedMediaType = localMediaTypes[0] ?? remoteMediaTypes[0] ?? (hasVoiceAttachments ? "audio" : undefined);
+        const resolvedMediaTypes = allMediaTypes.length > 0 ? allMediaTypes : undefined;
+
         const ctxPayload = pluginRuntime.channel.reply.finalizeInboundContext({
           Body: body,
           BodyForAgent: agentBody,
@@ -805,8 +821,6 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
             ? {
                 MediaPaths: localMediaPaths,
                 MediaPath: localMediaPaths[0],
-                MediaTypes: localMediaTypes,
-                MediaType: localMediaTypes[0],
               }
             : {}),
           ...(remoteMediaUrls.length > 0
@@ -815,6 +829,8 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
                 MediaUrl: remoteMediaUrls[0],
               }
             : {}),
+          ...(resolvedMediaType ? { MediaType: resolvedMediaType } : {}),
+          ...(resolvedMediaTypes ? { MediaTypes: resolvedMediaTypes } : {}),
           ...(replyToId
             ? {
                 ReplyToId: replyToId,
