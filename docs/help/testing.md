@@ -72,6 +72,9 @@ These commands sit beside the main test suites when you need QA-lab realism:
   - Writes a Matrix QA report, summary, and observed-events artifact under `.artifacts/qa-e2e/...`.
 - `pnpm openclaw qa telegram`
   - Runs the Telegram live QA lane against a real private group using the driver and SUT bot tokens from env.
+  - Requires `OPENCLAW_QA_TELEGRAM_GROUP_ID`, `OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN`, and `OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN`. The group id must be the numeric Telegram chat id.
+  - Requires two distinct bots in the same private group, with the SUT bot exposing a Telegram username.
+  - For stable bot-to-bot observation, enable Bot-to-Bot Communication Mode in `@BotFather` for both bots and ensure the driver bot can observe group bot traffic.
   - Writes a Telegram QA report, summary, and observed-messages artifact under `.artifacts/qa-e2e/...`.
 
 Live transport lanes share one standard contract so new transports do not drift:

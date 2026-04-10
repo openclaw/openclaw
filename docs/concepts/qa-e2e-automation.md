@@ -64,6 +64,20 @@ the real Matrix plugin inside a QA gateway child. The live transport lane keeps
 the child config scoped to the transport under test, so Matrix runs without
 `qa-channel` in the child config.
 
+For a transport-real Telegram smoke lane, run:
+
+```bash
+pnpm openclaw qa telegram
+```
+
+That lane targets one real private Telegram group instead of provisioning a
+disposable server. It requires `OPENCLAW_QA_TELEGRAM_GROUP_ID`,
+`OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN`, and
+`OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN`, plus two distinct bots in the same
+private group. The SUT bot must have a Telegram username, and bot-to-bot
+observation works best when both bots have Bot-to-Bot Communication Mode
+enabled in `@BotFather`.
+
 Live transport lanes now share one smaller contract instead of each inventing
 their own scenario list shape:
 
