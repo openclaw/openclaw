@@ -130,6 +130,7 @@ export function registerOctoCli(program: Command) {
     .description("Discover available agentic coding tools on this machine")
     .option("--json", "Output as JSON")
     .option("--usage", "Include local usage statistics (token counts, session history)")
+    .option("--probe", "Spawn interactive TUI sessions to query live quota (takes ~30s)")
     .action(async (opts) => {
       const { runOctoRuntimes } = await import("./runtimes.js");
       const code = runOctoRuntimes(opts);

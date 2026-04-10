@@ -80,12 +80,21 @@ export interface RuntimeInfo {
   usage: UsageStats;
   models: ModelInfo[];
   capabilities: CliCapabilities | null;
+  probe: ProbeResult | null;
   notes: string;
+}
+
+export interface ProbeResult {
+  available: boolean;
+  rawOutput: string;
+  parsed: Record<string, unknown>;
+  detail: string;
 }
 
 export interface RuntimesOptions {
   json?: boolean;
   usage?: boolean;
+  probe?: boolean;
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -102,6 +111,10 @@ interface KnownRuntime {
   authProbe: () => AuthStatus;
   usageProbe: () => UsageStats;
   modelProbe: () => ModelInfo[];
+  /** Interactive slash command to probe for live usage/quota. null = no probe available. */
+  probeCommand: string | null;
+  /** Parse the raw tmux capture-pane output from the probe session. */
+  parseProbe: ((raw: string) => ProbeResult) | null;
   notes: string;
 }
 
@@ -513,6 +526,216 @@ function probeCli(binary: string): CliCapabilities | null {
   }
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// TUI probe — spawn interactive session, run slash command, capture output
+// ──────────────────────────────────────────────────────────────────────────
+
+function stripAnsi(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").replace(/\x1b\][^\x07]*\x07/g, "");
+}
+
+/**
+ * Spawn a tmux session, wait for the CLI to init, send a slash command,
+ * capture the pane output, and kill the session. Human-equivalent operation.
+ */
+function runTuiProbe(
+  binary: string,
+  slashCommand: string,
+  sessionName: string,
+  initWaitMs = 4000,
+  commandWaitMs = 5000,
+): string | null {
+  try {
+    // Kill any stale probe session
+    try {
+      execSync(`tmux kill-session -t ${sessionName} 2>/dev/null`, { timeout: 3000 });
+    } catch {
+      // ignore — session may not exist
+    }
+
+    // Spawn the CLI in a detached tmux session
+    execSync(`tmux new-session -d -s ${sessionName} -x 200 -y 50 '${binary}'`, {
+      timeout: 5000,
+    });
+
+    // Wait for CLI to initialize
+    execSync(`sleep ${initWaitMs / 1000}`, { timeout: initWaitMs + 2000 });
+
+    // Send the slash command
+    execSync(`tmux send-keys -t ${sessionName} '${slashCommand}' Enter`, { timeout: 3000 });
+
+    // Wait for output to render
+    execSync(`sleep ${commandWaitMs / 1000}`, { timeout: commandWaitMs + 2000 });
+
+    // Capture the pane content
+    const raw = execSync(`tmux capture-pane -t ${sessionName} -p -S -50`, {
+      encoding: "utf-8",
+      timeout: 5000,
+    });
+
+    // Kill the session
+    try {
+      execSync(`tmux kill-session -t ${sessionName}`, { timeout: 3000 });
+    } catch {
+      // best effort cleanup
+    }
+
+    return stripAnsi(raw);
+  } catch {
+    // Clean up on failure
+    try {
+      execSync(`tmux kill-session -t ${sessionName} 2>/dev/null`, { timeout: 3000 });
+    } catch {
+      // ignore
+    }
+    return null;
+  }
+}
+
+function parseClaudeProbe(raw: string): ProbeResult {
+  // /cost output contains cost and usage info
+  const lines = raw
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const parsed: Record<string, unknown> = {};
+
+  for (const line of lines) {
+    const costMatch = line.match(/\$?([\d.]+)/);
+    if (line.toLowerCase().includes("cost") && costMatch) {
+      parsed.cost = parseFloat(costMatch[1]);
+    }
+    if (line.toLowerCase().includes("subscription")) {
+      parsed.subscription = true;
+    }
+    if (line.toLowerCase().includes("token")) {
+      const tokenMatch = line.match(/([\d,]+)\s*tokens?/i);
+      if (tokenMatch) {
+        parsed.tokens = parseInt(tokenMatch[1].replace(/,/g, ""), 10);
+      }
+    }
+  }
+
+  const costStr = typeof parsed.cost === "number" ? parsed.cost.toFixed(4) : "unknown";
+  return {
+    available: true,
+    rawOutput: raw,
+    parsed,
+    detail: parsed.subscription
+      ? "subscription-based (no per-session cost)"
+      : "session cost: $" + costStr,
+  };
+}
+
+function parseCodexProbe(raw: string): ProbeResult {
+  // /status output contains usage percentages, windows, reset times
+  const lines = raw
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const parsed: Record<string, unknown> = {};
+
+  for (const line of lines) {
+    // Look for percentage usage
+    const pctMatch = line.match(/([\d.]+)%/);
+    if (pctMatch) {
+      const pct = parseFloat(pctMatch[1]);
+      if (line.toLowerCase().includes("primary") || lines.indexOf(line) === 0) {
+        parsed.primaryUsedPercent = pct;
+      } else if (line.toLowerCase().includes("secondary")) {
+        parsed.secondaryUsedPercent = pct;
+      } else if (!parsed.usedPercent) {
+        parsed.usedPercent = pct;
+      }
+    }
+    // Look for reset time
+    const resetMatch = line.match(/reset.*?(\d+\s*(?:min|hour|h|m))/i);
+    if (resetMatch) {
+      parsed.resetIn = resetMatch[1];
+    }
+    // Look for plan type
+    if (line.toLowerCase().includes("pro") || line.toLowerCase().includes("plus")) {
+      parsed.plan = line;
+    }
+    // Look for window info
+    const windowMatch = line.match(/(\d+)\s*(?:hour|h)\s*(?:window|rolling)/i);
+    if (windowMatch) {
+      parsed.windowHours = parseInt(windowMatch[1], 10);
+    }
+  }
+
+  const usedPct = (parsed.primaryUsedPercent ?? parsed.usedPercent ?? null) as number | null;
+  const remaining = usedPct != null ? (100 - usedPct).toFixed(0) : "unknown";
+
+  return {
+    available: true,
+    rawOutput: raw,
+    parsed,
+    detail:
+      usedPct != null
+        ? usedPct.toFixed(0) +
+          "% used, " +
+          remaining +
+          "% remaining" +
+          (typeof parsed.resetIn === "string" ? ", resets in " + parsed.resetIn : "")
+        : "quota data captured (check raw output for details)",
+  };
+}
+
+function parseGeminiProbe(raw: string): ProbeResult {
+  // /stats output contains token usage and remaining quota per model
+  const lines = raw
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const parsed: Record<string, unknown> = {};
+  const models: Array<{ model: string; remaining: string }> = [];
+
+  for (const line of lines) {
+    // Look for remaining percentage
+    const remainMatch = line.match(/([\d.]+)%\s*(?:remaining|left|available)/i);
+    if (remainMatch) {
+      parsed.remainingPercent = parseFloat(remainMatch[1]);
+    }
+    // Look for model-specific quota
+    const modelMatch = line.match(/(gemini[\w.-]+).*?([\d.]+)%/i);
+    if (modelMatch) {
+      models.push({ model: modelMatch[1], remaining: modelMatch[2] + "%" });
+    }
+    // Look for token counts
+    const tokenMatch = line.match(/([\d,]+)\s*tokens?/i);
+    if (tokenMatch && !parsed.totalTokens) {
+      parsed.totalTokens = parseInt(tokenMatch[1].replace(/,/g, ""), 10);
+    }
+    // Look for reset time
+    const resetMatch = line.match(/reset.*?(\d{1,2}:\d{2}|\d+\s*(?:min|hour|h|m))/i);
+    if (resetMatch) {
+      parsed.resetAt = resetMatch[1];
+    }
+  }
+
+  if (models.length > 0) {
+    parsed.models = models;
+  }
+
+  const remaining = parsed.remainingPercent as number | undefined;
+
+  return {
+    available: true,
+    rawOutput: raw,
+    parsed,
+    detail:
+      remaining != null
+        ? remaining.toFixed(0) +
+          "% remaining" +
+          (typeof parsed.resetAt === "string" ? ", resets at " + parsed.resetAt : "")
+        : models.length > 0
+          ? models.map((m) => m.model + ": " + m.remaining + " remaining").join(", ")
+          : "stats captured (check raw output for details)",
+  };
+}
+
 function alwaysAvailableAuth(): AuthStatus {
   return {
     authenticated: true,
@@ -540,6 +763,8 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     authProbe: alwaysAvailableAuth,
     usageProbe: noUsageProbe,
     modelProbe: noModelProbe,
+    probeCommand: null,
+    parseProbe: null,
     notes:
       "Native OpenClaw agent loop — no external tool needed. Always available when Gateway is running.",
   },
@@ -553,6 +778,8 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     authProbe: probeClaudeAuth,
     usageProbe: probeClaudeUsage,
     modelProbe: probeClaudeModels,
+    probeCommand: "/cost",
+    parseProbe: parseClaudeProbe,
     notes:
       "Anthropic CLI. Supports --output-format stream-json for structured output. Requires Anthropic API key or OAuth.",
   },
@@ -566,6 +793,8 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     authProbe: probeCodexAuth,
     usageProbe: probeCodexUsage,
     modelProbe: probeCodexModels,
+    probeCommand: "/status",
+    parseProbe: parseCodexProbe,
     notes:
       "OpenAI CLI. Supports --json structured output mode. Requires OpenAI API key or ChatGPT OAuth.",
   },
@@ -579,6 +808,8 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     authProbe: probeGeminiAuth,
     usageProbe: noUsageProbe,
     modelProbe: noModelProbe,
+    probeCommand: "/stats",
+    parseProbe: parseGeminiProbe,
     notes: "Google CLI. Supports structured output. Requires Google API credentials.",
   },
   {
@@ -591,6 +822,8 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     authProbe: noAuthProbe,
     usageProbe: noUsageProbe,
     modelProbe: noModelProbe,
+    probeCommand: null,
+    parseProbe: null,
     notes: "AI pair programming tool. Interactive TUI only — driven via PTY/tmux.",
   },
   {
@@ -603,6 +836,8 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     authProbe: noAuthProbe,
     usageProbe: noUsageProbe,
     modelProbe: noModelProbe,
+    probeCommand: null,
+    parseProbe: null,
     notes: "Cursor editor CLI. Interactive — driven via PTY/tmux if CLI mode available.",
   },
   {
@@ -615,6 +850,8 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     authProbe: probeGhCopilotAuth,
     usageProbe: noUsageProbe,
     modelProbe: noModelProbe,
+    probeCommand: null,
+    parseProbe: null,
     notes: "GitHub Copilot via `gh copilot`. Requires GitHub CLI + Copilot extension.",
   },
   {
@@ -627,6 +864,8 @@ const KNOWN_RUNTIMES: KnownRuntime[] = [
     authProbe: noAuthProbe,
     usageProbe: noUsageProbe,
     modelProbe: noModelProbe,
+    probeCommand: null,
+    parseProbe: null,
     notes: "Open-source coding agent. Supports structured output mode.",
   },
 ];
@@ -658,7 +897,10 @@ function getVersion(binary: string, versionFlag: string): string | null {
 }
 
 /** Discover all known runtimes on this machine. */
-export function discoverRuntimes(opts?: { includeUsage?: boolean }): RuntimeInfo[] {
+export function discoverRuntimes(opts?: {
+  includeUsage?: boolean;
+  probe?: boolean;
+}): RuntimeInfo[] {
   return KNOWN_RUNTIMES.map((known) => {
     const binaryPath = findBinary(known.binary);
     const found = binaryPath !== null;
@@ -667,6 +909,25 @@ export function discoverRuntimes(opts?: { includeUsage?: boolean }): RuntimeInfo
     const usage = found && opts?.includeUsage ? known.usageProbe() : NO_USAGE;
     const models = found && opts?.includeUsage ? known.modelProbe() : [];
     const capabilities = found && opts?.includeUsage ? probeCli(known.binary) : null;
+
+    // TUI probe: spawn interactive session, run slash command, capture output
+    let probe: ProbeResult | null = null;
+    if (found && opts?.probe && known.probeCommand && known.parseProbe) {
+      const sessionName = `octo-probe-${known.binary.replace(/[^a-z0-9]/g, "")}`;
+      process.stdout.write(`  Probing ${known.name} (${known.probeCommand})...\n`);
+      const raw = runTuiProbe(known.binary, known.probeCommand, sessionName);
+      if (raw) {
+        probe = known.parseProbe(raw);
+      } else {
+        probe = {
+          available: false,
+          rawOutput: "",
+          parsed: {},
+          detail: "probe failed — could not capture TUI output",
+        };
+      }
+    }
+
     return {
       name: known.name,
       binary: known.binary,
@@ -680,6 +941,7 @@ export function discoverRuntimes(opts?: { includeUsage?: boolean }): RuntimeInfo
       usage,
       models,
       capabilities,
+      probe,
       notes: known.notes,
     };
   });
@@ -773,6 +1035,9 @@ export function formatRuntimes(runtimes: RuntimeInfo[]): string {
           `       commands: ${rt.capabilities.subcommands.length} subcommands (${rt.capabilities.subcommands.slice(0, 8).join(", ")}${rt.capabilities.subcommands.length > 8 ? ", ..." : ""})`,
         );
       }
+      if (rt.probe) {
+        lines.push(`       live: ${rt.probe.detail}`);
+      }
       lines.push("");
     }
   } else {
@@ -836,7 +1101,10 @@ export function runOctoRuntimes(
   opts: RuntimesOptions,
   out: { write: (s: string) => void } = process.stdout,
 ): number {
-  const runtimes = discoverRuntimes({ includeUsage: opts.usage ?? false });
+  const runtimes = discoverRuntimes({
+    includeUsage: opts.usage ?? opts.probe ?? false,
+    probe: opts.probe ?? false,
+  });
   const output = opts.json ? formatRuntimesJson(runtimes) : formatRuntimes(runtimes);
   out.write(output);
   return 0;
