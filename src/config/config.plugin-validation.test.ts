@@ -337,6 +337,31 @@ describe("config plugin validation", () => {
     });
   });
 
+  it('warns with guidance when "dreaming" is added to plugins.allow', async () => {
+    const res = validateInSuite({
+      plugins: {
+        allow: ["dreaming"],
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.warnings).toContainEqual({
+        path: "plugins.allow",
+        message:
+          '"dreaming" is a memory-core command, not a plugin id. Remove it from plugins.allow and configure plugins.entries.memory-core.config.dreaming instead.',
+      });
+    }
+  });
+
   it("surfaces plugin config diagnostics", async () => {
     const res = validateInSuite({
       agents: { list: [{ id: "pi" }] },

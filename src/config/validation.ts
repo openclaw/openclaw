@@ -930,6 +930,14 @@ function validateConfigObjectWithPluginsBase(
     if (typeof pluginId !== "string" || !pluginId.trim()) {
       continue;
     }
+    if (pluginId === "dreaming") {
+      warnings.push({
+        path: "plugins.allow",
+        message:
+          '"dreaming" is a memory-core command, not a plugin id. Remove it from plugins.allow and configure plugins.entries.memory-core.config.dreaming instead.',
+      });
+      continue;
+    }
     if (!knownIds.has(pluginId)) {
       pushMissingPluginIssue("plugins.allow", pluginId, { warnOnly: true });
     }
