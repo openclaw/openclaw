@@ -7,6 +7,7 @@ import {
   classifyProviderRuntimeFailureKind,
   getApiErrorPayloadFingerprint,
   parseApiErrorInfo,
+  type ProviderRuntimeFailureKind,
 } from "./pi-embedded-helpers.js";
 import { stableStringify } from "./stable-stringify.js";
 
@@ -112,7 +113,7 @@ export function buildApiErrorObservationFields(
   rawErrorHash?: string;
   rawErrorFingerprint?: string;
   httpCode?: string;
-  providerRuntimeFailureKind?: string;
+  providerRuntimeFailureKind?: ProviderRuntimeFailureKind;
   providerErrorType?: string;
   providerErrorMessagePreview?: string;
   requestIdHash?: string;
@@ -171,7 +172,7 @@ export function buildTextObservationFields(
   textHash?: string;
   textFingerprint?: string;
   httpCode?: string;
-  providerRuntimeFailureKind?: string;
+  providerRuntimeFailureKind?: ProviderRuntimeFailureKind;
   providerErrorType?: string;
   providerErrorMessagePreview?: string;
   requestIdHash?: string;

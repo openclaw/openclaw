@@ -26,7 +26,7 @@ function normalizeOpenAICodexAuthorizeUrl(rawUrl: string): string {
   }
   try {
     const url = new URL(trimmed);
-    if (!/openai\.com$/i.test(url.hostname) || !/\/oauth\/authorize$/i.test(url.pathname)) {
+    if (!/(?:^|\.)openai\.com$/i.test(url.hostname) || !/\/oauth\/authorize$/i.test(url.pathname)) {
       return rawUrl;
     }
 
