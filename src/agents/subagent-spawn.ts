@@ -843,6 +843,14 @@ export async function spawnSubagentDirect(
       retainAttachmentsOnKeep: retainOnSessionKeep,
     });
   } catch (err) {
+    // Roll back context engine preparation on registration failure.
+    if (subagentSpawnPreparationRollback) {
+      try {
+        await subagentSpawnPreparationRollback();
+      } catch {
+        // Best-effort rollback only.
+      }
+    }
     if (attachmentAbsDir) {
       try {
         await fs.rm(attachmentAbsDir, { recursive: true, force: true });
