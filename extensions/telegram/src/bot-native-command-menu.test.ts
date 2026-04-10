@@ -407,9 +407,11 @@ describe("bot-native-command-menu", () => {
       botIdentity: "bot-exhaust",
     });
 
-    // Each retry schedules a new timer; drain multiple rounds to exhaust all retries.
-    for (let i = 0; i < 4; i++) {
-      await vi.runAllTimersAsync();
+    // The first call happens before any retry timer is scheduled.
+    await vi.waitFor(() => expect(setMyCommands).toHaveBeenCalledTimes(1));
+    // Each retry schedules one timer; drain them one round at a time.
+    for (let i = 0; i < 3; i++) {
+      await vi.runOnlyPendingTimersAsync();
     }
     vi.useRealTimers();
 
