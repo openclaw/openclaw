@@ -132,6 +132,10 @@ export function buildOpenrouterMusicGenerationProvider(): MusicGenerationProvide
     capabilities: {
       generate: {
         maxTracks: 1,
+        supportsLyrics: true,
+        supportsInstrumental: true,
+        supportsFormat: true,
+        supportedFormats: ["mp3", "wav"],
       },
       edit: {
         enabled: false,

@@ -71,6 +71,9 @@ describe("openrouter music generation provider", () => {
     expect(provider.defaultModel).toBe("openai/gpt-4o-audio-preview");
     expect(provider.models).toContain("openai/gpt-4o-audio-preview");
     expect(provider.capabilities.generate?.maxTracks).toBe(1);
+    expect(provider.capabilities.generate?.supportsLyrics).toBe(true);
+    expect(provider.capabilities.generate?.supportsInstrumental).toBe(true);
+    expect(provider.capabilities.generate?.supportsFormat).toBe(true);
     expect(provider.capabilities.edit?.enabled).toBe(false);
   });
 

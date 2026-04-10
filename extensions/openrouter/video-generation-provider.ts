@@ -46,6 +46,16 @@ type OpenRouterVideoPollResponse = {
   };
 };
 
+function isSameOrigin(baseUrl: string, candidateUrl: string): boolean {
+  try {
+    const base = new URL(baseUrl);
+    const candidate = new URL(candidateUrl);
+    return base.origin === candidate.origin;
+  } catch {
+    return false;
+  }
+}
+
 function toBase64DataUrl(buffer: Buffer, mimeType: string): string {
   return `data:${mimeType};base64,${buffer.toString("base64")}`;
 }
@@ -230,8 +240,13 @@ export function buildOpenrouterVideoGenerationProvider(): VideoGenerationProvide
           throw new Error("OpenRouter video generation response missing video id");
         }
 
+        // Only trust polling_url if it shares the same origin as baseUrl to
+        // prevent credential exfiltration via a crafted response.
+        const candidatePollingUrl = normalizeOptionalString(submitted.polling_url);
         const pollingUrl =
-          normalizeOptionalString(submitted.polling_url) ?? `${baseUrl}/videos/${videoId}`;
+          candidatePollingUrl && isSameOrigin(baseUrl, candidatePollingUrl)
+            ? candidatePollingUrl
+            : `${baseUrl}/videos/${videoId}`;
         const completed = await pollOpenRouterVideo({
           pollingUrl,
           headers,
