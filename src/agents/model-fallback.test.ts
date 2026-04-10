@@ -177,7 +177,9 @@ async function expectSkippedUnavailableProvider(params: {
   });
 
   expect(result.result).toBe("ok");
-  expect(run.mock.calls).toEqual([["fallback", "ok-model"]]);
+  expect(run.mock.calls).toEqual([
+    ["fallback", "ok-model", expect.objectContaining({ previousFailureReasons: expect.any(Array) })],
+  ]);
   expect(result.attempts[0]?.reason).toBe(params.expectedReason);
 }
 
@@ -354,7 +356,7 @@ describe("runWithModelFallback", () => {
     expect(result.model).toBe("gpt-4.1-mini");
     expect(run.mock.calls).toEqual([
       ["anthropic", "claude-opus-4-5"],
-      ["openai", "gpt-4.1-mini"],
+      ["openai", "gpt-4.1-mini", expect.objectContaining({ previousFailureReasons: expect.any(Array) })],
     ]);
   });
 
@@ -392,7 +394,7 @@ describe("runWithModelFallback", () => {
     expect(result.model).toBe("openrouter/deepseek-chat");
     expect(run.mock.calls).toEqual([
       ["anthropic", "claude-haiku-3-5"],
-      ["openrouter", "openrouter/deepseek-chat"],
+      ["openrouter", "openrouter/deepseek-chat", expect.objectContaining({ previousFailureReasons: expect.any(Array) })],
     ]);
   });
 
@@ -423,11 +425,8 @@ describe("runWithModelFallback", () => {
     expect(result.result).toBe("ok");
     expect(run.mock.calls).toEqual([
       ["openai", "gpt-4.1-mini"],
-      ["anthropic", "claude-haiku-3-5"],
+      ["anthropic", "claude-haiku-3-5", expect.objectContaining({ previousFailureReasons: expect.any(Array) })],
     ]);
-  });
-
-  it("falls back on transient HTTP 5xx errors", async () => {
     await expectFallsBackToHaiku({
       provider: "openai",
       model: "gpt-4.1-mini",
@@ -494,7 +493,7 @@ describe("runWithModelFallback", () => {
     expect(result.result).toBe("ok");
     expect(run.mock.calls).toEqual([
       ["anthropic", "claude-opus-4"],
-      ["openai", "gpt-4.1-mini"],
+      ["openai", "gpt-4.1-mini", expect.objectContaining({ previousFailureReasons: expect.any(Array) })],
     ]);
   });
 
@@ -721,11 +720,8 @@ describe("runWithModelFallback", () => {
 
     expect(run.mock.calls).toEqual([
       ["anthropic", "claude-opus-4-5"],
-      ["anthropic", "claude-haiku-3-5"],
+      ["anthropic", "claude-haiku-3-5", expect.objectContaining({ previousFailureReasons: expect.any(Array) })],
     ]);
-  });
-
-  it("refreshes cooldown expiry from persisted auth state before fallback summary", async () => {
     const expiry = Date.now() + 120_000;
     const cfg = makeCfg({
       agents: {
@@ -917,11 +913,8 @@ describe("runWithModelFallback", () => {
     expect(result.result).toBe("ok");
     expect(run.mock.calls).toEqual([
       ["anthropic", "claude-sonnet-4"],
-      ["openai", "gpt-4o"],
+      ["openai", "gpt-4o", expect.objectContaining({ previousFailureReasons: expect.any(Array) })],
     ]);
-  });
-
-  it("defaults provider/model when missing (regression #946)", async () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
@@ -1213,10 +1206,12 @@ describe("runWithModelFallback", () => {
 
       expect(result.result).toBe("groq success");
       expect(run).toHaveBeenCalledTimes(2);
-      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile");
-    });
-
-    it("still skips fallbacks when using different provider than config", async () => {
+      expect(run).toHaveBeenNthCalledWith(
+        2,
+        "groq",
+        "llama-3.3-70b-versatile",
+        expect.objectContaining({ previousFailureReasons: expect.any(Array) }),
+      );
       const cfg = makeCfg({
         agents: {
           defaults: {
@@ -1244,7 +1239,12 @@ describe("runWithModelFallback", () => {
       expect(result.result).toBe("config primary worked");
       expect(run).toHaveBeenCalledTimes(2);
       expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini"); // Original request
-      expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-opus-4-6"); // Config primary as final fallback
+      expect(run).toHaveBeenNthCalledWith(
+        2,
+        "anthropic",
+        "claude-opus-4-6",
+        expect.objectContaining({ previousFailureReasons: expect.any(Array) }),
+      ); // Config primary as final fallback
     });
 
     it("uses fallbacks when session model exactly matches config primary", async () => {
@@ -1273,7 +1273,12 @@ describe("runWithModelFallback", () => {
 
       expect(result.result).toBe("fallback worked");
       expect(run).toHaveBeenCalledTimes(2);
-      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile");
+      expect(run).toHaveBeenNthCalledWith(
+        2,
+        "groq",
+        "llama-3.3-70b-versatile",
+        expect.objectContaining({ previousFailureReasons: expect.any(Array) }),
+      );
     });
   });
 
@@ -1333,10 +1338,8 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenCalledTimes(1);
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
         allowTransientCooldownProbe: true,
+        previousFailureReasons: expect.any(Array),
       });
-    });
-
-    it("attempts same-provider fallbacks during overloaded cooldown", async () => {
       const { dir } = await makeAuthStoreWithCooldown("anthropic", "overloaded");
       const cfg = makeCfg({
         agents: {
@@ -1363,6 +1366,7 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenCalledTimes(1);
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
         allowTransientCooldownProbe: true,
+        previousFailureReasons: expect.any(Array),
       });
     });
 
@@ -1393,6 +1397,7 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenCalledTimes(1);
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
         allowTransientCooldownProbe: true,
+        previousFailureReasons: expect.any(Array),
       });
     });
 
@@ -1421,7 +1426,12 @@ describe("runWithModelFallback", () => {
 
       expect(result.result).toBe("groq success");
       expect(run).toHaveBeenCalledTimes(1);
-      expect(run).toHaveBeenNthCalledWith(1, "groq", "llama-3.3-70b-versatile");
+      expect(run).toHaveBeenNthCalledWith(
+        1,
+        "groq",
+        "llama-3.3-70b-versatile",
+        expect.objectContaining({ previousFailureReasons: expect.any(Array) }),
+      );
     });
 
     it("skips same-provider models on billing cooldown but still tries no-profile fallback providers", async () => {
@@ -1449,7 +1459,12 @@ describe("runWithModelFallback", () => {
 
       expect(result.result).toBe("groq success");
       expect(run).toHaveBeenCalledTimes(1);
-      expect(run).toHaveBeenNthCalledWith(1, "groq", "llama-3.3-70b-versatile");
+      expect(run).toHaveBeenNthCalledWith(
+        1,
+        "groq",
+        "llama-3.3-70b-versatile",
+        expect.objectContaining({ previousFailureReasons: expect.any(Array) }),
+      );
     });
 
     it("tries cross-provider fallbacks when same provider has rate limit", async () => {
@@ -1497,8 +1512,14 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenCalledTimes(2);
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
         allowTransientCooldownProbe: true,
+        previousFailureReasons: expect.any(Array),
       });
-      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile");
+      expect(run).toHaveBeenNthCalledWith(
+        2,
+        "groq",
+        "llama-3.3-70b-versatile",
+        expect.objectContaining({ previousFailureReasons: expect.any(Array) }),
+      );
     });
 
     it("limits cooldown probes to one per provider before moving to cross-provider fallback", async () => {
@@ -1535,8 +1556,14 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenCalledTimes(2);
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
         allowTransientCooldownProbe: true,
+        previousFailureReasons: expect.any(Array),
       });
-      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile");
+      expect(run).toHaveBeenNthCalledWith(
+        2,
+        "groq",
+        "llama-3.3-70b-versatile",
+        expect.objectContaining({ previousFailureReasons: expect.any(Array) }),
+      );
     });
 
     it("does not consume transient probe slot when first same-provider probe fails with model_not_found", async () => {
@@ -1573,9 +1600,11 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenCalledTimes(2);
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
         allowTransientCooldownProbe: true,
+        previousFailureReasons: expect.any(Array),
       });
       expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5", {
         allowTransientCooldownProbe: true,
+        previousFailureReasons: expect.any(Array),
       });
     });
   });
@@ -1609,7 +1638,11 @@ describe("runWithImageModelFallback", () => {
     expect(result.result).toBe("ok");
     expect(run.mock.calls).toEqual([
       ["openai", "gpt-image-1"],
-      ["google", "gemini-2.5-flash-image-preview"],
+      [
+        "google",
+        "gemini-2.5-flash-image-preview",
+        expect.objectContaining({ previousFailureReasons: expect.any(Array) }),
+      ],
     ]);
   });
 });
