@@ -1166,4 +1166,12 @@ describe("classifyProviderRuntimeFailureKind", () => {
       "replay_invalid",
     );
   });
+
+  it("does not classify generic config errors that mention proxy settings as proxy failures", () => {
+    expect(
+      classifyProviderRuntimeFailureKind(
+        'Model-provider request.proxy/request.tls is not yet supported for api "ollama"',
+      ),
+    ).not.toBe("proxy");
+  });
 });

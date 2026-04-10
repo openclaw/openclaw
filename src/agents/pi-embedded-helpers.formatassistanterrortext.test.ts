@@ -265,6 +265,18 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it("keeps non-transport config errors that mention proxy settings actionable", () => {
+    const msg = makeAssistantError(
+      'Model-provider request.proxy/request.tls is not yet supported for api "ollama"',
+    );
+    expect(formatAssistantErrorText(msg)).toContain(
+      'Model-provider request.proxy/request.tls is not yet supported for api "ollama"',
+    );
+    expect(formatAssistantErrorText(msg)).not.toBe(
+      "LLM request failed: proxy or tunnel configuration blocked the provider request.",
+    );
+  });
+
   it("sanitizes invalid streaming event order errors", () => {
     const msg = makeAssistantError(
       'Unexpected event order, got message_start before receiving "message_stop"',
