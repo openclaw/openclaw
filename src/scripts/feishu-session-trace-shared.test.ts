@@ -117,4 +117,19 @@ describe("feishu session trace shared helpers", () => {
       "Run command pnpm test",
     ]);
   });
+
+  it("parses stringified arguments on top-level function_call payloads", () => {
+    const line = JSON.stringify({
+      type: "message",
+      message: {
+        role: "assistant",
+        function_call: {
+          name: "exec",
+          arguments: JSON.stringify({ command: "pnpm build" }),
+        },
+      },
+    });
+
+    expect(extractTraceMessagesFromSessionLine(line)).toEqual(["Run command pnpm build"]);
+  });
 });

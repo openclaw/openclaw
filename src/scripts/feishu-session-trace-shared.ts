@@ -102,6 +102,13 @@ function parseToolCallArgs(value: unknown): unknown {
   if (record.arguments && typeof record.arguments === "object") {
     return record.arguments;
   }
+  if (typeof record.arguments === "string") {
+    try {
+      return JSON.parse(record.arguments);
+    } catch {
+      return undefined;
+    }
+  }
   if (record.input && typeof record.input === "object") {
     return record.input;
   }
