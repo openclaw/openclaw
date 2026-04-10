@@ -33,14 +33,17 @@ export async function resolveAttemptBootstrapContext<
   const shouldCheckContinuationTurn =
     params.contextInjectionMode === "continuation-skip" &&
     params.bootstrapContextRunKind !== "heartbeat";
-  const bootstrapSignature = shouldCheckContinuationTurn
-    ? await params.resolveBootstrapSignatureForRun?.()
-    : undefined;
-  const isContinuationTurn =
-    shouldCheckContinuationTurn &&
-    (await (bootstrapSignature
-      ? params.hasCompletedBootstrapTurn(params.sessionFile, bootstrapSignature)
-      : params.hasCompletedBootstrapTurn(params.sessionFile)));
+  let bootstrapSignature: string | undefined;
+  let isContinuationTurn = false;
+  if (shouldCheckContinuationTurn) {
+    const hasCompletedBootstrap = await params.hasCompletedBootstrapTurn(params.sessionFile);
+    if (hasCompletedBootstrap) {
+      bootstrapSignature = await params.resolveBootstrapSignatureForRun?.();
+      isContinuationTurn = bootstrapSignature
+        ? await params.hasCompletedBootstrapTurn(params.sessionFile, bootstrapSignature)
+        : true;
+    }
+  }
   const shouldRecordCompletedBootstrapTurn =
     !isContinuationTurn &&
     params.bootstrapContextMode !== "lightweight" &&
