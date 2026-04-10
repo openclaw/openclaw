@@ -259,6 +259,8 @@ Progress note (2026-04-10): completed 1.6-1.8 in `/home/codex/clawd/` during thi
 
 **Tasks:**
 
+Progress note (2026-04-10): Phase 2 execution started from the live scheduler state after re-reading the current OpenClaw cron CLI source. This build expects `--timeout-seconds` (not `--timeout`) and `--best-effort-deliver` (not a generic delivery mode flag), so the rollout commands below should use the actual CLI surface when executed.
+
 - [ ] **2.1** Create Morning Data Collect cron job
   ```bash
   openclaw cron add \
@@ -268,9 +270,9 @@ Progress note (2026-04-10): completed 1.6-1.8 in `/home/codex/clawd/` during thi
     --fallback openrouter/minimax/minimax-m2.7 \
     --fallback openrouter/qwen/qwen3.6-plus \
     --session isolated \
-    --timeout 300 \
+    --timeout-seconds 300 \
     --message "Run: python3 /home/codex/second-brain/scripts/openclaw-pipeline/morning_collect.py" \
-    --announce --channel telegram --to 183115134 --delivery bestEffort
+    --announce --channel telegram --to 183115134 --best-effort-deliver
   ```
 - [ ] **2.2** Create Morning Planner cron job
 
@@ -282,7 +284,7 @@ Progress note (2026-04-10): completed 1.6-1.8 in `/home/codex/clawd/` during thi
     --fallback openrouter/minimax/minimax-m2.7 \
     --fallback openrouter/qwen/qwen3.6-plus \
     --session isolated \
-    --timeout 1800 \
+    --timeout-seconds 1800 \
     --message "<morning_planner_prompt>" \
     --announce --channel telegram --to 183115134
   ```

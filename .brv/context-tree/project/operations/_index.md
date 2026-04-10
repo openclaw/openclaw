@@ -1,37 +1,36 @@
 ---
-children_hash: f1410dfa857b532e92bd0266d3ee830cecabde3e8785f908cef29b2a345fac8c
-compression_ratio: 0.7741935483870968
+children_hash: 634a409d72004bba54a41232c56ccc39f6135be269d1ed60dd11bd61314e409f
+compression_ratio: 0.3988522238163558
 condensation_order: 1
-covers: [health_audit_2026_04_08.md]
-covers_token_total: 248
+covers: [cron_pipeline_collector_agent_refactor.md, health_audit_2026_04_08.md]
+covers_token_total: 697
 summary_level: d1
-token_count: 192
+token_count: 278
 type: summary
 ---
 
 # Project Operations
 
-## Health Audit Summary
+## Overview
 
-**Date:** 2026-04-08
+Operational domain covering system health maintenance and collector-agent infrastructure refactoring.
 
-### Remediation Overview
+## Key Activities
 
-Single-session audit completed with 7 fixes across model routing, compaction, cron jobs, plugin config, and brv model settings.
+### Phase 1 Validation
 
-### Key Changes
+- **cron_pipeline_collector_agent_refactor**: Phase 1 collector-agent refactor validated. Tests pass, atomic wipe-before-write pattern confirmed, per-source error handling working. Morning pipeline rollout pending passive context documentation completion.
 
-- **Model routing:** Requires `openrouter/` prefix; switches brv from `openai/gpt-4.1-mini` to `minimax/minimax-m2.7`
-- **Compaction threshold:** 20x increase (4000→80000)
-- **Cron targets:** 4 delivery targets corrected
-- **Plugin config:** `plugins.allow` set to 10 plugins
-- **Agent install:** `acpx 0.5.1`
-- **Cleanup:** `moltbot.json` archived
+### Health Remediation
 
-### Dependencies
+- **health_audit_2026_04_08**: Single-session remediation addressing model routing (requires `openrouter/` prefix), compaction threshold (4000→80000), 4 cron delivery targets, plugin configuration (10 plugins allowed, acpx 0.5.1 installed), and brv model switch (minimax/minimax-m2.7).
 
-OpenRouter guardrail compliance drove model routing changes.
+## Patterns
 
-### Entry Reference
+- Atomic operations with per-source error isolation
+- OpenRouter guardrail compliance driving model routing changes
+- 20x compaction threshold adjustment
 
-- `project/operations/health_audit_2026_04_08.md` — Full remediation details
+## Relationships
+
+Collector-agent refactor depends on passive context changes documented in execution plan. Health audit fixes were self-contained with OpenRouter compliance as the primary driver.

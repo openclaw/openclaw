@@ -3,41 +3,47 @@
     {
       "order": 3,
       "path": "_index.md",
-      "tokens": 130,
+      "tokens": 332,
       "type": "summary"
     },
     {
       "order": 2,
       "path": "project/_index.md",
-      "tokens": 210,
+      "tokens": 327,
       "type": "summary"
     },
     {
       "order": 1,
       "path": "project/operations/_index.md",
-      "tokens": 192,
+      "tokens": 278,
       "type": "summary"
     },
     {
       "importance": 50,
       "path": "project/context.md",
-      "tokens": 84,
+      "tokens": 85,
+      "type": "context"
+    },
+    {
+      "importance": 50,
+      "path": "project/operations/cron_pipeline_collector_agent_refactor.md",
+      "tokens": 448,
       "type": "context"
     },
     {
       "importance": 50,
       "path": "project/operations/health_audit_2026_04_08.md",
-      "tokens": 248,
+      "tokens": 249,
       "type": "context"
     }
   ],
-  "generated_at": "2026-04-08T11:09:38.892Z",
+  "generated_at": "2026-04-10T10:05:26.519Z",
   "lane_tokens": {
-    "contexts": 332,
+    "contexts": 782,
     "stubs": 0,
-    "summaries": 532
+    "summaries": 937
   },
-  "source_fingerprint": "8ab18f247f63e8a2afc75ef4569ec47885ef81002b527e6dabb6a90f99c83619",
-  "total_tokens": 864,
+  "source_fingerprint": "8d2176a7b74de067b7d3566bdb80a0e33fc795609ae782e4877a3844faf667da",
+  "total_tokens": 1719,
   "version": 1
 }
