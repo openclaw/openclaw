@@ -1096,7 +1096,7 @@ Auto-join example:
     discord: {
       voice: {
         enabled: true,
-        model: "openai-codex/gpt-5.4",
+        model: "openai-codex/gpt-5.3-codex-spark",
         autoJoin: [
           {
             guildId: "123456789012345678",
@@ -1107,7 +1107,7 @@ Auto-join example:
         decryptionFailureTolerance: 24,
         tts: {
           provider: "openai",
-          openai: { voice: "alloy" },
+          openai: { voice: "onyx" },
         },
       },
     },
@@ -1126,7 +1126,7 @@ If you want to mirror a working baseline quickly, use the values below as a star
       provider: "openai",
       openai: {
         model: "gpt-4o-mini-tts",
-        voice: "alloy",
+        voice: "onyx",
       },
     },
   },
@@ -1142,13 +1142,13 @@ If you want to mirror a working baseline quickly, use the values below as a star
     discord: {
       voice: {
         enabled: true,
-        model: "openai-codex/gpt-5.4",
+        model: "openai-codex/gpt-5.3-codex-spark",
         daveEncryption: true,
         decryptionFailureTolerance: 24,
         tts: {
           provider: "openai",
           openai: {
-            voice: "alloy",
+            voice: "onyx",
           },
         },
       },
@@ -1159,8 +1159,8 @@ If you want to mirror a working baseline quickly, use the values below as a star
 
 Required env keys for this baseline:
 
-- `OPENAI_API_KEY` (transcribe + response model + OpenAI TTS auth path when using OpenAI routes)
-- Codex OAuth profile auth (for `openai-codex/*` route) if you use `openai-codex/gpt-5.4`
+- `OPENAI_API_KEY` (transcribe + OpenAI responses used by `openai/*` routes)
+- Codex OAuth profile auth (for `openai-codex/*` route)
 
 
 
