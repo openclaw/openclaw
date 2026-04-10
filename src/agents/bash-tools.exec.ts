@@ -1745,6 +1745,7 @@ export function createExecTool(
         if (yielded || run.session.backgrounded) {
           return;
         }
+        run.disableUpdates();
         run.kill();
       };
 

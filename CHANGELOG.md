@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- fix(exec): disable live exec updates as soon as a run aborts or settles, and shorten hard-kill fallback settling so late output and missing exit events do not leave exec runs hanging or re-enter dead listeners.
 - fix(agents): guard nodes tool outPath against workspace boundary [AI-assisted]. (#63551) Thanks @pgondhi987.
 - fix(qqbot): enforce media storage boundary for all outbound local file paths [AI]. (#63271) Thanks @pgondhi987.
 - iMessage/self-chat: distinguish normal DM outbound rows from true self-chat using `destination_caller_id` plus chat participants, while preserving multi-handle self-chat aliases so outbound DM replies stop looping back as inbound messages. (#61619) Thanks @neeravmakwana.

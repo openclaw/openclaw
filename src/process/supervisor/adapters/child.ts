@@ -5,7 +5,7 @@ import { resolveWindowsCommandShim } from "../../windows-command.js";
 import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
 
-const FORCE_KILL_WAIT_FALLBACK_MS = 4000;
+const FORCE_KILL_WAIT_FALLBACK_MS = 1000;
 
 function resolveCommand(command: string): string {
   return resolveWindowsCommandShim({
