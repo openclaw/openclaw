@@ -453,6 +453,11 @@ export function consumeAdjustedParamsForToolCall(toolCallId: string, runId?: str
   return params;
 }
 
+export function peekAdjustedParamsForToolCall(toolCallId: string, runId?: string): unknown {
+  const adjustedParamsKey = buildAdjustedParamsKey({ runId, toolCallId });
+  return adjustedParamsByToolCallId.get(adjustedParamsKey);
+}
+
 export const __testing = {
   BEFORE_TOOL_CALL_WRAPPED,
   buildAdjustedParamsKey,

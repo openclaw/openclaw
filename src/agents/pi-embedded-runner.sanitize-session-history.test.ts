@@ -830,6 +830,254 @@ describe("sanitizeSessionHistory", () => {
     ).toBe(false);
   });
 
+  it("omits stale transient diagnostic tool results older than the replay threshold", async () => {
+    setNonGoogleModelApi();
+    const oldTimestamp = Date.now() - 2 * 60 * 60 * 1000;
+    const messages = castAgentMessages([
+      makeAssistantMessage([{ type: "toolCall", id: "call_old", name: "exec", arguments: {} }], {
+        stopReason: "toolUse",
+        timestamp: oldTimestamp - 1,
+      }),
+      {
+        role: "toolResult",
+        toolCallId: "call_old",
+        toolName: "exec",
+        content: [{ type: "text", text: "old plugin output" }],
+        isError: false,
+        timestamp: oldTimestamp,
+        __openclaw: {
+          transient: true,
+          diagnosticType: "openclaw.plugins_list",
+          taggedAt: oldTimestamp,
+          sourceTool: "exec",
+        },
+      },
+    ]);
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-responses",
+      provider: "openai",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect(result[1]).toMatchObject({
+      role: "toolResult",
+      content: [
+        {
+          type: "text",
+          text: "[Previous environment diagnostic output omitted from replay for accuracy.]",
+        },
+      ],
+      __openclaw: expect.objectContaining({
+        replayOmitted: true,
+        diagnosticType: "openclaw.plugins_list",
+      }),
+    });
+  });
+
+  it("omits older transient diagnostic tool results when a newer result of the same type exists", async () => {
+    setNonGoogleModelApi();
+    const older = Date.now() - 10 * 60 * 1000;
+    const newer = Date.now() - 30 * 1000;
+    const messages = castAgentMessages([
+      makeAssistantMessage([{ type: "toolCall", id: "call_old", name: "exec", arguments: {} }], {
+        stopReason: "toolUse",
+        timestamp: older - 1,
+      }),
+      {
+        role: "toolResult",
+        toolCallId: "call_old",
+        toolName: "exec",
+        content: "plugins list old output",
+        isError: false,
+        timestamp: older,
+        __openclaw: {
+          transient: true,
+          diagnosticType: "openclaw.plugins_list",
+          taggedAt: older,
+          sourceTool: "exec",
+        },
+      },
+      makeAssistantMessage([{ type: "toolCall", id: "call_new", name: "exec", arguments: {} }], {
+        stopReason: "toolUse",
+        timestamp: newer - 1,
+      }),
+      {
+        role: "toolResult",
+        toolCallId: "call_new",
+        toolName: "exec",
+        content: "(no output)",
+        isError: false,
+        timestamp: newer,
+        __openclaw: {
+          transient: true,
+          diagnosticType: "openclaw.plugins_list",
+          taggedAt: newer,
+          sourceTool: "exec",
+        },
+      },
+    ]);
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-responses",
+      provider: "openai",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect(result[1]).toMatchObject({
+      role: "toolResult",
+      content: "[Previous environment diagnostic output omitted from replay for accuracy.]",
+      __openclaw: expect.objectContaining({
+        replayOmitted: true,
+      }),
+    });
+    expect(result[3]).toMatchObject({
+      role: "toolResult",
+      content: "(no output)",
+    });
+    expect(
+      (result[3] as { __openclaw?: { replayOmitted?: boolean } }).__openclaw?.replayOmitted,
+    ).not.toBe(true);
+  });
+
+  it("replaces stale transient diagnostic tool results even when content has an unexpected shape", async () => {
+    setNonGoogleModelApi();
+    const oldTimestamp = Date.now() - 2 * 60 * 60 * 1000;
+    const messages = castAgentMessages([
+      makeAssistantMessage([{ type: "toolCall", id: "call_old", name: "exec", arguments: {} }], {
+        stopReason: "toolUse",
+        timestamp: oldTimestamp - 1,
+      }),
+      {
+        role: "toolResult",
+        toolCallId: "call_old",
+        toolName: "exec",
+        content: { stale: true },
+        isError: false,
+        timestamp: oldTimestamp,
+        __openclaw: {
+          transient: true,
+          diagnosticType: "openclaw.plugins_list",
+          taggedAt: oldTimestamp,
+          sourceTool: "exec",
+        },
+      },
+    ]);
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-responses",
+      provider: "openai",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect(result[1]).toMatchObject({
+      role: "toolResult",
+      content: "[Previous environment diagnostic output omitted from replay for accuracy.]",
+      __openclaw: expect.objectContaining({
+        replayOmitted: true,
+      }),
+    });
+  });
+
+  it("keeps fresh diagnostic tool results when only the persisted replay timestamp is recent", async () => {
+    setNonGoogleModelApi();
+    const taggedAt = Date.now() - 2 * 60 * 60 * 1000;
+    const persistedAt = Date.now() - 5_000;
+    const messages = castAgentMessages([
+      makeAssistantMessage([{ type: "toolCall", id: "call_recent", name: "exec", arguments: {} }], {
+        stopReason: "toolUse",
+        timestamp: taggedAt - 1,
+      }),
+      {
+        role: "toolResult",
+        toolCallId: "call_recent",
+        toolName: "exec",
+        content: [{ type: "text", text: "latest plugin output" }],
+        isError: false,
+        __openclaw: {
+          transient: true,
+          diagnosticType: "openclaw.plugins_list",
+          taggedAt,
+          persistedAt,
+          sourceTool: "exec",
+        },
+      },
+    ]);
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-responses",
+      provider: "openai",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect(result[1]).toMatchObject({
+      role: "toolResult",
+      content: [{ type: "text", text: "latest plugin output" }],
+      __openclaw: expect.objectContaining({
+        diagnosticType: "openclaw.plugins_list",
+      }),
+    });
+    expect(
+      (result[1] as { __openclaw?: { replayOmitted?: boolean } }).__openclaw?.replayOmitted,
+    ).not.toBe(true);
+  });
+
+  it("falls back to persisted replay time when toolResult timestamp is present but invalid", async () => {
+    setNonGoogleModelApi();
+    const persistedAt = Date.now() - 2 * 60 * 60 * 1000;
+    const messages = castAgentMessages([
+      makeAssistantMessage([{ type: "toolCall", id: "call_old", name: "exec", arguments: {} }], {
+        stopReason: "toolUse",
+        timestamp: persistedAt - 1,
+      }),
+      {
+        role: "toolResult",
+        toolCallId: "call_old",
+        toolName: "exec",
+        content: [{ type: "text", text: "old plugin output" }],
+        isError: false,
+        timestamp: { invalid: true },
+        __openclaw: {
+          transient: true,
+          diagnosticType: "openclaw.plugins_list",
+          taggedAt: Date.now(),
+          persistedAt,
+          sourceTool: "exec",
+        },
+      },
+    ]);
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-responses",
+      provider: "openai",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect(result[1]).toMatchObject({
+      role: "toolResult",
+      content: [
+        {
+          type: "text",
+          text: "[Previous environment diagnostic output omitted from replay for accuracy.]",
+        },
+      ],
+      __openclaw: expect.objectContaining({
+        replayOmitted: true,
+        diagnosticType: "openclaw.plugins_list",
+      }),
+    });
+  });
+
   it("preserves latest assistant thinking blocks for github-copilot models", async () => {
     setNonGoogleModelApi();
 

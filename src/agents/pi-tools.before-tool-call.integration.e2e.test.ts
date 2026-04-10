@@ -17,6 +17,7 @@ type ToToolDefinitions = ToolDefinitionAdapterModule["toToolDefinitions"];
 type WrapToolWithAbortSignal = PiToolsAbortModule["wrapToolWithAbortSignal"];
 type BeforeToolCallTesting = BeforeToolCallModule["__testing"];
 type ConsumeAdjustedParamsForToolCall = BeforeToolCallModule["consumeAdjustedParamsForToolCall"];
+type PeekAdjustedParamsForToolCall = BeforeToolCallModule["peekAdjustedParamsForToolCall"];
 type WrapToolWithBeforeToolCallHook = BeforeToolCallModule["wrapToolWithBeforeToolCallHook"];
 
 let toClientToolDefinitions!: ToClientToolDefinitions;
@@ -24,6 +25,7 @@ let toToolDefinitions!: ToToolDefinitions;
 let wrapToolWithAbortSignal!: WrapToolWithAbortSignal;
 let beforeToolCallTesting!: BeforeToolCallTesting;
 let consumeAdjustedParamsForToolCall!: ConsumeAdjustedParamsForToolCall;
+let peekAdjustedParamsForToolCall!: PeekAdjustedParamsForToolCall;
 let wrapToolWithBeforeToolCallHook!: WrapToolWithBeforeToolCallHook;
 
 beforeEach(async () => {
@@ -34,6 +36,7 @@ beforeEach(async () => {
     ({
       __testing: beforeToolCallTesting,
       consumeAdjustedParamsForToolCall,
+      peekAdjustedParamsForToolCall,
       wrapToolWithBeforeToolCallHook,
     } = await import("./pi-tools.before-tool-call.js"));
   }
@@ -233,10 +236,19 @@ describe("before_tool_call hook integration", () => {
     await toolA.execute(sharedToolCallId, { path: "/tmp/a.txt" }, undefined, extensionContextA);
     await toolB.execute(sharedToolCallId, { path: "/tmp/b.txt" }, undefined, extensionContextB);
 
+    expect(peekAdjustedParamsForToolCall(sharedToolCallId, "run-a")).toEqual({
+      path: "/tmp/a.txt",
+      marker: "A",
+    });
+    expect(peekAdjustedParamsForToolCall(sharedToolCallId, "run-b")).toEqual({
+      path: "/tmp/b.txt",
+      marker: "B",
+    });
     expect(consumeAdjustedParamsForToolCall(sharedToolCallId, "run-a")).toEqual({
       path: "/tmp/a.txt",
       marker: "A",
     });
+    expect(peekAdjustedParamsForToolCall(sharedToolCallId, "run-a")).toBeUndefined();
     expect(consumeAdjustedParamsForToolCall(sharedToolCallId, "run-b")).toEqual({
       path: "/tmp/b.txt",
       marker: "B",
