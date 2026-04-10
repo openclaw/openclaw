@@ -24,6 +24,7 @@ import { applyArmTransition, InvalidTransitionError } from "../head/arm-fsm.ts";
 import type { EventLogService } from "../head/event-log.ts";
 import type { AppendInput } from "../head/event-log.ts";
 import { applyGripTransition } from "../head/grip-fsm.ts";
+import { applyMissionTransition } from "../head/mission-fsm.ts";
 import { ConflictError } from "../head/registry.ts";
 import type { ArmRecord, RegistryService } from "../head/registry.ts";
 import { ProcessWatcher, type ProcessWatcherEvent } from "./process-watcher.ts";
@@ -416,6 +417,52 @@ export class NodeAgent {
         this.log("warn", "transitionArm: grip completion cascade failed", {
           arm_id: arm.arm_id,
           grip_id: arm.current_grip_id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+
+      // Mission completion: after a grip completes, check if ALL grips
+      // for this mission are now completed. If so, transition the mission
+      // from active → completed. This is the final piece of the lifecycle:
+      // mission create → arm spawn → grip claim → work → arm done → grip done → mission done.
+      try {
+        const mission = this.registry.getMission(arm.mission_id);
+        if (mission && mission.status === "active") {
+          const allGrips = this.registry.listGrips({ mission_id: arm.mission_id });
+          const allDone =
+            allGrips.length > 0 &&
+            allGrips.every((g) => g.status === "completed" || g.status === "archived");
+          if (allDone) {
+            const missionNext = applyMissionTransition(
+              { state: mission.status, updated_at: mission.updated_at },
+              "completed",
+              { now, mission_id: mission.mission_id },
+            );
+            this.registry.casUpdateMission(mission.mission_id, mission.version, {
+              status: missionNext.state,
+              updated_at: missionNext.updated_at,
+            });
+            await this.eventLog.append({
+              schema_version: 1,
+              entity_type: "mission",
+              entity_id: mission.mission_id,
+              event_type: "mission.completed",
+              ts: new Date(now).toISOString(),
+              actor: `node-agent:${this.nodeId}`,
+              payload: {
+                grip_count: allGrips.length,
+              },
+            });
+            this.log("info", "mission completed — all grips done", {
+              mission_id: mission.mission_id,
+              grip_count: allGrips.length,
+            });
+          }
+        }
+      } catch (err) {
+        this.log("warn", "transitionArm: mission completion check failed", {
+          arm_id: arm.arm_id,
+          mission_id: arm.mission_id,
           error: err instanceof Error ? err.message : String(err),
         });
       }
