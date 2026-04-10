@@ -211,6 +211,14 @@ describe("failover-error", () => {
     ).toBeNull();
   });
 
+  it("does not classify generic deprecation transition messages as model_not_found", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "The endpoint has been deprecated. Transition to v2 API for continued access.",
+      }),
+    ).toBeNull();
+  });
+
   it("keeps status-only 503s conservative unless the payload is clearly overloaded", () => {
     expect(
       resolveFailoverReasonFromError({
