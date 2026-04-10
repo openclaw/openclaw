@@ -92,6 +92,35 @@ describe("matrix harness runtime", () => {
     }
   });
 
+  it("treats empty Docker health fields as a fallback to running state", async () => {
+    const outputDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-harness-"));
+
+    try {
+      const result = await startMatrixQaHarness(
+        {
+          outputDir,
+          repoRoot: "/repo/openclaw",
+          homeserverPort: 28008,
+        },
+        {
+          async runCommand(_command, args) {
+            if (args.join(" ").includes("ps --format json")) {
+              return { stdout: '{"Health":"","State":"running"}\n', stderr: "" };
+            }
+            return { stdout: "", stderr: "" };
+          },
+          fetchImpl: vi.fn(async () => ({ ok: true })),
+          sleepImpl: vi.fn(async () => {}),
+          resolveHostPortImpl: vi.fn(async (port: number) => port),
+        },
+      );
+
+      expect(result.baseUrl).toBe("http://127.0.0.1:28008/");
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
   it("falls back to the container IP when the host port is unreachable", async () => {
     const calls: string[] = [];
     const outputDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-harness-"));

@@ -145,6 +145,18 @@ async function isHealthy(url: string, fetchImpl: FetchLike) {
   }
 }
 
+function normalizeDockerServiceStatus(row?: { Health?: string; State?: string }) {
+  const health = row?.Health?.trim();
+  if (health) {
+    return health;
+  }
+  const state = row?.State?.trim();
+  if (state) {
+    return state;
+  }
+  return "unknown";
+}
+
 export async function waitForDockerServiceHealth(
   service: string,
   composeFile: string,
@@ -172,7 +184,7 @@ export async function waitForDockerServiceHealth(
         .filter(Boolean)
         .map((line) => JSON.parse(line) as { Health?: string; State?: string });
       const row = rows[0];
-      lastStatus = row?.Health ?? row?.State ?? "unknown";
+      lastStatus = normalizeDockerServiceStatus(row);
       if (lastStatus === "healthy" || lastStatus === "running") {
         return;
       }
@@ -229,3 +241,7 @@ export async function resolveComposeServiceUrl(
   }
   return (await isHealthy(`${baseUrl}healthz`, fetchImpl)) ? baseUrl : null;
 }
+
+export const __testing = {
+  normalizeDockerServiceStatus,
+};
