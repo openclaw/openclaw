@@ -33,8 +33,8 @@ function createStubChild(pid = 1234) {
     child.emit("close", code, signal);
   };
   const emitExit = (code: number | null, signal: NodeJS.Signals | null = null) => {
-    child.exitCode = code;
-    child.signalCode = signal;
+    (child as any).exitCode = code;
+    (child as any).signalCode = signal;
     child.emit("exit", code, signal);
   };
   return { child, killMock, emitClose, emitExit };

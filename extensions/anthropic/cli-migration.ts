@@ -125,7 +125,7 @@ export function hasClaudeCliAuth(options?: { allowKeychainPrompt?: boolean }): b
 }
 
 function buildClaudeCliAuthProfiles(
-  credential?: ClaudeCliCredential | null,
+  credential?: ClaudeCliCredential,
 ): ProviderAuthResult["profiles"] {
   if (!credential) {
     return [];
@@ -159,7 +159,7 @@ function buildClaudeCliAuthProfiles(
 
 export function buildAnthropicCliMigrationResult(
   config: OpenClawConfig,
-  credential?: ClaudeCliCredential | null,
+  credential?: ClaudeCliCredential,
 ): ProviderAuthResult {
   const defaults = config.agents?.defaults;
   const rewrittenModel = rewriteModelSelection(defaults?.model);

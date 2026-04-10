@@ -4,6 +4,7 @@ import {
   VOLC_MODEL_GLM_4_7,
   VOLC_MODEL_KIMI_K2_5,
   VOLC_SHARED_CODING_MODEL_CATALOG,
+  type VolcModelCatalogEntry,
 } from "openclaw/plugin-sdk/volc-model-catalog-shared";
 
 export const DOUBAO_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
@@ -63,8 +64,6 @@ export const DOUBAO_CODING_MODEL_CATALOG = [
 export type DoubaoCatalogEntry = (typeof DOUBAO_MODEL_CATALOG)[number];
 export type DoubaoCodingCatalogEntry = (typeof DOUBAO_CODING_MODEL_CATALOG)[number];
 
-export function buildDoubaoModelDefinition(
-  entry: DoubaoCatalogEntry | DoubaoCodingCatalogEntry,
-): ModelDefinitionConfig {
+export function buildDoubaoModelDefinition(entry: VolcModelCatalogEntry): ModelDefinitionConfig {
   return buildVolcModelDefinition(entry, DOUBAO_DEFAULT_COST);
 }

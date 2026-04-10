@@ -5,7 +5,13 @@
   "autoEnableWhenConfiguredProviders": ["google-gemini-cli"],
   "cliBackends": ["google-gemini-cli"],
   "providerAuthEnvVars": {
-    "google": ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
+    "google": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+    "gemini": [
+      "GEMINI_API_KEY",
+      "GOOGLE_GEMINI_BASE_URL",
+      "GEMINI_BASE_URL",
+      "GOOGLE_GEMINI_ENDPOINT"
+    ]
   },
   "providerAuthChoices": [
     {
@@ -42,6 +48,16 @@
     "webSearch.model": {
       "label": "Gemini Search Model",
       "help": "Gemini model override for web search grounding."
+    },
+    "webSearch.baseUrl": {
+      "label": "Gemini Search Base URL",
+      "help": "Gemini API base URL override (fallbacks: GOOGLE_GEMINI_ENDPOINT, GEMINI_BASE_URL, GOOGLE_GEMINI_BASE_URL). Include the version suffix (e.g. /v1beta) for custom endpoints.",
+      "placeholder": "http://localhost:4000/v1beta"
+    },
+    "webSearch.apiType": {
+      "label": "Gemini Search API Type",
+      "help": "Set to 'openai-compatible' for LiteLLM, OneAPI, or other OpenAI-style proxies (fallback: GEMINI_API_TYPE env var).",
+      "placeholder": "gemini"
     }
   },
   "contracts": {
@@ -64,6 +80,13 @@
           },
           "model": {
             "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "apiType": {
+            "type": "string",
+            "enum": ["gemini", "openai-compatible"]
           }
         }
       }

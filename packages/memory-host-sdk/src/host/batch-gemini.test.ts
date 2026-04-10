@@ -36,6 +36,7 @@ describe("runGeminiEmbeddingBatches", () => {
     modelPath: "models/gemini-embedding-2-preview",
     apiKeys: ["test-key"],
     outputDimensionality: 1536,
+    apiType: "gemini",
   };
 
   it("includes outputDimensionality in batch upload requests", async () => {

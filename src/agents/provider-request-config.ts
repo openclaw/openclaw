@@ -57,11 +57,10 @@ export type ProviderRequestTransportOverrides = {
   auth?: ProviderRequestAuthOverride;
   proxy?: ProviderRequestProxyOverride;
   tls?: ProviderRequestTlsOverride;
-};
-
-export type ModelProviderRequestTransportOverrides = ProviderRequestTransportOverrides & {
   allowPrivateNetwork?: boolean;
 };
+
+export type ModelProviderRequestTransportOverrides = ProviderRequestTransportOverrides;
 
 export type ResolvedProviderRequestAuthConfig =
   | {
@@ -305,7 +304,8 @@ export function sanitizeConfiguredProviderRequest(
 export function sanitizeConfiguredModelProviderRequest(
   request: ConfiguredModelProviderRequest | undefined,
 ): ModelProviderRequestTransportOverrides | undefined {
-  const sanitized = sanitizeConfiguredProviderRequest(request);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sanitized = sanitizeConfiguredProviderRequest(request as unknown as any);
   const rawAllow = request?.allowPrivateNetwork;
   const allowPrivateNetwork = rawAllow === true ? true : rawAllow === false ? false : undefined;
   if (!sanitized && allowPrivateNetwork === undefined) {
@@ -349,16 +349,7 @@ export function mergeProviderRequestOverrides(
 export function mergeModelProviderRequestOverrides(
   ...overrides: Array<ModelProviderRequestTransportOverrides | undefined>
 ): ModelProviderRequestTransportOverrides | undefined {
-  let merged = mergeProviderRequestOverrides(...overrides);
-  for (const current of overrides) {
-    if (current?.allowPrivateNetwork !== undefined) {
-      merged = {
-        ...merged,
-        allowPrivateNetwork: current.allowPrivateNetwork,
-      };
-    }
-  }
-  return merged;
+  return mergeProviderRequestOverrides(...overrides);
 }
 
 export function normalizeBaseUrl(baseUrl: string | undefined, fallback: string): string;

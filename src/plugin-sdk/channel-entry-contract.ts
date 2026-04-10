@@ -75,16 +75,24 @@ function isTruthyEnvFlag(value: string | undefined): boolean {
 
 function resolveSpecifierCandidates(modulePath: string): string[] {
   const ext = normalizeLowercaseStringOrEmpty(path.extname(modulePath));
+  const candidates = [modulePath];
   if (ext === ".js") {
-    return [modulePath, modulePath.slice(0, -3) + ".ts"];
+    candidates.push(modulePath.slice(0, -3) + ".ts");
+  } else if (ext === ".mjs") {
+    candidates.push(modulePath.slice(0, -4) + ".mts");
+  } else if (ext === ".cjs") {
+    candidates.push(modulePath.slice(0, -4) + ".cts");
   }
-  if (ext === ".mjs") {
-    return [modulePath, modulePath.slice(0, -4) + ".mts"];
+
+  // If we are in 'dist', also look in the corresponding 'src' directory in the root.
+  const distSegment = `${path.sep}dist${path.sep}`;
+  if (modulePath.includes(distSegment)) {
+    for (const c of candidates.slice()) {
+      candidates.push(c.replace(distSegment, path.sep));
+    }
   }
-  if (ext === ".cjs") {
-    return [modulePath, modulePath.slice(0, -4) + ".cts"];
-  }
-  return [modulePath];
+
+  return candidates;
 }
 
 function resolveEntryBoundaryRoot(importMetaUrl: string): string {
@@ -306,6 +314,9 @@ export function loadBundledEntryExportSync<T>(
   importMetaUrl: string,
   reference: BundledEntryModuleRef,
 ): T {
+  if (!reference) {
+    throw new Error("plugin entry specifier is missing");
+  }
   const loaded = loadBundledEntryModuleSync(importMetaUrl, reference.specifier);
   const resolved =
     loaded && typeof loaded === "object" && "default" in (loaded as Record<string, unknown>)

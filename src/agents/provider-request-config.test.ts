@@ -299,14 +299,14 @@ describe("provider request config", () => {
     expect(() =>
       sanitizeConfiguredProviderRequest({
         headers: {
-          "X-Tenant": { source: "env", provider: "default", id: "MEDIA_AUDIO_TENANT" },
+          "X-Tenant": { source: "env", provider: "default", id: "MEDIA_AUDIO_TENANT" } as any,
         },
         auth: {
           mode: "authorization-bearer",
-          token: { source: "env", provider: "default", id: "MEDIA_AUDIO_TOKEN" },
+          token: { source: "env", provider: "default", id: "MEDIA_AUDIO_TOKEN" } as any,
         },
         tls: {
-          cert: { source: "env", provider: "default", id: "MEDIA_AUDIO_CERT" },
+          cert: { source: "env", provider: "default", id: "MEDIA_AUDIO_CERT" } as any,
         },
       }),
     ).toThrow(/request\.(headers\.X-Tenant|auth\.token|tls\.cert): unresolved SecretRef/i);

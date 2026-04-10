@@ -4,6 +4,7 @@ import {
   VOLC_MODEL_GLM_4_7,
   VOLC_MODEL_KIMI_K2_5,
   VOLC_SHARED_CODING_MODEL_CATALOG,
+  type VolcModelCatalogEntry,
 } from "openclaw/plugin-sdk/volc-model-catalog-shared";
 
 export const BYTEPLUS_BASE_URL = "https://ark.ap-southeast.bytepluses.com/api/v3";
@@ -37,8 +38,6 @@ export const BYTEPLUS_CODING_MODEL_CATALOG = VOLC_SHARED_CODING_MODEL_CATALOG;
 export type BytePlusCatalogEntry = (typeof BYTEPLUS_MODEL_CATALOG)[number];
 export type BytePlusCodingCatalogEntry = (typeof BYTEPLUS_CODING_MODEL_CATALOG)[number];
 
-export function buildBytePlusModelDefinition(
-  entry: BytePlusCatalogEntry | BytePlusCodingCatalogEntry,
-): ModelDefinitionConfig {
+export function buildBytePlusModelDefinition(entry: VolcModelCatalogEntry): ModelDefinitionConfig {
   return buildVolcModelDefinition(entry, BYTEPLUS_DEFAULT_COST);
 }

@@ -14,7 +14,6 @@ import {
   resolveStateDir,
   writeFileWithinRoot,
   type OpenClawConfig,
-  type ResolvedMemorySearchSyncConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildSessionEntry,
@@ -245,7 +244,8 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly xdgCacheHome: string;
   private readonly indexPath: string;
   private readonly env: NodeJS.ProcessEnv;
-  private readonly syncSettings: ResolvedMemorySearchSyncConfig | null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private readonly syncSettings: any;
   private readonly managedCollectionNames: string[];
   private readonly collectionRoots = new Map<string, CollectionRoot>();
   private readonly sources = new Set<MemorySource>();
