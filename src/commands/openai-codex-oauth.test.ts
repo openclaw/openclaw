@@ -141,6 +141,31 @@ describe("loginOpenAICodexOAuth", () => {
     );
   });
 
+  it("normalizes slash-terminated authorize paths too", async () => {
+    const creds = {
+      provider: "openai-codex" as const,
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: Date.now() + 60_000,
+      email: "user@example.com",
+    };
+    mocks.loginOpenAICodex.mockImplementation(
+      async (opts: { onAuth: (event: { url: string }) => Promise<void> }) => {
+        await opts.onAuth({
+          url: "https://auth.openai.com/oauth/authorize/?state=abc",
+        });
+        return creds;
+      },
+    );
+
+    const openUrl = vi.fn(async () => {});
+    await runCodexOAuth({ isRemote: false, openUrl });
+
+    expect(openUrl).toHaveBeenCalledWith(
+      "https://auth.openai.com/oauth/authorize/?state=abc&scope=openid+profile+email+offline_access+model.request+api.responses.write",
+    );
+  });
+
   it("reports oauth errors and rethrows", async () => {
     mocks.loginOpenAICodex.mockRejectedValue(new Error("oauth failed"));
 
