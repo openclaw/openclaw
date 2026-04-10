@@ -290,6 +290,17 @@ function resolvePluginConversationRefForThreadBinding(params: {
   if (!conversationId) {
     return null;
   }
+
+  if (params.channelId === "discord") {
+    return normalizeConversationTargetRef({
+      conversationId: resolveConversationIdFromTargets({ targets: [conversationId] }) ?? conversationId,
+      parentConversationId:
+        resolveConversationIdFromTargets({
+          targets: [normalizeOptionalString(resolvedConversation?.parentConversationId)],
+        }) ?? resolvedConversation?.parentConversationId,
+    });
+  }
+
   return normalizeConversationTargetRef({
     conversationId,
     parentConversationId: resolvedConversation?.parentConversationId,
