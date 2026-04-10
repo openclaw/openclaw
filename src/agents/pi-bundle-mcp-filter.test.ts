@@ -141,4 +141,50 @@ describe("applyMcpToolFilter", () => {
     });
     expect(infoSpy).not.toHaveBeenCalled();
   });
+
+  it("coerces a non-array allow (e.g. bundle-provided truthy garbage) to undefined and warns", () => {
+    const warnSpy = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+    const tools = makeTools("alpha", "beta");
+    const result = applyMcpToolFilter({
+      serverName: "srv",
+      tools,
+      filter: { allow: true as unknown as [string, ...string[]] },
+    });
+    // allow ignored → tools pass through unchanged
+    expect(result).toBe(tools);
+    expect(warnSpy).toHaveBeenCalledWith(
+      'bundle-mcp: server "srv" tools.allow is not an array — ignoring',
+    );
+  });
+
+  it("coerces a non-array deny (e.g. {}) to undefined and warns", () => {
+    const warnSpy = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+    const tools = makeTools("alpha", "beta");
+    const result = applyMcpToolFilter({
+      serverName: "srv",
+      tools,
+      filter: { deny: {} as unknown as [string, ...string[]] },
+    });
+    expect(result).toBe(tools);
+    expect(warnSpy).toHaveBeenCalledWith(
+      'bundle-mcp: server "srv" tools.deny is not an array — ignoring',
+    );
+  });
+
+  it("applies a valid allow even when deny is a non-array", () => {
+    const warnSpy = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+    const tools = makeTools("alpha", "beta", "gamma");
+    const result = applyMcpToolFilter({
+      serverName: "srv",
+      tools,
+      filter: {
+        allow: ["alpha", "beta"],
+        deny: "nope" as unknown as [string, ...string[]],
+      },
+    });
+    expect(result.map((tool) => tool.name)).toEqual(["alpha", "beta"]);
+    expect(warnSpy).toHaveBeenCalledWith(
+      'bundle-mcp: server "srv" tools.deny is not an array — ignoring',
+    );
+  });
 });

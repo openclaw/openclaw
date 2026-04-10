@@ -21,9 +21,10 @@ export type McpToolFilter = {
  *   Unknown `deny` entries are silent because denying a non-existent tool is idempotent
  *   and often intentional (defensive config).
  *
- * The filter is a **context-budget mechanism**, not an access-control mechanism. See the
- * note in pi-bundle-mcp-runtime.ts `callTool` for why denying a tool here does NOT prevent
- * direct invocation by name via the runtime.
+ * The filter is a **context-budget mechanism**, not an access-control mechanism.
+ * Denying a tool here prevents models from seeing it in the catalog, but does NOT prevent
+ * direct invocation by name through the runtime's `callTool` path (which bypasses catalog
+ * filtering). Do not rely on this filter as a security boundary.
  *
  * Generic on `T extends { name: string }` so it can be called directly on the SDK
  * `ListedTool` shape without an adapter.
@@ -34,14 +35,43 @@ export function applyMcpToolFilter<T extends { name: string }>(params: {
   filter?: McpToolFilter;
 }): T[] {
   const { serverName, tools, filter } = params;
-  if (!filter || (!filter.allow && !filter.deny)) {
+  if (!filter || (filter.allow === undefined && filter.deny === undefined)) {
+    return tools;
+  }
+
+  // Defensive: bundle-provided MCP configs reach this function via a runtime
+  // cast in pi-bundle-mcp-runtime.ts and are not always zod-validated, so
+  // allow/deny may be arbitrary runtime values (e.g. `true`, `{}`) despite
+  // the TypeScript type. Coerce non-array shapes to undefined and warn the
+  // operator instead of letting `new Set(...)` throw on a non-iterable.
+  let allow: string[] | undefined;
+  if (filter.allow !== undefined) {
+    if (Array.isArray(filter.allow)) {
+      allow = filter.allow;
+    } else {
+      logWarn(
+        `bundle-mcp: server "${serverName}" tools.allow is not an array — ignoring`,
+      );
+    }
+  }
+  let deny: string[] | undefined;
+  if (filter.deny !== undefined) {
+    if (Array.isArray(filter.deny)) {
+      deny = filter.deny;
+    } else {
+      logWarn(
+        `bundle-mcp: server "${serverName}" tools.deny is not an array — ignoring`,
+      );
+    }
+  }
+  if (!allow && !deny) {
     return tools;
   }
 
   let filtered = tools;
 
-  if (filter.allow) {
-    const allowSet = new Set(filter.allow);
+  if (allow) {
+    const allowSet = new Set(allow);
     const seenOnServer = new Set(tools.map((tool) => tool.name));
     for (const entry of allowSet) {
       if (!seenOnServer.has(entry)) {
@@ -53,8 +83,8 @@ export function applyMcpToolFilter<T extends { name: string }>(params: {
     filtered = filtered.filter((tool) => allowSet.has(tool.name));
   }
 
-  if (filter.deny) {
-    const denySet = new Set(filter.deny);
+  if (deny) {
+    const denySet = new Set(deny);
     filtered = filtered.filter((tool) => !denySet.has(tool.name));
   }
 
