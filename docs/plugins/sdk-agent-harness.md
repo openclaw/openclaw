@@ -126,6 +126,9 @@ when you want Codex-managed auth, Codex model discovery, native threads, and
 Codex app-server execution. `/model` can switch among the Codex models returned
 by the Codex app server without requiring OpenAI provider credentials.
 
+For operator setup, model prefix examples, and Codex-only configs, see
+[Codex Harness](/plugins/codex-harness).
+
 OpenClaw requires Codex app-server `0.118.0` or newer. The Codex plugin checks
 the app-server initialize handshake and blocks older or unversioned servers so
 OpenClaw only runs against the protocol surface it has been tested with.
@@ -257,4 +260,5 @@ on the same delivery path as PI-backed runs.
 - [SDK Overview](/plugins/sdk-overview)
 - [Runtime Helpers](/plugins/sdk-runtime)
 - [Provider Plugins](/plugins/sdk-provider-plugins)
+- [Codex Harness](/plugins/codex-harness)
 - [Model Providers](/concepts/model-providers)
