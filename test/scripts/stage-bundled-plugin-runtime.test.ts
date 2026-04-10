@@ -18,9 +18,44 @@ describe("stageBundledPluginRuntime", () => {
     vi.restoreAllMocks();
   });
 
+  it("copies SKILL.md into dist-runtime while leaving other skill assets linked", async () => {
+    await withTempDir(async (repoRoot) => {
+      const skillDir = path.join(repoRoot, "dist", "extensions", "acpx", "skills", "acp-router");
+      const skillFile = path.join(skillDir, "SKILL.md");
+      const assetFile = path.join(skillDir, "notes.txt");
+      await fs.promises.mkdir(skillDir, { recursive: true });
+      await fs.promises.writeFile(skillFile, "skill-body\n", "utf8");
+      await fs.promises.writeFile(assetFile, "notes\n", "utf8");
+
+      stageBundledPluginRuntime({ repoRoot });
+
+      const runtimeSkillFile = path.join(
+        repoRoot,
+        "dist-runtime",
+        "extensions",
+        "acpx",
+        "skills",
+        "acp-router",
+        "SKILL.md",
+      );
+      const runtimeAssetFile = path.join(
+        repoRoot,
+        "dist-runtime",
+        "extensions",
+        "acpx",
+        "skills",
+        "acp-router",
+        "notes.txt",
+      );
+      expect(await fs.promises.readFile(runtimeSkillFile, "utf8")).toBe("skill-body\n");
+      expect(fs.lstatSync(runtimeSkillFile).isSymbolicLink()).toBe(false);
+      expect(fs.lstatSync(runtimeAssetFile).isSymbolicLink()).toBe(true);
+    });
+  });
+
   it("copies files when Windows rejects runtime overlay symlinks", async () => {
     await withTempDir(async (repoRoot) => {
-      const sourceFile = path.join(
+      const skillFile = path.join(
         repoRoot,
         "dist",
         "extensions",
@@ -29,8 +64,10 @@ describe("stageBundledPluginRuntime", () => {
         "acp-router",
         "SKILL.md",
       );
-      await fs.promises.mkdir(path.dirname(sourceFile), { recursive: true });
-      await fs.promises.writeFile(sourceFile, "skill-body\n", "utf8");
+      const sourceFile = path.join(path.dirname(skillFile), "notes.txt");
+      await fs.promises.mkdir(path.dirname(skillFile), { recursive: true });
+      await fs.promises.writeFile(skillFile, "skill-body\n", "utf8");
+      await fs.promises.writeFile(sourceFile, "notes\n", "utf8");
 
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       const symlinkSpy = vi
@@ -56,9 +93,9 @@ describe("stageBundledPluginRuntime", () => {
         "acpx",
         "skills",
         "acp-router",
-        "SKILL.md",
+        "notes.txt",
       );
-      expect(await fs.promises.readFile(runtimeFile, "utf8")).toBe("skill-body\n");
+      expect(await fs.promises.readFile(runtimeFile, "utf8")).toBe("notes\n");
       expect(fs.lstatSync(runtimeFile).isSymbolicLink()).toBe(false);
       expect(symlinkSpy).toHaveBeenCalled();
     });

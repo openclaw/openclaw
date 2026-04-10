@@ -77,6 +77,9 @@ function shouldCopyRuntimeFile(sourcePath) {
   return (
     relativePath.endsWith("/package.json") ||
     relativePath.endsWith("/openclaw.plugin.json") ||
+    // Skill definitions must stay physically under dist-runtime so realpath-based
+    // containment checks do not resolve them back into dist/.
+    relativePath.endsWith("/SKILL.md") ||
     relativePath.endsWith("/.codex-plugin/plugin.json") ||
     relativePath.endsWith("/.claude-plugin/plugin.json") ||
     relativePath.endsWith("/.cursor-plugin/plugin.json")
