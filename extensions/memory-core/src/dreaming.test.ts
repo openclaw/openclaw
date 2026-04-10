@@ -25,6 +25,15 @@ type CronParam = NonNullable<Parameters<typeof reconcileShortTermDreamingCronJob
 type CronJobLike = Awaited<ReturnType<CronParam["list"]>>[number];
 type CronAddInput = Parameters<CronParam["add"]>[0];
 type CronPatch = Parameters<CronParam["update"]>[1];
+type DreamingPluginApi = Parameters<typeof registerShortTermPromotionDreaming>[0];
+type DreamingPluginApiTestDouble = {
+  config: OpenClawConfig;
+  pluginConfig: Record<string, unknown>;
+  logger: ReturnType<typeof createLogger>;
+  runtime: unknown;
+  registerHook: (event: string, handler: Parameters<typeof registerInternalHook>[1]) => void;
+  on: ReturnType<typeof vi.fn>;
+};
 
 function createLogger() {
   return {
@@ -139,6 +148,10 @@ function getBeforeAgentReplyHandler(
     event: { cleanedBody: string },
     ctx: { trigger?: string; workspaceDir?: string },
   ) => Promise<unknown>;
+}
+
+function registerShortTermPromotionDreamingForTest(api: DreamingPluginApiTestDouble): void {
+  registerShortTermPromotionDreaming(api as unknown as DreamingPluginApi);
 }
 
 describe("short-term dreaming config", () => {
@@ -700,7 +713,7 @@ describe("gateway startup reconciliation", () => {
     clearInternalHooks();
     const logger = createLogger();
     const harness = createCronHarness();
-    const api = {
+    const api: DreamingPluginApiTestDouble = {
       config: { plugins: { entries: {} } },
       pluginConfig: {},
       logger,
@@ -709,10 +722,10 @@ describe("gateway startup reconciliation", () => {
         registerInternalHook(event, handler);
       },
       on: vi.fn(),
-    } as never;
+    };
 
     try {
-      registerShortTermPromotionDreaming(api);
+      registerShortTermPromotionDreamingForTest(api);
       await triggerInternalHook(
         createInternalHookEvent("gateway", "startup", "gateway:startup", {
           cfg: {
@@ -756,7 +769,7 @@ describe("gateway startup reconciliation", () => {
     const logger = createLogger();
     const harness = createCronHarness();
     const onMock = vi.fn();
-    const api = {
+    const api: DreamingPluginApiTestDouble = {
       config: {
         plugins: {
           entries: {
@@ -779,10 +792,10 @@ describe("gateway startup reconciliation", () => {
         registerInternalHook(event, handler);
       },
       on: onMock,
-    } as never;
+    };
 
     try {
-      registerShortTermPromotionDreaming(api);
+      registerShortTermPromotionDreamingForTest(api);
       const deps = { cron: harness.cron };
       await triggerInternalHook(
         createInternalHookEvent("gateway", "startup", "gateway:startup", {
@@ -810,7 +823,10 @@ describe("gateway startup reconciliation", () => {
       } as OpenClawConfig;
 
       const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
-      await beforeAgentReply({ cleanedBody: "hello" }, { trigger: "user", workspaceDir: "." });
+      await beforeAgentReply(
+        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+        { trigger: "heartbeat", workspaceDir: "." },
+      );
 
       expect(harness.addCalls).toHaveLength(1);
       expect(harness.addCalls[0]?.schedule).toMatchObject({
@@ -828,7 +844,7 @@ describe("gateway startup reconciliation", () => {
     const logger = createLogger();
     const startupHarness = createCronHarness();
     const onMock = vi.fn();
-    const api = {
+    const api: DreamingPluginApiTestDouble = {
       config: {
         plugins: {
           entries: {
@@ -851,10 +867,10 @@ describe("gateway startup reconciliation", () => {
         registerInternalHook(event, handler);
       },
       on: onMock,
-    } as never;
+    };
 
     try {
-      registerShortTermPromotionDreaming(api);
+      registerShortTermPromotionDreamingForTest(api);
       const deps = { cron: startupHarness.cron };
       await triggerInternalHook(
         createInternalHookEvent("gateway", "startup", "gateway:startup", {
@@ -898,7 +914,10 @@ describe("gateway startup reconciliation", () => {
       } as OpenClawConfig;
 
       const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
-      await beforeAgentReply({ cleanedBody: "hello" }, { trigger: "user", workspaceDir: "." });
+      await beforeAgentReply(
+        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+        { trigger: "heartbeat", workspaceDir: "." },
+      );
 
       expect(startupHarness.updateCalls).toHaveLength(0);
       expect(reloadedHarness.updateCalls).toHaveLength(1);
@@ -917,7 +936,7 @@ describe("gateway startup reconciliation", () => {
     const logger = createLogger();
     const harness = createCronHarness();
     const onMock = vi.fn();
-    const api = {
+    const api: DreamingPluginApiTestDouble = {
       config: {
         plugins: {
           entries: {
@@ -940,10 +959,10 @@ describe("gateway startup reconciliation", () => {
         registerInternalHook(event, handler);
       },
       on: onMock,
-    } as never;
+    };
 
     try {
-      registerShortTermPromotionDreaming(api);
+      registerShortTermPromotionDreamingForTest(api);
       await triggerInternalHook(
         createInternalHookEvent("gateway", "startup", "gateway:startup", {
           cfg: api.config,
@@ -962,7 +981,10 @@ describe("gateway startup reconciliation", () => {
       expect(harness.jobs).toHaveLength(0);
 
       const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
-      await beforeAgentReply({ cleanedBody: "hello" }, { trigger: "user", workspaceDir: "." });
+      await beforeAgentReply(
+        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+        { trigger: "heartbeat", workspaceDir: "." },
+      );
 
       expect(harness.addCalls).toHaveLength(2);
       expect(harness.addCalls[1]?.schedule).toMatchObject({
@@ -975,14 +997,12 @@ describe("gateway startup reconciliation", () => {
     }
   });
 
-  it("does not reconcile managed cron on every repeated runtime reply", async () => {
+  it("does not reconcile managed cron on non-heartbeat runtime replies", async () => {
     clearInternalHooks();
     const logger = createLogger();
     const harness = createCronHarness();
     const onMock = vi.fn();
-    const now = Date.parse("2026-04-10T12:00:00Z");
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
-    const api = {
+    const api: DreamingPluginApiTestDouble = {
       config: {
         plugins: {
           entries: {
@@ -1005,10 +1025,10 @@ describe("gateway startup reconciliation", () => {
         registerInternalHook(event, handler);
       },
       on: onMock,
-    } as never;
+    };
 
     try {
-      registerShortTermPromotionDreaming(api);
+      registerShortTermPromotionDreamingForTest(api);
       await triggerInternalHook(
         createInternalHookEvent("gateway", "startup", "gateway:startup", {
           cfg: api.config,
@@ -1023,6 +1043,65 @@ describe("gateway startup reconciliation", () => {
       await beforeAgentReply(
         { cleanedBody: "hello again" },
         { trigger: "user", workspaceDir: "." },
+      );
+
+      expect(harness.listCalls).toBe(1);
+    } finally {
+      clearInternalHooks();
+    }
+  });
+
+  it("does not reconcile managed cron on every repeated runtime heartbeat", async () => {
+    clearInternalHooks();
+    const logger = createLogger();
+    const harness = createCronHarness();
+    const onMock = vi.fn();
+    const now = Date.parse("2026-04-10T12:00:00Z");
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    const api: DreamingPluginApiTestDouble = {
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "0 2 * * *",
+                  timezone: "UTC",
+                },
+              },
+            },
+          },
+        },
+      },
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      registerHook: (event: string, handler: Parameters<typeof registerInternalHook>[1]) => {
+        registerInternalHook(event, handler);
+      },
+      on: onMock,
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      await triggerInternalHook(
+        createInternalHookEvent("gateway", "startup", "gateway:startup", {
+          cfg: api.config,
+          deps: { cron: harness.cron },
+        }),
+      );
+
+      expect(harness.listCalls).toBe(1);
+
+      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
+      await beforeAgentReply(
+        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+        { trigger: "heartbeat", workspaceDir: "." },
+      );
+      await beforeAgentReply(
+        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+        { trigger: "heartbeat", workspaceDir: "." },
       );
 
       expect(harness.listCalls).toBe(2);

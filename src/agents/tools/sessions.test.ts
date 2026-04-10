@@ -288,6 +288,7 @@ describe("resolveAnnounceTarget", () => {
             channel: "whatsapp",
             to: "123@g.us",
             accountId: "work",
+            threadId: 99,
           },
         },
       ],
@@ -301,6 +302,7 @@ describe("resolveAnnounceTarget", () => {
       channel: "whatsapp",
       to: "123@g.us",
       accountId: "work",
+      threadId: "99",
     });
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
     const first = callGatewayMock.mock.calls[0]?.[0] as { method?: string } | undefined;
@@ -318,6 +320,7 @@ describe("resolveAnnounceTarget", () => {
             accountId: "work",
           },
           lastTo: "123@g.us",
+          lastThreadId: 271,
         },
       ],
     });
@@ -330,6 +333,7 @@ describe("resolveAnnounceTarget", () => {
       channel: "whatsapp",
       to: "123@g.us",
       accountId: "work",
+      threadId: "271",
     });
   });
 });
