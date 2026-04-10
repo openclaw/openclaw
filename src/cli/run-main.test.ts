@@ -131,6 +131,17 @@ describe("resolveMissingPluginCommandMessage", () => {
     ).resolves.toContain('`plugins.allow` excludes plugin "voice-call"');
   });
 
+  it("ignores plugins.deny while probing bundled CLI roots", async () => {
+    await expect(
+      resolveMissingPluginCommandMessage("voicecall", {
+        plugins: {
+          allow: ["telegram"],
+          deny: ["voice-call"],
+        },
+      }),
+    ).resolves.toContain('`plugins.allow` excludes plugin "voice-call"');
+  });
+
   it("returns null when bundled CLI root detection throws", async () => {
     vi.spyOn(pluginCliRegistryLoader, "loadPluginCliMetadataRegistryWithContext").mockRejectedValue(
       new Error("boom"),

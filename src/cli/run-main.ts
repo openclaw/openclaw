@@ -104,6 +104,7 @@ async function resolveBundledPluginCliRootCommand(
       ...config?.plugins,
       ...(config?.plugins?.enabled === false ? { enabled: true } : {}),
       allow: bundledPluginIds,
+      deny: [],
       entries: detectionEntries,
     },
   };
