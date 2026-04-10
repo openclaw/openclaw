@@ -327,7 +327,7 @@ describe("createMSTeamsReplyDispatcher", () => {
   it("forwards partial replies into the Teams stream", async () => {
     const dispatcher = createDispatcher("personal");
 
-    await dispatcher.replyOptions.onPartialReply?.({ text: "partial response" });
+    dispatcher.replyOptions.onPartialReply?.({ text: "partial response" });
 
     expect(streamInstances[0]?.update).toHaveBeenCalledWith("partial response");
   });
