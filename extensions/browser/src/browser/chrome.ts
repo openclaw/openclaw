@@ -330,10 +330,21 @@ export async function launchOpenClawChrome(
     // environments (e.g. Docker), while keeping stderr piped for diagnostics.
     // Cast to ChildProcessWithoutNullStreams so callers can use .stderr safely;
     // the tuple overload resolution varies across @types/node versions.
+    // Detect WSL2 and set DISPLAY for Chrome to connect to Windows X server
+    const isWSL2 = () => {
+      try {
+        return fs.existsSync("/proc/sys/fs/binfmt_misc/WSLInterop") ||
+               process.release?.name === "wsl";
+      } catch {
+        return false;
+      }
+    };
     return spawn(exe.path, args, {
       stdio: ["ignore", "ignore", "pipe"],
       env: {
         ...process.env,
+        // Fix for WSL2: Chrome needs DISPLAY set to connect to X server on Windows
+        ...(isWSL2() ? { DISPLAY: ":0" } : {}),
         // Reduce accidental sharing with the user's env.
         HOME: os.homedir(),
       },
