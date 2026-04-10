@@ -523,16 +523,22 @@ export async function loadCompactHooksHarness(): Promise<{
     };
   });
 
-  vi.doMock("../pi-embedded-helpers.js", () => ({
-    ensureSessionHeader: vi.fn(async () => {}),
-    pickFallbackThinkingLevel: vi.fn((params: { message?: string; attempted?: Set<string> }) =>
-      params.message?.includes("Reasoning is mandatory") && !params.attempted?.has("minimal")
-        ? "minimal"
-        : undefined,
-    ),
-    validateAnthropicTurns: vi.fn((m: unknown[]) => m),
-    validateGeminiTurns: vi.fn((m: unknown[]) => m),
-  }));
+  vi.doMock("../pi-embedded-helpers.js", async () => {
+    const actual = await vi.importActual<typeof import("../pi-embedded-helpers.js")>(
+      "../pi-embedded-helpers.js",
+    );
+    return {
+      ...actual,
+      ensureSessionHeader: vi.fn(async () => {}),
+      pickFallbackThinkingLevel: vi.fn((params: { message?: string; attempted?: Set<string> }) =>
+        params.message?.includes("Reasoning is mandatory") && !params.attempted?.has("minimal")
+          ? "minimal"
+          : undefined,
+      ),
+      validateAnthropicTurns: vi.fn((m: unknown[]) => m),
+      validateGeminiTurns: vi.fn((m: unknown[]) => m),
+    };
+  });
 
   vi.doMock("../pi-project-settings.js", () => ({
     createPreparedEmbeddedPiSettingsManager: vi.fn(() => ({
