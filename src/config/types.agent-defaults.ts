@@ -299,6 +299,8 @@ export type AgentDefaultsConfig = {
     ackMaxChars?: number;
     /** Suppress tool error warning payloads during heartbeat runs. */
     suppressToolErrorWarnings?: boolean;
+    /** Run timeout in seconds for heartbeat agent turns. */
+    timeoutSeconds?: number;
     /**
      * If true, run heartbeat turns with lightweight bootstrap context.
      * Lightweight mode keeps only HEARTBEAT.md from workspace bootstrap files.
