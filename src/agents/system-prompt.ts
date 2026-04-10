@@ -340,11 +340,20 @@ function buildMessagingSection(params: {
   if (params.isMinimal) {
     return [];
   }
+  const hasSessionsSpawn = params.availableTools.has("sessions_spawn");
+  const hasSubagents = params.availableTools.has("subagents");
+  const subagentOrchestrationGuidance = hasSessionsSpawn
+    ? hasSubagents
+      ? "- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; use `subagents(action=list|steer|kill)` to manage already-spawned children."
+      : "- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work."
+    : hasSubagents
+      ? "- Sub-agent orchestration → use `subagents(action=list|steer|kill)` to manage already-spawned children."
+      : "";
   return [
     "## Messaging",
     "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
-    "- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; use `subagents(action=list|steer|kill)` to manage already-spawned children.",
+    subagentOrchestrationGuidance,
     `- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to ${SILENT_REPLY_TOKEN}).`,
     "- Never use exec/curl for provider messaging; OpenClaw handles all routing internally.",
     params.availableTools.has("message")
