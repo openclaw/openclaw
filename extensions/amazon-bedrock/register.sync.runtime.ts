@@ -6,7 +6,9 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createBedrockNoCacheWrapper,
+  createBedrockServiceTierWrapper,
   isAnthropicBedrockModel,
+  resolveBedrockServiceTier,
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
@@ -22,40 +24,7 @@ type GuardrailConfig = {
   trace?: "enabled" | "disabled" | "enabled_full";
 };
 
-const BEDROCK_SERVICE_TIER_VALUES = ["flex", "priority", "default", "reserved"] as const;
-type BedrockServiceTier = (typeof BEDROCK_SERVICE_TIER_VALUES)[number];
 
-function resolveBedrockServiceTier(
-  extraParams: Record<string, unknown> | undefined,
-): BedrockServiceTier | undefined {
-  const raw = extraParams?.serviceTier ?? extraParams?.service_tier;
-  if (typeof raw === "string" && BEDROCK_SERVICE_TIER_VALUES.includes(raw as BedrockServiceTier)) {
-    return raw as BedrockServiceTier;
-  }
-  return undefined;
-}
-
-function createServiceTierWrapStreamFn(
-  innerWrapStreamFn: (ctx: { modelId: string; streamFn?: StreamFn }) => StreamFn | null | undefined,
-): (ctx: { modelId: string; streamFn?: StreamFn; extraParams?: Record<string, unknown> }) => StreamFn | null | undefined {
-  return (ctx) => {
-    const inner = innerWrapStreamFn(ctx);
-    if (!inner) {
-      return inner;
-    }
-    const serviceTier = resolveBedrockServiceTier(ctx.extraParams);
-    if (!serviceTier) {
-      return inner;
-    }
-    return (model, context, options) => {
-      return streamWithPayloadPatch(inner, model, context, options, (payload) => {
-        if (payload.serviceTier === undefined) {
-          payload.serviceTier = { type: serviceTier };
-        }
-      });
-    };
-  };
-}
 
 type AmazonBedrockPluginConfig = {
   discovery?: {
@@ -196,10 +165,10 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
       let wrapped = cacheWrapStreamFn({ modelId, streamFn });
 
       // Apply service tier wrapping (params.serviceTier from model config).
-      const serviceTierWrapStreamFn = createServiceTierWrapStreamFn(
-        ({ modelId: mid, streamFn: sfn }) => wrapped,
-      );
-      wrapped = serviceTierWrapStreamFn({ modelId, streamFn: wrapped, extraParams }) ?? wrapped;
+      const serviceTier = resolveBedrockServiceTier(extraParams);
+      if (serviceTier) {
+        wrapped = createBedrockServiceTierWrapper(wrapped, serviceTier);
+      }
 
       const region = resolveBedrockRegion(config) ?? extractRegionFromBaseUrl(model?.baseUrl);
 
