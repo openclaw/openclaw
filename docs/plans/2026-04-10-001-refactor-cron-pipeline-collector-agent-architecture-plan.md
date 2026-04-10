@@ -1,10 +1,11 @@
 ---
 title: "refactor: Cron pipeline — collector-agent decomposition"
 type: refactor
-status: draft
+status: deepened
 created: 2026-04-10
 origin: docs/brainstorms/2026-04-10-cron-pipeline-refactor-brainstorm.md
 detail_level: comprehensive
+deepened: 2026-04-10
 ---
 
 # Cron Pipeline: Collector-Agent Decomposition
@@ -55,16 +56,21 @@ The key insight: **separate data gathering (minimal LLM) from reasoning (right-s
 └── tomorrow.json          # Written by Evening Analyst, read by Morning Planner
 ```
 
-**JSON schema for all files:**
+**JSON schema for all collector output files:**
 
 ```json
 {
   "collected_at": "2026-04-10T05:00:12+02:00",
   "status": "ok",
   "error": null,
+  "items_count": 7,
+  "duration_ms": 1230,
   "data": { ... }
 }
 ```
+
+- `items_count`: number of data items collected (e.g., calendar events, emails). Zero on a workday is a quality signal worth flagging; zero on a weekend is normal.
+- `duration_ms`: how long this source took to collect. Enables duration trend tracking.
 
 **`tomorrow.json` additionally includes:**
 
@@ -155,11 +161,13 @@ The built-in `gpt-mini` alias in `src/config/defaults.ts:21` resolves to `openai
 
 **Tasks:**
 
+Progress note (2026-04-10): completed 0.2-0.5. The optional alias override in 0.1 was attempted and rejected by OpenClaw config validation, so explicit `openai-codex/gpt-5.4-mini` job model IDs remain the safe path.
+
 - [ ] **0.1** Add `gpt-5.4-mini` model override in `~/.openclaw/openclaw.json` to route `gpt-mini` alias through `openai-codex` provider (optional — explicit model IDs are primary)
   - File: `~/.openclaw/openclaw.json` (runtime config, not repo)
   - Add to `agents.defaults.model.aliases`: `"gpt-mini": "openai-codex/gpt-5.4-mini"`
-- [ ] **0.2** Configure heartbeat model to `openai-codex/gpt-5.4-mini` in `openclaw.json`
-- [ ] **0.3** Smoke test: create a one-shot cron job that sends a simple prompt via `openai-codex/gpt-5.4-mini` and verifies response + Telegram delivery
+- [x] **0.2** Configure heartbeat model to `openai-codex/gpt-5.4-mini` in `openclaw.json`
+- [x] **0.3** Smoke test: create a one-shot cron job that sends a simple prompt via `openai-codex/gpt-5.4-mini` and verifies response + Telegram delivery
   ```bash
   openclaw cron add \
     --name "Model Routing Smoke Test" \
@@ -170,12 +178,12 @@ The built-in `gpt-mini` alias in `src/config/defaults.ts:21` resolves to `openai
     --at 5m --delete-after-run
   ```
   Verify: Telegram message received with correct content. Check `openclaw cron list` to confirm model stuck at `openai-codex/gpt-5.4-mini`.
-- [ ] **0.4** Clean up exposed `OPENROUTER_API_KEY` from `env` fields in `~/.openclaw/cron/jobs.json`
+- [x] **0.4** Clean up exposed `OPENROUTER_API_KEY` from `env` fields in `~/.openclaw/cron/jobs.json`
   ```bash
   grep -i "OPENROUTER" ~/.openclaw/cron/jobs.json
   ```
   Remove any inline API key values from job `env` fields. OpenRouter auth should come from the provider profile, not inline env.
-- [ ] **0.5** Verify: `openclaw cron list` shows all existing jobs still operational (no regression from config changes)
+- [x] **0.5** Verify: `openclaw cron list` shows all existing jobs still operational (no regression from config changes)
 
 **Rollback:** Remove alias override from `openclaw.json`. Existing jobs on OpenRouter are unaffected.
 
@@ -191,41 +199,53 @@ The built-in `gpt-mini` alias in `src/config/defaults.ts:21` resolves to `openai
 
 #### 1A. Collector Scripts
 
-- [ ] **1.1** Create directory: `second-brain/scripts/openclaw-pipeline/`
-- [ ] **1.2** Create `second-brain/scripts/openclaw-pipeline/morning_collect.py`
-  - Wipe and recreate `/tmp/openclaw-pipeline/am/`
+Progress note (2026-04-10): completed 1.1-1.5 and 1.9 in the canonical `second-brain` repo. Re-verified in this execution: `python3 -m unittest tests/test_openclaw_pipeline_collect_utils.py tests/test_openclaw_pipeline_collectors.py tests/test_cron_ensure_daily_log.py` passes, both collectors still perform atomic wipe-before-write correctly, and live manual runs confirmed the intended partial-failure behavior when external CLIs are unavailable from the host exec environment. Clawd file updates 1.6-1.8 were still pending at the start of this pass.
+
+- [x] **1.1** Create directory: `second-brain/scripts/openclaw-pipeline/`
+- [x] **1.2** Create `second-brain/scripts/openclaw-pipeline/morning_collect.py`
+  - Wipe and recreate `/tmp/openclaw-pipeline/am/` (atomic directory swap — see Implementation Patterns)
   - Collect: calendar (today) via `gws calendar`, email (urgent unread) via `gws gmail`, Readwise queue via `readwise reader-list-documents`, vault health via `python3 scripts/daily-routine.py --json`, project CONTEXT.md summaries (company-scoped by day-of-week)
   - Git repo sync (`git -C <repo> pull --rebase` for key repos)
-  - Each source wrapped in try/except — failure writes `{"status": "error", "error": "..."}` for that file
-  - Every JSON file includes `collected_at` ISO timestamp and `status` field
+  - Each source wrapped in try/except with per-source timeout (45-60s) — failure writes `{"status": "error", "error": "..."}` for that file
+  - Every JSON file includes `collected_at`, `status`, `items_count`, `duration_ms` fields
+  - Atomic file writes: `tempfile.NamedTemporaryFile` + `os.fsync` + `os.replace` (same filesystem)
+  - Stdout: 1-3 line summary for LLM consumer ("Collected 5/6 sources. Errors: readwise")
+  - Stderr: JSON-lines structured logging for diagnostics
   - Note: does NOT touch `tomorrow.json` (hot handoff between agents)
-- [ ] **1.3** Create `second-brain/scripts/openclaw-pipeline/evening_collect.py`
-  - Wipe and recreate `/tmp/openclaw-pipeline/pm/`
+- [x] **1.3** Create `second-brain/scripts/openclaw-pipeline/evening_collect.py`
+  - Wipe and recreate `/tmp/openclaw-pipeline/pm/` (atomic directory swap)
   - Collect: git activity since morning (`git log --since`), session notes from daily log, meeting notes added today, inbox state (`find inbox/ -name "*.md"`), new Readwise highlights since morning, CONTEXT.md diff (today vs. morning snapshot)
   - Check `git status --porcelain` for `second-brain/` — include dirty-state flag in `git-activity.json`
-  - Same error handling and JSON schema as morning collector
-- [ ] **1.4** Manual test both scripts:
+  - Same implementation patterns as morning collector (atomic writes, per-source timeouts, error aggregation)
+- [x] **1.3b** Create `second-brain/scripts/openclaw-pipeline/collect_utils.py` — shared utilities
+  - `atomic_write_json(filepath, data)` — tempfile + fsync + os.replace
+  - `atomic_replace_dir(target, populate_fn)` — write to temp dir, rename swap
+  - `run_cli(cmd, timeout)` — subprocess with timeout, never `shell=True`
+  - `CollectionRun` / `SourceResult` dataclasses — error aggregation with three-valued status (`ok`/`error`/`partial`)
+- [x] **1.4** Manual test both scripts:
   ```bash
   python3 second-brain/scripts/openclaw-pipeline/morning_collect.py
   ls -la /tmp/openclaw-pipeline/am/
   python3 -c "import json; [print(f, json.load(open(f'/tmp/openclaw-pipeline/am/{f}')).get('status')) for f in __import__('os').listdir('/tmp/openclaw-pipeline/am/')]"
   ```
   Same for evening collector with `pm/`.
-- [ ] **1.5** Unit tests for both scripts (test JSON schema, error handling, wipe-before-write)
+- [x] **1.5** Unit tests for both scripts (test JSON schema, error handling, wipe-before-write)
 
 #### 1B. Early Clawd File Updates (passive context — no job IDs)
 
-- [ ] **1.6** Update `clawd/USER.md` — add Work Preferences section (see brainstorm: Section 6, USER.md)
+Progress note (2026-04-10): completed 1.6-1.8 in `/home/codex/clawd/` during this execution. These were passive context updates only: no job IDs, no cron wiring, no runtime behavior changes.
+
+- [x] **1.6** Update `clawd/USER.md` — add Work Preferences section (see brainstorm: Section 6, USER.md)
   - Morning = Planning Session, Evening = Compounding Machine, Right-Size Everything, Delivery: Telegram + Daily Note, CONTEXT.md Convention
-- [ ] **1.7** Update `clawd/TOOLS.md` — fix stale model routing references only
+- [x] **1.7** Update `clawd/TOOLS.md` — fix stale model routing references only
   - Remove Sonnet 4.6/Opus references
   - Add `gpt-5.4-mini` as cron default, `gpt-5.4` as interactive default
   - Do NOT add pipeline data exchange section yet (depends on validated pipeline — Phase 3.5)
-- [ ] **1.8** Update `clawd/PRINCIPLES.md` — add two new principles + one regression
+- [x] **1.8** Update `clawd/PRINCIPLES.md` — add two new principles + one regression
   - New: "Pipeline-First Decomposition" (see brainstorm: Section 4, PRINCIPLES.md)
   - New: "CONTEXT.md Is Always-Current" (see brainstorm: Section 4, PRINCIPLES.md)
   - Regression: "2026-04-10: Monolithic Cron Waste" (see brainstorm: Section 4, PRINCIPLES.md)
-- [ ] **1.9** Update `second-brain/scripts/cron_ensure_daily_log.py` — add `## Evening Recap` to the daily note template between `## Daily Capture (auto)` and `## Related`
+- [x] **1.9** Update `second-brain/scripts/cron_ensure_daily_log.py` — add `## Evening Recap` to the daily note template between `## Daily Capture (auto)` and `## Related`
 
 **Rollback:** Delete scripts directory. Revert file changes via git.
 
@@ -267,29 +287,54 @@ The built-in `gpt-mini` alias in `src/config/defaults.ts:21` resolves to `openai
     --announce --channel telegram --to 183115134
   ```
 
-  **Morning Planner prompt sketch** (~400 tokens):
+  **Morning Planner prompt** (~400 tokens, using pre-flight + steps + error table pattern):
 
   ```
-  Read /tmp/openclaw-pipeline/am/*.json and /tmp/openclaw-pipeline/tomorrow.json.
-  You are Leonard's morning planning agent. Your job: connect dots, prioritize, plan.
+  You are Leonard's morning planning agent. Connect dots, prioritize, plan.
 
-  GUARD: If /tmp/openclaw-pipeline/am/ does not exist or contains 0 JSON files,
-  send Telegram: "⚠️ Morning collection failed — no data" and EXIT.
-  If any file has collected_at older than 2 hours, flag it as stale.
-  If tomorrow.json has written_at older than 36 hours, ignore it (expired).
+  PRE-FLIGHT (Step 0):
+  Run this bash block and read the output before proceeding:
+    ls /tmp/openclaw-pipeline/am/*.json 2>/dev/null | wc -l > /tmp/am_count.txt
+    python3 -c "
+    import json, os, datetime as dt
+    now = dt.datetime.now(dt.timezone.utc)
+    status = {}
+    for f in os.listdir('/tmp/openclaw-pipeline/am/'):
+      if not f.endswith('.json'): continue
+      d = json.load(open(f'/tmp/openclaw-pipeline/am/{f}'))
+      age_h = (now - dt.datetime.fromisoformat(d['collected_at'])).total_seconds() / 3600
+      status[f] = {'status': d['status'], 'stale': age_h > 2, 'items': d.get('items_count', '?')}
+    # Check tomorrow.json
+    tj = '/tmp/openclaw-pipeline/tomorrow.json'
+    if os.path.exists(tj):
+      d = json.load(open(tj))
+      age_h = (now - dt.datetime.fromisoformat(d['written_at'])).total_seconds() / 3600
+      status['tomorrow'] = {'expired': age_h > 36}
+    else:
+      status['tomorrow'] = {'missing': True}
+    json.dump(status, open('/tmp/preflight.json','w'), indent=2)
+    print(json.dumps(status, indent=2))
+    "
 
-  Rules:
-  - Link Readwise articles to active projects when relevant
-  - Flag email threads related to today's meetings
-  - Surface stale blockers from CONTEXT.md
-  - Output a prioritized plan, not a data dump
+  Step 1: Read /tmp/preflight.json. Note which sources are FRESH vs STALE vs ERROR.
+  Step 2: Read FRESH data files from /tmp/openclaw-pipeline/am/.
+  Step 3: If tomorrow.json is not expired, read carry-forward context.
+  Step 4: Reason — connect dots: Readwise→projects, email→meetings, surface blockers.
+  Step 5: Write plan to /tmp/plan.txt. Prioritized actions, not a data dump.
+  Step 6: Call: python3 /home/codex/second-brain/scripts/cron_upsert_section.py \
+          --path <daily_note_path> --heading "Plan (pipeline)" --level 2 --in /tmp/plan.txt
+  Step 7: Verify /tmp/plan.txt exists and is non-empty.
 
-  Write full plan → daily note via:
-    python3 /home/codex/second-brain/scripts/cron_upsert_section.py \
-      --path <daily_note_path> --heading "Plan (pipeline)" --level 2 --in /tmp/plan.txt
+  ERROR TABLE:
+  | Condition              | Action                                              |
+  |------------------------|-----------------------------------------------------|
+  | 0 JSON files in am/    | Telegram: "⚠️ Morning collection failed" then EXIT  |
+  | All sources STALE      | Flag in plan, skip time-sensitive recommendations   |
+  | Source status: error    | Note gap, plan with available data                  |
+  | tomorrow.json expired  | Skip carry-forward, note "no evening context"       |
+  | cron_upsert fails      | Still send Telegram summary, log the failure        |
 
-  Send top 5 bullets → Telegram (via your response).
-  Attempt both deliveries independently. Report any failures in output.
+  Telegram: Send top 5 bullets via your response. Max 500 chars.
   ```
 
   Note: During Phase 2, uses heading `## Plan (pipeline)` to avoid collision with old job's `## Plan`.
@@ -360,32 +405,40 @@ The built-in `gpt-mini` alias in `src/config/defaults.ts:21` resolves to `openai
   ```
 
 - [ ] **3.3** Create Evening Analyst cron job (21:15)
-      **Evening Analyst prompt sketch** (~400 tokens):
+      **Evening Analyst prompt** (~400 tokens, pre-flight + steps + error table):
 
   ```
-  Read /tmp/openclaw-pipeline/pm/*.json and /tmp/openclaw-pipeline/pm/triage.json.
-  You are Leonard's evening analyst.
+  You are Leonard's evening analyst. Extract learnings, track progress, prime tomorrow.
 
-  GUARD: If /tmp/openclaw-pipeline/pm/ does not exist or contains 0 JSON files,
-  send Telegram: "⚠️ Evening pipeline data missing" and EXIT.
-  If triage.json is missing, proceed without it and note the gap.
+  PRE-FLIGHT (Step 0):
+  Run preflight check (same pattern as morning — check pm/ files, triage.json existence,
+  freshness). Write results to /tmp/preflight_pm.json.
 
-  Extract from today's data:
-  - Decisions made + their outcomes
-  - Progress deltas vs. yesterday
-  - Learnings (from meetings, reading, coding)
-  - Assistant friction signals (repeated failures, slow responses, tool issues)
+  Step 1: Read /tmp/preflight_pm.json. Note available vs missing sources.
+  Step 2: Read FRESH data files from /tmp/openclaw-pipeline/pm/.
+  Step 3: If triage.json exists, read Knowledge Processor results.
+  Step 4: Extract and synthesize:
+          - Decisions made + outcomes
+          - Progress deltas vs. yesterday
+          - Learnings (from meetings, reading, coding)
+          - Friction signals (repeated failures, slow responses, tool issues)
+  Step 5: Write recap to /tmp/recap.txt.
+  Step 6: Call: python3 /home/codex/second-brain/scripts/cron_upsert_section.py \
+          --path <daily_note_path> --heading "Evening Recap" --level 2 --in /tmp/recap.txt
+  Step 7: Write /tmp/openclaw-pipeline/tomorrow.json (atomic write) with:
+          written_at, unfinished_threads, blockers, key_context, readwise_project_map.
+  Step 8: Verify both /tmp/recap.txt and tomorrow.json exist and are non-empty.
 
-  Write full recap → daily note via:
-    python3 /home/codex/second-brain/scripts/cron_upsert_section.py \
-      --path <daily_note_path> --heading "Evening Recap" --level 2 --in /tmp/recap.txt
+  ERROR TABLE:
+  | Condition              | Action                                              |
+  |------------------------|-----------------------------------------------------|
+  | 0 JSON files in pm/    | Telegram: "⚠️ Evening collection failed" then EXIT  |
+  | triage.json missing    | Proceed without triage data, note gap in recap      |
+  | All sources empty      | Minimal "quiet day" recap, still write tomorrow.json|
+  | cron_upsert fails      | Still send Telegram + write tomorrow.json           |
+  | tomorrow.json write fails | Log error, still send Telegram + daily note      |
 
-  Write carry-forward → /tmp/openclaw-pipeline/tomorrow.json with:
-    written_at (ISO timestamp), unfinished threads, blockers surfaced today,
-    key context for tomorrow, Readwise articles mapped to projects.
-
-  Send condensed summary → Telegram (via your response).
-  Attempt both deliveries independently. Report any failures in output.
+  Telegram: Condensed summary via your response. Max 500 chars. Lead with outcomes.
   ```
 
 - [ ] **3.4** Disable old jobs (keep as fallback):
@@ -444,7 +497,12 @@ The built-in `gpt-mini` alias in `src/config/defaults.ts:21` resolves to `openai
 - [ ] **3.5.3** Update `clawd/TOOLS.md` — add pipeline data exchange section
   - Add `## Pipeline Data Exchange` section (see brainstorm: TOOLS.md section)
   - Update cron job references: "Daily Note Prep (05:00)" → "Morning Planner (05:10)", etc.
-- [ ] **3.5.4** Switch Morning Planner heading from `## Plan (pipeline)` back to `## Plan`
+- [ ] **3.5.4** Create pipeline runbook at `second-brain/projects/homelab/runbooks/cron-pipeline.md`
+  - Quick status check script (30 seconds)
+  - Common failure modes decision tree (gateway down, script error, model error, delivery failure)
+  - Manual re-run commands per pipeline stage
+  - One screen per failure mode — this is a "2am half-asleep reference", not an SRE document
+- [ ] **3.5.5** Switch Morning Planner heading from `## Plan (pipeline)` back to `## Plan`
   - Update the Morning Planner cron job prompt
   - Disable old Daily Note Prep job (no longer needed — Morning Planner proven)
 
@@ -518,11 +576,13 @@ The built-in `gpt-mini` alias in `src/config/defaults.ts:21` resolves to `openai
 
 ### New Files
 
-| File                                                        | Phase | Purpose                |
-| ----------------------------------------------------------- | ----- | ---------------------- |
-| `second-brain/scripts/openclaw-pipeline/morning_collect.py` | 1     | Morning data collector |
-| `second-brain/scripts/openclaw-pipeline/evening_collect.py` | 1     | Evening data collector |
-| `second-brain/scripts/openclaw-pipeline/__init__.py`        | 1     | Package marker         |
+| File                                                        | Phase | Purpose                                                         |
+| ----------------------------------------------------------- | ----- | --------------------------------------------------------------- |
+| `second-brain/scripts/openclaw-pipeline/morning_collect.py` | 1     | Morning data collector                                          |
+| `second-brain/scripts/openclaw-pipeline/evening_collect.py` | 1     | Evening data collector                                          |
+| `second-brain/scripts/openclaw-pipeline/collect_utils.py`   | 1     | Shared utilities (atomic writes, subprocess, error aggregation) |
+| `second-brain/scripts/openclaw-pipeline/__init__.py`        | 1     | Package marker                                                  |
+| `second-brain/projects/homelab/runbooks/cron-pipeline.md`   | 3.5   | Pipeline runbook (status check, failure modes, re-run commands) |
 
 ### Modified Files
 
@@ -603,6 +663,185 @@ The built-in `gpt-mini` alias in `src/config/defaults.ts:21` resolves to `openai
 
 ---
 
+## Monitoring & Alerting
+
+### Alert Thresholds
+
+| Condition                              | Action                                                                                                                                        |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 failure, any agent job               | Log it. No alert. `consecutiveErrors` increments.                                                                                             |
+| 2 consecutive failures, same agent job | Telegram alert: "[Job Name] failed 2x. Last error: [truncated]"                                                                               |
+| 1 failure, any collector job           | **Immediate alert.** Collectors are simple scripts; failure means environment issue (disk, network, auth). Cascades to all downstream agents. |
+| Delivery failure (Telegram)            | **Immediate alert.** Delivery failures mean the system cannot tell you it's broken.                                                           |
+| No run in expected window              | Dead man's switch: if `nextRunAtMs` is >2x expected interval in the past, alert. Catches gateway being down.                                  |
+| Duration > 3x 7-day average            | Warning footnote in next Telegram briefing, not a standalone alert.                                                                           |
+
+### Output Quality Signals
+
+**Per-run (automated):**
+
+- **Output structure validation**: Does the daily note contain expected H2 headings? Is Telegram message under character limit?
+- **Empty-input canary**: If all data sources were empty/stale, output should contain "No activity captured" or similar. If it doesn't despite empty inputs, the model hallucinated.
+- **Output length tracking**: Log character count. Sudden drop (<50% of 7-day average) or spike (>200%) signals degradation.
+
+**Longitudinal (manual review weekly):**
+
+- Are plans actionable (next steps, blockers, decisions) or data dumps?
+- Is the evening recap synthesizing or parroting?
+- Is `tomorrow.json` carry-forward actually influencing morning plans?
+
+### Pipeline Throughput
+
+Track daily completion count. The last evening job (Evening Analyst) writes a `pipeline_throughput` field to `tomorrow.json`: number of pipeline jobs that completed today (from cron state). If fewer than 7 of 9 completed on a weekday, flag as degraded day.
+
+### Runbook
+
+Create `second-brain/projects/homelab/runbooks/cron-pipeline.md` (Phase 3.5) with:
+
+- Quick status check (30-second script)
+- Common failure modes decision tree (gateway down, script error, model error, delivery failure, slow upstream)
+- Manual re-run commands per pipeline stage
+- Keep it to one screen per failure mode
+
+---
+
+## Implementation Patterns (Appendix)
+
+### Atomic File Writes
+
+All collector JSON output uses atomic writes to prevent partial reads:
+
+```python
+import tempfile, os, json
+
+def atomic_write_json(filepath: str, data: dict) -> None:
+    dir_ = os.path.dirname(filepath)
+    fd = tempfile.NamedTemporaryFile(mode="w", suffix=".tmp", dir=dir_, delete=False)
+    try:
+        json.dump(data, fd, indent=2)
+        fd.flush()
+        os.fsync(fd.fileno())
+        fd.close()
+        os.replace(fd.name, filepath)  # atomic on POSIX (same filesystem)
+    except BaseException:
+        fd.close()
+        os.unlink(fd.name)
+        raise
+```
+
+Key: temp file in same directory (same filesystem for atomic `os.replace`), `fsync` before rename, cleanup on failure.
+
+### Atomic Directory Swap
+
+Collectors replace their target directory atomically:
+
+```python
+import tempfile, shutil, os
+
+def atomic_replace_dir(target_dir: str, populate_fn) -> None:
+    parent = os.path.dirname(target_dir)
+    tmp_dir = tempfile.mkdtemp(dir=parent)
+    try:
+        populate_fn(tmp_dir)
+        backup = target_dir + ".old"
+        if os.path.exists(target_dir):
+            os.rename(target_dir, backup)
+        os.rename(tmp_dir, target_dir)
+        if os.path.exists(backup):
+            shutil.rmtree(backup)
+    except BaseException:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        if not os.path.exists(target_dir) and os.path.exists(backup):
+            os.rename(backup, target_dir)
+        raise
+```
+
+### Subprocess Timeout Handling
+
+External CLIs get per-source timeouts (45-60s), never `shell=True`:
+
+```python
+import subprocess
+
+def run_cli(cmd: list[str], timeout: int = 60) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        cmd, capture_output=True, text=True,
+        timeout=timeout, check=True, stdin=subprocess.DEVNULL,
+    )
+```
+
+Budget: 5 sources × 60s max = 300s total budget fits within the 300s collector timeout.
+
+### Error Aggregation
+
+```python
+from dataclasses import dataclass, field
+
+@dataclass
+class SourceResult:
+    name: str
+    status: str  # "ok" | "error"
+    data: dict | None = None
+    error: str | None = None
+    duration_ms: int = 0
+    items_count: int = 0
+
+@dataclass
+class CollectionRun:
+    results: list[SourceResult] = field(default_factory=list)
+
+    @property
+    def overall_status(self) -> str:
+        statuses = {r.status for r in self.results}
+        if statuses == {"ok"}: return "ok"
+        if statuses == {"error"}: return "error"
+        return "partial"
+
+    @property
+    def summary(self) -> str:
+        ok = [r.name for r in self.results if r.status == "ok"]
+        err = [r.name for r in self.results if r.status == "error"]
+        return f"{len(ok)}/{len(self.results)} ok. Errors: {', '.join(err) or 'none'}"
+```
+
+Three-valued status (`ok`/`error`/`partial`) lets downstream agents decide how to handle partial data. `duration_ms` per source enables trend tracking.
+
+### Logging Convention
+
+- **stdout**: 1-3 line human summary for the LLM consumer (~20 tokens). Example: `Collected 5/6 sources. Errors: readwise`
+- **stderr**: JSON-lines structured logging for diagnostics (timestamps, levels, source names)
+- **Never put stack traces on stdout** — they blow the LLM's ~200 token context budget
+
+### Agent Prompt Template
+
+All pipeline agent prompts follow this structure (proven reliable on gpt-5.4-mini at ~400 tokens):
+
+```
+SYSTEM: You are [role]. You read data from [dir] and produce:
+  1. Markdown section (via cron_upsert_section.py)
+  2. Telegram message (via response)
+
+PRE-FLIGHT (Step 0): [bash block → /tmp/preflight.json with freshness verdicts]
+
+Step 1-N: [numbered sequential steps, max 5-6, clear verbs]
+
+ERROR TABLE:
+| Condition | Action |
+|-----------|--------|
+| ...       | ...    |
+```
+
+Design rules:
+
+- **Max 5-7 discrete steps** — compliance drops sharply above 7 on gpt-5.4-mini
+- **Pre-flight externalizes guard logic** — model reads facts (FRESH/STALE/MISSING), not timestamps
+- **Error table beats inline if/then** — highest reliability pattern on smaller models
+- **Separate write operations per output** — prevents model from completing one and forgetting the other
+- **Verification step at the end** — "check both outputs exist and are non-empty"
+- **Never ask the model to parse ISO timestamps** — externalize time math to Python in the pre-flight
+
+---
+
 ## What This Is NOT
 
 - Not a rewrite of OpenClaw core (no TypeScript changes)
@@ -626,3 +865,10 @@ The built-in `gpt-mini` alias in `src/config/defaults.ts:21` resolves to `openai
 - **Current jobs:** `~/.openclaw/cron/jobs.json` — 9 active jobs, all on `openrouter/minimax`
 - **HEARTBEAT.md:** `clawd/HEARTBEAT.md` — current critical job UUIDs and health check script
 - **SpecFlow analysis findings:** Identified 14 gaps including collector failure behavior, parallel-run section collision, `tomorrow.json` expiration, `maxConcurrentRuns` constraint, git push policy, and daily note section heading assignments.
+
+### Deepening Research (external best practices)
+
+- **Python collector patterns:** Atomic file writes via `tempfile` + `os.replace` + `os.fsync` (CPython docs). Per-source subprocess timeouts with `capture_output=True` (never `shell=True`). Error aggregation via `CollectionRun` dataclass with three-valued status. Lightweight assertions for JSON validation (not full schema).
+- **Pipeline monitoring:** Alert on 2 consecutive failures for agents, immediate alert for collectors and delivery failures. Dead man's switch for missed runs. Track `items_count` and `duration_ms` per source for quality signals and trend anomaly detection. Runbook with decision tree.
+- **Agent prompt patterns:** Pre-flight bash block externalizes guard logic (model reads facts, not timestamps). Max 5-7 steps for gpt-5.4-mini reliability. Error handling in table format (highest reliability on smaller models). Separate write operations per output to prevent forgotten deliveries. Verification step at end.
+- **Production skill patterns in this codebase:** `sb-daily-wrap-from-pieces` and `sb-hourly-log-from-pieces` demonstrate the proven pre-flight + numbered steps + idempotency guard pattern already in use for scheduled agent skills.
