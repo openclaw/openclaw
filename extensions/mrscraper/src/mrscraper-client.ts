@@ -367,11 +367,21 @@ export async function runMrScraperCreateAiScraper(
     body.proxyCountry = proxyCountry;
   }
   if (params.agent === "map") {
-    if (typeof params.maxDepth === "number") body.maxDepth = Math.floor(params.maxDepth);
-    if (typeof params.maxPages === "number") body.maxPages = Math.floor(params.maxPages);
-    if (typeof params.limit === "number") body.limit = Math.floor(params.limit);
-    if (params.includePatterns) body.includePatterns = params.includePatterns;
-    if (params.excludePatterns) body.excludePatterns = params.excludePatterns;
+    if (typeof params.maxDepth === "number") {
+      body.maxDepth = Math.floor(params.maxDepth);
+    }
+    if (typeof params.maxPages === "number") {
+      body.maxPages = Math.floor(params.maxPages);
+    }
+    if (typeof params.limit === "number") {
+      body.limit = Math.floor(params.limit);
+    }
+    if (params.includePatterns) {
+      body.includePatterns = params.includePatterns;
+    }
+    if (params.excludePatterns) {
+      body.excludePatterns = params.excludePatterns;
+    }
   }
 
   const start = Date.now();
@@ -405,11 +415,21 @@ export async function runMrScraperRerunAiScraper(
     scraperId: params.scraperId,
     url: params.url,
   };
-  if (typeof params.maxDepth === "number") body.maxDepth = Math.floor(params.maxDepth);
-  if (typeof params.maxPages === "number") body.maxPages = Math.floor(params.maxPages);
-  if (typeof params.limit === "number") body.limit = Math.floor(params.limit);
-  if (params.includePatterns) body.includePatterns = params.includePatterns;
-  if (params.excludePatterns) body.excludePatterns = params.excludePatterns;
+  if (typeof params.maxDepth === "number") {
+    body.maxDepth = Math.floor(params.maxDepth);
+  }
+  if (typeof params.maxPages === "number") {
+    body.maxPages = Math.floor(params.maxPages);
+  }
+  if (typeof params.limit === "number") {
+    body.limit = Math.floor(params.limit);
+  }
+  if (params.includePatterns) {
+    body.includePatterns = params.includePatterns;
+  }
+  if (params.excludePatterns) {
+    body.excludePatterns = params.excludePatterns;
+  }
 
   const start = Date.now();
   const payload = await runPlatformJsonRequest({
@@ -532,10 +552,18 @@ export async function runMrScraperGetAllResults(
   endpoint.searchParams.set("sortOrder", params.sortOrder ?? "DESC");
   endpoint.searchParams.set("pageSize", String(params.pageSize ?? 10));
   endpoint.searchParams.set("page", String(params.page ?? 1));
-  if (params.search) endpoint.searchParams.set("search", params.search);
-  if (params.dateRangeColumn) endpoint.searchParams.set("dateRangeColumn", params.dateRangeColumn);
-  if (params.startAt) endpoint.searchParams.set("startAt", params.startAt);
-  if (params.endAt) endpoint.searchParams.set("endAt", params.endAt);
+  if (params.search) {
+    endpoint.searchParams.set("search", params.search);
+  }
+  if (params.dateRangeColumn) {
+    endpoint.searchParams.set("dateRangeColumn", params.dateRangeColumn);
+  }
+  if (params.startAt) {
+    endpoint.searchParams.set("startAt", params.startAt);
+  }
+  if (params.endAt) {
+    endpoint.searchParams.set("endAt", params.endAt);
+  }
 
   const start = Date.now();
   const payload = await runPlatformJsonRequest({

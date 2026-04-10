@@ -11,7 +11,8 @@ const MrScraperWebFetchSchema = Type.Object(
       Type.Unsafe<"markdown" | "text">({
         type: "string",
         enum: ["markdown", "text"],
-        description: 'Output format: "markdown" or "text". Default: markdown.',
+        description:
+          '"markdown" returns the rendered HTML payload; "text" returns stripped plain text. Default: markdown.',
       }),
     ),
     maxChars: Type.Optional(
@@ -81,8 +82,8 @@ export function createMrScraperWebFetchProvider(): WebFetchProviderPlugin {
       const entry = (entries.mrscraper ??= {});
       const pluginConfig =
         entry.config && typeof entry.config === "object" && !Array.isArray(entry.config)
-          ? (entry.config as Record<string, unknown>)
-          : ((entry.config = {}), entry.config as Record<string, unknown>);
+          ? entry.config
+          : ((entry.config = {}), entry.config);
       pluginConfig.apiToken = value;
     },
     applySelectionConfig: (config) => enablePluginInConfig(config, "mrscraper").config,

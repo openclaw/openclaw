@@ -14,7 +14,8 @@ const MrScraperFetchHtmlSchema = Type.Object(
       Type.Unsafe<"markdown" | "text">({
         type: "string",
         enum: ["markdown", "text"],
-        description: 'Output format: "markdown" or "text". Default: markdown.',
+        description:
+          '"markdown" returns the rendered HTML payload; "text" returns stripped plain text. Default: markdown.',
       }),
     ),
     maxChars: Type.Optional(
