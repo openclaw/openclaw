@@ -678,7 +678,10 @@ export async function startQaGatewayChild(params: {
     controlUiEnabled: params.controlUiEnabled,
   });
   const cfg = params.mutateConfig ? params.mutateConfig(baseCfg) : baseCfg;
-  await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
+  await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
   const allowedPluginIds = [...(cfg.plugins?.allow ?? []), "openai"].filter(
     (pluginId, index, array): pluginId is string => {
       return (

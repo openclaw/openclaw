@@ -166,6 +166,43 @@ describe("telegram live qa runtime", () => {
     ).toBe("match");
   });
 
+  it("redacts observed message content by default in artifacts", () => {
+    expect(
+      __testing.buildObservedMessagesArtifact({
+        includeContent: false,
+        observedMessages: [
+          {
+            updateId: 1,
+            messageId: 9,
+            chatId: -100123,
+            senderId: 42,
+            senderIsBot: true,
+            senderUsername: "driver_bot",
+            text: "secret text",
+            caption: "secret caption",
+            replyToMessageId: 8,
+            timestamp: 1_700_000_000_000,
+            inlineButtons: ["Approve"],
+            mediaKinds: ["photo"],
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        updateId: 1,
+        messageId: 9,
+        chatId: -100123,
+        senderId: 42,
+        senderIsBot: true,
+        senderUsername: "driver_bot",
+        replyToMessageId: 8,
+        timestamp: 1_700_000_000_000,
+        inlineButtons: ["Approve"],
+        mediaKinds: ["photo"],
+      },
+    ]);
+  });
+
   it("formats phase-specific canary diagnostics with context", () => {
     const error = new Error(
       "SUT bot did not send any group reply after the canary command within 30s.",

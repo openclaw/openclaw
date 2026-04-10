@@ -44,6 +44,11 @@ type TelegramObservedMessage = {
   mediaKinds: string[];
 };
 
+type TelegramObservedMessageArtifact = Omit<TelegramObservedMessage, "text" | "caption"> & {
+  text?: string;
+  caption?: string;
+};
+
 type TelegramQaScenarioResult = {
   id: string;
   title: string;
@@ -425,6 +430,28 @@ function renderTelegramQaMarkdown(params: {
   return lines.join("\n");
 }
 
+function buildObservedMessagesArtifact(params: {
+  observedMessages: TelegramObservedMessage[];
+  includeContent: boolean;
+}) {
+  return params.observedMessages.map<TelegramObservedMessageArtifact>((message) =>
+    params.includeContent
+      ? { ...message }
+      : {
+          updateId: message.updateId,
+          messageId: message.messageId,
+          chatId: message.chatId,
+          senderId: message.senderId,
+          senderIsBot: message.senderIsBot,
+          senderUsername: message.senderUsername,
+          replyToMessageId: message.replyToMessageId,
+          timestamp: message.timestamp,
+          inlineButtons: message.inlineButtons,
+          mediaKinds: message.mediaKinds,
+        },
+  );
+}
+
 function findScenario(ids?: string[]) {
   if (!ids || ids.length === 0) {
     return [...TELEGRAM_QA_SCENARIOS];
@@ -628,6 +655,7 @@ export async function runTelegramQaLive(params: {
   const sutAccountId = params.sutAccountId?.trim() || "sut";
   const scenarios = findScenario(params.scenarioIds);
   const observedMessages: TelegramObservedMessage[] = [];
+  const includeObservedMessageContent = process.env.OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT === "1";
   const startedAt = new Date().toISOString();
 
   const driverIdentity = await getBotIdentity(runtimeEnv.driverToken);
@@ -755,13 +783,23 @@ export async function runTelegramQaLive(params: {
       finishedAt,
       scenarios: scenarioResults,
     })}\n`,
-    "utf8",
+    { encoding: "utf8", mode: 0o600 },
   );
-  await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
+  await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
   await fs.writeFile(
     observedMessagesPath,
-    `${JSON.stringify(observedMessages, null, 2)}\n`,
-    "utf8",
+    `${JSON.stringify(
+      buildObservedMessagesArtifact({
+        observedMessages,
+        includeContent: includeObservedMessageContent,
+      }),
+      null,
+      2,
+    )}\n`,
+    { encoding: "utf8", mode: 0o600 },
   );
   if (canaryFailure) {
     throw new Error(
@@ -781,6 +819,7 @@ export async function runTelegramQaLive(params: {
 export const __testing = {
   TELEGRAM_QA_SCENARIOS,
   buildTelegramQaConfig,
+  buildObservedMessagesArtifact,
   canaryFailureMessage,
   classifyCanaryReply,
   normalizeTelegramObservedMessage,
