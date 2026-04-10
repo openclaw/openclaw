@@ -436,6 +436,24 @@ function findScenario(ids?: string[]) {
   return selected;
 }
 
+function classifyCanaryReply(params: {
+  message: TelegramObservedMessage;
+  groupId: string;
+  sutBotId: number;
+  driverMessageId: number;
+}) {
+  if (
+    params.message.chatId !== Number(params.groupId) ||
+    params.message.senderId !== params.sutBotId ||
+    !params.message.text.trim()
+  ) {
+    return "ignore" as const;
+  }
+  return params.message.replyToMessageId === params.driverMessageId
+    ? ("match" as const)
+    : ("unthreaded" as const);
+}
+
 async function runCanary(params: {
   driverToken: string;
   groupId: string;
@@ -449,6 +467,9 @@ async function runCanary(params: {
     params.groupId,
     `/help@${params.sutUsername}`,
   );
+  let firstUnthreadedReply:
+    | Pick<TelegramObservedMessage, "messageId" | "replyToMessageId" | "text">
+    | undefined;
   let sutObserved: Awaited<ReturnType<typeof waitForObservedMessage>>;
   try {
     sutObserved = await waitForObservedMessage({
@@ -456,10 +477,41 @@ async function runCanary(params: {
       initialOffset: offset,
       timeoutMs: 30_000,
       observedMessages: params.observedMessages,
-      predicate: (message) =>
-        message.chatId === Number(params.groupId) && message.senderId === params.sutBotId,
+      predicate: (message) => {
+        const classification = classifyCanaryReply({
+          message,
+          groupId: params.groupId,
+          sutBotId: params.sutBotId,
+          driverMessageId: driverMessage.message_id,
+        });
+        if (classification === "ignore") {
+          return false;
+        }
+        if (classification === "unthreaded") {
+          firstUnthreadedReply ??= {
+            messageId: message.messageId,
+            replyToMessageId: message.replyToMessageId,
+            text: message.text,
+          };
+          return false;
+        }
+        return classification === "match";
+      },
     });
   } catch (error) {
+    if (firstUnthreadedReply) {
+      throw new TelegramQaCanaryError(
+        "sut_reply_not_threaded",
+        "SUT bot replied, but not as a reply to the canary driver message.",
+        {
+          groupId: params.groupId,
+          sutBotId: params.sutBotId,
+          driverMessageId: driverMessage.message_id,
+          sutMessageId: firstUnthreadedReply.messageId,
+          sutReplyToMessageId: firstUnthreadedReply.replyToMessageId,
+        },
+      );
+    }
     throw new TelegramQaCanaryError(
       "sut_reply_timeout",
       "SUT bot did not send any group reply after the canary command within 30s.",
@@ -468,19 +520,6 @@ async function runCanary(params: {
         sutBotId: params.sutBotId,
         driverMessageId: driverMessage.message_id,
         cause: formatErrorMessage(error),
-      },
-    );
-  }
-  if (sutObserved.message.replyToMessageId !== driverMessage.message_id) {
-    throw new TelegramQaCanaryError(
-      "sut_reply_not_threaded",
-      "SUT bot replied, but not as a reply to the canary driver message.",
-      {
-        groupId: params.groupId,
-        sutBotId: params.sutBotId,
-        driverMessageId: driverMessage.message_id,
-        sutMessageId: sutObserved.message.messageId,
-        sutReplyToMessageId: sutObserved.message.replyToMessageId,
       },
     );
   }
@@ -743,6 +782,7 @@ export const __testing = {
   TELEGRAM_QA_SCENARIOS,
   buildTelegramQaConfig,
   canaryFailureMessage,
+  classifyCanaryReply,
   normalizeTelegramObservedMessage,
   resolveTelegramQaRuntimeEnv,
 };

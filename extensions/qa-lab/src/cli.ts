@@ -163,7 +163,7 @@ export function registerQaLabCli(program: Command) {
     .option(
       "--provider-mode <mode>",
       "Provider mode: mock-openai or live-frontier (legacy live-openai still works)",
-      "live-frontier",
+      "mock-openai",
     )
     .option("--model <ref>", "Primary provider/model ref")
     .option("--alt-model <ref>", "Alternate provider/model ref")
@@ -223,7 +223,7 @@ export function registerQaLabCli(program: Command) {
     .option(
       "--provider-mode <mode>",
       "Provider mode: mock-openai or live-frontier (legacy live-openai still works)",
-      "mock-openai",
+      "live-frontier",
     )
     .option("--model <ref>", "Primary provider/model ref")
     .option("--alt-model <ref>", "Alternate provider/model ref")

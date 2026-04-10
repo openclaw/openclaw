@@ -123,6 +123,49 @@ describe("telegram live qa runtime", () => {
     });
   });
 
+  it("ignores unrelated sut replies when matching the canary response", () => {
+    expect(
+      __testing.classifyCanaryReply({
+        groupId: "-100123",
+        sutBotId: 88,
+        driverMessageId: 55,
+        message: {
+          updateId: 1,
+          messageId: 9,
+          chatId: -100123,
+          senderId: 88,
+          senderIsBot: true,
+          senderUsername: "sut_bot",
+          text: "other reply",
+          replyToMessageId: 999,
+          timestamp: 1_700_000_000_000,
+          inlineButtons: [],
+          mediaKinds: [],
+        },
+      }),
+    ).toBe("unthreaded");
+    expect(
+      __testing.classifyCanaryReply({
+        groupId: "-100123",
+        sutBotId: 88,
+        driverMessageId: 55,
+        message: {
+          updateId: 2,
+          messageId: 10,
+          chatId: -100123,
+          senderId: 88,
+          senderIsBot: true,
+          senderUsername: "sut_bot",
+          text: "canary reply",
+          replyToMessageId: 55,
+          timestamp: 1_700_000_001_000,
+          inlineButtons: [],
+          mediaKinds: [],
+        },
+      }),
+    ).toBe("match");
+  });
+
   it("formats phase-specific canary diagnostics with context", () => {
     const error = new Error(
       "SUT bot did not send any group reply after the canary command within 30s.",
