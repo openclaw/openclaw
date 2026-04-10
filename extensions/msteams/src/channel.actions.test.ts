@@ -465,7 +465,8 @@ describe("msteamsPlugin message actions", () => {
         emoji: reactionType,
       },
       toolContext: {
-        currentChannelId: teamChannelTarget,
+        currentChannelId: "conversation:19:channel-abc@thread.tacv2",
+        currentGraphChannelId: teamChannelTarget,
       },
       runtimeParams: {
         to: teamChannelTarget,
@@ -500,6 +501,7 @@ describe("msteamsPlugin message actions", () => {
       },
       toolContext: {
         currentChannelId: teamChannelTarget,
+        currentGraphChannelId: teamChannelTarget,
       },
       runtimeParams: {
         to: explicitTarget,
@@ -579,7 +581,8 @@ describe("msteamsPlugin.threading.buildToolContext", () => {
       NativeChannelId: "team-1/19:channel-abc@thread.tacv2",
       ReplyToId: "reply-1",
     });
-    expect(result?.currentChannelId).toBe("team-1/19:channel-abc@thread.tacv2");
+    expect(result?.currentChannelId).toBe("conversation:19:channel-abc@thread.tacv2");
+    expect(result?.currentGraphChannelId).toBe("team-1/19:channel-abc@thread.tacv2");
     expect(result?.currentThreadTs).toBe("reply-1");
   });
 
@@ -588,6 +591,7 @@ describe("msteamsPlugin.threading.buildToolContext", () => {
       To: "user:aad-user-1",
     });
     expect(result?.currentChannelId).toBe("user:aad-user-1");
+    expect(result?.currentGraphChannelId).toBeUndefined();
   });
 
   it("falls back to To for group chat turns (no NativeChannelId)", () => {
@@ -595,6 +599,7 @@ describe("msteamsPlugin.threading.buildToolContext", () => {
       To: "conversation:19:groupchat@thread.v2",
     });
     expect(result?.currentChannelId).toBe("conversation:19:groupchat@thread.v2");
+    expect(result?.currentGraphChannelId).toBeUndefined();
   });
 
   it("ignores NativeChannelId that does not encode a teamId/channelId pair", () => {
@@ -606,5 +611,6 @@ describe("msteamsPlugin.threading.buildToolContext", () => {
       NativeChannelId: "19:chat@thread.v2",
     });
     expect(result?.currentChannelId).toBe("conversation:19:chat@thread.v2");
+    expect(result?.currentGraphChannelId).toBeUndefined();
   });
 });

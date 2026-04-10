@@ -4,6 +4,7 @@
   "description": "OpenClaw Microsoft Teams channel plugin",
   "type": "module",
   "dependencies": {
+    "@sinclair/typebox": "0.34.49",
     "@microsoft/teams.api": "2.0.6",
     "@microsoft/teams.apps": "2.0.6",
     "express": "^5.2.1"
