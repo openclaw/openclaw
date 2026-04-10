@@ -37,6 +37,7 @@ function createClientHarness() {
 describe("shared Codex app-server client", () => {
   afterEach(() => {
     resetSharedCodexAppServerClientForTests();
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -58,5 +59,32 @@ describe("shared Codex app-server client", () => {
     );
     expect(harness.process.kill).toHaveBeenCalledTimes(1);
     startSpy.mockRestore();
+  });
+
+  it("closes and clears a shared app-server when initialize times out", async () => {
+    const first = createClientHarness();
+    const second = createClientHarness();
+    const startSpy = vi
+      .spyOn(CodexAppServerClient, "start")
+      .mockReturnValueOnce(first.client)
+      .mockReturnValueOnce(second.client);
+
+    await expect(listCodexAppServerModels({ timeoutMs: 5 })).rejects.toThrow(
+      "codex app-server initialize timed out",
+    );
+    expect(first.process.kill).toHaveBeenCalledTimes(1);
+
+    const secondList = listCodexAppServerModels({ timeoutMs: 1000 });
+    const initialize = JSON.parse(second.writes[0] ?? "{}") as { id?: number };
+    second.send({
+      id: initialize.id,
+      result: { userAgent: "openclaw/0.118.0 (macOS; test)" },
+    });
+    await vi.waitFor(() => expect(second.writes.length).toBeGreaterThanOrEqual(3));
+    const modelList = JSON.parse(second.writes[2] ?? "{}") as { id?: number };
+    second.send({ id: modelList.id, result: { data: [] } });
+
+    await expect(secondList).resolves.toEqual({ models: [] });
+    expect(startSpy).toHaveBeenCalledTimes(2);
   });
 });

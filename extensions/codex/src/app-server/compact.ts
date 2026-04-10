@@ -1,6 +1,5 @@
 import {
   embeddedAgentLog,
-  resolveEmbeddedAgentRuntime,
   type CompactEmbeddedPiSessionParams,
   type EmbeddedPiCompactResult,
 } from "openclaw/plugin-sdk/agent-harness";
@@ -34,21 +33,9 @@ export async function maybeCompactCodexAppServerSession(
   options: { pluginConfig?: unknown } = {},
 ): Promise<EmbeddedPiCompactResult | undefined> {
   const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: options.pluginConfig });
-  const runtime = resolveEmbeddedAgentRuntime();
-  const provider = params.provider?.trim().toLowerCase();
-  const shouldUseCodex =
-    runtime === "codex" ||
-    (runtime === "auto" && (provider === "codex" || provider === "openai-codex"));
-  if (!shouldUseCodex) {
-    return undefined;
-  }
-
   const binding = await readCodexAppServerBinding(params.sessionFile);
   if (!binding?.threadId) {
-    if (runtime === "codex") {
-      return { ok: false, compacted: false, reason: "no codex app-server thread binding" };
-    }
-    return undefined;
+    return { ok: false, compacted: false, reason: "no codex app-server thread binding" };
   }
 
   const client = await clientFactory(appServer.start);

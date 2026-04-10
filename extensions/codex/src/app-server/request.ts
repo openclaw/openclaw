@@ -12,8 +12,11 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
   const timeoutMs = params.timeoutMs ?? 60_000;
   return await withTimeout(
     (async () => {
-      const client = await getSharedCodexAppServerClient({ startOptions: params.startOptions });
-      return await client.request<T>(params.method, params.requestParams);
+      const client = await getSharedCodexAppServerClient({
+        startOptions: params.startOptions,
+        timeoutMs,
+      });
+      return await client.request<T>(params.method, params.requestParams, { timeoutMs });
     })(),
     timeoutMs,
     `codex app-server ${params.method} timed out`,

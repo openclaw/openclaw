@@ -4,6 +4,7 @@ import {
   resolveCodexAppServerRuntimeOptions,
   type CodexAppServerStartOptions,
 } from "./config.js";
+import { withTimeout } from "./timeout.js";
 
 type SharedCodexAppServerClientState = {
   client?: CodexAppServerClient;
@@ -23,6 +24,7 @@ function getSharedCodexAppServerClientState(): SharedCodexAppServerClientState {
 
 export async function getSharedCodexAppServerClient(options?: {
   startOptions?: CodexAppServerStartOptions;
+  timeoutMs?: number;
 }): Promise<CodexAppServerClient> {
   const state = getSharedCodexAppServerClientState();
   const startOptions = options?.startOptions ?? resolveCodexAppServerRuntimeOptions().start;
@@ -46,11 +48,13 @@ export async function getSharedCodexAppServerClient(options?: {
     }
   })();
   try {
-    return await state.promise;
+    return await withTimeout(
+      state.promise,
+      options?.timeoutMs ?? 0,
+      "codex app-server initialize timed out",
+    );
   } catch (error) {
-    state.client = undefined;
-    state.promise = undefined;
-    state.key = undefined;
+    clearSharedCodexAppServerClient();
     throw error;
   }
 }
