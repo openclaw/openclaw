@@ -376,21 +376,26 @@ function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
 }
 
 /**
- * Generate display text for a server_tool_use block.
- * All server_tool_use blocks are preserved as opaqueServerBlock for round-tripping.
+ * Returns true if the content block is a server_tool_use invocation marker
+ * (advisor, web_search, code_execution, etc.). These blocks are silently
+ * dropped during streaming — they are not stored in assistant content and
+ * not replayed to the API on subsequent turns.
  */
-function translateServerToolBlock(contentBlock: Record<string, unknown>): string | null {
-  if (contentBlock.type === "server_tool_use") {
-    const name = typeof contentBlock.name === "string" ? contentBlock.name : "unknown";
-    return `[Server tool: ${sanitizeTransportPayloadText(name)}]`;
-  }
-  return null;
+function isServerToolUseBlock(contentBlock: Record<string, unknown>): boolean {
+  return contentBlock.type === "server_tool_use";
 }
 
 /**
- * Generate display text for a *_tool_result block.
- * All tool result blocks are preserved as opaqueServerBlock for round-tripping —
- * the API expects them back verbatim in conversation history.
+ * Returns display text for a *_tool_result block, or null if the block is
+ * not a tool result. Readable results (plain text, errors, redacted markers)
+ * return a non-empty string that becomes a text block with serverToolDisplay
+ * set — visible to all renderers but skipped by convertAnthropicMessages on
+ * API replay. Untranslatable results return an empty string so the caller
+ * silently drops them (no prompt pollution).
+ *
+ * Encrypted content is NOT round-tripped to the API; the model's text response
+ * already incorporates the tool output, so follow-up turns have the context
+ * they need via normal assistant text.
  */
 function translateServerToolResultBlock(contentBlock: Record<string, unknown>): string | null {
   const blockType = contentBlock.type;
@@ -418,8 +423,8 @@ function translateServerToolResultBlock(contentBlock: Record<string, unknown>): 
     }
   }
   // Untranslatable result (e.g. web_search_tool_result with array content).
-  // Still round-tripped via opaqueServerBlock, but no display text —
-  // avoids polluting prompt history with useless placeholders.
+  // Empty string signals the caller to silently drop the block so we don't
+  // pollute prompt history with useless placeholders.
   return "";
 }
 
@@ -786,7 +791,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             // since the model's text response already incorporates the output.
             // Encrypted content round-tripping is deferred to a follow-up.
             const rawBlock = contentBlock as Record<string, unknown>;
-            if (translateServerToolBlock(rawBlock) !== null) {
+            if (isServerToolUseBlock(rawBlock)) {
               // server_tool_use: silently drop (invocation marker only)
               continue;
             }
@@ -959,6 +964,6 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
 
 export const __testing = {
   mapStopReason,
-  translateServerToolBlock,
+  isServerToolUseBlock,
   translateServerToolResultBlock,
 };

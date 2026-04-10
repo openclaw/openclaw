@@ -494,28 +494,29 @@ describe("mapStopReason resilience", () => {
 });
 
 describe("server-side tool block handling", () => {
-  let translateServerToolBlock: (block: Record<string, unknown>) => string | null;
+  let isServerToolUseBlock: (block: Record<string, unknown>) => boolean;
   let translateServerToolResultBlock: (block: Record<string, unknown>) => string | null;
 
   beforeAll(async () => {
     const mod = await import("./anthropic-transport-stream.js");
-    translateServerToolBlock = mod.__testing.translateServerToolBlock;
+    isServerToolUseBlock = mod.__testing.isServerToolUseBlock;
     translateServerToolResultBlock = mod.__testing.translateServerToolResultBlock;
   });
 
-  it("translates server_tool_use blocks to display text", () => {
-    const block = {
-      type: "server_tool_use",
-      id: "toolu_123",
-      name: "web_search",
-      input: { query: "test" },
-    };
-    expect(translateServerToolBlock(block)).toBe("[Server tool: web_search]");
+  it("identifies server_tool_use blocks", () => {
+    expect(
+      isServerToolUseBlock({
+        type: "server_tool_use",
+        id: "toolu_123",
+        name: "web_search",
+        input: { query: "test" },
+      }),
+    ).toBe(true);
   });
 
-  it("returns null for non-server_tool_use blocks", () => {
-    expect(translateServerToolBlock({ type: "text" })).toBeNull();
-    expect(translateServerToolBlock({ type: "tool_use" })).toBeNull();
+  it("returns false for non-server_tool_use blocks", () => {
+    expect(isServerToolUseBlock({ type: "text" })).toBe(false);
+    expect(isServerToolUseBlock({ type: "tool_use" })).toBe(false);
   });
 
   it("translates advisor_tool_result with advisor_result content", () => {
