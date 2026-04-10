@@ -5,6 +5,7 @@ import type {
   SpeechProviderOverrides,
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech";
+import { asBoolean } from "openclaw/plugin-sdk/speech";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -30,6 +31,7 @@ const OPENAI_SPEECH_RESPONSE_FORMATS = ["mp3", "opus", "wav"] as const;
 type OpenAiSpeechResponseFormat = (typeof OPENAI_SPEECH_RESPONSE_FORMATS)[number];
 
 type OpenAITtsProviderConfig = {
+  enabled: boolean;
   apiKey?: string;
   baseUrl: string;
   model: string;
@@ -101,6 +103,7 @@ function normalizeOpenAIProviderConfig(
 ): OpenAITtsProviderConfig {
   const raw = resolveOpenAIProviderConfigRecord(rawConfig);
   return {
+    enabled: asBoolean(raw?.enabled) ?? true,
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
       path: "messages.tts.providers.openai.apiKey",
@@ -121,6 +124,7 @@ function normalizeOpenAIProviderConfig(
 function readOpenAIProviderConfig(config: SpeechProviderConfig): OpenAITtsProviderConfig {
   const normalized = normalizeOpenAIProviderConfig({});
   return {
+    enabled: asBoolean(config.enabled) ?? normalized.enabled,
     apiKey: trimToUndefined(config.apiKey) ?? normalized.apiKey,
     baseUrl: trimToUndefined(config.baseUrl) ?? normalized.baseUrl,
     model: trimToUndefined(config.model) ?? normalized.model,
@@ -227,8 +231,10 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
       ...(asFiniteNumber(params.speed) == null ? {} : { speed: asFiniteNumber(params.speed) }),
     }),
     listVoices: async () => OPENAI_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
-    isConfigured: ({ providerConfig }) =>
-      Boolean(readOpenAIProviderConfig(providerConfig).apiKey || process.env.OPENAI_API_KEY),
+    isConfigured: ({ providerConfig }) => {
+      const config = readOpenAIProviderConfig(providerConfig);
+      return config.enabled && Boolean(config.apiKey || process.env.OPENAI_API_KEY);
+    },
     synthesize: async (req) => {
       const config = readOpenAIProviderConfig(req.providerConfig);
       const overrides = readOpenAIOverrides(req.providerOverrides);

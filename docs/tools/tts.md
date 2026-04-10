@@ -132,6 +132,10 @@ Full schema is in [Gateway configuration](/gateway/configuration).
 
 ### Mistral with shared provider auth
 
+Reuses the Mistral API key already configured for models. OpenAI TTS is
+disabled so it does not appear in the fallback order even though
+`OPENAI_API_KEY` is set.
+
 ```json5
 {
   messages: {
@@ -142,6 +146,9 @@ Full schema is in [Gateway configuration](/gateway/configuration).
         mistral: {
           model: "voxtral-mini-tts-2603",
           voice: "gb_oliver_excited",
+        },
+        openai: {
+          enabled: false,
         },
       },
     },
@@ -297,6 +304,7 @@ Then run:
 - `providers.mistral.baseUrl`: override Mistral TTS endpoint (default `https://api.mistral.ai/v1`, env: `MISTRAL_TTS_BASE_URL`; also inherits `models.providers.mistral.baseUrl` when set).
 - `providers.mistral.model`: Voxtral TTS model (default `voxtral-mini-tts-2603`).
 - `providers.mistral.voice`: Voxtral voice name (e.g. `gb_oliver_excited`). See [Voxtral TTS docs](https://docs.mistral.ai/capabilities/audio/text_to_speech) for available voices.
+- `providers.openai.enabled`: allow OpenAI TTS usage (default `true`). Set to `false` to exclude OpenAI from TTS and fallback while keeping the API key available for models.
 - `providers.microsoft.enabled`: allow Microsoft speech usage (default `true`; no API key).
 - `providers.microsoft.voice`: Microsoft neural voice name (e.g. `en-US-MichelleNeural`).
 - `providers.microsoft.lang`: language code (e.g. `en-US`).

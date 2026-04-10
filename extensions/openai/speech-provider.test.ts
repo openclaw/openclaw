@@ -45,6 +45,7 @@ describe("buildOpenAISpeechProvider", () => {
     });
 
     expect(resolved).toEqual({
+      enabled: true,
       apiKey: "sk-test",
       baseUrl: "https://example.com/v1",
       model: "tts-1",
@@ -191,5 +192,16 @@ describe("buildOpenAISpeechProvider", () => {
     expect(result.outputFormat).toBe("wav");
     expect(result.fileExtension).toBe(".wav");
     expect(result.voiceCompatible).toBe(false);
+  });
+
+  it("reports not configured when enabled is false, even with an API key", () => {
+    const provider = buildOpenAISpeechProvider();
+    expect(
+      provider.isConfigured({
+        cfg: {} as never,
+        providerConfig: { apiKey: "sk-test", enabled: false },
+        timeoutMs: 5_000,
+      }),
+    ).toBe(false);
   });
 });
