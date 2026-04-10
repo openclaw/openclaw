@@ -38,6 +38,7 @@ describe("avatar policy", () => {
     const root = path.resolve("/tmp/root");
     expect(isPathWithinRoot(root, root)).toBe(true);
     expect(isPathWithinRoot(root, path.resolve("/tmp/root/avatars/a.png"))).toBe(true);
+    expect(isPathWithinRoot(root, path.resolve("/tmp/root/..agents.md"))).toBe(true);
     expect(isPathWithinRoot(root, path.resolve("/tmp/root/../outside.png"))).toBe(false);
     expect(isPathWithinRoot(root, path.resolve("/tmp/root-sibling/avatar.png"))).toBe(false);
   });
