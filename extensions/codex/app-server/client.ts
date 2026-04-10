@@ -336,9 +336,6 @@ export function defaultServerRequestResponse(
   ) {
     return { decision: "decline" };
   }
-  if (request.method === "execCommandApproval" || request.method === "applyPatchApproval") {
-    return { decision: "denied" };
-  }
   if (request.method === "item/permissions/requestApproval") {
     return { permissions: {}, scope: "turn" };
   }

@@ -161,9 +161,6 @@ export function buildApprovalResponse(
     }
     return { permissions: {}, scope: "turn" };
   }
-  if (method === "execCommandApproval" || method === "applyPatchApproval") {
-    return { decision: legacyReviewDecision(outcome) };
-  }
   return {
     decision: outcome === "approved-once" || outcome === "approved-session" ? "accept" : "decline",
   };
@@ -288,16 +285,6 @@ function fileChangeApprovalDecision(outcome: AppServerApprovalOutcome): JsonValu
     return "decline";
   }
   return outcome === "approved-session" ? "acceptForSession" : "accept";
-}
-
-function legacyReviewDecision(outcome: AppServerApprovalOutcome): JsonValue {
-  if (outcome === "cancelled") {
-    return "abort";
-  }
-  if (outcome === "denied" || outcome === "unavailable") {
-    return "denied";
-  }
-  return outcome === "approved-session" ? "approved_for_session" : "approved";
 }
 
 function requestedPermissions(requestParams: JsonObject | undefined): JsonObject {

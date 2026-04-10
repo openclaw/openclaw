@@ -107,11 +107,17 @@ describe("Codex app-server approval bridge", () => {
   });
 
   it("maps app-server approval response families separately", () => {
-    expect(buildApprovalResponse("execCommandApproval", undefined, "approved-session")).toEqual({
-      decision: "approved_for_session",
+    expect(
+      buildApprovalResponse(
+        "item/commandExecution/requestApproval",
+        { availableDecisions: ["accept"] },
+        "approved-session",
+      ),
+    ).toEqual({
+      decision: "accept",
     });
-    expect(buildApprovalResponse("applyPatchApproval", undefined, "denied")).toEqual({
-      decision: "denied",
+    expect(buildApprovalResponse("item/fileChange/requestApproval", undefined, "denied")).toEqual({
+      decision: "decline",
     });
     expect(
       buildApprovalResponse(
