@@ -1096,7 +1096,7 @@ Auto-join example:
     discord: {
       voice: {
         enabled: true,
-        model: "openai-codex/gpt-5.3-codex-spark",
+        model: "openai/gpt-5.4",
         autoJoin: [
           {
             guildId: "123456789012345678",
@@ -1142,7 +1142,7 @@ If you want to mirror a working baseline quickly, use the values below as a star
     discord: {
       voice: {
         enabled: true,
-        model: "openai-codex/gpt-5.3-codex-spark",
+        model: "openai/gpt-5.4",
         daveEncryption: true,
         decryptionFailureTolerance: 24,
         tts: {
@@ -1159,8 +1159,8 @@ If you want to mirror a working baseline quickly, use the values below as a star
 
 Required env keys for this baseline:
 
-- `OPENAI_API_KEY` (transcribe + OpenAI responses used by `openai/*` routes)
-- Codex OAuth profile auth (for `openai-codex/*` route)
+- `OPENAI_API_KEY` for the `openai/*` path (`tools.media.audio` and `openai` TTS path)
+- Optional: Codex OAuth profile auth if you switch `channels.discord.voice.model` to `openai-codex/*`.
 
 
 
@@ -1194,7 +1194,6 @@ Required credentials by component:
 - STT model path (`tools.media.audio`): provider-specific auth (for OpenAI audio model, `OPENAI_API_KEY`/`openai` provider config or profile).
 - TTS model path (`messages.tts` / `voice.tts`): provider-specific auth (`ELEVENLABS_API_KEY` or `OPENAI_API_KEY`, depending on provider).
 
-This is also a maintenance note from the PR context: Discord voice runtime behavior in prior versions could leave sessions unstable (join/drop/no transcript/reply path), and this change set is intended as a repair-path fix.
 
 ## Voice messages
 
