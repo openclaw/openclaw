@@ -242,6 +242,16 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it("does not misdiagnose generic Codex permission denials as missing-scope failures", () => {
+    const msg = makeAssistantError(
+      '403 {"type":"error","error":{"type":"permission_error","message":"You have insufficient permissions for this operation"}}',
+    );
+    const formatted = formatAssistantErrorText(msg, { provider: "openai-codex" });
+
+    expect(formatted).not.toContain("required OpenAI Codex scopes");
+    expect(formatted).not.toContain("Re-run OpenAI/Codex login");
+  });
+
   it("returns an HTML-403 auth message for HTML provider auth failures", () => {
     const msg = makeAssistantError("403 <!DOCTYPE html><html><body>Access denied</body></html>");
     expect(formatAssistantErrorText(msg)).toBe(

@@ -324,6 +324,16 @@ describe("failover-error", () => {
     ).toEqual({ kind: "context_overflow" });
   });
 
+  it("requires explicit scope signals before classifying openai-codex auth_scope", () => {
+    expect(
+      classifyFailoverSignal({
+        status: 403,
+        provider: "openai-codex",
+        message: "OpenAI Codex returned insufficient permissions for this workspace",
+      }),
+    ).toEqual({ kind: "reason", reason: "auth" });
+  });
+
   it("treats HTTP 422 as format error", () => {
     expect(
       resolveFailoverReasonFromError({
