@@ -111,6 +111,7 @@ type DispatchCronDeliveryParams = {
   deliveryRequested: boolean;
   skipHeartbeatDelivery: boolean;
   skipMessagingToolDelivery: boolean;
+  skipTransientErrorDelivery: boolean;
   deliveryBestEffort: boolean;
   deliveryPayloadHasStructuredContent: boolean;
   deliveryPayloads: ReplyPayload[];
@@ -377,7 +378,8 @@ export async function dispatchCronDelivery(
   if (
     params.deliveryRequested &&
     !params.skipHeartbeatDelivery &&
-    !params.skipMessagingToolDelivery
+    !params.skipMessagingToolDelivery &&
+    !params.skipTransientErrorDelivery
   ) {
     if (!params.resolvedDelivery.ok) {
       if (!params.deliveryBestEffort) {

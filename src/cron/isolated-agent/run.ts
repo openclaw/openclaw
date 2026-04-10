@@ -653,6 +653,11 @@ export async function runCronIsolatedAgentTurn(params: {
   // Skip delivery for heartbeat-only responses (HEARTBEAT_OK with no real content).
   const ackMaxChars = resolveHeartbeatAckMaxChars(agentCfg);
   const skipHeartbeatDelivery = deliveryRequested && isHeartbeatOnlyResponse(payloads, ackMaxChars);
+  // Skip delivery for *repeated* cron errors to avoid spamming the user.
+  // First failure is delivered normally; subsequent consecutive failures are
+  // suppressed until a successful run resets the state. (TES-908)
+  const previousRunAlsoFailed = params.job.state?.lastStatus === "error";
+  const skipTransientErrorDelivery = hasFatalErrorPayload && previousRunAlsoFailed;
   const skipMessagingToolDelivery =
     deliveryRequested &&
     runResult.didSendViaMessagingTool === true &&
@@ -679,6 +684,7 @@ export async function runCronIsolatedAgentTurn(params: {
     deliveryRequested,
     skipHeartbeatDelivery,
     skipMessagingToolDelivery,
+    skipTransientErrorDelivery,
     deliveryBestEffort,
     deliveryPayloadHasStructuredContent,
     deliveryPayloads,
