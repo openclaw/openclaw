@@ -18,6 +18,7 @@ import { openrouterMediaUnderstandingProvider } from "./media-understanding-prov
 import { buildOpenrouterMusicGenerationProvider } from "./music-generation-provider.js";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildOpenrouterProvider } from "./provider-catalog.js";
+import { buildOpenrouterSpeechProvider } from "./speech-provider.js";
 import { wrapOpenRouterProviderStream } from "./stream.js";
 import { buildOpenrouterVideoGenerationProvider } from "./video-generation-provider.js";
 
@@ -118,5 +119,6 @@ export default definePluginEntry({
     api.registerImageGenerationProvider(buildOpenrouterImageGenerationProvider());
     api.registerVideoGenerationProvider(buildOpenrouterVideoGenerationProvider());
     api.registerMusicGenerationProvider(buildOpenrouterMusicGenerationProvider());
+    api.registerSpeechProvider(buildOpenrouterSpeechProvider());
   },
 });

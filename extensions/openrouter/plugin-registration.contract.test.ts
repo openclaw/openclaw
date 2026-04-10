@@ -7,6 +7,7 @@ describePluginRegistrationContract({
   imageGenerationProviderIds: ["openrouter"],
   videoGenerationProviderIds: ["openrouter"],
   musicGenerationProviderIds: ["openrouter"],
+  speechProviderIds: ["openrouter"],
   requireGenerateImage: true,
   requireGenerateVideo: true,
 });

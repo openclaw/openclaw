@@ -68,8 +68,9 @@ describe("openrouter music generation provider", () => {
     const provider = buildOpenrouterMusicGenerationProvider();
     expect(provider.id).toBe("openrouter");
     expect(provider.label).toBe("OpenRouter");
-    expect(provider.defaultModel).toBe("openai/gpt-4o-audio-preview");
-    expect(provider.models).toContain("openai/gpt-4o-audio-preview");
+    expect(provider.defaultModel).toBe("google/lyria-3-clip-preview");
+    expect(provider.models).toContain("google/lyria-3-clip-preview");
+    expect(provider.models).toContain("google/lyria-3-pro-preview");
     expect(provider.capabilities.generate?.maxTracks).toBe(1);
     expect(provider.capabilities.generate?.supportsLyrics).toBe(true);
     expect(provider.capabilities.generate?.supportsInstrumental).toBe(true);
@@ -94,7 +95,7 @@ describe("openrouter music generation provider", () => {
     const provider = buildOpenrouterMusicGenerationProvider();
     const result = await provider.generateMusic({
       provider: "openrouter",
-      model: "openai/gpt-4o-audio-preview",
+      model: "google/lyria-3-clip-preview",
       prompt: "Create a jazz melody",
       cfg: {},
     });
@@ -109,7 +110,7 @@ describe("openrouter music generation provider", () => {
     ]);
     expect(result.tracks[0]?.buffer).toEqual(expectedBuffer);
     expect(result.lyrics).toEqual(["Hello world"]);
-    expect(result.model).toBe("openai/gpt-4o-audio-preview");
+    expect(result.model).toBe("google/lyria-3-clip-preview");
 
     expect(fetchWithTimeoutMock).toHaveBeenCalledWith(
       "https://openrouter.ai/api/v1/chat/completions",
@@ -134,7 +135,7 @@ describe("openrouter music generation provider", () => {
     const provider = buildOpenrouterMusicGenerationProvider();
     await provider.generateMusic({
       provider: "openrouter",
-      model: "openai/gpt-4o-audio-preview",
+      model: "google/lyria-3-clip-preview",
       prompt: "A ballad",
       cfg: {},
       lyrics: "La la la",
@@ -160,7 +161,7 @@ describe("openrouter music generation provider", () => {
     const provider = buildOpenrouterMusicGenerationProvider();
     const result = await provider.generateMusic({
       provider: "openrouter",
-      model: "openai/gpt-4o-audio-preview",
+      model: "google/lyria-3-clip-preview",
       prompt: "A drumbeat",
       cfg: {},
       format: "wav",
@@ -188,7 +189,7 @@ describe("openrouter music generation provider", () => {
     await expect(
       provider.generateMusic({
         provider: "openrouter",
-        model: "openai/gpt-4o-audio-preview",
+        model: "google/lyria-3-clip-preview",
         prompt: "no audio",
         cfg: {},
       }),
@@ -202,7 +203,7 @@ describe("openrouter music generation provider", () => {
     await expect(
       provider.generateMusic({
         provider: "openrouter",
-        model: "openai/gpt-4o-audio-preview",
+        model: "google/lyria-3-clip-preview",
         prompt: "test",
         cfg: {},
       }),

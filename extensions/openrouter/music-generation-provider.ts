@@ -12,9 +12,13 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { OPENROUTER_BASE_URL, resolveConfiguredBaseUrl } from "./openrouter-config.js";
+import { collectStreamedAudio } from "./streaming-audio.js";
 
-const DEFAULT_OPENROUTER_MUSIC_MODEL = "openai/gpt-4o-audio-preview";
-const OPENROUTER_MUSIC_MODELS = ["openai/gpt-4o-audio-preview"] as const;
+const DEFAULT_OPENROUTER_MUSIC_MODEL = "google/lyria-3-clip-preview";
+const OPENROUTER_MUSIC_MODELS = [
+  "google/lyria-3-clip-preview",
+  "google/lyria-3-pro-preview",
+] as const;
 const DEFAULT_TIMEOUT_MS = 120_000;
 
 function buildMusicPrompt(req: MusicGenerationRequest): string {
@@ -27,95 +31,6 @@ function buildMusicPrompt(req: MusicGenerationRequest): string {
     parts.push(`Lyrics:\n${lyrics}`);
   }
   return parts.join("\n\n");
-}
-
-function resolveAudioFormat(req: MusicGenerationRequest): string {
-  if (req.format === "wav") {
-    return "wav";
-  }
-  return "mp3";
-}
-
-function resolveOutputMimeType(format: string): string {
-  switch (format) {
-    case "wav":
-      return "audio/wav";
-    default:
-      return "audio/mpeg";
-  }
-}
-
-type SseAudioChunk = {
-  choices?: Array<{
-    delta?: {
-      audio?: {
-        data?: string;
-        transcript?: string;
-      };
-    };
-  }>;
-};
-
-async function collectStreamedAudio(
-  response: Response,
-): Promise<{ audioBuffer: Buffer; transcript: string }> {
-  // Decode each base64 chunk individually to avoid corruption from padding chars mid-string.
-  const audioBuffers: Buffer[] = [];
-  const transcriptParts: string[] = [];
-
-  const body = response.body;
-  if (!body) {
-    throw new Error("OpenRouter audio response missing stream body");
-  }
-
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
-    }
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith("data:")) {
-        continue;
-      }
-      const payload = trimmed.slice(5).trim();
-      if (payload === "[DONE]") {
-        continue;
-      }
-      let parsed: SseAudioChunk;
-      try {
-        parsed = JSON.parse(payload) as SseAudioChunk;
-      } catch {
-        continue;
-      }
-      const audioDelta = parsed.choices?.[0]?.delta?.audio;
-      if (!audioDelta) {
-        continue;
-      }
-      const data = audioDelta.data;
-      if (typeof data === "string" && data.length > 0) {
-        audioBuffers.push(Buffer.from(data, "base64"));
-      }
-      const transcript = audioDelta.transcript;
-      if (typeof transcript === "string" && transcript.length > 0) {
-        transcriptParts.push(transcript);
-      }
-    }
-  }
-
-  return {
-    audioBuffer: Buffer.concat(audioBuffers),
-    transcript: transcriptParts.join(""),
-  };
 }
 
 export function buildOpenrouterMusicGenerationProvider(): MusicGenerationProvider {
@@ -165,7 +80,7 @@ export function buildOpenrouterMusicGenerationProvider(): MusicGenerationProvide
       });
 
       const model = normalizeOptionalString(req.model) ?? DEFAULT_OPENROUTER_MUSIC_MODEL;
-      const audioFormat = resolveAudioFormat(req);
+      const audioFormat = req.format === "wav" ? "wav" : "mp3";
 
       const requestHeaders = new Headers(headers);
       requestHeaders.set("Content-Type", "application/json");
@@ -178,7 +93,7 @@ export function buildOpenrouterMusicGenerationProvider(): MusicGenerationProvide
             model,
             messages: [{ role: "user", content: buildMusicPrompt(req) }],
             modalities: ["text", "audio"],
-            audio: { voice: "alloy", format: audioFormat },
+            audio: { format: audioFormat },
             stream: true,
           }),
         },
@@ -192,12 +107,11 @@ export function buildOpenrouterMusicGenerationProvider(): MusicGenerationProvide
         throw new Error("OpenRouter music generation response missing audio data");
       }
 
-      const mimeType = resolveOutputMimeType(audioFormat);
-      const extension = audioFormat === "wav" ? "wav" : "mp3";
+      const mimeType = audioFormat === "wav" ? "audio/wav" : "audio/mpeg";
       const track: GeneratedMusicAsset = {
         buffer: audioBuffer,
         mimeType,
-        fileName: `track-1.${extension}`,
+        fileName: `track-1.${audioFormat}`,
       };
 
       return {
