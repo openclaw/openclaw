@@ -472,25 +472,45 @@ function formatLaunchctlResultDetail(res: {
   return (res.stderr || res.stdout).trim();
 }
 
-async function isLaunchAgentProcessRunning(serviceTarget: string): Promise<boolean> {
+type LaunchAgentProbeResult =
+  | { state: "running" }
+  | { state: "stopped" }
+  | { state: "not-loaded" }
+  | { state: "unknown"; detail?: string };
+
+async function probeLaunchAgentState(serviceTarget: string): Promise<LaunchAgentProbeResult> {
   const probe = await execLaunchctl(["print", serviceTarget]);
   if (probe.code !== 0) {
-    return false;
+    if (isLaunchctlNotLoaded(probe)) {
+      return { state: "not-loaded" };
+    }
+    return {
+      state: "unknown",
+      detail: formatLaunchctlResultDetail(probe) || undefined,
+    };
   }
   const runtime = parseLaunchctlPrint(probe.stdout || probe.stderr || "");
-  return typeof runtime.pid === "number" && runtime.pid > 1;
+  if (typeof runtime.pid === "number" && runtime.pid > 1) {
+    return { state: "running" };
+  }
+  return { state: "stopped" };
 }
 
-async function waitForLaunchAgentStopped(serviceTarget: string): Promise<boolean> {
+async function waitForLaunchAgentStopped(serviceTarget: string): Promise<LaunchAgentProbeResult> {
+  let lastUnknown: LaunchAgentProbeResult | null = null;
   for (let attempt = 0; attempt < 10; attempt += 1) {
-    if (!(await isLaunchAgentProcessRunning(serviceTarget))) {
-      return true;
+    const probe = await probeLaunchAgentState(serviceTarget);
+    if (probe.state === "stopped" || probe.state === "not-loaded") {
+      return probe;
+    }
+    if (probe.state === "unknown") {
+      lastUnknown = probe;
     }
     await new Promise((resolve) => {
       setTimeout(resolve, 100);
     });
   }
-  return false;
+  return lastUnknown ?? { state: "running" };
 }
 
 export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
@@ -523,16 +543,23 @@ export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs
     throw new Error(`launchctl stop failed: ${formatLaunchctlResultDetail(stop)}`);
   }
 
-  if (!(await waitForLaunchAgentStopped(serviceTarget))) {
+  const stopState = await waitForLaunchAgentStopped(serviceTarget);
+  if (stopState.state !== "stopped" && stopState.state !== "not-loaded") {
     const bootout = await execLaunchctl(["bootout", serviceTarget]);
     if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
+      const reason =
+        stopState.state === "unknown"
+          ? `launchctl print could not confirm stop: ${stopState.detail ?? "unknown error"}`
+          : "launchctl stop left the service running";
       throw new Error(
-        `launchctl stop left the service running and launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`,
+        `${reason}; launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`,
       );
     }
-    stdout.write(
-      `${formatLine("Warning", "launchctl stop did not fully stop the service; used bootout fallback and left service unloaded")}\n`,
-    );
+    const warning =
+      stopState.state === "unknown"
+        ? `launchctl print could not confirm stop; used bootout fallback and left service unloaded: ${stopState.detail ?? "unknown error"}`
+        : "launchctl stop did not fully stop the service; used bootout fallback and left service unloaded";
+    stdout.write(`${formatLine("Warning", warning)}\n`);
     stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
     return;
   }
