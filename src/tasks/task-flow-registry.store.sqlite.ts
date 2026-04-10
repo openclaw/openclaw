@@ -227,6 +227,11 @@ function hasFlowRunsColumn(db: DatabaseSync, columnName: string): boolean {
   return rows.some((row) => row.name === columnName);
 }
 
+// NOTE: Must only be called from ensureSchema() after all ALTER TABLE
+// migration steps have run. This function's SELECT relies on every
+// column (sync_mode, shape, controller_id, revision, blocked_task_id,
+// blocked_summary, state_json, wait_json, cancel_requested_at) being
+// present on the flow_runs table before the rebuild begins.
 function rebuildLegacyFlowRunsTable(db: DatabaseSync) {
   db.exec(`BEGIN IMMEDIATE`);
   try {
@@ -287,10 +292,6 @@ function rebuildLegacyFlowRunsTable(db: DatabaseSync) {
         requester_origin_json,
         CASE
           WHEN controller_id IS NOT NULL AND trim(controller_id) <> '' THEN controller_id
-          WHEN COALESCE(NULLIF(sync_mode, ''), CASE
-            WHEN shape = 'single_task' THEN 'task_mirrored'
-            ELSE 'managed'
-          END) = 'managed' THEN 'core/legacy-restored'
           ELSE NULL
         END,
         COALESCE(revision, 0),
