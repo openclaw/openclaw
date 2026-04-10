@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "../infra/errors.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 
 export type PluginCommandRunResult = {
@@ -13,6 +14,7 @@ export type PluginCommandRunOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
+/** Run a plugin-managed command with timeout handling and normalized stdout/stderr results. */
 export async function runPluginCommandWithTimeout(
   options: PluginCommandRunOptions,
 ): Promise<PluginCommandRunResult> {
@@ -39,7 +41,7 @@ export async function runPluginCommandWithTimeout(
     return {
       code: 1,
       stdout: "",
-      stderr: error instanceof Error ? error.message : String(error),
+      stderr: formatErrorMessage(error),
     };
   }
 }

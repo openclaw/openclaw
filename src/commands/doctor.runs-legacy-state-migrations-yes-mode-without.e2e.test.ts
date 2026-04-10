@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   arrangeLegacyStateMigrationTest,
   confirm,
@@ -14,9 +14,11 @@ let doctorCommand: typeof import("./doctor.js").doctorCommand;
 let healthCommand: typeof import("./health.js").healthCommand;
 
 describe("doctor command", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ doctorCommand } = await import("./doctor.js"));
     ({ healthCommand } = await import("./health.js"));
+    vi.clearAllMocks();
   });
 
   it("runs legacy state migrations in yes mode without prompting", async () => {

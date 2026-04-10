@@ -2,13 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { installSkill } from "./skills-install.js";
+import { captureEnv } from "../test-utils/env.js";
 import {
   hasBinaryMock,
   runCommandWithTimeoutMock,
   scanDirectoryWithSummaryMock,
 } from "./skills-install.test-mocks.js";
-import { buildWorkspaceSkillStatus } from "./skills-status.js";
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
@@ -18,13 +17,17 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: vi.fn(),
 }));
 
-vi.mock("../security/skill-scanner.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../security/skill-scanner.js")>()),
+vi.mock("../security/skill-scanner.js", async () => ({
+  ...(await vi.importActual<typeof import("../security/skill-scanner.js")>(
+    "../security/skill-scanner.js",
+  )),
   scanDirectoryWithSummary: (...args: unknown[]) => scanDirectoryWithSummaryMock(...args),
 }));
 
-vi.mock("../shared/config-eval.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../shared/config-eval.js")>();
+vi.mock("../shared/config-eval.js", async () => {
+  const actual = await vi.importActual<typeof import("../shared/config-eval.js")>(
+    "../shared/config-eval.js",
+  );
   return {
     ...actual,
     hasBinary: (bin: string) => hasBinaryMock(bin),
@@ -34,6 +37,14 @@ vi.mock("../shared/config-eval.js", async (importOriginal) => {
 vi.mock("../infra/brew.js", () => ({
   resolveBrewExecutable: () => undefined,
 }));
+
+let installSkill: typeof import("./skills-install.js").installSkill;
+let buildWorkspaceSkillStatus: typeof import("./skills-status.js").buildWorkspaceSkillStatus;
+
+async function loadSkillsInstallModulesForTest() {
+  ({ installSkill } = await import("./skills-install.js"));
+  ({ buildWorkspaceSkillStatus } = await import("./skills-status.js"));
+}
 
 async function writeSkillWithInstallers(
   workspaceDir: string,
@@ -94,9 +105,10 @@ describe("skills-install fallback edge cases", () => {
     await writeSkillWithInstaller(workspaceDir, "py-tool", "uv", {
       package: "example-package",
     });
+    await loadSkillsInstallModulesForTest();
   });
 
-  beforeEach(async () => {
+  beforeEach(() => {
     runCommandWithTimeoutMock.mockClear();
     scanDirectoryWithSummaryMock.mockClear();
     hasBinaryMock.mockClear();
@@ -191,5 +203,53 @@ describe("skills-install fallback edge cases", () => {
 
     // Verify NO curl command was attempted (no auto-install)
     expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves system uv/python env vars when running uv installs", async () => {
+    mockAvailableBinaries(["uv"]);
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      code: 0,
+      stdout: "ok",
+      stderr: "",
+      signal: null,
+      killed: false,
+    });
+
+    const envSnapshot = captureEnv([
+      "UV_PYTHON",
+      "UV_INDEX_URL",
+      "PIP_INDEX_URL",
+      "PYTHONPATH",
+      "VIRTUAL_ENV",
+    ]);
+    try {
+      process.env.UV_PYTHON = "/tmp/attacker-python";
+      process.env.UV_INDEX_URL = "https://example.invalid/simple";
+      process.env.PIP_INDEX_URL = "https://example.invalid/pip";
+      process.env.PYTHONPATH = "/tmp/attacker-pythonpath";
+      process.env.VIRTUAL_ENV = "/tmp/attacker-venv";
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "py-tool",
+        installId: "deps",
+        timeoutMs: 10_000,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
+        ["uv", "tool", "install", "example-package"],
+        expect.objectContaining({
+          timeoutMs: 10_000,
+        }),
+      );
+      const firstCall = runCommandWithTimeoutMock.mock.calls[0] as
+        | [string[], { timeoutMs?: number; env?: Record<string, string | undefined> }]
+        | undefined;
+      const envArg = firstCall?.[1]?.env;
+      expect(envArg).toBeUndefined();
+    } finally {
+      envSnapshot.restore();
+    }
   });
 });

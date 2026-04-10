@@ -1,9 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { BROWSER_BRIDGES } from "./browser-bridges.js";
-import { ensureSandboxBrowser } from "./browser.js";
-import { resetNoVncObserverTokensForTests } from "./novnc-auth.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { collectDockerFlagValues, findDockerArgsCall } from "./test-args.js";
 import type { SandboxConfig } from "./types.js";
+import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
+
+let BROWSER_BRIDGES: Map<string, unknown>;
+let ensureSandboxBrowser: typeof import("./browser.js").ensureSandboxBrowser;
+let resetNoVncObserverTokensForTests: typeof import("./novnc-auth.js").resetNoVncObserverTokensForTests;
 
 const dockerMocks = vi.hoisted(() => ({
   dockerContainerState: vi.fn(),
@@ -23,8 +25,8 @@ const bridgeMocks = vi.hoisted(() => ({
   stopBrowserBridgeServer: vi.fn(),
 }));
 
-vi.mock("./docker.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./docker.js")>();
+vi.mock("./docker.js", async () => {
+  const actual = await vi.importActual<typeof import("./docker.js")>("./docker.js");
   return {
     ...actual,
     dockerContainerState: dockerMocks.dockerContainerState,
@@ -40,14 +42,22 @@ vi.mock("./registry.js", () => ({
   updateBrowserRegistry: registryMocks.updateBrowserRegistry,
 }));
 
-vi.mock("../../browser/bridge-server.js", () => ({
+vi.mock("../../plugin-sdk/browser-bridge.js", () => ({
   startBrowserBridgeServer: bridgeMocks.startBrowserBridgeServer,
   stopBrowserBridgeServer: bridgeMocks.stopBrowserBridgeServer,
 }));
 
+async function loadFreshBrowserModulesForTest() {
+  vi.resetModules();
+  ({ BROWSER_BRIDGES } = await import("./browser-bridges.js"));
+  ({ ensureSandboxBrowser } = await import("./browser.js"));
+  ({ resetNoVncObserverTokensForTests } = await import("./novnc-auth.js"));
+}
+
 function buildConfig(enableNoVnc: boolean): SandboxConfig {
   return {
     mode: "all",
+    backend: "docker",
     scope: "session",
     workspaceAccess: "none",
     workspaceRoot: "/tmp/openclaw-sandboxes",
@@ -60,6 +70,12 @@ function buildConfig(enableNoVnc: boolean): SandboxConfig {
       network: "none",
       capDrop: ["ALL"],
       env: { LANG: "C.UTF-8" },
+    },
+    ssh: {
+      command: "ssh",
+      workspaceRoot: "/tmp/openclaw-sandboxes",
+      strictHostKeyChecking: true,
+      updateHostKeys: true,
     },
     browser: {
       enabled: true,
@@ -87,7 +103,12 @@ function buildConfig(enableNoVnc: boolean): SandboxConfig {
 }
 
 describe("ensureSandboxBrowser create args", () => {
+  beforeAll(async () => {
+    await loadFreshBrowserModulesForTest();
+  });
+
   beforeEach(() => {
+    vi.restoreAllMocks();
     BROWSER_BRIDGES.clear();
     resetNoVncObserverTokensForTests();
     dockerMocks.dockerContainerState.mockClear();
@@ -152,7 +173,7 @@ describe("ensureSandboxBrowser create args", () => {
       entry.startsWith("OPENCLAW_BROWSER_NOVNC_PASSWORD="),
     );
     expect(passwordEntry).toMatch(/^OPENCLAW_BROWSER_NOVNC_PASSWORD=[A-Za-z0-9]{8}$/);
-    expect(result?.noVncUrl).toMatch(/^http:\/\/127\.0\.0\.1:19000\/sandbox\/novnc\?token=/);
+    expect(result?.noVncUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/sandbox\/novnc\?token=/);
     expect(result?.noVncUrl).not.toContain("password=");
   });
 
@@ -186,7 +207,7 @@ describe("ensureSandboxBrowser create args", () => {
     const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
 
     expect(createArgs).toBeDefined();
-    expect(createArgs).toContain("/tmp/workspace:/workspace:ro");
+    expect(createArgs).toContain("/tmp/workspace:/workspace:ro,z");
   });
 
   it("keeps the main workspace writable when workspaceAccess is rw", async () => {
@@ -203,7 +224,55 @@ describe("ensureSandboxBrowser create args", () => {
     const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
 
     expect(createArgs).toBeDefined();
-    expect(createArgs).toContain("/tmp/workspace:/workspace");
-    expect(createArgs).not.toContain("/tmp/workspace:/workspace:ro");
+    expect(createArgs).toContain("/tmp/workspace:/workspace:z");
+    expect(createArgs).not.toContain("/tmp/workspace:/workspace:ro,z");
+  });
+
+  it("stamps the mount format version label on browser containers", async () => {
+    await ensureSandboxBrowser({
+      scopeKey: "session:test",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      cfg: buildConfig(false),
+    });
+
+    const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
+    const labels = collectDockerFlagValues(createArgs ?? [], "--label");
+    expect(labels).toContain(`openclaw.mountFormatVersion=${SANDBOX_MOUNT_FORMAT_VERSION}`);
+  });
+
+  it("force-removes the browser container when CDP never becomes reachable", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("timeout"));
+    bridgeMocks.startBrowserBridgeServer.mockImplementationOnce(async (params) => {
+      await params.onEnsureAttachTarget?.({});
+      return {
+        server: {} as never,
+        port: 19000,
+        baseUrl: "http://127.0.0.1:19000",
+        state: {
+          server: null,
+          port: 19000,
+          resolved: { profiles: {} },
+          profiles: new Map(),
+        },
+      };
+    });
+
+    const cfg = buildConfig(false);
+    cfg.browser.autoStartTimeoutMs = 1;
+
+    await expect(
+      ensureSandboxBrowser({
+        scopeKey: "session:test",
+        workspaceDir: "/tmp/workspace",
+        agentWorkspaceDir: "/tmp/workspace",
+        cfg,
+      }),
+    ).rejects.toThrow("hung container has been forcefully removed");
+
+    expect(dockerMocks.execDocker).toHaveBeenCalledWith(
+      ["rm", "-f", expect.stringMatching(/^openclaw-sbx-browser-session-test-/)],
+      { allowFailure: true },
+    );
   });
 });

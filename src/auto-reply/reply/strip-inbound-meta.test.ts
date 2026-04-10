@@ -118,6 +118,52 @@ name: test
 Hello from user`;
     expect(stripInboundMetadata(input)).toBe(input);
   });
+
+  it("ignores metadata blocks whose json decodes to a non-object", () => {
+    const input = `Sender (untrusted metadata):
+\`\`\`json
+["not","an","object"]
+\`\`\`
+Hello from user`;
+    expect(stripInboundMetadata(input)).toBe("Hello from user");
+    expect(extractInboundSenderLabel(input)).toBeNull();
+  });
+});
+
+describe("timestamp prefix stripping", () => {
+  it("strips a leading injected timestamp prefix", () => {
+    expect(stripInboundMetadata("[Wed 2026-03-11 23:51 PDT] hello")).toBe("hello");
+  });
+
+  it("strips timestamp prefix with UTC timezone", () => {
+    expect(stripInboundMetadata("[Thu 2026-03-12 07:00 UTC] what time is it?")).toBe(
+      "what time is it?",
+    );
+  });
+
+  it("leaves non timestamp brackets alone", () => {
+    expect(stripInboundMetadata("[some note] hello")).toBe("[some note] hello");
+  });
+
+  it("strips timestamp prefix and inbound metadata blocks together", () => {
+    const input = `[Wed 2026-03-11 23:51 PDT] Conversation info (untrusted metadata):
+\`\`\`json
+{"message_id":"msg-1","sender":"+1555"}
+\`\`\`
+
+Hello`;
+    expect(stripInboundMetadata(input)).toBe("Hello");
+  });
+
+  it("strips a timestamp prefix that remains after removing metadata blocks", () => {
+    const input = `Sender (untrusted metadata):
+\`\`\`json
+{"label":"OpenClaw UI"}
+\`\`\`
+
+[Thu 2026-03-12 07:00 UTC] what time is it?`;
+    expect(stripInboundMetadata(input)).toBe("what time is it?");
+  });
 });
 
 describe("extractInboundSenderLabel", () => {

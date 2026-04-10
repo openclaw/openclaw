@@ -2,42 +2,55 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
-
-	pi "github.com/joshp123/pi-golang"
 )
 
 const (
-	translateMaxAttempts = 3
-	translateBaseDelay   = 15 * time.Second
+	translateMaxAttempts     = 3
+	translateBaseDelay       = 15 * time.Second
+	defaultPromptTimeout     = 2 * time.Minute
+	envDocsI18nPromptTimeout = "OPENCLAW_DOCS_I18N_PROMPT_TIMEOUT"
 )
 
 var errEmptyTranslation = errors.New("empty translation")
 
 type PiTranslator struct {
-	client *pi.OneShotClient
+	client        docsPiPromptClient
+	clientFactory docsPiClientFactory
 }
 
+type docsTranslator interface {
+	Translate(context.Context, string, string, string) (string, error)
+	TranslateRaw(context.Context, string, string, string) (string, error)
+	Close()
+}
+
+type docsTranslatorFactory func(string, string, []GlossaryEntry, string) (docsTranslator, error)
+
+type docsPiPromptClient interface {
+	promptRunner
+	Close() error
+}
+
+type docsPiClientFactory func(context.Context) (docsPiPromptClient, error)
+
 func NewPiTranslator(srcLang, tgtLang string, glossary []GlossaryEntry, thinking string) (*PiTranslator, error) {
-	options := pi.DefaultOneShotOptions()
-	options.AppName = "openclaw-docs-i18n"
-	options.WorkDir = "/tmp"
-	options.Mode = pi.ModeDragons
-	options.Dragons = pi.DragonsOptions{
-		Provider: "anthropic",
-		Model:    modelVersion,
-		Thinking: normalizeThinking(thinking),
+	options := docsPiClientOptions{
+		SystemPrompt: translationPrompt(srcLang, tgtLang, glossary),
+		Thinking:     normalizeThinking(thinking),
 	}
-	options.SystemPrompt = translationPrompt(srcLang, tgtLang, glossary)
-	client, err := pi.StartOneShot(options)
+	clientFactory := func(ctx context.Context) (docsPiPromptClient, error) {
+		return startDocsPiClient(ctx, options)
+	}
+	client, err := clientFactory(context.Background())
 	if err != nil {
 		return nil, err
 	}
-	return &PiTranslator{client: client}, nil
+	return &PiTranslator{client: client, clientFactory: clientFactory}, nil
 }
 
 func (t *PiTranslator) Translate(ctx context.Context, text, srcLang, tgtLang string) (string, error) {
@@ -77,6 +90,12 @@ func (t *PiTranslator) translateWithRetry(ctx context.Context, run func(context.
 		}
 		lastErr = err
 		if attempt+1 < translateMaxAttempts {
+			if shouldRestartPiClientForError(err) {
+				if err := t.restartClient(ctx); err != nil {
+					return "", fmt.Errorf("%w (pi client restart failed: %v)", lastErr, err)
+				}
+				continue
+			}
 			delay := translateBaseDelay * time.Duration(attempt+1)
 			if err := sleepWithContext(ctx, delay); err != nil {
 				return "", err
@@ -121,11 +140,51 @@ func isRetryableTranslateError(err error) bool {
 	if err == nil {
 		return false
 	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return false
+	}
 	if errors.Is(err, errEmptyTranslation) {
 		return true
 	}
 	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "placeholder missing") || strings.Contains(message, "rate limit") || strings.Contains(message, "429")
+	if strings.Contains(message, "authentication failed") {
+		return false
+	}
+	return strings.Contains(message, "placeholder missing") ||
+		strings.Contains(message, "rate limit") ||
+		strings.Contains(message, "429") ||
+		shouldRestartPiClientForError(err)
+}
+
+func shouldRestartPiClientForError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "pi error: terminated") ||
+		strings.Contains(message, "stopreason=cancelled") ||
+		strings.Contains(message, "stopreason=canceled") ||
+		strings.Contains(message, "stopreason=aborted") ||
+		strings.Contains(message, "stopreason=terminated") ||
+		strings.Contains(message, "stopreason=error") ||
+		strings.Contains(message, "pi process closed") ||
+		strings.Contains(message, "pi event stream closed")
+}
+
+func (t *PiTranslator) restartClient(ctx context.Context) error {
+	if t.clientFactory == nil {
+		return errors.New("pi client restart unavailable")
+	}
+	if t.client != nil {
+		_ = t.client.Close()
+		t.client = nil
+	}
+	client, err := t.clientFactory(ctx)
+	if err != nil {
+		return err
+	}
+	t.client = client
+	return nil
 }
 
 func sleepWithContext(ctx context.Context, delay time.Duration) error {
@@ -145,96 +204,31 @@ func (t *PiTranslator) Close() {
 	}
 }
 
-type agentEndPayload struct {
-	Messages []agentMessage `json:"messages"`
+type promptRunner interface {
+	Prompt(context.Context, string) (string, error)
+	Stderr() string
 }
 
-type agentMessage struct {
-	Role         string          `json:"role"`
-	Content      json.RawMessage `json:"content"`
-	StopReason   string          `json:"stopReason,omitempty"`
-	ErrorMessage string          `json:"errorMessage,omitempty"`
-}
-
-type contentBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
-}
-
-func runPrompt(ctx context.Context, client *pi.OneShotClient, message string) (string, error) {
-	events, cancel := client.Subscribe(256)
+func runPrompt(ctx context.Context, client promptRunner, message string) (string, error) {
+	promptCtx, cancel := context.WithTimeout(ctx, docsI18nPromptTimeout())
 	defer cancel()
 
-	if err := client.Prompt(ctx, message); err != nil {
-		return "", err
+	result, err := client.Prompt(promptCtx, message)
+	if err != nil {
+		return "", decoratePromptError(err, client.Stderr())
 	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		case event, ok := <-events:
-			if !ok {
-				return "", errors.New("event stream closed")
-			}
-			if event.Type == "agent_end" {
-				return extractTranslationResult(event.Raw)
-			}
-		}
-	}
+	return result, nil
 }
 
-func extractTranslationResult(raw json.RawMessage) (string, error) {
-	var payload agentEndPayload
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return "", err
+func decoratePromptError(err error, stderr string) error {
+	if err == nil {
+		return nil
 	}
-	for index := len(payload.Messages) - 1; index >= 0; index-- {
-		message := payload.Messages[index]
-		if message.Role != "assistant" {
-			continue
-		}
-		if message.ErrorMessage != "" || strings.EqualFold(message.StopReason, "error") {
-			msg := strings.TrimSpace(message.ErrorMessage)
-			if msg == "" {
-				msg = "unknown error"
-			}
-			return "", fmt.Errorf("pi error: %s", msg)
-		}
-		text, err := extractContentText(message.Content)
-		if err != nil {
-			return "", err
-		}
-		return text, nil
-	}
-	return "", errors.New("assistant message not found")
-}
-
-func extractContentText(content json.RawMessage) (string, error) {
-	trimmed := strings.TrimSpace(string(content))
+	trimmed := strings.TrimSpace(stderr)
 	if trimmed == "" {
-		return "", nil
+		return err
 	}
-	if strings.HasPrefix(trimmed, "\"") {
-		var text string
-		if err := json.Unmarshal(content, &text); err != nil {
-			return "", err
-		}
-		return text, nil
-	}
-
-	var blocks []contentBlock
-	if err := json.Unmarshal(content, &blocks); err != nil {
-		return "", err
-	}
-
-	var parts []string
-	for _, block := range blocks {
-		if block.Type == "text" && block.Text != "" {
-			parts = append(parts, block.Text)
-		}
-	}
-	return strings.Join(parts, ""), nil
+	return fmt.Errorf("%w (pi stderr: %s)", err, trimmed)
 }
 
 func normalizeThinking(value string) string {
@@ -244,4 +238,16 @@ func normalizeThinking(value string) string {
 	default:
 		return "high"
 	}
+}
+
+func docsI18nPromptTimeout() time.Duration {
+	value := strings.TrimSpace(os.Getenv(envDocsI18nPromptTimeout))
+	if value == "" {
+		return defaultPromptTimeout
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil || parsed <= 0 {
+		return defaultPromptTimeout
+	}
+	return parsed
 }

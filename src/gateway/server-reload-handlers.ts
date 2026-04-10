@@ -16,18 +16,37 @@ import {
 } from "../infra/restart.js";
 import { setCommandLaneConcurrency, getTotalQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
+import {
+  activateSecretsRuntimeSnapshot,
+  clearSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeSnapshot,
+} from "../secrets/runtime.js";
+import { getInspectableTaskRegistrySummary } from "../tasks/task-registry.maintenance.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { ChannelKind } from "./config-reload-plan.js";
-import type { GatewayReloadPlan } from "./config-reload.js";
+import { startGatewayConfigReloader, type GatewayReloadPlan } from "./config-reload.js";
 import { resolveHooksConfig } from "./hooks.js";
-import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js";
+import type { HookClientIpConfig } from "./server-http.js";
+import {
+  type GatewayChannelManager,
+  startGatewayChannelHealthMonitor,
+  startGatewayCronWithLogging,
+} from "./server-runtime-services.js";
+import {
+  disconnectStaleSharedGatewayAuthClients,
+  setCurrentSharedGatewaySessionGeneration,
+  type SharedGatewayAuthClient,
+  type SharedGatewaySessionGenerationState,
+} from "./server-shared-auth-generation.js";
+import type { ActivateRuntimeSecrets } from "./server-startup-config.js";
+import { resolveHookClientIpConfig } from "./server/hooks.js";
 
 type GatewayHotReloadState = {
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
+  hookClientIpConfig: HookClientIpConfig;
   heartbeatRunner: HeartbeatRunner;
   cronState: GatewayCronState;
-  browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> | null;
   channelHealthMonitor: ChannelHealthMonitor | null;
 };
 
@@ -43,11 +62,10 @@ export function createGatewayReloadHandlers(params: {
     warn: (msg: string) => void;
     error: (msg: string) => void;
   };
-  logBrowser: { error: (msg: string) => void };
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   logCron: { error: (msg: string) => void };
   logReload: { info: (msg: string) => void; warn: (msg: string) => void };
-  createHealthMonitor: (checkIntervalMs: number) => ChannelHealthMonitor;
+  createHealthMonitor: (config: ReturnType<typeof loadConfig>) => ChannelHealthMonitor | null;
 }) {
   const applyHotReload = async (
     plan: GatewayReloadPlan,
@@ -64,6 +82,7 @@ export function createGatewayReloadHandlers(params: {
         params.logHooks.warn(`hooks config reload failed: ${String(err)}`);
       }
     }
+    nextState.hookClientIpConfig = resolveHookClientIpConfig(nextConfig);
 
     if (plan.restartHeartbeat) {
       nextState.heartbeatRunner.updateConfig(nextConfig);
@@ -78,27 +97,15 @@ export function createGatewayReloadHandlers(params: {
         deps: params.deps,
         broadcast: params.broadcast,
       });
-      void nextState.cronState.cron
-        .start()
-        .catch((err) => params.logCron.error(`failed to start: ${String(err)}`));
-    }
-
-    if (plan.restartBrowserControl) {
-      if (state.browserControl) {
-        await state.browserControl.stop().catch(() => {});
-      }
-      try {
-        nextState.browserControl = await startBrowserControlServerIfEnabled();
-      } catch (err) {
-        params.logBrowser.error(`server failed to start: ${String(err)}`);
-      }
+      startGatewayCronWithLogging({
+        cron: nextState.cronState.cron,
+        logCron: params.logCron,
+      });
     }
 
     if (plan.restartHealthMonitor) {
       state.channelHealthMonitor?.stop();
-      const minutes = nextConfig.gateway?.channelHealthCheckMinutes;
-      nextState.channelHealthMonitor =
-        minutes === 0 ? null : params.createHealthMonitor((minutes ?? 5) * 60_000);
+      nextState.channelHealthMonitor = params.createHealthMonitor(nextConfig);
     }
 
     if (plan.restartGmailWatcher) {
@@ -149,7 +156,7 @@ export function createGatewayReloadHandlers(params: {
   const requestGatewayRestart = (
     plan: GatewayReloadPlan,
     nextConfig: ReturnType<typeof loadConfig>,
-  ) => {
+  ): boolean => {
     setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
     const reasons = plan.restartReasons.length
       ? plan.restartReasons.join(", ")
@@ -157,18 +164,20 @@ export function createGatewayReloadHandlers(params: {
 
     if (process.listenerCount("SIGUSR1") === 0) {
       params.logReload.warn("no SIGUSR1 listener found; restart skipped");
-      return;
+      return false;
     }
 
     const getActiveCounts = () => {
       const queueSize = getTotalQueueSize();
       const pendingReplies = getTotalPendingReplies();
       const embeddedRuns = getActiveEmbeddedRunCount();
+      const activeTasks = getInspectableTaskRegistrySummary().active;
       return {
         queueSize,
         pendingReplies,
         embeddedRuns,
-        totalActive: queueSize + pendingReplies + embeddedRuns,
+        activeTasks,
+        totalActive: queueSize + pendingReplies + embeddedRuns + activeTasks,
       };
     };
     const formatActiveDetails = (counts: ReturnType<typeof getActiveCounts>) => {
@@ -182,6 +191,9 @@ export function createGatewayReloadHandlers(params: {
       if (counts.embeddedRuns > 0) {
         details.push(`${counts.embeddedRuns} embedded run(s)`);
       }
+      if (counts.activeTasks > 0) {
+        details.push(`${counts.activeTasks} task run(s)`);
+      }
       return details;
     };
     const active = getActiveCounts();
@@ -192,7 +204,7 @@ export function createGatewayReloadHandlers(params: {
         params.logReload.info(
           `config change requires gateway restart (${reasons}) — already waiting for operations to complete`,
         );
-        return;
+        return true;
       }
       restartPending = true;
       const initialDetails = formatActiveDetails(active);
@@ -202,6 +214,7 @@ export function createGatewayReloadHandlers(params: {
 
       deferGatewayRestartUntilIdle({
         getPendingCount: () => getActiveCounts().totalActive,
+        maxWaitMs: nextConfig.gateway?.reload?.deferralTimeoutMs,
         hooks: {
           onReady: () => {
             restartPending = false;
@@ -222,6 +235,7 @@ export function createGatewayReloadHandlers(params: {
           },
         },
       });
+      return true;
     } else {
       // No active operations or pending replies, restart immediately
       params.logReload.warn(`config change requires gateway restart (${reasons})`);
@@ -229,8 +243,164 @@ export function createGatewayReloadHandlers(params: {
       if (!emitted) {
         params.logReload.info("gateway restart already scheduled; skipping duplicate signal");
       }
+      return true;
     }
   };
 
   return { applyHotReload, requestGatewayRestart };
+}
+
+export function startManagedGatewayConfigReloader(params: {
+  minimalTestGateway: boolean;
+  initialConfig: ReturnType<typeof loadConfig>;
+  initialInternalWriteHash: string | null;
+  watchPath: string;
+  readSnapshot: typeof import("../config/config.js").readConfigFileSnapshot;
+  subscribeToWrites: typeof import("../config/config.js").registerConfigWriteListener;
+  deps: CliDeps;
+  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+  getState: () => GatewayHotReloadState;
+  setState: (state: GatewayHotReloadState) => void;
+  startChannel: (name: ChannelKind) => Promise<void>;
+  stopChannel: (name: ChannelKind) => Promise<void>;
+  logHooks: {
+    info: (msg: string) => void;
+    warn: (msg: string) => void;
+    error: (msg: string) => void;
+  };
+  logChannels: { info: (msg: string) => void; error: (msg: string) => void };
+  logCron: { error: (msg: string) => void };
+  logReload: {
+    info: (msg: string) => void;
+    warn: (msg: string) => void;
+    error: (msg: string) => void;
+  };
+  channelManager: GatewayChannelManager;
+  activateRuntimeSecrets: ActivateRuntimeSecrets;
+  resolveSharedGatewaySessionGenerationForConfig: (
+    config: ReturnType<typeof loadConfig>,
+  ) => string | undefined;
+  sharedGatewaySessionGenerationState: SharedGatewaySessionGenerationState;
+  clients: Iterable<SharedGatewayAuthClient>;
+}) {
+  if (params.minimalTestGateway) {
+    return { stop: async () => {} };
+  }
+
+  const { applyHotReload, requestGatewayRestart } = createGatewayReloadHandlers({
+    deps: params.deps,
+    broadcast: params.broadcast,
+    getState: params.getState,
+    setState: params.setState,
+    startChannel: params.startChannel,
+    stopChannel: params.stopChannel,
+    logHooks: params.logHooks,
+    logChannels: params.logChannels,
+    logCron: params.logCron,
+    logReload: params.logReload,
+    createHealthMonitor: (config) =>
+      startGatewayChannelHealthMonitor({
+        cfg: config,
+        channelManager: params.channelManager,
+      }),
+  });
+
+  return startGatewayConfigReloader({
+    initialConfig: params.initialConfig,
+    initialInternalWriteHash: params.initialInternalWriteHash,
+    readSnapshot: params.readSnapshot,
+    subscribeToWrites: params.subscribeToWrites,
+    onHotReload: async (plan, nextConfig) => {
+      const previousSharedGatewaySessionGeneration =
+        params.sharedGatewaySessionGenerationState.current;
+      const previousSnapshot = getActiveSecretsRuntimeSnapshot();
+      const prepared = await params.activateRuntimeSecrets(nextConfig, {
+        reason: "reload",
+        activate: true,
+      });
+      const nextSharedGatewaySessionGeneration =
+        params.resolveSharedGatewaySessionGenerationForConfig(prepared.config);
+      params.sharedGatewaySessionGenerationState.current = nextSharedGatewaySessionGeneration;
+      const sharedGatewaySessionGenerationChanged =
+        previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration;
+      if (sharedGatewaySessionGenerationChanged) {
+        disconnectStaleSharedGatewayAuthClients({
+          clients: params.clients,
+          expectedGeneration: nextSharedGatewaySessionGeneration,
+        });
+      }
+      try {
+        await applyHotReload(plan, prepared.config);
+      } catch (err) {
+        if (previousSnapshot) {
+          activateSecretsRuntimeSnapshot(previousSnapshot);
+        } else {
+          clearSecretsRuntimeSnapshot();
+        }
+        params.sharedGatewaySessionGenerationState.current = previousSharedGatewaySessionGeneration;
+        if (sharedGatewaySessionGenerationChanged) {
+          disconnectStaleSharedGatewayAuthClients({
+            clients: params.clients,
+            expectedGeneration: previousSharedGatewaySessionGeneration,
+          });
+        }
+        throw err;
+      }
+      setCurrentSharedGatewaySessionGeneration(
+        params.sharedGatewaySessionGenerationState,
+        nextSharedGatewaySessionGeneration,
+      );
+    },
+    onRestart: async (plan, nextConfig) => {
+      const previousRequiredSharedGatewaySessionGeneration =
+        params.sharedGatewaySessionGenerationState.required;
+      const previousSharedGatewaySessionGeneration =
+        params.sharedGatewaySessionGenerationState.current;
+      try {
+        const prepared = await params.activateRuntimeSecrets(nextConfig, {
+          reason: "restart-check",
+          activate: false,
+        });
+        const nextSharedGatewaySessionGeneration =
+          params.resolveSharedGatewaySessionGenerationForConfig(prepared.config);
+        const restartQueued = requestGatewayRestart(plan, nextConfig);
+        if (!restartQueued) {
+          if (previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration) {
+            activateSecretsRuntimeSnapshot(prepared);
+            setCurrentSharedGatewaySessionGeneration(
+              params.sharedGatewaySessionGenerationState,
+              nextSharedGatewaySessionGeneration,
+            );
+            params.sharedGatewaySessionGenerationState.required = null;
+            disconnectStaleSharedGatewayAuthClients({
+              clients: params.clients,
+              expectedGeneration: nextSharedGatewaySessionGeneration,
+            });
+          } else {
+            params.sharedGatewaySessionGenerationState.required = null;
+          }
+          return;
+        }
+        if (previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration) {
+          params.sharedGatewaySessionGenerationState.required = nextSharedGatewaySessionGeneration;
+          disconnectStaleSharedGatewayAuthClients({
+            clients: params.clients,
+            expectedGeneration: nextSharedGatewaySessionGeneration,
+          });
+        } else {
+          params.sharedGatewaySessionGenerationState.required = null;
+        }
+      } catch (error) {
+        params.sharedGatewaySessionGenerationState.required =
+          previousRequiredSharedGatewaySessionGeneration;
+        throw error;
+      }
+    },
+    log: {
+      info: (msg) => params.logReload.info(msg),
+      warn: (msg) => params.logReload.warn(msg),
+      error: (msg) => params.logReload.error(msg),
+    },
+    watchPath: params.watchPath,
+  });
 }

@@ -1,15 +1,17 @@
-import { spawnSync } from "node:child_process";
-import fsSync from "node:fs";
 import { isRestartEnabled } from "../../config/commands.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
-import { parseCmdScriptCommandLine } from "../../daemon/cmd-argv.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { probeGateway } from "../../gateway/probe.js";
-import { isGatewayArgv, parseProcCmdline } from "../../infra/gateway-process-argv.js";
-import { findGatewayPidsOnPortSync } from "../../infra/restart.js";
+import {
+  findVerifiedGatewayListenerPidsOnPortSync,
+  formatGatewayPidList,
+  signalVerifiedGatewayPidSync,
+} from "../../infra/gateway-processes.js";
 import { defaultRuntime } from "../../runtime.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { theme } from "../../terminal/theme.js";
 import { formatCliCommand } from "../command-format.js";
+import { recoverInstalledLaunchAgent } from "./launchd-recovery.js";
 import {
   runServiceRestart,
   runServiceStart,
@@ -19,6 +21,7 @@ import {
 import {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
   DEFAULT_RESTART_HEALTH_DELAY_MS,
+  type GatewayRestartSnapshot,
   renderGatewayPortHealthDiagnostics,
   renderRestartDiagnostics,
   terminateStaleGatewayPids,
@@ -30,6 +33,25 @@ import type { DaemonLifecycleOptions } from "./types.js";
 
 const POST_RESTART_HEALTH_ATTEMPTS = DEFAULT_RESTART_HEALTH_ATTEMPTS;
 const POST_RESTART_HEALTH_DELAY_MS = DEFAULT_RESTART_HEALTH_DELAY_MS;
+
+function formatRestartFailure(params: {
+  health: GatewayRestartSnapshot;
+  port: number;
+  timeoutSeconds: number;
+}): { statusLine: string; failMessage: string } {
+  if (params.health.waitOutcome === "stopped-free") {
+    const elapsedSeconds = Math.max(1, Math.round((params.health.elapsedMs ?? 0) / 1000));
+    return {
+      statusLine: `Gateway restart failed after ${elapsedSeconds}s: service stayed stopped and port ${params.port} stayed free.`,
+      failMessage: `Gateway restart failed after ${elapsedSeconds}s: service stayed stopped and health checks never came up.`,
+    };
+  }
+
+  return {
+    statusLine: `Timed out after ${params.timeoutSeconds}s waiting for gateway port ${params.port} to become healthy.`,
+    failMessage: `Gateway restart timed out after ${params.timeoutSeconds}s waiting for health checks.`,
+  };
+}
 
 async function resolveGatewayLifecyclePort(service = resolveGatewayService()) {
   const command = await service.readCommand(process.env).catch(() => null);
@@ -43,91 +65,21 @@ async function resolveGatewayLifecyclePort(service = resolveGatewayService()) {
   return portFromArgs ?? resolveGatewayPort(await readBestEffortConfig(), mergedEnv);
 }
 
-function extractWindowsCommandLine(raw: string): string | null {
-  const lines = raw
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  for (const line of lines) {
-    if (!line.toLowerCase().startsWith("commandline=")) {
-      continue;
-    }
-    const value = line.slice("commandline=".length).trim();
-    return value || null;
-  }
-  return lines.find((line) => line.toLowerCase() !== "commandline") ?? null;
-}
-
-function readGatewayProcessArgsSync(pid: number): string[] | null {
-  if (process.platform === "linux") {
-    try {
-      return parseProcCmdline(fsSync.readFileSync(`/proc/${pid}/cmdline`, "utf8"));
-    } catch {
-      return null;
-    }
-  }
-  if (process.platform === "darwin") {
-    const ps = spawnSync("ps", ["-o", "command=", "-p", String(pid)], {
-      encoding: "utf8",
-      timeout: 1000,
-    });
-    if (ps.error || ps.status !== 0) {
-      return null;
-    }
-    const command = ps.stdout.trim();
-    return command ? command.split(/\s+/) : null;
-  }
-  if (process.platform === "win32") {
-    const wmic = spawnSync(
-      "wmic",
-      ["process", "where", `ProcessId=${pid}`, "get", "CommandLine", "/value"],
-      {
-        encoding: "utf8",
-        timeout: 1000,
-      },
-    );
-    if (wmic.error || wmic.status !== 0) {
-      return null;
-    }
-    const command = extractWindowsCommandLine(wmic.stdout);
-    return command ? parseCmdScriptCommandLine(command) : null;
-  }
-  return null;
-}
-
-function resolveGatewayListenerPids(port: number): number[] {
-  return Array.from(new Set(findGatewayPidsOnPortSync(port)))
-    .filter((pid): pid is number => Number.isFinite(pid) && pid > 0)
-    .filter((pid) => {
-      const args = readGatewayProcessArgsSync(pid);
-      return args != null && isGatewayArgv(args, { allowGatewayBinary: true });
-    });
-}
-
 function resolveGatewayPortFallback(): Promise<number> {
   return readBestEffortConfig()
     .then((cfg) => resolveGatewayPort(cfg, process.env))
     .catch(() => resolveGatewayPort(undefined, process.env));
 }
 
-function signalGatewayPid(pid: number, signal: "SIGTERM" | "SIGUSR1") {
-  const args = readGatewayProcessArgsSync(pid);
-  if (!args || !isGatewayArgv(args, { allowGatewayBinary: true })) {
-    throw new Error(`refusing to signal non-gateway process pid ${pid}`);
-  }
-  process.kill(pid, signal);
-}
-
-function formatGatewayPidList(pids: number[]): string {
-  return pids.join(", ");
-}
-
 async function assertUnmanagedGatewayRestartEnabled(port: number): Promise<void> {
+  const cfg = await readBestEffortConfig().catch(() => undefined);
+  const tlsEnabled = !!cfg?.gateway?.tls?.enabled;
+  const scheme = tlsEnabled ? "wss" : "ws";
   const probe = await probeGateway({
-    url: `ws://127.0.0.1:${port}`,
+    url: `${scheme}://127.0.0.1:${port}`,
     auth: {
-      token: process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined,
-      password: process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() || undefined,
+      token: normalizeOptionalString(process.env.OPENCLAW_GATEWAY_TOKEN),
+      password: normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD),
     },
     timeoutMs: 1_000,
   }).catch(() => null);
@@ -143,7 +95,7 @@ async function assertUnmanagedGatewayRestartEnabled(port: number): Promise<void>
 }
 
 function resolveVerifiedGatewayListenerPids(port: number): number[] {
-  return resolveGatewayListenerPids(port).filter(
+  return findVerifiedGatewayListenerPidsOnPortSync(port).filter(
     (pid): pid is number => Number.isFinite(pid) && pid > 0,
   );
 }
@@ -154,7 +106,7 @@ async function stopGatewayWithoutServiceManager(port: number) {
     return null;
   }
   for (const pid of pids) {
-    signalGatewayPid(pid, "SIGTERM");
+    signalVerifiedGatewayPidSync(pid, "SIGTERM");
   }
   return {
     result: "stopped" as const,
@@ -173,7 +125,7 @@ async function restartGatewayWithoutServiceManager(port: number) {
       `multiple gateway processes are listening on port ${port}: ${formatGatewayPidList(pids)}; use "openclaw gateway status --deep" before retrying restart`,
     );
   }
-  signalGatewayPid(pids[0], "SIGUSR1");
+  signalVerifiedGatewayPidSync(pids[0], "SIGUSR1");
   return {
     result: "restarted" as const,
     message: `Gateway restart signal sent to unmanaged process on port ${port}: ${pids[0]}.`,
@@ -195,6 +147,10 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
     serviceNoun: "Gateway",
     service: resolveGatewayService(),
     renderStartHints: renderGatewayServiceStartHints,
+    onNotLoaded:
+      process.platform === "darwin"
+        ? async () => await recoverInstalledLaunchAgent({ result: "started" })
+        : undefined,
     opts,
   });
 }
@@ -237,8 +193,9 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       const handled = await restartGatewayWithoutServiceManager(restartPort);
       if (handled) {
         restartedWithoutServiceManager = true;
+        return handled;
       }
-      return handled;
+      return await recoverInstalledLaunchAgent({ result: "restarted" });
     },
     postRestartCheck: async ({ warnings, fail, stdout }) => {
       if (restartedWithoutServiceManager) {
@@ -304,13 +261,17 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       }
 
       const diagnostics = renderRestartDiagnostics(health);
-      const timeoutLine = `Timed out after ${restartWaitSeconds}s waiting for gateway port ${restartPort} to become healthy.`;
+      const failure = formatRestartFailure({
+        health,
+        port: restartPort,
+        timeoutSeconds: restartWaitSeconds,
+      });
       const runningNoPortLine =
         health.runtime.status === "running" && health.portUsage.status === "free"
           ? `Gateway process is running but port ${restartPort} is still free (startup hang/crash loop or very slow VM startup).`
           : null;
       if (!json) {
-        defaultRuntime.log(theme.warn(timeoutLine));
+        defaultRuntime.log(theme.warn(failure.statusLine));
         if (runningNoPortLine) {
           defaultRuntime.log(theme.warn(runningNoPortLine));
         }
@@ -318,14 +279,14 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           defaultRuntime.log(theme.muted(line));
         }
       } else {
-        warnings.push(timeoutLine);
+        warnings.push(failure.statusLine);
         if (runningNoPortLine) {
           warnings.push(runningNoPortLine);
         }
         warnings.push(...diagnostics);
       }
 
-      fail(`Gateway restart timed out after ${restartWaitSeconds}s waiting for health checks.`, [
+      fail(failure.failMessage, [
         formatCliCommand("openclaw gateway status --deep"),
         formatCliCommand("openclaw doctor"),
       ]);

@@ -6,6 +6,7 @@ import {
   type ExistingProviderConfig,
 } from "./models-config.merge.js";
 import {
+  applyNativeStreamingUsageCompat,
   enforceSourceManagedProviderSecrets,
   normalizeProviders,
   resolveImplicitProviders,
@@ -13,6 +14,12 @@ import {
 } from "./models-config.providers.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
+export type ResolveImplicitProvidersForModelsJson = (params: {
+  agentDir: string;
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  explicitProviders: Record<string, ProviderConfig>;
+}) => Promise<Record<string, ProviderConfig>>;
 
 export type ModelsJsonPlan =
   | {
@@ -26,14 +33,20 @@ export type ModelsJsonPlan =
       contents: string;
     };
 
-async function resolveProvidersForModelsJson(params: {
-  cfg: OpenClawConfig;
-  agentDir: string;
-  env: NodeJS.ProcessEnv;
-}): Promise<Record<string, ProviderConfig>> {
+export async function resolveProvidersForModelsJsonWithDeps(
+  params: {
+    cfg: OpenClawConfig;
+    agentDir: string;
+    env: NodeJS.ProcessEnv;
+  },
+  deps?: {
+    resolveImplicitProviders?: ResolveImplicitProvidersForModelsJson;
+  },
+): Promise<Record<string, ProviderConfig>> {
   const { cfg, agentDir, env } = params;
   const explicitProviders = cfg.models?.providers ?? {};
-  const implicitProviders = await resolveImplicitProviders({
+  const resolveImplicitProvidersImpl = deps?.resolveImplicitProviders ?? resolveImplicitProviders;
+  const implicitProviders = await resolveImplicitProvidersImpl({
     agentDir,
     config: cfg,
     env,
@@ -59,13 +72,13 @@ function resolveExplicitBaseUrlProviders(
   );
 }
 
-async function resolveProvidersForMode(params: {
+function resolveProvidersForMode(params: {
   mode: NonNullable<ModelsConfig["mode"]>;
   existingParsed: unknown;
   providers: Record<string, ProviderConfig>;
   secretRefManagedProviders: ReadonlySet<string>;
   explicitBaseUrlProviders: ReadonlySet<string>;
-}): Promise<Record<string, ProviderConfig>> {
+}): Record<string, ProviderConfig> {
   if (params.mode !== "merge") {
     return params.providers;
   }
@@ -85,16 +98,21 @@ async function resolveProvidersForMode(params: {
   });
 }
 
-export async function planOpenClawModelsJson(params: {
-  cfg: OpenClawConfig;
-  sourceConfigForSecrets?: OpenClawConfig;
-  agentDir: string;
-  env: NodeJS.ProcessEnv;
-  existingRaw: string;
-  existingParsed: unknown;
-}): Promise<ModelsJsonPlan> {
+export async function planOpenClawModelsJsonWithDeps(
+  params: {
+    cfg: OpenClawConfig;
+    sourceConfigForSecrets?: OpenClawConfig;
+    agentDir: string;
+    env: NodeJS.ProcessEnv;
+    existingRaw: string;
+    existingParsed: unknown;
+  },
+  deps?: {
+    resolveImplicitProviders?: ResolveImplicitProvidersForModelsJson;
+  },
+): Promise<ModelsJsonPlan> {
   const { cfg, agentDir, env } = params;
-  const providers = await resolveProvidersForModelsJson({ cfg, agentDir, env });
+  const providers = await resolveProvidersForModelsJsonWithDeps({ cfg, agentDir, env }, deps);
 
   if (Object.keys(providers).length === 0) {
     return { action: "skip" };
@@ -112,7 +130,7 @@ export async function planOpenClawModelsJson(params: {
       sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
       secretRefManagedProviders,
     }) ?? providers;
-  const mergedProviders = await resolveProvidersForMode({
+  const mergedProviders = resolveProvidersForMode({
     mode,
     existingParsed: params.existingParsed,
     providers: normalizedProviders,
@@ -126,7 +144,8 @@ export async function planOpenClawModelsJson(params: {
       sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
       secretRefManagedProviders,
     }) ?? mergedProviders;
-  const nextContents = `${JSON.stringify({ providers: secretEnforcedProviders }, null, 2)}\n`;
+  const finalProviders = applyNativeStreamingUsageCompat(secretEnforcedProviders);
+  const nextContents = `${JSON.stringify({ providers: finalProviders }, null, 2)}\n`;
 
   if (params.existingRaw === nextContents) {
     return { action: "noop" };
@@ -136,4 +155,10 @@ export async function planOpenClawModelsJson(params: {
     action: "write",
     contents: nextContents,
   };
+}
+
+export async function planOpenClawModelsJson(
+  params: Parameters<typeof planOpenClawModelsJsonWithDeps>[0],
+): Promise<ModelsJsonPlan> {
+  return planOpenClawModelsJsonWithDeps(params);
 }

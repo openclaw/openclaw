@@ -1,28 +1,40 @@
+import {
+  getChannelPlugin,
+  listChannelPlugins,
+  resolveChannelApprovalCapability,
+} from "../channels/plugins/index.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
-import { listEnabledDiscordAccounts } from "../discord/accounts.js";
-import { isDiscordExecApprovalClientEnabled } from "../discord/exec-approvals.js";
-import { listEnabledTelegramAccounts } from "../telegram/accounts.js";
-import { isTelegramExecApprovalClientEnabled } from "../telegram/exec-approvals.js";
-import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../utils/message-channel.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../utils/message-channel.js";
 
 export type ExecApprovalInitiatingSurfaceState =
-  | { kind: "enabled"; channel: string | undefined; channelLabel: string }
-  | { kind: "disabled"; channel: string; channelLabel: string }
-  | { kind: "unsupported"; channel: string; channelLabel: string };
+  | { kind: "enabled"; channel: string | undefined; channelLabel: string; accountId?: string }
+  | { kind: "disabled"; channel: string; channelLabel: string; accountId?: string }
+  | { kind: "unsupported"; channel: string; channelLabel: string; accountId?: string };
 
 function labelForChannel(channel?: string): string {
-  switch (channel) {
-    case "discord":
-      return "Discord";
-    case "telegram":
-      return "Telegram";
-    case "tui":
-      return "terminal UI";
-    case INTERNAL_MESSAGE_CHANNEL:
-      return "Web UI";
-    default:
-      return channel ? channel[0]?.toUpperCase() + channel.slice(1) : "this platform";
+  if (channel === "tui") {
+    return "terminal UI";
   }
+  if (channel === INTERNAL_MESSAGE_CHANNEL) {
+    return "Web UI";
+  }
+  return (
+    getChannelPlugin(channel ?? "")?.meta.label ??
+    (channel ? channel[0]?.toUpperCase() + channel.slice(1) : "this platform")
+  );
+}
+
+function hasNativeExecApprovalCapability(channel?: string): boolean {
+  const capability = resolveChannelApprovalCapability(getChannelPlugin(channel ?? ""));
+  if (!capability?.native) {
+    return false;
+  }
+  return Boolean(capability.getExecInitiatingSurfaceState || capability.getActionAvailabilityState);
 }
 
 export function resolveExecApprovalInitiatingSurfaceState(params: {
@@ -32,46 +44,70 @@ export function resolveExecApprovalInitiatingSurfaceState(params: {
 }): ExecApprovalInitiatingSurfaceState {
   const channel = normalizeMessageChannel(params.channel);
   const channelLabel = labelForChannel(channel);
+  const accountId = normalizeOptionalString(params.accountId);
   if (!channel || channel === INTERNAL_MESSAGE_CHANNEL || channel === "tui") {
-    return { kind: "enabled", channel, channelLabel };
+    return { kind: "enabled", channel, channelLabel, accountId };
   }
 
   const cfg = params.cfg ?? loadConfig();
-  if (channel === "telegram") {
-    return isTelegramExecApprovalClientEnabled({ cfg, accountId: params.accountId })
-      ? { kind: "enabled", channel, channelLabel }
-      : { kind: "disabled", channel, channelLabel };
+  const capability = resolveChannelApprovalCapability(getChannelPlugin(channel));
+  const state =
+    capability?.getExecInitiatingSurfaceState?.({
+      cfg,
+      accountId: params.accountId,
+      action: "approve",
+    }) ??
+    capability?.getActionAvailabilityState?.({
+      cfg,
+      accountId: params.accountId,
+      action: "approve",
+      approvalKind: "exec",
+    });
+  if (state) {
+    return { ...state, channel, channelLabel, accountId };
   }
-  if (channel === "discord") {
-    return isDiscordExecApprovalClientEnabled({ cfg, accountId: params.accountId })
-      ? { kind: "enabled", channel, channelLabel }
-      : { kind: "disabled", channel, channelLabel };
+  if (isDeliverableMessageChannel(channel)) {
+    return { kind: "enabled", channel, channelLabel, accountId };
   }
-  return { kind: "unsupported", channel, channelLabel };
+  return { kind: "unsupported", channel, channelLabel, accountId };
 }
 
-export function hasConfiguredExecApprovalDmRoute(cfg: OpenClawConfig): boolean {
-  for (const account of listEnabledDiscordAccounts(cfg)) {
-    const execApprovals = account.config.execApprovals;
-    if (!execApprovals?.enabled || (execApprovals.approvers?.length ?? 0) === 0) {
-      continue;
-    }
-    const target = execApprovals.target ?? "dm";
-    if (target === "dm" || target === "both") {
-      return true;
-    }
+export function supportsNativeExecApprovalClient(channel?: string | null): boolean {
+  const normalized = normalizeMessageChannel(channel);
+  if (!normalized || normalized === INTERNAL_MESSAGE_CHANNEL || normalized === "tui") {
+    return true;
   }
+  return hasNativeExecApprovalCapability(normalized);
+}
 
-  for (const account of listEnabledTelegramAccounts(cfg)) {
-    const execApprovals = account.config.execApprovals;
-    if (!execApprovals?.enabled || (execApprovals.approvers?.length ?? 0) === 0) {
-      continue;
-    }
-    const target = execApprovals.target ?? "dm";
-    if (target === "dm" || target === "both") {
-      return true;
-    }
+export function listNativeExecApprovalClientLabels(params?: {
+  excludeChannel?: string | null;
+}): string[] {
+  const excludeChannel = normalizeMessageChannel(params?.excludeChannel);
+  return listChannelPlugins()
+    .filter((plugin) => plugin.id !== excludeChannel)
+    .filter((plugin) => hasNativeExecApprovalCapability(plugin.id))
+    .map((plugin) => normalizeOptionalString(plugin.meta.label))
+    .filter((label): label is string => Boolean(label))
+    .toSorted((a, b) => a.localeCompare(b));
+}
+
+export function describeNativeExecApprovalClientSetup(params: {
+  channel?: string | null;
+  channelLabel?: string | null;
+  accountId?: string | null;
+}): string | null {
+  const channel = normalizeMessageChannel(params.channel);
+  if (!channel || channel === INTERNAL_MESSAGE_CHANNEL || channel === "tui") {
+    return null;
   }
-
-  return false;
+  const channelLabel = normalizeOptionalString(params.channelLabel) ?? labelForChannel(channel);
+  const accountId = normalizeOptionalString(params.accountId);
+  return (
+    resolveChannelApprovalCapability(getChannelPlugin(channel))?.describeExecApprovalSetup?.({
+      channel,
+      channelLabel,
+      accountId,
+    }) ?? null
+  );
 }

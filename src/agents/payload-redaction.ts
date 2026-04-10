@@ -1,17 +1,46 @@
 import crypto from "node:crypto";
 import { estimateBase64DecodedBytes } from "../media/base64.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export const REDACTED_IMAGE_DATA = "<redacted>";
 
-function toLowerTrimmed(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
+const NON_CREDENTIAL_FIELD_NAMES = new Set([
+  "passwordfile",
+  "tokenbudget",
+  "tokencount",
+  "tokenfield",
+  "tokenlimit",
+  "tokens",
+]);
+
+function normalizeFieldName(value: string): string {
+  return normalizeLowercaseStringOrEmpty(value.replaceAll(/[^a-z0-9]/gi, ""));
+}
+
+function isCredentialFieldName(key: string): boolean {
+  const normalized = normalizeFieldName(key);
+  if (!normalized || NON_CREDENTIAL_FIELD_NAMES.has(normalized)) {
+    return false;
+  }
+  if (normalized === "authorization" || normalized === "proxyauthorization") {
+    return true;
+  }
+  return (
+    normalized.endsWith("apikey") ||
+    normalized.endsWith("password") ||
+    normalized.endsWith("passwd") ||
+    normalized.endsWith("passphrase") ||
+    normalized.endsWith("secret") ||
+    normalized.endsWith("secretkey") ||
+    normalized.endsWith("token")
+  );
 }
 
 function hasImageMime(record: Record<string, unknown>): boolean {
   const candidates = [
-    toLowerTrimmed(record.mimeType),
-    toLowerTrimmed(record.media_type),
-    toLowerTrimmed(record.mime_type),
+    normalizeLowercaseStringOrEmpty(record.mimeType),
+    normalizeLowercaseStringOrEmpty(record.media_type),
+    normalizeLowercaseStringOrEmpty(record.mime_type),
   ];
   return candidates.some((value) => value.startsWith("image/"));
 }
@@ -20,7 +49,7 @@ function shouldRedactImageData(record: Record<string, unknown>): record is Recor
   if (typeof record.data !== "string") {
     return false;
   }
-  const type = toLowerTrimmed(record.type);
+  const type = normalizeLowercaseStringOrEmpty(record.type);
   return type === "image" || hasImageMime(record);
 }
 
@@ -28,10 +57,10 @@ function digestBase64Payload(data: string): string {
   return crypto.createHash("sha256").update(data).digest("hex");
 }
 
-/**
- * Redacts image/base64 payload data from diagnostic objects before persistence.
- */
-export function redactImageDataForDiagnostics(value: unknown): unknown {
+function visitDiagnosticPayload(
+  value: unknown,
+  opts?: { omitField?: (key: string) => boolean },
+): unknown {
   const seen = new WeakSet<object>();
 
   const visit = (input: unknown): unknown => {
@@ -49,6 +78,9 @@ export function redactImageDataForDiagnostics(value: unknown): unknown {
     const record = input as Record<string, unknown>;
     const out: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(record)) {
+      if (opts?.omitField?.(key)) {
+        continue;
+      }
       out[key] = visit(val);
     }
 
@@ -61,4 +93,19 @@ export function redactImageDataForDiagnostics(value: unknown): unknown {
   };
 
   return visit(value);
+}
+
+/**
+ * Redacts image/base64 payload data from diagnostic objects before persistence.
+ */
+export function redactImageDataForDiagnostics(value: unknown): unknown {
+  return visitDiagnosticPayload(value);
+}
+
+/**
+ * Removes credential-like fields and image/base64 payload data from diagnostic
+ * objects before persistence.
+ */
+export function sanitizeDiagnosticPayload(value: unknown): unknown {
+  return visitDiagnosticPayload(value, { omitField: isCredentialFieldName });
 }

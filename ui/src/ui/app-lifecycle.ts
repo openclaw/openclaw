@@ -10,7 +10,6 @@ import {
 import { observeTopbar, scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
 import {
   applySettingsFromUrl,
-  attachThemeListener,
   detachThemeListener,
   inferBasePath,
   syncTabWithLocation,
@@ -34,7 +33,7 @@ type LifecycleHost = {
   chatLoading: boolean;
   chatMessages: unknown[];
   chatToolMessages: unknown[];
-  chatStream: string;
+  chatStream: string | null;
   logsAutoFollow: boolean;
   logsAtBottom: boolean;
   logsEntries: unknown[];
@@ -49,7 +48,6 @@ export function handleConnected(host: LifecycleHost) {
   const bootstrapReady = loadControlUiBootstrapConfig(host);
   syncTabWithLocation(host as unknown as Parameters<typeof syncTabWithLocation>[0], true);
   syncThemeWithSettings(host as unknown as Parameters<typeof syncThemeWithSettings>[0]);
-  attachThemeListener(host as unknown as Parameters<typeof attachThemeListener>[0]);
   window.addEventListener("popstate", host.popStateHandler);
   void bootstrapReady.finally(() => {
     if (host.connectGeneration !== connectGeneration) {
@@ -99,9 +97,15 @@ export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unk
     const forcedByTab = changed.has("tab");
     const forcedByLoad =
       changed.has("chatLoading") && changed.get("chatLoading") === true && !host.chatLoading;
+    // Detect streaming start: chatStream changed from null/undefined to a string value
+    const previousStream = changed.get("chatStream") as string | null | undefined;
+    const streamJustStarted =
+      changed.has("chatStream") &&
+      (previousStream === null || previousStream === undefined) &&
+      typeof host.chatStream === "string";
     scheduleChatScroll(
       host as unknown as Parameters<typeof scheduleChatScroll>[0],
-      forcedByTab || forcedByLoad || !host.chatHasAutoScrolled,
+      forcedByTab || forcedByLoad || streamJustStarted || !host.chatHasAutoScrolled,
     );
   }
   if (

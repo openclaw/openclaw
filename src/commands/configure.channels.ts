@@ -5,6 +5,7 @@ import { CONFIG_PATH } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
+import { shouldShowChannelInSetup } from "./channel-setup/discovery.js";
 import { confirm, select } from "./configure.shared.js";
 import { guardCancel } from "./onboard-helpers.js";
 
@@ -17,6 +18,7 @@ export async function removeChannelConfigWizard(
   const listConfiguredChannels = () =>
     listChannelPlugins()
       .map((plugin) => plugin.meta)
+      .filter((meta) => shouldShowChannelInSetup(meta))
       .filter((meta) => next.channels?.[meta.id] !== undefined);
 
   while (true) {

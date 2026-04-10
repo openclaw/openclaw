@@ -69,6 +69,13 @@ enum GatewaySettingsStore {
             account: self.preferredGatewayStableIDAccount)
     }
 
+    static func clearPreferredGatewayStableID(defaults: UserDefaults = .standard) {
+        _ = KeychainStore.delete(
+            service: self.gatewayService,
+            account: self.preferredGatewayStableIDAccount)
+        defaults.removeObject(forKey: self.preferredGatewayStableIDDefaultsKey)
+    }
+
     static func loadLastDiscoveredGatewayStableID() -> String? {
         if let value = KeychainStore.loadString(
             service: self.gatewayService,
@@ -89,6 +96,13 @@ enum GatewaySettingsStore {
             account: self.lastDiscoveredGatewayStableIDAccount)
     }
 
+    static func clearLastDiscoveredGatewayStableID(defaults: UserDefaults = .standard) {
+        _ = KeychainStore.delete(
+            service: self.gatewayService,
+            account: self.lastDiscoveredGatewayStableIDAccount)
+        defaults.removeObject(forKey: self.lastDiscoveredGatewayStableIDDefaultsKey)
+    }
+
     static func loadGatewayToken(instanceId: String) -> String? {
         let account = self.gatewayTokenAccount(instanceId: instanceId)
         let token = KeychainStore.loadString(service: self.gatewayService, account: account)?
@@ -102,6 +116,27 @@ enum GatewaySettingsStore {
             token,
             service: self.gatewayService,
             account: self.gatewayTokenAccount(instanceId: instanceId))
+    }
+
+    static func loadGatewayBootstrapToken(instanceId: String) -> String? {
+        let account = self.gatewayBootstrapTokenAccount(instanceId: instanceId)
+        let token = KeychainStore.loadString(service: self.gatewayService, account: account)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if token?.isEmpty == false { return token }
+        return nil
+    }
+
+    static func saveGatewayBootstrapToken(_ token: String, instanceId: String) {
+        _ = KeychainStore.saveString(
+            token,
+            service: self.gatewayService,
+            account: self.gatewayBootstrapTokenAccount(instanceId: instanceId))
+    }
+
+    static func clearGatewayBootstrapToken(instanceId: String) {
+        _ = KeychainStore.delete(
+            service: self.gatewayService,
+            account: self.gatewayBootstrapTokenAccount(instanceId: instanceId))
     }
 
     static func loadGatewayPassword(instanceId: String) -> String? {
@@ -280,6 +315,9 @@ enum GatewaySettingsStore {
             account: self.gatewayTokenAccount(instanceId: trimmed))
         _ = KeychainStore.delete(
             service: self.gatewayService,
+            account: self.gatewayBootstrapTokenAccount(instanceId: trimmed))
+        _ = KeychainStore.delete(
+            service: self.gatewayService,
             account: self.gatewayPasswordAccount(instanceId: trimmed))
     }
 
@@ -329,6 +367,10 @@ enum GatewaySettingsStore {
 
     private static func gatewayTokenAccount(instanceId: String) -> String {
         "gateway-token.\(instanceId)"
+    }
+
+    private static func gatewayBootstrapTokenAccount(instanceId: String) -> String {
+        "gateway-bootstrap-token.\(instanceId)"
     }
 
     private static func gatewayPasswordAccount(instanceId: String) -> String {

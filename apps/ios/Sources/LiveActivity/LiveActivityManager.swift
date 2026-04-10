@@ -1,4 +1,4 @@
-import ActivityKit
+@preconcurrency import ActivityKit
 import Foundation
 import os
 

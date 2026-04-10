@@ -1,7 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import type { TemplateContext } from "../templating.js";
 import { buildThreadingToolContext } from "./agent-runner-utils.js";
 import { applyReplyThreading } from "./reply-payloads.js";
@@ -12,10 +18,28 @@ import {
   sortSubagentRuns,
 } from "./subagents-utils.js";
 
+function createSlackThreadingPlugin(): ChannelPlugin {
+  return {
+    ...createChannelTestPluginBase({ id: "slack", label: "Slack" }),
+    threading: {
+      buildToolContext: ({ context }) => ({
+        currentChannelId: context.To?.replace(/^channel:/, ""),
+        currentThreadTs:
+          context.MessageThreadId != null ? String(context.MessageThreadId) : undefined,
+        replyToMode: "all",
+      }),
+    },
+  } as ChannelPlugin;
+}
+
 describe("buildThreadingToolContext", () => {
   const cfg = {} as OpenClawConfig;
 
-  it("uses conversation id for WhatsApp", () => {
+  afterEach(() => {
+    resetPluginRuntimeStateForTest();
+  });
+
+  it("uses the recipient id for WhatsApp without origin routing metadata", () => {
     const sessionCtx = {
       Provider: "whatsapp",
       From: "123@g.us",
@@ -28,7 +52,7 @@ describe("buildThreadingToolContext", () => {
       hasRepliedRef: undefined,
     });
 
-    expect(result.currentChannelId).toBe("123@g.us");
+    expect(result.currentChannelId).toBe("+15550001");
   });
 
   it("falls back to To for WhatsApp when From is missing", () => {
@@ -62,7 +86,7 @@ describe("buildThreadingToolContext", () => {
     expect(result.currentChannelId).toBe("chat:99");
   });
 
-  it("normalizes signal direct targets for tool context", () => {
+  it("uses raw signal direct targets for tool context without provider-specific normalization", () => {
     const sessionCtx = {
       Provider: "signal",
       ChatType: "direct",
@@ -76,10 +100,10 @@ describe("buildThreadingToolContext", () => {
       hasRepliedRef: undefined,
     });
 
-    expect(result.currentChannelId).toBe("+15550001");
+    expect(result.currentChannelId).toBe("signal:+15550002");
   });
 
-  it("preserves signal group ids for tool context", () => {
+  it("keeps raw signal group ids for tool context", () => {
     const sessionCtx = {
       Provider: "signal",
       ChatType: "group",
@@ -92,10 +116,12 @@ describe("buildThreadingToolContext", () => {
       hasRepliedRef: undefined,
     });
 
-    expect(result.currentChannelId).toBe("group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=");
+    expect(result.currentChannelId).toBe(
+      "signal:group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
+    );
   });
 
-  it("uses the sender handle for iMessage direct chats", () => {
+  it("uses chat_id for iMessage direct chats without provider-specific normalization", () => {
     const sessionCtx = {
       Provider: "imessage",
       ChatType: "direct",
@@ -109,7 +135,7 @@ describe("buildThreadingToolContext", () => {
       hasRepliedRef: undefined,
     });
 
-    expect(result.currentChannelId).toBe("imessage:+15550001");
+    expect(result.currentChannelId).toBe("chat_id:12");
   });
 
   it("uses chat_id for iMessage groups", () => {
@@ -129,7 +155,29 @@ describe("buildThreadingToolContext", () => {
     expect(result.currentChannelId).toBe("chat_id:7");
   });
 
-  it("prefers MessageThreadId for Slack tool threading", () => {
+  it("uses raw Slack channel ids without implicit thread context", () => {
+    const sessionCtx = {
+      Provider: "slack",
+      To: "channel:C1",
+      MessageThreadId: "123.456",
+    } as TemplateContext;
+
+    const result = buildThreadingToolContext({
+      sessionCtx,
+      config: { channels: { slack: { replyToMode: "all" } } } as OpenClawConfig,
+      hasRepliedRef: undefined,
+    });
+
+    expect(result.currentChannelId).toBe("channel:C1");
+    expect(result.currentThreadTs).toBeUndefined();
+  });
+
+  it("uses Slack plugin threading context when the plugin registry is active", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "slack", plugin: createSlackThreadingPlugin(), source: "test" },
+      ]),
+    );
     const sessionCtx = {
       Provider: "slack",
       To: "channel:C1",
@@ -171,6 +219,43 @@ describe("applyReplyThreading auto-threading", () => {
     expect(result[1].replyToId).toBeUndefined();
   });
 
+  it("threads only first payload when mode is 'batched' and the turn is batched", () => {
+    const result = applyReplyThreading({
+      payloads: [{ text: "A" }, { text: "B" }],
+      replyToMode: "batched",
+      currentMessageId: "42",
+      replyThreading: { implicitCurrentMessage: "allow" },
+    });
+
+    expect(result).toHaveLength(2);
+    expect(result[0].replyToId).toBe("42");
+    expect(result[1].replyToId).toBeUndefined();
+  });
+
+  it("can disable implicit reply threading for the current turn", () => {
+    const result = applyReplyThreading({
+      payloads: [{ text: "Hello" }],
+      replyToMode: "batched",
+      currentMessageId: "42",
+      replyThreading: { implicitCurrentMessage: "deny" },
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].replyToId).toBeUndefined();
+  });
+
+  it("still honors explicit reply tags when implicit reply threading is disabled", () => {
+    const result = applyReplyThreading({
+      payloads: [{ text: "Hello [[reply_to_current]]" }],
+      replyToMode: "batched",
+      currentMessageId: "42",
+      replyThreading: { implicitCurrentMessage: "deny" },
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].replyToId).toBe("42");
+  });
+
   it("threads all payloads when mode is 'all'", () => {
     const result = applyReplyThreading({
       payloads: [{ text: "A" }, { text: "B" }],
@@ -206,7 +291,7 @@ describe("applyReplyThreading auto-threading", () => {
     expect(result[0].replyToId).toBeUndefined();
   });
 
-  it("strips explicit tags for Slack when off mode disallows tags", () => {
+  it("keeps explicit tags for Slack when off mode allows explicit tags", () => {
     const result = applyReplyThreading({
       payloads: [{ text: "[[reply_to_current]]A" }],
       replyToMode: "off",
@@ -215,7 +300,8 @@ describe("applyReplyThreading auto-threading", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0].replyToId).toBeUndefined();
+    expect(result[0].replyToId).toBe("42");
+    expect(result[0].replyToTag).toBe(true);
   });
 
   it("keeps explicit tags for Telegram when off mode is enabled", () => {
@@ -298,6 +384,21 @@ describe("subagents utils", () => {
     const formatted = formatRunLabel(run, { maxLength: 10 });
     expect(formatted.startsWith("x".repeat(10))).toBe(true);
     expect(formatted.endsWith("…")).toBe(true);
+  });
+
+  it("sanitizes leaked internal runtime context from formatted run labels", () => {
+    const run = {
+      ...baseRun,
+      label: [
+        "OpenClaw runtime context (internal):",
+        "This context is runtime-generated, not user-authored. Keep internal details private.",
+        "",
+        "[Internal task completion event]",
+        "source: subagent",
+      ].join("\n"),
+    };
+
+    expect(formatRunLabel(run)).toBe("subagent");
   });
 
   it("sorts subagent runs by newest start/created time", () => {

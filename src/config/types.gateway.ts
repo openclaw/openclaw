@@ -49,17 +49,9 @@ export type CanvasHostConfig = {
 };
 
 export type TalkProviderConfig = {
-  /** Default voice ID for the provider's Talk mode implementation. */
-  voiceId?: string;
-  /** Optional voice name -> provider voice ID map. */
-  voiceAliases?: Record<string, string>;
-  /** Default provider model ID for Talk mode. */
-  modelId?: string;
-  /** Default provider output format (for example pcm_44100). */
-  outputFormat?: string;
   /** Provider API key (optional; provider-specific env fallback may apply). */
   apiKey?: SecretInput;
-  /** Provider-specific extensions. */
+  /** Provider-owned Talk config fields. */
   [key: string]: unknown;
 };
 
@@ -71,7 +63,7 @@ export type ResolvedTalkConfig = {
 };
 
 export type TalkConfig = {
-  /** Active Talk TTS provider (for example "elevenlabs"). */
+  /** Active Talk TTS provider (for example "acme-speech"). */
   provider?: string;
   /** Provider-specific Talk config keyed by provider id. */
   providers?: Record<string, TalkProviderConfig>;
@@ -79,16 +71,6 @@ export type TalkConfig = {
   interruptOnSpeech?: boolean;
   /** Milliseconds of user silence before Talk mode sends the transcript after a pause. */
   silenceTimeoutMs?: number;
-
-  /**
-   * Legacy ElevenLabs compatibility fields.
-   * Kept during rollout while older clients migrate to provider/providers.
-   */
-  voiceId?: string;
-  voiceAliases?: Record<string, string>;
-  modelId?: string;
-  outputFormat?: string;
-  apiKey?: SecretInput;
 };
 
 export type TalkConfigResponse = TalkConfig & {
@@ -211,6 +193,13 @@ export type GatewayReloadConfig = {
   mode?: GatewayReloadMode;
   /** Debounce window for config reloads (ms). Default: 300. */
   debounceMs?: number;
+  /**
+   * Maximum time (ms) to wait for in-flight operations to complete before
+   * forcing a SIGUSR1 restart. Default: 300000 (5 minutes).
+   * Lower values risk aborting active subagent LLM calls.
+   * @see https://github.com/openclaw/openclaw/issues/47711
+   */
+  deferralTimeoutMs?: number;
 };
 
 export type GatewayHttpChatCompletionsConfig = {
@@ -347,6 +336,21 @@ export type GatewayHttpConfig = {
   securityHeaders?: GatewayHttpSecurityHeadersConfig;
 };
 
+export type GatewayPushApnsRelayConfig = {
+  /** Base HTTPS URL for the external iOS APNs relay service. */
+  baseUrl?: string;
+  /** Timeout in milliseconds for relay send requests (default: 10000). */
+  timeoutMs?: number;
+};
+
+export type GatewayPushApnsConfig = {
+  relay?: GatewayPushApnsRelayConfig;
+};
+
+export type GatewayPushConfig = {
+  apns?: GatewayPushApnsConfig;
+};
+
 export type GatewayNodesConfig = {
   /** Browser routing policy for node-hosted browser proxies. */
   browser?: {
@@ -366,6 +370,11 @@ export type GatewayToolsConfig = {
   deny?: string[];
   /** Tools to explicitly allow (removes from default deny list). */
   allow?: string[];
+};
+
+export type GatewayWebchatConfig = {
+  /** Max characters per text field in chat.history responses before truncation (default: 12000). */
+  chatHistoryMaxChars?: number;
 };
 
 export type GatewayConfig = {
@@ -395,6 +404,7 @@ export type GatewayConfig = {
   reload?: GatewayReloadConfig;
   tls?: GatewayTlsConfig;
   http?: GatewayHttpConfig;
+  push?: GatewayPushConfig;
   nodes?: GatewayNodesConfig;
   /**
    * IPs of trusted reverse proxies (e.g. Traefik, nginx). When a connection
@@ -409,10 +419,24 @@ export type GatewayConfig = {
   allowRealIpFallback?: boolean;
   /** Tool access restrictions for HTTP /tools/invoke endpoint. */
   tools?: GatewayToolsConfig;
+  /** WebChat display/history settings. */
+  webchat?: GatewayWebchatConfig;
   /**
    * Channel health monitor interval in minutes.
    * Periodically checks channel health and restarts unhealthy channels.
    * Set to 0 to disable. Default: 5.
    */
   channelHealthCheckMinutes?: number;
+  /**
+   * Stale event threshold in minutes for the channel health monitor.
+   * A connected channel that receives no events for this duration is treated
+   * as a stale socket and restarted. Default: 30.
+   */
+  channelStaleEventThresholdMinutes?: number;
+  /**
+   * Maximum number of health-monitor-initiated channel restarts per hour.
+   * Once this limit is reached, the monitor skips further restarts until
+   * the rolling window expires. Default: 10.
+   */
+  channelMaxRestartsPerHour?: number;
 };

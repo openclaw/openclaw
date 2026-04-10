@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../templating.js";
+import { withFastReplyConfig } from "./get-reply-fast-path.js";
+import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
 import { registerGetReplyCommonMocks } from "./get-reply.test-mocks.js";
 
 const mocks = vi.hoisted(() => ({
@@ -23,7 +25,13 @@ vi.mock("../../hooks/internal-hooks.js", () => ({
 vi.mock("../../link-understanding/apply.js", () => ({
   applyLinkUnderstanding: mocks.applyLinkUnderstanding,
 }));
+vi.mock("../../link-understanding/apply.runtime.js", () => ({
+  applyLinkUnderstanding: mocks.applyLinkUnderstanding,
+}));
 vi.mock("../../media-understanding/apply.js", () => ({
+  applyMediaUnderstanding: mocks.applyMediaUnderstanding,
+}));
+vi.mock("../../media-understanding/apply.runtime.js", () => ({
   applyMediaUnderstanding: mocks.applyMediaUnderstanding,
 }));
 vi.mock("./commands-core.js", () => ({
@@ -39,7 +47,11 @@ vi.mock("./session.js", () => ({
   initSessionState: mocks.initSessionState,
 }));
 
-const { getReplyFromConfig } = await import("./get-reply.js");
+let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
+
+async function loadGetReplyRuntimeForTest() {
+  ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
+}
 
 function buildCtx(overrides: Partial<MsgContext> = {}): MsgContext {
   return {
@@ -57,12 +69,16 @@ function buildCtx(overrides: Partial<MsgContext> = {}): MsgContext {
     To: "telegram:-100123",
     GroupChannel: "ops",
     Timestamp: 1710000000000,
+    MediaPath: "/tmp/voice.ogg",
+    MediaUrl: "https://example.test/voice.ogg",
+    MediaType: "audio/ogg",
     ...overrides,
   };
 }
 
 describe("getReplyFromConfig message hooks", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await loadGetReplyRuntimeForTest();
     delete process.env.OPENCLAW_TEST_FAST;
     mocks.applyMediaUnderstanding.mockReset();
     mocks.applyLinkUnderstanding.mockReset();
@@ -113,7 +129,7 @@ describe("getReplyFromConfig message hooks", () => {
   it("emits transcribed + preprocessed hooks with enriched context", async () => {
     const ctx = buildCtx();
 
-    await getReplyFromConfig(ctx, undefined, {});
+    await getReplyFromConfig(ctx, undefined, withFastReplyConfig({}));
 
     expect(mocks.createInternalHookEvent).toHaveBeenCalledTimes(2);
     expect(mocks.createInternalHookEvent).toHaveBeenNthCalledWith(
@@ -149,7 +165,7 @@ describe("getReplyFromConfig message hooks", () => {
       ctx.BodyForAgent = "<media:audio>";
     });
 
-    await getReplyFromConfig(buildCtx(), undefined, {});
+    await getReplyFromConfig(buildCtx(), undefined, withFastReplyConfig({}));
 
     expect(mocks.createInternalHookEvent).toHaveBeenCalledTimes(1);
     expect(mocks.createInternalHookEvent).toHaveBeenCalledWith(
@@ -163,7 +179,7 @@ describe("getReplyFromConfig message hooks", () => {
   it("skips message hooks in fast test mode", async () => {
     process.env.OPENCLAW_TEST_FAST = "1";
 
-    await getReplyFromConfig(buildCtx(), undefined, {});
+    await getReplyFromConfig(buildCtx(), undefined, withFastReplyConfig({}));
 
     expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
     expect(mocks.applyLinkUnderstanding).not.toHaveBeenCalled();
@@ -172,9 +188,37 @@ describe("getReplyFromConfig message hooks", () => {
   });
 
   it("skips message hooks when SessionKey is unavailable", async () => {
-    await getReplyFromConfig(buildCtx({ SessionKey: undefined }), undefined, {});
+    await getReplyFromConfig(
+      buildCtx({ SessionKey: undefined }),
+      undefined,
+      withFastReplyConfig({}),
+    );
 
     expect(mocks.createInternalHookEvent).not.toHaveBeenCalled();
     expect(mocks.triggerInternalHook).not.toHaveBeenCalled();
+  });
+
+  it("skips media and link understanding on plain text without attachments or urls", async () => {
+    await getReplyFromConfig(
+      buildCtx({
+        Body: "hello there",
+        BodyForAgent: "hello there",
+        RawBody: "hello there",
+        CommandBody: "hello there",
+        BodyForCommands: "hello there",
+        MediaPath: undefined,
+        MediaUrl: undefined,
+        MediaPaths: undefined,
+        MediaUrls: undefined,
+        MediaTypes: undefined,
+        Sticker: undefined,
+        StickerMediaIncluded: undefined,
+      }),
+      undefined,
+      withFastReplyConfig({}),
+    );
+
+    expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
+    expect(mocks.applyLinkUnderstanding).not.toHaveBeenCalled();
   });
 });

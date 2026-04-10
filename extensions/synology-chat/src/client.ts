@@ -5,6 +5,9 @@
 
 import * as http from "node:http";
 import * as https from "node:https";
+import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { z } from "zod";
 
 const MIN_SEND_INTERVAL_MS = 500;
 let lastSendTime = 0;
@@ -27,6 +30,43 @@ type ChatUserCacheEntry = {
   cachedAt: number;
 };
 
+type ChatWebhookPayload = {
+  text?: string;
+  file_url?: string;
+  user_ids?: number[];
+};
+
+const ChatUserSchema = z
+  .object({
+    user_id: z.number(),
+    username: z.string().optional(),
+    nickname: z.string().optional(),
+  })
+  .transform(
+    (user): ChatUser => ({
+      user_id: user.user_id,
+      username: user.username ?? "",
+      nickname: user.nickname ?? "",
+    }),
+  );
+
+const ChatUserListResponseSchema = z.object({
+  success: z.boolean(),
+  data: z
+    .object({
+      users: z
+        .array(z.unknown())
+        .optional()
+        .transform((users) =>
+          (users ?? []).flatMap((user) => {
+            const parsed = safeParseWithSchema(ChatUserSchema, user);
+            return parsed ? [parsed] : [];
+          }),
+        ),
+    })
+    .optional(),
+});
+
 // Cache user lists per bot endpoint to avoid cross-account bleed.
 const chatUserCache = new Map<string, ChatUserCacheEntry>();
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
@@ -43,20 +83,11 @@ export async function sendMessage(
   incomingUrl: string,
   text: string,
   userId?: string | number,
-  allowInsecureSsl = true,
+  allowInsecureSsl = false,
 ): Promise<boolean> {
   // Synology Chat API requires user_ids (numeric) to specify the recipient
   // The @mention is optional but user_ids is mandatory
-  const payloadObj: Record<string, any> = { text };
-  if (userId) {
-    // userId can be numeric ID or username - if numeric, add to user_ids
-    const numericId = typeof userId === "number" ? userId : parseInt(userId, 10);
-    if (!isNaN(numericId)) {
-      payloadObj.user_ids = [numericId];
-    }
-  }
-  const payload = JSON.stringify(payloadObj);
-  const body = `payload=${encodeURIComponent(payload)}`;
+  const body = buildWebhookBody({ text }, userId);
 
   // Internal rate limit: min 500ms between sends
   const now = Date.now();
@@ -73,7 +104,9 @@ export async function sendMessage(
     try {
       const ok = await doPost(incomingUrl, body, allowInsecureSsl);
       lastSendTime = Date.now();
-      if (ok) return true;
+      if (ok) {
+        return true;
+      }
     } catch {
       // will retry
     }
@@ -93,17 +126,9 @@ export async function sendFileUrl(
   incomingUrl: string,
   fileUrl: string,
   userId?: string | number,
-  allowInsecureSsl = true,
+  allowInsecureSsl = false,
 ): Promise<boolean> {
-  const payloadObj: Record<string, any> = { file_url: fileUrl };
-  if (userId) {
-    const numericId = typeof userId === "number" ? userId : parseInt(userId, 10);
-    if (!isNaN(numericId)) {
-      payloadObj.user_ids = [numericId];
-    }
-  }
-  const payload = JSON.stringify(payloadObj);
-  const body = `payload=${encodeURIComponent(payload)}`;
+  const body = buildWebhookBody({ file_url: fileUrl }, userId);
 
   try {
     const ok = await doPost(incomingUrl, body, allowInsecureSsl);
@@ -123,7 +148,7 @@ export async function sendFileUrl(
  */
 export async function fetchChatUsers(
   incomingUrl: string,
-  allowInsecureSsl = true,
+  allowInsecureSsl = false,
   log?: { warn: (...args: unknown[]) => void },
 ): Promise<ChatUser[]> {
   const now = Date.now();
@@ -143,37 +168,35 @@ export async function fetchChatUsers(
       return;
     }
     const transport = parsedUrl.protocol === "https:" ? https : http;
+    const requestOptions: http.RequestOptions | https.RequestOptions =
+      parsedUrl.protocol === "https:" ? { rejectUnauthorized: !allowInsecureSsl } : {};
 
     transport
-      .get(listUrl, { rejectUnauthorized: !allowInsecureSsl } as any, (res) => {
+      .get(listUrl, requestOptions, (res) => {
         let data = "";
         res.on("data", (c: Buffer) => {
           data += c.toString();
         });
         res.on("end", () => {
-          try {
-            const result = JSON.parse(data);
-            if (result.success && result.data?.users) {
-              const users = result.data.users.map((u: any) => ({
-                user_id: u.user_id,
-                username: u.username || "",
-                nickname: u.nickname || "",
-              }));
-              chatUserCache.set(listUrl, {
-                users,
-                cachedAt: now,
-              });
-              resolve(users);
-            } else {
-              log?.warn(
-                `fetchChatUsers: API returned success=${result.success}, using cached data`,
-              );
-              resolve(cached?.users ?? []);
-            }
-          } catch {
+          const result = safeParseJsonWithSchema(ChatUserListResponseSchema, data);
+          if (!result) {
             log?.warn("fetchChatUsers: failed to parse user_list response");
             resolve(cached?.users ?? []);
+            return;
           }
+
+          if (result.success) {
+            const users = result.data?.users ?? [];
+            chatUserCache.set(listUrl, {
+              users,
+              cachedAt: now,
+            });
+            resolve(users);
+            return;
+          }
+
+          log?.warn(`fetchChatUsers: API returned success=${result.success}, using cached data`);
+          resolve(cached?.users ?? []);
         });
       })
       .on("error", (err) => {
@@ -184,38 +207,55 @@ export async function fetchChatUsers(
 }
 
 /**
- * Resolve a webhook username to the correct Chat API user_id.
+ * Resolve a mutable webhook username/nickname to the correct Chat API user_id.
  *
  * Synology Chat outgoing webhooks send a user_id that may NOT match the
  * Chat-internal user_id needed by the chatbot API (method=chatbot).
  * The webhook's "username" field corresponds to the Chat user's "nickname".
  *
- * @param incomingUrl - Bot incoming webhook URL (used to derive user_list URL)
- * @param webhookUsername - The username from the outgoing webhook payload
- * @param allowInsecureSsl - Skip TLS verification
  * @returns The correct Chat user_id, or undefined if not found
  */
-export async function resolveChatUserId(
-  incomingUrl: string,
-  webhookUsername: string,
-  allowInsecureSsl = true,
-  log?: { warn: (...args: unknown[]) => void },
-): Promise<number | undefined> {
-  const users = await fetchChatUsers(incomingUrl, allowInsecureSsl, log);
-  const lower = webhookUsername.toLowerCase();
+export async function resolveLegacyWebhookNameToChatUserId(params: {
+  incomingUrl: string;
+  mutableWebhookUsername: string;
+  allowInsecureSsl?: boolean;
+  log?: { warn: (...args: unknown[]) => void };
+}): Promise<number | undefined> {
+  const users = await fetchChatUsers(params.incomingUrl, params.allowInsecureSsl, params.log);
+  const lower = normalizeLowercaseStringOrEmpty(params.mutableWebhookUsername);
 
   // Match by nickname first (webhook "username" field = Chat "nickname")
-  const byNickname = users.find((u) => u.nickname.toLowerCase() === lower);
-  if (byNickname) return byNickname.user_id;
+  const byNickname = users.find((u) => normalizeLowercaseStringOrEmpty(u.nickname) === lower);
+  if (byNickname) {
+    return byNickname.user_id;
+  }
 
   // Then by username
-  const byUsername = users.find((u) => u.username.toLowerCase() === lower);
-  if (byUsername) return byUsername.user_id;
+  const byUsername = users.find((u) => normalizeLowercaseStringOrEmpty(u.username) === lower);
+  if (byUsername) {
+    return byUsername.user_id;
+  }
 
   return undefined;
 }
 
-function doPost(url: string, body: string, allowInsecureSsl = true): Promise<boolean> {
+function buildWebhookBody(payload: ChatWebhookPayload, userId?: string | number): string {
+  const numericId = parseNumericUserId(userId);
+  if (numericId !== undefined) {
+    payload.user_ids = [numericId];
+  }
+  return `payload=${encodeURIComponent(JSON.stringify(payload))}`;
+}
+
+function parseNumericUserId(userId?: string | number): number | undefined {
+  if (userId === undefined) {
+    return undefined;
+  }
+  const numericId = typeof userId === "number" ? userId : parseInt(userId, 10);
+  return Number.isNaN(numericId) ? undefined : numericId;
+}
+
+function doPost(url: string, body: string, allowInsecureSsl = false): Promise<boolean> {
   return new Promise((resolve, reject) => {
     let parsedUrl: URL;
     try {

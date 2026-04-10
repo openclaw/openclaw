@@ -32,7 +32,7 @@ describe("createChannelInboundDebouncer", () => {
           inbound: {
             debounceMs: 10,
             byChannel: {
-              slack: 25,
+              "demo-channel": 25,
             },
           },
         },
@@ -40,7 +40,7 @@ describe("createChannelInboundDebouncer", () => {
 
       const { debounceMs, debouncer } = createChannelInboundDebouncer<{ id: string }>({
         cfg,
-        channel: "slack",
+        channel: "demo-channel",
         buildKey: (item) => item.id,
         onFlush: async (items) => {
           flushed.push(items.map((entry) => entry.id));

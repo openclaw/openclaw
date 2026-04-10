@@ -1,4 +1,8 @@
+// Canonical shared prelude for channel-oriented plugin SDK surfaces.
+// Keep `core` and channel-specific SDK entrypoints derived from this module
+// so bundled channel entrypoints do not drift across overlapping exports.
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+export type { ChannelMessageActionContext } from "../channels/plugins/types.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { OpenClawPluginApi } from "../plugins/types.js";
 
@@ -18,4 +22,4 @@ export {
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 
-export { getChatChannelMeta } from "../channels/registry.js";
+export { getChatChannelMeta } from "../channels/chat-meta.js";

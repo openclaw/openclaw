@@ -1,15 +1,35 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
-import {
-  enforceSourceManagedProviderSecrets,
-  normalizeProviders,
-} from "./models-config.providers.js";
+import { normalizeProviders } from "./models-config.providers.normalize.js";
+import { resolveApiKeyFromProfiles } from "./models-config.providers.secrets.js";
+import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
+
+vi.mock("./models-config.providers.policy.runtime.js", () => ({
+  applyProviderNativeStreamingUsagePolicy: () => undefined,
+  normalizeProviderConfigPolicy: () => undefined,
+  resolveProviderConfigApiKeyPolicy: () => undefined,
+}));
 
 describe("normalizeProviders", () => {
+  const createModel = (
+    overrides: Partial<
+      NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]["models"][number]
+    > = {},
+  ) => ({
+    id: "config-model",
+    name: "Config model",
+    input: ["text"] as Array<"text" | "image">,
+    reasoning: false,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 8192,
+    maxTokens: 2048,
+    ...overrides,
+  });
+
   it("trims provider keys so image models remain discoverable for custom providers", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     try {
@@ -110,6 +130,76 @@ describe("normalizeProviders", () => {
       } else {
         process.env.OPENAI_API_KEY = original;
       }
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("normalizes SecretRef-managed provider apiKey values to env markers", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const secretRefManagedProviders = new Set<string>();
+    try {
+      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+        custom: {
+          baseUrl: "https://config.example/v1",
+          api: "openai-responses",
+          apiKey: { source: "env", provider: "default", id: "CUSTOM_PROVIDER_API_KEY" },
+          models: [createModel()],
+        },
+      };
+
+      const normalized = normalizeProviders({
+        providers,
+        agentDir,
+        secretRefManagedProviders,
+      });
+
+      expect(normalized?.custom?.apiKey).toBe("CUSTOM_PROVIDER_API_KEY"); // pragma: allowlist secret
+      expect(secretRefManagedProviders.has("custom")).toBe(true);
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reads provider apiKey markers from auth-profiles env refs", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    try {
+      await fs.writeFile(
+        path.join(agentDir, "auth-profiles.json"),
+        `${JSON.stringify(
+          {
+            version: 1,
+            profiles: {
+              "minimax:default": {
+                type: "api_key",
+                provider: "minimax",
+                keyRef: { source: "env", provider: "default", id: "MINIMAX_API_KEY" },
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      const resolved = resolveApiKeyFromProfiles({
+        provider: "minimax",
+        store: {
+          version: 1,
+          profiles: {
+            "minimax:default": {
+              type: "api_key",
+              provider: "minimax",
+              keyRef: { source: "env", provider: "default", id: "MINIMAX_API_KEY" },
+            },
+          },
+        },
+        env: process.env,
+      });
+
+      expect(resolved?.apiKey).toBe("MINIMAX_API_KEY"); // pragma: allowlist secret
+      expect(resolved?.source).toBe("env-ref");
+    } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
   });

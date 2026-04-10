@@ -1,5 +1,6 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { sendBlueBubblesReaction } from "./reactions.js";
+import { installBlueBubblesFetchTestHooks } from "./test-harness.js";
 
 vi.mock("./accounts.js", async () => {
   const { createBlueBubblesAccountsMockModule } = await import("./test-harness.js");
@@ -7,19 +8,18 @@ vi.mock("./accounts.js", async () => {
 });
 
 const mockFetch = vi.fn();
+const noopPrivateApiStatusMock = {
+  mockReturnValue: () => {},
+};
+
+installBlueBubblesFetchTestHooks({
+  mockFetch,
+  privateApiStatusMock: noopPrivateApiStatusMock,
+});
 
 describe("reactions", () => {
-  beforeEach(() => {
-    vi.stubGlobal("fetch", mockFetch);
-    mockFetch.mockReset();
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
   describe("sendBlueBubblesReaction", () => {
-    async function expectRemovedReaction(emoji: string) {
+    async function expectRemovedReaction(emoji: string, expectedReaction = "-love") {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         text: () => Promise.resolve(""),
@@ -37,7 +37,7 @@ describe("reactions", () => {
       });
 
       const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-      expect(body.reaction).toBe("-love");
+      expect(body.reaction).toBe(expectedReaction);
     }
 
     it("throws when chatGuid is empty", async () => {
@@ -327,45 +327,11 @@ describe("reactions", () => {
 
     describe("reaction removal aliases", () => {
       it("handles emoji-based removal", async () => {
-        mockFetch.mockResolvedValueOnce({
-          ok: true,
-          text: () => Promise.resolve(""),
-        });
-
-        await sendBlueBubblesReaction({
-          chatGuid: "chat-123",
-          messageGuid: "msg-123",
-          emoji: "👍",
-          remove: true,
-          opts: {
-            serverUrl: "http://localhost:1234",
-            password: "test",
-          },
-        });
-
-        const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-        expect(body.reaction).toBe("-like");
+        await expectRemovedReaction("👍", "-like");
       });
 
       it("handles text alias removal", async () => {
-        mockFetch.mockResolvedValueOnce({
-          ok: true,
-          text: () => Promise.resolve(""),
-        });
-
-        await sendBlueBubblesReaction({
-          chatGuid: "chat-123",
-          messageGuid: "msg-123",
-          emoji: "haha",
-          remove: true,
-          opts: {
-            serverUrl: "http://localhost:1234",
-            password: "test",
-          },
-        });
-
-        const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-        expect(body.reaction).toBe("-laugh");
+        await expectRemovedReaction("haha", "-laugh");
       });
     });
   });
