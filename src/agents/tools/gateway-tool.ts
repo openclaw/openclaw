@@ -3,6 +3,12 @@ import { Type } from "@sinclair/typebox";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { parseConfigJson5, resolveConfigSnapshotHash } from "../../config/io.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
+import {
+  configMayNeedPluginAutoEnable,
+  materializePluginAutoEnableCandidatesInternal,
+  resolveConfiguredPluginAutoEnableCandidates,
+  resolvePluginAutoEnableManifestRegistry,
+} from "../../config/plugin-auto-enable.shared.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -12,7 +18,6 @@ import {
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { normalizeOptionalString, readStringValue } from "../../shared/string-coerce.js";
 import {
   createPluginActivationSource,
   normalizePluginsConfig,
@@ -20,6 +25,7 @@ import {
 } from "../../plugins/config-state.js";
 import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import { collectEnabledInsecureOrDangerousFlags } from "../../security/dangerous-config-flags.js";
+import { normalizeOptionalString, readStringValue } from "../../shared/string-coerce.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agent-scope.js";
 import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
@@ -144,6 +150,7 @@ function getPluginIdFromDangerousFlag(
 function isPluginDangerousFlagActive(
   config: Record<string, unknown>,
   flag: `plugins.entries.${string}.config.${string}`,
+  autoEnabledReasons?: Readonly<Record<string, string[]>>,
 ): boolean {
   const rootConfig = config as OpenClawConfig;
   const pluginId = getPluginIdFromDangerousFlag(flag, config);
@@ -160,6 +167,10 @@ function isPluginDangerousFlagActive(
     cache: true,
   }).plugins.find((plugin) => plugin.id === pluginId);
   if (!manifestRecord) {
+    const globalEnabled = (rootConfig.plugins as { enabled?: unknown } | undefined)?.enabled;
+    if (globalEnabled === false) {
+      return false;
+    }
     return (pluginEntry as { enabled?: unknown }).enabled !== false;
   }
 
@@ -175,7 +186,32 @@ function isPluginDangerousFlagActive(
     rootConfig,
     enabledByDefault: manifestRecord.enabledByDefault,
     activationSource,
+    autoEnabledReason: autoEnabledReasons?.[pluginId]?.[0],
   }).activated;
+}
+
+function resolveAutoEnabledPluginReasons(
+  config: Record<string, unknown>,
+): Record<string, string[]> {
+  const rootConfig = config as OpenClawConfig;
+  if (!configMayNeedPluginAutoEnable(rootConfig, process.env)) {
+    return {};
+  }
+  const manifestRegistry = resolvePluginAutoEnableManifestRegistry({
+    config: rootConfig,
+    env: process.env,
+  });
+  const candidates = resolveConfiguredPluginAutoEnableCandidates({
+    config: rootConfig,
+    env: process.env,
+    registry: manifestRegistry,
+  });
+  return materializePluginAutoEnableCandidatesInternal({
+    config: rootConfig,
+    candidates,
+    env: process.env,
+    manifestRegistry,
+  }).autoEnabledReasons;
 }
 
 type DangerousFlagToken = {
@@ -292,6 +328,7 @@ function collectNewlyEnabledDangerousConfigFlags(
   nextConfig: Record<string, unknown>,
 ): string[] {
   const currentFlags = collectEnabledInsecureOrDangerousFlags(currentConfig as OpenClawConfig);
+  const currentAutoEnabledReasons = resolveAutoEnabledPluginReasons(currentConfig);
   const remainingCurrentTokens = currentFlags.map((flag) =>
     createDangerousConfigFlagToken(flag, currentConfig),
   );
@@ -309,6 +346,7 @@ function collectNewlyEnabledDangerousConfigFlags(
     }
   }
   const nextFlags = collectEnabledInsecureOrDangerousFlags(nextConfig as OpenClawConfig);
+  const nextAutoEnabledReasons = resolveAutoEnabledPluginReasons(nextConfig);
   const newlyEnabledFlags = nextFlags.filter(
     (flag) =>
       !takeMatchingDangerousFlag(
@@ -320,13 +358,13 @@ function collectNewlyEnabledDangerousConfigFlags(
     currentFlags.filter(
       (flag): flag is `plugins.entries.${string}.config.${string}` =>
         isPluginEntryDangerousFlag(flag, currentConfig) &&
-        isPluginDangerousFlagActive(currentConfig, flag),
+        isPluginDangerousFlagActive(currentConfig, flag, currentAutoEnabledReasons),
     ),
   );
   for (const flag of nextFlags) {
     if (
       !isPluginEntryDangerousFlag(flag, nextConfig) ||
-      !isPluginDangerousFlagActive(nextConfig, flag)
+      !isPluginDangerousFlagActive(nextConfig, flag, nextAutoEnabledReasons)
     ) {
       continue;
     }

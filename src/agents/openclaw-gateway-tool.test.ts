@@ -15,6 +15,25 @@ const { callGatewayToolMock, readGatewayCallOptionsMock, configState } = vi.hois
 const { resolvePluginConfigContractsByIdMock } = vi.hoisted(() => ({
   resolvePluginConfigContractsByIdMock: vi.fn(),
 }));
+const { resolvePluginSetupAutoEnableReasonsMock } = vi.hoisted(() => ({
+  resolvePluginSetupAutoEnableReasonsMock: vi.fn(() => []),
+}));
+const { loadPluginManifestRegistryMock } = vi.hoisted(() => ({
+  loadPluginManifestRegistryMock: vi.fn(() => ({
+    plugins: [
+      {
+        id: "acpx",
+        origin: "bundled",
+        enabledByDefault: true,
+        autoEnableWhenConfiguredProviders: ["openai"],
+        providers: [],
+        channels: [],
+        legacyPluginIds: [],
+      },
+    ],
+    diagnostics: [],
+  })),
+}));
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -40,7 +59,21 @@ vi.mock("../plugins/config-contracts.js", async (importOriginal) => {
     resolvePluginConfigContractsById: resolvePluginConfigContractsByIdMock,
   };
 });
+vi.mock("../plugins/setup-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/setup-registry.js")>();
+  return {
+    ...actual,
+    resolvePluginSetupAutoEnableReasons: resolvePluginSetupAutoEnableReasonsMock,
+  };
+});
 
+vi.mock("../plugins/manifest-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/manifest-registry.js")>();
+  return {
+    ...actual,
+    loadPluginManifestRegistry: loadPluginManifestRegistryMock,
+  };
+});
 function requireGatewayTool(agentSessionKey?: string) {
   return createGatewayTool({
     ...(agentSessionKey ? { agentSessionKey } : {}),
@@ -75,6 +108,8 @@ describe("gateway tool", () => {
     callGatewayToolMock.mockClear();
     readGatewayCallOptionsMock.mockClear();
     resolvePluginConfigContractsByIdMock.mockReset();
+    resolvePluginSetupAutoEnableReasonsMock.mockReset();
+    loadPluginManifestRegistryMock.mockReset();
     configState.value = {};
     resolvePluginConfigContractsByIdMock.mockImplementation(
       ({ pluginIds }: { pluginIds: string[] }) =>
@@ -89,6 +124,21 @@ describe("gateway tool", () => {
           ]),
         ),
     );
+    loadPluginManifestRegistryMock.mockReturnValue({
+      plugins: [
+        {
+          id: "acpx",
+          origin: "bundled",
+          enabledByDefault: true,
+          autoEnableWhenConfiguredProviders: ["openai"],
+          providers: [],
+          channels: [],
+          legacyPluginIds: [],
+        },
+      ],
+      diagnostics: [],
+    });
+    resolvePluginSetupAutoEnableReasonsMock.mockReturnValue([]);
     callGatewayToolMock.mockImplementation(async (method: string) => {
       if (method === "config.get") {
         return {
@@ -528,6 +578,50 @@ describe("gateway tool", () => {
     );
   });
 
+  it("rejects config.patch when it globally re-enables plugins with dangerous config and manifests are unavailable", async () => {
+    loadPluginManifestRegistryMock.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          hash: "hash-1",
+          config: {
+            plugins: {
+              enabled: false,
+              entries: {
+                acpx: {
+                  config: {
+                    permissionMode: "approve-all",
+                  },
+                },
+              },
+            },
+            tools: { exec: { ask: "on-miss", security: "allowlist" } },
+          },
+        };
+      }
+      return { ok: true };
+    });
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-enable-dangerous-plugins-globally-without-manifests", {
+        action: "config.patch",
+        raw: "{ plugins: { enabled: true } }",
+      }),
+    ).rejects.toThrow(
+      "gateway config.patch cannot enable dangerous config flags: plugins.entries.acpx.config.permissionMode=approve-all",
+    );
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
   it("rejects config.patch when an allowlist change activates dangerous plugin config", async () => {
     vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
       if (method === "config.get") {
@@ -556,6 +650,59 @@ describe("gateway tool", () => {
       tool.execute("call-allow-dangerous-plugin", {
         action: "config.patch",
         raw: '{ plugins: { allow: ["acpx"] } }',
+      }),
+    ).rejects.toThrow(
+      "gateway config.patch cannot enable dangerous config flags: plugins.entries.acpx.config.permissionMode=approve-all",
+    );
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
+  it("rejects config.patch when provider config auto-enables dangerous plugin config", async () => {
+    loadPluginManifestRegistryMock.mockReturnValue({
+      plugins: [
+        {
+          id: "acpx",
+          origin: "bundled",
+          enabledByDefault: false,
+          autoEnableWhenConfiguredProviders: ["openai"],
+          providers: [],
+          channels: [],
+          legacyPluginIds: [],
+        },
+      ],
+      diagnostics: [],
+    });
+    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          hash: "hash-1",
+          config: {
+            plugins: {
+              entries: {
+                acpx: {
+                  config: {
+                    permissionMode: "approve-all",
+                  },
+                },
+              },
+            },
+            tools: { exec: { ask: "on-miss", security: "allowlist" } },
+          },
+        };
+      }
+      return { ok: true };
+    });
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-auto-enable-dangerous-plugin", {
+        action: "config.patch",
+        raw: '{ auth: { profiles: { primary: { provider: "openai", mode: "api-key" } } } }',
       }),
     ).rejects.toThrow(
       "gateway config.patch cannot enable dangerous config flags: plugins.entries.acpx.config.permissionMode=approve-all",
