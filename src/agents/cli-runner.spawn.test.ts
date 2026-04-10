@@ -967,6 +967,7 @@ describe("runCliAgent spawn path", () => {
     const resolveBootstrapContextForRun = vi.fn(async () => ({
       bootstrapFiles: [],
       contextFiles: [],
+      bootstrapSignature: "agents:AGENTS.md",
     }));
 
     setCliRunnerPrepareTestDeps({
