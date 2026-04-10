@@ -1893,8 +1893,8 @@ describe("prependSystemPromptAddition", () => {
 });
 
 describe("buildAfterTurnRuntimeContext", () => {
-  it("uses primary model when compaction.model is not set", () => {
-    const legacy = buildAfterTurnRuntimeContext({
+  it("uses primary model when compaction.model is not set", async () => {
+    const legacy = await buildAfterTurnRuntimeContext({
       attempt: {
         sessionKey: "agent:main:session:abc",
         messageChannel: "slack",
@@ -1921,8 +1921,8 @@ describe("buildAfterTurnRuntimeContext", () => {
     });
   });
 
-  it("resolves compaction.model override in runtime context so all context engines use the correct model", () => {
-    const legacy = buildAfterTurnRuntimeContext({
+  it("resolves compaction.model override in runtime context so all context engines use the correct model", async () => {
+    const legacy = await buildAfterTurnRuntimeContext({
       attempt: {
         sessionKey: "agent:main:session:abc",
         messageChannel: "slack",
@@ -1961,8 +1961,8 @@ describe("buildAfterTurnRuntimeContext", () => {
       authProfileId: undefined,
     });
   });
-  it("includes resolved auth profile fields for context-engine afterTurn compaction", () => {
-    const legacy = buildAfterTurnRuntimeContext({
+  it("includes resolved auth profile fields for context-engine afterTurn compaction", async () => {
+    const legacy = await buildAfterTurnRuntimeContext({
       attempt: {
         sessionKey: "agent:main:session:abc",
         messageChannel: "slack",
@@ -1992,8 +1992,8 @@ describe("buildAfterTurnRuntimeContext", () => {
     });
   });
 
-  it("preserves sender and channel routing context for scoped compaction discovery", () => {
-    const legacy = buildAfterTurnRuntimeContext({
+  it("preserves sender and channel routing context for scoped compaction discovery", async () => {
+    const legacy = await buildAfterTurnRuntimeContext({
       attempt: {
         sessionKey: "agent:main:session:abc",
         messageChannel: "slack",

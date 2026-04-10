@@ -3,6 +3,7 @@ import type {
   ContextEngineMaintenanceResult,
   ContextEngineRuntimeContext,
 } from "../../context-engine/types.js";
+import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import { log } from "./logger.js";
 import {
   rewriteTranscriptEntriesInSessionFile,
@@ -13,15 +14,17 @@ import {
  * Attach runtime-owned transcript rewrite helpers to an existing
  * context-engine runtime context payload.
  */
-export function buildContextEngineMaintenanceRuntimeContext(params: {
+export async function buildContextEngineMaintenanceRuntimeContext(params: {
   sessionId: string;
   sessionKey?: string;
   sessionFile: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
-}): ContextEngineRuntimeContext {
+}): Promise<ContextEngineRuntimeContext> {
+  const capabilities = await resolveContextEngineCapabilities();
   return {
     ...params.runtimeContext,
+    ...capabilities,
     rewriteTranscriptEntries: async (request) => {
       if (params.sessionManager) {
         return rewriteTranscriptEntriesInSessionManager({
@@ -60,7 +63,7 @@ export async function runContextEngineMaintenance(params: {
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       sessionFile: params.sessionFile,
-      runtimeContext: buildContextEngineMaintenanceRuntimeContext({
+      runtimeContext: await buildContextEngineMaintenanceRuntimeContext({
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
         sessionFile: params.sessionFile,

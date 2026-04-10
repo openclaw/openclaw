@@ -139,6 +139,18 @@ export type ContextEngineRuntimeContext = Record<string, unknown> & {
   rewriteTranscriptEntries?: (
     request: TranscriptRewriteRequest,
   ) => Promise<TranscriptRewriteResult>;
+  /** LLM completion capability for engines that need model inference. */
+  llm?: {
+    complete: (
+      params: import("../plugins/runtime/types-core.js").PluginLlmCompleteParams,
+    ) => Promise<import("../plugins/runtime/types-core.js").PluginLlmCompleteResult>;
+  };
+  /** Sandbox execution capability for engines that need shell commands. */
+  sandbox?: {
+    exec: (
+      params: import("../plugins/runtime/types-core.js").PluginSandboxExecParams,
+    ) => Promise<import("../plugins/runtime/types-core.js").PluginSandboxExecResult>;
+  };
 };
 
 /**

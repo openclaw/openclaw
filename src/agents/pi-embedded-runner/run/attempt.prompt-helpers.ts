@@ -16,6 +16,7 @@ import { prependSystemPromptAdditionAfterCacheBoundary } from "../../system-prom
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../../video-generation-task-status.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
+import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
 import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -157,7 +158,7 @@ export function resolveAttemptPrependSystemContext(params: {
 }
 
 /** Build runtime context passed into context-engine afterTurn hooks. */
-export function buildAfterTurnRuntimeContext(params: {
+export async function buildAfterTurnRuntimeContext(params: {
   attempt: Pick<
     EmbeddedRunAttemptParams,
     | "sessionKey"
@@ -183,7 +184,8 @@ export function buildAfterTurnRuntimeContext(params: {
   workspaceDir: string;
   agentDir: string;
   promptCache?: ContextEnginePromptCacheInfo;
-}): ContextEngineRuntimeContext {
+}): Promise<ContextEngineRuntimeContext> {
+  const capabilities = await resolveContextEngineCapabilities();
   return {
     ...buildEmbeddedCompactionRuntimeContext({
       sessionKey: params.attempt.sessionKey,
@@ -208,6 +210,7 @@ export function buildAfterTurnRuntimeContext(params: {
       extraSystemPrompt: params.attempt.extraSystemPrompt,
       ownerNumbers: params.attempt.ownerNumbers,
     }),
+    ...capabilities,
     ...(params.promptCache ? { promptCache: params.promptCache } : {}),
   };
 }

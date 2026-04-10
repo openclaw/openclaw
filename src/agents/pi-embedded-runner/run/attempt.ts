@@ -839,7 +839,7 @@ export async function runEmbeddedAttempt(
         sessionKey: params.sessionKey,
         sessionFile: params.sessionFile,
         sessionManager,
-        runtimeContext: buildAfterTurnRuntimeContext({
+        runtimeContext: await buildAfterTurnRuntimeContext({
           attempt: params,
           workspaceDir: effectiveWorkspace,
           agentDir,
@@ -2080,7 +2080,7 @@ export async function runEmbeddedAttempt(
 
         // Let the active context engine run its post-turn lifecycle.
         if (params.contextEngine) {
-          const afterTurnRuntimeContext = buildAfterTurnRuntimeContext({
+          const afterTurnRuntimeContext = await buildAfterTurnRuntimeContext({
             attempt: params,
             workspaceDir: effectiveWorkspace,
             agentDir,
