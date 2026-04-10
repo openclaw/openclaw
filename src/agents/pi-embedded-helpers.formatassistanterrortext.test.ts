@@ -275,6 +275,13 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it("does not misdiagnose provider ids containing proxy as transport failures", () => {
+    const msg = makeAssistantError("Unknown model: custom-proxy/foo");
+    expect(formatAssistantErrorText(msg)).not.toBe(
+      "LLM request failed: proxy or tunnel configuration blocked the provider request.",
+    );
+  });
+
   it("sanitizes invalid streaming event order errors", () => {
     const msg = makeAssistantError(
       'Unexpected event order, got message_start before receiving "message_stop"',

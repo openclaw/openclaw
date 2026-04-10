@@ -1161,6 +1161,10 @@ describe("classifyProviderRuntimeFailureKind", () => {
 
   it("classifies proxy, dns, timeout, schema, sandbox, and replay failures", () => {
     expect(classifyProviderRuntimeFailureKind("407 Proxy Authentication Required")).toBe("proxy");
+    expect(classifyProviderRuntimeFailureKind("tunnel connection failed")).toBe("proxy");
+    expect(classifyProviderRuntimeFailureKind("Unknown model: custom-proxy/foo")).not.toBe(
+      "proxy",
+    );
     expect(
       classifyProviderRuntimeFailureKind("dial tcp: lookup api.example.com: no such host"),
     ).toBe("dns");
