@@ -238,6 +238,7 @@ export function toPluginInboundClaimContext(
     parentConversationId: conversation.parentConversationId,
     senderId: canonical.senderId,
     messageId: canonical.messageId,
+    sessionKey: canonical.sessionKey,
   };
 }
 
