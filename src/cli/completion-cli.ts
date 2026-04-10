@@ -108,6 +108,10 @@ function formatCompletionSourceLine(
   if (shell === "fish") {
     return `source "${cachePath}"`;
   }
+  // PowerShell uses dot-sourcing syntax; `source` is not a valid PS cmdlet.
+  if (shell === "powershell") {
+    return `. "${cachePath}"`;
+  }
   return `source "${cachePath}"`;
 }
 
@@ -346,8 +350,9 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
     profilePath = path.join(home, ".config", "fish", "config.fish");
     sourceLine = formatCompletionSourceLine("fish", binName, cachePath);
   } else {
-    console.error(`Automated installation not supported for ${shell} yet.`);
-    return;
+    // powershell — all CompletionShell values are now handled above.
+    profilePath = getShellProfilePath("powershell");
+    sourceLine = formatCompletionSourceLine("powershell", binName, cachePath);
   }
 
   try {
@@ -378,7 +383,9 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
 
     await fs.writeFile(profilePath, update.next, "utf-8");
     if (!yes) {
-      console.log(`Completion installed. Restart your shell or run: source ${profilePath}`);
+      // Use the correct reload syntax for each shell: PowerShell uses dot-source, others use source.
+      const reloadHint = shell === "powershell" ? `. "${profilePath}"` : `source ${profilePath}`;
+      console.log(`Completion installed. Restart your shell or run: ${reloadHint}`);
     }
   } catch (err) {
     console.error(`Failed to install completion: ${err as string}`);
