@@ -22,7 +22,9 @@ Use `openclaw approvals get`, `openclaw approvals get --gateway`, or
 host policy sources, and the effective result.
 For the local machine, `openclaw exec-policy show` exposes the same merged view and
 `openclaw exec-policy set|preset` can synchronize the local requested policy with the
-local host approvals file in one step.
+local host approvals file in one step. When a local scope requests `host=node`,
+`openclaw exec-policy show` reports that scope as node-managed at runtime instead of
+pretending the local approvals file is the effective source of truth.
 
 If the companion app UI is **not available**, any request that requires a prompt is
 resolved by the **ask fallback** (default: deny).

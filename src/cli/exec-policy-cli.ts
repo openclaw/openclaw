@@ -62,7 +62,37 @@ type ExecPolicyShowPayload = {
   approvalsExists: boolean;
   effectivePolicy: {
     note: string;
-    scopes: ExecPolicyScopeSnapshot[];
+    scopes: ExecPolicyShowScope[];
+  };
+};
+
+type ExecPolicyShowSecurity = ExecSecurity | "unknown";
+type ExecPolicyShowAsk = ExecAsk | "unknown";
+
+type ExecPolicyShowScope = Omit<
+  ExecPolicyScopeSnapshot,
+  "security" | "ask" | "askFallback" | "allowedDecisions"
+> & {
+  runtimeApprovalsSource: "local-file" | "node-runtime";
+  security: {
+    requested: ExecSecurity;
+    requestedSource: string;
+    host: ExecPolicyShowSecurity;
+    hostSource: string;
+    effective: ExecPolicyShowSecurity;
+    note: string;
+  };
+  ask: {
+    requested: ExecAsk;
+    requestedSource: string;
+    host: ExecPolicyShowAsk;
+    hostSource: string;
+    effective: ExecPolicyShowAsk;
+    note: string;
+  };
+  askFallback: {
+    effective: ExecPolicyShowSecurity;
+    source: string;
   };
 };
 
@@ -195,17 +225,54 @@ function buildNextExecPolicyConfig(
 async function buildLocalExecPolicyShowPayload(): Promise<ExecPolicyShowPayload> {
   const configSnapshot = await readConfigFileSnapshot();
   const approvalsSnapshot = readExecApprovalsSnapshot();
+  const scopes = collectExecPolicyScopeSnapshots({
+    cfg: configSnapshot.config ?? {},
+    approvals: approvalsSnapshot.file,
+    hostPath: approvalsSnapshot.path,
+  }).map(buildExecPolicyShowScope);
+  const hasNodeRuntimeScope = scopes.some((scope) => scope.runtimeApprovalsSource === "node-runtime");
   return {
     configPath: configSnapshot.path,
     approvalsPath: approvalsSnapshot.path,
     approvalsExists: approvalsSnapshot.exists,
     effectivePolicy: {
-      note: "Effective exec policy is the host approvals file intersected with requested tools.exec policy.",
-      scopes: collectExecPolicyScopeSnapshots({
-        cfg: configSnapshot.config ?? {},
-        approvals: approvalsSnapshot.file,
-        hostPath: approvalsSnapshot.path,
-      }),
+      note: hasNodeRuntimeScope
+        ? "Scopes requesting host=node are node-managed at runtime. Local approvals are shown only for local/gateway scopes."
+        : "Effective exec policy is the host approvals file intersected with requested tools.exec policy.",
+      scopes,
+    },
+  };
+}
+
+function buildExecPolicyShowScope(snapshot: ExecPolicyScopeSnapshot): ExecPolicyShowScope {
+  if (snapshot.host.requested !== "node") {
+    return {
+      ...snapshot,
+      runtimeApprovalsSource: "local-file",
+    };
+  }
+  return {
+    ...snapshot,
+    runtimeApprovalsSource: "node-runtime",
+    security: {
+      requested: snapshot.security.requested,
+      requestedSource: snapshot.security.requestedSource,
+      host: "unknown",
+      hostSource: "node runtime approvals",
+      effective: "unknown",
+      note: "runtime policy resolved by node approvals",
+    },
+    ask: {
+      requested: snapshot.ask.requested,
+      requestedSource: snapshot.ask.requestedSource,
+      host: "unknown",
+      hostSource: "node runtime approvals",
+      effective: "unknown",
+      note: "runtime policy resolved by node approvals",
+    },
+    askFallback: {
+      effective: "unknown",
+      source: "node runtime approvals",
     },
   };
 }

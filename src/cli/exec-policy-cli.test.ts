@@ -243,6 +243,51 @@ describe("exec-policy CLI", () => {
     );
   });
 
+  it("marks host=node scopes as node-managed in show output", async () => {
+    mocks.setConfig({
+      tools: {
+        exec: {
+          host: "node",
+          security: "allowlist",
+          ask: "on-miss",
+        },
+      },
+    });
+
+    await runExecPolicyCommand(["exec-policy", "show", "--json"]);
+
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        effectivePolicy: expect.objectContaining({
+          note: expect.stringContaining("host=node"),
+          scopes: [
+            expect.objectContaining({
+              scopeLabel: "tools.exec",
+              runtimeApprovalsSource: "node-runtime",
+              security: expect.objectContaining({
+                requested: "allowlist",
+                host: "unknown",
+                effective: "unknown",
+                hostSource: "node runtime approvals",
+              }),
+              ask: expect.objectContaining({
+                requested: "on-miss",
+                host: "unknown",
+                effective: "unknown",
+                hostSource: "node runtime approvals",
+              }),
+              askFallback: expect.objectContaining({
+                effective: "unknown",
+                source: "node runtime approvals",
+              }),
+            }),
+          ],
+        }),
+      }),
+      0,
+    );
+  });
+
   it("applies the yolo preset to both config and approvals", async () => {
     await runExecPolicyCommand(["exec-policy", "preset", "yolo", "--json"]);
 

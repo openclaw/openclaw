@@ -52,6 +52,7 @@ Current scope:
 - it updates the local config file and the local approvals file together
 - it does **not** push policy to the gateway host or a node host
 - `--host node` is rejected in this command because node exec approvals are fetched from the node at runtime and must be managed through node-targeted approvals commands instead
+- `openclaw exec-policy show` marks `host=node` scopes as node-managed at runtime instead of deriving an effective policy from the local approvals file
 
 If you need to edit remote host approvals directly, keep using `openclaw approvals set --gateway`
 or `openclaw approvals set --node <id|name|ip>`.
