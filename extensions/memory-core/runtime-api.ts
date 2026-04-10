@@ -17,6 +17,7 @@ export { checkQmdBinaryAvailability } from "openclaw/plugin-sdk/memory-core-host
 export { hasConfiguredMemorySecretInput } from "openclaw/plugin-sdk/memory-core-host-secret";
 export {
   auditShortTermPromotionArtifacts,
+  removeGroundedShortTermCandidates,
   repairShortTermPromotionArtifacts,
 } from "./src/short-term-promotion.js";
 export type { BuiltinMemoryEmbeddingProviderDoctorMetadata } from "./src/memory/provider-adapters.js";

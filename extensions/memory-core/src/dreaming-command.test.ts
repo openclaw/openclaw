@@ -52,13 +52,17 @@ function createHarness(initialConfig: OpenClawConfig = {}) {
   };
 }
 
-function createCommandContext(args?: string): PluginCommandContext {
+function createCommandContext(
+  args?: string,
+  overrides?: Partial<Pick<PluginCommandContext, "gatewayClientScopes">>,
+): PluginCommandContext {
   return {
     channel: "webchat",
     isAuthorizedSender: true,
     commandBody: args ? `/dreaming ${args}` : "/dreaming",
     args,
     config: {},
+    gatewayClientScopes: overrides?.gatewayClientScopes,
     requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
     detachConversationBinding: async () => ({ removed: false }),
     getCurrentConversationBinding: async () => null,
@@ -113,6 +117,48 @@ describe("memory-core /dreaming command", () => {
       frequency: "0 */6 * * *",
     });
     expect(result.text).toContain("Dreaming disabled.");
+  });
+
+  it("blocks unscoped gateway callers from persisting dreaming config", async () => {
+    const { command, runtime } = createHarness();
+
+    const result = await command.handler(
+      createCommandContext("off", {
+        gatewayClientScopes: [],
+      }),
+    );
+
+    expect(result.text).toContain("requires operator.admin");
+    expect(runtime.config.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("blocks write-scoped gateway callers from persisting dreaming config", async () => {
+    const { command, runtime } = createHarness();
+
+    const result = await command.handler(
+      createCommandContext("off", {
+        gatewayClientScopes: ["operator.write"],
+      }),
+    );
+
+    expect(result.text).toContain("requires operator.admin");
+    expect(runtime.config.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("allows admin-scoped gateway callers to persist dreaming config", async () => {
+    const { command, runtime, getRuntimeConfig } = createHarness();
+
+    const result = await command.handler(
+      createCommandContext("on", {
+        gatewayClientScopes: ["operator.admin"],
+      }),
+    );
+
+    expect(runtime.config.writeConfigFile).toHaveBeenCalledTimes(1);
+    expect(resolveStoredDreaming(getRuntimeConfig())).toMatchObject({
+      enabled: true,
+    });
+    expect(result.text).toContain("Dreaming enabled.");
   });
 
   it("returns status without mutating config", async () => {

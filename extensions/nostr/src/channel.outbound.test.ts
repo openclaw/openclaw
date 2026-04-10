@@ -28,6 +28,40 @@ function createCfg() {
   };
 }
 
+function installOutboundRuntime(convertMarkdownTables = vi.fn((text: string) => text)) {
+  const resolveMarkdownTableMode = vi.fn(() => "off");
+  setNostrRuntime({
+    channel: {
+      text: {
+        resolveMarkdownTableMode,
+        convertMarkdownTables,
+      },
+    },
+    reply: {},
+  } as unknown as PluginRuntime);
+  return { resolveMarkdownTableMode, convertMarkdownTables };
+}
+
+async function startOutboundAccount(accountId?: string) {
+  const sendDm = vi.fn(async () => {});
+  const bus = {
+    sendDm,
+    close: vi.fn(),
+    getMetrics: vi.fn(() => ({ counters: {} })),
+    publishProfile: vi.fn(),
+    getProfileState: vi.fn(async () => null),
+  };
+  mocks.startNostrBus.mockResolvedValueOnce(bus as unknown);
+
+  const cleanup = (await startNostrGatewayAccount(
+    createStartAccountContext({
+      account: buildResolvedNostrAccount(accountId ? { accountId } : undefined),
+    }),
+  )) as { stop: () => void };
+
+  return { cleanup, sendDm };
+}
+
 describe("nostr outbound cfg threading", () => {
   afterEach(() => {
     mocks.normalizePubkey.mockClear();
@@ -35,33 +69,10 @@ describe("nostr outbound cfg threading", () => {
   });
 
   it("uses resolved cfg when converting markdown tables before send", async () => {
-    const resolveMarkdownTableMode = vi.fn(() => "off");
-    const convertMarkdownTables = vi.fn((text: string) => `converted:${text}`);
-    setNostrRuntime({
-      channel: {
-        text: {
-          resolveMarkdownTableMode,
-          convertMarkdownTables,
-        },
-      },
-      reply: {},
-    } as unknown as PluginRuntime);
-
-    const sendDm = vi.fn(async () => {});
-    const bus = {
-      sendDm,
-      close: vi.fn(),
-      getMetrics: vi.fn(() => ({ counters: {} })),
-      publishProfile: vi.fn(),
-      getProfileState: vi.fn(async () => null),
-    };
-    mocks.startNostrBus.mockResolvedValueOnce(bus as unknown);
-
-    const cleanup = (await startNostrGatewayAccount(
-      createStartAccountContext({
-        account: buildResolvedNostrAccount(),
-      }),
-    )) as { stop: () => void };
+    const { resolveMarkdownTableMode, convertMarkdownTables } = installOutboundRuntime(
+      vi.fn((text: string) => `converted:${text}`),
+    );
+    const { cleanup, sendDm } = await startOutboundAccount();
 
     const cfg = createCfg();
     await nostrOutboundAdapter.sendText({
@@ -84,33 +95,8 @@ describe("nostr outbound cfg threading", () => {
   });
 
   it("uses the configured defaultAccount when accountId is omitted", async () => {
-    const resolveMarkdownTableMode = vi.fn(() => "off");
-    const convertMarkdownTables = vi.fn((text: string) => text);
-    setNostrRuntime({
-      channel: {
-        text: {
-          resolveMarkdownTableMode,
-          convertMarkdownTables,
-        },
-      },
-      reply: {},
-    } as unknown as PluginRuntime);
-
-    const sendDm = vi.fn(async () => {});
-    const bus = {
-      sendDm,
-      close: vi.fn(),
-      getMetrics: vi.fn(() => ({ counters: {} })),
-      publishProfile: vi.fn(),
-      getProfileState: vi.fn(async () => null),
-    };
-    mocks.startNostrBus.mockResolvedValueOnce(bus as unknown);
-
-    const cleanup = (await startNostrGatewayAccount(
-      createStartAccountContext({
-        account: buildResolvedNostrAccount({ accountId: "work" }),
-      }),
-    )) as { stop: () => void };
+    const { resolveMarkdownTableMode } = installOutboundRuntime();
+    const { cleanup, sendDm } = await startOutboundAccount("work");
 
     const cfg = {
       channels: {

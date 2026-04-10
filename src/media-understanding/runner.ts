@@ -461,58 +461,6 @@ async function resolveKeyEntry(params: {
     return { type: "provider" as const, provider: providerId, model: resolvedModel };
   };
 
-  if (capability === "image") {
-    const activeProvider = params.activeModel?.provider?.trim();
-    if (activeProvider) {
-      const activeEntry = await checkProvider(activeProvider, params.activeModel?.model);
-      if (activeEntry) {
-        return activeEntry;
-      }
-    }
-    for (const providerId of resolveConfiguredKeyProviderOrder({
-      cfg,
-      providerRegistry,
-      capability,
-      fallbackProviders: resolveAutoMediaKeyProviders({
-        cfg,
-        capability,
-        providerRegistry,
-      }),
-    })) {
-      const entry = await checkProvider(providerId);
-      if (entry) {
-        return entry;
-      }
-    }
-    return null;
-  }
-
-  if (capability === "video") {
-    const activeProvider = params.activeModel?.provider?.trim();
-    if (activeProvider) {
-      const activeEntry = await checkProvider(activeProvider, params.activeModel?.model);
-      if (activeEntry) {
-        return activeEntry;
-      }
-    }
-    for (const providerId of resolveConfiguredKeyProviderOrder({
-      cfg,
-      providerRegistry,
-      capability,
-      fallbackProviders: resolveAutoMediaKeyProviders({
-        cfg,
-        capability,
-        providerRegistry,
-      }),
-    })) {
-      const entry = await checkProvider(providerId, undefined);
-      if (entry) {
-        return entry;
-      }
-    }
-    return null;
-  }
-
   const activeProvider = params.activeModel?.provider?.trim();
   if (activeProvider) {
     const activeEntry = await checkProvider(activeProvider, params.activeModel?.model);

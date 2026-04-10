@@ -17,6 +17,7 @@ export type ModelCatalogEntry = {
   id: string;
   name: string;
   provider: string;
+  alias?: string;
   contextWindow?: number;
   reasoning?: boolean;
   input?: ModelInputType[];
@@ -143,7 +144,7 @@ export async function loadModelCatalog(params?: {
         if (!provider) {
           continue;
         }
-        if (shouldSuppressBuiltInModel({ provider, id })) {
+        if (shouldSuppressBuiltInModel({ provider, id, config: cfg })) {
           continue;
         }
         const name = normalizeOptionalString(String(entry?.name ?? id)) || id;

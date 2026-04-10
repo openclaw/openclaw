@@ -20,6 +20,10 @@ vi.mock("../../agents/model-catalog.js", () => ({
   ]),
 }));
 
+vi.mock("../../agents/model-auth-label.js", () => ({
+  resolveModelAuthLabel: () => undefined,
+}));
+
 const telegramModelsTestPlugin: ChannelPlugin = {
   ...createChannelTestPluginBase({
     id: "telegram",

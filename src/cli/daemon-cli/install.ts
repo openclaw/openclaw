@@ -124,6 +124,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     env: installEnv,
     port,
     runtime: runtimeRaw,
+    existingEnvironment: existingServiceEnv,
     warn: (message) => {
       if (json) {
         warnings.push(message);

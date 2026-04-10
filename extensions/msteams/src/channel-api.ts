@@ -1,7 +1,8 @@
 export type { ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
+export type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 export { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
-export type { ChannelPlugin, OpenClawConfig } from "openclaw/plugin-sdk/core";
-export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/core";
+export type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 export {
   buildProbeChannelStatusSummary,
   createDefaultChannelRuntimeState,
