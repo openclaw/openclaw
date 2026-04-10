@@ -284,9 +284,9 @@ export async function runGatewayLoop(params: {
         try {
           server = await Promise.race([params.start({ startupStartedAt }), startupTimeoutPromise]);
         } finally {
-          if (startupTimeoutHandle !== null) {
-            clearTimeout(startupTimeoutHandle);
-          }
+          // The Promise constructor callback is synchronous, so startupTimeoutHandle
+          // is always assigned by the time this finally block runs.
+          clearTimeout(startupTimeoutHandle!);
         }
         isFirstStart = false;
       } catch (err) {
