@@ -69,17 +69,20 @@ const mocks = vi.hoisted(() => {
         result: undefined,
       };
     }),
-    replaceConfigFile: vi.fn(async ({ nextConfig }: { nextConfig: OpenClawConfig }) => {
-      configState = structuredClone(nextConfig);
-      return {
-        path: "/tmp/openclaw.json",
-        previousHash: "hash-1",
-        snapshot: { path: "/tmp/openclaw.json" },
-        nextConfig,
-      };
-    }),
+    replaceConfigFile: vi.fn(
+      async ({ nextConfig }: { nextConfig: OpenClawConfig; baseHash?: string }) => {
+        configState = structuredClone(nextConfig);
+        return {
+          path: "/tmp/openclaw.json",
+          previousHash: "hash-1",
+          snapshot: { path: "/tmp/openclaw.json" },
+          nextConfig,
+        };
+      },
+    ),
     readConfigFileSnapshot: vi.fn(async () => ({
       path: "/tmp/openclaw.json",
+      hash: "config-hash-1",
       config: configState,
     })),
     readExecApprovalsSnapshot: vi.fn(() => ({
@@ -179,7 +182,7 @@ describe("exec-policy CLI", () => {
     );
     mocks.replaceConfigFile.mockReset();
     mocks.replaceConfigFile.mockImplementation(
-      async ({ nextConfig }: { nextConfig: OpenClawConfig }) => {
+      async ({ nextConfig }: { nextConfig: OpenClawConfig; baseHash?: string }) => {
         mocks.setConfig(structuredClone(nextConfig));
         return {
           path: "/tmp/openclaw.json",
@@ -192,6 +195,7 @@ describe("exec-policy CLI", () => {
     mocks.readConfigFileSnapshot.mockReset();
     mocks.readConfigFileSnapshot.mockImplementation(async () => ({
       path: "/tmp/openclaw.json",
+      hash: "config-hash-1",
       config: mocks.getConfig(),
     }));
     mocks.readExecApprovalsSnapshot.mockReset();
@@ -252,6 +256,11 @@ describe("exec-policy CLI", () => {
       ask: "off",
       askFallback: "full",
     });
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseHash: "config-hash-1",
+      }),
+    );
     expect(mocks.saveExecApprovals).toHaveBeenCalledTimes(1);
     expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(1);
   });

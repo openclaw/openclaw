@@ -279,6 +279,7 @@ async function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPol
   saveExecApprovals(nextApprovals);
   try {
     await replaceConfigFile({
+      baseHash: configSnapshot.hash,
       nextConfig,
     });
   } catch (err) {
