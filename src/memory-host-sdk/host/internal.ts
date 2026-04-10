@@ -55,8 +55,30 @@ export function ensureDir(dir: string): string {
 }
 
 export function normalizeRelPath(value: string): string {
-  const trimmed = value.trim().replace(/^[./]+/, "");
-  return trimmed.replace(/\\/g, "/");
+  const trimmed = value.trim().replace(/\\/g, "/");
+  // Collapse .. segments to prevent path traversal (e.g. memory/user1/../user2/secret.md).
+  const normalized = path.posix.normalize(trimmed);
+  // Paths that escape root are rejected.
+  if (normalized.startsWith("../") || normalized === "..") {
+    return "";
+  }
+  // Strip leading ./
+  return normalized.replace(/^\.\//, "");
+}
+
+function sanitizeUserId(userId: string): string {
+  // Strip null bytes.
+  let clean = Array.from(userId)
+    .filter((ch) => ch.charCodeAt(0) !== 0)
+    .join("");
+  // Replace filesystem-unsafe characters (including colon, safe on Linux but not Windows/macOS HFS+).
+  clean = clean.replace(/[/\\:*?"<>|]/g, "_");
+  // Collapse consecutive dots (.. path traversal attempt).
+  clean = clean.replace(/\.{2,}/g, "_");
+  // Trim leading/trailing dots and whitespace (e.g. "." or "  " would be dangerous directory names).
+  clean = clean.replace(/^[.\s]+|[.\s]+$/g, "");
+  // If everything was stripped, use a safe fallback.
+  return clean || "_anonymous_";
 }
 
 export function normalizeExtraMemoryPaths(workspaceDir: string, extraPaths?: string[]): string[] {
@@ -72,10 +94,21 @@ export function normalizeExtraMemoryPaths(workspaceDir: string, extraPaths?: str
   return Array.from(new Set(resolved));
 }
 
-export function isMemoryPath(relPath: string): boolean {
+export function isMemoryPath(relPath: string, userId?: string): boolean {
   const normalized = normalizeRelPath(relPath);
   if (!normalized) {
     return false;
+  }
+  if (userId) {
+    const safeUser = sanitizeUserId(userId);
+    const userPrefix = `memory/users/${safeUser}/`;
+    if (normalized.startsWith(userPrefix)) {
+      return true;
+    }
+    // Block access to other user directories
+    if (normalized.startsWith("memory/users/")) {
+      return false;
+    }
   }
   if (normalized === "MEMORY.md" || normalized === "memory.md" || normalized === "DREAMS.md") {
     return true;
@@ -95,7 +128,7 @@ function isAllowedMemoryFilePath(filePath: string, multimodal?: MemoryMultimodal
 async function walkDir(dir: string, files: string[], multimodal?: MemoryMultimodalSettings) {
   const entries = await fs.readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
-    const full = path.join(dir, entry.name);
+    const full = path.join(dir, entry.name).replace(/\\/g, "/");
     if (entry.isSymbolicLink()) {
       continue;
     }
@@ -113,26 +146,56 @@ async function walkDir(dir: string, files: string[], multimodal?: MemoryMultimod
   }
 }
 
-export async function listMemoryFiles(
-  workspaceDir: string,
-  extraPaths?: string[],
+async function walkDirSkipping(
+  dir: string,
+  files: string[],
   multimodal?: MemoryMultimodalSettings,
-): Promise<string[]> {
-  const result: string[] = [];
+  skipDir?: string,
+) {
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name).replace(/\\/g, "/");
+    if (skipDir && full.startsWith(skipDir)) {
+      continue;
+    }
+    if (entry.isSymbolicLink()) {
+      continue;
+    }
+    if (entry.isDirectory()) {
+      await walkDirSkipping(full, files, multimodal, skipDir);
+      continue;
+    }
+    if (!entry.isFile()) {
+      continue;
+    }
+    if (!isAllowedMemoryFilePath(full, multimodal)) {
+      continue;
+    }
+    files.push(full);
+  }
+}
+
+async function walkRootFiles(
+  workspaceDir: string,
+  result: string[],
+  multimodal?: MemoryMultimodalSettings,
+  skipDir?: string,
+): Promise<void> {
   const memoryFile = path.join(workspaceDir, "MEMORY.md");
   const altMemoryFile = path.join(workspaceDir, "memory.md");
   const memoryDir = path.join(workspaceDir, "memory");
 
   const addMarkdownFile = async (absPath: string) => {
     try {
-      const stat = await fs.lstat(absPath);
+      const normalized = absPath.replace(/\\/g, "/");
+      const stat = await fs.lstat(normalized);
       if (stat.isSymbolicLink() || !stat.isFile()) {
         return;
       }
-      if (!absPath.endsWith(".md")) {
+      if (!normalized.endsWith(".md")) {
         return;
       }
-      result.push(absPath);
+      result.push(normalized);
     } catch {}
   };
 
@@ -141,9 +204,37 @@ export async function listMemoryFiles(
   try {
     const dirStat = await fs.lstat(memoryDir);
     if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
-      await walkDir(memoryDir, result);
+      // When isolation is active, skip the per-user subtree so other users' files
+      // are not surfaced as shared content.
+      await walkDirSkipping(memoryDir, result, multimodal, skipDir);
     }
   } catch {}
+}
+
+export async function listMemoryFiles(
+  workspaceDir: string,
+  extraPaths?: string[],
+  multimodal?: MemoryMultimodalSettings,
+  userId?: string,
+): Promise<string[]> {
+  const result: string[] = [];
+
+  if (userId) {
+    const safeUser = sanitizeUserId(userId);
+    const userMemoryDir = path.join(workspaceDir, "memory", "users", safeUser);
+    try {
+      const dirStat = await fs.lstat(userMemoryDir);
+      if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
+        await walkDir(userMemoryDir, result, multimodal);
+      }
+    } catch {}
+    // Include shared root files, but skip the per-user subtree to prevent leaking
+    // other users' files as shared content.
+    const usersDir = path.join(workspaceDir, "memory", "users").replace(/\\/g, "/");
+    await walkRootFiles(workspaceDir, result, multimodal, usersDir);
+  } else {
+    await walkRootFiles(workspaceDir, result, multimodal);
+  }
 
   const normalizedExtraPaths = normalizeExtraMemoryPaths(workspaceDir, extraPaths);
   if (normalizedExtraPaths.length > 0) {

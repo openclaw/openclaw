@@ -12,47 +12,35 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
-const VALID_PLATFORMS = new Set([
-  "discord",
-  "telegram",
-  "whatsapp",
-  "signal",
-  "slack",
-  "msteams",
-  "webchat",
-  "line",
-  "kakaotalk",
-  "zalo",
-  "matrix",
-  "mattermost",
-  "irc",
-  "feishu",
-  "googlechat",
-  "nextcloud-talk",
-  "nostr",
-  "synology-chat",
-  "tlon",
-  "twitch",
-  "imessage",
-]);
+// Session-type markers that follow the platform token in a session key.
+// e.g. "agent:main:telegram:dm:123" — "dm" is a session-type marker, "telegram" is the platform.
+// Using structural detection instead of a hardcoded platform list avoids missing new channels.
+const SESSION_TYPE_MARKERS = new Set(["direct", "dm", "group", "channel"]);
 
+/**
+ * Extract the platform name from a session key based on session key structure.
+ * A session key segment like "<platform>:<session-type>:<id>" identifies the platform
+ * by its position before a known session-type marker.
+ */
 function extractPlatformFromSessionKey(sessionKey: string | undefined | null): string | null {
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed?.rest) {
     return null;
   }
   const tokens = parsed.rest.split(":").filter(Boolean);
-  const firstToken = tokens[0];
-  if (!firstToken) {
-    return null;
-  }
-  const baseName = firstToken.replace(/-dev$/, "");
-  if (VALID_PLATFORMS.has(baseName)) {
-    return firstToken;
+  // The platform is the token immediately before a session-type marker.
+  if (tokens.length >= 2 && SESSION_TYPE_MARKERS.has(tokens[1])) {
+    return tokens[0].toLowerCase();
   }
   return null;
 }
 
+/**
+ * Produce a platform-scoped user ID like "discord:12345" for memory isolation.
+ * If the senderId already contains a colon it is treated as already-prefixed and
+ * returned unchanged. Otherwise the platform is extracted from the session key
+ * and prepended.
+ */
 function addPlatformPrefixToSenderId(params: {
   senderId: string | undefined | null;
   sessionKey: string | undefined | null;
@@ -61,14 +49,9 @@ function addPlatformPrefixToSenderId(params: {
   if (!senderId) {
     return undefined;
   }
-  const prefixMatch = senderId.match(/^([a-z0-9-]+):(.+)$/i);
-  if (prefixMatch) {
-    const [, prefix, id] = prefixMatch;
-    const baseName = prefix.replace(/-dev$/, "");
-    if (VALID_PLATFORMS.has(baseName.toLowerCase())) {
-      return senderId;
-    }
-    return id ? `${prefix.toLowerCase()}:${id}` : senderId;
+  // Already prefixed (e.g. "discord:12345") — preserve as-is.
+  if (senderId.includes(":")) {
+    return senderId;
   }
   const platform = extractPlatformFromSessionKey(sessionKey);
   if (platform) {

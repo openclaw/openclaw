@@ -55,8 +55,15 @@ export function ensureDir(dir: string): string {
 }
 
 export function normalizeRelPath(value: string): string {
-  const trimmed = value.trim().replace(/^[./]+/, "");
-  return trimmed.replace(/\\/g, "/");
+  const trimmed = value.trim().replace(/\\/g, "/");
+  // Collapse .. segments to prevent path traversal (e.g. memory/user1/../user2/secret.md).
+  const normalized = path.posix.normalize(trimmed);
+  // Paths that escape root are rejected.
+  if (normalized.startsWith("../") || normalized === "..") {
+    return "";
+  }
+  // Strip leading ./
+  return normalized.replace(/^\.\//, "");
 }
 
 export function normalizeExtraMemoryPaths(workspaceDir: string, extraPaths?: string[]): string[] {
@@ -73,10 +80,18 @@ export function normalizeExtraMemoryPaths(workspaceDir: string, extraPaths?: str
 }
 
 function sanitizeUserId(userId: string): string {
-  const clean = Array.from(userId)
+  // Strip null bytes.
+  let clean = Array.from(userId)
     .filter((ch) => ch.charCodeAt(0) !== 0)
     .join("");
-  return clean.replace(/[/\\:*?"<>|]/g, "_").replace(/\.{2,}/g, "_");
+  // Replace filesystem-unsafe characters (including colon, safe on Linux but not Windows/macOS HFS+).
+  clean = clean.replace(/[/\\:*?"<>|]/g, "_");
+  // Collapse consecutive dots (.. path traversal attempt).
+  clean = clean.replace(/\.{2,}/g, "_");
+  // Trim leading/trailing dots and whitespace (e.g. "." or "  " would be dangerous directory names).
+  clean = clean.replace(/^[.\s]+|[.\s]+$/g, "");
+  // If everything was stripped, use a safe fallback.
+  return clean || "_anonymous_";
 }
 
 export function isMemoryPath(relPath: string, userId?: string): boolean {
@@ -156,6 +171,7 @@ async function walkRootFiles(
   workspaceDir: string,
   result: string[],
   multimodal?: MemoryMultimodalSettings,
+  skipDir?: string,
 ): Promise<void> {
   const memoryDir = path.join(workspaceDir, "memory");
 
@@ -180,9 +196,40 @@ async function walkRootFiles(
   try {
     const dirStat = await fs.lstat(memoryDir);
     if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
-      await walkDir(memoryDir, result, multimodal);
+      // When isolation is active, skip the per-user subtree so other users' files
+      // are not surfaced as shared content.
+      await walkDirSkipping(memoryDir, result, multimodal, skipDir);
     }
   } catch {}
+}
+
+async function walkDirSkipping(
+  dir: string,
+  files: string[],
+  multimodal?: MemoryMultimodalSettings,
+  skipDir?: string,
+) {
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name).replace(/\\/g, "/");
+    if (skipDir && full.startsWith(skipDir)) {
+      continue;
+    }
+    if (entry.isSymbolicLink()) {
+      continue;
+    }
+    if (entry.isDirectory()) {
+      await walkDirSkipping(full, files, multimodal, skipDir);
+      continue;
+    }
+    if (!entry.isFile()) {
+      continue;
+    }
+    if (!isAllowedMemoryFilePath(full, multimodal)) {
+      continue;
+    }
+    files.push(full);
+  }
 }
 
 export async function listMemoryFiles(
@@ -202,8 +249,10 @@ export async function listMemoryFiles(
         await walkDir(userMemoryDir, result, multimodal);
       }
     } catch {}
-    // Also include shared root files
-    await walkRootFiles(workspaceDir, result, multimodal);
+    // Include shared root files, but skip the per-user subtree to prevent leaking
+    // other users' files as shared content.
+    const usersDir = path.join(workspaceDir, "memory", "users").replace(/\\/g, "/");
+    await walkRootFiles(workspaceDir, result, multimodal, usersDir);
   } else {
     await walkRootFiles(workspaceDir, result, multimodal);
   }

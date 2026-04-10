@@ -162,8 +162,18 @@ export function resolveThreadParentSessionKey(
   return parent;
 }
 
+// Token values that appear after a DM marker but are not user IDs.
+const NON_USER_TOKENS = new Set(["group", "channel", "cron", "subagent", "acp", "thread"]);
+// DM-type markers that separate the platform token from the user ID.
+const DIRECT_MARKERS = ["direct", "dm"];
+
 /**
  * Extract user ID from session key for direct message sessions.
+ * Supports both "direct" and "dm" markers, and preserves full IDs that contain colons.
+ * Examples:
+ *   agent:main:telegram:dm:123      -> "123"
+ *   agent:main:discord:direct:456   -> "456"
+ *   agent:main:discord:direct:a:b   -> "a:b"  (colon-containing ID)
  */
 export function extractUserIdFromSessionKey(sessionKey: string | undefined | null): string | null {
   const parsed = parseAgentSessionKey(sessionKey);
@@ -171,11 +181,15 @@ export function extractUserIdFromSessionKey(sessionKey: string | undefined | nul
     return null;
   }
   const tokens = parsed.rest.split(":").filter(Boolean);
-  const directIdx = tokens.indexOf("direct");
-  if (directIdx !== -1 && directIdx + 1 < tokens.length) {
-    const userId = tokens[directIdx + 1];
-    if (userId && !["group", "channel", "dm", "cron", "subagent", "acp"].includes(userId)) {
-      return userId;
+  for (const marker of DIRECT_MARKERS) {
+    const idx = tokens.indexOf(marker);
+    if (idx !== -1 && idx + 1 < tokens.length) {
+      const firstToken = tokens[idx + 1];
+      if (NON_USER_TOKENS.has(firstToken)) {
+        continue;
+      }
+      // Preserve full IDs that contain colons by joining all remaining tokens.
+      return tokens.slice(idx + 1).join(":");
     }
   }
   return null;
