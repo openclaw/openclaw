@@ -207,12 +207,8 @@ enum HostEnvSecurityPolicy {
 
     static let blockedInheritedPrefixes: [String] = [
         "BASH_FUNC_",
-        "CARGO_REGISTRIES_",
         "DYLD_",
-        "GIT_CONFIG_",
-        "LD_",
-        "NPM_CONFIG_",
-        "TF_VAR_"
+        "LD_"
     ]
 
     static let blockedKeys: Set<String> = [

@@ -264,13 +264,13 @@ describe("isDangerousHostInheritedEnvVarName", () => {
     expect(isDangerousHostInheritedEnvVarName("ANSIBLE_CONFIG")).toBe(true);
     expect(isDangerousHostInheritedEnvVarName("ansible_library")).toBe(true);
     expect(isDangerousHostInheritedEnvVarName("TF_CLI_CONFIG_FILE")).toBe(true);
-    expect(isDangerousHostInheritedEnvVarName("TF_VAR_admin_cidr")).toBe(true);
+    expect(isDangerousHostInheritedEnvVarName("TF_VAR_admin_cidr")).toBe(false);
     expect(isDangerousHostInheritedEnvVarName("AWS_CONTAINER_CREDENTIALS_FULL_URI")).toBe(true);
     expect(isDangerousHostInheritedEnvVarName("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")).toBe(true);
     expect(isDangerousHostInheritedEnvVarName("KUBECONFIG")).toBe(true);
-    expect(isDangerousHostInheritedEnvVarName("GIT_CONFIG_GLOBAL")).toBe(true);
-    expect(isDangerousHostInheritedEnvVarName("NPM_CONFIG_USERCONFIG")).toBe(true);
-    expect(isDangerousHostInheritedEnvVarName("CARGO_REGISTRIES_CRATES_IO_INDEX")).toBe(true);
+    expect(isDangerousHostInheritedEnvVarName("GIT_CONFIG_GLOBAL")).toBe(false);
+    expect(isDangerousHostInheritedEnvVarName("NPM_CONFIG_USERCONFIG")).toBe(false);
+    expect(isDangerousHostInheritedEnvVarName("CARGO_REGISTRIES_CRATES_IO_INDEX")).toBe(false);
 
     expect(isDangerousHostInheritedEnvVarName("HTTP_PROXY")).toBe(false);
     expect(isDangerousHostInheritedEnvVarName("https_proxy")).toBe(false);
@@ -465,7 +465,7 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.EDITOR).toBeUndefined();
     expect(env.NPM_CONFIG_USERCONFIG).toBeUndefined();
     expect(env.GIT_CONFIG_GLOBAL).toBeUndefined();
-    expect(env.CARGO_REGISTRIES_CRATES_IO_INDEX).toBeUndefined();
+    expect(env.CARGO_REGISTRIES_CRATES_IO_INDEX).toBe("https://trusted.example/crates.io-index");
     expect(env.SHELLOPTS).toBeUndefined();
     expect(env.PS4).toBeUndefined();
     expect(env.CLASSPATH).toBeUndefined();
@@ -553,7 +553,7 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.R_PROFILE_USER).toBeUndefined();
     expect(env.ERL_AFLAGS).toBeUndefined();
     expect(env.TF_CLI_CONFIG_FILE).toBeUndefined();
-    expect(env.TF_VAR_admin_cidr).toBeUndefined();
+    expect(env.TF_VAR_admin_cidr).toBe("10.0.0.0/24");
     expect(env.SAFE).toBe("1");
   });
 

@@ -17,6 +17,7 @@ function derivePolicyArrays(policy) {
   );
   const blockedPrefixes = policy.blockedPrefixes ?? [];
   const blockedOverridePrefixes = policy.blockedOverridePrefixes ?? [];
+  const blockedInheritedPrefixes = policy.blockedInheritedPrefixes ?? blockedPrefixes;
 
   return {
     blockedInheritedKeys: sortUniqueUppercase([
@@ -25,7 +26,7 @@ function derivePolicyArrays(policy) {
         (value) => !allowedInheritedOverrideOnlyUpper.has(value.toUpperCase()),
       ),
     ]),
-    blockedInheritedPrefixes: sortUniqueUppercase([...blockedPrefixes, ...blockedOverridePrefixes]),
+    blockedInheritedPrefixes: sortUniqueUppercase(blockedInheritedPrefixes),
     blockedKeys: sortUniqueUppercase(blockedEverywhereKeys),
     blockedOverrideKeys: sortUniqueUppercase(blockedOverrideOnlyKeys),
     blockedPrefixes: sortUniqueUppercase(blockedPrefixes),

@@ -106,7 +106,7 @@ describe("host env security policy parity", () => {
       ]),
     );
     expect(policy.blockedInheritedPrefixes).toEqual(
-      sortUnique([...(policy.blockedPrefixes ?? []), ...(policy.blockedOverridePrefixes ?? [])]),
+      sortUnique(rawPolicy.blockedInheritedPrefixes ?? rawPolicy.blockedPrefixes ?? []),
     );
   });
 });
