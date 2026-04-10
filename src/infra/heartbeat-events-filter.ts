@@ -85,12 +85,8 @@ function isHeartbeatNoiseEvent(evt: string): boolean {
 }
 
 export function isExecCompletionEvent(evt: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(evt);
-  return (
-    normalized.includes("exec finished") ||
-    normalized.includes("exec completed") ||
-    normalized.includes("exec failed")
-  );
+  const normalized = normalizeLowercaseStringOrEmpty(evt).trimStart();
+  return /^exec (finished|completed|failed)\s*\(/.test(normalized);
 }
 
 // Returns true when a system event should be treated as real cron reminder content.
