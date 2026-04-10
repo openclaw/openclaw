@@ -148,7 +148,7 @@ Docs: https://docs.openclaw.ai
 - Daemon/launchd: keep `openclaw gateway stop` persistent without uninstalling the macOS LaunchAgent, re-enable it on explicit restart or repair, and harden launchd label handling. (#64447) Thanks @ngutman.
 - Agents/Slack: preserve threaded announce delivery when `sessions.list` rows lack stored thread metadata by falling back to the thread id encoded in the session key. (#63143) Thanks @mariosousa-finn.
 - Plugins/context engines: preserve `plugins.slots.contextEngine` through normalization and keep explicitly selected workspace context-engine plugins enabled, so loader diagnostics and plugin activation stop dropping that slot selection. (#64192) Thanks @hclsys.
-
+- Heartbeat: stop top-level `interval:` and `prompt:` fields outside the `tasks:` block from bleeding into the last parsed heartbeat task. (#64488) Thanks @Rahulkumar070.
 ## 2026.4.9
 
 ### Changes

@@ -20,6 +20,7 @@ type PendingRequest = {
   method: string;
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
+  cleanup: () => void;
 };
 
 export class CodexAppServerRpcError extends Error {
@@ -113,19 +114,71 @@ export class CodexAppServerClient {
     this.initialized = true;
   }
 
-  request<T = JsonValue | undefined>(method: string, params?: JsonValue): Promise<T> {
+  request<T = JsonValue | undefined>(
+    method: string,
+    params?: JsonValue,
+    options: { timeoutMs?: number; signal?: AbortSignal } = {},
+  ): Promise<T> {
     if (this.closed) {
       return Promise.reject(new Error("codex app-server client is closed"));
+    }
+    if (options.signal?.aborted) {
+      return Promise.reject(new Error(`${method} aborted`));
     }
     const id = this.nextId++;
     const message: RpcRequest = { id, method, params };
     return new Promise<T>((resolve, reject) => {
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      let cleanupAbort: (() => void) | undefined;
+      const cleanup = () => {
+        if (timeout) {
+          clearTimeout(timeout);
+          timeout = undefined;
+        }
+        cleanupAbort?.();
+        cleanupAbort = undefined;
+      };
+      const rejectPending = (error: Error) => {
+        if (!this.pending.has(id)) {
+          return;
+        }
+        this.pending.delete(id);
+        cleanup();
+        reject(error);
+      };
+      if (options.timeoutMs && Number.isFinite(options.timeoutMs) && options.timeoutMs > 0) {
+        timeout = setTimeout(
+          () => rejectPending(new Error(`${method} timed out`)),
+          Math.max(100, options.timeoutMs),
+        );
+        timeout.unref?.();
+      }
+      if (options.signal) {
+        const abortListener = () => rejectPending(new Error(`${method} aborted`));
+        options.signal.addEventListener("abort", abortListener, { once: true });
+        cleanupAbort = () => options.signal?.removeEventListener("abort", abortListener);
+      }
       this.pending.set(id, {
         method,
-        resolve: (value) => resolve(value as T),
-        reject,
+        resolve: (value) => {
+          cleanup();
+          resolve(value as T);
+        },
+        reject: (error) => {
+          cleanup();
+          reject(error);
+        },
+        cleanup,
       });
-      this.writeMessage(message);
+      if (options.signal?.aborted) {
+        rejectPending(new Error(`${method} aborted`));
+        return;
+      }
+      try {
+        this.writeMessage(message);
+      } catch (error) {
+        rejectPending(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
 
@@ -252,6 +305,7 @@ export class CodexAppServerClient {
 
   private rejectPendingRequests(error: Error): void {
     for (const pending of this.pending.values()) {
+      pending.cleanup();
       pending.reject(error);
     }
     this.pending.clear();

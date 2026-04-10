@@ -109,7 +109,7 @@ function applyBlueBubblesSetupPatch(
 }
 
 function validateBlueBubblesWebhookPath(value: string): string | undefined {
-  const trimmed = String(value ?? "").trim();
+  const trimmed = value.trim();
   if (!trimmed) {
     return "Required";
   }
@@ -222,7 +222,7 @@ export const blueBubblesSetupWizard: ChannelSetupWizard = {
       currentValue: ({ cfg, accountId }) =>
         normalizeOptionalString(resolveBlueBubblesAccount({ cfg, accountId }).config.serverUrl),
       validate: ({ value }) => validateBlueBubblesServerUrlInput(value),
-      normalizeValue: ({ value }) => String(value).trim(),
+      normalizeValue: ({ value }) => value.trim(),
       applySet: async ({ cfg, accountId, value }) =>
         applyBlueBubblesSetupPatch(cfg, accountId, {
           serverUrl: value,
@@ -241,7 +241,7 @@ export const blueBubblesSetupWizard: ChannelSetupWizard = {
       shouldPrompt: ({ credentialValues }) =>
         credentialValues[CONFIGURE_CUSTOM_WEBHOOK_FLAG] === "1",
       validate: ({ value }) => validateBlueBubblesWebhookPath(value),
-      normalizeValue: ({ value }) => String(value).trim(),
+      normalizeValue: ({ value }) => value.trim(),
       applySet: async ({ cfg, accountId, value }) =>
         applyBlueBubblesSetupPatch(cfg, accountId, {
           webhookPath: value,

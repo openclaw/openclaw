@@ -108,6 +108,10 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     groupChannel: params.sessionEntry.groupChannel,
     groupSpace: params.sessionEntry.space,
     spawnedBy: params.sessionEntry.spawnedBy,
+    senderId: params.command.senderId,
+    senderName: params.ctx.SenderName,
+    senderUsername: params.ctx.SenderUsername,
+    senderE164: params.ctx.SenderE164,
     sessionFile: runtime.resolveSessionFilePath(
       sessionId,
       params.sessionEntry,

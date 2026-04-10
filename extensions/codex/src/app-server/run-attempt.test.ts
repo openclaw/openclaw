@@ -243,6 +243,41 @@ describe("runCodexAppServerAttempt", () => {
     expect(queueAgentHarnessMessage("session-1", "after timeout")).toBe(false);
   });
 
+  it("times out turn start before the active run handle is installed", async () => {
+    const request = vi.fn(
+      async (method: string, _params?: unknown, options?: { timeoutMs?: number }) => {
+        if (method === "thread/start") {
+          return { thread: { id: "thread-1" }, model: "gpt-5.4-codex", modelProvider: "openai" };
+        }
+        if (method === "turn/start") {
+          return await new Promise<never>((_, reject) => {
+            setTimeout(
+              () => reject(new Error("turn/start timed out")),
+              Math.max(100, options?.timeoutMs ?? 0),
+            );
+          });
+        }
+        return {};
+      },
+    );
+    __testing.setCodexAppServerClientFactoryForTests(
+      async () =>
+        ({
+          request,
+          addNotificationHandler: () => () => undefined,
+          addRequestHandler: () => () => undefined,
+        }) as never,
+    );
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 1;
+
+    await expect(runCodexAppServerAttempt(params)).rejects.toThrow("turn/start timed out");
+    expect(queueAgentHarnessMessage("session-1", "after timeout")).toBe(false);
+  });
+
   it("keeps extended history enabled when resuming a bound Codex thread", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

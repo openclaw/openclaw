@@ -232,6 +232,7 @@ async function writeLiveGatewayConfig(params: {
     agents: {
       defaults: {
         workspace: params.workspace,
+        embeddedHarness: { runtime: "codex", fallback: "none" },
         skipBootstrap: true,
         model: { primary: params.modelKey },
         models: { [params.modelKey]: {} },
@@ -421,6 +422,7 @@ describeLive("gateway live (Codex harness)", () => {
 
       clearRuntimeConfigSnapshot();
       process.env.OPENCLAW_AGENT_RUNTIME = "codex";
+      process.env.OPENCLAW_AGENT_HARNESS_FALLBACK = "none";
       process.env.OPENCLAW_CONFIG_PATH = configPath;
       process.env.OPENCLAW_GATEWAY_TOKEN = token;
       process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";

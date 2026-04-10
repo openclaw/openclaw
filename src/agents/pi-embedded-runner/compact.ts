@@ -161,6 +161,9 @@ export type CompactEmbeddedPiSessionParams = {
   currentMessageId?: string | number;
   /** Trusted sender id from inbound context for scoped message-tool discovery. */
   senderId?: string;
+  senderName?: string;
+  senderUsername?: string;
+  senderE164?: string;
   authProfileId?: string;
   /** Group id for channel-level tool policy resolution. */
   groupId?: string | null;
@@ -562,6 +565,10 @@ export async function compactEmbeddedPiSessionDirect(
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,
       spawnedBy: params.spawnedBy,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
       senderIsOwner: params.senderIsOwner,
       allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
       agentDir,

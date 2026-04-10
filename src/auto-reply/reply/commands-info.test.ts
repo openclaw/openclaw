@@ -89,6 +89,29 @@ describe("info command handlers", () => {
     expect(result?.reply?.text).toContain("AllowFrom: 12345");
   });
 
+  it("uses the canonical command sender identity for /whoami AllowFrom", async () => {
+    const params = buildInfoParams(
+      "/whoami",
+      {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      {
+        SenderId: "123@lid",
+        SenderUsername: "TestUser",
+        SenderE164: "+15551234567",
+        ChatType: "direct",
+      },
+    );
+    params.command.senderId = "+15551234567";
+
+    const result = await handleWhoamiCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("User id: 123@lid");
+    expect(result?.reply?.text).toContain("AllowFrom: +15551234567");
+  });
+
   it("returns expected details for /context commands", async () => {
     const cfg = {
       commands: { text: true },

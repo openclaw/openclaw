@@ -452,7 +452,9 @@ continue through the normal OpenClaw delivery path.
 
 When the selected model uses the Codex harness, native thread compaction is
 delegated to Codex app-server. OpenClaw keeps a transcript mirror for channel
-history, search, `/new`, `/reset`, and future model or harness switching.
+history, search, `/new`, `/reset`, and future model or harness switching. The
+mirror includes the user prompt, final assistant text, and lightweight Codex
+reasoning or plan records when the app-server emits them.
 
 Media generation does not require PI. Image, video, music, PDF, TTS, and media
 understanding continue to use the matching provider/model settings such as

@@ -47,6 +47,7 @@ describe("CodexAppServerClient", () => {
 
   afterEach(() => {
     resetSharedCodexAppServerClientForTests();
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.useRealTimers();
     for (const client of clients) {
@@ -80,6 +81,37 @@ describe("CodexAppServerClient", () => {
       code: -32601,
       message: "Method not found",
     } satisfies Partial<CodexAppServerRpcError>);
+  });
+
+  it("rejects timed-out requests and ignores late responses", async () => {
+    vi.useFakeTimers();
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    const request = harness.client.request("model/list", {}, { timeoutMs: 1 });
+    const outbound = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
+    const assertion = expect(request).rejects.toThrow("model/list timed out");
+
+    await vi.advanceTimersByTimeAsync(100);
+    await assertion;
+
+    harness.send({ id: outbound.id, result: { data: [] } });
+    expect(harness.writes).toHaveLength(1);
+  });
+
+  it("rejects aborted requests and ignores late responses", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const controller = new AbortController();
+
+    const request = harness.client.request("model/list", {}, { signal: controller.signal });
+    const outbound = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
+    const assertion = expect(request).rejects.toThrow("model/list aborted");
+    controller.abort();
+
+    await assertion;
+    harness.send({ id: outbound.id, result: { data: [] } });
+    expect(harness.writes).toHaveLength(1);
   });
 
   it("initializes with the required client version", async () => {

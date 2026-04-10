@@ -127,6 +127,7 @@ export async function runCodexAppServerAttempt(
   const completion = new Promise<void>((resolve) => {
     resolveCompletion = resolve;
   });
+  let notificationQueue: Promise<void> = Promise.resolve();
 
   const handleNotification = async (notification: CodexServerNotification) => {
     if (!projector || !turnId) {
@@ -142,8 +143,15 @@ export async function runCodexAppServerAttempt(
       resolveCompletion?.();
     }
   };
+  const enqueueNotification = (notification: CodexServerNotification): Promise<void> => {
+    notificationQueue = notificationQueue.then(
+      () => handleNotification(notification),
+      () => handleNotification(notification),
+    );
+    return notificationQueue;
+  };
 
-  const notificationCleanup = client.addNotificationHandler(handleNotification);
+  const notificationCleanup = client.addNotificationHandler(enqueueNotification);
   const requestCleanup = client.addRequestHandler(async (request) => {
     if (!turnId) {
       return undefined;
@@ -177,6 +185,7 @@ export async function runCodexAppServerAttempt(
         cwd: effectiveWorkspace,
         appServer,
       }),
+      { timeoutMs: params.timeoutMs, signal: runAbortController.signal },
     );
   } catch (error) {
     notificationCleanup();
@@ -187,7 +196,7 @@ export async function runCodexAppServerAttempt(
   turnId = turn.turn.id;
   projector = new CodexAppServerEventProjector(params, thread.threadId, turnId);
   for (const notification of pendingNotifications.splice(0)) {
-    await handleNotification(notification);
+    await enqueueNotification(notification);
   }
   const activeTurnId = turnId;
   const activeProjector = projector;
