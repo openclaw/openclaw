@@ -163,7 +163,7 @@ describe("delivery context helpers", () => {
       // Telegram bundled plugin provides resolveDeliveryTarget which returns the
       // raw chatId; the generic "channel:" prefix only applies to channels without
       // a bundled plugin resolver.
-      expected: { to: "-10099", threadId: "42" },
+      expected: { to: "channel:-10099", threadId: "42" },
     },
     {
       channel: "mattermost",
