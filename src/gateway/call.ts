@@ -270,19 +270,36 @@ type ResolvedGatewayCallContext = {
 
 function resolveGatewayCallContext(opts: CallGatewayBaseOptions): ResolvedGatewayCallContext {
   const explicitUrl = trimToUndefined(opts.url);
+  const envUrlOverride = explicitUrl
+    ? undefined
+    : trimToUndefined(process.env.OPENCLAW_GATEWAY_URL);
   const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
-  const skipConfigLoad =
-    !opts.config && explicitUrl && (explicitAuth.token || explicitAuth.password);
-  const config = opts.config ?? (skipConfigLoad ? ({} as OpenClawConfig) : resolveGatewayConfig());
+  const envAuth = resolveExplicitGatewayAuth({
+    token: process.env.OPENCLAW_GATEWAY_TOKEN,
+    password: process.env.OPENCLAW_GATEWAY_PASSWORD,
+  });
+  const hasOverrideAuth =
+    explicitAuth.token || explicitAuth.password || envAuth.token || envAuth.password;
+  let config = opts.config;
+  if (!config) {
+    if (explicitUrl && hasOverrideAuth) {
+      config = {} as OpenClawConfig;
+    } else if (envUrlOverride && hasOverrideAuth) {
+      try {
+        config = resolveGatewayConfig();
+      } catch {
+        config = {} as OpenClawConfig;
+      }
+    } else {
+      config = resolveGatewayConfig();
+    }
+  }
   const configPath = opts.configPath ?? resolveGatewayConfigPath(process.env);
   const isRemoteMode = config.gateway?.mode === "remote";
   const remote = isRemoteMode
     ? (config.gateway?.remote as GatewayRemoteSettings | undefined)
     : undefined;
   const cliUrlOverride = explicitUrl;
-  const envUrlOverride = cliUrlOverride
-    ? undefined
-    : trimToUndefined(process.env.OPENCLAW_GATEWAY_URL);
   const urlOverride = cliUrlOverride ?? envUrlOverride;
   const urlOverrideSource = cliUrlOverride ? "cli" : envUrlOverride ? "env" : undefined;
   const remoteUrl = trimToUndefined(remote?.url);
@@ -945,7 +962,14 @@ export async function callGatewayCli<T = Record<string, unknown>>(
   opts: CallGatewayCliOptions,
 ): Promise<T> {
   const scopes = Array.isArray(opts.scopes) ? opts.scopes : CLI_DEFAULT_OPERATOR_SCOPES;
-  return await callGatewayWithScopes(opts, scopes);
+  return await callGatewayWithScopes(
+    {
+      ...opts,
+      clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
+      mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
+    },
+    scopes,
+  );
 }
 
 export async function callGatewayLeastPrivilege<T = Record<string, unknown>>(
