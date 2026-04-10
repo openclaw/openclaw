@@ -107,6 +107,15 @@ describe("browser control server", () => {
         }),
       );
 
+      const resizeZero = await postJson<{ error?: string; code?: string }>(`${base}/act`, {
+        kind: "resize",
+        width: 0,
+        height: 600,
+      });
+      expect(resizeZero.code).toBe("ACT_INVALID_REQUEST");
+      expect(resizeZero.error).toContain("resize requires width and height");
+      expect(pwMocks.resizeViewportViaPlaywright).toHaveBeenCalledTimes(1);
+
       const wait = await postJson<{ ok: boolean }>(`${base}/act`, {
         kind: "wait",
         timeMs: 5,
