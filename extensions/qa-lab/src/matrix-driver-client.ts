@@ -1,0 +1,536 @@
+import { randomUUID } from "node:crypto";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+
+type FetchLike = typeof fetch;
+
+type MatrixQaAuthStage = "m.login.dummy" | "m.login.registration_token";
+
+type MatrixQaRequestResult<T> = {
+  status: number;
+  body: T;
+};
+
+type MatrixQaRegisterResponse = {
+  access_token?: string;
+  device_id?: string;
+  user_id?: string;
+};
+
+type MatrixQaRoomCreateResponse = {
+  room_id?: string;
+};
+
+type MatrixQaSyncResponse = {
+  next_batch?: string;
+  rooms?: {
+    join?: Record<
+      string,
+      {
+        timeline?: {
+          events?: MatrixQaRoomEvent[];
+        };
+      }
+    >;
+  };
+};
+
+type MatrixQaUiaaResponse = {
+  completed?: string[];
+  flows?: Array<{ stages?: string[] }>;
+  session?: string;
+};
+
+type MatrixQaRoomEvent = {
+  content?: Record<string, unknown>;
+  event_id?: string;
+  origin_server_ts?: number;
+  sender?: string;
+  state_key?: string;
+  type?: string;
+};
+
+export type MatrixQaObservedEvent = {
+  roomId: string;
+  eventId: string;
+  sender?: string;
+  stateKey?: string;
+  type: string;
+  originServerTs?: number;
+  body?: string;
+  formattedBody?: string;
+  msgtype?: string;
+  membership?: string;
+  relatesTo?: {
+    eventId?: string;
+    inReplyToId?: string;
+    isFallingBack?: boolean;
+    relType?: string;
+  };
+  mentions?: {
+    room?: boolean;
+    userIds?: string[];
+  };
+};
+
+export type MatrixQaRegisteredAccount = {
+  accessToken: string;
+  deviceId?: string;
+  localpart: string;
+  password: string;
+  userId: string;
+};
+
+export type MatrixQaProvisionResult = {
+  driver: MatrixQaRegisteredAccount;
+  roomId: string;
+  sut: MatrixQaRegisteredAccount;
+};
+
+function buildMatrixThreadRelation(threadRootEventId: string, replyToEventId?: string) {
+  return {
+    "m.relates_to": {
+      rel_type: "m.thread",
+      event_id: threadRootEventId,
+      is_falling_back: true,
+      "m.in_reply_to": {
+        event_id: replyToEventId?.trim() || threadRootEventId,
+      },
+    },
+  };
+}
+
+function normalizeMentionUserIds(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    : undefined;
+}
+
+export function normalizeMatrixQaObservedEvent(
+  roomId: string,
+  event: MatrixQaRoomEvent,
+): MatrixQaObservedEvent | null {
+  const eventId = event.event_id?.trim();
+  const type = event.type?.trim();
+  if (!eventId || !type) {
+    return null;
+  }
+  const content = event.content ?? {};
+  const relatesToRaw = content["m.relates_to"];
+  const relatesTo =
+    typeof relatesToRaw === "object" && relatesToRaw !== null
+      ? (relatesToRaw as Record<string, unknown>)
+      : null;
+  const inReplyToRaw = relatesTo?.["m.in_reply_to"];
+  const inReplyTo =
+    typeof inReplyToRaw === "object" && inReplyToRaw !== null
+      ? (inReplyToRaw as Record<string, unknown>)
+      : null;
+  const mentionsRaw = content["m.mentions"];
+  const mentions =
+    typeof mentionsRaw === "object" && mentionsRaw !== null
+      ? (mentionsRaw as Record<string, unknown>)
+      : null;
+
+  return {
+    roomId,
+    eventId,
+    sender: typeof event.sender === "string" ? event.sender : undefined,
+    stateKey: typeof event.state_key === "string" ? event.state_key : undefined,
+    type,
+    originServerTs:
+      typeof event.origin_server_ts === "number" ? Math.floor(event.origin_server_ts) : undefined,
+    body: typeof content.body === "string" ? content.body : undefined,
+    formattedBody: typeof content.formatted_body === "string" ? content.formatted_body : undefined,
+    msgtype: typeof content.msgtype === "string" ? content.msgtype : undefined,
+    membership: typeof content.membership === "string" ? content.membership : undefined,
+    ...(relatesTo
+      ? {
+          relatesTo: {
+            eventId: typeof relatesTo.event_id === "string" ? relatesTo.event_id : undefined,
+            inReplyToId: typeof inReplyTo?.event_id === "string" ? inReplyTo.event_id : undefined,
+            isFallingBack:
+              typeof relatesTo.is_falling_back === "boolean"
+                ? relatesTo.is_falling_back
+                : undefined,
+            relType: typeof relatesTo.rel_type === "string" ? relatesTo.rel_type : undefined,
+          },
+        }
+      : {}),
+    ...(mentions
+      ? {
+          mentions: {
+            ...(mentions.room === true ? { room: true } : {}),
+            ...(normalizeMentionUserIds(mentions.user_ids)
+              ? { userIds: normalizeMentionUserIds(mentions.user_ids) }
+              : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+export function resolveNextRegistrationAuth(params: {
+  registrationToken: string;
+  response: MatrixQaUiaaResponse;
+}) {
+  const session = params.response.session?.trim();
+  if (!session) {
+    throw new Error("Matrix registration UIAA response did not include a session id.");
+  }
+
+  const completed = new Set(
+    (params.response.completed ?? []).filter(
+      (stage): stage is MatrixQaAuthStage =>
+        stage === "m.login.dummy" || stage === "m.login.registration_token",
+    ),
+  );
+  const supportedStages = new Set<MatrixQaAuthStage>([
+    "m.login.registration_token",
+    "m.login.dummy",
+  ]);
+
+  for (const flow of params.response.flows ?? []) {
+    const stages = (flow.stages ?? []).filter(
+      (stage): stage is MatrixQaAuthStage =>
+        stage === "m.login.dummy" || stage === "m.login.registration_token",
+    );
+    if (stages.length === 0 || stages.some((stage) => !supportedStages.has(stage))) {
+      continue;
+    }
+    const nextStage = stages.find((stage) => !completed.has(stage));
+    if (!nextStage) {
+      continue;
+    }
+    if (nextStage === "m.login.registration_token") {
+      return {
+        session,
+        type: nextStage,
+        token: params.registrationToken,
+      };
+    }
+    return {
+      session,
+      type: nextStage,
+    };
+  }
+
+  throw new Error(
+    `Matrix registration requires unsupported auth stages: ${JSON.stringify(params.response.flows ?? [])}`,
+  );
+}
+
+async function requestMatrixJson<T>(params: {
+  accessToken?: string;
+  baseUrl: string;
+  body?: unknown;
+  endpoint: string;
+  fetchImpl: FetchLike;
+  method: "GET" | "POST" | "PUT";
+  okStatuses?: number[];
+  query?: Record<string, string | number | undefined>;
+  timeoutMs?: number;
+}) {
+  const url = new URL(params.endpoint, params.baseUrl);
+  for (const [key, value] of Object.entries(params.query ?? {})) {
+    if (value !== undefined) {
+      url.searchParams.set(key, String(value));
+    }
+  }
+  const response = await params.fetchImpl(url, {
+    method: params.method,
+    headers: {
+      accept: "application/json",
+      ...(params.body !== undefined ? { "content-type": "application/json" } : {}),
+      ...(params.accessToken ? { authorization: `Bearer ${params.accessToken}` } : {}),
+    },
+    ...(params.body !== undefined ? { body: JSON.stringify(params.body) } : {}),
+    signal: AbortSignal.timeout(params.timeoutMs ?? 20_000),
+  });
+  let body: unknown = {};
+  try {
+    body = (await response.json()) as unknown;
+  } catch {
+    body = {};
+  }
+  const okStatuses = params.okStatuses ?? [200];
+  if (!okStatuses.includes(response.status)) {
+    const details =
+      typeof body === "object" &&
+      body !== null &&
+      typeof (body as { error?: unknown }).error === "string"
+        ? (body as { error: string }).error
+        : `${params.method} ${params.endpoint} failed with status ${response.status}`;
+    throw new Error(details);
+  }
+  return {
+    status: response.status,
+    body: body as T,
+  } satisfies MatrixQaRequestResult<T>;
+}
+
+function buildRegisteredAccount(params: {
+  localpart: string;
+  password: string;
+  response: MatrixQaRegisterResponse;
+}) {
+  const userId = params.response.user_id?.trim();
+  const accessToken = params.response.access_token?.trim();
+  if (!userId || !accessToken) {
+    throw new Error("Matrix registration did not return both user_id and access_token.");
+  }
+  return {
+    accessToken,
+    deviceId: params.response.device_id?.trim() || undefined,
+    localpart: params.localpart,
+    password: params.password,
+    userId,
+  } satisfies MatrixQaRegisteredAccount;
+}
+
+export function createMatrixQaClient(params: {
+  accessToken?: string;
+  baseUrl: string;
+  fetchImpl?: FetchLike;
+}) {
+  const fetchImpl = params.fetchImpl ?? fetch;
+
+  return {
+    async createPrivateRoom(opts: { inviteUserIds: string[]; name: string }) {
+      const result = await requestMatrixJson<MatrixQaRoomCreateResponse>({
+        accessToken: params.accessToken,
+        baseUrl: params.baseUrl,
+        body: {
+          creation_content: { "m.federate": false },
+          initial_state: [
+            {
+              type: "m.room.history_visibility",
+              state_key: "",
+              content: { history_visibility: "joined" },
+            },
+          ],
+          invite: opts.inviteUserIds,
+          is_direct: false,
+          name: opts.name,
+          preset: "private_chat",
+        },
+        endpoint: "/_matrix/client/v3/createRoom",
+        fetchImpl,
+        method: "POST",
+      });
+      const roomId = result.body.room_id?.trim();
+      if (!roomId) {
+        throw new Error("Matrix createRoom did not return room_id.");
+      }
+      return roomId;
+    },
+    async primeRoom() {
+      const response = await requestMatrixJson<MatrixQaSyncResponse>({
+        accessToken: params.accessToken,
+        baseUrl: params.baseUrl,
+        endpoint: "/_matrix/client/v3/sync",
+        fetchImpl,
+        method: "GET",
+        query: { timeout: 0 },
+      });
+      return response.body.next_batch?.trim() || undefined;
+    },
+    async registerWithToken(opts: {
+      deviceName: string;
+      localpart: string;
+      password: string;
+      registrationToken: string;
+    }) {
+      let auth: Record<string, unknown> | undefined;
+      const baseBody = {
+        inhibit_login: false,
+        initial_device_display_name: opts.deviceName,
+        password: opts.password,
+        username: opts.localpart,
+      };
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        const response = await requestMatrixJson<MatrixQaRegisterResponse | MatrixQaUiaaResponse>({
+          baseUrl: params.baseUrl,
+          body: {
+            ...baseBody,
+            ...(auth ? { auth } : {}),
+          },
+          endpoint: "/_matrix/client/v3/register",
+          fetchImpl,
+          method: "POST",
+          okStatuses: [200, 401],
+          timeoutMs: 30_000,
+        });
+        if (response.status === 200) {
+          return buildRegisteredAccount({
+            localpart: opts.localpart,
+            password: opts.password,
+            response: response.body as MatrixQaRegisterResponse,
+          });
+        }
+        auth = resolveNextRegistrationAuth({
+          registrationToken: opts.registrationToken,
+          response: response.body as MatrixQaUiaaResponse,
+        });
+      }
+      throw new Error(
+        `Matrix registration for ${opts.localpart} did not complete after 4 attempts.`,
+      );
+    },
+    async sendTextMessage(opts: {
+      body: string;
+      mentionUserIds?: string[];
+      replyToEventId?: string;
+      roomId: string;
+      threadRootEventId?: string;
+    }) {
+      const txnId = randomUUID();
+      const result = await requestMatrixJson<{ event_id?: string }>({
+        accessToken: params.accessToken,
+        baseUrl: params.baseUrl,
+        body: {
+          body: opts.body,
+          msgtype: "m.text",
+          ...(opts.mentionUserIds && opts.mentionUserIds.length > 0
+            ? { "m.mentions": { user_ids: opts.mentionUserIds } }
+            : {}),
+          ...(opts.threadRootEventId
+            ? buildMatrixThreadRelation(opts.threadRootEventId, opts.replyToEventId)
+            : {}),
+        },
+        endpoint: `/_matrix/client/v3/rooms/${encodeURIComponent(opts.roomId)}/send/m.room.message/${encodeURIComponent(txnId)}`,
+        fetchImpl,
+        method: "PUT",
+      });
+      const eventId = result.body.event_id?.trim();
+      if (!eventId) {
+        throw new Error("Matrix sendMessage did not return event_id.");
+      }
+      return eventId;
+    },
+    async joinRoom(roomId: string) {
+      const result = await requestMatrixJson<{ room_id?: string }>({
+        accessToken: params.accessToken,
+        baseUrl: params.baseUrl,
+        body: {},
+        endpoint: `/_matrix/client/v3/join/${encodeURIComponent(roomId)}`,
+        fetchImpl,
+        method: "POST",
+      });
+      return result.body.room_id?.trim() || roomId;
+    },
+    async waitForRoomEvent(opts: {
+      observedEvents: MatrixQaObservedEvent[];
+      predicate: (event: MatrixQaObservedEvent) => boolean;
+      roomId: string;
+      since?: string;
+      timeoutMs: number;
+    }) {
+      const startedAt = Date.now();
+      let since = opts.since;
+      while (Date.now() - startedAt < opts.timeoutMs) {
+        const remainingMs = Math.max(1_000, opts.timeoutMs - (Date.now() - startedAt));
+        const response = await requestMatrixJson<MatrixQaSyncResponse>({
+          accessToken: params.accessToken,
+          baseUrl: params.baseUrl,
+          endpoint: "/_matrix/client/v3/sync",
+          fetchImpl,
+          method: "GET",
+          query: {
+            ...(since ? { since } : {}),
+            timeout: Math.min(10_000, remainingMs),
+          },
+          timeoutMs: Math.min(15_000, remainingMs + 5_000),
+        });
+        since = response.body.next_batch?.trim() || since;
+        const roomEvents = response.body.rooms?.join?.[opts.roomId]?.timeline?.events ?? [];
+        for (const event of roomEvents) {
+          const normalized = normalizeMatrixQaObservedEvent(opts.roomId, event);
+          if (!normalized) {
+            continue;
+          }
+          opts.observedEvents.push(normalized);
+          if (opts.predicate(normalized)) {
+            return { event: normalized, since };
+          }
+        }
+      }
+      throw new Error(`timed out after ${opts.timeoutMs}ms waiting for Matrix room event`);
+    },
+  };
+}
+
+async function joinRoomWithRetry(params: {
+  accessToken: string;
+  baseUrl: string;
+  fetchImpl?: FetchLike;
+  roomId: string;
+}) {
+  const client = createMatrixQaClient({
+    accessToken: params.accessToken,
+    baseUrl: params.baseUrl,
+    fetchImpl: params.fetchImpl,
+  });
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= 10; attempt += 1) {
+    try {
+      await client.joinRoom(params.roomId);
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 300 * attempt));
+    }
+  }
+  throw new Error(`Matrix join retry failed: ${formatErrorMessage(lastError)}`);
+}
+
+export async function provisionMatrixQaRoom(params: {
+  baseUrl: string;
+  fetchImpl?: FetchLike;
+  roomName: string;
+  driverLocalpart: string;
+  registrationToken: string;
+  sutLocalpart: string;
+}) {
+  const anonClient = createMatrixQaClient({
+    baseUrl: params.baseUrl,
+    fetchImpl: params.fetchImpl,
+  });
+  const driver = await anonClient.registerWithToken({
+    deviceName: "OpenClaw Matrix QA Driver",
+    localpart: params.driverLocalpart,
+    password: `driver-${randomUUID()}`,
+    registrationToken: params.registrationToken,
+  });
+  const sut = await anonClient.registerWithToken({
+    deviceName: "OpenClaw Matrix QA SUT",
+    localpart: params.sutLocalpart,
+    password: `sut-${randomUUID()}`,
+    registrationToken: params.registrationToken,
+  });
+  const driverClient = createMatrixQaClient({
+    accessToken: driver.accessToken,
+    baseUrl: params.baseUrl,
+    fetchImpl: params.fetchImpl,
+  });
+  const roomId = await driverClient.createPrivateRoom({
+    inviteUserIds: [sut.userId],
+    name: params.roomName,
+  });
+  await joinRoomWithRetry({
+    accessToken: sut.accessToken,
+    baseUrl: params.baseUrl,
+    fetchImpl: params.fetchImpl,
+    roomId,
+  });
+  return {
+    driver,
+    roomId,
+    sut,
+  } satisfies MatrixQaProvisionResult;
+}
+
+export const __testing = {
+  buildMatrixThreadRelation,
+  normalizeMatrixQaObservedEvent,
+  resolveNextRegistrationAuth,
+};

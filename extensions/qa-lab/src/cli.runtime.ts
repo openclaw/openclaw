@@ -5,6 +5,7 @@ import { runQaDockerUp } from "./docker-up.runtime.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import { startQaLabServer } from "./lab-server.js";
 import { runQaManualLane } from "./manual-lane.runtime.js";
+import { runMatrixQaLive } from "./matrix-live.runtime.js";
 import { startQaMockOpenAiServer } from "./mock-openai-server.js";
 import { runQaMultipass } from "./multipass.runtime.js";
 import { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-gateway-config.js";
@@ -322,6 +323,34 @@ export async function runQaTelegramCommand(opts: {
   process.stdout.write(`Telegram QA report: ${result.reportPath}\n`);
   process.stdout.write(`Telegram QA summary: ${result.summaryPath}\n`);
   process.stdout.write(`Telegram QA observed messages: ${result.observedMessagesPath}\n`);
+}
+
+export async function runQaMatrixCommand(opts: {
+  repoRoot?: string;
+  outputDir?: string;
+  providerMode?: QaProviderModeInput;
+  primaryModel?: string;
+  alternateModel?: string;
+  fastMode?: boolean;
+  scenarioIds?: string[];
+  sutAccountId?: string;
+}) {
+  const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
+  const providerMode: QaProviderMode =
+    opts.providerMode === undefined ? "live-frontier" : normalizeQaProviderMode(opts.providerMode);
+  const result = await runMatrixQaLive({
+    repoRoot,
+    outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
+    providerMode,
+    primaryModel: opts.primaryModel,
+    alternateModel: opts.alternateModel,
+    fastMode: opts.fastMode,
+    scenarioIds: opts.scenarioIds,
+    sutAccountId: opts.sutAccountId,
+  });
+  process.stdout.write(`Matrix QA report: ${result.reportPath}\n`);
+  process.stdout.write(`Matrix QA summary: ${result.summaryPath}\n`);
+  process.stdout.write(`Matrix QA observed events: ${result.observedEventsPath}\n`);
 }
 
 export async function runQaCharacterEvalCommand(opts: {

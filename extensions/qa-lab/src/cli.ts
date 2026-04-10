@@ -49,6 +49,20 @@ async function runQaTelegram(opts: {
   await runtime.runQaTelegramCommand(opts);
 }
 
+async function runQaMatrix(opts: {
+  repoRoot?: string;
+  outputDir?: string;
+  providerMode?: QaProviderModeInput;
+  primaryModel?: string;
+  alternateModel?: string;
+  fastMode?: boolean;
+  scenarioIds?: string[];
+  sutAccountId?: string;
+}) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaMatrixCommand(opts);
+}
+
 async function runQaCharacterEval(opts: {
   repoRoot?: string;
   outputDir?: string;
@@ -251,6 +265,49 @@ export function registerQaLabCli(program: Command) {
         sutAccount?: string;
       }) => {
         await runQaTelegram({
+          repoRoot: opts.repoRoot,
+          outputDir: opts.outputDir,
+          providerMode: opts.providerMode,
+          primaryModel: opts.model,
+          alternateModel: opts.altModel,
+          fastMode: opts.fast,
+          scenarioIds: opts.scenario,
+          sutAccountId: opts.sutAccount,
+        });
+      },
+    );
+
+  qa.command("matrix")
+    .description("Run the Docker-backed Matrix live QA lane against a disposable homeserver")
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+    .option("--output-dir <path>", "Matrix QA artifact directory")
+    .option(
+      "--provider-mode <mode>",
+      "Provider mode: mock-openai or live-frontier (legacy live-openai still works)",
+      "live-frontier",
+    )
+    .option("--model <ref>", "Primary provider/model ref")
+    .option("--alt-model <ref>", "Alternate provider/model ref")
+    .option(
+      "--scenario <id>",
+      "Run only the named Matrix QA scenario (repeatable)",
+      collectString,
+      [],
+    )
+    .option("--fast", "Enable provider fast mode where supported", false)
+    .option("--sut-account <id>", "Temporary Matrix account id inside the QA gateway config", "sut")
+    .action(
+      async (opts: {
+        repoRoot?: string;
+        outputDir?: string;
+        providerMode?: QaProviderModeInput;
+        model?: string;
+        altModel?: string;
+        scenario?: string[];
+        fast?: boolean;
+        sutAccount?: string;
+      }) => {
+        await runQaMatrix({
           repoRoot: opts.repoRoot,
           outputDir: opts.outputDir,
           providerMode: opts.providerMode,
