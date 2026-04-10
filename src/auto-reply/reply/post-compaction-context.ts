@@ -6,6 +6,7 @@ import { resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { resolveUserPath } from "../../utils.js";
 
 const MAX_CONTEXT_CHARS = 3000;
 const DEFAULT_POST_COMPACTION_SECTIONS = ["Session Startup", "Red Lines"];
@@ -74,8 +75,9 @@ export async function readPostCompactionContext(
     modelId?: string;
   },
 ): Promise<string | null> {
+  const resolvedWorkspaceDir = resolveUserPath(workspaceDir);
   const { bootstrapFile } = await resolveEffectiveAgentsBootstrapFileForRun({
-    workspaceDir,
+    workspaceDir: resolvedWorkspaceDir,
     config: cfg,
     sessionKey: runContext?.sessionKey,
     sessionId: runContext?.sessionId,
@@ -93,7 +95,7 @@ export async function readPostCompactionContext(
       (await (async () => {
         const opened = await openBoundaryFile({
           absolutePath: agentsPath,
-          rootPath: workspaceDir,
+          rootPath: resolvedWorkspaceDir,
           boundaryLabel: "workspace root",
         });
         if (!opened.ok) {
