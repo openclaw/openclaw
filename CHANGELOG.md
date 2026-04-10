@@ -98,6 +98,7 @@ Docs: https://docs.openclaw.ai
 - Heartbeat: ignore doc-only Markdown fence markers in the default `HEARTBEAT.md` template so comment-only heartbeat scaffolds skip API calls again. (#63434) Thanks @ravyg.
 - Control UI/BTW: render `/btw` side results as dismissible ephemeral cards in the browser, send `/btw` immediately during active runs, and clear stale BTW cards on reset flows so webchat matches the intended detached side-question behavior. (#64290) Thanks @ngutman.
 - Reply/skills: keep resolved skill and memory secret config stable through embedded reply runs so raw SecretRefs in secondary skill settings no longer crash replies when the gateway already has the live env. (#64249) Thanks @mbelinky.
+- Dreaming/startup: keep plugin-registered startup hooks alive across workspace hook reloads and include dreaming startup owners in the gateway startup plugin scope, so managed Dreaming cron registration comes back reliably after gateway boot. (#62327) Thanks @mbelinky.
 
 ## 2026.4.9
 

@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const hoisted = vi.hoisted(() => {
   const startPluginServices = vi.fn(async () => null);
   const startGmailWatcherWithLogs = vi.fn(async () => undefined);
-  const clearInternalHooks = vi.fn();
   const loadInternalHooks = vi.fn(async () => 0);
   const startGatewayMemoryBackend = vi.fn(async () => undefined);
   const scheduleGatewayUpdateCheck = vi.fn(() => () => {});
@@ -20,7 +19,6 @@ const hoisted = vi.hoisted(() => {
   return {
     startPluginServices,
     startGmailWatcherWithLogs,
-    clearInternalHooks,
     loadInternalHooks,
     startGatewayMemoryBackend,
     scheduleGatewayUpdateCheck,
@@ -54,7 +52,6 @@ vi.mock("../hooks/gmail-watcher-lifecycle.js", () => ({
 }));
 
 vi.mock("../hooks/internal-hooks.js", () => ({
-  clearInternalHooks: hoisted.clearInternalHooks,
   createInternalHookEvent: vi.fn(() => ({})),
   triggerInternalHook: vi.fn(async () => undefined),
 }));
@@ -104,7 +101,6 @@ describe("startGatewayPostAttachRuntime", () => {
   beforeEach(() => {
     hoisted.startPluginServices.mockClear();
     hoisted.startGmailWatcherWithLogs.mockClear();
-    hoisted.clearInternalHooks.mockClear();
     hoisted.loadInternalHooks.mockClear();
     hoisted.startGatewayMemoryBackend.mockClear();
     hoisted.scheduleGatewayUpdateCheck.mockClear();

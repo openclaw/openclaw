@@ -15,12 +15,13 @@ import { sanitizeForLog } from "../terminal/ansi.js";
 import { shouldIncludeHook } from "./config.js";
 import { buildImportUrl } from "./import-url.js";
 import type { InternalHookHandler } from "./internal-hooks.js";
-import { registerInternalHook } from "./internal-hooks.js";
+import { registerInternalHook, unregisterInternalHook } from "./internal-hooks.js";
 import { getLegacyInternalHookHandlers } from "./legacy-config.js";
 import { resolveFunctionModuleExport } from "./module-loader.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
 const log = createSubsystemLogger("hooks:loader");
+const loadedHookRegistrations: Array<{ event: string; handler: InternalHookHandler }> = [];
 
 function safeLogValue(value: string): string {
   return sanitizeForLog(value);
@@ -37,6 +38,16 @@ function maybeWarnTrustedHookSource(source: string): void {
     log.warn(
       "Loading managed hook code into the gateway process. Managed hooks are trusted local code.",
     );
+  }
+}
+
+function resetLoadedInternalHooks(): void {
+  while (loadedHookRegistrations.length > 0) {
+    const registration = loadedHookRegistrations.pop();
+    if (!registration) {
+      continue;
+    }
+    unregisterInternalHook(registration.event, registration.handler);
   }
 }
 
@@ -67,6 +78,8 @@ export async function loadInternalHooks(
     bundledHooksDir?: string;
   },
 ): Promise<number> {
+  resetLoadedInternalHooks();
+
   // Hooks are on by default; only skip when explicitly disabled.
   if (cfg.hooks?.internal?.enabled === false) {
     return 0;
@@ -136,6 +149,7 @@ export async function loadInternalHooks(
 
         for (const event of events) {
           registerInternalHook(event, handler);
+          loadedHookRegistrations.push({ event, handler });
         }
 
         log.debug(
@@ -225,6 +239,7 @@ export async function loadInternalHooks(
       }
 
       registerInternalHook(handlerConfig.event, handler);
+      loadedHookRegistrations.push({ event: handlerConfig.event, handler });
       log.debug(
         `Registered hook (legacy): ${safeLogValue(handlerConfig.event)} -> ${safeLogValue(modulePath)}${exportName !== "default" ? `#${safeLogValue(exportName)}` : ""}`,
       );

@@ -20,11 +20,7 @@ import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
-import {
-  clearInternalHooks,
-  createInternalHookEvent,
-  triggerInternalHook,
-} from "../hooks/internal-hooks.js";
+import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { loadInternalHooks } from "../hooks/loader.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
@@ -145,7 +141,6 @@ export async function startGatewaySidecars(params: {
   }
 
   try {
-    clearInternalHooks();
     const loadedCount = await loadInternalHooks(params.cfg, params.defaultWorkspaceDir);
     if (loadedCount > 0) {
       params.logHooks.info(

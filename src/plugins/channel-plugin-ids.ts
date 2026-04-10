@@ -1,6 +1,11 @@
 import { listPotentialConfiguredChannelIds } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  resolveMemoryDreamingConfig,
+  resolveMemoryDreamingPluginConfig,
+  resolveMemoryDreamingPluginId,
+} from "../memory-host-sdk/dreaming.js";
+import {
   createPluginActivationSource,
   normalizePluginsConfig,
   resolveEffectivePluginActivationState,
@@ -26,6 +31,17 @@ function hasRuntimeContractSurface(plugin: PluginManifestRecord): boolean {
 
 function isGatewayStartupSidecar(plugin: PluginManifestRecord): boolean {
   return plugin.channels.length === 0 && !hasRuntimeContractSurface(plugin);
+}
+
+function resolveGatewayStartupDreamingPluginIds(config: OpenClawConfig): Set<string> {
+  const dreamingConfig = resolveMemoryDreamingConfig({
+    pluginConfig: resolveMemoryDreamingPluginConfig(config),
+    cfg: config,
+  });
+  if (!dreamingConfig.enabled) {
+    return new Set();
+  }
+  return new Set(["memory-core", resolveMemoryDreamingPluginId(config)]);
 }
 
 export function resolveChannelPluginIds(params: {
@@ -96,6 +112,7 @@ export function resolveGatewayStartupPluginIds(params: {
   const activationSource = createPluginActivationSource({
     config: params.activationSourceConfig ?? params.config,
   });
+  const startupDreamingPluginIds = resolveGatewayStartupDreamingPluginIds(params.config);
   return loadPluginManifestRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -103,6 +120,9 @@ export function resolveGatewayStartupPluginIds(params: {
   })
     .plugins.filter((plugin) => {
       if (plugin.channels.some((channelId) => configuredChannelIds.has(channelId))) {
+        return true;
+      }
+      if (startupDreamingPluginIds.has(plugin.id)) {
         return true;
       }
       if (!isGatewayStartupSidecar(plugin)) {
