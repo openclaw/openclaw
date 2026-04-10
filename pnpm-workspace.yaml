@@ -19,6 +19,7 @@ minimumReleaseAgeExclude:
   - "@typescript/native-preview*"
   - "@oxlint/*"
   - "@oxfmt/*"
+  - "axios@1.15.0"
   - "sqlite-vec"
   - "sqlite-vec-*"
 
