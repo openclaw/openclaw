@@ -68,14 +68,15 @@ function stripPortFromHttpUrl(value: string): string {
 }
 
 /**
- * Canonicalize an MCP config for hashing into CLI session identity. Strips
- * ephemeral transport details (currently: ports from http(s) URLs on server
- * entries) while preserving everything else — server names, types, headers,
- * stdio command/args/env — so the hash still invalidates sessions when the
- * real tool surface changes (e.g. the loopback bridge fails to start, or a
- * user adds/removes a plugin MCP server).
+ * Canonicalize the gateway-managed `additionalConfig` overlay for
+ * session-identity hashing. Strips ports from http(s) URLs on each server
+ * entry (the loopback MCP bridge binds to an OS-assigned ephemeral port on
+ * every gateway start), while preserving everything else — server names,
+ * types, headers, stdio command/args/env. Applied *only* to overlay servers,
+ * never to user-authored plugin MCP endpoints; see
+ * `prepareCliBundleMcpConfig` for the full hash-source construction.
  */
-function canonicalizeBundleMcpConfigForHash(config: BundleMcpConfig): BundleMcpConfig {
+function canonicalizeAdditionalConfigForHash(config: BundleMcpConfig): BundleMcpConfig {
   const canonicalServers: Record<string, BundleMcpServerConfig> = {};
   for (const [serverName, server] of Object.entries(config.mcpServers)) {
     const canonicalServer: BundleMcpServerConfig = { ...server };
@@ -408,21 +409,32 @@ export async function prepareCliBundleMcpConfig(params: {
     params.warn?.(`bundle MCP skipped for ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
   mergedConfig = applyMergePatch(mergedConfig, bundleConfig.config) as BundleMcpConfig;
+  // Snapshot the user-authored merge result *before* layering the gateway
+  // overlay. User/plugin MCP server URLs must be hashed verbatim — moving a
+  // real plugin endpoint from host:1234 to host:5678 is a real tool-surface
+  // change that should invalidate the stored CLI session.
+  const userAuthoredMerged: BundleMcpConfig = {
+    mcpServers: { ...mergedConfig.mcpServers },
+  };
   if (params.additionalConfig) {
     mergedConfig = applyMergePatch(mergedConfig, params.additionalConfig) as BundleMcpConfig;
   }
 
-  // `additionalConfig` carries gateway-internal runtime state (the loopback MCP
-  // bridge) whose URL embeds an ephemeral port assigned on every gateway start.
-  // Hashing that port verbatim would invalidate every persisted CLI session
-  // binding on every restart, wiping agent memory. But we *do* still need the
-  // loopback's presence/absence and its non-ephemeral identity (server name,
-  // type, headers) to contribute to session identity, because
-  // `startGatewayEarlyRuntime` continues after a loopback startup failure — so a
-  // session bound while the bridge was up must be invalidated if the next run
-  // has no bridge (and vice versa). Canonicalize URL ports to zero for the hash
-  // source only; the on-disk mcp.json / CLI args still use the live port.
-  const hashSource = canonicalizeBundleMcpConfigForHash(mergedConfig);
+  // The hash source layers the gateway overlay on top of the user-authored
+  // merge, but port-canonicalized so gateway restarts that re-bind the
+  // loopback MCP bridge to a new ephemeral port don't invalidate sessions.
+  // The loopback's presence/absence and its non-ephemeral identity (server
+  // name, type, headers) *do* contribute to the hash, so a session bound
+  // while the bridge was up is still invalidated if the next run has no
+  // bridge (`startGatewayEarlyRuntime` catches loopback startup failures
+  // and continues), and any change to overlay headers still flips the hash.
+  // The on-disk mcp.json / CLI args still use the live port.
+  const hashSource = params.additionalConfig
+    ? (applyMergePatch(
+        userAuthoredMerged,
+        canonicalizeAdditionalConfigForHash(params.additionalConfig),
+      ) as BundleMcpConfig)
+    : userAuthoredMerged;
 
   return await prepareModeSpecificBundleMcpConfig({
     mode,

@@ -427,6 +427,72 @@ describe("prepareCliBundleMcpConfig", () => {
     await prepared.cleanup?.();
   });
 
+  it("changes mcpConfigHash when a user-authored plugin HTTP MCP server changes port", async () => {
+    // Guards against over-broad canonicalization: port stripping must apply
+    // *only* to the gateway overlay (`additionalConfig`), never to
+    // user-authored plugin MCP endpoints. If a configured plugin HTTP server
+    // moves from host:1234 to host:5678, that's a real tool-surface change —
+    // the stored CLI session must be invalidated so the CLI process doesn't
+    // reuse state pointing at a stale backend.
+    const makeWorkspaceWithHttpPlugin = async (label: string, port: number) => {
+      const workspaceDir = await tempHarness.createTempDir(
+        `openclaw-cli-bundle-mcp-user-http-${label}-`,
+      );
+      const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "http-probe");
+      await fs.mkdir(pluginRoot, { recursive: true });
+      await writeClaudeBundleManifest({
+        homeDir: workspaceDir,
+        pluginId: "http-probe",
+        manifest: { name: "http-probe" },
+      });
+      await fs.writeFile(
+        path.join(pluginRoot, ".mcp.json"),
+        `${JSON.stringify(
+          {
+            mcpServers: {
+              httpProbe: {
+                type: "http",
+                url: `http://example.internal:${port}/mcp`,
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+      return workspaceDir;
+    };
+
+    const workspaceDirA = await makeWorkspaceWithHttpPlugin("a", 1234);
+    const workspaceDirB = await makeWorkspaceWithHttpPlugin("b", 5678);
+    const config: OpenClawConfig = {
+      plugins: { entries: { "http-probe": { enabled: true } } },
+    };
+
+    const preparedA = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: { command: "node", args: ["./fake-claude.mjs"] },
+      workspaceDir: workspaceDirA,
+      config,
+    });
+    const preparedB = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: { command: "node", args: ["./fake-claude.mjs"] },
+      workspaceDir: workspaceDirB,
+      config,
+    });
+
+    expect(preparedA.mcpConfigHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(preparedB.mcpConfigHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(preparedA.mcpConfigHash).not.toBe(preparedB.mcpConfigHash);
+
+    await preparedA.cleanup?.();
+    await preparedB.cleanup?.();
+  });
+
   it("changes mcpConfigHash when the loopback overlay headers change", async () => {
     // Non-ephemeral fields on the loopback overlay (server name, type, headers)
     // must still contribute to session identity so a real transport change
