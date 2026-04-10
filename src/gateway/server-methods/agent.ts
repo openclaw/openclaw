@@ -95,6 +95,28 @@ function resolveCanResetSessionFromClient(client: GatewayRequestHandlerOptions["
   return resolveSenderIsOwnerFromClient(client);
 }
 
+const ACP_SESSION_NORMALIZATION_PROMPT = [
+  "ACP harness normalization:",
+  "- Capability classes matter more than literal tool names.",
+  "- The same capability may appear as a direct tool, an MCP-prefixed tool, or an MCP resource.",
+  "- Absence of a literal `Read` tool does not imply read capability is missing.",
+  "- For filesystem reads, use a direct read tool when present; otherwise use the MCP or resource-style surface available to this harness (for example `read_mcp_resource`).",
+  "- OpenClaw plugin tools may use harness-specific naming or prefixes.",
+  "- When reporting capabilities, mention both the normalized capability and the concrete surface you actually used.",
+].join("\n");
+
+function buildAcpTurnExtraSystemPrompt(params: {
+  existing?: string;
+  sessionEntry?: SessionEntry;
+}): string | undefined {
+  const existing = normalizeOptionalString(params.existing);
+  const hasAcpSession = Boolean((params.sessionEntry as { acp?: unknown } | undefined)?.acp);
+  if (!hasAcpSession) {
+    return existing || undefined;
+  }
+  return [existing, ACP_SESSION_NORMALIZATION_PROMPT].filter(Boolean).join("\n\n");
+}
+
 async function runSessionResetFromAgent(params: {
   key: string;
   reason: "new" | "reset";
@@ -830,7 +852,10 @@ export const agentHandlers: GatewayRequestHandlers = {
         messageChannel: originMessageChannel,
         runId,
         lane: request.lane,
-        extraSystemPrompt: request.extraSystemPrompt,
+        extraSystemPrompt: buildAcpTurnExtraSystemPrompt({
+          existing: request.extraSystemPrompt,
+          sessionEntry,
+        }),
         bootstrapContextMode: request.bootstrapContextMode,
         bootstrapContextRunKind: request.bootstrapContextRunKind,
         internalEvents: request.internalEvents,

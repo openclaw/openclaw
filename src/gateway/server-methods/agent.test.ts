@@ -351,6 +351,71 @@ describe("gateway agent handler", () => {
     expect(capturedEntry?.acp).toEqual(existingAcpMeta);
   });
 
+  it("adds ACP capability normalization guidance for ACP session turns", async () => {
+    mockMainSessionEntry({
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime-1",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await runMainAgent("test", "test-idem-acp-guidance");
+
+    const lastCall = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+      extraSystemPrompt?: string;
+    };
+    expect(lastCall?.extraSystemPrompt).toContain("ACP harness normalization:");
+    expect(lastCall?.extraSystemPrompt).toContain(
+      "Capability classes matter more than literal tool names.",
+    );
+    expect(lastCall?.extraSystemPrompt).toContain(
+      "Absence of a literal `Read` tool does not imply read capability is missing.",
+    );
+    expect(lastCall?.extraSystemPrompt).toContain("read_mcp_resource");
+  });
+
+  it("appends ACP capability normalization guidance after any existing extraSystemPrompt", async () => {
+    mockMainSessionEntry({
+      acp: {
+        backend: "acpx",
+        agent: "claude",
+        runtimeSessionName: "runtime-2",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "test",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        extraSystemPrompt: "Existing prompt block",
+        idempotencyKey: "test-idem-acp-guidance-merge",
+      },
+      { reqId: "test-idem-acp-guidance-merge" },
+    );
+
+    const lastCall = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+      extraSystemPrompt?: string;
+    };
+    expect(lastCall?.extraSystemPrompt).toContain("Existing prompt block");
+    expect(lastCall?.extraSystemPrompt).toContain("ACP harness normalization:");
+  });
+
   it("forwards provider and model overrides for admin-scoped callers", async () => {
     primeMainAgentRun();
 

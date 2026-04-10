@@ -181,18 +181,37 @@ function buildAnnounceReplyInstruction(params: {
   announceType: SubagentAnnounceType;
   expectsCompletionMessage?: boolean;
 }): string {
+  const noReplyGuard = `Reply ONLY with ${SILENT_REPLY_TOKEN} when ALL of these hold: (a) this completion is a duplicate of one already processed in this turn, (b) the result is already covered in a prior reply, or (c) it is only incremental confirmation that does not materially change the user-facing conclusion. In every other case you MUST produce a substantive reply.`;
   if (params.requesterIsSubagent) {
-    return `Convert this completion into a concise internal orchestration update for your parent agent in your own words. Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
+    return `Convert this completion into a concise internal orchestration update for your parent agent in your own words. Keep this internal context private (don't mention system/log/stats/session details or announce type). ${noReplyGuard}`;
   }
   if (params.expectsCompletionMessage) {
-    return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type).`;
+    return `A completed ${params.announceType} is ready for user delivery. Convert the result from the structured internalEvents into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type). ${noReplyGuard}`;
   }
-  return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the internal event text verbatim. Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`;
+  return `A completed ${params.announceType} is ready for user delivery. Convert the result from the structured internalEvents into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the internal event text verbatim. ${noReplyGuard}`;
 }
 
-function buildAnnounceSteerMessage(events: AgentInternalEvent[]): string {
+function buildAnnounceSteerMessage(params: {
+  events: AgentInternalEvent[];
+  expectsCompletionMessage?: boolean;
+  requesterIsSubagent: boolean;
+  taskLabel?: string;
+  statusLabel?: string;
+  findings?: string;
+}): string {
+  if (params.expectsCompletionMessage && !params.requesterIsSubagent) {
+    return [
+      "A background task finished.",
+      params.taskLabel ? `Task: ${params.taskLabel}.` : undefined,
+      params.statusLabel ? `Status: ${params.statusLabel}.` : undefined,
+      params.findings ? `Latest result summary:\n${params.findings}` : undefined,
+      `Use the structured internal completion event attached to this turn as the authoritative source. Send a user-facing update only if it adds something materially new, otherwise reply ONLY with ${SILENT_REPLY_TOKEN}.`,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+  }
   return (
-    formatAgentInternalEventsForPrompt(events) ||
+    formatAgentInternalEventsForPrompt(params.events) ||
     "A background task finished. Process the completion update now."
   );
 }
@@ -340,7 +359,12 @@ export async function runSubagentAnnounceFlow(params: {
         : undefined;
     })();
     const settleTimeoutMs = Math.min(Math.max(params.timeoutMs, 1), 120_000);
-    let reply = params.roundOneReply;
+    const cachedRoundOneReply = normalizeOptionalString(params.roundOneReply);
+    const cachedRoundOneReplyIsSilent =
+      Boolean(cachedRoundOneReply) &&
+      (isAnnounceSkip(cachedRoundOneReply) ||
+        isSilentReplyText(cachedRoundOneReply, SILENT_REPLY_TOKEN));
+    let reply = expectsCompletionMessage ? undefined : cachedRoundOneReply;
     let outcome: SubagentRunOutcome | undefined = params.outcome;
     if (childSessionId && isEmbeddedPiRunActive(childSessionId)) {
       const settled = await waitForEmbeddedPiRunEnd(childSessionId, settleTimeoutMs);
@@ -469,6 +493,10 @@ export async function runSubagentAnnounceFlow(params: {
         reply = fallbackReply;
       }
 
+      if (!reply?.trim() && expectsCompletionMessage && cachedRoundOneReplyIsSilent) {
+        reply = cachedRoundOneReply;
+      }
+
       // A worker can finish just after the first wait request timed out.
       // If we already have real completion content, do one cached recheck so
       // the final completion event prefers the authoritative terminal state.
@@ -572,7 +600,14 @@ export async function runSubagentAnnounceFlow(params: {
         replyInstruction,
       },
     ];
-    const triggerMessage = buildAnnounceSteerMessage(internalEvents);
+    const triggerMessage = buildAnnounceSteerMessage({
+      events: internalEvents,
+      expectsCompletionMessage,
+      requesterIsSubagent,
+      taskLabel,
+      statusLabel,
+      findings,
+    });
 
     // Send to the requester session. For nested subagents this is an internal
     // follow-up injection (deliver=false) so the orchestrator receives it.

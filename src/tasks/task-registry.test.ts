@@ -1701,6 +1701,105 @@ describe("task-registry", () => {
     });
   });
 
+  it("silently wakes the parent for parent-spawned ACP terminal completions on deliverable channels", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      resetSystemEventsForTest();
+
+      for (const [channel, to, runId] of [
+        ["telegram", "telegram:123", "run-parent-telegram"],
+        ["discord", "discord:123", "run-parent-discord"],
+      ] as const) {
+        hoisted.sendMessageMock.mockClear();
+        resetSystemEventsForTest();
+        resetHeartbeatWakeStateForTests();
+
+        createTaskRecord({
+          runtime: "acp",
+          ownerKey: "agent:main:main",
+          spawnedBy: "agent:main:main",
+          scopeKind: "session",
+          requesterOrigin: {
+            channel,
+            to,
+          },
+          childSessionKey: `agent:codex:acp:${channel}-child`,
+          runId,
+          task: "Create the file",
+          status: "running",
+          deliveryStatus: "pending",
+        });
+
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          data: {
+            phase: "end",
+            endedAt: 250,
+          },
+        });
+        await flushAsyncWork();
+
+        expect(findTaskByRunId(runId)).toMatchObject({
+          status: "succeeded",
+          deliveryStatus: "session_queued",
+        });
+        expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+        expect(peekSystemEvents("agent:main:main")).toEqual([]);
+        expect(hasPendingHeartbeatWake()).toBe(true);
+      }
+    });
+  });
+
+  it("keeps blocked follow-up delivery when silently waking the parent for spawned ACP runs", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      resetSystemEventsForTest();
+
+      for (const [channel, to, runId] of [
+        ["telegram", "telegram:123", "run-parent-blocked-telegram"],
+        ["discord", "discord:123", "run-parent-blocked-discord"],
+      ] as const) {
+        hoisted.sendMessageMock.mockClear();
+        resetSystemEventsForTest();
+        resetHeartbeatWakeStateForTests();
+
+        createTaskRecord({
+          runtime: "acp",
+          ownerKey: "agent:main:main",
+          spawnedBy: "agent:main:main",
+          scopeKind: "session",
+          requesterOrigin: {
+            channel,
+            to,
+          },
+          childSessionKey: `agent:codex:acp:${channel}-blocked-child`,
+          runId,
+          task: "Port the repo changes",
+          status: "succeeded",
+          deliveryStatus: "pending",
+          terminalOutcome: "blocked",
+          terminalSummary: "Writable session or apply_patch authorization required.",
+        });
+
+        await waitForAssertion(() =>
+          expect(findTaskByRunId(runId)).toMatchObject({
+            status: "succeeded",
+            deliveryStatus: "session_queued",
+            terminalOutcome: "blocked",
+          }),
+        );
+        expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+        expect(peekSystemEvents("agent:main:main")).toEqual([
+          `Task needs follow-up: ACP background task (run ${runId.slice(0, 8)}). Writable session or apply_patch authorization required.`,
+        ]);
+        expect(hasPendingHeartbeatWake()).toBe(true);
+      }
+    });
+  });
+
   it("delivers a concise terminal failure message without internal ACP chatter", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;

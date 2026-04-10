@@ -12,7 +12,9 @@ const resolveAgentIdFromSessionKeyMock = vi.fn((sessionKey: string) => {
 });
 const resolveStorePathMock = vi.fn((_store: unknown, _options: unknown) => "/tmp/sessions.json");
 const resolveMainSessionKeyMock = vi.fn((_cfg: unknown) => "agent:main:main");
-const readLatestAssistantReplyMock = vi.fn(async (_params?: unknown) => "raw subagent reply");
+const readLatestAssistantReplyMock = vi.fn(
+  async (_params?: unknown): Promise<string | undefined> => "raw subagent reply",
+);
 const isEmbeddedPiRunActiveMock = vi.fn((_sessionId: string) => false);
 const queueEmbeddedPiMessageMock = vi.fn((_sessionId: string, _text: string) => false);
 const waitForEmbeddedPiRunEndMock = vi.fn(async (_sessionId: string, _timeoutMs?: number) => true);
@@ -446,5 +448,96 @@ describe("subagent announce seam flow", () => {
         to: "-1001234567890",
       }),
     );
+  });
+
+  it("prefers live completion output over cached interim chatter for completion delivery", async () => {
+    readLatestAssistantReplyMock.mockResolvedValue(
+      "Permanent omnichannel ACP fix applied and verified.",
+    );
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:acp",
+      childRunId: "run-live-output-wins",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "deliver final completion",
+      timeoutMs: 10,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply:
+        "I don't have prior context about which four files or what changes are needed.",
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    const agentCall = agentSpy.mock.calls[0]?.[0] as {
+      params?: {
+        message?: string;
+      };
+    };
+    expect(agentCall?.params?.message).toContain(
+      "Use the structured internal completion event attached to this turn as the authoritative source.",
+    );
+    expect(agentCall?.params?.message).toContain(
+      "Permanent omnichannel ACP fix applied and verified.",
+    );
+    expect(agentCall?.params?.message).not.toContain(
+      "I don't have prior context about which four files or what changes are needed.",
+    );
+  });
+
+  it("does not reuse cached interim chatter when no live completion output exists", async () => {
+    callGatewayMock.mockImplementation(async (req: unknown) => {
+      const typed = req as AgentCallRequest;
+      if (typed.method === "agent") {
+        return await agentSpy(typed);
+      }
+      if (typed.method === "agent.wait") {
+        return { status: "ok", startedAt: 10, endedAt: 20 };
+      }
+      if (typed.method === "chat.history") {
+        return { messages: [] as Array<unknown> };
+      }
+      if (typed.method === "sessions.patch") {
+        return {};
+      }
+      if (typed.method === "sessions.delete") {
+        sessionsDeleteSpy(typed);
+        return {};
+      }
+      return {};
+    });
+    readLatestAssistantReplyMock.mockResolvedValue(undefined);
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:acp-empty",
+      childRunId: "run-no-live-output",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "deliver final completion",
+      timeoutMs: 10,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "Let me read the source files first.",
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    const agentCall = agentSpy.mock.calls[0]?.[0] as {
+      params?: {
+        message?: string;
+      };
+    };
+    expect(agentCall?.params?.message).toContain(
+      "Use the structured internal completion event attached to this turn as the authoritative source.",
+    );
+    expect(agentCall?.params?.message).toContain("(no output)");
+    expect(agentCall?.params?.message).not.toContain("Let me read the source files first.");
   });
 });

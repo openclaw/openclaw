@@ -1025,6 +1025,22 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
       });
     }
     const eventText = formatTaskTerminalMessage(latest);
+    const shouldWakeParentSession =
+      latest.runtime === "acp" && ownerSessionKey === latest.spawnedBy?.trim();
+    if (shouldWakeParentSession) {
+      requestHeartbeatNow({
+        reason:
+          latest.terminalOutcome === "blocked" ? "background-task-blocked" : "background-task",
+        sessionKey: ownerSessionKey,
+      });
+      if (latest.terminalOutcome === "blocked") {
+        queueBlockedTaskFollowup(latest);
+      }
+      return updateTask(taskId, {
+        deliveryStatus: "session_queued",
+        lastEventAt: Date.now(),
+      });
+    }
     if (!canDeliverTaskToRequesterOrigin(latest)) {
       try {
         queueTaskSystemEvent(latest, eventText);
@@ -1360,6 +1376,7 @@ export function createTaskRecord(params: {
   sourceId?: string;
   requesterSessionKey?: string;
   ownerKey?: string;
+  spawnedBy?: string;
   scopeKind?: TaskScopeKind;
   requesterOrigin?: TaskDeliveryState["requesterOrigin"];
   childSessionKey?: string;
@@ -1435,6 +1452,7 @@ export function createTaskRecord(params: {
     sourceId: normalizeOptionalString(params.sourceId),
     requesterSessionKey,
     ownerKey,
+    spawnedBy: normalizeOptionalString(params.spawnedBy),
     scopeKind,
     childSessionKey: params.childSessionKey,
     parentFlowId: normalizeOptionalString(params.parentFlowId),

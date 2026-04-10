@@ -289,6 +289,48 @@ describe("subagent registry lifecycle hardening", () => {
     });
   });
 
+  it("uses a silent ended hook for deferred completion cleanup", async () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      expectsCompletionMessage: true,
+      retainAttachmentsOnKeep: true,
+    });
+    const emitSubagentEndedHookForRun = vi.fn(async () => {});
+
+    const controller = createSubagentRegistryLifecycleController({
+      runs: new Map([[entry.runId, entry]]),
+      resumedRuns: new Set(),
+      subagentAnnounceTimeoutMs: 1_000,
+      persist: vi.fn(),
+      clearPendingLifecycleError: vi.fn(),
+      countPendingDescendantRuns: () => 0,
+      suppressAnnounceForSteerRestart: () => false,
+      shouldEmitEndedHookForRun: () => true,
+      emitSubagentEndedHookForRun,
+      notifyContextEngineSubagentEnded: vi.fn(async () => {}),
+      resumeSubagentRun: vi.fn(),
+      captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
+      runSubagentAnnounceFlow: vi.fn(async () => true),
+      warn: vi.fn(),
+    });
+
+    await expect(
+      controller.finalizeResumedAnnounceGiveUp({
+        runId: entry.runId,
+        entry,
+        reason: "retry-limit",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(emitSubagentEndedHookForRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entry,
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        sendFarewell: false,
+      }),
+    );
+  });
+
   it("skips browser cleanup when steer restart suppresses cleanup flow", async () => {
     const entry = createRunEntry({
       expectsCompletionMessage: false,

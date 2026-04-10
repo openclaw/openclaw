@@ -240,7 +240,7 @@ export function createSubagentRegistryLifecycleController(params: {
       await params.emitSubagentEndedHookForRun({
         entry,
         reason,
-        sendFarewell: true,
+        sendFarewell: false,
       });
     }
   };

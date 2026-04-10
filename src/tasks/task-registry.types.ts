@@ -57,6 +57,7 @@ export type TaskRecord = {
   sourceId?: string;
   requesterSessionKey: string;
   ownerKey: string;
+  spawnedBy?: string;
   scopeKind: TaskScopeKind;
   childSessionKey?: string;
   parentFlowId?: string;

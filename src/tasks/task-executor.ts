@@ -121,6 +121,7 @@ export function createRunningTaskRun(params: {
   sourceId?: string;
   requesterSessionKey?: string;
   ownerKey?: string;
+  spawnedBy?: string;
   scopeKind?: TaskScopeKind;
   requesterOrigin?: TaskDeliveryState["requesterOrigin"];
   parentFlowId?: string;
