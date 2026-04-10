@@ -43,6 +43,20 @@ export type CodexPluginConfig = {
   };
 };
 
+export const CODEX_APP_SERVER_CONFIG_KEYS = [
+  "transport",
+  "command",
+  "args",
+  "url",
+  "authToken",
+  "headers",
+  "requestTimeoutMs",
+  "approvalPolicy",
+  "sandbox",
+  "approvalsReviewer",
+  "serviceTier",
+] as const;
+
 const codexAppServerTransportSchema = z.enum(["stdio", "websocket"]);
 const codexAppServerApprovalPolicySchema = z.enum([
   "never",
@@ -101,6 +115,11 @@ export function resolveCodexAppServerRuntimeOptions(
   const headers = normalizeHeaders(config.headers);
   const authToken = readNonEmptyString(config.authToken);
   const url = readNonEmptyString(config.url);
+  if (transport === "websocket" && !url) {
+    throw new Error(
+      "plugins.entries.codex.config.appServer.url is required when appServer.transport is websocket",
+    );
+  }
 
   return {
     start: {

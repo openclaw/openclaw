@@ -22,6 +22,18 @@ type PendingRequest = {
   reject: (error: Error) => void;
 };
 
+export class CodexAppServerRpcError extends Error {
+  readonly code?: number;
+  readonly data?: JsonValue;
+
+  constructor(error: { code?: number; message: string; data?: JsonValue }, method: string) {
+    super(error.message || `${method} failed`);
+    this.name = "CodexAppServerRpcError";
+    this.code = error.code;
+    this.data = error.data;
+  }
+}
+
 export type CodexServerRequestHandler = (
   request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
 ) => Promise<JsonValue | undefined> | JsonValue | undefined;
@@ -192,7 +204,7 @@ export class CodexAppServerClient {
     }
     this.pending.delete(response.id);
     if (response.error) {
-      pending.reject(new Error(response.error.message || `${pending.method} failed`));
+      pending.reject(new CodexAppServerRpcError(response.error, pending.method));
       return;
     }
     pending.resolve(response.result);
