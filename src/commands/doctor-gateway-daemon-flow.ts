@@ -68,7 +68,7 @@ async function maybeRepairLaunchAgentBootstrap(params: {
   }
 
   params.runtime.log(`Bootstrapping ${params.title} LaunchAgent...`);
-  const repair = await repairLaunchAgentBootstrap({ env: params.env });
+  const repair = await repairLaunchAgentBootstrap({ env: params.env, forceEnable: true });
   if (!repair.ok) {
     params.runtime.error(
       `${params.title} LaunchAgent bootstrap failed: ${repair.detail ?? "unknown error"}`,

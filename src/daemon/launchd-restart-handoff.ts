@@ -66,7 +66,9 @@ export function isCurrentProcessLaunchdServiceLabel(
 }
 
 function buildLaunchdRestartScript(mode: LaunchdRestartHandoffMode): string {
-  const waitForCallerPid = `wait_pid="$4"
+  const waitForCallerPid = `should_enable="$4"
+wait_pid="$5"
+enable_marker_path="$6"
 if [ -n "$wait_pid" ] && [ "$wait_pid" -gt 1 ] 2>/dev/null; then
   while kill -0 "$wait_pid" >/dev/null 2>&1; do
     sleep 0.1
@@ -79,7 +81,12 @@ fi
 domain="$2"
 plist_path="$3"
 ${waitForCallerPid}
-launchctl enable "$service_target" >/dev/null 2>&1
+if [ "$should_enable" = "1" ]; then
+  launchctl enable "$service_target" >/dev/null 2>&1
+  if [ -n "$enable_marker_path" ]; then
+    rm -f "$enable_marker_path" >/dev/null 2>&1 || true
+  fi
+fi
 if ! launchctl kickstart -k "$service_target" >/dev/null 2>&1; then
   if launchctl bootstrap "$domain" "$plist_path" >/dev/null 2>&1; then
     launchctl kickstart -k "$service_target" >/dev/null 2>&1 || true
@@ -93,7 +100,12 @@ domain="$2"
 plist_path="$3"
 label="$(basename "$service_target")"
 ${waitForCallerPid}
-launchctl enable "$service_target" >/dev/null 2>&1
+if [ "$should_enable" = "1" ]; then
+  launchctl enable "$service_target" >/dev/null 2>&1
+  if [ -n "$enable_marker_path" ]; then
+    rm -f "$enable_marker_path" >/dev/null 2>&1 || true
+  fi
+fi
 if ! launchctl start "$label" >/dev/null 2>&1; then
   if launchctl bootstrap "$domain" "$plist_path" >/dev/null 2>&1; then
     launchctl start "$label" >/dev/null 2>&1 || launchctl kickstart -k "$service_target" >/dev/null 2>&1 || true
@@ -107,7 +119,9 @@ fi
 export function scheduleDetachedLaunchdRestartHandoff(params: {
   env?: Record<string, string | undefined>;
   mode: LaunchdRestartHandoffMode;
+  shouldEnable?: boolean;
   waitForPid?: number;
+  enableMarkerPath?: string;
 }): LaunchdRestartHandoffResult {
   const target = resolveLaunchdRestartTarget(params.env);
   const waitForPid =
@@ -124,7 +138,9 @@ export function scheduleDetachedLaunchdRestartHandoff(params: {
         target.serviceTarget,
         target.domain,
         target.plistPath,
+        params.shouldEnable ? "1" : "0",
         String(waitForPid),
+        params.enableMarkerPath ?? "",
       ],
       {
         detached: true,

@@ -38,11 +38,34 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     const [, args] = spawnMock.mock.calls[0] as [string, string[]];
     expect(args[0]).toBe("-c");
     expect(args[2]).toBe("openclaw-launchd-restart-handoff");
-    expect(args[6]).toBe("9876");
+    expect(args[6]).toBe("0");
+    expect(args[7]).toBe("9876");
     expect(args[1]).toContain('while kill -0 "$wait_pid" >/dev/null 2>&1; do');
-    expect(args[1]).toContain('launchctl enable "$service_target" >/dev/null 2>&1');
-    expect(args[1]).toContain('launchctl kickstart -k "$service_target" >/dev/null 2>&1');
+    expect(args[1]).not.toContain('launchctl enable "$service_target" >/dev/null 2>&1\nif !');
+    expect(args[1]).toContain(
+      'if ! launchctl kickstart -k "$service_target" >/dev/null 2>&1; then',
+    );
     expect(args[1]).not.toContain("sleep 1");
     expect(unrefMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("only injects launchctl enable when the caller requested re-enable", () => {
+    spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
+
+    scheduleDetachedLaunchdRestartHandoff({
+      env: {
+        HOME: "/Users/test",
+        OPENCLAW_PROFILE: "default",
+      },
+      mode: "kickstart",
+      shouldEnable: true,
+      enableMarkerPath: "/Users/test/.openclaw/service/marker",
+    });
+
+    const [, args] = spawnMock.mock.calls[0] as [string, string[]];
+    expect(args[6]).toBe("1");
+    expect(args[8]).toBe("/Users/test/.openclaw/service/marker");
+    expect(args[1]).toContain('launchctl enable "$service_target" >/dev/null 2>&1');
+    expect(args[1]).toContain('rm -f "$enable_marker_path" >/dev/null 2>&1 || true');
   });
 });
