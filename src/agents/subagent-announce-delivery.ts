@@ -16,16 +16,11 @@ import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import {
   type DeliveryContext,
-  deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
   resolveConversationDeliveryTarget,
 } from "../utils/delivery-context.js";
-import {
-  INTERNAL_MESSAGE_CHANNEL,
-  isDeliverableMessageChannel,
-  isInternalMessageChannel,
-} from "../utils/message-channel.js";
+import { INTERNAL_MESSAGE_CHANNEL, isDeliverableMessageChannel } from "../utils/message-channel.js";
 import { buildAnnounceIdempotencyKey, resolveQueueAnnounceId } from "./announce-idempotency.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import { isEmbeddedPiRunActive, queueEmbeddedPiMessage } from "./pi-embedded.js";
@@ -33,6 +28,7 @@ import {
   runSubagentAnnounceDispatch,
   type SubagentAnnounceDeliveryResult,
 } from "./subagent-announce-dispatch.js";
+import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.js";
@@ -44,8 +40,6 @@ const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
 const DIRECT_ANNOUNCE_TRANSIENT_RETRY_DELAYS_MS = FAST_TEST_MODE
   ? ([8, 16, 32] as const)
   : ([5_000, 10_000, 20_000] as const);
-
-type DeliveryContextSource = Parameters<typeof deliveryContextFromSession>[0];
 
 export function resolveSubagentAnnounceTimeoutMs(cfg: ReturnType<typeof loadConfig>): number {
   return Math.min(resolveSubagentCompletionAnnounceTimeoutMs(cfg), MAX_TIMER_SAFE_TIMEOUT_MS);
@@ -157,33 +151,6 @@ export async function runAnnounceDeliveryWithRetry<T>(params: {
       await waitForAnnounceRetryDelay(delayMs, params.signal);
     }
   }
-}
-
-export function resolveAnnounceOrigin(
-  entry?: DeliveryContextSource,
-  requesterOrigin?: DeliveryContext,
-): DeliveryContext | undefined {
-  const normalizedRequester = normalizeDeliveryContext(requesterOrigin);
-  const normalizedEntry = deliveryContextFromSession(entry);
-  if (normalizedRequester?.channel && isInternalMessageChannel(normalizedRequester.channel)) {
-    return mergeDeliveryContext(
-      {
-        accountId: normalizedRequester.accountId,
-        threadId: normalizedRequester.threadId,
-      },
-      normalizedEntry,
-    );
-  }
-  const entryForMerge =
-    normalizedRequester?.to &&
-    normalizedRequester.threadId == null &&
-    normalizedEntry?.threadId != null
-      ? (() => {
-          const { threadId: _ignore, ...rest } = normalizedEntry;
-          return rest;
-        })()
-      : normalizedEntry;
-  return mergeDeliveryContext(normalizedRequester, entryForMerge);
 }
 
 export async function resolveSubagentCompletionOrigin(params: {
