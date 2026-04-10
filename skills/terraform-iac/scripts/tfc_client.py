@@ -1521,8 +1521,12 @@ resource "aws_organizations_account" "audit" {{
             print(f"  ⚠️  Auto-derived trail bucket name '{trail_bucket}' is invalid:")
             for e in errors:
                 print(f"     - {e}")
-            trail_bucket = prompt("S3 bucket name for org trail logs")
-            trail_bucket = trail_bucket.lower().replace(" ", "-").replace("_", "-")
+            while True:
+                trail_bucket = prompt("S3 bucket name for org trail logs")
+                trail_bucket = trail_bucket.lower().replace(" ", "-").replace("_", "-")
+                if trail_bucket == name or trail_bucket.startswith(f"{name}-"):
+                    break
+                print(f"  ❌ Bucket '{trail_bucket}' must be derived from the landing-zone name '{name}' (use '{name}-org-trail-logs' or a prefix of it).")
             errors = validate_s3_bucket_name(trail_bucket)
             if errors:
                 print("❌ Invalid S3 bucket name:")
@@ -1716,19 +1720,9 @@ resource "aws_guardduty_organization_admin_account" "audit" {{
   depends_on       = [aws_guardduty_detector.this]
 }}
 
-# NOTE: aws_guardduty_organization_configuration must be applied from the
-# delegated admin (Audit) account, and it must target the delegated admin
-# detector created in that account. Use the Audit account workspace for the
-# org-wide configuration below after creating an Audit-account detector.
-#
-#   resource "aws_guardduty_detector" "admin" {{
-#     enable = true
-#   }}
-#
-#   resource "aws_guardduty_organization_configuration" "this" {{
-#     detector_id = aws_guardduty_detector.admin.id
-#     auto_enable_organization_members = "ALL"
-#   }}
+# NOTE: GuardDuty org configuration is intentionally omitted here.
+# Apply aws_guardduty_organization_configuration from the delegated admin
+# (Audit) account workspace, using that workspace's detector.
 #
 # The management workspace only creates the detector and assigns delegated admin.
 """
@@ -3456,6 +3450,25 @@ def validate_s3_bucket_name(name):
         errors.append("Name cannot contain consecutive dots")
     if re.match(r'^\d+\.\d+\.\d+\.\d+$', name):
         errors.append("Name cannot be formatted as an IP address")
+    if name.startswith('xn--'):
+        errors.append("Name cannot start with 'xn--'")
+    if name.startswith('sthree-'):
+        errors.append("Name cannot start with 'sthree-'")
+    return errors
+
+
+def validate_landing_zone_name(name):
+    """Validate landing zone names before deriving dependent names from them."""
+    import re
+    errors = []
+    if not (3 <= len(name) <= 63):
+        errors.append(f"Name must be 3-63 characters (got {len(name)})")
+    if name != name.lower():
+        errors.append(f"Name must be lowercase (use '{name.lower()}')")
+    if not re.match(r'^[a-z0-9][a-z0-9\-]*[a-z0-9]$', name):
+        errors.append("Name must start/end with a letter or number and use only lowercase letters, numbers, and hyphens")
+    if '..' in name:
+        errors.append("Name cannot contain consecutive dots")
     if name.startswith('xn--'):
         errors.append("Name cannot start with 'xn--'")
     if name.startswith('sthree-'):
