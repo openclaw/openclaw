@@ -3721,6 +3721,9 @@ def cmd_state(args):
         f"{TFC_API}/organizations/{quote(org, safe='')}/workspaces/{ws_name}",
         headers=api_headers()
     )
+    if r.status_code == 404:
+        print(f"No workspace named '{args.workspace}' found in organization '{org}'.")
+        return
     r.raise_for_status()
     ws_id = r.json()["data"]["id"]
 
@@ -3769,6 +3772,9 @@ def cmd_outputs(args):
         f"{TFC_API}/organizations/{quote(org, safe='')}/workspaces/{ws_name}",
         headers=api_headers()
     )
+    if r.status_code == 404:
+        print(f"No workspace named '{args.workspace}' found in organization '{org}'.")
+        return
     r.raise_for_status()
     ws_id = r.json()["data"]["id"]
 
