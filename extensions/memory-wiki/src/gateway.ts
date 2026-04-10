@@ -7,6 +7,7 @@ import {
   WIKI_SEARCH_CORPORA,
   type ResolvedMemoryWikiConfig,
 } from "./config.js";
+import { listMemoryWikiImportRuns } from "./import-runs.js";
 import { ingestMemoryWikiSource } from "./ingest.js";
 import { lintMemoryWikiVault } from "./lint.js";
 import {
@@ -106,6 +107,24 @@ export function registerMemoryWikiGatewayMethods(params: {
           true,
           await resolveMemoryWikiStatus(config, {
             appConfig,
+          }),
+        );
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: READ_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "wiki.importRuns",
+    async ({ params: requestParams, respond }) => {
+      try {
+        const limit = readNumberParam(requestParams, "limit");
+        respond(
+          true,
+          await listMemoryWikiImportRuns(config, {
+            ...(limit !== undefined ? { limit } : {}),
           }),
         );
       } catch (error) {

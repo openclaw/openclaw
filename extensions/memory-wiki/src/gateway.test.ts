@@ -5,6 +5,7 @@ import {
   type ApplyMemoryWikiMutation,
 } from "./apply.js";
 import { registerMemoryWikiGatewayMethods } from "./gateway.js";
+import { listMemoryWikiImportRuns } from "./import-runs.js";
 import { ingestMemoryWikiSource } from "./ingest.js";
 import { searchMemoryWiki } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
@@ -22,6 +23,10 @@ vi.mock("./compile.js", () => ({
 
 vi.mock("./ingest.js", () => ({
   ingestMemoryWikiSource: vi.fn(),
+}));
+
+vi.mock("./import-runs.js", () => ({
+  listMemoryWikiImportRuns: vi.fn(),
 }));
 
 vi.mock("./lint.js", () => ({
@@ -90,6 +95,12 @@ describe("memory-wiki gateway methods", () => {
     vi.mocked(ingestMemoryWikiSource).mockResolvedValue({
       pagePath: "sources/alpha-notes.md",
     } as never);
+    vi.mocked(listMemoryWikiImportRuns).mockResolvedValue({
+      runs: [],
+      totalRuns: 0,
+      activeRuns: 0,
+      rolledBackRuns: 0,
+    } as never);
     vi.mocked(normalizeMemoryWikiMutationInput).mockReturnValue({
       op: "create_synthesis",
       title: "Gateway Alpha",
@@ -131,6 +142,55 @@ describe("memory-wiki gateway methods", () => {
       expect.objectContaining({
         vaultMode: "isolated",
         vaultExists: true,
+      }),
+    );
+  });
+
+  it("returns recent import runs over the gateway", async () => {
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
+    const { api, registerGatewayMethod } = createPluginApi();
+    vi.mocked(listMemoryWikiImportRuns).mockResolvedValue({
+      runs: [
+        {
+          runId: "chatgpt-abc123",
+          importType: "chatgpt",
+          appliedAt: "2026-04-10T10:00:00.000Z",
+          exportPath: "/tmp/chatgpt",
+          sourcePath: "/tmp/chatgpt/conversations.json",
+          conversationCount: 12,
+          createdCount: 4,
+          updatedCount: 2,
+          skippedCount: 6,
+          status: "applied",
+          pagePaths: ["sources/chatgpt-2026-04-10-alpha.md"],
+          samplePaths: ["sources/chatgpt-2026-04-10-alpha.md"],
+        },
+      ],
+      totalRuns: 1,
+      activeRuns: 1,
+      rolledBackRuns: 0,
+    } as never);
+
+    registerMemoryWikiGatewayMethods({ api, config });
+    const handler = findGatewayHandler(registerGatewayMethod, "wiki.importRuns");
+    if (!handler) {
+      throw new Error("wiki.importRuns handler missing");
+    }
+    const respond = vi.fn();
+
+    await handler({
+      params: {
+        limit: 5,
+      },
+      respond,
+    });
+
+    expect(listMemoryWikiImportRuns).toHaveBeenCalledWith(config, { limit: 5 });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        totalRuns: 1,
+        activeRuns: 1,
       }),
     );
   });

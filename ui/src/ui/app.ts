@@ -61,7 +61,7 @@ import {
 } from "./controllers/agents.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
-import type { DreamingStatus } from "./controllers/dreaming.ts";
+import type { DreamingStatus, WikiImportStatus } from "./controllers/dreaming.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
 import type {
@@ -232,6 +232,9 @@ export class OpenClawApp extends LitElement {
   @state() dreamDiaryError: string | null = null;
   @state() dreamDiaryPath: string | null = null;
   @state() dreamDiaryContent: string | null = null;
+  @state() wikiImportRunsLoading = false;
+  @state() wikiImportRunsError: string | null = null;
+  @state() wikiImportStatus: WikiImportStatus | null = null;
   @state() configFormDirty = false;
   @state() configFormMode: "form" | "raw" = "form";
   @state() configSearchQuery = "";

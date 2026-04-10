@@ -133,6 +133,9 @@ export type AppViewState = {
   dreamDiaryError: string | null;
   dreamDiaryPath: string | null;
   dreamDiaryContent: string | null;
+  wikiImportRunsLoading: boolean;
+  wikiImportRunsError: string | null;
+  wikiImportStatus: import("./controllers/dreaming.js").WikiImportStatus | null;
   configFormMode: "form" | "raw";
   configSearchQuery: string;
   configActiveSection: string | null;

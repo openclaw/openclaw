@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
-import type { DreamingEntry } from "../controllers/dreaming.ts";
+import type { DreamingEntry, WikiImportStatus } from "../controllers/dreaming.ts";
 
 // ── Diary entry parser ─────────────────────────────────────────────────
 
@@ -112,8 +112,12 @@ export type DreamingProps = {
   dreamDiaryError: string | null;
   dreamDiaryPath: string | null;
   dreamDiaryContent: string | null;
+  wikiImportRunsLoading: boolean;
+  wikiImportRunsError: string | null;
+  wikiImportStatus: WikiImportStatus | null;
   onRefresh: () => void;
   onRefreshDiary: () => void;
+  onRefreshImports: () => void;
   onBackfillDiary: () => void;
   onResetDiary: () => void;
   onResetGroundedShortTerm: () => void;
@@ -152,7 +156,7 @@ const DREAM_SWAP_MS = 6_000;
 
 // ── Sub-tab state ─────────────────────────────────────────────────────
 
-type DreamSubTab = "scene" | "diary" | "advanced";
+type DreamSubTab = "scene" | "diary" | "advanced" | "imports";
 let _subTab: DreamSubTab = "scene";
 type AdvancedWaitingSort = "recent" | "signals";
 let _advancedWaitingSort: AdvancedWaitingSort = "recent";
@@ -276,13 +280,24 @@ export function renderDreaming(props: DreamingProps) {
         >
           ${t("dreaming.tabs.advanced")}
         </button>
+        <button
+          class="dreams__tab ${_subTab === "imports" ? "dreams__tab--active" : ""}"
+          @click=${() => {
+            _subTab = "imports";
+            props.onRequestUpdate?.();
+          }}
+        >
+          Imports
+        </button>
       </nav>
 
       ${_subTab === "scene"
         ? renderScene(props, idle, dreamText)
         : _subTab === "diary"
           ? renderDiarySection(props)
-          : renderAdvancedSection(props)}
+          : _subTab === "advanced"
+            ? renderAdvancedSection(props)
+            : renderImportsSection(props)}
     </div>
   `;
 }
@@ -428,6 +443,18 @@ function formatCompactDateTime(value: string): string {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+function basename(value: string): string {
+  const normalized = value.replace(/\\/g, "/");
+  return normalized.split("/").filter(Boolean).at(-1) ?? value;
+}
+
+function formatImportCounts(
+  run: NonNullable<DreamingProps["wikiImportStatus"]>["runs"][number],
+): string {
+  const total = run.conversationCount > 0 ? `${run.conversationCount} chats` : "chat import";
+  return `${total} · ${run.createdCount} new · ${run.updatedCount} updated · ${run.skippedCount} skipped`;
 }
 
 function parseSortableTimestamp(value?: string): number {
@@ -670,6 +697,102 @@ function renderAdvancedSection(props: DreamingProps) {
       ${props.statusError
         ? html`<div class="dreams__controls-error">${props.statusError}</div>`
         : nothing}
+    </section>
+  `;
+}
+
+function renderImportsSection(props: DreamingProps) {
+  if (props.wikiImportRunsError) {
+    return html`
+      <section class="dreams-diary">
+        <div class="dreams-diary__error">${props.wikiImportRunsError}</div>
+      </section>
+    `;
+  }
+
+  const importStatus = props.wikiImportStatus;
+  const runs = importStatus?.runs ?? [];
+
+  return html`
+    <section class="dreams-diary">
+      <div class="dreams-diary__header">
+        <span class="dreams-diary__title">Import Runs</span>
+        <button
+          class="btn btn--subtle btn--sm"
+          ?disabled=${props.wikiImportRunsLoading}
+          @click=${() => props.onRefreshImports()}
+        >
+          ${props.wikiImportRunsLoading ? "Reloading…" : "Reload"}
+        </button>
+      </div>
+
+      ${props.wikiImportRunsLoading && runs.length === 0
+        ? html`<div class="dreams-advanced__empty">Loading import runs…</div>`
+        : runs.length === 0
+          ? html`
+              <div class="dreams-diary__empty">
+                <div class="dreams-diary__empty-text">No import runs yet</div>
+                <div class="dreams-diary__empty-hint">
+                  Run a ChatGPT import with apply to populate this window.
+                </div>
+              </div>
+            `
+          : html`
+              <section class="dreams-advanced">
+                <div class="dreams-advanced__sections">
+                  <section class="dreams-advanced__section">
+                    <div class="dreams-advanced__section-header">
+                      <div class="dreams-advanced__section-copy">
+                        <span class="dreams-advanced__section-title">Recent Runs</span>
+                        <p class="dreams-advanced__section-description">
+                          ${importStatus?.activeRuns ?? 0} active ·
+                          ${importStatus?.rolledBackRuns ?? 0} rolled back
+                        </p>
+                      </div>
+                      <div class="dreams-advanced__section-toolbar">
+                        <span class="dreams-advanced__section-count"
+                          >${importStatus?.totalRuns ?? runs.length}</span
+                        >
+                      </div>
+                    </div>
+                    <div class="dreams-advanced__list">
+                      ${runs.map(
+                        (run) => html`
+                          <article
+                            class="dreams-advanced__item"
+                            data-kind="imports"
+                            data-run-id=${run.runId}
+                          >
+                            <span class="dreams-advanced__badge">
+                              ${run.status === "rolled_back" ? "Rolled back" : "Applied"}
+                            </span>
+                            <div class="dreams-advanced__snippet">
+                              ${formatCompactDateTime(run.appliedAt)} · ${formatImportCounts(run)}
+                            </div>
+                            <div class="dreams-advanced__source">
+                              ${basename(run.exportPath)} → ${basename(run.sourcePath)}
+                            </div>
+                            <div class="dreams-advanced__meta">
+                              ${run.runId}
+                              ${run.rolledBackAt
+                                ? ` · rolled back ${formatCompactDateTime(run.rolledBackAt)}`
+                                : ""}
+                            </div>
+                            ${run.samplePaths.length > 0
+                              ? html`
+                                  <div class="dreams-advanced__meta">
+                                    ${run.samplePaths.join(" · ")}
+                                  </div>
+                                `
+                              : nothing}
+                          </article>
+                        `,
+                      )}
+                    </div>
+                  </section>
+                </div>
+              </section>
+            `}
     </section>
   `;
 }

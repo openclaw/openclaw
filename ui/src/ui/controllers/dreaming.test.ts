@@ -3,6 +3,7 @@ import {
   backfillDreamDiary,
   loadDreamDiary,
   loadDreamingStatus,
+  loadWikiImportStatus,
   resetGroundedShortTerm,
   resetDreamDiary,
   resolveConfiguredDreaming,
@@ -28,6 +29,9 @@ function createState(): { state: DreamingState; request: ReturnType<typeof vi.fn
     dreamDiaryError: null,
     dreamDiaryPath: null,
     dreamDiaryContent: null,
+    wikiImportRunsLoading: false,
+    wikiImportRunsError: null,
+    wikiImportStatus: null,
     lastError: null,
   };
   return { state, request };
@@ -210,6 +214,51 @@ describe("dreaming controller", () => {
     );
     expect(state.dreamingStatus?.phases).toBeUndefined();
     expect(state.dreamingStatusError).toBeNull();
+  });
+
+  it("loads and normalizes wiki import runs", async () => {
+    const { state, request } = createState();
+    request.mockResolvedValue({
+      runs: [
+        {
+          runId: "chatgpt-abc123",
+          importType: "chatgpt",
+          appliedAt: "2026-04-10T10:00:00.000Z",
+          exportPath: "/tmp/chatgpt",
+          sourcePath: "/tmp/chatgpt/conversations.json",
+          conversationCount: 12,
+          createdCount: 4,
+          updatedCount: 2,
+          skippedCount: 6,
+          status: "applied",
+          pagePaths: ["sources/chatgpt-2026-04-10-alpha.md"],
+          samplePaths: ["sources/chatgpt-2026-04-10-alpha.md"],
+        },
+      ],
+      totalRuns: 1,
+      activeRuns: 1,
+      rolledBackRuns: 0,
+    });
+
+    await loadWikiImportStatus(state);
+
+    expect(request).toHaveBeenCalledWith("wiki.importRuns", { limit: 12 });
+    expect(state.wikiImportStatus).toEqual(
+      expect.objectContaining({
+        totalRuns: 1,
+        activeRuns: 1,
+        rolledBackRuns: 0,
+        runs: [
+          expect.objectContaining({
+            runId: "chatgpt-abc123",
+            createdCount: 4,
+            skippedCount: 6,
+          }),
+        ],
+      }),
+    );
+    expect(state.wikiImportRunsError).toBeNull();
+    expect(state.wikiImportRunsLoading).toBe(false);
   });
 
   it("patches config to update global dreaming enablement", async () => {

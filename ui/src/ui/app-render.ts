@@ -69,6 +69,7 @@ import {
   backfillDreamDiary,
   loadDreamDiary,
   loadDreamingStatus,
+  loadWikiImportStatus,
   resetGroundedShortTerm,
   resetDreamDiary,
   resolveConfiguredDreaming,
@@ -426,7 +427,11 @@ export function renderApp(state: AppViewState) {
   const dreamingLoading = state.dreamingStatusLoading || state.dreamingModeSaving;
   const dreamingRefreshLoading = state.dreamingStatusLoading || state.dreamDiaryLoading;
   const refreshDreaming = () => {
-    void Promise.all([loadDreamingStatus(state), loadDreamDiary(state)]);
+    void Promise.all([
+      loadDreamingStatus(state),
+      loadDreamDiary(state),
+      loadWikiImportStatus(state),
+    ]);
   };
   const applyDreamingEnabled = (enabled: boolean) => {
     if (state.dreamingModeSaving || dreamingOn === enabled) {
@@ -1933,8 +1938,12 @@ export function renderApp(state: AppViewState) {
               dreamDiaryError: state.dreamDiaryError,
               dreamDiaryPath: state.dreamDiaryPath,
               dreamDiaryContent: state.dreamDiaryContent,
+              wikiImportRunsLoading: state.wikiImportRunsLoading,
+              wikiImportRunsError: state.wikiImportRunsError,
+              wikiImportStatus: state.wikiImportStatus,
               onRefresh: refreshDreaming,
               onRefreshDiary: () => loadDreamDiary(state),
+              onRefreshImports: () => loadWikiImportStatus(state),
               onBackfillDiary: () => backfillDreamDiary(state),
               onResetDiary: () => resetDreamDiary(state),
               onResetGroundedShortTerm: () => resetGroundedShortTerm(state),

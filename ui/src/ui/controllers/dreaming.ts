@@ -79,6 +79,29 @@ export type DreamingStatus = {
   };
 };
 
+export type WikiImportRun = {
+  runId: string;
+  importType: string;
+  appliedAt: string;
+  exportPath: string;
+  sourcePath: string;
+  conversationCount: number;
+  createdCount: number;
+  updatedCount: number;
+  skippedCount: number;
+  status: "applied" | "rolled_back";
+  rolledBackAt?: string;
+  pagePaths: string[];
+  samplePaths: string[];
+};
+
+export type WikiImportStatus = {
+  runs: WikiImportRun[];
+  totalRuns: number;
+  activeRuns: number;
+  rolledBackRuns: number;
+};
+
 type DoctorMemoryStatusPayload = {
   dreaming?: unknown;
 };
@@ -97,6 +120,13 @@ type DoctorMemoryDreamActionPayload = {
   removedShortTermEntries?: unknown;
 };
 
+type WikiImportRunsPayload = {
+  runs?: unknown;
+  totalRuns?: unknown;
+  activeRuns?: unknown;
+  rolledBackRuns?: unknown;
+};
+
 export type DreamingState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -111,6 +141,9 @@ export type DreamingState = {
   dreamDiaryError: string | null;
   dreamDiaryPath: string | null;
   dreamDiaryContent: string | null;
+  wikiImportRunsLoading: boolean;
+  wikiImportRunsError: string | null;
+  wikiImportStatus: WikiImportStatus | null;
   lastError: string | null;
 };
 
@@ -232,6 +265,73 @@ function normalizeDreamingEntries(raw: unknown): DreamingEntry[] {
     .map((entry) => normalizeDreamingEntry(entry))
     .filter((entry): entry is DreamingEntry => entry !== null);
 }
+
+function normalizeStringArray(raw: unknown): string[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw.filter(
+    (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
+  );
+}
+
+function normalizeWikiImportRun(raw: unknown): WikiImportRun | null {
+  const record = asRecord(raw);
+  const runId = normalizeTrimmedString(record?.runId);
+  const importType = normalizeTrimmedString(record?.importType);
+  const appliedAt = normalizeTrimmedString(record?.appliedAt);
+  const exportPath = normalizeTrimmedString(record?.exportPath);
+  const sourcePath = normalizeTrimmedString(record?.sourcePath);
+  const status = normalizeTrimmedString(record?.status);
+  if (
+    !runId ||
+    !importType ||
+    !appliedAt ||
+    !exportPath ||
+    !sourcePath ||
+    (status !== "applied" && status !== "rolled_back")
+  ) {
+    return null;
+  }
+  const rolledBackAt = normalizeTrimmedString(record?.rolledBackAt);
+  return {
+    runId,
+    importType,
+    appliedAt,
+    exportPath,
+    sourcePath,
+    conversationCount: normalizeFiniteInt(record?.conversationCount, 0),
+    createdCount: normalizeFiniteInt(record?.createdCount, 0),
+    updatedCount: normalizeFiniteInt(record?.updatedCount, 0),
+    skippedCount: normalizeFiniteInt(record?.skippedCount, 0),
+    status,
+    ...(rolledBackAt ? { rolledBackAt } : {}),
+    pagePaths: normalizeStringArray(record?.pagePaths),
+    samplePaths: normalizeStringArray(record?.samplePaths),
+  };
+}
+
+function normalizeWikiImportStatus(raw: unknown): WikiImportStatus {
+  const record = asRecord(raw);
+  const runs = Array.isArray(record?.runs)
+    ? record.runs
+        .map((entry) => normalizeWikiImportRun(entry))
+        .filter((entry): entry is WikiImportRun => entry !== null)
+    : [];
+  return {
+    runs,
+    totalRuns: normalizeFiniteInt(record?.totalRuns, runs.length),
+    activeRuns: normalizeFiniteInt(
+      record?.activeRuns,
+      runs.filter((entry) => entry.status === "applied").length,
+    ),
+    rolledBackRuns: normalizeFiniteInt(
+      record?.rolledBackRuns,
+      runs.filter((entry) => entry.status === "rolled_back").length,
+    ),
+  };
+}
+
 function normalizeDreamingStatus(raw: unknown): DreamingStatus | null {
   const record = asRecord(raw);
   if (!record) {
@@ -344,6 +444,24 @@ export async function loadDreamDiary(state: DreamingState): Promise<void> {
     state.dreamDiaryError = String(err);
   } finally {
     state.dreamDiaryLoading = false;
+  }
+}
+
+export async function loadWikiImportStatus(state: DreamingState): Promise<void> {
+  if (!state.client || !state.connected || state.wikiImportRunsLoading) {
+    return;
+  }
+  state.wikiImportRunsLoading = true;
+  state.wikiImportRunsError = null;
+  try {
+    const payload = await state.client.request<WikiImportRunsPayload>("wiki.importRuns", {
+      limit: 12,
+    });
+    state.wikiImportStatus = normalizeWikiImportStatus(payload);
+  } catch (err) {
+    state.wikiImportRunsError = String(err);
+  } finally {
+    state.wikiImportRunsLoading = false;
   }
 }
 

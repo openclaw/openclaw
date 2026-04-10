@@ -102,6 +102,10 @@ type ChatGptImportRunRecord = {
   exportPath: string;
   sourcePath: string;
   appliedAt: string;
+  conversationCount: number;
+  createdCount: number;
+  updatedCount: number;
+  skippedCount: number;
   createdPaths: string[];
   updatedPaths: ChatGptImportRunEntry[];
   rolledBackAt?: string;
@@ -755,6 +759,10 @@ export async function importChatGptConversations(params: {
       exportPath,
       sourcePath: conversationsPath,
       appliedAt: nowIso,
+      conversationCount: records.length,
+      createdCount: 0,
+      updatedCount: 0,
+      skippedCount: 0,
       createdPaths: [],
       updatedPaths: [],
     };
@@ -788,6 +796,9 @@ export async function importChatGptConversations(params: {
 
   let indexUpdatedFiles: string[] = [];
   if (!params.dryRun && importRunRecord) {
+    importRunRecord.createdCount = createdCount;
+    importRunRecord.updatedCount = updatedCount;
+    importRunRecord.skippedCount = skippedCount;
     if (importRunRecord.createdPaths.length > 0 || importRunRecord.updatedPaths.length > 0) {
       const compile = await compileMemoryWikiVault(params.config);
       indexUpdatedFiles = compile.updatedFiles;

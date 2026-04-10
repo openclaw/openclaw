@@ -66,8 +66,32 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
     dreamDiaryPath: "DREAMS.md",
     dreamDiaryContent:
       "# Dream Diary\n\n<!-- openclaw:dreaming:diary:start -->\n\n---\n\n*April 5, 2026, 3:00 AM*\n\nThe repository whispered of forgotten endpoints tonight.\n\n<!-- openclaw:dreaming:diary:end -->",
+    wikiImportRunsLoading: false,
+    wikiImportRunsError: null,
+    wikiImportStatus: {
+      totalRuns: 1,
+      activeRuns: 1,
+      rolledBackRuns: 0,
+      runs: [
+        {
+          runId: "chatgpt-abc123",
+          importType: "chatgpt",
+          appliedAt: "2026-04-10T10:00:00.000Z",
+          exportPath: "/tmp/chatgpt-export",
+          sourcePath: "/tmp/chatgpt-export/conversations.json",
+          conversationCount: 12,
+          createdCount: 4,
+          updatedCount: 2,
+          skippedCount: 6,
+          status: "applied",
+          pagePaths: ["sources/chatgpt-2026-04-10-alpha.md"],
+          samplePaths: ["sources/chatgpt-2026-04-10-alpha.md"],
+        },
+      ],
+    },
     onRefresh: () => {},
     onRefreshDiary: () => {},
+    onRefreshImports: () => {},
     onBackfillDiary: () => {},
     onResetDiary: () => {},
     onResetGroundedShortTerm: () => {},
@@ -183,10 +207,24 @@ describe("dreaming view", () => {
   it("renders sub-tab navigation", () => {
     const container = renderInto(buildProps());
     const tabs = container.querySelectorAll(".dreams__tab");
-    expect(tabs.length).toBe(3);
+    expect(tabs.length).toBe(4);
     expect(tabs[0]?.textContent).toContain("Scene");
     expect(tabs[1]?.textContent).toContain("Diary");
     expect(tabs[2]?.textContent).toContain("Advanced");
+    expect(tabs[3]?.textContent).toContain("Imports");
+  });
+
+  it("renders import runs on imports tab", () => {
+    setDreamSubTab("imports");
+    const container = renderInto(buildProps());
+    expect(container.querySelector(".dreams-diary__title")?.textContent).toContain("Import Runs");
+    expect(
+      container.querySelector('[data-kind="imports"] .dreams-advanced__snippet')?.textContent,
+    ).toContain("12 chats");
+    expect(
+      container.querySelector('[data-kind="imports"] .dreams-advanced__meta')?.textContent,
+    ).toContain("chatgpt-abc123");
+    setDreamSubTab("scene");
   });
 
   it("renders dream diary with parsed entry on diary tab", () => {
