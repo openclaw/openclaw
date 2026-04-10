@@ -260,6 +260,42 @@ describe("exec approvals store helpers", () => {
     expect(fs.existsSync(path.join(realStateRoot, "state"))).toBe(false);
   });
 
+  it("allows darwin system alias prefixes for OPENCLAW_STATE_DIR without masking user symlinks", () => {
+    createHomeDir();
+    const stateDir = createStateDir();
+    const originalPlatform = process.platform;
+    const realpathSync = fs.realpathSync.bind(fs);
+    const lstatSync = fs.lstatSync.bind(fs);
+    const lstatSpy = vi.spyOn(fs, "lstatSync").mockImplementation((targetPath: fs.PathLike) => {
+      const resolved = path.resolve(String(targetPath));
+      if (resolved === "/tmp") {
+        return {
+          isSymbolicLink: () => true,
+        } as unknown as fs.Stats;
+      }
+      return lstatSync(targetPath);
+    });
+    const realpathSpy = vi.spyOn(fs, "realpathSync").mockImplementation((targetPath: fs.PathLike) => {
+      const resolved = path.resolve(String(targetPath));
+      if (resolved === path.resolve(stateDir)) {
+        return `/private${resolved}`;
+      }
+      return realpathSync(targetPath);
+    });
+
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    try {
+      expect(() =>
+        saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
+      ).not.toThrow();
+      expect(fs.existsSync(path.join(stateDir, "exec-approvals.json"))).toBe(true);
+    } finally {
+      realpathSpy.mockRestore();
+      lstatSpy.mockRestore();
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
+  });
+
   it("adds trimmed allowlist entries once and persists generated ids", () => {
     const dir = createHomeDir();
     vi.spyOn(Date, "now").mockReturnValue(123_456);

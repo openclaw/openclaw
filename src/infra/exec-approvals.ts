@@ -239,23 +239,47 @@ function ensureDir(filePath: string) {
 
 function assertNoSymlinkPathComponents(targetPath: string): void {
   const resolvedTarget = path.resolve(targetPath);
-  const parsedTarget = path.parse(resolvedTarget);
-  const relative = path.relative(parsedTarget.root, resolvedTarget);
-  const segments = relative && relative !== "." ? relative.split(path.sep).filter(Boolean) : [];
-  let current = parsedTarget.root;
-  for (const segment of segments) {
-    current = path.join(current, segment);
+  const existingAncestor = findNearestExistingAncestor(resolvedTarget);
+  const relative = path.relative(existingAncestor, resolvedTarget);
+  const realAncestor = fs.realpathSync(existingAncestor);
+  const realTarget = path.resolve(realAncestor, relative);
+  if (
+    normalizeSymlinkComparisonPath(resolvedTarget) !== normalizeSymlinkComparisonPath(realTarget)
+  ) {
+    throw new Error(`Refusing to traverse symlink in exec approvals path: ${existingAncestor}`);
+  }
+}
+
+function findNearestExistingAncestor(targetPath: string): string {
+  let current = targetPath;
+  while (true) {
     try {
-      const stat = fs.lstatSync(current);
-      if (stat.isSymbolicLink()) {
-        throw new Error(`Refusing to traverse symlink in exec approvals path: ${current}`);
-      }
+      fs.lstatSync(current);
+      return current;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
         throw err;
       }
     }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return current;
+    }
+    current = parent;
   }
+}
+
+function normalizeSymlinkComparisonPath(targetPath: string): string {
+  const resolvedTarget = path.resolve(targetPath);
+  if (process.platform !== "darwin") {
+    return resolvedTarget;
+  }
+  for (const prefix of ["/private/tmp", "/private/var", "/private/etc"]) {
+    if (resolvedTarget === prefix || resolvedTarget.startsWith(`${prefix}${path.sep}`)) {
+      return resolvedTarget.slice("/private".length);
+    }
+  }
+  return resolvedTarget;
 }
 
 function assertSafeExecApprovalsDestination(filePath: string): void {
