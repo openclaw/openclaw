@@ -210,10 +210,7 @@ function resolveThinkingLevel(level: ThinkingLevel, modelId: string): GoogleThin
   }
 }
 
-function getDisabledThinkingConfig(modelId: string): Record<string, unknown> {
-  if (isGemini3FlashModel(modelId)) {
-    return { thinkingBudget: 0 };
-  }
+function getDisabledThinkingConfig(_modelId: string): Record<string, unknown> {
   return { thinkingBudget: 0 };
 }
 
