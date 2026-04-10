@@ -1,6 +1,7 @@
 import { setLastActiveSessionKey } from "./app-last-active-session.ts";
 import { scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
+import type { ChatSideResult } from "./chat/side-result.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
 import { parseSlashCommand } from "./chat/slash-commands.ts";
 import {
@@ -36,6 +37,8 @@ export type ChatHost = {
   basePath: string;
   hello: GatewayHelloOk | null;
   chatAvatarUrl: string | null;
+  chatSideResult?: ChatSideResult | null;
+  chatSideResultTerminalRuns?: Set<string>;
   chatModelOverrides: Record<string, ChatModelOverride | null>;
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
@@ -425,6 +428,8 @@ async function clearChatHistory(host: ChatHost) {
   try {
     await host.client.request("sessions.reset", { key: host.sessionKey });
     host.chatMessages = [];
+    host.chatSideResult = null;
+    host.chatSideResultTerminalRuns?.clear();
     host.chatStream = null;
     host.chatRunId = null;
     await loadChatHistory(host as unknown as ChatState);

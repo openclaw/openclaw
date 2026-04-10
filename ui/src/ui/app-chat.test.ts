@@ -7,7 +7,7 @@ const { setLastActiveSessionKeyMock } = vi.hoisted(() => ({
   setLastActiveSessionKeyMock: vi.fn(),
 }));
 
-vi.mock("./app-settings.ts", () => ({
+vi.mock("./app-last-active-session.ts", () => ({
   setLastActiveSessionKey: (...args: unknown[]) => setLastActiveSessionKeyMock(...args),
 }));
 
@@ -39,6 +39,8 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     basePath: "",
     hello: null,
     chatAvatarUrl: null,
+    chatSideResult: null,
+    chatSideResultTerminalRuns: new Set<string>(),
     chatModelOverrides: {},
     chatModelsLoading: false,
     chatModelCatalog: [],
@@ -304,6 +306,43 @@ describe("handleSendChat", () => {
     expect(host.lastError).toContain("network down");
   });
 
+  it("clears BTW side results when /clear resets chat history", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.reset") {
+        return { ok: true };
+      }
+      if (method === "chat.history") {
+        return { messages: [], thinkingLevel: null };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "main",
+      chatMessage: "/clear",
+      chatMessages: [{ role: "user", content: "hello", timestamp: 1 }],
+      chatSideResult: {
+        kind: "btw",
+        runId: "btw-run-clear",
+        sessionKey: "main",
+        question: "what changed?",
+        text: "Detached BTW result",
+        isError: false,
+        ts: 1,
+      },
+      chatSideResultTerminalRuns: new Set(["btw-run-clear"]),
+    });
+
+    await handleSendChat(host);
+
+    expect(request).toHaveBeenCalledWith("sessions.reset", { key: "main" });
+    expect(host.chatMessages).toEqual([]);
+    expect(host.chatSideResult).toBeNull();
+    expect(host.chatSideResultTerminalRuns?.size).toBe(0);
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatStream).toBeNull();
+  });
+
   it("shows a visible pending item for /steer on the active run", async () => {
     vi.doMock("./chat/slash-command-executor.ts", async () => {
       const actual = await vi.importActual<typeof import("./chat/slash-command-executor.ts")>(
@@ -364,6 +403,6 @@ describe("handleSendChat", () => {
 });
 
 afterAll(() => {
-  vi.doUnmock("./app-settings.ts");
+  vi.doUnmock("./app-last-active-session.ts");
   vi.resetModules();
 });
