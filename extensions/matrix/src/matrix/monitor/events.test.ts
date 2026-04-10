@@ -32,6 +32,8 @@ function createHarness(params?: {
   cryptoAvailable?: boolean;
   selfUserId?: string;
   selfUserIdError?: Error;
+  startupMs?: number;
+  startupGraceMs?: number;
   allowFrom?: string[];
   dmEnabled?: boolean;
   dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
@@ -145,6 +147,8 @@ function createHarness(params?: {
     warnedEncryptedRooms: new Set<string>(),
     warnedCryptoMissingRooms: new Set<string>(),
     logger,
+    startupMs: params?.startupMs,
+    startupGraceMs: params?.startupGraceMs,
     formatNativeDependencyHint,
     onRoomMessage,
   });
@@ -1483,6 +1487,117 @@ describe("registerMatrixMonitorEvents verification routing", () => {
         senderMatchesOwnUser: false,
       }),
     );
+  });
+
+  it("classifies repeated fresh post-startup decrypt failures separately", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-10T16:21:00.000Z"));
+    try {
+      const startupMs = Date.now() - 60_000;
+      const { logger, failedDecryptListener } = createHarness({
+        accountId: "ops",
+        startupMs,
+      });
+      if (!failedDecryptListener) {
+        throw new Error("room.failed_decryption listener was not registered");
+      }
+
+      for (const [index, roomId] of [
+        "!room-a:example.org",
+        "!room-b:example.org",
+        "!room-c:example.org",
+      ].entries()) {
+        await failedDecryptListener(
+          roomId,
+          {
+            event_id: `$enc-fresh-${index + 1}`,
+            sender: `@alice${index + 1}:matrix.example.org`,
+            type: EventType.RoomMessageEncrypted,
+            origin_server_ts: Date.now() - 1_000 * (index + 1),
+            content: {},
+          },
+          new Error("The sender's device has not sent us the keys for this message."),
+        );
+      }
+
+      expect(logger.warn).toHaveBeenNthCalledWith(
+        1,
+        "Failed to decrypt fresh post-startup message",
+        expect.objectContaining({
+          eventId: "$enc-fresh-1",
+          freshPostStartup: true,
+          postStartupFailureCount: 1,
+        }),
+      );
+      expect(logger.warn).toHaveBeenNthCalledWith(
+        2,
+        "Failed to decrypt fresh post-startup message",
+        expect.objectContaining({
+          eventId: "$enc-fresh-2",
+          freshPostStartup: true,
+          postStartupFailureCount: 2,
+        }),
+      );
+      expect(logger.warn).toHaveBeenNthCalledWith(
+        3,
+        "Failed to decrypt fresh post-startup message",
+        expect.objectContaining({
+          eventId: "$enc-fresh-3",
+          freshPostStartup: true,
+          postStartupFailureCount: 3,
+        }),
+      );
+      expect(logger.warn).toHaveBeenNthCalledWith(
+        4,
+        "matrix: repeated fresh encrypted messages are still failing to decrypt after startup. Matrix sync is healthy, but this device may be missing new room keys. Check 'openclaw matrix verify status --verbose --account ops' and 'openclaw matrix devices list --account ops'.",
+        expect.objectContaining({
+          failureCount: 3,
+          roomCount: 3,
+          senderCount: 3,
+          rooms: ["!room-a:example.org", "!room-b:example.org", "!room-c:example.org"],
+          sampleEventIds: ["$enc-fresh-1", "$enc-fresh-2", "$enc-fresh-3"],
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps pre-startup decrypt failures on the generic warning path", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-10T16:21:00.000Z"));
+    try {
+      const { logger, failedDecryptListener } = createHarness({
+        accountId: "ops",
+        startupMs: Date.now(),
+      });
+      if (!failedDecryptListener) {
+        throw new Error("room.failed_decryption listener was not registered");
+      }
+
+      await failedDecryptListener(
+        "!room:example.org",
+        {
+          event_id: "$enc-old",
+          sender: "@alice:matrix.example.org",
+          type: EventType.RoomMessageEncrypted,
+          origin_server_ts: Date.now() - 5 * 60_000,
+          content: {},
+        },
+        new Error("The sender's device has not sent us the keys for this message."),
+      );
+
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledWith(
+        "Failed to decrypt message",
+        expect.objectContaining({
+          eventId: "$enc-old",
+          freshPostStartup: false,
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not throw when getUserId fails during decrypt guidance lookup", async () => {

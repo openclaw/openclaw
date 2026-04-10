@@ -8,6 +8,126 @@ import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
 import { createMatrixVerificationEventRouter } from "./verification-events.js";
 
+const MATRIX_POST_STARTUP_DECRYPT_FAILURE_WINDOW_MS = 2 * 60_000;
+const MATRIX_POST_STARTUP_DECRYPT_FAILURE_THRESHOLD = 3;
+const MATRIX_POST_STARTUP_DECRYPT_FAILURE_SAMPLE_LIMIT = 3;
+
+type MatrixPostStartupDecryptFailureObservation = {
+  key: string;
+  roomId: string;
+  eventId: string;
+  sender: string | null;
+  eventTs: number;
+  error: string;
+};
+
+function formatMatrixPostStartupDecryptionHint(accountId: string): string {
+  return (
+    "matrix: repeated fresh encrypted messages are still failing to decrypt after startup. " +
+    "Matrix sync is healthy, but this device may be missing new room keys. " +
+    `Check 'openclaw matrix verify status --verbose --account ${accountId}' and 'openclaw matrix devices list --account ${accountId}'.`
+  );
+}
+
+function isFreshPostStartupDecryptFailure(params: {
+  event: MatrixRawEvent;
+  startupMs?: number;
+  startupGraceMs?: number;
+  nowMs: number;
+}): boolean {
+  const { event, startupMs, startupGraceMs = 0, nowMs } = params;
+  if (typeof startupMs !== "number" || !Number.isFinite(startupMs)) {
+    return false;
+  }
+  const eventTs = event.origin_server_ts;
+  if (!Number.isFinite(eventTs) || eventTs <= 0) {
+    return false;
+  }
+  if (eventTs < startupMs + startupGraceMs) {
+    return false;
+  }
+  if (eventTs > nowMs + 60_000) {
+    return false;
+  }
+  return true;
+}
+
+function createMatrixPostStartupDecryptFailureTracker(params: {
+  startupMs?: number;
+  startupGraceMs?: number;
+}) {
+  let observations: MatrixPostStartupDecryptFailureObservation[] = [];
+  let warningEmitted = false;
+
+  const pruneObservations = (nowMs: number) => {
+    observations = observations.filter(
+      (entry) => nowMs - entry.eventTs <= MATRIX_POST_STARTUP_DECRYPT_FAILURE_WINDOW_MS,
+    );
+  };
+
+  return {
+    recordFailure(roomId: string, event: MatrixRawEvent, error: Error) {
+      const nowMs = Date.now();
+      if (
+        !isFreshPostStartupDecryptFailure({
+          event,
+          startupMs: params.startupMs,
+          startupGraceMs: params.startupGraceMs,
+          nowMs,
+        })
+      ) {
+        return { freshPostStartup: false, failureCount: 0 } as const;
+      }
+
+      pruneObservations(nowMs);
+
+      const key = `${roomId}|${event.event_id}`;
+      if (!observations.some((entry) => entry.key === key)) {
+        observations.push({
+          key,
+          roomId,
+          eventId: event.event_id,
+          sender: typeof event.sender === "string" ? event.sender : null,
+          eventTs: event.origin_server_ts,
+          error: error.message,
+        });
+      }
+
+      const failureCount = observations.length;
+      if (warningEmitted || failureCount < MATRIX_POST_STARTUP_DECRYPT_FAILURE_THRESHOLD) {
+        return { freshPostStartup: true, failureCount } as const;
+      }
+
+      warningEmitted = true;
+      const rooms = [...new Set(observations.map((entry) => entry.roomId))].slice(
+        0,
+        MATRIX_POST_STARTUP_DECRYPT_FAILURE_SAMPLE_LIMIT,
+      );
+      const senders = [...new Set(observations.map((entry) => entry.sender).filter(Boolean))].slice(
+        0,
+        MATRIX_POST_STARTUP_DECRYPT_FAILURE_SAMPLE_LIMIT,
+      );
+      const eventIds = observations
+        .slice(-MATRIX_POST_STARTUP_DECRYPT_FAILURE_SAMPLE_LIMIT)
+        .map((entry) => entry.eventId);
+      const latestError = observations.at(-1)?.error ?? error.message;
+      return {
+        freshPostStartup: true,
+        failureCount,
+        warning: {
+          rooms,
+          roomCount: new Set(observations.map((entry) => entry.roomId)).size,
+          senders,
+          senderCount: new Set(observations.map((entry) => entry.sender).filter(Boolean)).size,
+          eventIds,
+          latestError,
+          windowMs: MATRIX_POST_STARTUP_DECRYPT_FAILURE_WINDOW_MS,
+        },
+      } as const;
+    },
+  };
+}
+
 function formatMatrixSelfDecryptionHint(accountId: string): string {
   return (
     "matrix: failed to decrypt a message from this same Matrix user. " +
@@ -47,6 +167,8 @@ export function registerMatrixMonitorEvents(params: {
   warnedEncryptedRooms: Set<string>;
   warnedCryptoMissingRooms: Set<string>;
   logger: RuntimeLogger;
+  startupMs?: number;
+  startupGraceMs?: number;
   formatNativeDependencyHint: PluginRuntime["system"]["formatNativeDependencyHint"];
   onRoomMessage: (roomId: string, event: MatrixRawEvent) => void | Promise<void>;
   runDetachedTask?: (label: string, task: () => Promise<void>) => Promise<void>;
@@ -64,10 +186,16 @@ export function registerMatrixMonitorEvents(params: {
     warnedEncryptedRooms,
     warnedCryptoMissingRooms,
     logger,
+    startupMs,
+    startupGraceMs,
     formatNativeDependencyHint,
     onRoomMessage,
     runDetachedTask,
   } = params;
+  const postStartupDecryptFailureTracker = createMatrixPostStartupDecryptFailureTracker({
+    startupMs,
+    startupGraceMs,
+  });
   const { routeVerificationEvent, routeVerificationSummary } = createMatrixVerificationEventRouter({
     client,
     allowFrom,
@@ -115,16 +243,42 @@ export function registerMatrixMonitorEvents(params: {
   client.on(
     "room.failed_decryption",
     async (roomId: string, event: MatrixRawEvent, error: Error) => {
+      const failureState = postStartupDecryptFailureTracker.recordFailure(roomId, event, error);
       const selfUserId = await resolveMatrixSelfUserId(client, logVerboseMessage);
       const sender = typeof event.sender === "string" ? event.sender : null;
       const senderMatchesOwnUser = Boolean(selfUserId && sender && selfUserId === sender);
-      logger.warn("Failed to decrypt message", {
-        roomId,
-        eventId: event.event_id,
-        sender,
-        senderMatchesOwnUser,
-        error: error.message,
-      });
+      logger.warn(
+        failureState.freshPostStartup
+          ? "Failed to decrypt fresh post-startup message"
+          : "Failed to decrypt message",
+        {
+          roomId,
+          eventId: event.event_id,
+          sender,
+          senderMatchesOwnUser,
+          error: error.message,
+          freshPostStartup: failureState.freshPostStartup,
+          ...(failureState.freshPostStartup
+            ? {
+                postStartupFailureCount: failureState.failureCount,
+              }
+            : {}),
+        },
+      );
+      if (failureState.warning) {
+        logger.warn(formatMatrixPostStartupDecryptionHint(auth.accountId), {
+          roomId,
+          eventId: event.event_id,
+          failureCount: failureState.failureCount,
+          roomCount: failureState.warning.roomCount,
+          rooms: failureState.warning.rooms,
+          senderCount: failureState.warning.senderCount,
+          senders: failureState.warning.senders,
+          sampleEventIds: failureState.warning.eventIds,
+          latestError: failureState.warning.latestError,
+          windowMs: failureState.warning.windowMs,
+        });
+      }
       if (senderMatchesOwnUser) {
         logger.warn(formatMatrixSelfDecryptionHint(auth.accountId), {
           roomId,
@@ -133,7 +287,7 @@ export function registerMatrixMonitorEvents(params: {
         });
       }
       logVerboseMessage(
-        `matrix: failed decrypt room=${roomId} id=${event.event_id ?? "unknown"} error=${error.message}`,
+        `matrix: failed decrypt room=${roomId} id=${event.event_id ?? "unknown"} freshPostStartup=${String(failureState.freshPostStartup)} error=${error.message}`,
       );
     },
   );
