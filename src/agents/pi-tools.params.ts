@@ -137,12 +137,15 @@ function normalizeEditReplacements(record: Record<string, unknown>) {
       }
     }
   }
-  // Append top-level oldText/newText only when edits[] produced no valid
-  // replacements.  When edits[] has valid entries, the top-level values
-  // were hoisted from edits[0] and appending them would create a duplicate.
-  // When edits[] is empty or malformed (e.g. [{}]), fall back to top-level.
+  // Append top-level oldText/newText when:
+  //  - edits[] produced no valid replacements (fallback for malformed arrays), OR
+  //  - the top-level pair was user-provided (not hoisted from edits[0])
+  // Skip when the top-level values were hoisted from edits[0] and edits[]
+  // already produced valid entries — appending would create a duplicate.
+  const hoisted = Boolean(record._editHoistedFromArray);
+  const skipTopLevel = hoisted && replacements.length > 0;
   if (
-    replacements.length === 0 &&
+    !skipTopLevel &&
     typeof record.oldText === "string" &&
     record.oldText.trim().length > 0
   ) {
@@ -153,6 +156,7 @@ function normalizeEditReplacements(record: Record<string, unknown>) {
       });
     }
   }
+  delete record._editHoistedFromArray;
   if (replacements.length > 0) {
     record.edits = replacements;
   }
@@ -216,6 +220,10 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
   // Some models/schemas wrap edit params inside an edits[] array.
   // Hoist oldText/newText from edits[0] to the top level so downstream
   // validation and normalization find them.
+  // Track whether the top-level oldText was provided by the caller (true)
+  // or hoisted from edits[0] (false) so normalizeEditReplacements can
+  // decide whether to include it alongside the edits[] entries.
+  const hadTopLevelOldText = "oldText" in normalized;
   if (
     Array.isArray(normalized.edits) &&
     normalized.edits.length > 0 &&
@@ -240,6 +248,12 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
     // Re-run alias normalization so hoisted alias keys (e.g. old_string
     // from edits[0]) are converted to canonical keys (oldText/newText).
     normalizeClaudeParamAliases(normalized);
+  }
+  // Mark whether the top-level edit pair was user-provided or hoisted
+  // from edits[0]. normalizeEditReplacements uses this to avoid
+  // duplicating hoisted values while still honoring user-provided ones.
+  if (!hadTopLevelOldText && "oldText" in normalized) {
+    normalized._editHoistedFromArray = true;
   }
   // Some providers/models emit text payloads as structured blocks instead of raw strings.
   // Normalize these for write/edit so content matching and writes stay deterministic.

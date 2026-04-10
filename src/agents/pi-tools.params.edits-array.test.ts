@@ -118,6 +118,22 @@ describe("normalizeToolParams — edits[] array hoisting", () => {
     expect(edits[0]).toEqual({ oldText: "valid-top", newText: "valid-top-new" });
   });
 
+  it("includes user-provided top-level pair alongside valid edits[]", () => {
+    const params = {
+      file: "test.ts",
+      oldText: "user-top",
+      newText: "user-top-new",
+      edits: [{ oldText: "nested", newText: "nested-new" }],
+    };
+    const normalized = normalizeToolParams(params);
+    expect(normalized).toBeDefined();
+    // edits[] entry + user-provided top-level pair = 2 edits
+    expect(normalized!.edits).toHaveLength(2);
+    const edits = normalized!.edits as Array<{ oldText: string; newText: string }>;
+    expect(edits[0]).toEqual({ oldText: "nested", newText: "nested-new" });
+    expect(edits[1]).toEqual({ oldText: "user-top", newText: "user-top-new" });
+  });
+
   it("does not produce duplicate edits for a single-entry edits[] payload", () => {
     const params = {
       file: "test.ts",
