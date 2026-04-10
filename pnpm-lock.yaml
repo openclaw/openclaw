@@ -9067,8 +9067,8 @@ snapshots:
   '@mariozechner/pi-ai@0.65.2(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)':
     dependencies:
       '@anthropic-ai/sdk': 0.81.0(zod@4.3.6)
-      '@aws-sdk/client-bedrock-runtime': 3.1026.0
-      '@google/genai': 1.48.0(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))
+      '@aws-sdk/client-bedrock-runtime': 3.1028.0
+      '@google/genai': 1.49.0(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))
       '@mistralai/mistralai': 1.14.1
       '@sinclair/typebox': 0.34.49
       ajv: 8.18.0
@@ -9124,7 +9124,7 @@ snapshots:
       cli-highlight: 2.1.11
       diff: 8.0.4
       extract-zip: 2.0.1
-      file-type: 22.0.0
+      file-type: 22.0.1
       glob: 13.0.6
       hosted-git-info: 9.0.2
       ignore: 7.0.5
