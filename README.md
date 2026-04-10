@@ -426,6 +426,31 @@ Details: [Security guide](https://docs.openclaw.ai/gateway/security) · [Docker 
 }
 ```
 
+### [Feishu](https://docs.openclaw.ai/channels/feishu)
+
+- Run `openclaw channels add` and choose **Feishu**, or set `FEISHU_APP_ID` + `FEISHU_APP_SECRET`.
+- Feishu uses the platform's WebSocket event subscription, so you can start without exposing a public webhook URL.
+- For Lark (global) tenants, set `channels.feishu.domain: "lark"` or the per-account `domain` field.
+
+```json5
+{
+  channels: {
+    feishu: {
+      enabled: true,
+      dmPolicy: "pairing",
+      accounts: {
+        main: {
+          appId: "cli_xxx",
+          appSecret: "xxx",
+        },
+      },
+    },
+  },
+}
+```
+
+- Full app setup, permissions, and event subscription steps: [Feishu docs](https://docs.openclaw.ai/channels/feishu)
+
 ### [Signal](https://docs.openclaw.ai/channels/signal)
 
 - Requires `signal-cli` and a `channels.signal` config section.
