@@ -7148,6 +7148,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     description:
                       "Search provider id. Auto-detected from available API keys if omitted.",
                   },
+                  fallbacks: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                    title: "Web Search Fallbacks",
+                    description:
+                      "Ordered list of provider ids to try when the primary provider fails.",
+                  },
                   maxResults: {
                     type: "integer",
                     exclusiveMinimum: 0,
@@ -23789,6 +23798,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Web Search Provider",
       help: "Search provider id. Auto-detected from available API keys if omitted.",
       tags: ["tools"],
+    },
+    "tools.web.search.fallbacks": {
+      label: "Web Search Fallbacks",
+      help: "Ordered list of provider ids to try when the primary provider fails.",
+      tags: ["reliability", "tools"],
     },
     "tools.web.search.maxResults": {
       label: "Web Search Max Results",

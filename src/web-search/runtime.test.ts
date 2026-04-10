@@ -397,6 +397,173 @@ describe("web search runtime", () => {
     ).rejects.toThrow('Unknown web_search provider "missing-id".');
   });
 
+  it("falls back through configured fallbacks when primary provider fails", async () => {
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createGoogleSearchProvider({
+        createTool: () => ({
+          description: "google",
+          parameters: {},
+          execute: async () => {
+            throw new Error("google aborted");
+          },
+        }),
+      }),
+      createCustomSearchProvider({
+        id: "custom",
+        createTool: () => ({
+          description: "custom",
+          parameters: {},
+          execute: async (args: Record<string, unknown>) => ({ ...args, ok: true }),
+        }),
+      }),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: {
+          tools: {
+            web: {
+              search: {
+                provider: "google",
+                fallbacks: ["custom"],
+              },
+            },
+          },
+        },
+        args: { query: "with-fallbacks" },
+      }),
+    ).resolves.toMatchObject({
+      provider: "custom",
+      result: expect.objectContaining({ query: "with-fallbacks", ok: true }),
+    });
+  });
+
+  it("does not use fallbacks when primary provider succeeds", async () => {
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createGoogleSearchProvider({
+        createTool: () => ({
+          description: "google",
+          parameters: {},
+          execute: async (args: Record<string, unknown>) => ({ ...args, used: "google" }),
+        }),
+      }),
+      createCustomSearchProvider({
+        id: "custom",
+        createTool: () => ({
+          description: "custom",
+          parameters: {},
+          execute: async (args: Record<string, unknown>) => ({ ...args, used: "custom" }),
+        }),
+      }),
+    ]);
+
+    const result = await runWebSearch({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "google",
+              fallbacks: ["custom"],
+            },
+          },
+        },
+      },
+      args: { query: "primary-succeeds" },
+    });
+
+    expect(result.provider).toBe("google");
+    expect(result.result).toEqual({ query: "primary-succeeds", used: "google" });
+  });
+
+  it("fails fast when explicit provider with fallbacks exhausts all fallbacks", async () => {
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createGoogleSearchProvider({
+        createTool: () => {
+          throw new Error("google failed");
+        },
+      }),
+      createCustomSearchProvider({
+        id: "custom",
+        createTool: () => {
+          throw new Error("custom failed");
+        },
+      }),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: {
+          tools: {
+            web: {
+              search: {
+                provider: "google",
+                fallbacks: ["custom"],
+              },
+            },
+          },
+        },
+        args: { query: "all-fail" },
+      }),
+    ).rejects.toThrow("custom failed");
+  });
+
+  it("fails fast when explicit provider has empty fallbacks array", async () => {
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createGoogleSearchProvider({
+        createTool: () => ({
+          description: "google",
+          parameters: {},
+          execute: async () => {
+            throw new Error("google aborted");
+          },
+        }),
+      }),
+      createDuckDuckGoSearchProvider(),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: {
+          tools: {
+            web: {
+              search: {
+                provider: "google",
+                fallbacks: [],
+              },
+            },
+          },
+        },
+        args: { query: "empty-fallbacks" },
+      }),
+    ).rejects.toThrow("google aborted");
+  });
+
+  it("skips non-existent fallback providers and throws last error", async () => {
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createGoogleSearchProvider({
+        createTool: () => {
+          throw new Error("google failed");
+        },
+      }),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: {
+          tools: {
+            web: {
+              search: {
+                provider: "google",
+                fallbacks: ["nonexistent"],
+              },
+            },
+          },
+        },
+        args: { query: "missing-fallback" },
+      }),
+    ).rejects.toThrow("google failed");
+  });
+
   it("still falls back when config names an unknown provider id", async () => {
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([
       createGoogleSearchProvider({

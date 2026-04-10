@@ -687,6 +687,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Enable managed web_search and optional Codex-native search for eligible models.",
   "tools.web.search.provider":
     "Search provider id. Auto-detected from available API keys if omitted.",
+  "tools.web.search.fallbacks":
+    "Ordered list of provider ids to try when the primary provider fails.",
   "tools.web.search.maxResults": "Number of results to return (1-10).",
   "tools.web.search.timeoutSeconds": "Timeout in seconds for web_search requests.",
   "tools.web.search.cacheTtlMinutes": "Cache TTL in minutes for web_search results.",
