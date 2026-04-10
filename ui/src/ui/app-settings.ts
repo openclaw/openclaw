@@ -127,7 +127,6 @@ export function applySettingsFromUrl(host: SettingsHost) {
   const queryToken = params.get("token");
   const hashToken = hashParams.get("token");
   const hasTokenParam = hashToken != null || queryToken != null;
-  const passwordRaw = params.get("password") ?? hashParams.get("password");
   const token = normalizeOptionalString(hashToken ?? queryToken);
   const session = normalizeOptionalString(params.get("session") ?? hashParams.get("session"));
   const shouldResetSessionForToken = Boolean(token && !session && !gatewayUrlChanged);
@@ -163,7 +162,7 @@ export function applySettingsFromUrl(host: SettingsHost) {
     });
   }
 
-  if (passwordRaw != null) {
+  if (params.has("password") || hashParams.has("password")) {
     // Never hydrate password from URL params; strip only.
     params.delete("password");
     hashParams.delete("password");

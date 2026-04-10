@@ -44,12 +44,8 @@ const LEGACY_USAGE_DATE_PARAMS_INVALID_RE = /invalid sessions\.usage params/i;
 
 let legacyUsageDateParamsCache: Set<string> | null = null;
 
-function getLocalStorage(): Storage | null {
-  return getSafeLocalStorage();
-}
-
 function loadLegacyUsageDateParamsCache(): Set<string> {
-  const storage = getLocalStorage();
+  const storage = getSafeLocalStorage();
   if (!storage) {
     return new Set<string>();
   }
@@ -74,7 +70,7 @@ function loadLegacyUsageDateParamsCache(): Set<string> {
 }
 
 function persistLegacyUsageDateParamsCache(cache: Set<string>) {
-  const storage = getLocalStorage();
+  const storage = getSafeLocalStorage();
   if (!storage) {
     return;
   }
