@@ -229,7 +229,17 @@ function normalizeOpenAIStrictCompatSchemaRecursive(schema: unknown): unknown {
   let changed = false;
   const normalized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(record)) {
-    const next = normalizeOpenAIStrictCompatSchemaRecursive(value);
+    const next =
+      key === "properties" && value && typeof value === "object" && !Array.isArray(value)
+        ? Object.fromEntries(
+            Object.entries(value as Record<string, unknown>).map(
+              ([propertyName, propertyValue]) => [
+                propertyName,
+                normalizeOpenAIStrictCompatSchemaRecursive(propertyValue),
+              ],
+            ),
+          )
+        : normalizeOpenAIStrictCompatSchemaRecursive(value);
     normalized[key] = next;
     changed ||= next !== value;
   }
