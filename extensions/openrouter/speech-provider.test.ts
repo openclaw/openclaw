@@ -50,6 +50,20 @@ function makeSseStream(chunks: Array<{ data?: string; transcript?: string }>): R
   });
 }
 
+function mockSseResponse(chunks: Array<{ data?: string; transcript?: string }>) {
+  fetchWithTimeoutMock.mockResolvedValue(
+    new Response(makeSseStream(chunks), {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    }),
+  );
+}
+
+function parseRequestBody(): Record<string, unknown> {
+  const body = fetchWithTimeoutMock.mock.calls[0]?.[1]?.body as string;
+  return JSON.parse(body) as Record<string, unknown>;
+}
+
 describe("openrouter speech provider", () => {
   afterEach(() => {
     fetchWithTimeoutMock.mockReset();
@@ -67,17 +81,12 @@ describe("openrouter speech provider", () => {
     expect(provider.models).toContain("openai/gpt-4o-audio-preview");
     expect(provider.voices).toContain("alloy");
     expect(provider.voices).toContain("nova");
+    expect(provider.voices).toContain("shimmer");
   });
 
-  it("synthesizes speech from a streaming audio response", async () => {
+  it("synthesizes speech with default model and voice", async () => {
     const audioBase64 = Buffer.from("speech-bytes").toString("base64");
-
-    fetchWithTimeoutMock.mockResolvedValue(
-      new Response(
-        makeSseStream([{ data: audioBase64, transcript: "Hello" }]),
-        { status: 200, headers: { "content-type": "text/event-stream" } },
-      ),
-    );
+    mockSseResponse([{ data: audioBase64, transcript: "Hello" }]);
 
     const provider = buildOpenrouterSpeechProvider();
     const result = await provider.synthesize({
@@ -93,26 +102,17 @@ describe("openrouter speech provider", () => {
     expect(result.fileExtension).toBe(".mp3");
     expect(result.voiceCompatible).toBe(false);
 
-    const callBody = JSON.parse(
-      fetchWithTimeoutMock.mock.calls[0]?.[1]?.body as string,
-    ) as Record<string, unknown>;
-    expect(callBody.model).toBe("openai/gpt-audio-mini");
-    expect(callBody.modalities).toEqual(["text", "audio"]);
-    expect(callBody.stream).toBe(true);
-    const audio = callBody.audio as { voice: string; format: string };
+    const body = parseRequestBody();
+    expect(body.model).toBe("openai/gpt-audio-mini");
+    expect(body.modalities).toEqual(["text", "audio"]);
+    expect(body.stream).toBe(true);
+    const audio = body.audio as { voice: string; format: string };
     expect(audio.voice).toBe("alloy");
     expect(audio.format).toBe("mp3");
   });
 
   it("uses opus format for voice-note target", async () => {
-    const audioBase64 = Buffer.from("opus-bytes").toString("base64");
-
-    fetchWithTimeoutMock.mockResolvedValue(
-      new Response(
-        makeSseStream([{ data: audioBase64 }]),
-        { status: 200, headers: { "content-type": "text/event-stream" } },
-      ),
-    );
+    mockSseResponse([{ data: Buffer.from("opus-bytes").toString("base64") }]);
 
     const provider = buildOpenrouterSpeechProvider();
     const result = await provider.synthesize({
@@ -126,13 +126,67 @@ describe("openrouter speech provider", () => {
     expect(result.outputFormat).toBe("audio/ogg");
     expect(result.fileExtension).toBe(".opus");
     expect(result.voiceCompatible).toBe(true);
+
+    const body = parseRequestBody();
+    const audio = body.audio as { format: string };
+    expect(audio.format).toBe("opus");
+  });
+
+  it("honors providerConfig model, voice, and format overrides", async () => {
+    mockSseResponse([{ data: Buffer.from("wav-data").toString("base64") }]);
+
+    const provider = buildOpenrouterSpeechProvider();
+    await provider.synthesize({
+      text: "Custom config",
+      cfg: {},
+      providerConfig: {
+        apiKey: "test-key",
+        model: "openai/gpt-4o-audio-preview",
+        voice: "nova",
+        format: "wav",
+      },
+      target: "audio-file",
+      timeoutMs: 30_000,
+    });
+
+    const body = parseRequestBody();
+    expect(body.model).toBe("openai/gpt-4o-audio-preview");
+    const audio = body.audio as { voice: string; format: string };
+    expect(audio.voice).toBe("nova");
+    expect(audio.format).toBe("wav");
+  });
+
+  it("applies providerOverrides for model and voice at runtime", async () => {
+    mockSseResponse([{ data: Buffer.from("bytes").toString("base64") }]);
+
+    const provider = buildOpenrouterSpeechProvider();
+    await provider.synthesize({
+      text: "Override test",
+      cfg: {},
+      providerConfig: {
+        apiKey: "test-key",
+        model: "openai/gpt-audio-mini",
+        voice: "alloy",
+      },
+      providerOverrides: {
+        model: "openai/gpt-audio",
+        voice: "shimmer",
+      },
+      target: "audio-file",
+      timeoutMs: 30_000,
+    });
+
+    const body = parseRequestBody();
+    expect(body.model).toBe("openai/gpt-audio");
+    const audio = body.audio as { voice: string };
+    expect(audio.voice).toBe("shimmer");
   });
 
   it("detects configuration from providerConfig apiKey", () => {
     const provider = buildOpenrouterSpeechProvider();
-    expect(provider.isConfigured({ providerConfig: { apiKey: "key" }, cfg: {}, timeoutMs: 0 })).toBe(
-      true,
-    );
+    expect(
+      provider.isConfigured({ providerConfig: { apiKey: "key" }, cfg: {}, timeoutMs: 0 }),
+    ).toBe(true);
     expect(provider.isConfigured({ providerConfig: {}, cfg: {}, timeoutMs: 0 })).toBe(false);
   });
 
@@ -140,6 +194,21 @@ describe("openrouter speech provider", () => {
     vi.stubEnv("OPENROUTER_API_KEY", "env-key");
     const provider = buildOpenrouterSpeechProvider();
     expect(provider.isConfigured({ providerConfig: {}, cfg: {}, timeoutMs: 0 })).toBe(true);
+  });
+
+  it("throws when response contains no audio data", async () => {
+    mockSseResponse([]);
+
+    const provider = buildOpenrouterSpeechProvider();
+    await expect(
+      provider.synthesize({
+        text: "empty",
+        cfg: {},
+        providerConfig: { apiKey: "test-key" },
+        target: "audio-file",
+        timeoutMs: 30_000,
+      }),
+    ).rejects.toThrow("OpenRouter speech synthesis response missing audio data");
   });
 
   it("throws when API key is missing", async () => {
@@ -158,9 +227,13 @@ describe("openrouter speech provider", () => {
   it("lists available voices", async () => {
     const provider = buildOpenrouterSpeechProvider();
     const voices = await provider.listVoices!({});
+    expect(voices).toHaveLength(6);
     expect(voices).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "alloy" }),
+        expect.objectContaining({ id: "echo" }),
+        expect.objectContaining({ id: "fable" }),
+        expect.objectContaining({ id: "onyx" }),
         expect.objectContaining({ id: "nova" }),
         expect.objectContaining({ id: "shimmer" }),
       ]),

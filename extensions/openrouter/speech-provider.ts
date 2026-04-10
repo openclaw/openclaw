@@ -31,6 +31,11 @@ type OpenRouterSpeechConfig = {
   format?: string;
 };
 
+type OpenRouterSpeechOverrides = {
+  model?: string;
+  voice?: string;
+};
+
 function readConfig(providerConfig: Record<string, unknown>): OpenRouterSpeechConfig {
   return {
     apiKey: normalizeOptionalString(providerConfig.apiKey),
@@ -38,6 +43,18 @@ function readConfig(providerConfig: Record<string, unknown>): OpenRouterSpeechCo
     model: normalizeOptionalString(providerConfig.model),
     voice: normalizeOptionalString(providerConfig.voice),
     format: normalizeOptionalString(providerConfig.format),
+  };
+}
+
+function readOverrides(
+  overrides: Record<string, unknown> | undefined,
+): OpenRouterSpeechOverrides {
+  if (!overrides) {
+    return {};
+  }
+  return {
+    model: normalizeOptionalString(overrides.model),
+    voice: normalizeOptionalString(overrides.voice),
   };
 }
 
@@ -85,8 +102,9 @@ export function buildOpenrouterSpeechProvider(): SpeechProviderPlugin {
         transport: "http",
       });
 
-      const model = config.model ?? "openai/gpt-audio-mini";
-      const voice = config.voice ?? "alloy";
+      const overrides = readOverrides(req.providerOverrides);
+      const model = overrides.model ?? config.model ?? "openai/gpt-audio-mini";
+      const voice = overrides.voice ?? config.voice ?? "alloy";
       const { format, mimeType, fileExtension } = resolveResponseFormat(
         req.target,
         config.format,
