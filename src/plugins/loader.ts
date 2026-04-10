@@ -42,6 +42,7 @@ import {
 } from "./memory-embedding-providers.js";
 import {
   clearMemoryPluginState,
+  getMemoryCapabilityRegistration,
   getMemoryFlushPlanResolver,
   getMemoryPromptSectionBuilder,
   getMemoryRuntime,
@@ -155,6 +156,7 @@ type CachedPluginState = {
   memoryPromptBuilder: ReturnType<typeof getMemoryPromptSectionBuilder>;
   memoryPromptSupplements: ReturnType<typeof listMemoryPromptSupplements>;
   memoryRuntime: ReturnType<typeof getMemoryRuntime>;
+  memoryCapability: ReturnType<typeof getMemoryCapabilityRegistration>;
 };
 
 const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
@@ -1114,6 +1116,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         promptSupplements: cached.memoryPromptSupplements,
         flushPlanResolver: cached.memoryFlushPlanResolver,
         runtime: cached.memoryRuntime,
+        capability: cached.memoryCapability,
       });
       if (shouldActivate) {
         activatePluginRegistry(
@@ -1717,6 +1720,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       const previousMemoryCorpusSupplements = listMemoryCorpusSupplements();
       const previousMemoryPromptSupplements = listMemoryPromptSupplements();
       const previousMemoryRuntime = getMemoryRuntime();
+      const previousMemoryCapability = getMemoryCapabilityRegistration();
 
       try {
         const result = register(api);
@@ -1738,6 +1742,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
             promptSupplements: previousMemoryPromptSupplements,
             flushPlanResolver: previousMemoryFlushPlanResolver,
             runtime: previousMemoryRuntime,
+            capability: previousMemoryCapability,
           });
         }
         registry.plugins.push(record);
@@ -1751,6 +1756,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           promptSupplements: previousMemoryPromptSupplements,
           flushPlanResolver: previousMemoryFlushPlanResolver,
           runtime: previousMemoryRuntime,
+          capability: previousMemoryCapability,
         });
         recordPluginError({
           logger,
@@ -1808,6 +1814,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         memoryPromptBuilder: getMemoryPromptSectionBuilder(),
         memoryPromptSupplements: listMemoryPromptSupplements(),
         memoryRuntime: getMemoryRuntime(),
+        memoryCapability: getMemoryCapabilityRegistration(),
       });
     }
     if (shouldActivate) {

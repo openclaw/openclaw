@@ -1812,45 +1812,53 @@ module.exports = { id: "throws-after-import", register() {} };`,
 
   it("restores the active memory capability when plugin register fails", async () => {
     useNoBundledPlugins();
-    registerMemoryCapability("active-memory", {
-      promptBuilder: () => ["active capability section"],
-      flushPlanResolver: () => ({
-        softThresholdTokens: 1,
-        forceFlushTranscriptBytes: 2,
-        reserveTokensFloor: 3,
-        prompt: "active",
-        systemPrompt: "active",
-        relativePath: "memory/active-capability.md",
-      }),
-      runtime: {
-        async getMemorySearchManager() {
-          return { manager: null, error: "active-capability" };
-        },
-        resolveMemoryBackendConfig() {
-          return { backend: "builtin" as const };
-        },
-      },
-      publicArtifacts: {
-        async listArtifacts() {
-          return [
-            {
-              kind: "memory-root",
-              workspaceDir: "/tmp/active-workspace",
-              relativePath: "MEMORY.md",
-              absolutePath: "/tmp/active-workspace/MEMORY.md",
-              agentIds: ["main"],
-              contentType: "markdown" as const,
+    const activePlugin = writePlugin({
+      id: "active-memory",
+      filename: "active-memory.cjs",
+      body: `module.exports = {
+        id: "active-memory",
+        kind: "memory",
+        register(api) {
+          api.registerMemoryCapability({
+            promptBuilder: () => ["active capability section"],
+            flushPlanResolver: () => ({
+              softThresholdTokens: 1,
+              forceFlushTranscriptBytes: 2,
+              reserveTokensFloor: 3,
+              prompt: "active",
+              systemPrompt: "active",
+              relativePath: "memory/active-capability.md",
+            }),
+            runtime: {
+              async getMemorySearchManager() {
+                return { manager: null, error: "active-capability" };
+              },
+              resolveMemoryBackendConfig() {
+                return { backend: "builtin" };
+              },
             },
-          ];
+            publicArtifacts: {
+              async listArtifacts() {
+                return [{
+                  kind: "memory-root",
+                  workspaceDir: "/tmp/active-workspace",
+                  relativePath: "MEMORY.md",
+                  absolutePath: "/tmp/active-workspace/MEMORY.md",
+                  agentIds: ["main"],
+                  contentType: "markdown",
+                }];
+              },
+            },
+          });
         },
-      },
+      };`,
     });
-    const plugin = writePlugin({
+    const failingPlugin = writePlugin({
       id: "failing-memory-capability",
       filename: "failing-memory-capability.cjs",
       body: `module.exports = {
         id: "failing-memory-capability",
-        kind: "memory",
+        kind: ["memory", "context-engine"],
         register(api) {
           api.registerMemoryCapability({
             promptBuilder: () => ["failed capability section"],
@@ -1890,17 +1898,17 @@ module.exports = { id: "throws-after-import", register() {} };`,
 
     const registry = loadOpenClawPlugins({
       cache: false,
-      workspaceDir: plugin.dir,
+      workspaceDir: activePlugin.dir,
       config: {
         plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["failing-memory-capability"],
-          slots: { memory: "failing-memory-capability" },
+          load: { paths: [activePlugin.file, failingPlugin.file] },
+          allow: ["active-memory", "failing-memory-capability"],
+          slots: { memory: "active-memory" },
         },
       },
-      onlyPluginIds: ["failing-memory-capability"],
     });
 
+    expect(registry.plugins.find((entry) => entry.id === "active-memory")?.status).toBe("loaded");
     expect(registry.plugins.find((entry) => entry.id === "failing-memory-capability")?.status).toBe(
       "error",
     );
