@@ -96,19 +96,19 @@ type OpenAIStyleChunk = {
 };
 
 const DEFAULT_PLAMO_COMPAT: ResolvedPlamoCompat = {
-  supportsStore: true,
-  supportsDeveloperRole: true,
-  supportsReasoningEffort: true,
+  supportsStore: false,
+  supportsDeveloperRole: false,
+  supportsReasoningEffort: false,
   reasoningEffortMap: {},
   supportsUsageInStreaming: false,
-  maxTokensField: "max_completion_tokens",
+  maxTokensField: "max_tokens",
   requiresToolResultName: false,
   requiresAssistantAfterToolResult: false,
   requiresThinkingAsText: false,
   thinkingFormat: "openai",
   openRouterRouting: {},
   vercelGatewayRouting: {},
-  supportsStrictMode: true,
+  supportsStrictMode: false,
 };
 
 function isAssistantMessageWithContent(

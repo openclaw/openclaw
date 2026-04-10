@@ -357,6 +357,125 @@ describe("plamo provider plugin", () => {
     ).not.toHaveProperty("strict");
   });
 
+  it("uses PLaMo-safe compat defaults for uncataloged models without explicit compat", async () => {
+    const { provider } = await loadPlamoCatalog();
+
+    let resolveRequest:
+      | ((value: {
+          body: Record<string, unknown>;
+        }) => void)
+      | null = null;
+    const requestSeen = new Promise<{
+      body: Record<string, unknown>;
+    }>((resolve) => {
+      resolveRequest = resolve;
+    });
+
+    const server = createServer((req, res) => {
+      const chunks: string[] = [];
+      req.setEncoding("utf8");
+      req.on("data", (chunk) => chunks.push(chunk));
+      req.on("end", () => {
+        resolveRequest?.({
+          body: JSON.parse(chunks.join("")) as Record<string, unknown>,
+        });
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.write(
+          `data: ${JSON.stringify({
+            id: "chatcmpl-stream-test",
+            choices: [{ index: 0, delta: { content: "ok" } }],
+          })}\n\n`,
+        );
+        res.write(
+          `data: ${JSON.stringify({
+            id: "chatcmpl-stream-test",
+            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          })}\n\n`,
+        );
+        res.end("data: [DONE]\n\n");
+      });
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      server.close();
+      throw new Error("expected tcp server address");
+    }
+
+    const wrapped = createWrappedPlamoStream(provider, {
+      modelId: "plamo-next-preview",
+    });
+    const stream = await wrapped(
+      {
+        provider: "plamo",
+        api: "openai-completions",
+        id: "plamo-next-preview",
+        name: "PLaMo Next Preview",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 65_536,
+        maxTokens: 1_024,
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+      } as never,
+      {
+        systemPrompt: "system prompt",
+        messages: [{ role: "user", content: "こんにちは" }],
+        tools: [
+          {
+            name: "read",
+            description: "Read a file",
+            parameters: {
+              type: "object",
+              properties: { path: { type: "string" } },
+              required: ["path"],
+            },
+          },
+        ],
+      } as never,
+      {
+        apiKey: "test-key",
+        reasoningEffort: "high",
+        onPayload: async (payload: unknown) => ({
+          ...(payload as Record<string, unknown>),
+          store: true,
+          reasoning_effort: "high",
+          stream_options: { include_usage: true },
+        }),
+      } as never,
+    );
+
+    try {
+      for await (const _event of stream) {
+        // Drain the stream so the request completes.
+      }
+      await stream.result();
+    } finally {
+      server.close();
+    }
+
+    const request = await requestSeen;
+    expect(request.body).toMatchObject({
+      model: "plamo-next-preview",
+      max_tokens: 1_024,
+      messages: [
+        { role: "system", content: "system prompt" },
+        { role: "user", content: "こんにちは" },
+      ],
+      stream: true,
+    });
+    expect(request.body).not.toHaveProperty("max_completion_tokens");
+    expect(request.body).not.toHaveProperty("store");
+    expect(request.body).not.toHaveProperty("reasoning_effort");
+    expect(request.body).not.toHaveProperty("stream_options");
+    expect(
+      (request.body.tools as Array<{ function?: { strict?: unknown } }> | undefined)?.[0]?.function,
+    ).not.toHaveProperty("strict");
+  });
+
   it("reassembles fragmented native SSE chunks without truncating the final text", async () => {
     const { provider, catalog } = await loadPlamoCatalog();
 
