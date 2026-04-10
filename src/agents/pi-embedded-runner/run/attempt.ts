@@ -51,6 +51,7 @@ import {
   hasCompletedBootstrapTurn,
   makeBootstrapWarn,
   resolveBootstrapFilesWithSignatureForRun,
+  resolveBootstrapSignatureForRun,
   resolveBootstrapSignatureMode,
   resolveContextInjectionMode,
 } from "../../bootstrap-files.js";
@@ -470,7 +471,18 @@ export async function runEmbeddedAttempt(
       sessionFile: params.sessionFile,
       signatureMode,
       resolveBootstrapSignatureForRun: async () =>
-        (await resolveAttemptBootstrapFiles()).bootstrapSignature,
+        await resolveBootstrapSignatureForRun({
+          workspaceDir: effectiveWorkspace,
+          config: params.config,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          agentId: params.agentId,
+          modelProviderId: params.model.provider,
+          modelId: params.model.id,
+          warn: bootstrapWarn,
+          contextMode: params.bootstrapContextMode,
+          runKind: params.bootstrapContextRunKind,
+        }),
       hasCompletedBootstrapTurn,
       resolveBootstrapContextForRun: resolveAttemptBootstrapContextValue,
     });

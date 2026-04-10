@@ -12,6 +12,7 @@ import {
   hasCompletedBootstrapTurn,
   resolveBootstrapContextForRun,
   resolveBootstrapFilesForRun,
+  resolveBootstrapSignatureForRun,
   resolveContextInjectionMode,
 } from "./bootstrap-files.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
@@ -561,6 +562,22 @@ describe("resolveBootstrapContextForRun", () => {
     const result = await resolveBootstrapContextForRun({ workspaceDir });
 
     expect(result.bootstrapSignature).toBe("agents:AGENTS.hook.md");
+  });
+
+  it("does not invoke bootstrap hooks for signature-only resolution", async () => {
+    let hookCalls = 0;
+    registerInternalHook("agent:bootstrap", () => {
+      hookCalls += 1;
+    });
+
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "default rules", "utf8");
+
+    const signature = await resolveBootstrapSignatureForRun({ workspaceDir });
+
+    const expectedPath = path.join(workspaceDir, "AGENTS.md").replace(/\\/g, "/");
+    expect(signature).toBe(`agents:${expectedPath}`);
+    expect(hookCalls).toBe(0);
   });
 });
 

@@ -602,6 +602,36 @@ export async function resolveBootstrapFilesWithSignatureForRun(params: {
   };
 }
 
+export async function resolveBootstrapSignatureForRun(params: {
+  workspaceDir: string;
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  sessionId?: string;
+  agentId?: string;
+  modelProviderId?: string;
+  modelId?: string;
+  warn?: (message: string) => void;
+  contextMode?: BootstrapContextMode;
+  runKind?: BootstrapContextRunKind;
+}): Promise<string | undefined> {
+  const sessionKey = params.sessionKey ?? params.sessionId;
+  const rawFiles = params.sessionKey
+    ? await getOrLoadBootstrapFiles({
+        workspaceDir: params.workspaceDir,
+        sessionKey: params.sessionKey,
+      })
+    : await loadWorkspaceBootstrapFiles(params.workspaceDir);
+  const filteredBootstrapFiles = applyContextModeFilter({
+    files: filterBootstrapFilesForSession(rawFiles, sessionKey),
+    contextMode: params.contextMode,
+    runKind: params.runKind,
+  });
+  if (!filteredBootstrapFiles.some((file) => file.name === DEFAULT_AGENTS_FILENAME)) {
+    return undefined;
+  }
+  return (await resolveEffectiveAgentsBootstrapFileForRun(params)).bootstrapSignature;
+}
+
 export async function resolveBootstrapFilesForRun(params: {
   workspaceDir: string;
   config?: OpenClawConfig;
