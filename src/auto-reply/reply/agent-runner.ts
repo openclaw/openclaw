@@ -794,8 +794,13 @@ export async function runReplyAgent(params: {
 
       // Inject post-compaction workspace context for the next agent turn
       if (sessionKey) {
-        const workspaceDir = process.cwd();
-        readPostCompactionContext(workspaceDir, cfg)
+        readPostCompactionContext(followupRun.run.workspaceDir, cfg, undefined, {
+          sessionKey: followupRun.run.sessionKey,
+          sessionId: followupRun.run.sessionId,
+          agentId: followupRun.run.agentId,
+          modelProviderId: followupRun.run.provider,
+          modelId: followupRun.run.model,
+        })
           .then((contextContent) => {
             if (contextContent) {
               enqueueSystemEvent(contextContent, { sessionKey });
