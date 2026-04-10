@@ -304,6 +304,24 @@ describe("handleRoamInbound", () => {
       expect(ctxArg.BodyForAgent).toBe("hello world");
     });
 
+    it("does not treat arbitrary user mentions as bot mention when botId is unknown", async () => {
+      await handleRoamInbound({
+        message: makeMessage({
+          text: "<@U-01234567-abcd-4000-8000-000000000000> hello",
+          chatType: "group",
+        }),
+        account: makeAccount(),
+        config: defaultConfig,
+        runtime: defaultRuntime,
+        botId: undefined,
+      });
+
+      // wasBotMentioned should return false when botId is unknown,
+      // preventing the bot from waking on arbitrary user mentions in groups.
+      const ctxArg = mockFinalizeInboundContext.mock.calls[0][0];
+      expect(ctxArg.WasMentioned).toBe(false);
+    });
+
     it("strips <!@botId> exclamation-mark mention format", async () => {
       await handleRoamInbound({
         message: makeMessage({ text: "<!@bot-uuid> hello there" }),

@@ -15,10 +15,14 @@ import {
 import type { RoamGroupConfig } from "./types.js";
 
 function normalizeAllowEntry(raw: string): string {
-  return raw
+  let entry = raw
     .trim()
     .toLowerCase()
     .replace(/^(roam|roam-hq):/i, "");
+  // Strip Roam tagged-ID prefix (e.g. "U-<uuid>" → "<uuid>", "B-<uuid>" → "<uuid>")
+  // so that allowFrom entries with tagged IDs match bare UUID sender IDs from V1 webhooks.
+  entry = entry.replace(/^[a-z]-/i, "");
+  return entry;
 }
 
 export function normalizeRoamAllowlist(values: Array<string | number> | undefined): string[] {
@@ -36,9 +40,9 @@ export function resolveRoamAllowlistMatch(params: {
   if (allowFrom.includes("*")) {
     return { allowed: true, matchKey: "*", matchSource: "wildcard" };
   }
-  const senderId = normalizeAllowEntry(params.senderId);
-  if (allowFrom.includes(senderId)) {
-    return { allowed: true, matchKey: senderId, matchSource: "id" };
+  const normalizedSender = normalizeAllowEntry(params.senderId);
+  if (allowFrom.includes(normalizedSender)) {
+    return { allowed: true, matchKey: normalizedSender, matchSource: "id" };
   }
   return { allowed: false };
 }

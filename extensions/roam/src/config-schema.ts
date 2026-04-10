@@ -1,8 +1,6 @@
 import { requireChannelOpenAllowFrom } from "openclaw/plugin-sdk/extension-shared";
 import { z } from "zod";
 import {
-  BlockStreamingCoalesceSchema,
-  DmConfigSchema,
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
@@ -36,6 +34,8 @@ export const RoamAccountSchemaBase = z
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     groups: z.record(z.string(), RoamGroupSchema.optional()).optional(),
     webhookPath: z.string().optional(),
+    apiBaseUrl: z.string().optional(),
+    webhookUrl: z.string().optional(),
     ...ReplyRuntimeConfigSchemaShape,
   })
   .strict();

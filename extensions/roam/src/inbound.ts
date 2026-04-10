@@ -26,7 +26,7 @@ import {
 } from "./policy.js";
 import { getRoamRuntime } from "./runtime.js";
 import { sendMessageRoam, sendTypingRoam } from "./send.js";
-import type { CoreConfig, GroupPolicy, RoamInboundMessage } from "./types.js";
+import type { CoreConfig, RoamInboundMessage } from "./types.js";
 
 const CHANNEL_ID = "roam" as const;
 
@@ -52,8 +52,9 @@ function wasBotMentioned(text: string, botId?: string): boolean {
     const escaped = botId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     return new RegExp(`<!?@${escaped}>`, "i").test(text);
   }
-  // Fallback: any <@U-xxx> mention could be the bot
-  return /<!?@U-[0-9a-f-]+>/i.test(text);
+  // Without a known botId, we cannot reliably detect bot mentions.
+  // Return false to avoid waking the bot on arbitrary user mentions.
+  return false;
 }
 
 /** Download media URLs to local files for the media understanding pipeline. */
@@ -139,7 +140,7 @@ export async function handleRoamInbound(params: {
     resolveAllowlistProviderRuntimeGroupPolicy({
       providerConfigPresent:
         ((config.channels as Record<string, unknown> | undefined)?.roam ?? undefined) !== undefined,
-      groupPolicy: account.config.groupPolicy as GroupPolicy | undefined,
+      groupPolicy: account.config.groupPolicy,
       defaultGroupPolicy,
     });
   warnMissingProviderGroupPolicyFallbackOnce({

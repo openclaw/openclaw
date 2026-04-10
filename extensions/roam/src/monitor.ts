@@ -14,7 +14,7 @@ import { getRoamRuntime } from "./runtime.js";
 import type { CoreConfig, RoamBotIdentity, RoamInboundMessage, RoamWebhookEvent } from "./types.js";
 
 const DEFAULT_API_BASE = "https://api.ro.am";
-const DEFAULT_WEBHOOK_PATH = "/roam-webhook";
+const DEFAULT_WEBHOOK_PATH_PREFIX = "/roam-webhook";
 
 function resolveApiBase(cfg?: CoreConfig): string {
   const override = cfg?.channels?.roam?.apiBaseUrl?.replace(/\/+$/, "");
@@ -285,11 +285,17 @@ export async function monitorRoamProvider(opts: RoamMonitorOptions): Promise<{ s
     throw new Error(`Roam API key not configured for account "${account.accountId}"`);
   }
 
+  // Each account gets a unique webhook path to avoid cross-account routing.
+  // Default: /roam-webhook (for the default account) or /roam-webhook-<accountId>.
+  const defaultPath =
+    account.accountId === "default"
+      ? DEFAULT_WEBHOOK_PATH_PREFIX
+      : `${DEFAULT_WEBHOOK_PATH_PREFIX}-${account.accountId}`;
   const webhookPath =
     resolveWebhookPath({
       webhookPath: account.config.webhookPath,
-      defaultPath: DEFAULT_WEBHOOK_PATH,
-    }) ?? DEFAULT_WEBHOOK_PATH;
+      defaultPath,
+    }) ?? defaultPath;
 
   const logger = core.logging.getChildLogger({
     channel: "roam",
