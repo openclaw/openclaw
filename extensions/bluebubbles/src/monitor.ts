@@ -248,11 +248,29 @@ export async function handleBlueBubblesWebhookRequest(
         return true;
       }
       const reaction = normalizeWebhookReaction(payload);
+      // Allow updated-message events through when they contain attachments.
+      // BlueBubbles fires new-message first (possibly before the attachment is
+      // fully available), then updated-message ~2-3s later with the attachment
+      // data populated. Without this check, inbound images/PDFs/files attached
+      // to updated-message events are silently dropped.
+      const payloadRecord = payload;
+      const dataRecord = payloadRecord?.data as Record<string, unknown> | undefined;
+      const attachmentsFromData = Array.isArray(dataRecord?.attachments)
+        ? (dataRecord.attachments as unknown[])
+        : [];
+      const attachmentsFromRoot = Array.isArray(payloadRecord?.attachments)
+        ? (payloadRecord.attachments as unknown[])
+        : [];
+      const hasAttachments =
+        attachmentsFromData.length > 0 ? attachmentsFromData : attachmentsFromRoot;
+      const updatedMessageHasAttachments =
+        eventType === "updated-message" && hasAttachments.length > 0;
       if (
         (eventType === "updated-message" ||
           eventType === "message-reaction" ||
           eventType === "reaction") &&
-        !reaction
+        !reaction &&
+        !updatedMessageHasAttachments
       ) {
         res.statusCode = 200;
         res.end("ok");
