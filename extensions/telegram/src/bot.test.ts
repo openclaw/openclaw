@@ -1048,6 +1048,93 @@ describe("createTelegramBot", () => {
     }
   });
 
+  it("persists non-default model override using fresh config, not stale startup snapshot", async () => {
+    // Regression: the callback handler used the startup `cfg` snapshot for
+    // store path and default-model resolution.  If the config was reloaded
+    // (e.g. default model changed) the override could be written to the wrong
+    // store or incorrectly cleared because `isDefaultSelection` was wrong.
+    onSpy.mockClear();
+    replySpy.mockClear();
+    editMessageTextSpy.mockClear();
+
+    const storePath = `/tmp/openclaw-telegram-model-fresh-cfg-${process.pid}-${Date.now()}.json`;
+
+    await rm(storePath, { force: true });
+    try {
+      // Startup config: default is openai/gpt-5.4
+      const startupConfig = {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.4",
+            models: {
+              "openai/gpt-5.4": {},
+              "anthropic/claude-opus-4-6": {},
+            },
+          },
+        },
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+          },
+        },
+        session: {
+          store: storePath,
+        },
+      } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
+
+      // Fresh config: default changed to anthropic/claude-opus-4-6
+      const freshConfig = {
+        ...startupConfig,
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-6",
+            models: {
+              "openai/gpt-5.4": {},
+              "anthropic/claude-opus-4-6": {},
+            },
+          },
+        },
+      };
+
+      // Bot created with startup config; loadConfig now returns fresh config
+      loadConfig.mockReturnValue(freshConfig);
+      createTelegramBot({
+        token: "tok",
+        config: startupConfig,
+      });
+      const callbackHandler = onSpy.mock.calls.find(
+        (call) => call[0] === "callback_query",
+      )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+      expect(callbackHandler).toBeDefined();
+
+      // User selects openai/gpt-5.4 — was default at startup but NOT default
+      // in fresh config.  The override must be persisted.
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-model-fresh-cfg-1",
+          data: "mdl_sel_openai/gpt-5.4",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 20,
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      // Override must be persisted (not cleared) because openai/gpt-5.4 is
+      // NOT the default in the fresh config.
+      const entry = Object.values(loadSessionStore(storePath, { skipCache: true }))[0];
+      expect(entry?.providerOverride).toBe("openai");
+      expect(entry?.modelOverride).toBe("gpt-5.4");
+    } finally {
+      await rm(storePath, { force: true });
+    }
+  });
+
   it("rejects ambiguous compact model callbacks and returns provider list", async () => {
     onSpy.mockClear();
     replySpy.mockClear();
