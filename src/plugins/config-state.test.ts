@@ -55,6 +55,16 @@ describe("normalizePluginsConfig", () => {
   });
 
   it.each([
+    [{}, undefined],
+    [{ slots: { contextEngine: "lossless-claw" } }, "lossless-claw"],
+    [{ slots: { contextEngine: "none" } }, null],
+    [{ slots: { contextEngine: "  cortex  " } }, "cortex"],
+    [{ slots: { contextEngine: "" } }, undefined],
+  ] as const)("preserves contextEngine slot for %o (#64170)", (config, expected) => {
+    expect(normalizePluginsConfig(config).slots.contextEngine).toBe(expected);
+  });
+
+  it.each([
     {
       name: "normalizes plugin hook policy flags",
       entry: {
