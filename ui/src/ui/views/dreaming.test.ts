@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   renderDreaming,
   setDreamAdvancedWaitingSort,
+  setDreamDiarySubTab,
   setDreamSubTab,
   type DreamingProps,
 } from "./dreaming.ts";
@@ -66,32 +67,116 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
     dreamDiaryPath: "DREAMS.md",
     dreamDiaryContent:
       "# Dream Diary\n\n<!-- openclaw:dreaming:diary:start -->\n\n---\n\n*April 5, 2026, 3:00 AM*\n\nThe repository whispered of forgotten endpoints tonight.\n\n<!-- openclaw:dreaming:diary:end -->",
-    wikiImportRunsLoading: false,
-    wikiImportRunsError: null,
-    wikiImportStatus: {
-      totalRuns: 1,
-      activeRuns: 1,
-      rolledBackRuns: 0,
-      runs: [
+    wikiImportInsightsLoading: false,
+    wikiImportInsightsError: null,
+    wikiImportInsights: {
+      sourceType: "chatgpt",
+      totalItems: 2,
+      totalClusters: 2,
+      clusters: [
         {
-          runId: "chatgpt-abc123",
-          importType: "chatgpt",
-          appliedAt: "2026-04-10T10:00:00.000Z",
-          exportPath: "/tmp/chatgpt-export",
-          sourcePath: "/tmp/chatgpt-export/conversations.json",
-          conversationCount: 12,
-          createdCount: 4,
-          updatedCount: 2,
-          skippedCount: 6,
-          status: "applied",
-          pagePaths: ["sources/chatgpt-2026-04-10-alpha.md"],
-          samplePaths: ["sources/chatgpt-2026-04-10-alpha.md"],
+          key: "topic/travel",
+          label: "Travel",
+          itemCount: 1,
+          highRiskCount: 0,
+          withheldCount: 0,
+          preferenceSignalCount: 1,
+          items: [
+            {
+              pagePath: "sources/chatgpt-2026-04-10-alpha.md",
+              title: "BA flight receipts process",
+              riskLevel: "low",
+              riskReasons: [],
+              labels: ["domain/personal", "area/travel", "topic/travel"],
+              topicKey: "topic/travel",
+              topicLabel: "Travel",
+              digestStatus: "available",
+              activeBranchMessages: 4,
+              userMessageCount: 2,
+              assistantMessageCount: 2,
+              firstUserLine: "how do i get receipts?",
+              lastUserLine: "that option does not exist",
+              assistantOpener: "Use the BA request-a-receipt flow first.",
+              summary: "Use the BA request-a-receipt flow first.",
+              candidateSignals: ["prefers direct airline receipts"],
+              correctionSignals: [],
+              preferenceSignals: ["prefers direct airline receipts"],
+              updatedAt: "2026-04-10T10:00:00.000Z",
+            },
+          ],
+        },
+        {
+          key: "topic/health",
+          label: "Health",
+          itemCount: 1,
+          highRiskCount: 1,
+          withheldCount: 1,
+          preferenceSignalCount: 0,
+          items: [
+            {
+              pagePath: "sources/chatgpt-2026-04-10-health.md",
+              title: "Migraine Medication Advice",
+              riskLevel: "high",
+              riskReasons: ["health"],
+              labels: ["domain/personal", "area/health", "topic/health"],
+              topicKey: "topic/health",
+              topicLabel: "Health",
+              digestStatus: "withheld",
+              activeBranchMessages: 2,
+              userMessageCount: 1,
+              assistantMessageCount: 1,
+              summary:
+                "Sensitive health chat withheld from durable-memory extraction because it touches health.",
+              candidateSignals: [],
+              correctionSignals: [],
+              preferenceSignals: [],
+              updatedAt: "2026-04-11T10:00:00.000Z",
+            },
+          ],
+        },
+      ],
+    },
+    wikiMemoryPalaceLoading: false,
+    wikiMemoryPalaceError: null,
+    wikiMemoryPalace: {
+      totalItems: 2,
+      totalClaims: 3,
+      totalQuestions: 1,
+      totalContradictions: 1,
+      clusters: [
+        {
+          key: "synthesis",
+          label: "Syntheses",
+          itemCount: 1,
+          claimCount: 2,
+          questionCount: 1,
+          contradictionCount: 1,
+          items: [
+            {
+              pagePath: "syntheses/travel-system.md",
+              title: "Travel system",
+              kind: "synthesis",
+              claimCount: 2,
+              questionCount: 1,
+              contradictionCount: 1,
+              claims: [
+                "Mariano prefers direct receipts from airlines when possible.",
+                "Travel admin friction keeps showing up across chats.",
+              ],
+              questions: ["Should flight receipts be standardized into one process?"],
+              contradictions: ["Old BA receipts guidance may now be stale."],
+              snippet: "Recurring travel admin friction across imported chats.",
+              updatedAt: "2026-04-10T10:00:00.000Z",
+            },
+          ],
         },
       ],
     },
     onRefresh: () => {},
     onRefreshDiary: () => {},
     onRefreshImports: () => {},
+    onRefreshMemoryPalace: () => {},
+    onOpenWikiPage: async () => null,
     onBackfillDiary: () => {},
     onResetDiary: () => {},
     onResetGroundedShortTerm: () => {},
@@ -207,28 +292,68 @@ describe("dreaming view", () => {
   it("renders sub-tab navigation", () => {
     const container = renderInto(buildProps());
     const tabs = container.querySelectorAll(".dreams__tab");
-    expect(tabs.length).toBe(4);
+    expect(tabs.length).toBe(3);
     expect(tabs[0]?.textContent).toContain("Scene");
     expect(tabs[1]?.textContent).toContain("Diary");
     expect(tabs[2]?.textContent).toContain("Advanced");
-    expect(tabs[3]?.textContent).toContain("Imports");
   });
 
-  it("renders import runs on imports tab", () => {
-    setDreamSubTab("imports");
+  it("renders imported memory topics inside the diary tab", () => {
+    setDreamSubTab("diary");
+    setDreamDiarySubTab("insights");
     const container = renderInto(buildProps());
-    expect(container.querySelector(".dreams-diary__title")?.textContent).toContain("Import Runs");
-    expect(
-      container.querySelector('[data-kind="imports"] .dreams-advanced__snippet')?.textContent,
-    ).toContain("12 chats");
-    expect(
-      container.querySelector('[data-kind="imports"] .dreams-advanced__meta')?.textContent,
-    ).toContain("chatgpt-abc123");
+    expect(container.querySelectorAll(".dreams-diary__subtab").length).toBe(3);
+    expect(container.querySelector(".dreams-diary__date")?.textContent).toContain("Travel");
+    expect(container.querySelector(".dreams-diary__insight-card")?.textContent).toContain(
+      "BA flight receipts process",
+    );
+    expect(container.querySelector(".dreams-diary__insight-card")?.textContent).toContain(
+      "Use the BA request-a-receipt flow first.",
+    );
+    expect(container.querySelector(".dreams-diary__explainer")?.textContent).toContain(
+      "imported insights clustered from external history",
+    );
+    setDreamDiarySubTab("dreams");
+    setDreamSubTab("scene");
+  });
+
+  it("opens the full imported source page from diary cards", async () => {
+    setDreamSubTab("diary");
+    setDreamDiarySubTab("insights");
+    const onOpenWikiPage = vi.fn().mockResolvedValue({
+      title: "BA flight receipts process",
+      path: "sources/chatgpt-2026-04-10-alpha.md",
+      content: "# ChatGPT Export: BA flight receipts process",
+    });
+    const container = renderInto(buildProps({ onOpenWikiPage }));
+    container
+      .querySelectorAll<HTMLButtonElement>(".dreams-diary__insight-actions .btn")[1]
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await Promise.resolve();
+    expect(onOpenWikiPage).toHaveBeenCalledWith("sources/chatgpt-2026-04-10-alpha.md");
+    setDreamDiarySubTab("dreams");
+    setDreamSubTab("scene");
+  });
+
+  it("renders the memory palace inside the diary tab", () => {
+    setDreamSubTab("diary");
+    setDreamDiarySubTab("palace");
+    const container = renderInto(buildProps());
+    expect(container.querySelector(".dreams-diary__date")?.textContent).toContain("Syntheses");
+    expect(container.querySelector(".dreams-diary__insight-card")?.textContent).toContain(
+      "Travel system",
+    );
+    expect(container.querySelector(".dreams-diary__insight-card")?.textContent).toContain("Claims");
+    expect(container.querySelector(".dreams-diary__explainer")?.textContent).toContain(
+      "compiled memory wiki surface",
+    );
+    setDreamDiarySubTab("dreams");
     setDreamSubTab("scene");
   });
 
   it("renders dream diary with parsed entry on diary tab", () => {
     setDreamSubTab("diary");
+    setDreamDiarySubTab("dreams");
     const container = renderInto(buildProps());
     const title = container.querySelector(".dreams-diary__title");
     expect(title?.textContent).toContain("Dream Diary");
@@ -244,6 +369,7 @@ describe("dreaming view", () => {
 
   it("flattens structured backfill diary entries into plain prose", () => {
     setDreamSubTab("diary");
+    setDreamDiarySubTab("dreams");
     const container = renderInto(
       buildProps({
         dreamDiaryContent: [
@@ -286,6 +412,7 @@ describe("dreaming view", () => {
 
   it("renders diary day chips without the old density map", () => {
     setDreamSubTab("diary");
+    setDreamDiarySubTab("dreams");
     const container = renderInto(
       buildProps({
         dreamDiaryContent: [
@@ -326,6 +453,7 @@ describe("dreaming view", () => {
 
   it("shows empty diary state when no diary content exists", () => {
     setDreamSubTab("diary");
+    setDreamDiarySubTab("dreams");
     const container = renderInto(buildProps({ dreamDiaryContent: null }));
     expect(container.querySelector(".dreams-diary__empty")).not.toBeNull();
     expect(container.querySelector(".dreams-diary__empty-text")?.textContent).toContain(
@@ -336,6 +464,7 @@ describe("dreaming view", () => {
 
   it("shows diary error message when diary load fails", () => {
     setDreamSubTab("diary");
+    setDreamDiarySubTab("dreams");
     const container = renderInto(buildProps({ dreamDiaryError: "read failed" }));
     expect(container.querySelector(".dreams-diary__error")?.textContent).toContain("read failed");
     setDreamSubTab("scene");
@@ -343,6 +472,7 @@ describe("dreaming view", () => {
 
   it("does not render the old page navigation chrome", () => {
     setDreamSubTab("diary");
+    setDreamDiarySubTab("dreams");
     const container = renderInto(buildProps());
     expect(container.querySelector(".dreams-diary__page")).toBeNull();
     expect(container.querySelector(".dreams-diary__nav-btn")).toBeNull();

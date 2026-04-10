@@ -28,7 +28,8 @@ import { loadDevices, type DevicesState } from "./controllers/devices.ts";
 import {
   loadDreamDiary,
   loadDreamingStatus,
-  loadWikiImportStatus,
+  loadWikiImportInsights,
+  loadWikiMemoryPalace,
   type DreamingState,
 } from "./controllers/dreaming.ts";
 import { loadExecApprovals, type ExecApprovalsState } from "./controllers/exec-approvals.ts";
@@ -335,7 +336,12 @@ export async function refreshActiveTab(host: SettingsHost) {
       return;
     case "dreams":
       await loadConfig(app);
-      await Promise.all([loadDreamingStatus(app), loadDreamDiary(app), loadWikiImportStatus(app)]);
+      await Promise.all([
+        loadDreamingStatus(app),
+        loadDreamDiary(app),
+        loadWikiImportInsights(app),
+        loadWikiMemoryPalace(app),
+      ]);
       return;
     case "chat":
       await refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);

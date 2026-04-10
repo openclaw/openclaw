@@ -162,6 +162,12 @@ const createHost = (tab: Tab): SettingsHost => ({
   dreamDiaryError: null,
   dreamDiaryPath: null,
   dreamDiaryContent: null,
+  wikiImportInsightsLoading: false,
+  wikiImportInsightsError: null,
+  wikiImportInsights: null,
+  wikiMemoryPalaceLoading: false,
+  wikiMemoryPalaceError: null,
+  wikiMemoryPalace: null,
 });
 
 describe("setTabFromRoute", () => {

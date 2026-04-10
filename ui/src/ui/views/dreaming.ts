@@ -1,6 +1,10 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
-import type { DreamingEntry, WikiImportStatus } from "../controllers/dreaming.ts";
+import type {
+  DreamingEntry,
+  WikiImportInsights,
+  WikiMemoryPalace,
+} from "../controllers/dreaming.ts";
 
 // ── Diary entry parser ─────────────────────────────────────────────────
 
@@ -112,12 +116,22 @@ export type DreamingProps = {
   dreamDiaryError: string | null;
   dreamDiaryPath: string | null;
   dreamDiaryContent: string | null;
-  wikiImportRunsLoading: boolean;
-  wikiImportRunsError: string | null;
-  wikiImportStatus: WikiImportStatus | null;
+  wikiImportInsightsLoading: boolean;
+  wikiImportInsightsError: string | null;
+  wikiImportInsights: WikiImportInsights | null;
+  wikiMemoryPalaceLoading: boolean;
+  wikiMemoryPalaceError: string | null;
+  wikiMemoryPalace: WikiMemoryPalace | null;
   onRefresh: () => void;
   onRefreshDiary: () => void;
   onRefreshImports: () => void;
+  onRefreshMemoryPalace: () => void;
+  onOpenWikiPage: (lookup: string) => Promise<{
+    title: string;
+    path: string;
+    content: string;
+    updatedAt?: string;
+  } | null>;
   onBackfillDiary: () => void;
   onResetDiary: () => void;
   onResetGroundedShortTerm: () => void;
@@ -156,10 +170,21 @@ const DREAM_SWAP_MS = 6_000;
 
 // ── Sub-tab state ─────────────────────────────────────────────────────
 
-type DreamSubTab = "scene" | "diary" | "advanced" | "imports";
+type DreamSubTab = "scene" | "diary" | "advanced";
 let _subTab: DreamSubTab = "scene";
+type DreamDiarySubTab = "dreams" | "insights" | "palace";
+let _diarySubTab: DreamDiarySubTab = "dreams";
 type AdvancedWaitingSort = "recent" | "signals";
 let _advancedWaitingSort: AdvancedWaitingSort = "recent";
+const _expandedInsightCards = new Set<string>();
+const _expandedPalaceCards = new Set<string>();
+let _wikiPreviewOpen = false;
+let _wikiPreviewLoading = false;
+let _wikiPreviewTitle = "";
+let _wikiPreviewPath = "";
+let _wikiPreviewUpdatedAt: string | null = null;
+let _wikiPreviewContent = "";
+let _wikiPreviewError: string | null = null;
 
 export function setDreamSubTab(tab: DreamSubTab): void {
   _subTab = tab;
@@ -167,6 +192,10 @@ export function setDreamSubTab(tab: DreamSubTab): void {
 
 export function setDreamAdvancedWaitingSort(sort: AdvancedWaitingSort): void {
   _advancedWaitingSort = sort;
+}
+
+export function setDreamDiarySubTab(tab: DreamDiarySubTab): void {
+  _diarySubTab = tab;
 }
 
 // ── Diary pagination state ─────────────────────────────────────────────
@@ -280,24 +309,13 @@ export function renderDreaming(props: DreamingProps) {
         >
           ${t("dreaming.tabs.advanced")}
         </button>
-        <button
-          class="dreams__tab ${_subTab === "imports" ? "dreams__tab--active" : ""}"
-          @click=${() => {
-            _subTab = "imports";
-            props.onRequestUpdate?.();
-          }}
-        >
-          Imports
-        </button>
       </nav>
 
       ${_subTab === "scene"
         ? renderScene(props, idle, dreamText)
         : _subTab === "diary"
           ? renderDiarySection(props)
-          : _subTab === "advanced"
-            ? renderAdvancedSection(props)
-            : renderImportsSection(props)}
+          : renderAdvancedSection(props)}
     </div>
   `;
 }
@@ -450,11 +468,149 @@ function basename(value: string): string {
   return normalized.split("/").filter(Boolean).at(-1) ?? value;
 }
 
-function formatImportCounts(
-  run: NonNullable<DreamingProps["wikiImportStatus"]>["runs"][number],
-): string {
-  const total = run.conversationCount > 0 ? `${run.conversationCount} chats` : "chat import";
-  return `${total} · ${run.createdCount} new · ${run.updatedCount} updated · ${run.skippedCount} skipped`;
+function formatKindLabel(kind: "entity" | "concept" | "source" | "synthesis" | "report"): string {
+  switch (kind) {
+    case "entity":
+      return "entity";
+    case "concept":
+      return "concept";
+    case "source":
+      return "source";
+    case "synthesis":
+      return "synthesis";
+    case "report":
+      return "report";
+  }
+}
+
+function formatImportBadge(item: {
+  digestStatus: "available" | "withheld";
+  riskLevel: "low" | "medium" | "high" | "unknown";
+}): string {
+  if (item.digestStatus === "withheld") {
+    return "needs review";
+  }
+  switch (item.riskLevel) {
+    case "low":
+      return "low risk";
+    case "medium":
+      return "medium risk";
+    case "high":
+      return "high risk";
+    case "unknown":
+      return "unknown risk";
+  }
+}
+
+function toggleExpandedCard(bucket: Set<string>, key: string, requestUpdate?: () => void): void {
+  if (bucket.has(key)) {
+    bucket.delete(key);
+  } else {
+    bucket.add(key);
+  }
+  requestUpdate?.();
+}
+
+async function openWikiPreview(lookup: string, props: DreamingProps): Promise<void> {
+  _wikiPreviewOpen = true;
+  _wikiPreviewLoading = true;
+  _wikiPreviewTitle = basename(lookup);
+  _wikiPreviewPath = lookup;
+  _wikiPreviewUpdatedAt = null;
+  _wikiPreviewContent = "";
+  _wikiPreviewError = null;
+  props.onRequestUpdate?.();
+  try {
+    const preview = await props.onOpenWikiPage(lookup);
+    if (!preview) {
+      _wikiPreviewError = `No wiki page found for ${lookup}.`;
+      return;
+    }
+    _wikiPreviewTitle = preview.title;
+    _wikiPreviewPath = preview.path;
+    _wikiPreviewUpdatedAt = preview.updatedAt ?? null;
+    _wikiPreviewContent = preview.content;
+  } catch (error) {
+    _wikiPreviewError = String(error);
+  } finally {
+    _wikiPreviewLoading = false;
+    props.onRequestUpdate?.();
+  }
+}
+
+function closeWikiPreview(requestUpdate?: () => void): void {
+  _wikiPreviewOpen = false;
+  _wikiPreviewLoading = false;
+  _wikiPreviewTitle = "";
+  _wikiPreviewPath = "";
+  _wikiPreviewUpdatedAt = null;
+  _wikiPreviewContent = "";
+  _wikiPreviewError = null;
+  requestUpdate?.();
+}
+
+function renderWikiPreviewOverlay(props: DreamingProps) {
+  if (!_wikiPreviewOpen) {
+    return nothing;
+  }
+  return html`
+    <div
+      class="dreams-diary__preview-backdrop"
+      @click=${() => closeWikiPreview(props.onRequestUpdate)}
+    >
+      <div class="dreams-diary__preview-panel" @click=${(event: Event) => event.stopPropagation()}>
+        <div class="dreams-diary__preview-header">
+          <div>
+            <div class="dreams-diary__preview-title">${_wikiPreviewTitle || "Wiki page"}</div>
+            <div class="dreams-diary__preview-meta">
+              ${_wikiPreviewPath} ${_wikiPreviewUpdatedAt ? ` · ${_wikiPreviewUpdatedAt}` : ""}
+            </div>
+          </div>
+          <button
+            class="btn btn--subtle btn--sm"
+            @click=${() => closeWikiPreview(props.onRequestUpdate)}
+          >
+            Close
+          </button>
+        </div>
+        <div class="dreams-diary__preview-body">
+          ${_wikiPreviewLoading
+            ? html`<div class="dreams-diary__empty-text">Loading wiki page…</div>`
+            : _wikiPreviewError
+              ? html`<div class="dreams-diary__error">${_wikiPreviewError}</div>`
+              : html`<pre class="dreams-diary__preview-pre">${_wikiPreviewContent}</pre>`}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderDiarySubtabExplainer() {
+  switch (_diarySubTab) {
+    case "dreams":
+      return html`
+        <p class="dreams-diary__explainer">
+          This is the raw dream diary the system writes while replaying and consolidating memory;
+          use it to inspect what the memory system is noticing, and where it still looks noisy or
+          thin.
+        </p>
+      `;
+    case "insights":
+      return html`
+        <p class="dreams-diary__explainer">
+          These are imported insights clustered from external history; use them to review what
+          imports surfaced before any of it graduates into durable memory.
+        </p>
+      `;
+    case "palace":
+      return html`
+        <p class="dreams-diary__explainer">
+          This is the compiled memory wiki surface the system can search and reason over; use it to
+          inspect actual memory pages, claims, open questions, and contradictions rather than raw
+          imported source chats.
+        </p>
+      `;
+  }
 }
 
 function parseSortableTimestamp(value?: string): number {
@@ -701,138 +857,363 @@ function renderAdvancedSection(props: DreamingProps) {
   `;
 }
 
-function renderImportsSection(props: DreamingProps) {
-  if (props.wikiImportRunsError) {
+function renderDiaryImportsSection(props: DreamingProps) {
+  const importInsights = props.wikiImportInsights;
+  const clusters = importInsights?.clusters ?? [];
+
+  if (props.wikiImportInsightsLoading && clusters.length === 0) {
     return html`
-      <section class="dreams-diary">
-        <div class="dreams-diary__error">${props.wikiImportRunsError}</div>
-      </section>
+      <div class="dreams-diary__empty">
+        <div class="dreams-diary__empty-text">Loading imported insights…</div>
+      </div>
     `;
   }
 
-  const importStatus = props.wikiImportStatus;
-  const runs = importStatus?.runs ?? [];
+  if (clusters.length === 0) {
+    return html`
+      <div class="dreams-diary__empty">
+        <div class="dreams-diary__empty-text">No imported insights yet</div>
+        <div class="dreams-diary__empty-hint">
+          Run a ChatGPT import with apply to surface clustered imported insights here.
+        </div>
+      </div>
+    `;
+  }
+
+  _diaryEntryCount = clusters.length;
+  const clusterIndex = Math.max(0, Math.min(_diaryPage, clusters.length - 1));
+  const cluster = clusters[clusterIndex];
 
   return html`
-    <section class="dreams-diary">
-      <div class="dreams-diary__header">
-        <span class="dreams-diary__title">Import Runs</span>
-        <button
-          class="btn btn--subtle btn--sm"
-          ?disabled=${props.wikiImportRunsLoading}
-          @click=${() => props.onRefreshImports()}
-        >
-          ${props.wikiImportRunsLoading ? "Reloading…" : "Reload"}
-        </button>
-      </div>
+    <div class="dreams-diary__daychips">
+      ${clusters.map(
+        (entry, index) => html`
+          <button
+            class="dreams-diary__day-chip ${index === clusterIndex
+              ? "dreams-diary__day-chip--active"
+              : ""}"
+            @click=${() => {
+              setDiaryPage(index);
+              props.onRequestUpdate?.();
+            }}
+          >
+            ${entry.label}
+          </button>
+        `,
+      )}
+    </div>
 
-      ${props.wikiImportRunsLoading && runs.length === 0
-        ? html`<div class="dreams-advanced__empty">Loading import runs…</div>`
-        : runs.length === 0
-          ? html`
-              <div class="dreams-diary__empty">
-                <div class="dreams-diary__empty-text">No import runs yet</div>
-                <div class="dreams-diary__empty-hint">
-                  Run a ChatGPT import with apply to populate this window.
-                </div>
+    <article class="dreams-diary__entry" key="imports-${cluster.key}">
+      <div class="dreams-diary__accent"></div>
+      <div class="dreams-diary__date">
+        ${cluster.label} · ${cluster.itemCount} chats
+        ${cluster.highRiskCount > 0 ? html`· ${cluster.highRiskCount} sensitive` : nothing}
+        ${cluster.preferenceSignalCount > 0
+          ? html`· ${cluster.preferenceSignalCount} signals`
+          : nothing}
+      </div>
+      <div class="dreams-diary__prose">
+        <p class="dreams-diary__para">
+          Imported chats clustered around ${cluster.label.toLowerCase()}.
+          ${cluster.withheldCount > 0
+            ? ` ${cluster.withheldCount} digest${cluster.withheldCount === 1 ? " was" : "s were"} withheld pending review.`
+            : ""}
+        </p>
+      </div>
+      <div class="dreams-diary__insights">
+        ${cluster.items.map((item) => {
+          const expanded = _expandedInsightCards.has(item.pagePath);
+          return html`
+            <article
+              class="dreams-diary__insight-card dreams-diary__insight-card--clickable"
+              data-import-page=${item.pagePath}
+              @click=${() =>
+                toggleExpandedCard(_expandedInsightCards, item.pagePath, props.onRequestUpdate)}
+            >
+              <div class="dreams-diary__insight-topline">
+                <div class="dreams-diary__insight-title">${item.title}</div>
+                <span
+                  class="dreams-diary__insight-badge dreams-diary__insight-badge--${item.riskLevel}"
+                >
+                  ${formatImportBadge(item)}
+                </span>
               </div>
-            `
-          : html`
-              <section class="dreams-advanced">
-                <div class="dreams-advanced__sections">
-                  <section class="dreams-advanced__section">
-                    <div class="dreams-advanced__section-header">
-                      <div class="dreams-advanced__section-copy">
-                        <span class="dreams-advanced__section-title">Recent Runs</span>
-                        <p class="dreams-advanced__section-description">
-                          ${importStatus?.activeRuns ?? 0} active ·
-                          ${importStatus?.rolledBackRuns ?? 0} rolled back
-                        </p>
-                      </div>
-                      <div class="dreams-advanced__section-toolbar">
-                        <span class="dreams-advanced__section-count"
-                          >${importStatus?.totalRuns ?? runs.length}</span
-                        >
-                      </div>
-                    </div>
-                    <div class="dreams-advanced__list">
-                      ${runs.map(
-                        (run) => html`
-                          <article
-                            class="dreams-advanced__item"
-                            data-kind="imports"
-                            data-run-id=${run.runId}
-                          >
-                            <span class="dreams-advanced__badge">
-                              ${run.status === "rolled_back" ? "Rolled back" : "Applied"}
-                            </span>
-                            <div class="dreams-advanced__snippet">
-                              ${formatCompactDateTime(run.appliedAt)} · ${formatImportCounts(run)}
-                            </div>
-                            <div class="dreams-advanced__source">
-                              ${basename(run.exportPath)} → ${basename(run.sourcePath)}
-                            </div>
-                            <div class="dreams-advanced__meta">
-                              ${run.runId}
-                              ${run.rolledBackAt
-                                ? ` · rolled back ${formatCompactDateTime(run.rolledBackAt)}`
-                                : ""}
-                            </div>
-                            ${run.samplePaths.length > 0
-                              ? html`
-                                  <div class="dreams-advanced__meta">
-                                    ${run.samplePaths.join(" · ")}
-                                  </div>
-                                `
-                              : nothing}
-                          </article>
-                        `,
+              <div class="dreams-diary__insight-meta">
+                ${item.updatedAt ? formatCompactDateTime(item.updatedAt) : basename(item.pagePath)}
+                ${item.activeBranchMessages > 0 ? ` · ${item.activeBranchMessages} messages` : ""}
+              </div>
+              <p class="dreams-diary__insight-line">${item.summary}</p>
+              ${item.candidateSignals.length > 0
+                ? html`
+                    <div class="dreams-diary__insight-list">
+                      <strong>Potentially useful signals</strong>
+                      ${item.candidateSignals.map(
+                        (signal) => html`<p class="dreams-diary__insight-line">• ${signal}</p>`,
                       )}
                     </div>
-                  </section>
-                </div>
-              </section>
-            `}
-    </section>
+                  `
+                : nothing}
+              ${item.correctionSignals.length > 0
+                ? html`
+                    <div class="dreams-diary__insight-list">
+                      <strong>Corrections or revisions</strong>
+                      ${item.correctionSignals.map(
+                        (signal) => html`<p class="dreams-diary__insight-line">• ${signal}</p>`,
+                      )}
+                    </div>
+                  `
+                : nothing}
+              ${expanded
+                ? html`
+                    <div class="dreams-diary__insight-list">
+                      <strong>Import details</strong>
+                      ${item.firstUserLine
+                        ? html`
+                            <p class="dreams-diary__insight-line">
+                              <strong>Started with:</strong> ${item.firstUserLine}
+                            </p>
+                          `
+                        : nothing}
+                      ${item.lastUserLine && item.lastUserLine !== item.firstUserLine
+                        ? html`
+                            <p class="dreams-diary__insight-line">
+                              <strong>Ended on:</strong> ${item.lastUserLine}
+                            </p>
+                          `
+                        : nothing}
+                      <p class="dreams-diary__insight-line">
+                        <strong>Messages:</strong> ${item.userMessageCount} user ·
+                        ${item.assistantMessageCount} assistant
+                      </p>
+                      ${item.riskReasons.length > 0
+                        ? html`
+                            <p class="dreams-diary__insight-line">
+                              <strong>Risk reasons:</strong> ${item.riskReasons.join(", ")}
+                            </p>
+                          `
+                        : nothing}
+                      ${item.labels.length > 0
+                        ? html`
+                            <p class="dreams-diary__insight-line">
+                              <strong>Labels:</strong> ${item.labels.join(", ")}
+                            </p>
+                          `
+                        : nothing}
+                    </div>
+                  `
+                : nothing}
+              ${item.preferenceSignals.length > 0
+                ? html`
+                    <div class="dreams-diary__insight-signals">
+                      ${item.preferenceSignals.map(
+                        (signal) =>
+                          html`<span class="dreams-diary__insight-signal">${signal}</span>`,
+                      )}
+                    </div>
+                  `
+                : nothing}
+              <div class="dreams-diary__insight-actions">
+                <button
+                  class="btn btn--subtle btn--sm"
+                  @click=${(event: Event) => {
+                    event.stopPropagation();
+                    toggleExpandedCard(_expandedInsightCards, item.pagePath, props.onRequestUpdate);
+                  }}
+                >
+                  ${expanded ? "Hide details" : "Details"}
+                </button>
+                <button
+                  class="btn btn--subtle btn--sm"
+                  @click=${(event: Event) => {
+                    event.stopPropagation();
+                    void openWikiPreview(item.pagePath, props);
+                  }}
+                >
+                  Open source page
+                </button>
+              </div>
+            </article>
+          `;
+        })}
+      </div>
+    </article>
   `;
 }
 
-// ── Diary section renderer ────────────────────────────────────────────
+function renderMemoryPalaceSection(props: DreamingProps) {
+  const palace = props.wikiMemoryPalace;
+  const clusters = palace?.clusters ?? [];
 
-function renderDiarySection(props: DreamingProps) {
-  if (props.dreamDiaryError) {
+  if (props.wikiMemoryPalaceLoading && clusters.length === 0) {
     return html`
-      <section class="dreams-diary">
-        <div class="dreams-diary__error">${props.dreamDiaryError}</div>
-      </section>
+      <div class="dreams-diary__empty">
+        <div class="dreams-diary__empty-text">Loading memory palace…</div>
+      </div>
     `;
   }
 
+  if (clusters.length === 0) {
+    return html`
+      <div class="dreams-diary__empty">
+        <div class="dreams-diary__empty-text">Memory palace is not populated yet</div>
+        <div class="dreams-diary__empty-hint">
+          Right now the wiki mostly has raw source imports and operational reports. This tab becomes
+          useful once syntheses, entities, or concepts start getting written.
+        </div>
+      </div>
+    `;
+  }
+
+  _diaryEntryCount = clusters.length;
+  const clusterIndex = Math.max(0, Math.min(_diaryPage, clusters.length - 1));
+  const cluster = clusters[clusterIndex];
+
+  return html`
+    <div class="dreams-diary__daychips">
+      ${clusters.map(
+        (entry, index) => html`
+          <button
+            class="dreams-diary__day-chip ${index === clusterIndex
+              ? "dreams-diary__day-chip--active"
+              : ""}"
+            @click=${() => {
+              setDiaryPage(index);
+              props.onRequestUpdate?.();
+            }}
+          >
+            ${entry.label}
+          </button>
+        `,
+      )}
+    </div>
+
+    <article class="dreams-diary__entry" key="palace-${cluster.key}">
+      <div class="dreams-diary__accent"></div>
+      <div class="dreams-diary__date">
+        ${cluster.label} · ${cluster.itemCount} pages
+        ${cluster.claimCount > 0 ? html`· ${cluster.claimCount} claims` : nothing}
+        ${cluster.questionCount > 0 ? html`· ${cluster.questionCount} questions` : nothing}
+        ${cluster.contradictionCount > 0
+          ? html`· ${cluster.contradictionCount} contradictions`
+          : nothing}
+      </div>
+      <div class="dreams-diary__prose">
+        <p class="dreams-diary__para">
+          Compiled wiki pages currently grouped under ${cluster.label.toLowerCase()}.
+          ${cluster.updatedAt ? ` Latest update ${formatCompactDateTime(cluster.updatedAt)}.` : ""}
+        </p>
+      </div>
+      <div class="dreams-diary__insights">
+        ${cluster.items.map((item) => {
+          const expanded = _expandedPalaceCards.has(item.pagePath);
+          return html`
+            <article
+              class="dreams-diary__insight-card dreams-diary__insight-card--clickable"
+              data-palace-page=${item.pagePath}
+              @click=${() =>
+                toggleExpandedCard(_expandedPalaceCards, item.pagePath, props.onRequestUpdate)}
+            >
+              <div class="dreams-diary__insight-topline">
+                <div class="dreams-diary__insight-title">${item.title}</div>
+                <span class="dreams-diary__insight-badge dreams-diary__insight-badge--palace">
+                  ${formatKindLabel(item.kind)}
+                </span>
+              </div>
+              <div class="dreams-diary__insight-meta">
+                ${item.updatedAt ? formatCompactDateTime(item.updatedAt) : basename(item.pagePath)}
+                · ${item.pagePath}
+              </div>
+              ${item.snippet
+                ? html`<p class="dreams-diary__insight-line">${item.snippet}</p>`
+                : nothing}
+              ${item.claims.length > 0
+                ? html`
+                    <div class="dreams-diary__insight-list">
+                      <strong>Claims</strong>
+                      ${item.claims.map(
+                        (claim) => html`<p class="dreams-diary__insight-line">• ${claim}</p>`,
+                      )}
+                    </div>
+                  `
+                : nothing}
+              ${item.questions.length > 0
+                ? html`
+                    <div class="dreams-diary__insight-list">
+                      <strong>Open questions</strong>
+                      ${item.questions.map(
+                        (question) => html`<p class="dreams-diary__insight-line">• ${question}</p>`,
+                      )}
+                    </div>
+                  `
+                : nothing}
+              ${item.contradictions.length > 0
+                ? html`
+                    <div class="dreams-diary__insight-list">
+                      <strong>Contradictions</strong>
+                      ${item.contradictions.map(
+                        (entry) => html`<p class="dreams-diary__insight-line">• ${entry}</p>`,
+                      )}
+                    </div>
+                  `
+                : nothing}
+              ${expanded
+                ? html`
+                    <div class="dreams-diary__insight-list">
+                      <strong>Page details</strong>
+                      <p class="dreams-diary__insight-line">
+                        <strong>Wiki page:</strong> ${item.pagePath}
+                      </p>
+                      ${item.id
+                        ? html`
+                            <p class="dreams-diary__insight-line">
+                              <strong>Id:</strong> ${item.id}
+                            </p>
+                          `
+                        : nothing}
+                    </div>
+                  `
+                : nothing}
+              <div class="dreams-diary__insight-actions">
+                <button
+                  class="btn btn--subtle btn--sm"
+                  @click=${(event: Event) => {
+                    event.stopPropagation();
+                    toggleExpandedCard(_expandedPalaceCards, item.pagePath, props.onRequestUpdate);
+                  }}
+                >
+                  ${expanded ? "Hide details" : "Details"}
+                </button>
+                <button
+                  class="btn btn--subtle btn--sm"
+                  @click=${(event: Event) => {
+                    event.stopPropagation();
+                    void openWikiPreview(item.pagePath, props);
+                  }}
+                >
+                  Open wiki page
+                </button>
+              </div>
+            </article>
+          `;
+        })}
+      </div>
+    </article>
+  `;
+}
+
+function renderDreamDiaryEntries(props: DreamingProps) {
   if (typeof props.dreamDiaryContent !== "string") {
     return html`
-      <section class="dreams-diary">
-        <div class="dreams-diary__empty">
-          <div class="dreams-diary__empty-moon">
-            <svg viewBox="0 0 32 32" fill="none" width="32" height="32">
-              <circle
-                cx="16"
-                cy="16"
-                r="14"
-                stroke="currentColor"
-                stroke-width="0.5"
-                opacity="0.2"
-              />
-              <path
-                d="M20 8a10 10 0 0 1 0 16 10 10 0 1 0 0-16z"
-                fill="currentColor"
-                opacity="0.08"
-              />
-            </svg>
-          </div>
-          <div class="dreams-diary__empty-text">${t("dreaming.diary.noDreamsYet")}</div>
-          <div class="dreams-diary__empty-hint">${t("dreaming.diary.noDreamsHint")}</div>
+      <div class="dreams-diary__empty">
+        <div class="dreams-diary__empty-moon">
+          <svg viewBox="0 0 32 32" fill="none" width="32" height="32">
+            <circle cx="16" cy="16" r="14" stroke="currentColor" stroke-width="0.5" opacity="0.2" />
+            <path d="M20 8a10 10 0 0 1 0 16 10 10 0 1 0 0-16z" fill="currentColor" opacity="0.08" />
+          </svg>
         </div>
-      </section>
+        <div class="dreams-diary__empty-text">${t("dreaming.diary.noDreamsYet")}</div>
+        <div class="dreams-diary__empty-hint">${t("dreaming.diary.noDreamsHint")}</div>
+      </div>
     `;
   }
 
@@ -841,69 +1222,154 @@ function renderDiarySection(props: DreamingProps) {
 
   if (entries.length === 0) {
     return html`
-      <section class="dreams-diary">
-        <div class="dreams-diary__empty">
-          <div class="dreams-diary__empty-text">${t("dreaming.diary.waitingTitle")}</div>
-          <div class="dreams-diary__empty-hint">${t("dreaming.diary.waitingHint")}</div>
-        </div>
-      </section>
+      <div class="dreams-diary__empty">
+        <div class="dreams-diary__empty-text">${t("dreaming.diary.waitingTitle")}</div>
+        <div class="dreams-diary__empty-hint">${t("dreaming.diary.waitingHint")}</div>
+      </div>
     `;
   }
 
   const reversed = buildDiaryNavigation(entries);
-  // Clamp page.
   const page = Math.max(0, Math.min(_diaryPage, reversed.length - 1));
   const entry = reversed[page];
+
+  return html`
+    <div class="dreams-diary__daychips">
+      ${reversed.map(
+        (e) => html`
+          <button
+            class="dreams-diary__day-chip ${e.page === page
+              ? "dreams-diary__day-chip--active"
+              : ""}"
+            @click=${() => {
+              setDiaryPage(e.page);
+              props.onRequestUpdate?.();
+            }}
+          >
+            ${formatDiaryChipLabel(e.date)}
+          </button>
+        `,
+      )}
+    </div>
+    <article class="dreams-diary__entry" key="${page}">
+      <div class="dreams-diary__accent"></div>
+      ${entry.date ? html`<time class="dreams-diary__date">${entry.date}</time>` : nothing}
+      <div class="dreams-diary__prose">
+        ${flattenDiaryBody(entry.body).map(
+          (para, i) =>
+            html`<p class="dreams-diary__para" style="animation-delay: ${0.3 + i * 0.15}s;">
+              ${para}
+            </p>`,
+        )}
+      </div>
+    </article>
+  `;
+}
+
+// ── Diary section renderer ────────────────────────────────────────────
+
+function renderDiarySection(props: DreamingProps) {
+  const diaryError =
+    _diarySubTab === "dreams"
+      ? props.dreamDiaryError
+      : _diarySubTab === "insights"
+        ? props.wikiImportInsightsError
+        : props.wikiMemoryPalaceError;
+  if (diaryError) {
+    return html`
+      <section class="dreams-diary">
+        <div class="dreams-diary__error">${diaryError}</div>
+      </section>
+    `;
+  }
 
   return html`
     <section class="dreams-diary">
       <div class="dreams-diary__chrome">
         <div class="dreams-diary__header">
           <span class="dreams-diary__title">${t("dreaming.diary.title")}</span>
+          <div class="dreams-diary__subtabs">
+            <button
+              class="dreams-diary__subtab ${_diarySubTab === "dreams"
+                ? "dreams-diary__subtab--active"
+                : ""}"
+              @click=${() => {
+                closeWikiPreview();
+                _diarySubTab = "dreams";
+                _diaryPage = 0;
+                props.onRequestUpdate?.();
+              }}
+            >
+              Dreams
+            </button>
+            <button
+              class="dreams-diary__subtab ${_diarySubTab === "insights"
+                ? "dreams-diary__subtab--active"
+                : ""}"
+              @click=${() => {
+                closeWikiPreview();
+                _diarySubTab = "insights";
+                _diaryPage = 0;
+                props.onRequestUpdate?.();
+              }}
+            >
+              Imported Insights
+            </button>
+            <button
+              class="dreams-diary__subtab ${_diarySubTab === "palace"
+                ? "dreams-diary__subtab--active"
+                : ""}"
+              @click=${() => {
+                closeWikiPreview();
+                _diarySubTab = "palace";
+                _diaryPage = 0;
+                props.onRequestUpdate?.();
+              }}
+            >
+              Memory Palace
+            </button>
+          </div>
           <button
             class="btn btn--subtle btn--sm"
-            ?disabled=${props.modeSaving || props.dreamDiaryLoading}
+            ?disabled=${props.modeSaving ||
+            (_diarySubTab === "dreams"
+              ? props.dreamDiaryLoading
+              : _diarySubTab === "insights"
+                ? props.wikiImportInsightsLoading
+                : props.wikiMemoryPalaceLoading)}
             @click=${() => {
               _diaryPage = 0;
-              props.onRefreshDiary();
+              if (_diarySubTab === "dreams") {
+                props.onRefreshDiary();
+              } else if (_diarySubTab === "insights") {
+                props.onRefreshImports();
+              } else {
+                props.onRefreshMemoryPalace();
+              }
             }}
           >
-            ${props.dreamDiaryLoading ? t("dreaming.diary.reloading") : t("dreaming.diary.reload")}
+            ${_diarySubTab === "dreams"
+              ? props.dreamDiaryLoading
+                ? t("dreaming.diary.reloading")
+                : t("dreaming.diary.reload")
+              : _diarySubTab === "insights"
+                ? props.wikiImportInsightsLoading
+                  ? "Reloading…"
+                  : "Reload"
+                : props.wikiMemoryPalaceLoading
+                  ? "Reloading…"
+                  : "Reload"}
           </button>
         </div>
-
-        <!-- Simple day chips -->
-        <div class="dreams-diary__daychips">
-          ${reversed.map(
-            (e) => html`
-              <button
-                class="dreams-diary__day-chip ${e.page === page
-                  ? "dreams-diary__day-chip--active"
-                  : ""}"
-                @click=${() => {
-                  setDiaryPage(e.page);
-                  props.onRequestUpdate?.();
-                }}
-              >
-                ${formatDiaryChipLabel(e.date)}
-              </button>
-            `,
-          )}
-        </div>
+        ${renderDiarySubtabExplainer()}
       </div>
 
-      <article class="dreams-diary__entry" key="${page}">
-        <div class="dreams-diary__accent"></div>
-        ${entry.date ? html`<time class="dreams-diary__date">${entry.date}</time>` : nothing}
-        <div class="dreams-diary__prose">
-          ${flattenDiaryBody(entry.body).map(
-            (para, i) =>
-              html`<p class="dreams-diary__para" style="animation-delay: ${0.3 + i * 0.15}s;">
-                ${para}
-              </p>`,
-          )}
-        </div>
-      </article>
+      ${_diarySubTab === "dreams"
+        ? renderDreamDiaryEntries(props)
+        : _diarySubTab === "insights"
+          ? renderDiaryImportsSection(props)
+          : renderMemoryPalaceSection(props)}
+      ${renderWikiPreviewOverlay(props)}
     </section>
   `;
 }

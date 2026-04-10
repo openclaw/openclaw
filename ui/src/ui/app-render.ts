@@ -69,7 +69,8 @@ import {
   backfillDreamDiary,
   loadDreamDiary,
   loadDreamingStatus,
-  loadWikiImportStatus,
+  loadWikiImportInsights,
+  loadWikiMemoryPalace,
   resetGroundedShortTerm,
   resetDreamDiary,
   resolveConfiguredDreaming,
@@ -430,8 +431,42 @@ export function renderApp(state: AppViewState) {
     void Promise.all([
       loadDreamingStatus(state),
       loadDreamDiary(state),
-      loadWikiImportStatus(state),
+      loadWikiImportInsights(state),
+      loadWikiMemoryPalace(state),
     ]);
+  };
+  const openWikiPage = async (lookup: string) => {
+    if (!state.client || !state.connected) {
+      return null;
+    }
+    const payload = (await state.client.request("wiki.get", {
+      lookup,
+      fromLine: 1,
+      lineCount: 800,
+    })) as {
+      title?: unknown;
+      path?: unknown;
+      content?: unknown;
+      updatedAt?: unknown;
+    } | null;
+    const title =
+      typeof payload?.title === "string" && payload.title.trim() ? payload.title.trim() : lookup;
+    const path =
+      typeof payload?.path === "string" && payload.path.trim() ? payload.path.trim() : lookup;
+    const content =
+      typeof payload?.content === "string" && payload.content.length > 0
+        ? payload.content
+        : "No wiki content available.";
+    const updatedAt =
+      typeof payload?.updatedAt === "string" && payload.updatedAt.trim()
+        ? payload.updatedAt.trim()
+        : undefined;
+    return {
+      title,
+      path,
+      content,
+      ...(updatedAt ? { updatedAt } : {}),
+    };
   };
   const applyDreamingEnabled = (enabled: boolean) => {
     if (state.dreamingModeSaving || dreamingOn === enabled) {
@@ -1938,12 +1973,17 @@ export function renderApp(state: AppViewState) {
               dreamDiaryError: state.dreamDiaryError,
               dreamDiaryPath: state.dreamDiaryPath,
               dreamDiaryContent: state.dreamDiaryContent,
-              wikiImportRunsLoading: state.wikiImportRunsLoading,
-              wikiImportRunsError: state.wikiImportRunsError,
-              wikiImportStatus: state.wikiImportStatus,
+              wikiImportInsightsLoading: state.wikiImportInsightsLoading,
+              wikiImportInsightsError: state.wikiImportInsightsError,
+              wikiImportInsights: state.wikiImportInsights,
+              wikiMemoryPalaceLoading: state.wikiMemoryPalaceLoading,
+              wikiMemoryPalaceError: state.wikiMemoryPalaceError,
+              wikiMemoryPalace: state.wikiMemoryPalace,
               onRefresh: refreshDreaming,
               onRefreshDiary: () => loadDreamDiary(state),
-              onRefreshImports: () => loadWikiImportStatus(state),
+              onRefreshImports: () => loadWikiImportInsights(state),
+              onRefreshMemoryPalace: () => loadWikiMemoryPalace(state),
+              onOpenWikiPage: (lookup: string) => openWikiPage(lookup),
               onBackfillDiary: () => backfillDreamDiary(state),
               onResetDiary: () => resetDreamDiary(state),
               onResetGroundedShortTerm: () => resetGroundedShortTerm(state),
