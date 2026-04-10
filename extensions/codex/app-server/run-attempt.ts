@@ -81,6 +81,7 @@ export async function runCodexAppServerAttempt(
     config: params.config,
     agentId: params.agentId,
   });
+  let yieldDetected = false;
   const tools = await buildDynamicTools({
     params,
     resolvedWorkspace,
@@ -89,6 +90,9 @@ export async function runCodexAppServerAttempt(
     sandbox,
     runAbortController,
     sessionAgentId,
+    onYieldDetected: () => {
+      yieldDetected = true;
+    },
   });
   const toolBridge = createCodexDynamicToolBridge({
     tools,
@@ -216,7 +220,7 @@ export async function runCodexAppServerAttempt(
 
   try {
     await completion;
-    const result = activeProjector.buildResult(toolBridge.telemetry);
+    const result = activeProjector.buildResult(toolBridge.telemetry, { yieldDetected });
     await mirrorTranscriptBestEffort({
       params,
       result,
@@ -248,6 +252,7 @@ type DynamicToolBuildParams = {
   sandbox: Awaited<ReturnType<typeof resolveSandboxContext>>;
   runAbortController: AbortController;
   sessionAgentId: string | undefined;
+  onYieldDetected: () => void;
 };
 
 async function buildDynamicTools(input: DynamicToolBuildParams) {
@@ -306,6 +311,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
       params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
     disableMessageTool: params.disableMessageTool,
     onYield: (message) => {
+      input.onYieldDetected();
       params.onAgentEvent?.({
         stream: "codex_app_server.tool",
         data: { name: "sessions_yield", message },

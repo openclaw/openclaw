@@ -116,7 +116,10 @@ export class CodexAppServerEventProjector {
     }
   }
 
-  buildResult(toolTelemetry: CodexAppServerToolTelemetry): EmbeddedRunAttemptResult {
+  buildResult(
+    toolTelemetry: CodexAppServerToolTelemetry,
+    options?: { yieldDetected?: boolean },
+  ): EmbeddedRunAttemptResult {
     const assistantTexts = this.collectAssistantTexts();
     const lastAssistant =
       assistantTexts.length > 0
@@ -172,7 +175,7 @@ export class CodexAppServerEventProjector {
           ? { compactionCount: this.completedCompactionCount }
           : {}),
       },
-      yieldDetected: false,
+      yieldDetected: options?.yieldDetected || false,
       didSendDeterministicApprovalPrompt: this.guardianReviewCount > 0 ? false : undefined,
     };
   }
