@@ -216,6 +216,10 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
 
 @MainActor
 final class WebChatSwiftUIWindowController {
+    private final class CloseActionBox {
+        var action: (() -> Void)?
+    }
+
     private let presentation: WebChatPresentation
     private let sessionKey: String
     private let hosting: NSHostingController<MacChatChromeView>
@@ -240,18 +244,15 @@ final class WebChatSwiftUIWindowController {
                 UserDefaults.standard.set(level, forKey: webChatThinkingLevelDefaultsKey)
             })
         let accent = Self.color(fromHex: AppStateStore.shared.seamColorHex)
+        let closeActionBox = CloseActionBox()
         self.hosting = NSHostingController(rootView: MacChatChromeView(
             viewModel: vm,
             userAccent: accent,
             presentation: presentation,
-            onClose: {}))
+            onClose: { closeActionBox.action?() }))
         self.contentController = Self.makeContentController(for: presentation, hosting: self.hosting)
         self.window = Self.makeWindow(for: presentation, contentViewController: self.contentController)
-        self.hosting.rootView = MacChatChromeView(
-            viewModel: vm,
-            userAccent: accent,
-            presentation: presentation,
-            onClose: { [weak self] in self?.close() })
+        closeActionBox.action = { [weak self] in self?.close() }
     }
 
     deinit {}
