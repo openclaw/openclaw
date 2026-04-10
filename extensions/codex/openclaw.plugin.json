@@ -1,6 +1,5 @@
 {
   "id": "codex",
-  "enabledByDefault": true,
   "name": "Codex",
   "description": "Codex app-server harness and Codex-managed GPT model catalog.",
   "providers": ["codex"],
