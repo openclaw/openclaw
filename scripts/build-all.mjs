@@ -33,6 +33,11 @@ export const BUILD_ALL_STEPS = [
     args: ["--import", "tsx", "scripts/canvas-a2ui-copy.ts"],
   },
   {
+    label: "copy-octo-schema",
+    kind: "node",
+    args: ["--import", "tsx", "scripts/copy-octo-schema.ts"],
+  },
+  {
     label: "copy-hook-metadata",
     kind: "node",
     args: ["--import", "tsx", "scripts/copy-hook-metadata.ts"],
@@ -57,6 +62,7 @@ export const BUILD_ALL_STEPS = [
     kind: "node",
     args: ["--import", "tsx", "scripts/write-cli-compat.ts"],
   },
+  { label: "ui:build", kind: "pnpm", pnpmArgs: ["ui:build"] },
 ];
 
 function resolveStepEnv(step, env, platform) {

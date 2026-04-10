@@ -105,6 +105,11 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       exportName: "registerNodeCli",
     },
     {
+      commandNames: ["octo"],
+      loadModule: () => import("../octo-cli.js"),
+      exportName: "registerOctoCli",
+    },
+    {
       commandNames: ["sandbox"],
       loadModule: () => import("../sandbox-cli.js"),
       exportName: "registerSandboxCli",

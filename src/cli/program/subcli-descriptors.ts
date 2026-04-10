@@ -58,6 +58,11 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "octo",
+    description: "Octopus Orchestrator control plane (missions, arms, grips)",
+    hasSubcommands: true,
+  },
+  {
     name: "sandbox",
     description: "Manage sandbox containers for agent isolation",
     hasSubcommands: true,

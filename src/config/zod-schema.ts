@@ -960,6 +960,10 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    // Octopus Orchestrator subsystem — validated by its own TypeBox
+    // schema in src/octo/config/schema.ts; passthrough here so the
+    // top-level .strict() doesn't reject the block.
+    octo: z.record(z.string(), z.unknown()).optional(),
   })
   .strict()
   .superRefine((cfg, ctx) => {
