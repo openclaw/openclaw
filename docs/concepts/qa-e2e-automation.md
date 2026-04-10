@@ -67,28 +67,13 @@ the child config scoped to the transport under test, so Matrix runs without
 Live transport lanes now share one smaller contract instead of each inventing
 their own scenario list shape:
 
-- Baseline contract:
-  - canary
-  - mention gating
-  - sender allowlist block
-  - top-level reply shape
-  - restart resume
-- Capability add-ons:
-  - thread follow-up
-  - thread isolation
-  - reaction observation
-  - help command
+`qa-channel` remains the broad synthetic product-behavior suite and is not part
+of the live transport coverage matrix.
 
-Current coverage:
-
-- Matrix:
-  - baseline contract
-  - thread follow-up
-  - thread isolation
-  - reaction observation
-- Telegram:
-  - canary
-  - help command
+| Lane     | Canary | Mention gating | Allowlist block | Top-level reply | Restart resume | Thread follow-up | Thread isolation | Reaction observation | Help command |
+| -------- | ------ | -------------- | --------------- | --------------- | -------------- | ---------------- | ---------------- | -------------------- | ------------ |
+| Matrix   | x      | x              | x               | x               | x              | x                | x                | x                    |              |
+| Telegram | x      |                |                 |                 |                |                  |                  |                      | x            |
 
 This keeps `qa-channel` as the broad product-behavior suite while Matrix,
 Telegram, and future live transports share one explicit transport-contract
