@@ -14,7 +14,10 @@ import {
   runAttemptContextEngineBootstrap,
 } from "./attempt.context-engine-helpers.js";
 import {
+  cacheTtlEligibleModel,
+  cleanupTempPaths,
   createContextEngineBootstrapAndAssemble,
+  createContextEngineAttemptRunner,
   expectCalledWithSessionKey,
   getHoisted,
   resetEmbeddedAttemptHarness,
@@ -150,6 +153,38 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         model: "gpt-test",
       }),
     );
+  });
+
+  it("uses the canonical runtime model id for bootstrap lookup", async () => {
+    const tempPaths: string[] = [];
+    const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
+    const contextEngine = createTestContextEngine({ bootstrap, assemble });
+
+    try {
+      await createContextEngineAttemptRunner({
+        contextEngine,
+        sessionKey,
+        tempPaths,
+        attemptOverrides: {
+          provider: "anthropic",
+          modelId: "sonnet-4.6",
+          model: {
+            ...cacheTtlEligibleModel,
+            id: "claude-sonnet-4-6",
+            provider: "anthropic",
+          } as never,
+        },
+      });
+
+      expect(hoisted.resolveBootstrapFilesWithSignatureForRunMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          modelProviderId: "anthropic",
+          modelId: "claude-sonnet-4-6",
+        }),
+      );
+    } finally {
+      await cleanupTempPaths(tempPaths);
+    }
   });
 
   it("forwards availableTools and citationsMode to assemble", async () => {
