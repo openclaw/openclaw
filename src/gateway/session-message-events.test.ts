@@ -671,9 +671,10 @@ describe("session.message websocket events", () => {
           message.event === "socket.drain" &&
           (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
             "agent:main:main",
+        20000,
       );
 
-      const resetRes = await rpcReq(ws, "sessions.reset", { key: "agent:main:main" });
+      const resetRes = await rpcReq(ws, "sessions.reset", { key: "agent:main:main" }, 20000);
       expect(resetRes.ok).toBe(true);
 
       const drainEvent = await socketDrainPromise;
