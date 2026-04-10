@@ -75,6 +75,7 @@ export type EmbeddingProviderResult = {
 export type EmbeddingProviderOptions = {
   config: OpenClawConfig;
   agentDir?: string;
+  fetchImpl?: typeof fetch;
   provider: EmbeddingProviderRequest;
   remote?: {
     baseUrl?: string;

@@ -35,6 +35,7 @@ export type GeminiTaskType =
 export type EmbeddingProviderOptions = {
   config: OpenClawConfig;
   agentDir?: string;
+  fetchImpl?: typeof fetch;
   provider: EmbeddingProviderRequest;
   remote?: {
     baseUrl?: string;
