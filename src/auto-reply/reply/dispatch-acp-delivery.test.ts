@@ -233,7 +233,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
   });
 
-  it("treats direct feishu block text as visible", async () => {
+  it("does not treat direct feishu block text as visible", async () => {
     const coordinator = createAcpDispatchDeliveryCoordinator({
       cfg: createAcpTestConfig(),
       ctx: buildTestCtx({
@@ -249,14 +249,14 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
     await coordinator.settleVisibleText();
 
-    expect(coordinator.hasDeliveredVisibleText()).toBe(true);
+    expect(coordinator.hasDeliveredVisibleText()).toBe(false);
     expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
   });
 
   it("passes cfg and resolved accountId into direct visibility overrides", async () => {
     const cfg = createAcpTestConfig({
       channels: {
-        feishu: {
+        discord: {
           defaultAccount: "work",
         },
       },
@@ -265,8 +265,8 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     const coordinator = createAcpDispatchDeliveryCoordinator({
       cfg,
       ctx: buildTestCtx({
-        Provider: "feishu",
-        Surface: "feishu",
+        Provider: "discord",
+        Surface: "discord",
         SessionKey: "agent:codex-acp:session-1",
       }),
       dispatcher: createDispatcher(),

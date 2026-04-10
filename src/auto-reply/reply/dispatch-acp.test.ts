@@ -1151,7 +1151,7 @@ describe("tryDispatchAcpReply", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("does not deliver final fallback text when direct feishu block text was already visible", async () => {
+  it("preserves final fallback for direct feishu block text", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     queueTtsReplies(
@@ -1177,7 +1177,9 @@ describe("tryDispatchAcpReply", () => {
     expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: "Received your Feishu message." }),
     );
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Received your Feishu message." }),
+    );
   });
 
   it("treats visible telegram ACP block delivery as a successful final response", async () => {

@@ -74,6 +74,11 @@ async function shouldTreatDeliveredTextAsVisible(params: {
   if (!channelId) {
     return false;
   }
+  // Feishu block visibility is determined by async streaming outcomes; do not
+  // suppress ACP final fallback preemptively on the direct-delivery path.
+  if (!params.routed && channelId === "feishu" && params.kind === "block") {
+    return false;
+  }
   const { getChannelPlugin } = await loadChannelPluginRuntime();
   const outbound = getChannelPlugin(channelId)?.outbound;
   const visibilityOverride =
