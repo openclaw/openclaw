@@ -1,21 +1,19 @@
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
-import { type OpenClawConfig, type RuntimeEnv } from "../runtime-api.js";
-import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
 import { buildFeedbackEvent, runFeedbackReflection } from "./feedback-reflection.js";
 import { buildFileInfoCard, parseFileConsentInvoke, uploadToConsentUrl } from "./file-consent.js";
 import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } from "./inbound.js";
-import type { MSTeamsAdapter } from "./messenger.js";
 import { resolveMSTeamsSenderAccess } from "./monitor-handler/access.js";
 import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import { getPendingUpload, removePendingUpload } from "./pending-uploads.js";
-import type { MSTeamsPollStore } from "./polls.js";
 import { withRevokedProxyFallback } from "./revoked-context.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 import { buildGroupWelcomeText, buildWelcomeCard } from "./welcome-card.js";
+export type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
+import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 
 export type MSTeamsAccessTokenProvider = {
   getAccessToken: (scope: string) => Promise<string>;
@@ -35,19 +33,6 @@ export type MSTeamsActivityHandler = {
     handler: (context: unknown, next: () => Promise<void>) => Promise<void>,
   ) => MSTeamsActivityHandler;
   run?: (context: unknown) => Promise<void>;
-};
-
-export type MSTeamsMessageHandlerDeps = {
-  cfg: OpenClawConfig;
-  runtime: RuntimeEnv;
-  appId: string;
-  adapter: MSTeamsAdapter;
-  tokenProvider: MSTeamsAccessTokenProvider;
-  textLimit: number;
-  mediaMaxBytes: number;
-  conversationStore: MSTeamsConversationStore;
-  pollStore: MSTeamsPollStore;
-  log: MSTeamsMonitorLogger;
 };
 
 function serializeAdaptiveCardActionValue(value: unknown): string | null {
