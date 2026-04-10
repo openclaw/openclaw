@@ -438,6 +438,26 @@ Manual reply tags are supported:
 
 Note: `replyToMode="off"` disables **all** reply threading in Slack, including explicit `[[reply_to_*]]` tags. This differs from Telegram, where explicit tags are still honored in `"off"` mode. The difference reflects the platform threading models: Slack threads hide messages from the channel, while Telegram replies remain visible in the main chat flow.
 
+
+### replyBroadcast parameter (channel broadcast)
+
+When sending a thread reply, use `replyBroadcast: true` to also broadcast the reply to the parent channel. This posts a reference notification in the channel, making the thread reply visible to all channel members.
+
+```json
+{
+  "name": "message",
+  "params": {
+    "channel": "slack",
+    "target": "C123456",
+    "content": "Reply content",
+    "threadTs": "1774894809355549",
+    "replyBroadcast": true
+  }
+}
+```
+
+Note: `replyBroadcast` only takes effect when `threadTs` is provided. Defaults to `false`. Only applies to Slack; other channels ignore this parameter.
+
 ## Ack reactions
 
 `ackReaction` sends an acknowledgement emoji while OpenClaw is processing an inbound message.
