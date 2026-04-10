@@ -52,6 +52,18 @@ pnpm qa:lab:watch
 rebuilds that bundle on change, and the browser auto-reloads when the QA Lab
 asset hash changes.
 
+For a transport-real Matrix smoke lane, run:
+
+```bash
+pnpm openclaw qa matrix
+```
+
+That lane provisions a disposable Tuwunel homeserver in Docker, registers
+temporary driver and SUT users, creates one private room, then runs the real
+Matrix plugin inside a QA gateway child. The Matrix lane keeps `qa-channel`
+available in the child config for shared qa-lab helpers, but the transport
+under test is Matrix itself.
+
 For a disposable Linux VM lane without bringing Docker into the QA path, run:
 
 ```bash
