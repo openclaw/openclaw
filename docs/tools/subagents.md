@@ -139,6 +139,16 @@ Common pattern:
 - If the resolved runtime model changes, OpenClaw re-selects the matching file
   for that model on the next bootstrap pass.
 
+Why teams do this:
+
+- Some planning-heavy orchestrator runs benefit from a broader prompt with more
+  global policy and decomposition guidance.
+- Some worker runs benefit from a shorter file with stricter output shape,
+  sharper task boundaries, and less policy noise competing for context.
+- This is a prompt-tuning control, not a universal benchmark claim. It gives
+  teams a supported way to adapt prompt density and structure to the model they
+  actually run.
+
 Selection order:
 
 1. Decide whether this is a main run or a sub-agent run.
@@ -151,6 +161,15 @@ Selection order:
 
 Paths must stay inside the workspace root. Invalid or missing overrides warn and
 fall back safely.
+
+```mermaid
+flowchart LR
+    A["Spawn main or sub-agent run"] --> B["Resolve actual runtime model"]
+    B --> C["Pick base AGENTS file for that role"]
+    C --> D["Apply exact provider/model override if present"]
+    D --> E["Inject selected AGENTS content into bootstrap context"]
+    E --> F["Reuse same effective AGENTS source after continuation or compaction"]
+```
 
 Migration note: if you previously used the SubAgent Context Limiter plugin only
 to swap `SubAgentMD` into sub-agent runs, the core config above is the direct
