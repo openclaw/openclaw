@@ -288,7 +288,14 @@ export function buildGatewayCronService(params: {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       let sessionKey = `cron:${job.id}`;
       if (job.sessionTarget.startsWith("session:")) {
-        sessionKey = assertSafeCronSessionTargetId(job.sessionTarget.slice(8));
+        // The session target was percent-encoded at write time by
+        // assertSafeCronSessionTargetId (e.g. `/` → `%2F` for DingTalk
+        // base64 conversation IDs). Decode it back to the original raw
+        // session key so the lookup matches the session that was
+        // registered with the unencoded key (#64030).
+        sessionKey = decodeURIComponent(
+          assertSafeCronSessionTargetId(job.sessionTarget.slice(8)),
+        );
       }
       try {
         return await runCronIsolatedAgentTurn({
