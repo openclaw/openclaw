@@ -914,13 +914,14 @@ describe("memory cli", () => {
   it("previews rem harness output as json", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const nowMs = Date.now();
+      const isoDay = new Date(nowMs).toISOString().slice(0, 10);
       await recordShortTermRecalls({
         workspaceDir,
         query: "weather plans",
         nowMs,
         results: [
           {
-            path: "memory/2026-04-03.md",
+            path: `memory/${isoDay}.md`,
             startLine: 2,
             endLine: 3,
             score: 0.92,

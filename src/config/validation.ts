@@ -13,6 +13,7 @@ import {
 } from "../plugins/doctor-contract-registry.js";
 import {
   loadPluginManifestRegistry,
+  resolveManifestCommandAliasOwner,
   resolveManifestContractPluginIds,
 } from "../plugins/manifest-registry.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
@@ -39,19 +40,6 @@ import { coerceSecretRef } from "./types.secrets.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
-
-/**
- * Maps well-known runtime command names to the plugin that provides them.
- * Used to give actionable guidance when users accidentally put a command name
- * (e.g. "dreaming") into `plugins.allow` instead of the parent plugin id.
- */
-const COMMAND_NAME_TO_PLUGIN_ID: Record<string, string> = {
-  dreaming: "memory-core",
-  // "active-memory" omitted: command name equals plugin id, no redirect needed.
-  voice: "talk-voice",
-  phone: "phone-control",
-  pair: "device-pair",
-};
 
 type UnknownIssueRecord = Record<string, unknown>;
 type ConfigPathSegment = string | number;
@@ -1053,13 +1041,16 @@ function validateConfigObjectWithPluginsBase(
       continue;
     }
     if (!knownIds.has(pluginId)) {
-      const parentPluginId = COMMAND_NAME_TO_PLUGIN_ID[pluginId];
-      if (parentPluginId && parentPluginId !== pluginId && knownIds.has(parentPluginId)) {
+      const commandAlias = resolveManifestCommandAliasOwner({
+        command: pluginId,
+        registry,
+      });
+      if (commandAlias?.pluginId && knownIds.has(commandAlias.pluginId)) {
         warnings.push({
           path: "plugins.allow",
           message:
-            `"${pluginId}" is not a plugin — it is a command provided by the "${parentPluginId}" plugin. ` +
-            `Use "${parentPluginId}" in plugins.allow instead.`,
+            `"${pluginId}" is not a plugin — it is a command provided by the "${commandAlias.pluginId}" plugin. ` +
+            `Use "${commandAlias.pluginId}" in plugins.allow instead.`,
         });
       } else {
         pushMissingPluginIssue("plugins.allow", pluginId, { warnOnly: true });

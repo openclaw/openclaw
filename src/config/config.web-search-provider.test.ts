@@ -218,6 +218,7 @@ vi.mock("../plugins/manifest-registry.js", () => {
       params?.contract === "webSearchProviders"
         ? mockWebSearchProviders.find((provider) => provider.id === params.value)?.pluginId
         : undefined,
+    resolveManifestCommandAliasOwner: () => undefined,
   };
 });
 
