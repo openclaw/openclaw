@@ -1044,13 +1044,49 @@ Example:
 
 OpenClaw can join Discord voice channels for realtime, continuous conversations. This is separate from voice message attachments.
 
-Requirements:
+### Setup checklist
 
-- Enable native commands (`commands.native` or `channels.discord.commands.native`).
-- Configure `channels.discord.voice`.
-- The bot needs Connect + Speak permissions in the target voice channel.
+1. **Enable voice-required bot capabilities in Developer Portal**
 
-Use the Discord-only native command `/vc join|leave|status` to control sessions. The command uses the account default agent and follows the same allowlist and group policy rules as other Discord commands.
+   - Bot page → **Privileged Gateway Intents**
+     - **Message Content Intent** (required for reading commands/messages)
+     - **Server Members Intent** (required for role/user allowlist checks)
+   - Optional: **Presence Intent** only if you use bot presence workflows.
+
+2. **Invite the bot with the right scopes and permissions**
+
+   - Scopes: `bot`, `applications.commands`
+   - Minimum channel permissions in target guild voice channels:
+     - **Connect**
+     - **Speak**
+     - **Read Message History**
+     - **Send Messages** (for slash command replies and status messages)
+     - **Use Voice Activity** (some guilds require it depending on bot activity settings)
+
+3. **Turn on Discord native commands**
+
+   - set `commands.native=true` (global) or `channels.discord.commands.native=true` (Discord only)
+   - restart gateway after first-time role changes
+
+4. **Configure voice in OpenClaw**
+
+   - `channels.discord.voice` must exist and be enabled.
+   - optional `autoJoin` can start in a channel at startup.
+   - optional `voice.model` lets you override LLM model for VC only.
+
+5. **Verify runtime controls**
+
+   - `/vc status` should show no session first.
+   - `/vc join` then `/vc leave` validates command plumbing.
+   - if join works once but drops immediately, check bot role hierarchy + voice channel permission overrides.
+
+Use `/vc join` with a voice/stage channel argument, then `/vc leave`.
+
+```bash
+/vc join channel:<voice-channel-id>
+/vc status
+/vc leave
+```
 
 Auto-join example:
 
@@ -1060,6 +1096,7 @@ Auto-join example:
     discord: {
       voice: {
         enabled: true,
+        model: "openai-codex/gpt-5.4",
         autoJoin: [
           {
             guildId: "123456789012345678",
@@ -1081,13 +1118,13 @@ Auto-join example:
 Notes:
 
 - `voice.tts` overrides `messages.tts` for voice playback only.
-- `voice.model` can be set to override the LLM model used for VC responses (e.g. `openai-codex/gpt-5.4`). Leave unset to inherit the route's default model.
+- `voice.model` can be set to override the LLM used for VC responses (for example `openai-codex/gpt-5.4`). Leave unset to inherit the route session default model.
 - Voice transcript turns derive owner status from Discord `allowFrom` (or `dm.allowFrom`); non-owner speakers cannot access owner-only tools (for example `gateway` and `cron`).
 - Voice is enabled by default; set `channels.discord.voice.enabled=false` to disable it.
 - `voice.daveEncryption` and `voice.decryptionFailureTolerance` pass through to `@discordjs/voice` join options.
 - `@discordjs/voice` defaults are `daveEncryption=true` and `decryptionFailureTolerance=24` if unset.
-- OpenClaw also watches receive decrypt failures and auto-recovers by leaving/rejoining the voice channel after repeated failures in a short window.
-- If receive logs repeatedly show `DecryptionFailed(UnencryptedWhenPassthroughDisabled)`, this may be the upstream `@discordjs/voice` receive bug tracked in [discord.js #11419](https://github.com/discordjs/discord.js/issues/11419).
+- OpenClaw watches receive-decrypt failures and auto-recovers by leaving/rejoining the voice channel when failures repeat.
+- If you see repeated `DecryptionFailed(UnencryptedWhenPassthroughDisabled)`, this often maps to upstream `@discordjs/voice` behavior tracked in [discord.js #11419](https://github.com/discordjs/discord.js/issues/11419).
 
 ## Voice messages
 

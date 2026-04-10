@@ -178,7 +178,7 @@ Notes:
 - `/restart` is enabled by default; set `commands.restart: false` to disable it.
 - `/plugins install <spec>` accepts the same plugin specs as `openclaw plugins install`: local path/archive, npm package, or `clawhub:<pkg>`.
 - `/plugins enable|disable` updates plugin config and may prompt for a restart.
-- Discord-only native command: `/vc join|leave|status` controls voice channels (requires `channels.discord.voice` and native commands; not available as text).
+- Discord-only native command: `/vc join|leave|status` controls voice channels (not available as text). `join` requires a guild and selected voice/stage channel. Requires `channels.discord.voice` + native commands enabled.
 - Discord thread-binding commands (`/focus`, `/unfocus`, `/agents`, `/session idle`, `/session max-age`) require effective thread bindings to be enabled (`session.threadBindings.enabled` and/or `channels.discord.threadBindings.enabled`).
 - ACP command reference and runtime behavior: [ACP Agents](/tools/acp-agents).
 - `/verbose` is meant for debugging and extra visibility; keep it **off** in normal use.
