@@ -56,7 +56,7 @@ For model selection rules, see [/concepts/models](/concepts/models).
   to use the OpenAI provider and the normal OpenClaw provider transport.
   Codex-only deployments can disable automatic PI fallback with
   `agents.defaults.embeddedHarness.fallback: "none"`; see
-  [Agent Harness Plugins](/plugins/sdk-agent-harness#disable-pi-fallback).
+  [Codex Harness](/plugins/codex-harness).
 
 ## Plugin-owned provider behavior
 
