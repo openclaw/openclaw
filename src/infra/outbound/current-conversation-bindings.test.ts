@@ -9,6 +9,7 @@ import {
   bindGenericCurrentConversation,
   getGenericCurrentConversationBindingCapabilities,
   resolveGenericCurrentConversationBinding,
+  touchGenericCurrentConversationBinding,
   unbindGenericCurrentConversationBindings,
 } from "./current-conversation-bindings.js";
 
@@ -247,5 +248,42 @@ describe("generic current-conversation bindings", () => {
         conversationId: "spaces/AAAAAAA",
       }),
     ).toBeNull();
+  });
+
+  it("persists touched activity across reloads", async () => {
+    const bound = await bindGenericCurrentConversation({
+      targetSessionKey: "agent:codex:acp:slack-dm",
+      targetKind: "session",
+      conversation: {
+        channel: "slack",
+        accountId: "default",
+        conversationId: "user:U123",
+      },
+      metadata: {
+        label: "slack-dm",
+      },
+    });
+
+    expect(bound).not.toBeNull();
+
+    touchGenericCurrentConversationBinding(
+      "generic:slack\u241fdefault\u241f\u241fuser:U123",
+      1_234_567_890,
+    );
+
+    __testing.resetCurrentConversationBindingsForTests();
+
+    expect(
+      resolveGenericCurrentConversationBinding({
+        channel: "slack",
+        accountId: "default",
+        conversationId: "user:U123",
+      })?.metadata,
+    ).toEqual(
+      expect.objectContaining({
+        label: "slack-dm",
+        lastActivityAt: 1_234_567_890,
+      }),
+    );
   });
 });
