@@ -14,7 +14,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const srcRoot = path.join(repoRoot, "src");
 const extensionsRoot = path.join(repoRoot, BUNDLED_PLUGIN_ROOT_DIR);
 const testRoot = path.join(repoRoot, "test");
-const workspacePackagePaths = ["ui/package.json"];
+const BASE_WORKSPACE_PACKAGE_PATHS = ["ui/package.json"];
 const MAX_SCAN_BYTES = 2 * 1024 * 1024;
 const compareStrings = (left, right) => left.localeCompare(right);
 export const HELP_TEXT = `Usage: node scripts/audit-seams.mjs [--help]
@@ -40,12 +40,14 @@ Notes:
 `;
 
 async function collectWorkspacePackagePaths() {
+  const workspacePackagePaths = [...BASE_WORKSPACE_PACKAGE_PATHS];
   const entries = await fs.readdir(extensionsRoot, { withFileTypes: true });
   for (const entry of entries) {
     if (entry.isDirectory()) {
       workspacePackagePaths.push(path.join("extensions", entry.name, "package.json"));
     }
   }
+  return [...new Set(workspacePackagePaths)].toSorted(compareStrings);
 }
 
 function normalizePath(filePath) {
@@ -473,6 +475,7 @@ function classifyMissingPackageCluster(params) {
 }
 
 async function buildMissingPackages(params = {}) {
+  const workspacePackagePaths = params.workspacePackagePaths ?? [];
   const rootPackage = JSON.parse(await fs.readFile(path.join(repoRoot, "package.json"), "utf8"));
   const rootDeps = new Set([
     ...Object.keys(rootPackage.dependencies ?? {}),
@@ -1017,7 +1020,7 @@ export async function main(argv = process.argv.slice(2)) {
     return;
   }
 
-  await collectWorkspacePackagePaths();
+  const workspacePackagePaths = await collectWorkspacePackagePaths();
   const inventory = await collectCorePluginSdkImports();
   const optionalClusterStaticLeaks = await collectOptionalClusterStaticLeaks();
   const staticLeakClusters = new Set(optionalClusterStaticLeaks.map((entry) => entry.cluster));
@@ -1025,7 +1028,7 @@ export async function main(argv = process.argv.slice(2)) {
     duplicatedSeamFamilies: buildDuplicatedSeamFamilies(inventory),
     overlapFiles: buildOverlapFiles(inventory),
     optionalClusterStaticLeaks: buildOptionalClusterStaticLeaks(optionalClusterStaticLeaks),
-    missingPackages: await buildMissingPackages({ staticLeakClusters }),
+    missingPackages: await buildMissingPackages({ staticLeakClusters, workspacePackagePaths }),
     seamTestInventory: await buildSeamTestInventory(),
   };
 
