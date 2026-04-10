@@ -628,12 +628,29 @@ export async function runAgentTurnWithFallback(params: {
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.getActiveSessionEntry()?.systemPromptReport,
   );
-  const persistFallbackCandidateSelection = async (provider: string, model: string) => {
+  const persistFallbackCandidateSelection = async (
+    provider: string,
+    model: string,
+    runOptions?: ModelFallbackRunOptions,
+  ) => {
     if (
       !params.sessionKey ||
       !params.activeSessionStore ||
       (provider === params.followupRun.run.provider && model === params.followupRun.run.model)
     ) {
+      return;
+    }
+
+    // Auth failures are configuration errors, not model health issues.  A
+    // sticky session-level override would keep the fallback model active even
+    // after the user fixes their API key, forcing a manual /new to recover.
+    // Skip persistence so the primary model is retried on the next request and
+    // resumes automatically once auth is restored.
+    const previousReasons = runOptions?.previousFailureReasons ?? [];
+    const allAuthFailures =
+      previousReasons.length > 0 &&
+      previousReasons.every((r) => r === "auth" || r === "auth_permanent");
+    if (allAuthFailures) {
       return;
     }
 
@@ -791,6 +808,7 @@ export async function runAgentTurnWithFallback(params: {
             rollbackFallbackCandidateSelection = await persistFallbackCandidateSelection(
               provider,
               model,
+              runOptions,
             );
           } catch (error) {
             logVerbose(
