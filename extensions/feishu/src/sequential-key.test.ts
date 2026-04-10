@@ -30,7 +30,7 @@ describe("getFeishuSequentialKey", () => {
     [createTextEvent({ text: "hello" }), "feishu:default:oc_dm_chat"],
     [createTextEvent({ text: "/status" }), "feishu:default:oc_dm_chat"],
     [createTextEvent({ text: "/stop" }), "feishu:default:oc_dm_chat:control"],
-    [createTextEvent({ text: "/btw what changed?" }), "feishu:default:oc_dm_chat:btw:om_message_1"],
+    [createTextEvent({ text: "/btw what changed?" }), "feishu:default:oc_dm_chat:btw"],
   ])("resolves sequential key %#", (event, expected) => {
     expect(
       getFeishuSequentialKey({
@@ -38,6 +38,24 @@ describe("getFeishuSequentialKey", () => {
         event,
       }),
     ).toBe(expected);
+  });
+
+  it("keeps /btw on a stable per-chat lane across different message ids", () => {
+    const first = createTextEvent({ text: "/btw one", messageId: "om_message_1" });
+    const second = createTextEvent({ text: "/btw two", messageId: "om_message_2" });
+
+    expect(
+      getFeishuSequentialKey({
+        accountId: "default",
+        event: first,
+      }),
+    ).toBe("feishu:default:oc_dm_chat:btw");
+    expect(
+      getFeishuSequentialKey({
+        accountId: "default",
+        event: second,
+      }),
+    ).toBe("feishu:default:oc_dm_chat:btw");
   });
 
   it("falls back to a stable btw lane when the message id is unavailable", () => {

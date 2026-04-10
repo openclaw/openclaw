@@ -18,8 +18,7 @@ export function getFeishuSequentialKey(params: {
   }
 
   if (isBtwRequestText(text)) {
-    const messageId = event.message.message_id?.trim();
-    return messageId ? `${baseKey}:btw:${messageId}` : `${baseKey}:btw`;
+    return `${baseKey}:btw`;
   }
 
   return baseKey;
