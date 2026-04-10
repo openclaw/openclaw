@@ -80,7 +80,6 @@ const installRegistry = async () => {
           },
           capabilities: { chatTypes: ["direct", "channel", "thread"] },
           messaging: {
-            resolveSessionConversation: resolveSessionConversationStub,
             resolveSessionTarget: resolveSessionTargetStub,
           },
           config: {
@@ -103,6 +102,30 @@ const installRegistry = async () => {
             preferSessionLookupForAnnounceTarget: true,
           },
           capabilities: { chatTypes: ["direct", "group"] },
+          messaging: {
+            resolveSessionConversation: resolveSessionConversationStub,
+            resolveSessionTarget: resolveSessionTargetStub,
+          },
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: () => ({}),
+          },
+        },
+      },
+      {
+        pluginId: "slack",
+        source: "test",
+        plugin: {
+          id: "slack",
+          meta: {
+            id: "slack",
+            label: "Slack",
+            selectionLabel: "Slack",
+            docsPath: "/channels/slack",
+            blurb: "Slack test stub.",
+            preferSessionLookupForAnnounceTarget: true,
+          },
+          capabilities: { chatTypes: ["direct", "channel", "thread"] },
           messaging: {
             resolveSessionConversation: resolveSessionConversationStub,
             resolveSessionTarget: resolveSessionTargetStub,
@@ -361,6 +384,32 @@ describe("resolveAnnounceTarget", () => {
       to: "123@g.us",
       accountId: "work",
       threadId: "thread-77",
+    });
+  });
+
+  it("preserves threaded Slack session keys when sessions.list lacks stored thread metadata", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [
+        {
+          key: "agent:main:slack:channel:C123:thread:1710000000.000100",
+          deliveryContext: {
+            channel: "slack",
+            to: "channel:C123",
+            accountId: "workspace",
+          },
+        },
+      ],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "agent:main:slack:channel:C123:thread:1710000000.000100",
+      displayKey: "agent:main:slack:channel:C123:thread:1710000000.000100",
+    });
+    expect(target).toEqual({
+      channel: "slack",
+      to: "channel:C123",
+      accountId: "workspace",
+      threadId: "1710000000.000100",
     });
   });
 });

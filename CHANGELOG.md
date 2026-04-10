@@ -146,6 +146,7 @@ Docs: https://docs.openclaw.ai
 
 - Sandbox/security: auto-derive CDP source-range from Docker network gateway and refuse to start the socat relay without one, so peer containers cannot reach CDP unauthenticated. (#61404) Thanks @dims.
 - Daemon/launchd: keep `openclaw gateway stop` persistent without uninstalling the macOS LaunchAgent, re-enable it on explicit restart or repair, and harden launchd label handling. (#64447) Thanks @ngutman.
+- Agents/Slack: preserve threaded announce delivery when `sessions.list` rows lack stored thread metadata by falling back to the thread id encoded in the session key. (#63143) Thanks @mariosousa-finn.
 
 ## 2026.4.9
 
