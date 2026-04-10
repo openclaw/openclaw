@@ -98,6 +98,29 @@ async function assertExistingSessionPostInteractionNavigationAllowed(params: {
     lastObservedUrl = currentUrl;
   }
 
+  // If the loop exhausted without confirming stability but we did observe
+  // at least one allowed URL, run a single follow-up probe so a late URL
+  // transition that has already settled is not treated as a false failure.
+  if (lastObservedUrl) {
+    const lastDelay =
+      EXISTING_SESSION_INTERACTION_NAVIGATION_RECHECK_DELAYS_MS[
+        EXISTING_SESSION_INTERACTION_NAVIGATION_RECHECK_DELAYS_MS.length - 1
+      ];
+    await sleep(lastDelay);
+    try {
+      const followUpUrl = await readExistingSessionLocationHref(params);
+      await assertBrowserNavigationResultAllowed({
+        url: followUpUrl,
+        ...ssrfPolicyOpts,
+      });
+      if (followUpUrl === lastObservedUrl) {
+        return;
+      }
+    } catch {
+      // Probe failed — fall through to throw
+    }
+  }
+
   throw new Error("Unable to verify stable post-interaction navigation");
 }
 

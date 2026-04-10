@@ -204,10 +204,11 @@ describe("existing-session interaction navigation guard", () => {
 
   it("fails closed when a later post-action probe becomes unreadable", async () => {
     chromeMcpMocks.evaluateChromeMcpScript
-      .mockResolvedValueOnce("result" as never)
-      .mockResolvedValueOnce("https://example.com" as never)
-      .mockResolvedValueOnce(undefined as never)
-      .mockResolvedValueOnce(undefined as never);
+      .mockResolvedValueOnce("result" as never) // action evaluate
+      .mockResolvedValueOnce("https://example.com" as never) // location probe 1
+      .mockResolvedValueOnce(undefined as never) // location probe 2 - unreadable
+      .mockResolvedValueOnce(undefined as never) // location probe 3 - unreadable
+      .mockResolvedValueOnce(undefined as never); // follow-up probe - still unreadable
 
     const handler = getActPostHandler();
     const response = createBrowserRouteResponse();
@@ -227,6 +228,63 @@ describe("existing-session interaction navigation guard", () => {
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith(
       expect.objectContaining({ url: "https://example.com" }),
     );
+  });
+
+  it("confirms stability via follow-up probe when URL changes on the last loop iteration", async () => {
+    // Probe 1 (action evaluate result): returns the action value
+    // Location probe 1 (0ms): fails (context churn)
+    // Location probe 2 (250ms): reads safe URL A
+    // Location probe 3 (500ms): reads safe URL B (late navigation)
+    // Follow-up probe (500ms later): reads URL B again → stable, success
+    chromeMcpMocks.evaluateChromeMcpScript
+      .mockResolvedValueOnce("result" as never) // action evaluate result
+      .mockRejectedValueOnce(new Error("context churn") as never) // location probe 1 fails
+      .mockResolvedValueOnce("https://example.com" as never) // location probe 2: URL A
+      .mockResolvedValueOnce("https://safe-redirect.com" as never) // location probe 3: URL B (changed)
+      .mockResolvedValueOnce("https://safe-redirect.com" as never); // follow-up: URL B again → stable
+
+    const response = await runAction({ kind: "evaluate", fn: "() => 1" });
+
+    expect(response.statusCode).toBe(200);
+    // 1 action call + 5 location probes (3 in loop + 1 failed + 1 follow-up)
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledTimes(5);
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledTimes(3);
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ url: "https://example.com" }),
+    );
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ url: "https://safe-redirect.com" }),
+    );
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ url: "https://safe-redirect.com" }),
+    );
+  });
+
+  it("fails closed when follow-up probe sees yet another URL change", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript
+      .mockResolvedValueOnce("result" as never) // action evaluate result
+      .mockResolvedValueOnce("https://a.com" as never) // location probe 1
+      .mockResolvedValueOnce("https://b.com" as never) // location probe 2: changed
+      .mockResolvedValueOnce("https://c.com" as never) // location probe 3: changed again
+      .mockResolvedValueOnce("https://d.com" as never); // follow-up: still changing
+
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    const pending =
+      handler?.(
+        { params: {}, query: {}, body: { kind: "evaluate", fn: "() => 1" } },
+        response.res,
+      ) ?? Promise.resolve();
+    void pending.catch(() => {});
+    const completion = (async () => {
+      await vi.runAllTimersAsync();
+      await pending;
+    })();
+
+    await expect(completion).rejects.toThrow("Unable to verify stable post-interaction navigation");
   });
 
   it("skips the guard when no SSRF policy is configured", async () => {
