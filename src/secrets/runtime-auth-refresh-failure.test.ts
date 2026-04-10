@@ -126,7 +126,9 @@ describe("secrets runtime snapshot auth refresh failure", () => {
         type: "api_key",
         key: "sk-old",
       });
-      expect(snapshot.authStoreMtimes?.[agentDir]).toBe(1000);
+      expect(snapshot.authStoreFingerprints?.[agentDir]).toMatchObject({
+        mtimeNs: "1000000000",
+      });
     });
   });
 });

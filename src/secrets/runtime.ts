@@ -35,7 +35,13 @@ export type PreparedSecretsRuntimeSnapshot = {
   sourceConfig: OpenClawConfig;
   config: OpenClawConfig;
   authStores: Array<{ agentDir: string; store: AuthProfileStore }>;
-  authStoreMtimes?: Record<string, number>;
+  authStoreFingerprints?: Record<
+    string,
+    {
+      mtimeNs: string;
+      size: string;
+    } | null
+  >;
   warnings: SecretResolverWarning[];
   webTools: RuntimeWebToolsMetadata;
 };
@@ -87,7 +93,9 @@ function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecret
       agentDir: entry.agentDir,
       store: structuredClone(entry.store),
     })),
-    authStoreMtimes: snapshot.authStoreMtimes ? { ...snapshot.authStoreMtimes } : undefined,
+    authStoreFingerprints: snapshot.authStoreFingerprints
+      ? { ...snapshot.authStoreFingerprints }
+      : undefined,
     warnings: snapshot.warnings.map((warning) => ({ ...warning })),
     webTools: structuredClone(snapshot.webTools),
   };
@@ -216,7 +224,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
 
   const includeAuthStoreRefs = params.includeAuthStoreRefs ?? true;
   const authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];
-  const authStoreMtimes: Record<string, number> = {};
+  const authStoreFingerprints: PreparedSecretsRuntimeSnapshot["authStoreFingerprints"] = {};
   const loadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime;
   const candidateDirs = params.agentDirs?.length
     ? [...new Set(params.agentDirs.map((entry) => resolveUserPath(entry, runtimeEnv)))]
@@ -225,9 +233,13 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     for (const agentDir of candidateDirs) {
       const authPath = resolveAuthStorePath(agentDir);
       try {
-        authStoreMtimes[agentDir] = fs.statSync(authPath).mtimeMs;
+        const stat = fs.statSync(authPath, { bigint: true });
+        authStoreFingerprints[agentDir] = {
+          mtimeNs: stat.mtimeNs.toString(),
+          size: stat.size.toString(),
+        };
       } catch {
-        authStoreMtimes[agentDir] = Date.now();
+        authStoreFingerprints[agentDir] = null;
       }
       const store = structuredClone(loadAuthStore(agentDir));
       collectAuthStoreAssignments({
@@ -256,7 +268,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     sourceConfig,
     config: resolvedConfig,
     authStores,
-    authStoreMtimes,
+    authStoreFingerprints,
     warnings: context.warnings,
     webTools: await resolveRuntimeWebTools({
       sourceConfig,
@@ -285,7 +297,7 @@ export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeS
       loadablePluginOrigins: new Map<string, PluginOrigin>(),
     } satisfies SecretsRuntimeRefreshContext);
   setRuntimeConfigSnapshot(next.config, next.sourceConfig);
-  replaceRuntimeAuthProfileStoreSnapshots(next.authStores, next.authStoreMtimes);
+  replaceRuntimeAuthProfileStoreSnapshots(next.authStores, next.authStoreFingerprints);
   activeSnapshot = next;
   activeRefreshContext = cloneRefreshContext(refreshContext);
   setActiveRuntimeWebToolsMetadata(next.webTools);
