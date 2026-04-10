@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import type { Command } from "commander";
 import type { OpenClawConfig } from "../config/config.js";
@@ -94,6 +95,11 @@ function sanitizeExecPolicyTableCell(value: string): string {
 
 function sanitizeExecPolicyMessage(value: unknown): string {
   return sanitizeTerminalText(String(value));
+}
+
+function hashExecApprovalsFile(file: ExecApprovalsFile): string {
+  const raw = `${JSON.stringify(file, null, 2)}\n`;
+  return crypto.createHash("sha256").update(raw).digest("hex");
 }
 
 function resolveExecPolicyInput(params: {
@@ -268,12 +274,17 @@ async function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPol
   }
   const approvalsSnapshot = readExecApprovalsSnapshot();
   const nextApprovals = applyApprovalsDefaults(approvalsSnapshot.file, policy);
+  const writtenApprovalsHash = hashExecApprovalsFile(nextApprovals);
   saveExecApprovals(nextApprovals);
   try {
     await replaceConfigFile({
       nextConfig,
     });
   } catch (err) {
+    const currentApprovalsSnapshot = readExecApprovalsSnapshot();
+    if (currentApprovalsSnapshot.hash !== writtenApprovalsHash) {
+      throw err;
+    }
     if (!approvalsSnapshot.exists) {
       fs.rmSync(approvalsSnapshot.path, { force: true });
     } else if (approvalsSnapshot.raw !== null) {
