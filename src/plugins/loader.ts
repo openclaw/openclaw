@@ -1097,6 +1097,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     env,
     cfg,
     normalized,
+    activationSourceConfig,
     activationSource,
     autoEnabledReasons,
     onlyPluginIds,
