@@ -707,8 +707,11 @@
 .dreams-diary__entry {
   position: relative;
   max-width: 680px;
+  width: min(100%, 680px);
+  min-width: 0;
   padding: 0 0 0 16px;
   flex-shrink: 0;
+  overflow-x: clip;
   animation: diary-entry-reveal 1.4s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
@@ -765,6 +768,9 @@
   display: flex;
   gap: 6px;
   margin: 0 0 24px;
+  width: min(100%, 680px);
+  max-width: 100%;
+  min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
@@ -803,6 +809,9 @@
 
 .dreams-diary__prose {
   /* no styling container needed, just prose spacing */
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: clip;
 }
 
 .dreams-diary__para {
@@ -810,6 +819,8 @@
   font-size: 13px;
   line-height: 1.7;
   color: var(--text);
+  overflow-wrap: anywhere;
+  word-break: break-word;
   animation: diary-text-stream 2.4s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 

@@ -138,7 +138,7 @@ describe("dreaming view", () => {
     );
     expect(buttons).not.toContain("Backfill");
     expect(buttons).not.toContain("Reset");
-    expect(buttons).not.toContain("Clear Grounded");
+    expect(buttons).not.toContain("Clear Replayed");
   });
 
   it("shows dream bubble when active", () => {
@@ -323,20 +323,24 @@ describe("dreaming view", () => {
     setDreamAdvancedWaitingSort("recent");
     const container = renderInto(buildProps());
     expect(container.querySelector(".dreams-advanced__title")?.textContent).toContain(
-      "Daily Log Replay",
+      "Daily Log Review",
     );
     const buttons = [...container.querySelectorAll("button")].map((node) =>
       node.textContent?.trim(),
     );
     expect(buttons).toContain("Backfill");
     expect(buttons).toContain("Reset");
-    expect(buttons).toContain("Clear Grounded");
+    expect(buttons).toContain("Clear Replayed");
     expect(buttons).toContain("Most recent");
     expect(buttons).toContain("Strongest support");
     const sectionTitles = [...container.querySelectorAll(".dreams-advanced__section-title")].map(
       (node) => node.textContent?.trim(),
     );
-    expect(sectionTitles).toEqual(["From Daily Log", "Waiting for Promotion", "Recent Promotions"]);
+    expect(sectionTitles).toEqual([
+      "From the Daily Log",
+      "Waiting for Promotion",
+      "Recent Promotions",
+    ]);
     expect(container.querySelector(".dreams-advanced__summary")?.textContent).toContain(
       "1 from daily log",
     );

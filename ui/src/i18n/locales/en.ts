@@ -294,7 +294,7 @@ export const en: TranslationMap = {
     scene: {
       backfill: "Backfill",
       reset: "Reset",
-      clearGrounded: "Clear Grounded",
+      clearGrounded: "Clear Replayed",
       working: "Working…",
     },
     phase: {
@@ -305,13 +305,13 @@ export const en: TranslationMap = {
     },
     advanced: {
       eyebrow: "Review",
-      title: "Daily Log Replay",
+      title: "Daily Log Review",
       description:
-        "See what replayed from the daily log, what is waiting for promotion, and what already made it through.",
+        "Review what came from the daily log, what is waiting for promotion, and what was promoted recently.",
       summaryFromDailyLog: "from daily log",
       summaryWaiting: "waiting",
       summaryPromotedToday: "promoted today",
-      stagedTitle: "From Daily Log",
+      stagedTitle: "From the Daily Log",
       stagedDescription: "Replay candidates pulled from older daily log entries.",
       shortTermTitle: "Waiting for Promotion",
       shortTermDescription: "Current short-term candidates waiting to graduate into real memory.",
@@ -321,7 +321,7 @@ export const en: TranslationMap = {
       originLive: "live",
       originMixed: "mixed",
       promotedTitle: "Recent Promotions",
-      promotedDescription: "Items that already made it through promotion recently.",
+      promotedDescription: "Items that already made it through promotion.",
       emptyGrounded: "No staged grounded replay entries right now.",
       emptyShortTerm: "No short-term entries to inspect.",
       emptyPromoted: "No recent promotions to inspect.",

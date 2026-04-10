@@ -27,11 +27,11 @@
     "dreaming.phase.rem",
     "dreaming.tabs.advanced"
   ],
-  "generatedAt": "2026-04-10T07:35:35.815Z",
+  "generatedAt": "2026-04-10T07:41:26.696Z",
   "locale": "zh-TW",
   "model": "gpt-5.4",
   "provider": "openai",
-  "sourceHash": "06a0c6e1271629057cb308dd9f71232ba4e85e5b04ec5d2413dc7a36b35b582d",
+  "sourceHash": "d3dce86843ee772df42bab6583100c3bb4095c71cb53d310a3faa84ae22a66de",
   "totalKeys": 693,
   "translatedKeys": 667,
   "workflow": 1
