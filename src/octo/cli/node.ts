@@ -12,6 +12,8 @@
 // Boundary discipline (OCTO-DEC-033):
 //   Only imports from `node:*` builtins and relative paths inside `src/octo/`.
 
+import type { RegistryService } from "../head/registry.ts";
+
 // ──────────────────────────────────────────────────────────────────────────
 // Types
 // ──────────────────────────────────────────────────────────────────────────
@@ -154,4 +156,63 @@ export function runNodeShow(
   const output = opts.json ? formatNodeShowJson(detail) : formatNodeShow(detail);
   out.write(output);
   return 0;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Adapter: RegistryService → NodeRegistryView
+// ──────────────────────────────────────────────────────────────────────────
+
+/**
+ * Creates a NodeRegistryView by querying the RegistryService for arm records
+ * and aggregating per-node summaries. This is the CLI adapter — the live
+ * Gateway would use the in-memory node registry instead.
+ */
+export function createNodeRegistryView(registry: RegistryService): NodeRegistryView {
+  return {
+    listNodes(): NodeSummary[] {
+      const arms = registry.listArms({});
+      const nodeMap = new Map<string, { capabilities: Set<string>; activeArms: number }>();
+      for (const arm of arms) {
+        const nodeId = arm.node_id ?? "local";
+        let entry = nodeMap.get(nodeId);
+        if (!entry) {
+          entry = { capabilities: new Set(), activeArms: 0 };
+          nodeMap.set(nodeId, entry);
+        }
+        entry.capabilities.add(arm.adapter_type);
+        if (arm.state === "running" || arm.state === "spawning") {
+          entry.activeArms++;
+        }
+      }
+      return Array.from(nodeMap.entries()).map(([nodeId, entry]) => ({
+        nodeId,
+        capabilities: Array.from(entry.capabilities),
+        activeArms: entry.activeArms,
+        connected: true,
+      }));
+    },
+    getNode(nodeId: string): NodeDetail | null {
+      const arms = registry.listArms({ node_id: nodeId });
+      if (arms.length === 0) {
+        return null;
+      }
+      const capabilities = new Set<string>();
+      let activeArms = 0;
+      for (const arm of arms) {
+        capabilities.add(arm.adapter_type);
+        if (arm.state === "running" || arm.state === "spawning") {
+          activeArms++;
+        }
+      }
+      return {
+        nodeId,
+        capabilities: Array.from(capabilities),
+        activeArms,
+        connected: true,
+        maxArms: 10,
+        lastTelemetryTs: Date.now(),
+        leaseCount: 0,
+      };
+    },
+  };
 }
