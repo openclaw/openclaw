@@ -1,4 +1,3 @@
-import path from "node:path";
 import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -49,19 +48,6 @@ const cleanStaleGatewayProcessesSync = vi.hoisted(() =>
   vi.fn<(port?: number) => number[]>(() => []),
 );
 const defaultProgramArguments = ["node", "-e", "process.exit(0)"];
-
-function resolveDisableMarkerPath(
-  env: Record<string, string | undefined>,
-  label = "ai.openclaw.gateway",
-) {
-  const profile = env.OPENCLAW_PROFILE?.trim();
-  const suffix = !profile || profile.toLowerCase() === "default" ? "" : `-${profile}`;
-  return path.join(
-    env.OPENCLAW_STATE_DIR ?? path.join(env.HOME ?? "/Users/test", `.openclaw${suffix}`),
-    "service",
-    `${encodeURIComponent(label)}.launchd-disabled-by-openclaw`,
-  );
-}
 
 function expectLaunchctlEnableBootstrapOrder(env: Record<string, string | undefined>) {
   const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
@@ -332,7 +318,7 @@ describe("launchctl list detection", () => {
 });
 
 describe("launchd bootstrap repair", () => {
-  it("bootstraps and kickstarts the resolved label without enabling unrelated disabled state", async () => {
+  it("enables, bootstraps, and kickstarts the resolved label", async () => {
     const env: Record<string, string | undefined> = {
       HOME: "/Users/test",
       OPENCLAW_PROFILE: "default",
@@ -340,16 +326,11 @@ describe("launchd bootstrap repair", () => {
     const repair = await repairLaunchAgentBootstrap({ env });
     expect(repair).toEqual({ ok: true, status: "repaired" });
 
-    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-    const serviceId = `${domain}/ai.openclaw.gateway`;
-    const bootstrapIndex = state.launchctlCalls.findIndex(
-      (c) => c[0] === "bootstrap" && c[1] === domain,
-    );
+    const { serviceId, bootstrapIndex } = expectLaunchctlEnableBootstrapOrder(env);
     const kickstartIndex = state.launchctlCalls.findIndex(
       (c) => c[0] === "kickstart" && c[1] === "-k" && c[2] === serviceId,
     );
 
-    expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(false);
     expect(kickstartIndex).toBeGreaterThanOrEqual(0);
     expect(bootstrapIndex).toBeLessThan(kickstartIndex);
   });
@@ -414,30 +395,6 @@ describe("launchd bootstrap repair", () => {
       status: "kickstart-failed",
       detail: "launchctl kickstart failed: permission denied",
     });
-  });
-
-  it("re-enables when the disabled marker shows OpenClaw owns the stop state", async () => {
-    const env: Record<string, string | undefined> = {
-      HOME: "/Users/test",
-      OPENCLAW_PROFILE: "default",
-    };
-    state.files.set(resolveDisableMarkerPath(env), "disabled_by_openclaw\n");
-
-    await repairLaunchAgentBootstrap({ env });
-
-    expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(true);
-    expect(state.files.has(resolveDisableMarkerPath(env))).toBe(false);
-  });
-
-  it("allows explicit repairs to force re-enable disabled services", async () => {
-    const env: Record<string, string | undefined> = {
-      HOME: "/Users/test",
-      OPENCLAW_PROFILE: "default",
-    };
-
-    await repairLaunchAgentBootstrap({ env, forceEnable: true });
-
-    expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(true);
   });
 });
 
@@ -535,7 +492,6 @@ describe("launchd install", () => {
     expect(state.launchctlCalls).toContainEqual(["disable", serviceId]);
     expect(state.launchctlCalls).toContainEqual(["stop", "ai.openclaw.gateway"]);
     expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(false);
-    expect(state.files.has(resolveDisableMarkerPath(env))).toBe(true);
     expect(output).toContain("Stopped LaunchAgent");
   });
 
@@ -552,7 +508,6 @@ describe("launchd install", () => {
 
     expect(state.launchctlCalls.some((call) => call[0] === "stop")).toBe(false);
     expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(true);
-    expect(state.files.has(resolveDisableMarkerPath(env))).toBe(false);
     expect(output).toContain("Stopped LaunchAgent (degraded)");
     expect(output).toContain("used bootout fallback");
   });
@@ -649,28 +604,10 @@ describe("launchd install", () => {
     const serviceId = `${domain}/${label}`;
     expect(result).toEqual({ outcome: "completed" });
     expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(18789);
-    expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(false);
+    expect(state.launchctlCalls).toContainEqual(["enable", serviceId]);
     expect(state.launchctlCalls).toContainEqual(["kickstart", "-k", serviceId]);
     expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(false);
     expect(state.launchctlCalls.some((call) => call[0] === "bootstrap")).toBe(false);
-  });
-
-  it("re-enables before restart when OpenClaw owns the persisted disabled state", async () => {
-    const env = {
-      ...createDefaultLaunchdEnv(),
-      OPENCLAW_GATEWAY_PORT: "18789",
-    };
-    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-    const serviceId = `${domain}/ai.openclaw.gateway`;
-    state.files.set(resolveDisableMarkerPath(env), "disabled_by_openclaw\n");
-
-    await restartLaunchAgent({
-      env,
-      stdout: new PassThrough(),
-    });
-
-    expect(state.launchctlCalls).toContainEqual(["enable", serviceId]);
-    expect(state.files.has(resolveDisableMarkerPath(env))).toBe(false);
   });
 
   it("uses the configured gateway port for stale cleanup", async () => {
@@ -716,7 +653,7 @@ describe("launchd install", () => {
     );
 
     expect(result).toEqual({ outcome: "completed" });
-    expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(false);
+    expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(true);
     expect(state.launchctlCalls.some((call) => call[0] === "bootstrap")).toBe(true);
     expect(kickstartCalls).toHaveLength(2);
     expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(false);
@@ -734,7 +671,7 @@ describe("launchd install", () => {
       }),
     ).rejects.toThrow("launchctl kickstart failed: Input/output error");
 
-    expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(false);
+    expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(true);
     expect(state.launchctlCalls.some((call) => call[0] === "bootstrap")).toBe(false);
   });
 
@@ -751,7 +688,7 @@ describe("launchd install", () => {
       }),
     ).rejects.toThrow("launchctl kickstart failed: Input/output error");
 
-    expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(false);
+    expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(true);
     expect(state.launchctlCalls.some((call) => call[0] === "bootstrap")).toBe(true);
   });
 
@@ -767,7 +704,7 @@ describe("launchd install", () => {
       }),
     ).rejects.toThrow("launchctl kickstart failed: Input/output error");
 
-    expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(false);
+    expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(true);
     expect(state.launchctlCalls.some((call) => call[0] === "bootstrap")).toBe(false);
   });
 
@@ -784,30 +721,9 @@ describe("launchd install", () => {
     expect(launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff).toHaveBeenCalledWith({
       env,
       mode: "kickstart",
-      shouldEnable: false,
       waitForPid: process.pid,
-      enableMarkerPath: undefined,
     });
     expect(state.launchctlCalls).toEqual([]);
-  });
-
-  it("passes marker-owned re-enable intent to the detached handoff", async () => {
-    const env = createDefaultLaunchdEnv();
-    state.files.set(resolveDisableMarkerPath(env), "disabled_by_openclaw\n");
-    launchdRestartHandoffState.isCurrentProcessLaunchdServiceLabel.mockReturnValue(true);
-
-    await restartLaunchAgent({
-      env,
-      stdout: new PassThrough(),
-    });
-
-    expect(launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff).toHaveBeenCalledWith({
-      env,
-      mode: "kickstart",
-      shouldEnable: true,
-      waitForPid: process.pid,
-      enableMarkerPath: resolveDisableMarkerPath(env),
-    });
   });
 
   it("shows actionable guidance when launchctl gui domain does not support bootstrap", async () => {
@@ -882,5 +798,14 @@ describe("resolveLaunchAgentPlistPath", () => {
     },
   ])("$name", ({ env, expected }) => {
     expect(resolveLaunchAgentPlistPath(env)).toBe(expected);
+  });
+
+  it("rejects invalid launchd labels that contain path separators", () => {
+    expect(() =>
+      resolveLaunchAgentPlistPath({
+        HOME: "/Users/test",
+        OPENCLAW_LAUNCHD_LABEL: "../evil/label",
+      }),
+    ).toThrow("Invalid launchd label");
   });
 });
