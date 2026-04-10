@@ -348,7 +348,9 @@ export async function createBackupArchive(
         gzip: true,
         portable: true,
         preservePaths: true,
-        filter: buildExtensionsNodeModulesFilter(plan.stateDir),
+        filter: buildExtensionsNodeModulesFilter(
+          result.assets.find((a) => a.kind === "state")?.sourcePath ?? plan.stateDir,
+        ),
         onWriteEntry: (entry) => {
           entry.path = remapArchiveEntryPath({
             entryPath: entry.path,
