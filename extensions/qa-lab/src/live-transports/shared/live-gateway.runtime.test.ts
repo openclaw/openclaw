@@ -5,11 +5,11 @@ const { startQaGatewayChild, startQaMockOpenAiServer } = vi.hoisted(() => ({
   startQaMockOpenAiServer: vi.fn(),
 }));
 
-vi.mock("./gateway-child.js", () => ({
+vi.mock("../../gateway-child.js", () => ({
   startQaGatewayChild,
 }));
 
-vi.mock("./mock-openai-server.js", () => ({
+vi.mock("../../mock-openai-server.js", () => ({
   startQaMockOpenAiServer,
 }));
 

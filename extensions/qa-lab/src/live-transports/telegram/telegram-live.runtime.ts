@@ -3,19 +3,19 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { startQaGatewayChild } from "./gateway-child.js";
-import { startQaLiveLaneGateway } from "./live-gateway.runtime.js";
-import { appendLiveLaneIssue, buildLiveLaneArtifactsError } from "./live-lane-helpers.js";
-import {
-  collectLiveTransportStandardScenarioCoverage,
-  selectLiveTransportScenarios,
-  type LiveTransportScenarioDefinition,
-} from "./live-transport-scenarios.js";
+import { startQaGatewayChild } from "../../gateway-child.js";
 import {
   defaultQaModelForMode,
   normalizeQaProviderMode,
   type QaProviderModeInput,
-} from "./run-config.js";
+} from "../../run-config.js";
+import { startQaLiveLaneGateway } from "../shared/live-gateway.runtime.js";
+import { appendLiveLaneIssue, buildLiveLaneArtifactsError } from "../shared/live-lane-helpers.js";
+import {
+  collectLiveTransportStandardScenarioCoverage,
+  selectLiveTransportScenarios,
+  type LiveTransportScenarioDefinition,
+} from "../shared/live-transport-scenarios.js";
 
 type TelegramQaRuntimeEnv = {
   groupId: string;

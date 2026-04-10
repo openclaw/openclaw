@@ -4,8 +4,9 @@ import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-h
 import { runQaDockerUp } from "./docker-up.runtime.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import { startQaLabServer } from "./lab-server.js";
+import { runMatrixQaLive } from "./live-transports/matrix/matrix-live.runtime.js";
+import { runTelegramQaLive } from "./live-transports/telegram/telegram-live.runtime.js";
 import { runQaManualLane } from "./manual-lane.runtime.js";
-import { runMatrixQaLive } from "./matrix-live.runtime.js";
 import { startQaMockOpenAiServer } from "./mock-openai-server.js";
 import { runQaMultipass } from "./multipass.runtime.js";
 import { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-gateway-config.js";
@@ -16,7 +17,6 @@ import {
   type QaProviderModeInput,
 } from "./run-config.js";
 import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
-import { runTelegramQaLive } from "./telegram-live.runtime.js";
 
 type InterruptibleServer = {
   baseUrl: string;

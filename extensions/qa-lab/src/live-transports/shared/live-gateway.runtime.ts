@@ -1,8 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { startQaGatewayChild, type QaCliBackendAuthMode } from "./gateway-child.js";
+import { startQaGatewayChild, type QaCliBackendAuthMode } from "../../gateway-child.js";
+import { startQaMockOpenAiServer } from "../../mock-openai-server.js";
+import type { QaThinkingLevel } from "../../qa-gateway-config.js";
 import { appendLiveLaneIssue } from "./live-lane-helpers.js";
-import { startQaMockOpenAiServer } from "./mock-openai-server.js";
-import type { QaThinkingLevel } from "./qa-gateway-config.js";
 
 async function stopQaLiveLaneResources(resources: {
   gateway: Awaited<ReturnType<typeof startQaGatewayChild>>;

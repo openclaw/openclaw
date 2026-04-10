@@ -41,11 +41,11 @@ vi.mock("./multipass.runtime.js", () => ({
   runQaMultipass,
 }));
 
-vi.mock("./matrix-live.runtime.js", () => ({
+vi.mock("./live-transports/matrix/matrix-live.runtime.js", () => ({
   runMatrixQaLive,
 }));
 
-vi.mock("./telegram-live.runtime.js", () => ({
+vi.mock("./live-transports/telegram/telegram-live.runtime.js", () => ({
   runTelegramQaLive,
 }));
 

@@ -3,9 +3,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { startQaGatewayChild } from "./gateway-child.js";
-import { startQaLiveLaneGateway } from "./live-gateway.runtime.js";
-import { appendLiveLaneIssue, buildLiveLaneArtifactsError } from "./live-lane-helpers.js";
+import { startQaGatewayChild } from "../../gateway-child.js";
+import type { QaReportCheck } from "../../report.js";
+import { renderQaMarkdownReport } from "../../report.js";
+import {
+  defaultQaModelForMode,
+  normalizeQaProviderMode,
+  type QaProviderModeInput,
+} from "../../run-config.js";
+import { startQaLiveLaneGateway } from "../shared/live-gateway.runtime.js";
+import { appendLiveLaneIssue, buildLiveLaneArtifactsError } from "../shared/live-lane-helpers.js";
 import {
   provisionMatrixQaRoom,
   type MatrixQaObservedEvent,
@@ -21,13 +28,6 @@ import {
   type MatrixQaCanaryArtifact,
   type MatrixQaScenarioArtifacts,
 } from "./matrix-live-scenarios.js";
-import type { QaReportCheck } from "./report.js";
-import { renderQaMarkdownReport } from "./report.js";
-import {
-  defaultQaModelForMode,
-  normalizeQaProviderMode,
-  type QaProviderModeInput,
-} from "./run-config.js";
 
 type MatrixQaScenarioResult = {
   artifacts?: MatrixQaScenarioArtifacts;

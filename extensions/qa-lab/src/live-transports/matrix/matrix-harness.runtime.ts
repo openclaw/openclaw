@@ -10,7 +10,7 @@ import {
   waitForHealth,
   type FetchLike,
   type RunCommand,
-} from "./docker-runtime.js";
+} from "../../docker-runtime.js";
 
 const MATRIX_QA_DEFAULT_IMAGE = "ghcr.io/matrix-construct/tuwunel:v1.5.1";
 const MATRIX_QA_DEFAULT_SERVER_NAME = "matrix-qa.test";

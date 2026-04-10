@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
   findMissingLiveTransportStandardScenarios,
-} from "./live-transport-scenarios.js";
+} from "../shared/live-transport-scenarios.js";
 import { __testing as scenarioTesting } from "./matrix-live-scenarios.js";
 
 describe("matrix live qa scenarios", () => {
