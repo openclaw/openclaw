@@ -371,6 +371,44 @@ describe("runWithModelFallback – probe logic", () => {
     });
   });
 
+  it("probes primary model during timeout cooldown and falls back to non-cooldown provider on failure", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5", "google/gemini-2-flash"],
+          },
+        },
+      },
+    } as Partial<OpenClawConfig>);
+
+    // Only openai is in cooldown (default mock); anthropic and google are available.
+    mockedGetSoonestCooldownExpiry.mockReturnValue(1_700_000_000_000 + 60 * 1000);
+    mockedResolveProfilesUnavailableReason.mockReturnValue("timeout");
+
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("ETIMEDOUT"), { status: 0 }))
+      .mockResolvedValueOnce("fallback-ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("fallback-ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    // Primary probe fires with allowTransientCooldownProbe — this is the core fix.
+    expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini", {
+      allowTransientCooldownProbe: true,
+    });
+    // Fallback goes to a non-cooldown provider (anthropic), no cooldown probe flag needed.
+    expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5");
+  });
+
   it("keeps walking remaining fallbacks after an abort-wrapped RESOURCE_EXHAUSTED probe failure", async () => {
     const cfg = makeCfg({
       agents: {
