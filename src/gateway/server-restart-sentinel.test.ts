@@ -16,9 +16,13 @@ const mocks = vi.hoisted(() => ({
   formatRestartSentinelMessage: vi.fn(() => "restart message"),
   summarizeRestartSentinel: vi.fn(() => "restart summary"),
   resolveMainSessionKeyFromConfig: vi.fn(() => "agent:main:main"),
-  parseSessionThreadInfo: vi.fn(() => ({ baseSessionKey: null, threadId: undefined })),
+  parseSessionThreadInfo: vi.fn(
+    (): { baseSessionKey: string | null | undefined; threadId: string | undefined } => ({
+      baseSessionKey: null,
+      threadId: undefined,
+    }),
+  ),
   loadSessionEntry: vi.fn(() => ({ cfg: {}, entry: {} })),
-  resolveAnnounceTargetFromKey: vi.fn(() => null),
   deliveryContextFromSession: vi.fn(() => undefined),
   mergeDeliveryContext: vi.fn((a?: Record<string, unknown>, b?: Record<string, unknown>) => ({
     ...b,
@@ -56,10 +60,6 @@ vi.mock("../config/sessions/delivery-info.js", () => ({
 
 vi.mock("./session-utils.js", () => ({
   loadSessionEntry: mocks.loadSessionEntry,
-}));
-
-vi.mock("../agents/tools/sessions-send-helpers.js", () => ({
-  resolveAnnounceTargetFromKey: mocks.resolveAnnounceTargetFromKey,
 }));
 
 vi.mock("../utils/delivery-context.js", () => ({
@@ -126,6 +126,14 @@ describe("scheduleRestartSentinelWake", () => {
         },
       },
     });
+    mocks.parseSessionThreadInfo.mockReset();
+    mocks.parseSessionThreadInfo.mockReturnValue({ baseSessionKey: null, threadId: undefined });
+    mocks.loadSessionEntry.mockReset();
+    mocks.loadSessionEntry.mockReturnValue({ cfg: {}, entry: {} });
+    mocks.deliveryContextFromSession.mockReset();
+    mocks.deliveryContextFromSession.mockReturnValue(undefined);
+    mocks.resolveOutboundTarget.mockReset();
+    mocks.resolveOutboundTarget.mockReturnValue({ ok: true as const, to: "+15550002" });
     mocks.deliverOutboundPayloads.mockReset();
     mocks.deliverOutboundPayloads.mockResolvedValue([{ channel: "whatsapp", messageId: "msg-1" }]);
     mocks.enqueueDelivery.mockReset();
@@ -277,5 +285,30 @@ describe("scheduleRestartSentinelWake", () => {
     });
     expect(mocks.requestHeartbeatNow).not.toHaveBeenCalled();
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("skips outbound restart notice when no canonical delivery context survives restart", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValue({
+      payload: {
+        sessionKey: "agent:main:matrix:channel:!lowercased:example.org",
+      },
+    } as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>);
+    mocks.parseSessionThreadInfo.mockReturnValue({
+      baseSessionKey: "agent:main:matrix:channel:!lowercased:example.org",
+      threadId: undefined,
+    });
+    mocks.deliveryContextFromSession.mockReturnValue(undefined);
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      "restart message",
+      expect.objectContaining({
+        sessionKey: "agent:main:matrix:channel:!lowercased:example.org",
+      }),
+    );
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(mocks.enqueueDelivery).not.toHaveBeenCalled();
+    expect(mocks.resolveOutboundTarget).not.toHaveBeenCalled();
   });
 });

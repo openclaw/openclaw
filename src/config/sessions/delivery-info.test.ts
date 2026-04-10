@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import type { SessionEntry } from "./types.js";
 
 const storeState = vi.hoisted(() => ({
@@ -157,6 +158,34 @@ describe("extractDeliveryInfo", () => {
         to: "group:98765",
         accountId: "main",
         threadId: "77",
+      },
+      threadId: undefined,
+    });
+  });
+
+  it("derives delivery info from stored last route metadata when deliveryContext is missing", () => {
+    const sessionKey = "agent:main:matrix:channel:!lowercased:example.org";
+    storeState.store[sessionKey] = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      origin: {
+        provider: "matrix",
+        to: "room:!MixedCase:example.org",
+        nativeChannelId: "!MixedCase:example.org",
+      },
+      ...normalizeSessionDeliveryFields({
+        lastChannel: "matrix",
+        lastTo: "room:!MixedCase:example.org",
+      }),
+    };
+
+    const result = extractDeliveryInfo(sessionKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:!MixedCase:example.org",
+        accountId: undefined,
       },
       threadId: undefined,
     });

@@ -1,4 +1,3 @@
-import { resolveAnnounceTargetFromKey } from "../agents/tools/sessions-send-helpers.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import type { CliDeps } from "../cli/deps.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
@@ -144,7 +143,6 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
   const { baseSessionKey, threadId: sessionThreadId } = parseSessionThreadInfo(sessionKey);
 
   const { cfg, entry } = loadSessionEntry(sessionKey);
-  const parsedTarget = resolveAnnounceTargetFromKey(baseSessionKey ?? sessionKey);
 
   // Prefer delivery context from sentinel (captured at restart) over session store
   // Handles race condition where store wasn't flushed before restart
@@ -155,10 +153,7 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
     sessionDeliveryContext = deliveryContextFromSession(baseEntry);
   }
 
-  const origin = mergeDeliveryContext(
-    sentinelContext,
-    mergeDeliveryContext(sessionDeliveryContext, parsedTarget ?? undefined),
-  );
+  const origin = mergeDeliveryContext(sentinelContext, sessionDeliveryContext);
 
   const channelRaw = origin?.channel;
   const channel = channelRaw ? normalizeChannelId(channelRaw) : null;
@@ -180,7 +175,6 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
 
   const threadId =
     payload.threadId ??
-    parsedTarget?.threadId ?? // From resolveAnnounceTargetFromKey (extracts :topic:N)
     sessionThreadId ??
     (origin?.threadId != null ? String(origin.threadId) : undefined);
 
