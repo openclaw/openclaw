@@ -173,4 +173,107 @@ describe("sessions view", () => {
     expect(onDeselectAll).not.toHaveBeenCalled();
     expect(onSelectPage).not.toHaveBeenCalled();
   });
+
+  it("renders derived title and channel metadata under the session key", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:telegram:group:-1003751611182:topic:1",
+            kind: "group",
+            updatedAt: Date.now(),
+            derivedTitle: "Visible room UI",
+            channel: "telegram",
+            subject: "Escalona Labs 🚀🛰",
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.textContent).toContain("Visible room UI");
+    expect(container.textContent).toContain("Telegram • Escalona Labs 🚀🛰");
+  });
+
+  it("shows lastMessagePreview under the session key", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:telegram:group:-1003751611182:topic:1",
+            kind: "group",
+            updatedAt: Date.now(),
+            lastMessagePreview: "Here's the summary of your metrics",
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.textContent).toContain("Here's the summary of your metrics");
+  });
+
+  it("shows active dot for sessions updated within 2 minutes", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:telegram:group:-1003751611182:topic:1",
+            kind: "group",
+            updatedAt: Date.now(),
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    // Text content shows "just now" for sessions updated now
+    expect(container.textContent).toContain("just now");
+  });
+
+  it("does not show active dot for sessions older than 2 minutes", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:telegram:group:-1003751611182:topic:1",
+            kind: "group",
+            updatedAt: Date.now() - 10 * 60 * 1000,
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const dot = container.querySelector('span[style*="background: #4caf50"]');
+    expect(dot).toBeNull();
+  });
+
+  it("does not show Guardian badge on rows with sendPolicy allow", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:telegram:group:-1003751611182:topic:1",
+            kind: "group",
+            updatedAt: Date.now(),
+            sendPolicy: "allow" as const,
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.textContent).not.toContain("Guardian");
+  });
 });

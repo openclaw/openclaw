@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { resolveSessionDisplayName } from "../app-render.helpers.ts";
 import type {
   CompactionStatus as CompactionIndicatorStatus,
   FallbackStatus as FallbackIndicatorStatus,
@@ -102,6 +103,17 @@ export type ChatProps = {
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
+const CHANNEL_LABELS: Record<string, string> = {
+  bluebubbles: "iMessage",
+  telegram: "Telegram",
+  discord: "Discord",
+  signal: "Signal",
+  slack: "Slack",
+  whatsapp: "WhatsApp",
+  matrix: "Matrix",
+  email: "Email",
+  sms: "SMS",
+};
 
 // Persistent instances keyed by session
 const inputHistories = new Map<string, InputHistory>();
@@ -255,6 +267,135 @@ function renderFallbackIndicator(status: FallbackIndicatorStatus | null | undefi
   `;
 }
 
+function trimMaybeString(value?: string | null): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function formatChannelLabel(value?: string | null): string {
+  const trimmed = trimMaybeString(value);
+  if (!trimmed) {
+    return "";
+  }
+  return CHANNEL_LABELS[trimmed.toLowerCase()] ?? trimmed;
+}
+
+function uniqueNonEmpty(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const trimmed = trimMaybeString(value);
+    if (!trimmed) {
+      continue;
+    }
+    const normalized = trimmed.toLowerCase();
+    if (seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    result.push(trimmed);
+  }
+  return result;
+}
+
+function renderSessionContextBar(
+  session: GatewaySessionRow | undefined,
+  sessionKey: string,
+  modelProvider?: string | null,
+  model?: string | null,
+): TemplateResult | typeof nothing {
+  if (!session) {
+    return nothing;
+  }
+
+  const channelLabel = formatChannelLabel(session.channel);
+  const displayName = trimMaybeString(session.displayName);
+  const subject = trimMaybeString(session.subject);
+  const derivedTitle = trimMaybeString(session.derivedTitle);
+  const fallbackTitle = resolveSessionDisplayName(sessionKey, session);
+  const title = derivedTitle || subject || displayName || fallbackTitle;
+  const sessionModel = trimMaybeString(session.model);
+  const modelBadge = (() => {
+    const resolved =
+      sessionModel ||
+      (typeof model === "string" ? model.trim() : "") ||
+      (typeof modelProvider === "string" ? modelProvider.trim() : "");
+    if (!resolved) {
+      return null;
+    }
+    return `🤖 ${resolved}`;
+  })();
+  const responseUsageBadge = (() => {
+    const ru = session.responseUsage;
+    if (!ru || ru === "off") {
+      return null;
+    }
+    const map: Record<string, string> = { on: "📊 usage", tokens: "📊 tokens", full: "📊 full" };
+    return map[ru] ?? null;
+  })();
+  const badges = uniqueNonEmpty([
+    session.kind !== "unknown" ? session.kind : null,
+    channelLabel,
+    session.groupChannel,
+    session.sendPolicy === "deny" ? "🛡️ Guardian" : null,
+    session.spawnDepth === 1
+      ? "🤖 subagent"
+      : session.spawnDepth != null && session.spawnDepth > 1
+        ? `🤖 depth:${session.spawnDepth}`
+        : null,
+    modelBadge,
+    responseUsageBadge,
+  ]);
+  const detail = uniqueNonEmpty([subject, displayName]).filter(
+    (part) => part.toLowerCase() !== title.toLowerCase(),
+  );
+  const deliveryInfo = (() => {
+    const ch = trimMaybeString(session.lastChannel);
+    const to = trimMaybeString(session.lastTo);
+    if (!ch && !to) {
+      return null;
+    }
+    return `${formatChannelLabel(ch)}${to ? " → " + to : ""}`;
+  })();
+  const originSurface = (() => {
+    if (typeof session.origin?.surface === "string" && session.origin.surface.trim()) {
+      return session.origin.surface.trim();
+    }
+    return null;
+  })();
+
+  return html`
+    <div
+      class="chat-session-context"
+      style="display:grid; gap:6px; margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: color-mix(in srgb, var(--card) 92%, var(--accent) 8%);"
+    >
+      ${badges.length > 0
+        ? html`
+            <div style="display:flex; flex-wrap:wrap; gap:6px;">
+              ${badges.map(
+                (badge) =>
+                  html`<span class="data-table-badge data-table-badge--group">${badge}</span>`,
+              )}
+            </div>
+          `
+        : nothing}
+      <div style="font-weight:600; line-height:1.3;">${title}</div>
+      ${detail.length > 0
+        ? html`<div class="muted" style="font-size:12px; line-height:1.4;">
+            ${detail.join(" • ")}
+          </div>`
+        : nothing}
+      ${deliveryInfo
+        ? html`<div class="muted" style="font-size:11px; opacity:0.75;">→ ${deliveryInfo}</div>`
+        : nothing}
+      ${originSurface
+        ? html`<div class="muted" style="font-size:11px; opacity:0.65;">
+            surface: ${originSurface}
+          </div>`
+        : nothing}
+    </div>
+  `;
+}
+
 /**
  * Compact notice when context usage reaches 85%+.
  * Progressively shifts from amber (85%) to red (90%+).
@@ -298,7 +439,7 @@ function renderContextNotice(
   if (session?.totalTokensFresh === false) {
     return nothing;
   }
-  const used = session?.totalTokens ?? 0;
+  const used = session?.totalTokens ?? (session?.inputTokens ?? 0) + (session?.outputTokens ?? 0);
   const limit = session?.contextTokens ?? defaultContextTokens ?? 0;
   if (!used || !limit) {
     return nothing;
@@ -1178,6 +1319,12 @@ export function renderChat(props: ChatProps) {
           `
         : nothing}
       ${renderSearchBar(requestUpdate)} ${renderPinnedSection(props, pinned, requestUpdate)}
+      ${renderSessionContextBar(
+        activeSession,
+        props.sessionKey,
+        props.sessions?.defaults?.modelProvider,
+        props.sessions?.defaults?.model,
+      )}
 
       <div class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}">
         <div

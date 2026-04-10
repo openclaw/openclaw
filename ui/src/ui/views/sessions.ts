@@ -78,6 +78,17 @@ const FAST_LEVELS = [
 ] as const;
 const REASONING_LEVELS = ["", "off", "on", "stream"] as const;
 const PAGE_SIZES = [10, 25, 50, 100] as const;
+const CHANNEL_LABELS: Record<string, string> = {
+  bluebubbles: "iMessage",
+  telegram: "Telegram",
+  discord: "Discord",
+  signal: "Signal",
+  slack: "Slack",
+  whatsapp: "WhatsApp",
+  matrix: "Matrix",
+  email: "Email",
+  sms: "SMS",
+};
 
 function normalizeProviderId(provider?: string | null): string {
   if (!provider) {
@@ -144,17 +155,107 @@ function resolveThinkLevelPatchValue(value: string, isBinary: boolean): string |
   return value;
 }
 
+function trimMaybeString(value?: string | null): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function formatChannelLabel(value?: string | null): string {
+  const trimmed = trimMaybeString(value);
+  if (!trimmed) {
+    return "";
+  }
+  return CHANNEL_LABELS[trimmed.toLowerCase()] ?? trimmed;
+}
+
+function uniqueNonEmpty(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const trimmed = trimMaybeString(value);
+    if (!trimmed) {
+      continue;
+    }
+    const normalized = trimmed.toLowerCase();
+    if (seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    result.push(trimmed);
+  }
+  return result;
+}
+
+function resolveSecondaryTitle(row: GatewaySessionRow): string | null {
+  const key = trimMaybeString(row.key);
+  const label = trimMaybeString(row.label);
+  for (const candidate of [row.derivedTitle, row.displayName]) {
+    const trimmed = trimMaybeString(candidate);
+    if (!trimmed || trimmed === key || trimmed === label) {
+      continue;
+    }
+    return trimmed;
+  }
+  return null;
+}
+
+function resolveContextMeta(row: GatewaySessionRow, secondaryTitle?: string | null): string | null {
+  const title = trimMaybeString(secondaryTitle);
+  const parts = uniqueNonEmpty([
+    formatChannelLabel(row.channel),
+    row.groupChannel,
+    row.subject,
+  ]).filter((part) => part.toLowerCase() !== title.toLowerCase());
+  return parts.length > 0 ? parts.join(" • ") : null;
+}
+
+function resolveDeliveryContext(row: GatewaySessionRow): string | null {
+  const channel = trimMaybeString(row.lastChannel);
+  const to = trimMaybeString(row.lastTo);
+  if (!channel && !to) {
+    return null;
+  }
+  const parts: string[] = [];
+  if (channel) {
+    parts.push(formatChannelLabel(channel));
+  }
+  if (to) {
+    parts.push(to);
+  }
+  return parts.join(" → ");
+}
+
+function formatEstimatedCost(usd?: number | null): string {
+  if (usd == null || usd <= 0) {
+    return "";
+  }
+  if (usd < 0.001) {
+    return `$${(usd * 1_000_000).toFixed(2)}μ`;
+  }
+  if (usd < 1) {
+    return `$${usd.toFixed(4)}`;
+  }
+  return `$${usd.toFixed(2)}`;
+}
+
 function filterRows(rows: GatewaySessionRow[], query: string): GatewaySessionRow[] {
   const q = normalizeLowercaseStringOrEmpty(query);
   if (!q) {
     return rows;
   }
   return rows.filter((row) => {
-    const key = normalizeLowercaseStringOrEmpty(row.key);
-    const label = normalizeLowercaseStringOrEmpty(row.label);
-    const kind = normalizeLowercaseStringOrEmpty(row.kind);
-    const displayName = normalizeLowercaseStringOrEmpty(row.displayName);
-    return key.includes(q) || label.includes(q) || kind.includes(q) || displayName.includes(q);
+    const haystack = [
+      row.key,
+      row.label,
+      row.kind,
+      row.displayName,
+      row.derivedTitle,
+      row.channel,
+      row.groupChannel,
+      row.subject,
+    ]
+      .map((value) => trimMaybeString(value).toLowerCase())
+      .filter(Boolean);
+    return haystack.some((value) => value.includes(q));
   });
 }
 
@@ -452,6 +553,36 @@ export function renderSessions(props: SessionsProps) {
 
 function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const updated = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : t("common.na");
+  const isRecent =
+    row.updatedAt != null && row.updatedAt > 0 && Date.now() - row.updatedAt < 2 * 60 * 1000;
+  const isRunning = row.status === "running";
+  const startedAgo = row.startedAt ? formatRelativeTimestamp(row.startedAt) : null;
+  const durationMs = row.startedAt && row.endedAt ? row.endedAt - row.startedAt : null;
+  const durationLabel = (() => {
+    if (durationMs == null || durationMs <= 0) {
+      return null;
+    }
+    const s = Math.round(durationMs / 1000);
+    if (s < 60) {
+      return `${s}s`;
+    }
+    const m = Math.round(s / 60);
+    if (m < 60) {
+      return `${m}m`;
+    }
+    const h = Math.round(m / 60);
+    return `${h}h ${m % 60}m`;
+  })();
+  const updatedTitle = [
+    row.updatedAt ? `Updated: ${new Date(row.updatedAt).toLocaleString()}` : null,
+    row.startedAt ? `Started: ${new Date(row.startedAt).toLocaleString()}` : null,
+    durationLabel ? `Duration: ${durationLabel}` : null,
+    row.endedAt ? `Ended: ${new Date(row.endedAt).toLocaleString()}` : null,
+    row.runtimeMs ? `Runtime: ${row.runtimeMs}ms` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const childCount = Array.isArray(row.childSessions) ? row.childSessions.length : 0;
   const rawThinking = row.thinkingLevel ?? "";
   const isBinaryThinking = isBinaryThinkingProvider(row.modelProvider);
   const thinking = resolveThinkLevelDisplay(rawThinking, isBinaryThinking);
@@ -462,16 +593,13 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const verboseLevels = withCurrentLabeledOption(VERBOSE_LEVELS, verbose);
   const reasoning = row.reasoningLevel ?? "";
   const reasoningLevels = withCurrentOption(REASONING_LEVELS, reasoning);
+  const secondaryTitle = resolveSecondaryTitle(row);
+  const contextMeta = resolveContextMeta(row, secondaryTitle);
   const latestCheckpoint = row.latestCompactionCheckpoint;
   const checkpointCount = row.compactionCheckpointCount ?? 0;
   const isExpanded = props.expandedCheckpointKey === row.key;
   const checkpointItems = props.checkpointItemsByKey[row.key] ?? [];
   const checkpointError = props.checkpointErrorByKey[row.key];
-  const displayName = normalizeOptionalString(row.displayName) ?? null;
-  const trimmedLabel = normalizeOptionalString(row.label) ?? "";
-  const showDisplayName = Boolean(
-    displayName && displayName !== row.key && displayName !== trimmedLabel,
-  );
   const canLink = row.kind !== "global";
   const chatUrl = canLink
     ? `${pathForTab("chat", props.basePath)}?session=${encodeURIComponent(row.key)}`
@@ -520,8 +648,33 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                 >${row.key}</a
               >`
             : row.key}
-          ${showDisplayName
-            ? html`<span class="muted session-key-display-name">${displayName}</span>`
+          ${secondaryTitle
+            ? html`<span class="muted session-key-display-name">${secondaryTitle}</span>`
+            : nothing}
+          ${contextMeta
+            ? html`<span class="muted session-key-display-name">${contextMeta}</span>`
+            : nothing}
+          ${row.lastMessagePreview
+            ? html`<span class="muted session-key-display-name" style="font-style:italic;"
+                >${row.lastMessagePreview}</span
+              >`
+            : nothing}
+          ${(() => {
+            const delivery = resolveDeliveryContext(row);
+            return delivery
+              ? html`<span
+                  class="muted session-key-display-name"
+                  style="font-size:11px; opacity:0.75;"
+                  >→ ${delivery}</span
+                >`
+              : nothing;
+          })()}
+          ${row.parentSessionKey
+            ? html`<span
+                class="muted session-key-display-name"
+                style="font-size:11px; opacity:0.65;"
+                >⊕ from ${row.parentSessionKey}</span
+              >`
             : nothing}
         </div>
       </td>
@@ -538,10 +691,108 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
         />
       </td>
       <td>
-        <span class="data-table-badge ${badgeClass}">${row.kind}</span>
+        <div style="display:flex; gap:4px; align-items:center;">
+          <span class="data-table-badge ${badgeClass}">${row.kind}</span>
+          ${row.sendPolicy === "deny"
+            ? html`
+                <span
+                  class="data-table-badge"
+                  style="background: #e8f5e9; color: #2e7d32; border: 1px solid #a5d6a7"
+                  >🛡️ Guardian</span
+                >
+              `
+            : nothing}
+          ${row.spawnDepth === 1
+            ? html`
+                <span
+                  class="data-table-badge"
+                  style="background: #e3f2fd; color: #1565c0; border: 1px solid #90caf9"
+                  >🤖 subagent</span
+                >
+              `
+            : row.spawnDepth != null && row.spawnDepth > 1
+              ? html`<span
+                  class="data-table-badge"
+                  style="background:#e3f2fd; color:#1565c0; border:1px solid #90caf9;"
+                  >🤖 depth:${row.spawnDepth}</span
+                >`
+              : nothing}
+          ${row.status === "running"
+            ? html`
+                <span
+                  class="data-table-badge"
+                  style="background: #e8f5e9; color: #2e7d32; border: 1px solid #a5d6a7"
+                  title="Session running"
+                  >● running</span
+                >
+              `
+            : row.status === "failed"
+              ? html`
+                  <span
+                    class="data-table-badge"
+                    style="background: #ffebee; color: #c62828; border: 1px solid #ef9a9a"
+                    title="Session failed"
+                    >✗ failed</span
+                  >
+                `
+              : row.status === "killed" || row.status === "timeout"
+                ? html`<span
+                    class="data-table-badge"
+                    style="background:#fff8e1; color:#f57f17; border:1px solid #ffe082;"
+                    title="Session ${row.status}"
+                    >⚠ ${row.status}</span
+                  >`
+                : row.abortedLastRun
+                  ? html`
+                      <span
+                        class="data-table-badge"
+                        style="background: #fff8e1; color: #f57f17; border: 1px solid #ffe082"
+                        title="Last run aborted"
+                        >⚠ aborted</span
+                      >
+                    `
+                  : nothing}
+          ${childCount > 0
+            ? html`<span
+                class="data-table-badge"
+                style="background:#f3e5f5; color:#6a1b9a; border:1px solid #ce93d8;"
+                title="${childCount} child sessions"
+                >👶 ${childCount}</span
+              >`
+            : nothing}
+        </div>
       </td>
-      <td>${updated}</td>
-      <td>${formatSessionTokens(row)}</td>
+      <td title=${updatedTitle}>
+        <div style="display:flex; align-items:center; gap:6px;">
+          ${isRecent
+            ? html`
+                <span
+                  style="
+                      display: inline-block;
+                      width: 8px;
+                      height: 8px;
+                      border-radius: 50%;
+                      background: #4caf50;
+                      box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.3);
+                    "
+                ></span>
+              `
+            : nothing}
+          ${isRunning && startedAgo
+            ? html`<span style="color:#2e7d32; font-weight:500;">● ${startedAgo} active</span>`
+            : html`<span class="${isRecent ? "muted" : ""}">${updated}</span>`}
+          ${row.runtimeMs != null
+            ? html`<span class="muted" style="font-size:11px;">${row.runtimeMs}ms</span>`
+            : nothing}
+        </div>
+      </td>
+      <td>
+        <div>${formatSessionTokens(row)}</div>
+        ${(() => {
+          const cost = formatEstimatedCost(row.estimatedCostUsd);
+          return cost ? html`<div class="muted" style="font-size:11px;">${cost}</div>` : nothing;
+        })()}
+      </td>
       <td>
         <div style="display: grid; gap: 6px;">
           <span class="muted" style="font-size: 12px;">

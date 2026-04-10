@@ -352,7 +352,7 @@ describe("chat view", () => {
     expect(container.textContent).not.toContain("757.3k / 200k");
   });
 
-  it("hides the context notice when totalTokens is missing even if inputTokens is high", () => {
+  it("shows the context notice when inputTokens is high even if totalTokens is missing", () => {
     const container = document.createElement("div");
     render(
       renderChat(
@@ -377,7 +377,7 @@ describe("chat view", () => {
       container,
     );
 
-    expect(container.textContent).not.toContain("context used");
+    expect(container.textContent).toContain("context used");
   });
 
   it("hides the context notice when totalTokens is marked stale", () => {
@@ -408,6 +408,97 @@ describe("chat view", () => {
 
     expect(container.textContent).not.toContain("context used");
     expect(container.textContent).not.toContain("190k / 200k");
+  });
+
+  it("renders the active session context bar with channel and room metadata", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          sessionKey: "agent:main:telegram:group:-1003751611182:topic:1",
+          sessions: {
+            ts: 0,
+            path: "",
+            count: 1,
+            defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+            sessions: [
+              {
+                key: "agent:main:telegram:group:-1003751611182:topic:1",
+                kind: "group",
+                updatedAt: null,
+                channel: "telegram",
+                subject: "Escalona Labs 🚀🛰",
+                derivedTitle: "Visible room UI",
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("Visible room UI");
+    expect(container.textContent).toContain("Telegram");
+    expect(container.textContent).toContain("group");
+    expect(container.textContent).toContain("Escalona Labs 🚀🛰");
+  });
+
+  it("shows Guardian badge when session sendPolicy is deny", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          sessionKey: "agent:main:telegram:group:-1003751611182:topic:1",
+          sessions: {
+            ts: 0,
+            path: "",
+            count: 1,
+            defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+            sessions: [
+              {
+                key: "agent:main:telegram:group:-1003751611182:topic:1",
+                kind: "group",
+                updatedAt: null,
+                channel: "telegram",
+                sendPolicy: "deny" as const,
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("🛡️ Guardian");
+  });
+
+  it("does not show Guardian badge when session sendPolicy is allow", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          sessionKey: "agent:main:telegram:group:-1003751611182:topic:1",
+          sessions: {
+            ts: 0,
+            path: "",
+            count: 1,
+            defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+            sessions: [
+              {
+                key: "agent:main:telegram:group:-1003751611182:topic:1",
+                kind: "group",
+                updatedAt: null,
+                channel: "telegram",
+                sendPolicy: "allow" as const,
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).not.toContain("Guardian");
   });
 
   it("uses the assistant avatar URL for the welcome state when the identity avatar is only initials", () => {
