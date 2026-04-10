@@ -12,6 +12,7 @@ import {
   createLazyRuntimeMethod,
   createLazyRuntimeMethodBinder,
   createLazyRuntimeModule,
+  createLazyRuntimeSurface,
 } from "../../shared/lazy-runtime.js";
 import { VERSION } from "../../version.js";
 import {
@@ -94,6 +95,32 @@ function createRuntimeMusicGeneration(): PluginRuntime["musicGeneration"] {
   return {
     generate: (params) => generateRuntimeMusic(params),
     listProviders: (params) => listRuntimeMusicGenerationProviders(params),
+  };
+}
+
+function createRuntimeLlmFacade(): PluginRuntime["llm"] {
+  const loadLlm = createLazyRuntimeSurface(
+    () => import("./runtime-llm.runtime.js"),
+    (m) => m.createRuntimeLlm(),
+  );
+  return {
+    complete: async (params) => {
+      const llm = await loadLlm();
+      return llm.complete(params);
+    },
+  };
+}
+
+function createRuntimeSandboxFacade(): PluginRuntime["sandbox"] {
+  const loadSandbox = createLazyRuntimeSurface(
+    () => import("./runtime-sandbox.runtime.js"),
+    (m) => m.createRuntimeSandbox(),
+  );
+  return {
+    exec: async (params) => {
+      const sandbox = await loadSandbox();
+      return sandbox.exec(params);
+    },
   };
 }
 
@@ -245,6 +272,8 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     | "imageGeneration"
     | "videoGeneration"
     | "musicGeneration"
+    | "llm"
+    | "sandbox"
   > &
     Partial<
       Pick<
@@ -256,6 +285,8 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
         | "imageGeneration"
         | "videoGeneration"
         | "musicGeneration"
+        | "llm"
+        | "sandbox"
       >
     >;
 
@@ -268,6 +299,8 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
   defineCachedValue(runtime, "imageGeneration", createRuntimeImageGeneration);
   defineCachedValue(runtime, "videoGeneration", createRuntimeVideoGeneration);
   defineCachedValue(runtime, "musicGeneration", createRuntimeMusicGeneration);
+  defineCachedValue(runtime, "llm", createRuntimeLlmFacade);
+  defineCachedValue(runtime, "sandbox", createRuntimeSandboxFacade);
 
   return runtime as unknown as PluginRuntime;
 }

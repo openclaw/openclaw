@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   ContextEngine,
   ContextEngineMaintenanceResult,
@@ -22,7 +23,7 @@ import {
   updateTaskNotifyPolicyForOwner,
 } from "../../tasks/task-owner-access.js";
 import { findActiveSessionTask } from "../session-async-task-status.js";
-import type { SessionWriteLockAcquireTimeoutConfig } from "../session-write-lock.js";
+import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import { resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import {
@@ -46,7 +47,7 @@ type DeferredTurnMaintenanceScheduleParams = {
   sessionFile: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
-  config?: SessionWriteLockAcquireTimeoutConfig;
+  config?: OpenClawConfig;
 };
 
 type DeferredTurnMaintenanceRunState = {
@@ -277,10 +278,16 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
   runtimeContext?: ContextEngineRuntimeContext;
   allowDeferredCompactionExecution?: boolean;
   deferTranscriptRewriteToSessionLane?: boolean;
-  config?: SessionWriteLockAcquireTimeoutConfig;
+  config?: OpenClawConfig;
+  purpose?: string;
 }): ContextEngineRuntimeContext {
   return {
     ...params.runtimeContext,
+    ...resolveContextEngineCapabilities({
+      config: params.config,
+      sessionKey: params.sessionKey,
+      purpose: params.purpose ?? "context-engine.maintenance",
+    }),
     ...(params.allowDeferredCompactionExecution ? { allowDeferredCompactionExecution: true } : {}),
     rewriteTranscriptEntries: async (request) => {
       if (params.sessionManager) {
@@ -318,7 +325,7 @@ async function executeContextEngineMaintenance(params: {
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
   executionMode: "foreground" | "background";
-  config?: SessionWriteLockAcquireTimeoutConfig;
+  config?: OpenClawConfig;
 }): Promise<ContextEngineMaintenanceResult | undefined> {
   if (typeof params.contextEngine.maintain !== "function") {
     return undefined;
@@ -336,6 +343,7 @@ async function executeContextEngineMaintenance(params: {
       allowDeferredCompactionExecution: params.executionMode === "background",
       deferTranscriptRewriteToSessionLane: params.executionMode === "background",
       config: params.config,
+      purpose: `context-engine.${params.reason}.maintenance`,
     }),
   });
   if (result.changed) {
@@ -356,7 +364,7 @@ async function runDeferredTurnMaintenanceWorker(params: {
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
   runId: string;
-  config?: SessionWriteLockAcquireTimeoutConfig;
+  config?: OpenClawConfig;
 }): Promise<void> {
   let surfacedUserNotice = false;
   let longRunningTimer: ReturnType<typeof setTimeout> | null = null;
@@ -615,7 +623,7 @@ export async function runContextEngineMaintenance(params: {
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
   executionMode?: "foreground" | "background";
-  config?: SessionWriteLockAcquireTimeoutConfig;
+  config?: OpenClawConfig;
 }): Promise<ContextEngineMaintenanceResult | undefined> {
   if (typeof params.contextEngine?.maintain !== "function") {
     return undefined;

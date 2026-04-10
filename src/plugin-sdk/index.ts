@@ -62,6 +62,13 @@ export type {
   SubagentRunResult,
 } from "../plugins/runtime/types.js";
 export type {
+  PluginLlmCompleteMessage,
+  PluginLlmCompleteParams,
+  PluginLlmCompleteResult,
+  PluginSandboxExecParams,
+  PluginSandboxExecResult,
+} from "../plugins/runtime/types-core.js";
+export type {
   BoundTaskFlowsRuntime,
   BoundTaskRunsRuntime,
   DetachedTaskLifecycleRuntime,
