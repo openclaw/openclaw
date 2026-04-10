@@ -10,7 +10,7 @@ import {
   resolveNodeTargets,
   type NodeTargetOption,
 } from "./nodes-shared.ts";
-import type { NodesProps } from "./nodes.ts";
+import type { NodesProps } from "./nodes.types.ts";
 
 type ExecSecurity = "deny" | "allowlist" | "full";
 type ExecAsk = "off" | "on-miss" | "always";

@@ -10,7 +10,6 @@ import {
 import { observeTopbar, scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
 import {
   applySettingsFromUrl,
-  attachThemeListener,
   detachThemeListener,
   inferBasePath,
   syncTabWithLocation,
@@ -49,7 +48,6 @@ export function handleConnected(host: LifecycleHost) {
   const bootstrapReady = loadControlUiBootstrapConfig(host);
   syncTabWithLocation(host as unknown as Parameters<typeof syncTabWithLocation>[0], true);
   syncThemeWithSettings(host as unknown as Parameters<typeof syncThemeWithSettings>[0]);
-  attachThemeListener(host as unknown as Parameters<typeof attachThemeListener>[0]);
   window.addEventListener("popstate", host.popStateHandler);
   void bootstrapReady.finally(() => {
     if (host.connectGeneration !== connectGeneration) {

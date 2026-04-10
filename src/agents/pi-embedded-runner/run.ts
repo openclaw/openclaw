@@ -72,12 +72,13 @@ import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModelAsync } from "./model.js";
 import { handleAssistantFailover } from "./run/assistant-failover.js";
-import { runEmbeddedAttempt } from "./run/attempt.js";
 import { createEmbeddedRunAuthController } from "./run/auth-controller.js";
+import { runEmbeddedAttemptWithBackend } from "./run/backend.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./run/failover-policy.js";
 import {
   buildErrorAgentMeta,
+  resolveFinalAssistantVisibleText,
   buildUsageAgentMetaFields,
   createCompactionDiagId,
   resolveActiveErrorContext,
@@ -98,6 +99,7 @@ import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import { resolveEffectiveRuntimeModel, resolveHookModelSelection } from "./run/setup.js";
+import { mergeAttemptToolMediaPayloads } from "./run/tool-media-payloads.js";
 import {
   sessionLikelyHasOversizedToolResults,
   truncateOversizedToolResultsInSession,
@@ -106,6 +108,8 @@ import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accumulator.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
+
+const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
 
 /**
  * Best-effort backfill of sessionKey from sessionId when not explicitly provided.
@@ -397,6 +401,7 @@ export async function runEmbeddedPiAgent(
       let runLoopIterations = 0;
       let overloadProfileRotations = 0;
       let planningOnlyRetryAttempts = 0;
+      let sameModelIdleTimeoutRetries = 0;
       let lastRetryFailoverReason: FailoverReason | null = null;
       let planningOnlyRetryInstruction: string | null = null;
       const ackExecutionFastPathInstruction = resolveAckExecutionFastPathInstruction({
@@ -591,7 +596,7 @@ export async function runEmbeddedPiAgent(
             resolvedStreamApiKey = (apiKeyInfo as ApiKeyInfo).apiKey;
           }
 
-          const attempt = await runEmbeddedAttempt({
+          const attempt = await runEmbeddedAttemptWithBackend({
             sessionId: params.sessionId,
             sessionKey: resolvedSessionKey,
             trigger: params.trigger,
@@ -1362,7 +1367,15 @@ export async function runEmbeddedPiAgent(
             failoverFailure,
             failoverReason: assistantFailoverReason,
             timedOut,
+            idleTimedOut,
             timedOutDuringCompaction,
+            allowSameModelIdleTimeoutRetry:
+              timedOut &&
+              idleTimedOut &&
+              !timedOutDuringCompaction &&
+              !fallbackConfigured &&
+              canRestartForLiveSwitch &&
+              sameModelIdleTimeoutRetries < MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES,
             assistantProfileFailureReason,
             lastProfileId,
             modelId,
@@ -1388,13 +1401,15 @@ export async function runEmbeddedPiAgent(
           });
           overloadProfileRotations = assistantFailoverOutcome.overloadProfileRotations;
           if (assistantFailoverOutcome.action === "retry") {
+            if (assistantFailoverOutcome.retryKind === "same_model_idle_timeout") {
+              sameModelIdleTimeoutRetries += 1;
+            }
             lastRetryFailoverReason = assistantFailoverOutcome.lastRetryFailoverReason;
             continue;
           }
           if (assistantFailoverOutcome.action === "throw") {
             throw assistantFailoverOutcome.error;
           }
-
           const usageMeta = buildUsageAgentMetaFields({
             usageAccumulator,
             lastAssistantUsage: lastAssistant?.usage as UsageLike | undefined,
@@ -1410,6 +1425,7 @@ export async function runEmbeddedPiAgent(
             promptTokens: usageMeta.promptTokens,
             compactionCount: autoCompactionCount > 0 ? autoCompactionCount : undefined,
           };
+          const finalAssistantVisibleText = resolveFinalAssistantVisibleText(lastAssistant);
 
           const payloads = buildEmbeddedRunPayloads({
             assistantTexts: attempt.assistantTexts,
@@ -1429,11 +1445,16 @@ export async function runEmbeddedPiAgent(
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
           });
+          const payloadsWithToolMedia = mergeAttemptToolMediaPayloads({
+            payloads,
+            toolMediaUrls: attempt.toolMediaUrls,
+            toolAudioAsVoice: attempt.toolAudioAsVoice,
+          });
 
           // Timeout aborts can leave the run without any assistant payloads.
           // Emit an explicit timeout error instead of silently completing, so
           // callers do not lose the turn as an orphaned user message.
-          if (timedOut && !timedOutDuringCompaction && payloads.length === 0) {
+          if (timedOut && !timedOutDuringCompaction && !payloadsWithToolMedia?.length) {
             const timeoutText = idleTimedOut
               ? "The model did not produce a response before the LLM idle timeout. " +
                 "Please try again, or increase `agents.defaults.llm.idleTimeoutSeconds` in your config (set to 0 to disable)."
@@ -1451,6 +1472,7 @@ export async function runEmbeddedPiAgent(
                 agentMeta,
                 aborted,
                 systemPromptReport: attempt.systemPromptReport,
+                finalAssistantVisibleText,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
               didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
@@ -1464,7 +1486,7 @@ export async function runEmbeddedPiAgent(
           // Detect incomplete turns where prompt() resolved prematurely and the
           // runner would otherwise drop an empty reply.
           const incompleteTurnText = resolveIncompleteTurnPayloadText({
-            payloadCount: payloads.length,
+            payloadCount: payloadsWithToolMedia?.length ?? 0,
             aborted,
             timedOut,
             attempt,
@@ -1542,6 +1564,7 @@ export async function runEmbeddedPiAgent(
                 agentMeta,
                 aborted,
                 systemPromptReport: attempt.systemPromptReport,
+                finalAssistantVisibleText,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
               didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
@@ -1569,12 +1592,13 @@ export async function runEmbeddedPiAgent(
             });
           }
           return {
-            payloads: payloads.length ? payloads : undefined,
+            payloads: payloadsWithToolMedia?.length ? payloadsWithToolMedia : undefined,
             meta: {
               durationMs: Date.now() - started,
               agentMeta,
               aborted,
               systemPromptReport: attempt.systemPromptReport,
+              finalAssistantVisibleText,
               // Handle client tool calls (OpenResponses hosted tools)
               // Propagate the LLM stop reason so callers (lifecycle events,
               // ACP bridge) can distinguish end_turn from max_tokens.

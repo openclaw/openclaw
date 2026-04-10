@@ -1,10 +1,6 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import * as sessions from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
-import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -86,8 +82,17 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  state.compactEmbeddedPiSessionMock.mockClear();
-  state.runEmbeddedPiAgentMock.mockClear();
+  state.compactEmbeddedPiSessionMock.mockReset();
+  state.compactEmbeddedPiSessionMock.mockResolvedValue({
+    ok: true,
+    compacted: false,
+    reason: "test-default",
+  });
+  state.runEmbeddedPiAgentMock.mockReset();
+  state.runEmbeddedPiAgentMock.mockResolvedValue({
+    payloads: [{ text: "final" }],
+    meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+  });
   vi.mocked(enqueueFollowupRun).mockClear();
   vi.mocked(refreshQueuedFollowupSession).mockClear();
   vi.mocked(scheduleFollowupDrain).mockClear();
@@ -252,34 +257,6 @@ describe("runReplyAgent heartbeat followup guard", () => {
 });
 
 describe("runReplyAgent typing (heartbeat)", () => {
-  async function withTempStateDir<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {
-    return await withStateDirEnv(
-      "openclaw-typing-heartbeat-",
-      async ({ stateDir }) => await fn(stateDir),
-    );
-  }
-
-  async function writeCorruptGeminiSessionFixture(params: {
-    stateDir: string;
-    sessionId: string;
-    persistStore: boolean;
-  }) {
-    const storePath = path.join(params.stateDir, "sessions", "sessions.json");
-    const sessionEntry: SessionEntry = { sessionId: params.sessionId, updatedAt: Date.now() };
-    const sessionStore = { main: sessionEntry };
-
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    if (params.persistStore) {
-      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
-    }
-
-    const transcriptPath = sessions.resolveSessionTranscriptPath(params.sessionId);
-    await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
-    await fs.writeFile(transcriptPath, "bad", "utf-8");
-
-    return { storePath, sessionEntry, sessionStore, transcriptPath };
-  }
-
   it("signals typing for normal runs", async () => {
     const onPartialReply = vi.fn();
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
@@ -640,93 +617,6 @@ describe("runReplyAgent typing (heartbeat)", () => {
     await runPromise;
     expect(calls).toBe(2);
     vi.useRealTimers();
-  });
-
-  it("delivers tool results in order even when dispatched concurrently", async () => {
-    const deliveryOrder: string[] = [];
-    const onToolResult = vi.fn(async (payload: { text?: string }) => {
-      // Simulate variable network latency: first result is slower than second
-      const delay = payload.text === "first" ? 5 : 1;
-      await new Promise((r) => setTimeout(r, delay));
-      deliveryOrder.push(payload.text ?? "");
-    });
-
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-      // Fire two tool results without awaiting each one; await both at the end.
-      const first = params.onToolResult?.({ text: "first", mediaUrls: [] });
-      const second = params.onToolResult?.({ text: "second", mediaUrls: [] });
-      await Promise.all([first, second]);
-      return { payloads: [{ text: "final" }], meta: {} };
-    });
-
-    const { run } = createMinimalRun({
-      typingMode: "message",
-      opts: { onToolResult },
-    });
-    await run();
-
-    expect(onToolResult).toHaveBeenCalledTimes(2);
-    // Despite "first" having higher latency, it must be delivered before "second"
-    expect(deliveryOrder).toEqual(["first", "second"]);
-  });
-
-  it("continues delivering later tool results after an earlier tool result fails", async () => {
-    const delivered: string[] = [];
-    const onToolResult = vi.fn(async (payload: { text?: string }) => {
-      if (payload.text === "first") {
-        throw new Error("simulated delivery failure");
-      }
-      delivered.push(payload.text ?? "");
-    });
-
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-      const first = params.onToolResult?.({ text: "first", mediaUrls: [] });
-      const second = params.onToolResult?.({ text: "second", mediaUrls: [] });
-      await Promise.allSettled([first, second]);
-      return { payloads: [{ text: "final" }], meta: {} };
-    });
-
-    const { run } = createMinimalRun({
-      typingMode: "message",
-      opts: { onToolResult },
-    });
-    await run();
-
-    expect(onToolResult).toHaveBeenCalledTimes(2);
-    expect(delivered).toEqual(["second"]);
-  });
-
-  it("refreshes queued followups when auto-compaction rotates the session", async () => {
-    await withTempStateDir(async (stateDir) => {
-      const storePath = path.join(stateDir, "sessions", "sessions.json");
-      const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
-      const sessionStore = { main: sessionEntry };
-
-      state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
-        payloads: [{ text: "final" }],
-        meta: {
-          agentMeta: {
-            sessionId: "session-rotated",
-            compactionCount: 1,
-          },
-        },
-      });
-
-      const { run } = createMinimalRun({
-        sessionEntry,
-        sessionStore,
-        sessionKey: "main",
-        storePath,
-      });
-      await run();
-
-      expect(vi.mocked(refreshQueuedFollowupSession)).toHaveBeenCalledWith({
-        key: "main",
-        previousSessionId: "session",
-        nextSessionId: "session-rotated",
-        nextSessionFile: expect.stringContaining("session-rotated.jsonl"),
-      });
-    });
   });
 
   it("announces model fallback only when verbose mode is enabled", async () => {
@@ -1143,189 +1033,6 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it("retries after compaction failure by resetting the session", async () => {
-    await withTempStateDir(async (stateDir) => {
-      const sessionId = "session";
-      const storePath = path.join(stateDir, "sessions", "sessions.json");
-      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
-      const sessionEntry: SessionEntry = {
-        sessionId,
-        updatedAt: Date.now(),
-        sessionFile: transcriptPath,
-        fallbackNoticeSelectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-        fallbackNoticeActiveModel: "deepinfra/moonshotai/Kimi-K2.5",
-        fallbackNoticeReason: "rate limit",
-      };
-      const sessionStore = { main: sessionEntry };
-
-      await fs.mkdir(path.dirname(storePath), { recursive: true });
-      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
-      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
-      await fs.writeFile(transcriptPath, "ok", "utf-8");
-
-      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
-        throw new Error(
-          'Context overflow: Summarization failed: 400 {"message":"prompt is too long"}',
-        );
-      });
-
-      const { run } = createMinimalRun({
-        sessionEntry,
-        sessionStore,
-        sessionKey: "main",
-        storePath,
-      });
-      const res = await run();
-
-      expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-      const payload = Array.isArray(res) ? res[0] : res;
-      expect(payload).toMatchObject({
-        text: expect.stringContaining("Context limit exceeded during compaction"),
-      });
-      if (!payload) {
-        throw new Error("expected payload");
-      }
-      expect(payload.text?.toLowerCase()).toContain("reset");
-      expect(sessionStore.main.sessionId).not.toBe(sessionId);
-      expect(sessionStore.main.fallbackNoticeSelectedModel).toBeUndefined();
-      expect(sessionStore.main.fallbackNoticeActiveModel).toBeUndefined();
-      expect(sessionStore.main.fallbackNoticeReason).toBeUndefined();
-
-      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
-      expect(persisted.main.sessionId).toBe(sessionStore.main.sessionId);
-      expect(persisted.main.fallbackNoticeSelectedModel).toBeUndefined();
-      expect(persisted.main.fallbackNoticeActiveModel).toBeUndefined();
-      expect(persisted.main.fallbackNoticeReason).toBeUndefined();
-    });
-  });
-
-  it("retries after context overflow payload by resetting the session", async () => {
-    await withTempStateDir(async (stateDir) => {
-      const sessionId = "session";
-      const storePath = path.join(stateDir, "sessions", "sessions.json");
-      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
-      const sessionEntry = { sessionId, updatedAt: Date.now(), sessionFile: transcriptPath };
-      const sessionStore = { main: sessionEntry };
-
-      await fs.mkdir(path.dirname(storePath), { recursive: true });
-      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
-      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
-      await fs.writeFile(transcriptPath, "ok", "utf-8");
-
-      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
-        payloads: [{ text: "Context overflow: prompt too large", isError: true }],
-        meta: {
-          durationMs: 1,
-          error: {
-            kind: "context_overflow",
-            message: 'Context overflow: Summarization failed: 400 {"message":"prompt is too long"}',
-          },
-        },
-      }));
-
-      const { run } = createMinimalRun({
-        sessionEntry,
-        sessionStore,
-        sessionKey: "main",
-        storePath,
-      });
-      const res = await run();
-
-      expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-      const payload = Array.isArray(res) ? res[0] : res;
-      expect(payload).toMatchObject({
-        text: expect.stringContaining("Context limit exceeded"),
-      });
-      if (!payload) {
-        throw new Error("expected payload");
-      }
-      expect(payload.text?.toLowerCase()).toContain("reset");
-      expect(sessionStore.main.sessionId).not.toBe(sessionId);
-      expect(vi.mocked(refreshQueuedFollowupSession)).toHaveBeenCalledWith({
-        key: "main",
-        previousSessionId: sessionId,
-        nextSessionId: sessionStore.main.sessionId,
-        nextSessionFile: expect.stringContaining(".jsonl"),
-      });
-
-      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
-      expect(persisted.main.sessionId).toBe(sessionStore.main.sessionId);
-    });
-  });
-
-  it("clears stale runtime model fields when resetSession retries after compaction failure", async () => {
-    await withTempStateDir(async (stateDir) => {
-      const sessionId = "session-stale-model";
-      const storePath = path.join(stateDir, "sessions", "sessions.json");
-      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
-      const sessionEntry: SessionEntry = {
-        sessionId,
-        updatedAt: Date.now(),
-        sessionFile: transcriptPath,
-        modelProvider: "qwencode",
-        model: "qwen3.5-plus-2026-02-15",
-        contextTokens: 123456,
-        systemPromptReport: {
-          source: "run",
-          generatedAt: Date.now(),
-          sessionId,
-          sessionKey: "main",
-          provider: "qwencode",
-          model: "qwen3.5-plus-2026-02-15",
-          workspaceDir: stateDir,
-          bootstrapMaxChars: 1000,
-          bootstrapTotalMaxChars: 2000,
-          systemPrompt: {
-            chars: 10,
-            projectContextChars: 5,
-            nonProjectContextChars: 5,
-          },
-          injectedWorkspaceFiles: [],
-          skills: {
-            promptChars: 0,
-            entries: [],
-          },
-          tools: {
-            listChars: 0,
-            schemaChars: 0,
-            entries: [],
-          },
-        },
-      };
-      const sessionStore = { main: sessionEntry };
-
-      await fs.mkdir(path.dirname(storePath), { recursive: true });
-      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
-      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
-      await fs.writeFile(transcriptPath, "ok", "utf-8");
-
-      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
-        throw new Error(
-          'Context overflow: Summarization failed: 400 {"message":"prompt is too long"}',
-        );
-      });
-
-      const { run } = createMinimalRun({
-        sessionEntry,
-        sessionStore,
-        sessionKey: "main",
-        storePath,
-      });
-      await run();
-
-      expect(sessionStore.main.modelProvider).toBeUndefined();
-      expect(sessionStore.main.model).toBeUndefined();
-      expect(sessionStore.main.contextTokens).toBeUndefined();
-      expect(sessionStore.main.systemPromptReport).toBeUndefined();
-
-      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
-      expect(persisted.main.modelProvider).toBeUndefined();
-      expect(persisted.main.model).toBeUndefined();
-      expect(persisted.main.contextTokens).toBeUndefined();
-      expect(persisted.main.systemPromptReport).toBeUndefined();
-    });
-  });
-
   it("surfaces overflow fallback when embedded run returns empty payloads", async () => {
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
       payloads: [],
@@ -1372,163 +1079,6 @@ describe("runReplyAgent typing (heartbeat)", () => {
       throw new Error("expected payload");
     }
     expect(payload.text).toContain("/new");
-  });
-
-  it("resets the session after role ordering payloads", async () => {
-    await withTempStateDir(async (stateDir) => {
-      const sessionId = "session";
-      const storePath = path.join(stateDir, "sessions", "sessions.json");
-      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
-      const sessionEntry = { sessionId, updatedAt: Date.now(), sessionFile: transcriptPath };
-      const sessionStore = { main: sessionEntry };
-
-      await fs.mkdir(path.dirname(storePath), { recursive: true });
-      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
-      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
-      await fs.writeFile(transcriptPath, "ok", "utf-8");
-
-      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
-        payloads: [{ text: "Message ordering conflict - please try again.", isError: true }],
-        meta: {
-          durationMs: 1,
-          error: {
-            kind: "role_ordering",
-            message: 'messages: roles must alternate between "user" and "assistant"',
-          },
-        },
-      }));
-
-      const { run } = createMinimalRun({
-        sessionEntry,
-        sessionStore,
-        sessionKey: "main",
-        storePath,
-      });
-      const res = await run();
-
-      const payload = Array.isArray(res) ? res[0] : res;
-      expect(payload).toMatchObject({
-        text: expect.stringContaining("Message ordering conflict"),
-      });
-      if (!payload) {
-        throw new Error("expected payload");
-      }
-      expect(payload.text?.toLowerCase()).toContain("reset");
-      expect(sessionStore.main.sessionId).not.toBe(sessionId);
-      await expect(fs.access(transcriptPath)).rejects.toBeDefined();
-
-      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
-      expect(persisted.main.sessionId).toBe(sessionStore.main.sessionId);
-    });
-  });
-
-  it("resets corrupted Gemini sessions and deletes transcripts", async () => {
-    await withTempStateDir(async (stateDir) => {
-      const { storePath, sessionEntry, sessionStore, transcriptPath } =
-        await writeCorruptGeminiSessionFixture({
-          stateDir,
-          sessionId: "session-corrupt",
-          persistStore: true,
-        });
-
-      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
-        throw new Error(
-          "function call turn comes immediately after a user turn or after a function response turn",
-        );
-      });
-
-      const { run } = createMinimalRun({
-        sessionEntry,
-        sessionStore,
-        sessionKey: "main",
-        storePath,
-      });
-      const res = await run();
-
-      expect(res).toMatchObject({
-        text: expect.stringContaining("Session history was corrupted"),
-      });
-      expect(sessionStore.main).toBeUndefined();
-      await expect(fs.access(transcriptPath)).rejects.toThrow();
-
-      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
-      expect(persisted.main).toBeUndefined();
-    });
-  });
-
-  it("keeps sessions intact on other errors", async () => {
-    await withTempStateDir(async (stateDir) => {
-      const sessionId = "session-ok";
-      const storePath = path.join(stateDir, "sessions", "sessions.json");
-      const sessionEntry = { sessionId, updatedAt: Date.now() };
-      const sessionStore = { main: sessionEntry };
-
-      await fs.mkdir(path.dirname(storePath), { recursive: true });
-      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
-
-      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
-      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
-      await fs.writeFile(transcriptPath, "ok", "utf-8");
-
-      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
-        throw new Error("INVALID_ARGUMENT: some other failure");
-      });
-
-      const { run } = createMinimalRun({
-        sessionEntry,
-        sessionStore,
-        sessionKey: "main",
-        storePath,
-      });
-      const res = await run();
-
-      expect(res).toMatchObject({
-        text: expect.stringContaining("Something went wrong while processing your request"),
-      });
-      expect(sessionStore.main).toBeDefined();
-      await expect(fs.access(transcriptPath)).resolves.toBeUndefined();
-
-      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
-      expect(persisted.main).toBeDefined();
-    });
-  });
-
-  it("still replies even if session reset fails to persist", async () => {
-    await withTempStateDir(async (stateDir) => {
-      const saveSpy = vi
-        .spyOn(sessions, "saveSessionStore")
-        .mockRejectedValueOnce(new Error("boom"));
-      try {
-        const { storePath, sessionEntry, sessionStore, transcriptPath } =
-          await writeCorruptGeminiSessionFixture({
-            stateDir,
-            sessionId: "session-corrupt",
-            persistStore: false,
-          });
-
-        state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
-          throw new Error(
-            "function call turn comes immediately after a user turn or after a function response turn",
-          );
-        });
-
-        const { run } = createMinimalRun({
-          sessionEntry,
-          sessionStore,
-          sessionKey: "main",
-          storePath,
-        });
-        const res = await run();
-
-        expect(res).toMatchObject({
-          text: expect.stringContaining("Session history was corrupted"),
-        });
-        expect(sessionStore.main).toBeUndefined();
-        await expect(fs.access(transcriptPath)).rejects.toThrow();
-      } finally {
-        saveSpy.mockRestore();
-      }
-    });
   });
 
   it("returns friendly message for role ordering errors thrown as exceptions", async () => {

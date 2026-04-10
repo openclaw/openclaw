@@ -17,9 +17,21 @@ conceptual overviews, see:
 - [Builtin Engine](/concepts/memory-builtin) -- default SQLite backend
 - [QMD Engine](/concepts/memory-qmd) -- local-first sidecar
 - [Memory Search](/concepts/memory-search) -- search pipeline and tuning
+- [Active Memory](/concepts/active-memory) -- enabling the memory sub-agent for interactive sessions
 
 All memory search settings live under `agents.defaults.memorySearch` in
 `openclaw.json` unless noted otherwise.
+
+If you are looking for the **active memory** feature toggle and sub-agent config,
+that lives under `plugins.entries.active-memory` instead of `memorySearch`.
+
+Active memory uses a two-gate model:
+
+1. the plugin must be enabled and target the current agent id
+2. the request must be an eligible interactive persistent chat session
+
+See [Active Memory](/concepts/active-memory) for the activation model,
+plugin-owned config, transcript persistence, and safe rollout pattern.
 
 ---
 

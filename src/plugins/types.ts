@@ -10,9 +10,10 @@ import type {
   OAuthCredential,
   AuthProfileStore,
 } from "../agents/auth-profiles/types.js";
+import type { AgentHarness } from "../agents/harness/types.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { FailoverReason } from "../agents/pi-embedded-helpers/types.js";
-import type { ProviderRequestTransportOverrides } from "../agents/provider-request-config.js";
+import type { ModelProviderRequestTransportOverrides } from "../agents/provider-request-config.js";
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { PromptMode } from "../agents/system-prompt.js";
 import type { ToolFsPolicy } from "../agents/tool-fs-policy.js";
@@ -22,13 +23,13 @@ import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
 import type {
   CliBackendConfig,
   ModelProviderAuthMode,
   ModelProviderConfig,
 } from "../config/types.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
 import type { OperatorScope } from "../gateway/method-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
@@ -85,6 +86,7 @@ import type { PluginRuntime } from "./runtime/types.js";
 
 export type { PluginRuntime } from "./runtime/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
+export type { AgentHarness } from "../agents/harness/types.js";
 
 export type ProviderAuthOptionBag = {
   token?: string;
@@ -479,7 +481,7 @@ export type ProviderPrepareRuntimeAuthContext = {
 export type ProviderPreparedRuntimeAuth = {
   apiKey: string;
   baseUrl?: string;
-  request?: ProviderRequestTransportOverrides;
+  request?: ModelProviderRequestTransportOverrides;
   expiresAt?: number;
 };
 
@@ -1960,6 +1962,7 @@ export type PluginInteractiveHandlerRegistration = PluginInteractiveRegistration
 
 export type OpenClawPluginHttpRouteAuth = "gateway" | "plugin";
 export type OpenClawPluginHttpRouteMatch = "exact" | "prefix";
+export type OpenClawPluginGatewayRuntimeScopeSurface = "write-default" | "trusted-operator";
 
 export type OpenClawPluginHttpRouteHandler = (
   req: IncomingMessage,
@@ -1971,6 +1974,7 @@ export type OpenClawPluginHttpRouteParams = {
   handler: OpenClawPluginHttpRouteHandler;
   auth: OpenClawPluginHttpRouteAuth;
   match?: OpenClawPluginHttpRouteMatch;
+  gatewayRuntimeScopeSurface?: OpenClawPluginGatewayRuntimeScopeSurface;
   replaceExisting?: boolean;
 };
 
@@ -2236,6 +2240,8 @@ export type OpenClawPluginApi = {
   registerCompactionProvider: (
     provider: import("./compaction-provider.js").CompactionProvider,
   ) => void;
+  /** Register an agent harness implementation. */
+  registerAgentHarness: (harness: AgentHarness) => void;
   /** Register the active memory capability for this memory plugin (exclusive slot). */
   registerMemoryCapability: (
     capability: import("./memory-state.js").MemoryPluginCapability,

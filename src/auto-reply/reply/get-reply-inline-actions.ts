@@ -239,6 +239,7 @@ export async function handleInlineActions(params: {
         workspaceDir,
         config: cfg,
         allowGatewaySubagentBinding: true,
+        senderIsOwner: command.senderIsOwner,
       });
       const authorizedTools = applyOwnerOnlyToolPolicy(tools, command.senderIsOwner);
 

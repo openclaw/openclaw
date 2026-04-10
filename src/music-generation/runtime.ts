@@ -146,7 +146,7 @@ export async function generateMusic(
     }
   }
 
-  throwCapabilityGenerationFailure({
+  return throwCapabilityGenerationFailure({
     capabilityLabel: "music generation",
     attempts,
     lastError,

@@ -142,6 +142,38 @@ function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string }
   return { mimeType: match[1], content: match[2] };
 }
 
+function buildApiAttachments(attachments?: ChatAttachment[]) {
+  const hasAttachments = attachments && attachments.length > 0;
+  return hasAttachments
+    ? attachments
+        .map((att) => {
+          const parsed = dataUrlToBase64(att.dataUrl);
+          if (!parsed) {
+            return null;
+          }
+          return {
+            type: "image",
+            mimeType: parsed.mimeType,
+            content: parsed.content,
+          };
+        })
+        .filter((a): a is NonNullable<typeof a> => a !== null)
+    : undefined;
+}
+
+async function requestChatSend(
+  state: ChatState,
+  params: { message: string; attachments?: ChatAttachment[]; runId: string },
+) {
+  await state.client!.request("chat.send", {
+    sessionKey: state.sessionKey,
+    message: params.message,
+    deliver: false,
+    idempotencyKey: params.runId,
+    attachments: buildApiAttachments(params.attachments),
+  });
+}
+
 type AssistantMessageNormalizationOptions = {
   roleRequirement: "required" | "optional";
   roleCaseSensitive?: boolean;
@@ -238,31 +270,8 @@ export async function sendChatMessage(
   state.chatStream = "";
   state.chatStreamStartedAt = now;
 
-  // Convert attachments to API format
-  const apiAttachments = hasAttachments
-    ? attachments
-        .map((att) => {
-          const parsed = dataUrlToBase64(att.dataUrl);
-          if (!parsed) {
-            return null;
-          }
-          return {
-            type: "image",
-            mimeType: parsed.mimeType,
-            content: parsed.content,
-          };
-        })
-        .filter((a): a is NonNullable<typeof a> => a !== null)
-    : undefined;
-
   try {
-    await state.client.request("chat.send", {
-      sessionKey: state.sessionKey,
-      message: msg,
-      deliver: false,
-      idempotencyKey: runId,
-      attachments: apiAttachments,
-    });
+    await requestChatSend(state, { message: msg, attachments, runId });
     return runId;
   } catch (err) {
     const error = formatConnectError(err);
@@ -281,6 +290,30 @@ export async function sendChatMessage(
     return null;
   } finally {
     state.chatSending = false;
+  }
+}
+
+export async function sendDetachedChatMessage(
+  state: ChatState,
+  message: string,
+  attachments?: ChatAttachment[],
+): Promise<string | null> {
+  if (!state.client || !state.connected) {
+    return null;
+  }
+  const msg = message.trim();
+  const hasAttachments = attachments && attachments.length > 0;
+  if (!msg && !hasAttachments) {
+    return null;
+  }
+  state.lastError = null;
+  const runId = generateUUID();
+  try {
+    await requestChatSend(state, { message: msg, attachments, runId });
+    return runId;
+  } catch (err) {
+    state.lastError = formatConnectError(err);
+    return null;
   }
 }
 

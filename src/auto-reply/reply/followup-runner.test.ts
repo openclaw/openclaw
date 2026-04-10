@@ -1103,6 +1103,63 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     persistSpy.mockRestore();
   });
 
+  it("uses providerUsed for snapshot freshness when agent metadata overrides the run provider", async () => {
+    const storePath = "/tmp/openclaw-followup-usage-provider.json";
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const persistSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {
+        agentMeta: {
+          usage: { input: 10, output: 5 },
+          lastCallUsage: { input: 6, output: 3 },
+          model: "claude-opus-4-6",
+          provider: "anthropic",
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: createAsyncReplySpy() },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-6",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+    });
+
+    await expect(
+      runner(
+        createQueuedRun({
+          run: {
+            provider: "openai",
+            config: {
+              agents: {
+                defaults: {
+                  cliBackends: {
+                    anthropic: { command: "anthropic" },
+                  },
+                },
+              },
+            } as OpenClawConfig,
+          },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(persistSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerUsed: "anthropic",
+        usageIsContextSnapshot: true,
+      }),
+    );
+    persistSpy.mockRestore();
+  });
+
   it("does not fall back to dispatcher when cross-channel origin routing fails", async () => {
     routeReplyMock.mockResolvedValueOnce({
       ok: false,

@@ -7,7 +7,7 @@ import {
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import type { MentionTarget } from "./mention.js";
+import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent, buildMentionedMessage } from "./mention.js";
 import { parsePostContent } from "./post.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";

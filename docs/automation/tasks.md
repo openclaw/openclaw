@@ -180,7 +180,7 @@ The lookup token accepts a task ID, run ID, or session key. Shows the full recor
 openclaw tasks cancel <lookup>
 ```
 
-For ACP and subagent tasks, this kills the child session. Status transitions to `cancelled` and a delivery notification is sent.
+For ACP and subagent tasks, this kills the child session. For CLI-tracked tasks, cancellation is recorded in the task registry (there is no separate child runtime handle). Status transitions to `cancelled` and a delivery notification is sent when applicable.
 
 ### `tasks notify`
 

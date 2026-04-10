@@ -38,6 +38,11 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "exec-policy",
+    description: "Show or synchronize requested exec policy with host approvals",
+    hasSubcommands: true,
+  },
+  {
     name: "nodes",
     description: "Manage gateway-owned node pairing and node commands",
     hasSubcommands: true,

@@ -207,7 +207,7 @@ function extractFirstTextBlock(payload: unknown): string | undefined {
 }
 
 function createScopedCliClient(
-  scopes: string[],
+  scopes?: string[],
   client: Partial<{
     id: string;
     mode: string;
@@ -1411,6 +1411,25 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       "operator.write",
       "operator.pairing",
     ]);
+    expect(mockState.lastDispatchCtx?.CommandBody).toBe("/scopecheck");
+  });
+
+  it("normalizes missing gateway caller scopes to an empty array before dispatch", async () => {
+    createTranscriptFixture("openclaw-chat-send-missing-gateway-client-scopes-");
+    mockState.finalText = "ok";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-gateway-client-scopes-missing",
+      message: "/scopecheck",
+      client: createScopedCliClient(),
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx?.GatewayClientScopes).toEqual([]);
     expect(mockState.lastDispatchCtx?.CommandBody).toBe("/scopecheck");
   });
 
