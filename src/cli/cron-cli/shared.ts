@@ -14,14 +14,13 @@ import { colorize, isRich, theme } from "../../terminal/theme.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
 
-
 /**
  * Regex matching common shell command invocations in arbitrary text.
  * Used to warn users that systemEvent payloads on the main session do not
  * execute shell commands.
  */
 const SHELL_COMMAND_PATTERN =
-  /(?:^|\s)(?:python3?|bash|sh|node|bun|deno|uv run|npx|tsx|ts-node|ruby|perl|php|make|cargo|go run|java|dotnet|\.\/\S)(?:\s|$)/m;
+  /(?:^|\s)(?:python3?|bash|sh|node|bun|deno|uv run|npx|tsx|ts-node|ruby|perl|php|make|cargo|go run|java|dotnet|\.\/\S+)(?:\s|$)/m;
 
 export function looksLikeShellCommand(text: string): boolean {
   return SHELL_COMMAND_PATTERN.test(text);
