@@ -1,0 +1,27 @@
+{
+  "name": "@openclaw/amazon-services",
+  "version": "2026.4.1-beta.1",
+  "private": true,
+  "description": "OpenClaw Amazon AWS services plugin (Polly TTS, and more)",
+  "type": "module",
+  "dependencies": {
+    "@aws-sdk/client-polly": "3.1022.0",
+    "@aws-sdk/client-transcribe-streaming": "3.1022.0",
+    "@aws-sdk/client-bedrock-runtime": "3.1022.0"
+  },
+  "openclaw": {
+    "bundle": {
+      "stageRuntimeDependencies": true
+    },
+    "extensions": [
+      "./index.ts"
+    ],
+    "releaseChecks": {
+      "rootDependencyMirrorAllowlist": [
+        "@aws-sdk/client-polly",
+        "@aws-sdk/client-transcribe-streaming",
+        "@aws-sdk/client-bedrock-runtime"
+      ]
+    }
+  }
+}
