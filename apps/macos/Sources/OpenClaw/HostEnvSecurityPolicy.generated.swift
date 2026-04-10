@@ -60,7 +60,6 @@ enum HostEnvSecurityPolicy {
         "CXX",
         "DATABASE_URL",
         "DENO_DIR",
-        "DOCKER_CONTEXT",
         "DOTNET_ADDITIONAL_DEPS",
         "DOTNET_STARTUP_HOOKS",
         "EDITOR",

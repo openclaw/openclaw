@@ -274,6 +274,7 @@ describe("isDangerousHostInheritedEnvVarName", () => {
     expect(isDangerousHostInheritedEnvVarName("AWS_CONFIG_FILE")).toBe(false);
     expect(isDangerousHostInheritedEnvVarName("AZURE_AUTH_LOCATION")).toBe(false);
     expect(isDangerousHostInheritedEnvVarName("SSH_AUTH_SOCK")).toBe(false);
+    expect(isDangerousHostInheritedEnvVarName("DOCKER_CONTEXT")).toBe(false);
     expect(isDangerousHostInheritedEnvVarName("GIT_CONFIG_GLOBAL")).toBe(false);
     expect(isDangerousHostInheritedEnvVarName("NPM_CONFIG_USERCONFIG")).toBe(false);
     expect(isDangerousHostInheritedEnvVarName("CARGO_REGISTRIES_CRATES_IO_INDEX")).toBe(false);
@@ -324,6 +325,7 @@ describe("sanitizeHostExecEnv", () => {
         HTTPS_PROXY: "http://proxy.example.test:8443",
         SSL_CERT_FILE: "/tmp/evil-cert.pem",
         SSL_CERT_DIR: "/tmp/evil-cert-dir",
+        DOCKER_CONTEXT: "trusted-remote",
         DOCKER_HOST: "tcp://docker.example.test:2376",
         LD_PRELOAD: "/tmp/pwn.so",
         OK: "1",
@@ -344,6 +346,7 @@ describe("sanitizeHostExecEnv", () => {
       HTTPS_PROXY: "http://proxy.example.test:8443",
       SSL_CERT_FILE: "/tmp/evil-cert.pem",
       SSL_CERT_DIR: "/tmp/evil-cert-dir",
+      DOCKER_CONTEXT: "trusted-remote",
       DOCKER_HOST: "tcp://docker.example.test:2376",
       OK: "1",
     });
@@ -544,6 +547,7 @@ describe("sanitizeHostExecEnv", () => {
         AWS_CONFIG_FILE: "/tmp/trusted-aws-config",
         AZURE_AUTH_LOCATION: "/tmp/trusted-azure-auth.json",
         SSH_AUTH_SOCK: "/tmp/trusted-ssh-agent.sock",
+        DOCKER_CONTEXT: "trusted-remote",
         VIMINIT: ":!touch /tmp/pwned",
         EXINIT: "silent !touch /tmp/pwned",
         LUA_INIT_5_4: "os.execute('touch /tmp/pwned')",
@@ -574,6 +578,7 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.AWS_CONFIG_FILE).toBe("/tmp/trusted-aws-config");
     expect(env.AZURE_AUTH_LOCATION).toBe("/tmp/trusted-azure-auth.json");
     expect(env.SSH_AUTH_SOCK).toBe("/tmp/trusted-ssh-agent.sock");
+    expect(env.DOCKER_CONTEXT).toBe("trusted-remote");
     expect(env.AWS_CONTAINER_CREDENTIALS_FULL_URI).toBeUndefined();
     expect(env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI).toBeUndefined();
     expect(env.CONFIG_SITE).toBeUndefined();

@@ -26,6 +26,7 @@ const INHERITED_ALLOWLIST_RATIONALE: Record<string, string> = {
   AZURE_AUTH_LOCATION: "Trusted inherited Azure auth location selected by operator.",
   CURL_CA_BUNDLE: "Trusted inherited CA bundle path for TLS validation.",
   DOCKER_CERT_PATH: "Trusted inherited Docker client certificate location.",
+  DOCKER_CONTEXT: "Trusted inherited Docker context selector from operator runtime.",
   DOCKER_HOST: "Trusted inherited Docker endpoint selected by operator.",
   DOCKER_TLS_VERIFY: "Trusted inherited Docker TLS verification mode.",
   GIT_PAGER: "Trusted inherited interactive pager preference.",
