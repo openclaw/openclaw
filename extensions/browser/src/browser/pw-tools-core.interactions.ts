@@ -124,20 +124,10 @@ function isMainFrameNavigation(page: NavigationObservablePage, frame: Frame): bo
 }
 
 async function assertSubframeNavigationAllowed(
-  frame: Frame,
+  frameUrl: string,
   ssrfPolicy?: SsrFPolicy,
 ): Promise<void> {
-  if (!ssrfPolicy) {
-    return;
-  }
-
-  let frameUrl: string;
-  try {
-    frameUrl = frame.url();
-  } catch {
-    return;
-  }
-  if (!frameUrl.startsWith("http://") && !frameUrl.startsWith("https://")) {
+  if (!ssrfPolicy || (!frameUrl.startsWith("http://") && !frameUrl.startsWith("https://"))) {
     // Non-network frame URLs like about:blank and about:srcdoc do not cross the
     // browser SSRF boundary, so they should not trigger the navigation policy.
     return;
@@ -151,8 +141,17 @@ async function assertSubframeNavigationAllowed(
 
 type ObservedDelayedNavigations = {
   mainFrameNavigated: boolean;
-  subframes: Frame[];
+  subframes: string[];
 };
+
+function snapshotNetworkFrameUrl(frame: Frame): string | null {
+  try {
+    const frameUrl = frame.url();
+    return frameUrl.startsWith("http://") || frameUrl.startsWith("https://") ? frameUrl : null;
+  } catch {
+    return null;
+  }
+}
 
 async function assertObservedDelayedNavigations(opts: {
   cdpUrl: string;
@@ -161,19 +160,26 @@ async function assertObservedDelayedNavigations(opts: {
   targetId?: string;
   observed: ObservedDelayedNavigations;
 }): Promise<void> {
-  for (const frame of opts.observed.subframes) {
-    await assertSubframeNavigationAllowed(frame, opts.ssrfPolicy);
+  let subframeError: unknown;
+  try {
+    for (const frameUrl of opts.observed.subframes) {
+      await assertSubframeNavigationAllowed(frameUrl, opts.ssrfPolicy);
+    }
+  } catch (err) {
+    subframeError = err;
   }
-  if (!opts.observed.mainFrameNavigated) {
-    return;
+  if (opts.observed.mainFrameNavigated) {
+    await assertPageNavigationCompletedSafely({
+      cdpUrl: opts.cdpUrl,
+      page: opts.page,
+      response: null,
+      ssrfPolicy: opts.ssrfPolicy,
+      targetId: opts.targetId,
+    });
   }
-  await assertPageNavigationCompletedSafely({
-    cdpUrl: opts.cdpUrl,
-    page: opts.page,
-    response: null,
-    ssrfPolicy: opts.ssrfPolicy,
-    targetId: opts.targetId,
-  });
+  if (subframeError) {
+    throw subframeError;
+  }
 }
 
 function observeDelayedInteractionNavigation(
@@ -188,10 +194,13 @@ function observeDelayedInteractionNavigation(
   }
 
   return new Promise<ObservedDelayedNavigations>((resolve) => {
-    const subframes: Frame[] = [];
+    const subframes: string[] = [];
     const onFrameNavigated = (frame: Frame) => {
       if (!isMainFrameNavigation(page, frame)) {
-        subframes.push(frame);
+        const frameUrl = snapshotNetworkFrameUrl(frame);
+        if (frameUrl) {
+          subframes.push(frameUrl);
+        }
         return;
       }
       // Use isHashOnlyNavigation rather than !didCrossDocumentUrlChange: the
@@ -258,10 +267,13 @@ function scheduleDelayedInteractionNavigationGuard(opts: {
       }
       resolve();
     };
-    const subframes: Frame[] = [];
+    const subframes: string[] = [];
     const onFrameNavigated = (frame: Frame) => {
       if (!isMainFrameNavigation(page, frame)) {
-        subframes.push(frame);
+        const frameUrl = snapshotNetworkFrameUrl(frame);
+        if (frameUrl) {
+          subframes.push(frameUrl);
+        }
         return;
       }
       // Use isHashOnlyNavigation rather than !didCrossDocumentUrlChange: the
@@ -322,10 +334,13 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
   // slow interactions, silently bypassing the SSRF guard.
   const navPage = opts.page as unknown as NavigationObservablePage;
   let navigatedDuringAction = false;
-  const subframeNavigationsDuringAction: Frame[] = [];
+  const subframeNavigationsDuringAction: string[] = [];
   const onFrameNavigated = (frame: Frame) => {
     if (!isMainFrameNavigation(navPage, frame)) {
-      subframeNavigationsDuringAction.push(frame);
+      const frameUrl = snapshotNetworkFrameUrl(frame);
+      if (frameUrl) {
+        subframeNavigationsDuringAction.push(frameUrl);
+      }
       return;
     }
     // Use isHashOnlyNavigation rather than didCrossDocumentUrlChange: the event
@@ -354,8 +369,13 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
   const navigationObserved =
     navigatedDuringAction || didCrossDocumentUrlChange(opts.page, opts.previousUrl);
 
-  for (const frame of subframeNavigationsDuringAction) {
-    await assertSubframeNavigationAllowed(frame, opts.ssrfPolicy);
+  let subframeError: unknown;
+  try {
+    for (const frameUrl of subframeNavigationsDuringAction) {
+      await assertSubframeNavigationAllowed(frameUrl, opts.ssrfPolicy);
+    }
+  } catch (err) {
+    subframeError = err;
   }
 
   if (navigationObserved) {
@@ -391,6 +411,10 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
       ssrfPolicy: opts.ssrfPolicy,
       targetId: opts.targetId,
     });
+  }
+
+  if (subframeError) {
+    throw subframeError;
   }
 
   if (actionError) {
