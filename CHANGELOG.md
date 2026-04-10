@@ -44,6 +44,7 @@ Docs: https://docs.openclaw.ai
 - Security/nodes: keep `nodes` tool output paths inside the workspace boundary so model-driven node writes cannot escape the intended workspace. (#63551) Thanks @pgondhi987.
 - Security/QQBot: enforce media storage boundaries for all outbound local file paths and route image-size probes through SSRF-guarded media fetching instead of raw `fetch()`. (#63271, #63495) Thanks @pgondhi987.
 - Channel setup: ignore workspace plugin shadows when resolving trusted channel setup catalog entries so onboarding and setup flows keep using the bundled, trusted setup contract.
+- Gateway/memory startup: load the explicitly selected memory-slot plugin during gateway startup, while keeping restrictive allowlists and implicit default memory slots from auto-starting unrelated memory plugins. (#64423) Thanks @EronFan.
 - Config/plugins: let config writes keep disabled plugin entries without forcing required plugin config schemas or crashing raw plugin validation, and avoid re-activating plugin registry state during schema checks. (#54971, #63296) Thanks @fuller-stack-dev.
 - Config validation: surface the actual offending field for strict-schema union failures in bindings, including top-level unexpected keys on the matching ACP branch. (#40841) Thanks @Hollychou924.
 - Wizard/plugin config: coerce integer-typed plugin config fields from interactive text input so integer schema values persist as numbers instead of failing validation. (#63346) Thanks @jalehman.
