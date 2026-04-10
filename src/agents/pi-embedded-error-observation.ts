@@ -3,7 +3,11 @@ import { redactIdentifier } from "../logging/redact-identifier.js";
 import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
-import { getApiErrorPayloadFingerprint, parseApiErrorInfo } from "./pi-embedded-helpers.js";
+import {
+  classifyProviderRuntimeFailureKind,
+  getApiErrorPayloadFingerprint,
+  parseApiErrorInfo,
+} from "./pi-embedded-helpers.js";
 import { stableStringify } from "./stable-stringify.js";
 
 export { sanitizeForConsole } from "./console-sanitize.js";
@@ -105,6 +109,7 @@ export function buildApiErrorObservationFields(rawError?: string): {
   rawErrorHash?: string;
   rawErrorFingerprint?: string;
   httpCode?: string;
+  providerRuntimeFailureKind?: string;
   providerErrorType?: string;
   providerErrorMessagePreview?: string;
   requestIdHash?: string;
@@ -138,6 +143,10 @@ export function buildApiErrorObservationFields(rawError?: string): {
         ? redactIdentifier(rawFingerprint, { len: 12 })
         : undefined,
       httpCode: parsed?.httpCode,
+      providerRuntimeFailureKind: classifyProviderRuntimeFailureKind({
+        status: parsed?.httpCode ? Number(parsed.httpCode) : undefined,
+        message: trimmed,
+      }),
       providerErrorType: parsed?.type,
       providerErrorMessagePreview: truncateForObservation(
         redactedProviderMessage,
@@ -155,6 +164,7 @@ export function buildTextObservationFields(text?: string): {
   textHash?: string;
   textFingerprint?: string;
   httpCode?: string;
+  providerRuntimeFailureKind?: string;
   providerErrorType?: string;
   providerErrorMessagePreview?: string;
   requestIdHash?: string;
@@ -165,6 +175,7 @@ export function buildTextObservationFields(text?: string): {
     textHash: observed.rawErrorHash,
     textFingerprint: observed.rawErrorFingerprint,
     httpCode: observed.httpCode,
+    providerRuntimeFailureKind: observed.providerRuntimeFailureKind,
     providerErrorType: observed.providerErrorType,
     providerErrorMessagePreview: observed.providerErrorMessagePreview,
     requestIdHash: observed.requestIdHash,
