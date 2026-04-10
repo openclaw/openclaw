@@ -392,6 +392,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     isRateLimitAssistantError: mockedIsRateLimitAssistantError,
     isTimeoutErrorMessage: mockedIsTimeoutErrorMessage,
     pickFallbackThinkingLevel: mockedPickFallbackThinkingLevel,
+    sanitizeUserFacingText: (text?: string) => text ?? "",
   }));
 
   vi.doMock("./run/attempt.js", () => ({

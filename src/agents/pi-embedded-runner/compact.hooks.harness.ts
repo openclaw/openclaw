@@ -512,6 +512,7 @@ export async function loadCompactHooksHarness(): Promise<{
     ),
     validateAnthropicTurns: vi.fn((m: unknown[]) => m),
     validateGeminiTurns: vi.fn((m: unknown[]) => m),
+    sanitizeUserFacingText: (text?: string) => text ?? "",
   }));
 
   vi.doMock("../pi-project-settings.js", () => ({
