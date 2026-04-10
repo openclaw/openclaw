@@ -69,7 +69,7 @@ export async function resolveCommandsSystemPromptBundle(
     try {
       return createOpenClawCodingTools({
         config: params.cfg,
-        agentId: params.agentId,
+        agentId: sessionAgentId,
         workspaceDir,
         sessionKey: params.sessionKey,
         allowGatewaySubagentBinding: true,
