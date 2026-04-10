@@ -619,7 +619,7 @@ function rebalanceInlineFormatting(chunks: string[]): string[] {
     // Scan for unmatched markers in this chunk
     const state = scanUnmatchedInlineMarkers(chunk);
     if (state.openMarkers.length > 0) {
-      const close = [...state.openMarkers].reverse().join("");
+      const close = state.openMarkers.toReversed().join("");
       const reopen = state.openMarkers.join("");
       adjusted[i] = `${chunk}${close}`;
       pendingReopen = reopen;
