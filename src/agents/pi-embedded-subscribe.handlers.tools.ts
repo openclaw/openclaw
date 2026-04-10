@@ -763,6 +763,7 @@ export async function handleToolExecutionEnd(
   const startData = toolStartData.get(toolStartKey);
   toolStartData.delete(toolStartKey);
   const callSummary = ctx.state.toolMetaById.get(toolCallId);
+  const completedMutatingAction = !isToolError && Boolean(callSummary?.mutatingAction);
   const meta = callSummary?.meta;
   ctx.state.toolMetas.push({ toolName, meta });
   ctx.state.toolMetaById.delete(toolCallId);
@@ -792,7 +793,8 @@ export async function handleToolExecutionEnd(
     } else {
       ctx.state.lastToolError = undefined;
     }
-  } else if (callSummary?.mutatingAction) {
+  }
+  if (completedMutatingAction) {
     ctx.state.replayInvalid = true;
   }
 
