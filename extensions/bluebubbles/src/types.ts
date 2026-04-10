@@ -1,5 +1,6 @@
 import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/setup";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 
 export type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 export type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/setup";
@@ -29,6 +30,16 @@ export type BlueBubblesNetworkConfig = {
   /** Dangerous opt-in for same-host or trusted private/internal BlueBubbles deployments. */
   dangerouslyAllowPrivateNetwork?: boolean;
 };
+
+export const BLUEBUBBLES_SEND_METHODS = ["apple-script", "private-api"] as const;
+export type BlueBubblesSendMethod = (typeof BLUEBUBBLES_SEND_METHODS)[number];
+
+export function normalizeBlueBubblesSendMethod(
+  raw?: string | null,
+): BlueBubblesSendMethod | undefined {
+  const normalized = normalizeOptionalLowercaseString(raw);
+  return normalized === "apple-script" || normalized === "private-api" ? normalized : undefined;
+}
 
 export type BlueBubblesAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
@@ -74,6 +85,8 @@ export type BlueBubblesAccountConfig = {
    * Local paths are rejected unless they resolve under one of these roots.
    */
   mediaLocalRoots?: string[];
+  /** Force the BlueBubbles HTTP API send method for outbound delivery. */
+  sendMethod?: BlueBubblesSendMethod;
   /** Send read receipts for incoming messages (default: true). */
   sendReadReceipts?: boolean;
   /** Network policy overrides for same-host or trusted private/internal BlueBubbles deployments. */

@@ -1437,6 +1437,7 @@ export const BlueBubblesAccountSchemaBase = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     mediaMaxMb: z.number().int().positive().optional(),
     mediaLocalRoots: z.array(z.string()).optional(),
+    sendMethod: z.enum(["apple-script", "private-api"]).optional(),
     sendReadReceipts: z.boolean().optional(),
     network: z
       .object({
