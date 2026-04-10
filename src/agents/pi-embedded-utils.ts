@@ -17,9 +17,8 @@ export function isAssistantMessage(msg: AgentMessage | undefined): msg is Assist
  * - </minimax:tool_call> closing tags
  */
 export function stripMinimaxToolCallXml(text: string): string {
-  if (!text) {
-    return "";
-  }
+  if (text == null) return text as string;
+  if (!text) return "";
   if (!/minimax:tool_call/i.test(text)) {
     return text;
   }
@@ -49,9 +48,8 @@ export function stripMinimaxToolCallXml(text: string): string {
 const MODEL_SPECIAL_TOKEN_RE = /<[|｜][^|｜]*[|｜]>/g;
 
 export function stripModelSpecialTokens(text: string): string {
-  if (!text) {
-    return "";
-  }
+  if (text == null) return text as string;
+  if (!text) return "";
   if (!MODEL_SPECIAL_TOKEN_RE.test(text)) {
     return text;
   }
@@ -66,9 +64,8 @@ export function stripModelSpecialTokens(text: string): string {
  * not be shown to users.
  */
 export function stripDowngradedToolCallText(text: string): string {
-  if (!text) {
-    return "";
-  }
+  if (text == null) return text as string;
+  if (!text) return "";
   if (!/\[Tool (?:Call|Result)/i.test(text) && !/\[Historical context/i.test(text)) {
     return text;
   }
@@ -239,18 +236,12 @@ export function extractAssistantText(msg: AssistantMessage | undefined): string 
   }
   const extracted =
     extractTextFromChatContent(msg.content, {
-      sanitizeText: (text) => {
-        if (!text) {
-          return "";
-        }
-        return (
-          stripThinkingTagsFromText(
-            stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),
-          ) ?? ""
-        ).trim();
-      },
+      sanitizeText: (text) =>
+        stripThinkingTagsFromText(
+          stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),
+        ).trim(),
       joinWith: "\n",
-      normalizeText: (text) => (text ?? "").trim(),
+      normalizeText: (text) => text.trim(),
     }) ?? "";
   // Only apply keyword-based error rewrites when the assistant message is actually an error.
   // Otherwise normal prose that *mentions* errors (e.g. "context overflow") can get clobbered.

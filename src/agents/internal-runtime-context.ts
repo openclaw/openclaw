@@ -155,9 +155,8 @@ function stripLegacyInternalRuntimeContext(text: string): string {
 }
 
 export function stripInternalRuntimeContext(text: string): string {
-  if (!text) {
-    return "";
-  }
+  if (text == null) return text as string;
+  if (!text) return "";
   const withoutDelimitedBlocks = stripDelimitedBlock(
     text,
     INTERNAL_RUNTIME_CONTEXT_BEGIN,

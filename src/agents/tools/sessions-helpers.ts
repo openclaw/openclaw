@@ -177,9 +177,8 @@ export function stripToolMessages(messages: unknown[]): unknown[] {
  * This ensures user-facing text doesn't leak internal tool representations.
  */
 export function sanitizeTextContent(text: string): string {
-  if (!text) {
-    return "";
-  }
+  if (text == null) return text as string;
+  if (!text) return "";
   return stripThinkingTagsFromText(
     stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),
   );

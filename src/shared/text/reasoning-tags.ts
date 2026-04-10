@@ -24,9 +24,9 @@ export function stripReasoningTagsFromText(
     trim?: ReasoningTagTrim;
   },
 ): string {
-  if (!text) {
-    return "";
-  }
+  if (text == null) return text as string;
+  if (!text) return "";
+
   if (!QUICK_TAG_RE.test(text)) {
     return text;
   }
