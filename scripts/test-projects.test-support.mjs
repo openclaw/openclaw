@@ -87,6 +87,8 @@ const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
 const UTILS_VITEST_CONFIG = "test/vitest/vitest.utils.config.ts";
 const WIZARD_VITEST_CONFIG = "test/vitest/vitest.wizard.config.ts";
 const INCLUDE_FILE_ENV_KEY = "OPENCLAW_VITEST_INCLUDE_FILE";
+const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
+const DEFAULT_LOCAL_FULL_SUITE_PARALLELISM = 4;
 const CHANGED_ARGS_PATTERN = /^--changed(?:=(.+))?$/u;
 const VITEST_CONFIG_BY_KIND = {
   acp: ACP_VITEST_CONFIG,
@@ -688,7 +690,42 @@ export function resolveParallelFullSuiteConcurrency(specCount, env = process.env
   ) {
     return 1;
   }
-  return Math.min(10, specCount);
+  return Math.min(DEFAULT_LOCAL_FULL_SUITE_PARALLELISM, specCount);
+}
+
+function sanitizeVitestCachePathSegment(value) {
+  return (
+    value
+      .replace(/[^a-zA-Z0-9._-]+/gu, "-")
+      .replace(/^-+|-+$/gu, "")
+      .slice(0, 180) || "default"
+  );
+}
+
+export function applyParallelVitestCachePaths(specs, params = {}) {
+  const baseEnv = params.env ?? process.env;
+  if (baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim()) {
+    return specs;
+  }
+  const cwd = params.cwd ?? process.cwd();
+  return specs.map((spec, index) => {
+    if (spec.env?.[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim()) {
+      return spec;
+    }
+    const cacheSegment = sanitizeVitestCachePathSegment(`${index}-${spec.config}`);
+    return {
+      ...spec,
+      env: {
+        ...spec.env,
+        [FS_MODULE_CACHE_PATH_ENV_KEY]: path.join(
+          cwd,
+          "node_modules",
+          ".experimental-vitest-cache",
+          cacheSegment,
+        ),
+      },
+    };
+  });
 }
 
 export function createVitestRunSpecs(args, params = {}) {

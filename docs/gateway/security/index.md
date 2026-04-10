@@ -1149,13 +1149,13 @@ access those accounts and data. Treat browser profiles as **sensitive state**:
 - Disable browser proxy routing when you don’t need it (`gateway.nodes.browser.mode="off"`).
 - Chrome MCP existing-session mode is **not** “safer”; it can act as you in whatever that host Chrome profile can reach.
 
-### Browser SSRF policy (trusted-network default)
+### Browser SSRF policy (strict by default)
 
-OpenClaw’s browser network policy defaults to the trusted-operator model: private/internal destinations are allowed unless you explicitly disable them.
+OpenClaw’s browser navigation policy is strict by default: private/internal destinations stay blocked unless you explicitly opt in.
 
-- Default: `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork: true` (implicit when unset).
+- Default: `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` is unset, so browser navigation keeps private/internal/special-use destinations blocked.
 - Legacy alias: `browser.ssrfPolicy.allowPrivateNetwork` is still accepted for compatibility.
-- Strict mode: set `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork: false` to block private/internal/special-use destinations by default.
+- Opt-in mode: set `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork: true` to allow private/internal/special-use destinations.
 - In strict mode, use `hostnameAllowlist` (patterns like `*.example.com`) and `allowedHostnames` (exact host exceptions, including blocked names like `localhost`) for explicit exceptions.
 - Navigation is checked before request and best-effort re-checked on the final `http(s)` URL after navigation to reduce redirect-based pivots.
 

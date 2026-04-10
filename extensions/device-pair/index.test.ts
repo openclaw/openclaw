@@ -92,7 +92,7 @@ function registerPairCommand(params?: {
   pluginConfig?: Record<string, unknown>;
 }): OpenClawPluginCommandDefinition {
   let command: OpenClawPluginCommandDefinition | undefined;
-  registerDevicePair.register(
+  void registerDevicePair.register(
     createApi({
       ...params,
       registerCommand: (nextCommand) => {

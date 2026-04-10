@@ -15,11 +15,27 @@ import {
   type QaProviderModeInput,
 } from "./run-config.js";
 import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
+import { runTelegramQaLive } from "./telegram-live.runtime.js";
 
 type InterruptibleServer = {
   baseUrl: string;
   stop(): Promise<void>;
 };
+
+function resolveRepoRelativeOutputDir(repoRoot: string, outputDir?: string) {
+  if (!outputDir) {
+    return undefined;
+  }
+  if (path.isAbsolute(outputDir)) {
+    throw new Error("--output-dir must be a relative path inside the repo root.");
+  }
+  const resolved = path.resolve(repoRoot, outputDir);
+  const relative = path.relative(repoRoot, resolved);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error("--output-dir must stay within the repo root.");
+  }
+  return resolved;
+}
 
 function resolveQaManualLaneModels(opts: {
   providerMode: QaProviderMode;
@@ -241,7 +257,7 @@ export async function runQaSuiteCommand(opts: {
   if (runner === "multipass") {
     const result = await runQaMultipass({
       repoRoot,
-      outputDir: opts.outputDir ? path.resolve(repoRoot, opts.outputDir) : undefined,
+      outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
       providerMode,
       primaryModel: opts.primaryModel,
       alternateModel: opts.alternateModel,
@@ -264,7 +280,7 @@ export async function runQaSuiteCommand(opts: {
   }
   const result = await runQaSuiteFromRuntime({
     repoRoot,
-    outputDir: opts.outputDir ? path.resolve(repoRoot, opts.outputDir) : undefined,
+    outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
     providerMode,
     primaryModel: opts.primaryModel,
     alternateModel: opts.alternateModel,
@@ -278,6 +294,34 @@ export async function runQaSuiteCommand(opts: {
   process.stdout.write(`QA suite watch: ${result.watchUrl}\n`);
   process.stdout.write(`QA suite report: ${result.reportPath}\n`);
   process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
+}
+
+export async function runQaTelegramCommand(opts: {
+  repoRoot?: string;
+  outputDir?: string;
+  providerMode?: QaProviderModeInput;
+  primaryModel?: string;
+  alternateModel?: string;
+  fastMode?: boolean;
+  scenarioIds?: string[];
+  sutAccountId?: string;
+}) {
+  const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
+  const providerMode: QaProviderMode =
+    opts.providerMode === undefined ? "live-frontier" : normalizeQaProviderMode(opts.providerMode);
+  const result = await runTelegramQaLive({
+    repoRoot,
+    outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
+    providerMode,
+    primaryModel: opts.primaryModel,
+    alternateModel: opts.alternateModel,
+    fastMode: opts.fastMode,
+    scenarioIds: opts.scenarioIds,
+    sutAccountId: opts.sutAccountId,
+  });
+  process.stdout.write(`Telegram QA report: ${result.reportPath}\n`);
+  process.stdout.write(`Telegram QA summary: ${result.summaryPath}\n`);
+  process.stdout.write(`Telegram QA observed messages: ${result.observedMessagesPath}\n`);
 }
 
 export async function runQaCharacterEvalCommand(opts: {
@@ -299,7 +343,7 @@ export async function runQaCharacterEvalCommand(opts: {
   const judges = parseQaModelSpecs("--judge-model", opts.judgeModel);
   const result = await runQaCharacterEval({
     repoRoot,
-    outputDir: opts.outputDir ? path.resolve(repoRoot, opts.outputDir) : undefined,
+    outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
     models: candidates.models,
     scenarioId: opts.scenario,
     candidateFastMode: opts.fast,
@@ -391,7 +435,10 @@ export async function runQaDockerScaffoldCommand(opts: {
   bindUiDist?: boolean;
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
-  const outputDir = path.resolve(repoRoot, opts.outputDir);
+  const outputDir = resolveRepoRelativeOutputDir(repoRoot, opts.outputDir);
+  if (!outputDir) {
+    throw new Error("--output-dir is required.");
+  }
   const result = await writeQaDockerHarnessFiles({
     outputDir,
     repoRoot,
@@ -428,7 +475,7 @@ export async function runQaDockerUpCommand(opts: {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const result = await runQaDockerUp({
     repoRoot,
-    outputDir: opts.outputDir ? path.resolve(repoRoot, opts.outputDir) : undefined,
+    outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
     gatewayPort: Number.isFinite(opts.gatewayPort) ? opts.gatewayPort : undefined,
     qaLabPort: Number.isFinite(opts.qaLabPort) ? opts.qaLabPort : undefined,
     providerBaseUrl: opts.providerBaseUrl,
@@ -450,3 +497,7 @@ export async function runQaMockOpenAiCommand(opts: { host?: string; port?: numbe
   });
   await runInterruptibleServer("QA mock OpenAI", server);
 }
+
+export const __testing = {
+  resolveRepoRelativeOutputDir,
+};

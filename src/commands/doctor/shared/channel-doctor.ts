@@ -1,5 +1,8 @@
-import { listBundledChannelPlugins } from "../../../channels/plugins/bundled.js";
-import { listChannelPlugins } from "../../../channels/plugins/registry.js";
+import {
+  getBundledChannelPlugin,
+  listBundledChannelPlugins,
+} from "../../../channels/plugins/bundled.js";
+import { getChannelPlugin, listChannelPlugins } from "../../../channels/plugins/registry.js";
 import type {
   ChannelDoctorAdapter,
   ChannelDoctorConfigMutation,
@@ -45,10 +48,22 @@ function safeListBundledChannelPlugins() {
 function listChannelDoctorEntries(channelIds?: readonly string[]): ChannelDoctorEntry[] {
   const byId = new Map<string, ChannelDoctorEntry>();
   const selectedIds = channelIds ? new Set(channelIds) : null;
-  for (const plugin of [...safeListActiveChannelPlugins(), ...safeListBundledChannelPlugins()]) {
-    if (selectedIds && !selectedIds.has(plugin.id)) {
-      continue;
-    }
+  const plugins = selectedIds
+    ? [...selectedIds].flatMap((id) => {
+        let activeOrBundledPlugin;
+        try {
+          activeOrBundledPlugin = getChannelPlugin(id);
+        } catch {
+          activeOrBundledPlugin = undefined;
+        }
+        if (activeOrBundledPlugin?.doctor) {
+          return [activeOrBundledPlugin];
+        }
+        const bundledPlugin = getBundledChannelPlugin(id);
+        return bundledPlugin ? [bundledPlugin] : [];
+      })
+    : [...safeListActiveChannelPlugins(), ...safeListBundledChannelPlugins()];
+  for (const plugin of plugins) {
     if (!plugin.doctor) {
       continue;
     }

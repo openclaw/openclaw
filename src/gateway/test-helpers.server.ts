@@ -794,11 +794,11 @@ export async function readConnectChallengeNonce(
   }
   trackConnectChallengeNonce(ws);
   try {
-    const evt = await onceMessage<{
-      type?: string;
-      event?: string;
-      payload?: Record<string, unknown> | null;
-    }>(ws, (o) => o.type === "event" && o.event === "connect.challenge", timeoutMs);
+    const evt = await onceMessage(
+      ws,
+      (o) => o.type === "event" && o.event === "connect.challenge",
+      timeoutMs,
+    );
     const nonce = (evt.payload as { nonce?: unknown } | undefined)?.nonce;
     if (typeof nonce === "string" && nonce.trim().length > 0) {
       (ws as TrackedWs)[CONNECT_CHALLENGE_NONCE_KEY] = nonce.trim();

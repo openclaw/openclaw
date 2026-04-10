@@ -618,7 +618,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 type: "boolean",
                 title: "Browser Dangerously Allow Private Network",
                 description:
-                  "Allows access to private-network address ranges from browser tooling. Default is enabled for trusted-network operator setups; disable to enforce strict public-only resolution checks.",
+                  "Allows access to private-network address ranges from browser tooling. Default is disabled when unset; enable only for explicitly trusted private-network destinations.",
               },
               allowedHostnames: {
                 type: "array",
@@ -25435,7 +25435,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork": {
       label: "Browser Dangerously Allow Private Network",
-      help: "Allows access to private-network address ranges from browser tooling. Default is enabled for trusted-network operator setups; disable to enforce strict public-only resolution checks.",
+      help: "Allows access to private-network address ranges from browser tooling. Default is disabled when unset; enable only for explicitly trusted private-network destinations.",
       tags: ["security", "access", "advanced"],
     },
     "browser.ssrfPolicy.allowedHostnames": {
