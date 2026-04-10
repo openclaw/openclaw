@@ -29,6 +29,7 @@ export {
   dragViaPlaywright,
   emulateMediaViaPlaywright,
   evaluateViaPlaywright,
+  executeActViaPlaywright,
   fillFormViaPlaywright,
   getConsoleMessagesViaPlaywright,
   getNetworkRequestsViaPlaywright,

@@ -1,4 +1,7 @@
-import { loadBundledPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
+import {
+  loadBundledPluginPublicArtifactModuleSync,
+  resolveBundledPluginPublicArtifactPath,
+} from "./public-surface-loader.js";
 import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
@@ -25,7 +28,9 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
-function isWebSearchProviderPlugin(value: unknown): value is WebSearchProviderPlugin {
+function isWebProviderPlugin(
+  value: unknown,
+): value is WebSearchProviderPlugin | WebFetchProviderPlugin {
   return (
     isRecord(value) &&
     typeof value.id === "string" &&
@@ -41,20 +46,12 @@ function isWebSearchProviderPlugin(value: unknown): value is WebSearchProviderPl
   );
 }
 
+function isWebSearchProviderPlugin(value: unknown): value is WebSearchProviderPlugin {
+  return isWebProviderPlugin(value);
+}
+
 function isWebFetchProviderPlugin(value: unknown): value is WebFetchProviderPlugin {
-  return (
-    isRecord(value) &&
-    typeof value.id === "string" &&
-    typeof value.label === "string" &&
-    typeof value.hint === "string" &&
-    isStringArray(value.envVars) &&
-    typeof value.placeholder === "string" &&
-    typeof value.signupUrl === "string" &&
-    typeof value.credentialPath === "string" &&
-    typeof value.getCredentialValue === "function" &&
-    typeof value.setCredentialValue === "function" &&
-    typeof value.createTool === "function"
-  );
+  return isWebProviderPlugin(value);
 }
 
 function collectProviderFactories<TProvider>(params: {
@@ -185,4 +182,27 @@ export function resolveBundledExplicitWebFetchProvidersFromPublicArtifacts(param
     providers.push(...loadedProviders);
   }
   return providers;
+}
+
+function hasBundledPublicArtifactCandidate(params: {
+  dirName: string;
+  artifactCandidates: readonly string[];
+}): boolean {
+  return params.artifactCandidates.some((artifactBasename) =>
+    Boolean(resolveBundledPluginPublicArtifactPath({ dirName: params.dirName, artifactBasename })),
+  );
+}
+
+export function hasBundledWebSearchProviderPublicArtifact(pluginId: string): boolean {
+  return hasBundledPublicArtifactCandidate({
+    dirName: pluginId,
+    artifactCandidates: WEB_SEARCH_ARTIFACT_CANDIDATES,
+  });
+}
+
+export function hasBundledWebFetchProviderPublicArtifact(pluginId: string): boolean {
+  return hasBundledPublicArtifactCandidate({
+    dirName: pluginId,
+    artifactCandidates: WEB_FETCH_ARTIFACT_CANDIDATES,
+  });
 }

@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { ensureAuthProfileStore } from "./auth-profiles.js";
 import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import { normalizeProviders } from "./models-config.providers.normalize.js";
 import { resolveApiKeyFromProfiles } from "./models-config.providers.secrets.js";
@@ -183,13 +182,18 @@ describe("normalizeProviders", () => {
         "utf8",
       );
 
-      const store = ensureAuthProfileStore(agentDir, {
-        allowKeychainPrompt: false,
-      });
-
       const resolved = resolveApiKeyFromProfiles({
         provider: "minimax",
-        store,
+        store: {
+          version: 1,
+          profiles: {
+            "minimax:default": {
+              type: "api_key",
+              provider: "minimax",
+              keyRef: { source: "env", provider: "default", id: "MINIMAX_API_KEY" },
+            },
+          },
+        },
         env: process.env,
       });
 

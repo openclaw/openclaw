@@ -12,9 +12,6 @@ type PackageManifest = {
     install?: {
       minHostVersion?: string;
     };
-    releaseChecks?: {
-      rootDependencyMirrorAllowlist?: unknown;
-    };
   };
 };
 
@@ -63,12 +60,9 @@ export function describePackageManifestContract(params: PackageManifestContractP
           const rootSpec =
             rootManifest.dependencies?.[dependencyName] ??
             rootManifest.optionalDependencies?.[dependencyName];
-          const allowlist = pluginManifest.openclaw?.releaseChecks?.rootDependencyMirrorAllowlist;
 
           expect(pluginSpec).toBeTruthy();
           expect(rootSpec).toBe(pluginSpec);
-          expect(Array.isArray(allowlist)).toBe(true);
-          expect(allowlist).toContain(dependencyName);
         });
       }
     }

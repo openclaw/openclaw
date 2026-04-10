@@ -95,8 +95,8 @@ export const fullSuiteVitestShards = [
     ],
   },
   {
-    config: "vitest.full-extension-channel-roots.config.ts",
-    name: "extension-channel-roots",
+    config: "vitest.full-extensions.config.ts",
+    name: "extensions",
     projects: [
       "vitest.extension-acpx.config.ts",
       "vitest.extension-bluebubbles.config.ts",
@@ -109,50 +109,15 @@ export const fullSuiteVitestShards = [
       "vitest.extension-memory.config.ts",
       "vitest.extension-messaging.config.ts",
       "vitest.extension-msteams.config.ts",
+      "vitest.extension-providers.config.ts",
       "vitest.extension-telegram.config.ts",
       "vitest.extension-voice-call.config.ts",
       "vitest.extension-whatsapp.config.ts",
       "vitest.extension-zalo.config.ts",
+      "vitest.extension-browser.config.ts",
+      "vitest.extension-qa.config.ts",
+      "vitest.extension-media.config.ts",
+      "vitest.extension-misc.config.ts",
     ],
-  },
-  {
-    config: "vitest.full-extension-browser.config.ts",
-    name: "extension-browser",
-    projects: ["vitest.extension-browser.config.ts"],
-  },
-  {
-    config: "vitest.full-extension-providers.config.ts",
-    name: "extension-providers",
-    projects: ["vitest.extension-providers.config.ts"],
-  },
-  {
-    config: "vitest.full-extension-web-search.config.ts",
-    name: "extension-web-search",
-    projects: ["vitest.extension-web-search.config.ts"],
-  },
-  {
-    config: "vitest.full-extension-media-tools.config.ts",
-    name: "extension-media-tools",
-    projects: ["vitest.extension-media-tools.config.ts"],
-  },
-  {
-    config: "vitest.full-extension-qa-channel.config.ts",
-    name: "extension-qa-channel",
-    projects: ["vitest.extension-qa-channel.config.ts"],
-  },
-  {
-    config: "vitest.full-extension-qa-lab-core.config.ts",
-    name: "extension-qa-lab-core",
-    projects: ["vitest.extension-qa-lab-core.config.ts"],
-  },
-  {
-    config: "vitest.full-extension-qa-lab-runtime.config.ts",
-    name: "extension-qa-lab-runtime",
-    projects: ["vitest.extension-qa-lab-runtime.config.ts"],
-  },
-  {
-    config: "vitest.full-extension-dev-tools.config.ts",
-    name: "extension-dev-tools",
-    projects: ["vitest.extension-dev-tools.config.ts"],
   },
 ];

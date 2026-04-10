@@ -317,6 +317,13 @@ describe("gateway hot reload", () => {
     await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
   }
 
+  const testNodeExecProvider = {
+    source: "exec" as const,
+    command: process.execPath,
+    // CI-hosted Node binaries can be group-writable; these cases cover reload semantics.
+    allowInsecurePath: true,
+  };
+
   async function writeTalkProviderApiKeyEnvRefConfig(refId = "TALK_API_KEY_REF") {
     await writeConfigFile({
       talk: {
@@ -339,11 +346,7 @@ describe("gateway hot reload", () => {
       },
       secrets: {
         providers: {
-          vault: {
-            source: "exec",
-            command: process.execPath,
-            allowInsecurePath: true,
-          },
+          vault: testNodeExecProvider,
         },
       },
     });
@@ -364,9 +367,7 @@ describe("gateway hot reload", () => {
       secrets: {
         providers: {
           vault: {
-            source: "exec",
-            command: process.execPath,
-            allowInsecurePath: true,
+            ...testNodeExecProvider,
             allowSymlinkCommand: true,
             args: [params.resolverScriptPath, params.modePath, params.tokenValue],
           },
@@ -1042,9 +1043,7 @@ process.stdin.on("end", () => {
       secrets: {
         providers: {
           vault: {
-            source: "exec",
-            command: process.execPath,
-            allowInsecurePath: true,
+            ...testNodeExecProvider,
             allowSymlinkCommand: true,
             args: [resolverScriptPath, tokenPath],
           },

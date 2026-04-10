@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { loadBundledCapabilityRuntimeRegistry } from "../../../src/plugins/bundled-capability-runtime.js";
 import { resolveManifestContractOwnerPluginId } from "../../../src/plugins/manifest-registry.js";
+import { resolveBundledExplicitWebSearchProvidersFromPublicArtifacts } from "../../../src/plugins/web-provider-public-artifacts.explicit.js";
 import { resolvePluginWebSearchProviders } from "../../../src/plugins/web-search-providers.runtime.js";
 
 type ComparableProvider = {
@@ -78,10 +79,10 @@ function sortComparableEntries(entries: ComparableProvider[]): ComparableProvide
 export function describeBundledWebSearchFastPathContract(pluginId: string) {
   describe(`${pluginId} bundled web search fast-path contract`, () => {
     it("keeps provider-to-plugin ids aligned with bundled contracts", () => {
-      const providers = resolvePluginWebSearchProviders({
-        origin: "bundled",
-        onlyPluginIds: [pluginId],
-      });
+      const providers =
+        resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
+          onlyPluginIds: [pluginId],
+        }) ?? [];
       expect(providers.length).toBeGreaterThan(0);
       for (const provider of providers) {
         expect(
@@ -98,14 +99,16 @@ export function describeBundledWebSearchFastPathContract(pluginId: string) {
       const fastPathProviders = resolvePluginWebSearchProviders({
         origin: "bundled",
         onlyPluginIds: [pluginId],
-      });
+      }).filter((provider) => provider.pluginId === pluginId);
       const bundledProviderEntries = loadBundledCapabilityRuntimeRegistry({
         pluginIds: [pluginId],
         pluginSdkResolution: "dist",
-      }).webSearchProviders.map((entry) => ({
-        pluginId: entry.pluginId,
-        ...entry.provider,
-      }));
+      })
+        .webSearchProviders.filter((entry) => entry.pluginId === pluginId)
+        .map((entry) => ({
+          pluginId: entry.pluginId,
+          ...entry.provider,
+        }));
 
       expect(
         sortComparableEntries(

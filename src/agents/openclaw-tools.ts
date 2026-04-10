@@ -1,11 +1,15 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
+import {
+  collectPresentOpenClawTools,
+  isUpdatePlanToolEnabledForOpenClawTools,
+} from "./openclaw-tools.registration.js";
+import { wrapToolWorkspaceRootGuardWithOptions } from "./pi-tools.read.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
@@ -44,19 +48,6 @@ const defaultOpenClawToolsDeps: OpenClawToolsDeps = {
 
 let openClawToolsDeps: OpenClawToolsDeps = defaultOpenClawToolsDeps;
 
-function isOpenAIProvider(provider?: string): boolean {
-  const normalized = normalizeOptionalLowercaseString(provider);
-  return normalized === "openai" || normalized === "openai-codex";
-}
-
-function isUpdatePlanToolEnabled(config: OpenClawConfig | undefined, provider?: string): boolean {
-  const configured = config?.tools?.experimental?.planTool;
-  if (configured !== undefined) {
-    return configured;
-  }
-  return isOpenAIProvider(provider);
-}
-
 export function createOpenClawTools(
   options?: {
     sandboxBrowserBridgeUrl?: string;
@@ -70,6 +61,7 @@ export function createOpenClawTools(
     agentThreadId?: string | number;
     agentDir?: string;
     sandboxRoot?: string;
+    sandboxContainerWorkdir?: string;
     sandboxFsBridge?: SandboxFsBridge;
     fsPolicy?: ToolFsPolicy;
     sandboxed?: boolean;
@@ -215,18 +207,27 @@ export function createOpenClawTools(
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         requesterSenderId: options?.requesterSenderId ?? undefined,
       });
+  const nodesToolBase = createNodesTool({
+    agentSessionKey: options?.agentSessionKey,
+    agentChannel: options?.agentChannel,
+    agentAccountId: options?.agentAccountId,
+    currentChannelId: options?.currentChannelId,
+    currentThreadTs: options?.currentThreadTs,
+    config: options?.config,
+    modelHasVision: options?.modelHasVision,
+    allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
+  });
+  const nodesTool =
+    options?.fsPolicy?.workspaceOnly === true
+      ? wrapToolWorkspaceRootGuardWithOptions(nodesToolBase, options?.sandboxRoot ?? workspaceDir, {
+          containerWorkdir: options?.sandboxContainerWorkdir,
+          pathParamKeys: ["outPath"],
+          normalizeGuardedPathParams: true,
+        })
+      : nodesToolBase;
   const tools: AnyAgentTool[] = [
     createCanvasTool({ config: options?.config }),
-    createNodesTool({
-      agentSessionKey: options?.agentSessionKey,
-      agentChannel: options?.agentChannel,
-      agentAccountId: options?.agentAccountId,
-      currentChannelId: options?.currentChannelId,
-      currentThreadTs: options?.currentThreadTs,
-      config: options?.config,
-      modelHasVision: options?.modelHasVision,
-      allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
-    }),
+    nodesTool,
     createCronTool({
       agentSessionKey: options?.agentSessionKey,
     }),
@@ -235,9 +236,7 @@ export function createOpenClawTools(
       agentChannel: options?.agentChannel,
       config: options?.config,
     }),
-    ...(imageGenerateTool ? [imageGenerateTool] : []),
-    ...(musicGenerateTool ? [musicGenerateTool] : []),
-    ...(videoGenerateTool ? [videoGenerateTool] : []),
+    ...collectPresentOpenClawTools([imageGenerateTool, musicGenerateTool, videoGenerateTool]),
     createGatewayTool({
       agentSessionKey: options?.agentSessionKey,
       config: options?.config,
@@ -246,7 +245,7 @@ export function createOpenClawTools(
       agentSessionKey: options?.agentSessionKey,
       requesterAgentIdOverride: options?.requesterAgentIdOverride,
     }),
-    ...(isUpdatePlanToolEnabled(resolvedConfig, options?.modelProvider)
+    ...(isUpdatePlanToolEnabledForOpenClawTools(resolvedConfig, options?.modelProvider)
       ? [createUpdatePlanTool()]
       : []),
     createSessionsListTool({
@@ -293,10 +292,7 @@ export function createOpenClawTools(
       config: resolvedConfig,
       sandboxed: options?.sandboxed,
     }),
-    ...(webSearchTool ? [webSearchTool] : []),
-    ...(webFetchTool ? [webFetchTool] : []),
-    ...(imageTool ? [imageTool] : []),
-    ...(pdfTool ? [pdfTool] : []),
+    ...collectPresentOpenClawTools([webSearchTool, webFetchTool, imageTool, pdfTool]),
   ];
 
   if (options?.disablePluginTools) {

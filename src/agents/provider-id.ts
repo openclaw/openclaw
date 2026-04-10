@@ -27,16 +27,9 @@ export function normalizeProviderId(provider: string): string {
   return normalized;
 }
 
-/** Normalize provider ID for auth lookup. Coding-plan variants share auth with base. */
+/** Normalize provider ID before manifest-owned auth alias lookup. */
 export function normalizeProviderIdForAuth(provider: string): string {
-  const normalized = normalizeProviderId(provider);
-  if (normalized === "volcengine-plan") {
-    return "volcengine";
-  }
-  if (normalized === "byteplus-plan") {
-    return "byteplus";
-  }
-  return normalized;
+  return normalizeProviderId(provider);
 }
 
 export function findNormalizedProviderValue<T>(

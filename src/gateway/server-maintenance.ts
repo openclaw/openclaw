@@ -1,4 +1,5 @@
 import type { HealthSummary } from "../commands/health.js";
+import { sweepStaleRunContexts } from "../infra/agent-events.js";
 import { cleanOldMedia } from "../media/store.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ChatRunEntry } from "./server-chat.js";
@@ -151,6 +152,8 @@ export function startGatewayMaintenanceTimers(params: {
       params.chatDeltaSentAt.delete(runId);
       params.chatDeltaLastBroadcastLen.delete(runId);
     }
+    // Sweep stale agent run contexts (orphaned when lifecycle end/error is missed).
+    sweepStaleRunContexts();
   }, 60_000);
 
   if (typeof params.mediaCleanupTtlMs !== "number") {

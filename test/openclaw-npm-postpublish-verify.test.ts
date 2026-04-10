@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  buildPublishedInstallCommandArgs,
   buildPublishedInstallScenarios,
   collectInstalledMirroredRootDependencyManifestErrors,
   collectInstalledPackageErrors,
@@ -35,6 +36,23 @@ describe("buildPublishedInstallScenarios", () => {
         expectedVersion: "2026.3.23-2",
       },
     ]);
+  });
+});
+
+describe("buildPublishedInstallCommandArgs", () => {
+  it("runs lifecycle scripts for published install verification", () => {
+    const args = buildPublishedInstallCommandArgs("/tmp/openclaw-prefix", "openclaw@2026.4.10");
+
+    expect(args).toEqual([
+      "install",
+      "-g",
+      "--prefix",
+      "/tmp/openclaw-prefix",
+      "openclaw@2026.4.10",
+      "--no-fund",
+      "--no-audit",
+    ]);
+    expect(args).not.toContain("--ignore-scripts");
   });
 });
 
@@ -95,27 +113,28 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
     writeFileSync(fullPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   }
 
-  it("flags missing mirrored root dependencies required by bundled extensions", () => {
+  it("flags missing root mirrors for bundled plugin deps imported by root dist", () => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
       writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.9",
+        version: "2026.4.10",
         dependencies: {},
       });
       writePackageFile(packageRoot, "dist/extensions/slack/package.json", {
         dependencies: {
           "@slack/web-api": "^7.15.0",
         },
-        openclaw: {
-          releaseChecks: {
-            rootDependencyMirrorAllowlist: ["@slack/web-api"],
-          },
-        },
       });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "probe-Cz2PiFtC.js"),
+        'import("@slack/web-api");\n',
+        "utf8",
+      );
 
       expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([
-        "installed package is missing mirrored root runtime dependency '@slack/web-api' required by a bundled extension.",
+        "root dist imports bundled plugin runtime dependency '@slack/web-api' from probe-Cz2PiFtC.js; mirror '@slack/web-api: ^7.15.0' in root package.json (declared by slack).",
       ]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
@@ -127,7 +146,7 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
 
     try {
       writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.9",
+        version: "2026.4.10",
         optionalDependencies: {
           "@discordjs/opus": "^0.10.0",
         },
@@ -136,12 +155,13 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
         optionalDependencies: {
           "@discordjs/opus": "^0.10.0",
         },
-        openclaw: {
-          releaseChecks: {
-            rootDependencyMirrorAllowlist: ["@discordjs/opus"],
-          },
-        },
       });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "probe-Cz2PiFtC.js"),
+        'require("@discordjs/opus");\n',
+        "utf8",
+      );
 
       expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([]);
     } finally {
@@ -149,12 +169,12 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
     }
   });
 
-  it("flags mirrored root dependency version mismatches", () => {
+  it("flags root mirror dependency version mismatches", () => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
       writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.9",
+        version: "2026.4.10",
         dependencies: {
           "@slack/web-api": "^7.16.0",
         },
@@ -163,15 +183,16 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
         dependencies: {
           "@slack/web-api": "^7.15.0",
         },
-        openclaw: {
-          releaseChecks: {
-            rootDependencyMirrorAllowlist: ["@slack/web-api"],
-          },
-        },
       });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "probe-Cz2PiFtC.js"),
+        'import("@slack/web-api");\n',
+        "utf8",
+      );
 
       expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([
-        "installed package mirrored dependency '@slack/web-api' version mismatch: root '^7.16.0', extension '^7.15.0'.",
+        "root dist imports bundled plugin runtime dependency '@slack/web-api' from probe-Cz2PiFtC.js; root package.json has '^7.16.0' but plugin manifest declares '^7.15.0' (slack).",
       ]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
@@ -183,7 +204,7 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
 
     try {
       writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.9",
+        version: "2026.4.10",
         dependencies: {},
       });
       mkdirSync(join(packageRoot, "dist/extensions/slack"), { recursive: true });
@@ -206,7 +227,7 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
 
     try {
       writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.9",
+        version: "2026.4.10",
         dependencies: {},
       });
       mkdirSync(join(packageRoot, "dist/extensions/slack"), { recursive: true });
@@ -224,7 +245,7 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
 
     try {
       writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.9",
+        version: "2026.4.10",
         dependencies: {},
       });
       writePackageFile(packageRoot, "dist/extensions/device-pair/openclaw.plugin.json", {
@@ -243,7 +264,7 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
 
     try {
       writePackageFile(packageRoot, "package.json", {
-        version: "2026.4.9",
+        version: "2026.4.10",
         dependencies: {},
       });
       writePackageFile(outsideManifestRoot, "package.json", {

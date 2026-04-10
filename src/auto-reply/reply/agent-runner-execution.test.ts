@@ -27,9 +27,15 @@ vi.mock("../../agents/model-fallback.js", () => ({
     Array.isArray((err as { attempts?: unknown[] }).attempts),
 }));
 
-vi.mock("../../agents/model-selection.js", () => ({
-  isCliProvider: () => false,
-}));
+vi.mock("../../agents/model-selection.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/model-selection.js")>(
+    "../../agents/model-selection.js",
+  );
+  return {
+    ...actual,
+    isCliProvider: () => false,
+  };
+});
 
 vi.mock("../../agents/bootstrap-budget.js", () => ({
   resolveBootstrapWarningSignaturesSeen: () => [],
@@ -282,6 +288,142 @@ describe("runAgentTurnWithFallback", () => {
       mediaUrls: ["/tmp/generated.png"],
     });
     expect(onToolResult.mock.calls[0]?.[0]?.text).toBeUndefined();
+  });
+
+  it("strips a glued leading NO_REPLY token from streamed tool results", async () => {
+    const onToolResult = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onToolResult?.({ text: "NO_REPLYThe user is saying hello" });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const pendingToolTasks = new Set<Promise<void>>();
+    const typingSignals = createMockTypingSignaler();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {
+        onToolResult,
+      } satisfies GetReplyOptions,
+      typingSignals,
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks,
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    await Promise.all(pendingToolTasks);
+
+    expect(result.kind).toBe("success");
+    expect(typingSignals.signalTextDelta).toHaveBeenCalledWith("The user is saying hello");
+    expect(onToolResult).toHaveBeenCalledWith({ text: "The user is saying hello" });
+  });
+
+  it("continues delivering later streamed tool results after an earlier delivery failure", async () => {
+    const delivered: string[] = [];
+    const onToolResult = vi.fn(async (payload: { text?: string }) => {
+      if (payload.text === "first") {
+        throw new Error("simulated delivery failure");
+      }
+      delivered.push(payload.text ?? "");
+    });
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      params.onToolResult?.({ text: "first", mediaUrls: [] });
+      params.onToolResult?.({ text: "second", mediaUrls: [] });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const pendingToolTasks = new Set<Promise<void>>();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: { onToolResult } satisfies GetReplyOptions,
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks,
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    await Promise.all(pendingToolTasks);
+
+    expect(result.kind).toBe("success");
+    expect(onToolResult).toHaveBeenCalledTimes(2);
+    expect(delivered).toEqual(["second"]);
+  });
+
+  it("delivers streamed tool results in callback order even when dispatch latency differs", async () => {
+    const deliveryOrder: string[] = [];
+    const onToolResult = vi.fn(async (payload: { text?: string }) => {
+      const delay = payload.text === "first" ? 5 : 1;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      deliveryOrder.push(payload.text ?? "");
+    });
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      params.onToolResult?.({ text: "first", mediaUrls: [] });
+      params.onToolResult?.({ text: "second", mediaUrls: [] });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const pendingToolTasks = new Set<Promise<void>>();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: { onToolResult } satisfies GetReplyOptions,
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks,
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    await Promise.all(pendingToolTasks);
+
+    expect(result.kind).toBe("success");
+    expect(onToolResult).toHaveBeenCalledTimes(2);
+    expect(deliveryOrder).toEqual(["first", "second"]);
   });
 
   it("forwards item lifecycle events to reply options", async () => {
@@ -960,6 +1102,164 @@ describe("runAgentTurnWithFallback", () => {
     }
   });
 
+  it("surfaces gateway reauth guidance for known OAuth refresh failures", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error(
+        "OAuth token refresh failed for openai-codex: refresh_token_reused. Please try again or re-authenticate.",
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        "⚠️ Model login expired on the gateway for openai-codex. Re-auth with `openclaw models auth login --provider openai-codex`, then try again.",
+      );
+    }
+  });
+
+  it("surfaces direct provider auth guidance for missing API keys", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error(
+        'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.4 (OAuth) or set OPENAI_API_KEY to use openai/gpt-5.4. | No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.4 (OAuth) or set OPENAI_API_KEY to use openai/gpt-5.4.',
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        "⚠️ Missing API key for OpenAI on the gateway. Use `openai-codex/gpt-5.4` for OAuth, or set `OPENAI_API_KEY`, then try again.",
+      );
+    }
+  });
+
+  it("falls back to a generic provider message for unsafe missing-key provider ids", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error('No API key found for provider "openai`\nrm -rf /".'),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        "⚠️ Missing API key for the selected provider on the gateway. Configure provider auth, then try again.",
+      );
+    }
+  });
+
+  it("falls back to a generic reauth command when the provider in the OAuth error is unsafe", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error(
+        "OAuth token refresh failed for openai-codex`\nrm -rf /: invalid_grant. Please try again or re-authenticate.",
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        "⚠️ Model login expired on the gateway. Re-auth with `openclaw models auth login`, then try again.",
+      );
+    }
+  });
+
   it("returns a session reset hint for Bedrock tool mismatch errors on external chat channels", async () => {
     state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
       new Error(
@@ -1371,6 +1671,7 @@ describe("runAgentTurnWithFallback", () => {
     });
     expect(sessionEntry.providerOverride).toBe("openai-codex");
     expect(sessionEntry.modelOverride).toBe("gpt-5.4");
+    expect(sessionEntry.modelOverrideSource).toBe("auto");
     expect(sessionEntry.authProfileOverride).toBeUndefined();
     expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
     expect(sessionStore.main.authProfileOverride).toBeUndefined();
@@ -1404,6 +1705,7 @@ describe("runAgentTurnWithFallback", () => {
       updatedAt: 123,
       providerOverride: "anthropic",
       modelOverride: "claude-sonnet",
+      modelOverrideSource: "auto",
       authProfileOverride: "anthropic:openclaw",
       authProfileOverrideSource: "user",
     });

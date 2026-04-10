@@ -160,7 +160,10 @@ import { mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import {
   assembleAttemptContextEngine,
+  buildContextEnginePromptCacheInfo,
+  findCurrentAttemptAssistantMessage,
   finalizeAttemptContextEngineTurn,
+  resolveAttemptBootstrapContext,
   runAttemptContextEngineBootstrap,
 } from "./attempt.context-engine-helpers.js";
 import {
@@ -246,60 +249,6 @@ export {
   wrapOllamaCompatNumCtx,
 } from "../../../plugin-sdk/ollama-runtime.js";
 
-function buildContextEnginePromptCacheInfo(params: {
-  retention?: "none" | "short" | "long";
-  lastCallUsage?: NormalizedUsage;
-  observation?:
-    | {
-        broke: boolean;
-        previousCacheRead?: number;
-        cacheRead?: number;
-        changes?: PromptCacheChange[] | null;
-      }
-    | undefined;
-  lastCacheTouchAt?: number | null;
-}): EmbeddedRunAttemptResult["promptCache"] {
-  const promptCache: NonNullable<EmbeddedRunAttemptResult["promptCache"]> = {};
-  if (params.retention) {
-    promptCache.retention = params.retention;
-  }
-  if (params.lastCallUsage) {
-    promptCache.lastCallUsage = { ...params.lastCallUsage };
-  }
-  if (params.observation) {
-    promptCache.observation = {
-      broke: params.observation.broke,
-      ...(typeof params.observation.previousCacheRead === "number"
-        ? { previousCacheRead: params.observation.previousCacheRead }
-        : {}),
-      ...(typeof params.observation.cacheRead === "number"
-        ? { cacheRead: params.observation.cacheRead }
-        : {}),
-      ...(params.observation.changes && params.observation.changes.length > 0
-        ? {
-            changes: params.observation.changes.map((change) => ({
-              code: change.code,
-              detail: change.detail,
-            })),
-          }
-        : {}),
-    };
-  }
-  if (typeof params.lastCacheTouchAt === "number" && Number.isFinite(params.lastCacheTouchAt)) {
-    promptCache.lastCacheTouchAt = params.lastCacheTouchAt;
-  }
-  return Object.keys(promptCache).length > 0 ? promptCache : undefined;
-}
-
-function findCurrentAttemptAssistantMessage(params: {
-  messagesSnapshot: AgentMessage[];
-  prePromptMessageCount: number;
-}): AgentMessage | undefined {
-  return params.messagesSnapshot
-    .slice(Math.max(0, params.prePromptMessageCount))
-    .toReversed()
-    .find((message) => message.role === "assistant");
-}
 export {
   decodeHtmlEntitiesInObject,
   wrapStreamFnRepairMalformedToolCallArguments,
@@ -451,20 +400,18 @@ export async function runEmbeddedAttempt(
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const contextInjectionMode = resolveContextInjectionMode(params.config);
-    const isContinuationTurn =
-      contextInjectionMode === "continuation-skip" &&
-      params.bootstrapContextRunKind !== "heartbeat" &&
-      (await hasCompletedBootstrapTurn(params.sessionFile));
-    const shouldRecordCompletedBootstrapTurn =
-      !isContinuationTurn &&
-      params.bootstrapContextMode !== "lightweight" &&
-      params.bootstrapContextRunKind !== "heartbeat";
-    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } = isContinuationTurn
-      ? {
-          bootstrapFiles: [],
-          contextFiles: [],
-        }
-      : await resolveBootstrapContextForRun({
+    const {
+      bootstrapFiles: hookAdjustedBootstrapFiles,
+      contextFiles,
+      shouldRecordCompletedBootstrapTurn,
+    } = await resolveAttemptBootstrapContext({
+      contextInjectionMode,
+      bootstrapContextMode: params.bootstrapContextMode,
+      bootstrapContextRunKind: params.bootstrapContextRunKind,
+      sessionFile: params.sessionFile,
+      hasCompletedBootstrapTurn,
+      resolveBootstrapContextForRun: async () =>
+        await resolveBootstrapContextForRun({
           workspaceDir: effectiveWorkspace,
           config: params.config,
           sessionKey: params.sessionKey,
@@ -472,7 +419,8 @@ export async function runEmbeddedAttempt(
           warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
           contextMode: params.bootstrapContextMode,
           runKind: params.bootstrapContextRunKind,
-        });
+        }),
+    });
     const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
     const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
     const bootstrapAnalysis = analyzeBootstrapBudget({
@@ -1266,7 +1214,10 @@ export async function runEmbeddedAttempt(
       let idleTimeoutTrigger: ((error: Error) => void) | undefined;
 
       // Wrap stream with idle timeout detection
-      const idleTimeoutMs = resolveLlmIdleTimeoutMs(params.config);
+      const idleTimeoutMs = resolveLlmIdleTimeoutMs({
+        cfg: params.config,
+        trigger: params.trigger,
+      });
       if (idleTimeoutMs > 0) {
         activeSession.agent.streamFn = streamWithIdleTimeout(
           activeSession.agent.streamFn,
@@ -1377,6 +1328,7 @@ export async function runEmbeddedAttempt(
       let aborted = Boolean(params.abortSignal?.aborted);
       let yieldAborted = false;
       let timedOut = false;
+      let idleTimedOut = false;
       let timedOutDuringCompaction = false;
       const getAbortReason = (signal: AbortSignal): unknown =>
         "reason" in signal ? (signal as { reason?: unknown }).reason : undefined;
@@ -1426,6 +1378,7 @@ export async function runEmbeddedAttempt(
         void activeSession.abort();
       };
       idleTimeoutTrigger = (error) => {
+        idleTimedOut = true;
         abortRun(true, error);
       };
       const abortable = <T>(promise: Promise<T>): Promise<T> => {
@@ -2327,6 +2280,7 @@ export async function runEmbeddedAttempt(
         itemLifecycle: getItemLifecycle(),
         aborted,
         timedOut,
+        idleTimedOut,
         timedOutDuringCompaction,
         promptError,
         promptErrorSource,

@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as modelPickerPreferencesModule from "./model-picker-preferences.js";
 import * as modelPickerModule from "./model-picker.js";
 import { createModelsProviderData as createBaseModelsProviderData } from "./model-picker.test-utils.js";
-import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
+import * as nativeCommandRouteModule from "./native-command-route.js";
 import { replyWithDiscordModelPickerProviders } from "./native-command-ui.js";
 import {
   __testing as nativeCommandTesting,
@@ -248,11 +248,9 @@ function createBoundThreadBindingManager(params: {
 
 function createDispatchSpy() {
   const dispatchSpy = vi
-    .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
+    .fn<typeof dispatcherModule.dispatchReplyWithDispatcher>()
     .mockResolvedValue({} as never);
-  nativeCommandTesting.setDispatchReplyWithDispatcher(
-    dispatchSpy as unknown as typeof dispatcherModule.dispatchReplyWithDispatcher,
-  );
+  nativeCommandTesting.setDispatchReplyWithDispatcher(dispatchSpy);
   return dispatchSpy;
 }
 
@@ -260,13 +258,13 @@ describe("Discord model picker interactions", () => {
   beforeEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    nativeCommandTesting.setMatchPluginCommand(pluginRuntimeModule.matchPluginCommand);
+    nativeCommandTesting.setExecutePluginCommand(pluginRuntimeModule.executePluginCommand);
     nativeCommandTesting.setDispatchReplyWithDispatcher(
       dispatcherModule.dispatchReplyWithDispatcher,
     );
-    nativeCommandTesting.setMatchPluginCommand(pluginRuntimeModule.matchPluginCommand);
-    nativeCommandTesting.setExecutePluginCommand(pluginRuntimeModule.executePluginCommand);
     nativeCommandTesting.setResolveDiscordNativeInteractionRouteState(
-      resolveDiscordNativeInteractionRouteState,
+      nativeCommandRouteModule.resolveDiscordNativeInteractionRouteState,
     );
   });
 
