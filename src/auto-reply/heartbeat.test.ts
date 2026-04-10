@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   isHeartbeatContentEffectivelyEmpty,
+  parseHeartbeatTasks,
   stripHeartbeatToken,
 } from "./heartbeat.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
@@ -23,6 +24,22 @@ describe("stripHeartbeatToken", () => {
       text: "",
       didStrip: true,
     });
+  });
+
+  it("does not bleed top-level interval/prompt fields into task parsing", () => {
+    const content = `
+    tasks:- name: email-check
+    interval: 30m
+    prompt: Check for urgent emails
+interval: should-not-bleed
+`;
+    expect(parseHeartbeatTasks(content)).toEqual([
+      {
+        name: "email-check",
+        interval: "30m",
+        prompt: "Check for urgent emails",
+      },
+    ]);
   });
 
   it("drops heartbeats with small junk in heartbeat mode", () => {
