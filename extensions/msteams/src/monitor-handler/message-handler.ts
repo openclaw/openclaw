@@ -550,7 +550,13 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     // ID via the API (with conversation store caching) so the Graph media
     // download fallback works when the direct Bot Framework download fails.
     if (isDirectMessage && conversationId.startsWith("a:")) {
-      const cached = await conversationStore.get(conversationId);
+      const storeAny = conversationStore as unknown as {
+        get?: (id: string) => Promise<{ graphChatId?: string } | undefined> | undefined;
+      };
+      const cached =
+        typeof storeAny.get === "function"
+          ? await storeAny.get(conversationId)
+          : undefined;
       if (cached?.graphChatId) {
         graphConversationId = cached.graphChatId;
       } else {

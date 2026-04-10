@@ -4,7 +4,7 @@ packages:
   - packages/*
   - extensions/*
 
-minimumReleaseAge: 2880
+minimumReleaseAge: 0
 
 minimumReleaseAgeExclude:
   - "acpx"
@@ -27,6 +27,8 @@ minimumReleaseAgeExclude:
   - "rolldown"
   - "sqlite-vec"
   - "sqlite-vec-*"
+  - "@pierre/diffs"
+  - "@create-markdown/preview"
 
 onlyBuiltDependencies:
   - "@discordjs/opus"
