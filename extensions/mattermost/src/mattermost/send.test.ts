@@ -375,6 +375,7 @@ describe("sendMessageMattermost", () => {
     expect(Array.isArray(actions)).toBe(true);
     expect(actions?.[0]?.id).toBe("mdlprov");
     expect(actions?.[0]?.name).toBe("Browse providers");
+    expect(mockState.resolveMattermostAccount).toHaveBeenCalledTimes(1);
   });
 
   it("resolves a bare Mattermost user id as a DM target before upload", async () => {
