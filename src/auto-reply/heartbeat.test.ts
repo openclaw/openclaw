@@ -26,6 +26,22 @@ describe("stripHeartbeatToken", () => {
     });
   });
 
+  it("does not bleed top-level interval/prompt fields into task parsing", () => {
+    const content = `
+    tasks:- name: email-check
+    interval: 30m
+    prompt: Check for urgent emails
+interval: should-not-bleed
+`;
+    expect(parseHeartbeatTasks(content)).toEqual([
+      {
+        name: "email-check",
+        interval: "30m",
+        prompt: "Check for urgent emails",
+      },
+    ]);
+  });
+
   it("drops heartbeats with small junk in heartbeat mode", () => {
     expect(stripHeartbeatToken("HEARTBEAT_OK 🦞", { mode: "heartbeat" })).toEqual({
       shouldSkip: true,
