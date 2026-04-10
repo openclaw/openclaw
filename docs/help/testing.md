@@ -88,7 +88,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - `pnpm test --watch` still uses the native root `vitest.config.ts` project graph, because a multi-shard watch loop is not practical.
   - `pnpm test`, `pnpm test:watch`, and `pnpm test:perf:imports` route explicit file/directory targets through scoped lanes first, so `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts` avoids paying the full root project startup tax.
   - `pnpm test:changed` expands changed git paths into the same scoped lanes when the diff only touches routable source/test files; config/setup edits still fall back to the broad root-project rerun.
-  - Selected `plugin-sdk` and `commands` tests also route through dedicated light lanes that skip `test/setup-openclaw-runtime.ts`; stateful/runtime-heavy files stay on the existing lanes.
+  - Import-light unit tests from agents, commands, plugins, auto-reply helpers, `plugin-sdk`, and similar pure utility areas route through the `unit-fast` lane, which skips `test/setup-openclaw-runtime.ts`; stateful/runtime-heavy files stay on the existing lanes.
   - Selected `plugin-sdk` and `commands` helper source files also map changed-mode runs to explicit sibling tests in those light lanes, so helper edits avoid rerunning the full heavy suite for that directory.
   - `auto-reply` now has three dedicated buckets: top-level core helpers, top-level `reply.*` integration tests, and the `src/auto-reply/reply/**` subtree. This keeps the heaviest reply harness work off the cheap status/chunk/token tests.
 - Embedded runner note:
