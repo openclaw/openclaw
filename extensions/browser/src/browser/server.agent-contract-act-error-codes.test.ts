@@ -47,6 +47,24 @@ describe("browser control server", () => {
   );
 
   it(
+    "returns ACT_TARGET_ID_MISMATCH for top-level action targetId overrides",
+    async () => {
+      const base = await startServerAndBase();
+      const response = await postJson<ActErrorResponse>(`${base}/act`, {
+        kind: "click",
+        ref: "5",
+        // Intentionally non-string: route-level target selection ignores this,
+        // while action normalization stringifies it.
+        targetId: 12345,
+      });
+
+      expect(response.code).toBe("ACT_TARGET_ID_MISMATCH");
+      expect(response.error).toContain("action targetId must match request targetId");
+    },
+    slowTimeoutMs,
+  );
+
+  it(
     "returns ACT_SELECTOR_UNSUPPORTED for selector on unsupported action kinds",
     async () => {
       const base = await startServerAndBase();

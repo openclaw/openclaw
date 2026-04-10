@@ -239,6 +239,14 @@ export function registerBrowserAgentActRoutes(
       run: async ({ profileCtx, cdpUrl, tab }) => {
         const evaluateEnabled = ctx.state().resolved.evaluateEnabled;
         const ssrfPolicy = ctx.state().resolved.ssrfPolicy;
+        if (action.targetId && action.targetId !== tab.targetId) {
+          return jsonActError(
+            res,
+            403,
+            ACT_ERROR_CODES.targetIdMismatch,
+            "action targetId must match request targetId",
+          );
+        }
         const isExistingSession = getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp;
         const profileName = profileCtx.profile.name;
         if (isExistingSession) {
