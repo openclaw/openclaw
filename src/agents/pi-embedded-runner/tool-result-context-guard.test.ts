@@ -392,7 +392,25 @@ describe("installContextEngineLoopHook", () => {
     expect(transformed).toBe(compactedView);
   });
 
-  it("returns the source messages when the assembled view has the same length", async () => {
+  it("returns the assembled view when the engine rewrites content without changing count", async () => {
+    const agent = makeGuardableAgent();
+    const rewrittenView = [makeUser("rewritten-1"), makeUser("rewritten-2")];
+    const engine = makeMockEngine({
+      assemble: async () => ({ messages: rewrittenView, estimatedTokens: 0 }),
+    });
+    installHook(agent, engine);
+
+    const initial = [makeUser("first"), makeToolResult("call_1", "r")];
+    await callTransform(agent, initial);
+
+    const withNew = [...initial, makeToolResult("call_2", "r2")];
+    const transformed = await callTransform(agent, withNew);
+
+    // Same count (2) but different array reference — engine's view should be used
+    expect(transformed).toBe(rewrittenView);
+  });
+
+  it("returns the source when the engine returns the same array reference", async () => {
     const agent = makeGuardableAgent();
     const engine = makeMockEngine();
     installHook(agent, engine);

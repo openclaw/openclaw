@@ -239,11 +239,7 @@ export function installContextEngineLoopHook(params: {
         tokenBudget,
         model: modelId,
       });
-      if (
-        assembled &&
-        Array.isArray(assembled.messages) &&
-        assembled.messages.length !== sourceMessages.length
-      ) {
+      if (assembled && Array.isArray(assembled.messages) && assembled.messages !== sourceMessages) {
         lastAssembledView = assembled.messages;
         return assembled.messages;
       }
