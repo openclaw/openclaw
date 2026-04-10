@@ -16,6 +16,8 @@ import {
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
   STRICT_AGENTIC_BLOCKED_TEXT,
+  resolveReplayInvalidFlag,
+  resolveRunLivenessState,
 } from "./run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
@@ -256,5 +258,46 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
       explanation: "I'll inspect the code. Then I'll patch the issue. Finally I'll run tests.",
       steps: ["I'll inspect the code.", "Then I'll patch the issue.", "Finally I'll run tests."],
     });
+  });
+
+  it("marks incomplete-turn retries as replay-invalid abandoned runs", () => {
+    const attempt = makeAttemptResult({
+      assistantTexts: [],
+      lastAssistant: {
+        stopReason: "toolUse",
+        provider: "openai",
+        model: "gpt-5.4",
+        content: [],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+    const incompleteTurnText = "⚠️ Agent couldn't generate a response. Please try again.";
+
+    expect(resolveReplayInvalidFlag({ attempt, incompleteTurnText })).toBe(true);
+    expect(
+      resolveRunLivenessState({
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+        incompleteTurnText,
+      }),
+    ).toBe("abandoned");
+  });
+
+  it("marks compaction-timeout retries as paused and replay-invalid", () => {
+    const attempt = makeAttemptResult({
+      promptErrorSource: "compaction",
+      timedOutDuringCompaction: true,
+    });
+
+    expect(resolveReplayInvalidFlag({ attempt })).toBe(true);
+    expect(
+      resolveRunLivenessState({
+        payloadCount: 0,
+        aborted: true,
+        timedOut: true,
+        attempt,
+      }),
+    ).toBe("paused");
   });
 });

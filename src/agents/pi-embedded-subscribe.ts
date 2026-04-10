@@ -104,6 +104,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     compactionRetryReject: undefined,
     compactionRetryPromise: null,
     unsubscribed: false,
+    replayInvalid: false,
+    livenessState: "working",
     messagingToolSentTexts: [],
     messagingToolSentTextsNormalized: [],
     messagingToolSentTargets: [],
@@ -691,6 +693,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.pendingToolAudioAsVoice = false;
     state.deterministicApprovalPromptPending = false;
     state.deterministicApprovalPromptSent = false;
+    state.replayInvalid = false;
+    state.livenessState = "working";
     resetAssistantMessageState(0);
   };
 

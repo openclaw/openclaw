@@ -31,12 +31,16 @@ export type EmbeddedPiAgentMeta = {
   };
 };
 
+export type EmbeddedRunLivenessState = "working" | "paused" | "blocked" | "abandoned";
+
 export type EmbeddedPiRunMeta = {
   durationMs: number;
   agentMeta?: EmbeddedPiAgentMeta;
   aborted?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
   finalAssistantVisibleText?: string;
+  replayInvalid?: boolean;
+  livenessState?: EmbeddedRunLivenessState;
   error?: {
     kind:
       | "context_overflow"
