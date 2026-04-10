@@ -143,6 +143,7 @@ Docs: https://docs.openclaw.ai
 - Models/fallback: preserve `/models` selection across transient primary-model failures and config reloads so the fallback chain no longer permanently clobbers a user-chosen model. (#64471) Thanks @hoyyeva.
 
 - Sandbox/security: auto-derive CDP source-range from Docker network gateway and refuse to start the socat relay without one, so peer containers cannot reach CDP unauthenticated. (#61404) Thanks @dims.
+- Daemon/launchd: keep `openclaw gateway stop` persistent without uninstalling the macOS LaunchAgent, re-enable it on explicit restart or repair, and harden launchd label handling. (#64447) Thanks @ngutman.
 
 ## 2026.4.9
 

@@ -29,7 +29,9 @@ describe("codex provider", () => {
       pluginConfig: { discovery: { timeoutMs: 1234 } },
     });
 
-    expect(listModels).toHaveBeenCalledWith({ limit: 100, timeoutMs: 1234 });
+    expect(listModels).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 100, timeoutMs: 1234 }),
+    );
     expect(result.provider).toMatchObject({
       auth: "token",
       api: "openai-codex-responses",

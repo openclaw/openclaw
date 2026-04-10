@@ -24,6 +24,11 @@ import {
   isCodexAppServerApprovalRequest,
   type CodexAppServerClient,
 } from "./client.js";
+import {
+  resolveCodexAppServerRuntimeOptions,
+  type CodexAppServerRuntimeOptions,
+  type CodexAppServerStartOptions,
+} from "./config.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import {
@@ -45,13 +50,18 @@ import {
 } from "./session-binding.js";
 import { mirrorCodexAppServerTranscript } from "./transcript-mirror.js";
 
-type CodexAppServerClientFactory = () => Promise<CodexAppServerClient>;
+type CodexAppServerClientFactory = (
+  startOptions?: CodexAppServerStartOptions,
+) => Promise<CodexAppServerClient>;
 
-let clientFactory: CodexAppServerClientFactory = getSharedCodexAppServerClient;
+let clientFactory: CodexAppServerClientFactory = (startOptions) =>
+  getSharedCodexAppServerClient({ startOptions });
 
 export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
+  options: { pluginConfig?: unknown } = {},
 ): Promise<EmbeddedRunAttemptResult> {
+  const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: options.pluginConfig });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   await fs.mkdir(resolvedWorkspace, { recursive: true });
   const sandboxSessionKey = params.sessionKey?.trim() || params.sessionId;
@@ -106,12 +116,13 @@ export async function runCodexAppServerAttempt(
       timeoutMs: params.timeoutMs,
       signal: runAbortController.signal,
       operation: async () => {
-        const startupClient = await clientFactory();
+        const startupClient = await clientFactory(appServer.start);
         const startupThread = await startOrResumeThread({
           client: startupClient,
           params,
           cwd: effectiveWorkspace,
           dynamicTools: toolBridge.specs,
+          appServer,
         });
         return { client: startupClient, thread: startupThread };
       },
@@ -178,9 +189,10 @@ export async function runCodexAppServerAttempt(
       threadId: thread.threadId,
       input: buildUserInput(params),
       cwd: effectiveWorkspace,
-      approvalPolicy: resolveAppServerApprovalPolicy(),
-      approvalsReviewer: resolveApprovalsReviewer(),
+      approvalPolicy: appServer.approvalPolicy,
+      approvalsReviewer: appServer.approvalsReviewer,
       model: params.modelId,
+      ...(appServer.serviceTier ? { serviceTier: appServer.serviceTier } : {}),
       effort: resolveReasoningEffort(params.thinkLevel),
     });
   } catch (error) {
@@ -394,11 +406,17 @@ async function startOrResumeThread(params: {
   params: EmbeddedRunAttemptParams;
   cwd: string;
   dynamicTools: JsonValue[];
+  appServer: CodexAppServerRuntimeOptions;
 }): Promise<CodexAppServerThreadBinding> {
   const dynamicToolsFingerprint = fingerprintDynamicTools(params.dynamicTools);
   const binding = await readCodexAppServerBinding(params.params.sessionFile);
   if (binding?.threadId) {
-    if (binding.dynamicToolsFingerprint !== dynamicToolsFingerprint) {
+    // `/codex resume <thread>` writes a binding before the next turn can know
+    // the dynamic tool catalog, so only invalidate fingerprints we actually have.
+    if (
+      binding.dynamicToolsFingerprint &&
+      binding.dynamicToolsFingerprint !== dynamicToolsFingerprint
+    ) {
       embeddedAgentLog.debug(
         "codex app-server dynamic tool catalog changed; starting a new thread",
         {
@@ -410,6 +428,12 @@ async function startOrResumeThread(params: {
       try {
         const response = await params.client.request<CodexThreadResumeResponse>("thread/resume", {
           threadId: binding.threadId,
+          model: params.params.modelId,
+          modelProvider: normalizeModelProvider(params.params.provider),
+          approvalPolicy: params.appServer.approvalPolicy,
+          approvalsReviewer: params.appServer.approvalsReviewer,
+          sandbox: params.appServer.sandbox,
+          ...(params.appServer.serviceTier ? { serviceTier: params.appServer.serviceTier } : {}),
           persistExtendedHistory: true,
         });
         await writeCodexAppServerBinding(params.params.sessionFile, {
@@ -441,9 +465,10 @@ async function startOrResumeThread(params: {
     model: params.params.modelId,
     modelProvider: normalizeModelProvider(params.params.provider),
     cwd: params.cwd,
-    approvalPolicy: resolveAppServerApprovalPolicy(),
-    approvalsReviewer: resolveApprovalsReviewer(),
-    sandbox: resolveAppServerSandbox(),
+    approvalPolicy: params.appServer.approvalPolicy,
+    approvalsReviewer: params.appServer.approvalsReviewer,
+    sandbox: params.appServer.sandbox,
+    ...(params.appServer.serviceTier ? { serviceTier: params.appServer.serviceTier } : {}),
     serviceName: "OpenClaw",
     developerInstructions: buildDeveloperInstructions(params.params),
     dynamicTools: params.dynamicTools,
@@ -516,26 +541,6 @@ function buildUserInput(params: EmbeddedRunAttemptParams): CodexUserInput[] {
 
 function normalizeModelProvider(provider: string): string {
   return provider === "codex" || provider === "openai-codex" ? "openai" : provider;
-}
-
-function resolveAppServerApprovalPolicy(): "never" | "on-request" | "on-failure" | "untrusted" {
-  const raw = process.env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY?.trim();
-  if (raw === "on-request" || raw === "on-failure" || raw === "untrusted") {
-    return raw;
-  }
-  return "never";
-}
-
-function resolveAppServerSandbox(): "read-only" | "workspace-write" | "danger-full-access" {
-  const raw = process.env.OPENCLAW_CODEX_APP_SERVER_SANDBOX?.trim();
-  if (raw === "read-only" || raw === "danger-full-access") {
-    return raw;
-  }
-  return "workspace-write";
-}
-
-function resolveApprovalsReviewer(): "user" | "guardian_subagent" {
-  return process.env.OPENCLAW_CODEX_APP_SERVER_GUARDIAN === "1" ? "guardian_subagent" : "user";
 }
 
 function resolveReasoningEffort(
@@ -633,6 +638,6 @@ export const __testing = {
     clientFactory = factory;
   },
   resetCodexAppServerClientFactoryForTests(): void {
-    clientFactory = getSharedCodexAppServerClient;
+    clientFactory = (startOptions) => getSharedCodexAppServerClient({ startOptions });
   },
 } as const;

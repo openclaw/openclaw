@@ -14,6 +14,7 @@ describe("codex plugin", () => {
 
   it("registers the codex provider and agent harness", () => {
     const registerAgentHarness = vi.fn();
+    const registerCommand = vi.fn();
     const registerProvider = vi.fn();
 
     plugin.register(
@@ -25,6 +26,7 @@ describe("codex plugin", () => {
         pluginConfig: {},
         runtime: {} as never,
         registerAgentHarness,
+        registerCommand,
         registerProvider,
       }),
     );
@@ -33,6 +35,10 @@ describe("codex plugin", () => {
     expect(registerAgentHarness.mock.calls[0]?.[0]).toMatchObject({
       id: "codex",
       label: "Codex agent harness",
+    });
+    expect(registerCommand.mock.calls[0]?.[0]).toMatchObject({
+      name: "codex",
+      description: "Inspect and control the Codex app-server harness",
     });
   });
 });

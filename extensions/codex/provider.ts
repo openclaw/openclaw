@@ -10,6 +10,11 @@ import {
   type CodexAppServerModel,
   type CodexAppServerModelListResult,
 } from "./harness.js";
+import {
+  type CodexAppServerStartOptions,
+  readCodexPluginConfig,
+  resolveCodexAppServerRuntimeOptions,
+} from "./src/app-server/config.js";
 
 const PROVIDER_ID = "codex";
 const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
@@ -18,16 +23,10 @@ const DEFAULT_MAX_TOKENS = 128_000;
 const DEFAULT_DISCOVERY_TIMEOUT_MS = 2500;
 const LIVE_DISCOVERY_ENV = "OPENCLAW_CODEX_DISCOVERY_LIVE";
 
-type CodexPluginConfig = {
-  discovery?: {
-    enabled?: boolean;
-    timeoutMs?: number;
-  };
-};
-
 type CodexModelLister = (options: {
   timeoutMs: number;
   limit?: number;
+  startOptions?: CodexAppServerStartOptions;
 }) => Promise<CodexAppServerModelListResult>;
 
 type BuildCodexProviderOptions = {
@@ -98,6 +97,7 @@ export async function buildCodexProviderCatalog(
   options: BuildCatalogOptions = {},
 ): Promise<{ provider: ModelProviderConfig }> {
   const config = readCodexPluginConfig(options.pluginConfig);
+  const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: options.pluginConfig });
   const timeoutMs = normalizeTimeoutMs(config.discovery?.timeoutMs);
   const discovered =
     config.discovery?.enabled === false || shouldSkipLiveDiscovery(options.env)
@@ -105,6 +105,7 @@ export async function buildCodexProviderCatalog(
       : await listModelsBestEffort({
           listModels: options.listModels ?? listCodexAppServerModels,
           timeoutMs,
+          startOptions: appServer.start,
         });
   const models = (discovered.length > 0 ? discovered : FALLBACK_CODEX_MODELS).map(
     codexModelToDefinition,
@@ -167,23 +168,18 @@ function buildModelDefinition(model: {
 async function listModelsBestEffort(params: {
   listModels: CodexModelLister;
   timeoutMs: number;
+  startOptions: CodexAppServerStartOptions;
 }): Promise<CodexAppServerModel[]> {
   try {
     const result = await params.listModels({
       timeoutMs: params.timeoutMs,
       limit: 100,
+      startOptions: params.startOptions,
     });
     return result.models.filter((model) => !model.hidden);
   } catch {
     return [];
   }
-}
-
-function readCodexPluginConfig(value: unknown): CodexPluginConfig {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-  return value as CodexPluginConfig;
 }
 
 function normalizeTimeoutMs(value: unknown): number {
