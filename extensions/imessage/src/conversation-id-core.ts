@@ -30,7 +30,7 @@ export function normalizeIMessageAcpConversationId(
 export function matchIMessageAcpConversation(params: {
   bindingConversationId: string;
   conversationId: string;
-}): { conversationId: string; matchPriority: number } | null {
+}): { matchPriority: number } | null {
   const binding = normalizeIMessageAcpConversationId(params.bindingConversationId);
   const conversation = normalizeIMessageAcpConversationId(params.conversationId);
   if (!binding || !conversation) {
@@ -39,10 +39,7 @@ export function matchIMessageAcpConversation(params: {
   if (binding.conversationId !== conversation.conversationId) {
     return null;
   }
-  return {
-    conversationId: conversation.conversationId,
-    matchPriority: 2,
-  };
+  return { matchPriority: 2 };
 }
 
 export function resolveIMessageConversationIdFromTarget(target: string): string | undefined {

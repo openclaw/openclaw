@@ -5,10 +5,7 @@ import {
   createNestedAllowlistOverrideResolver,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
-import type {
-  ChannelMessageActionAdapter,
-  ChannelMessageToolDiscovery,
-} from "openclaw/plugin-sdk/channel-contract";
+import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { createOpenProviderConfiguredRouteWarningCollector } from "openclaw/plugin-sdk/channel-policy";
@@ -181,7 +178,7 @@ async function resolveDiscordSend(deps?: { [channelId: string]: unknown }): Prom
 const discordMessageActions = {
   describeMessageTool: (
     ctx: Parameters<NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>>[0],
-  ): ChannelMessageToolDiscovery | null =>
+  ) =>
     resolveRuntimeDiscordMessageActions()?.describeMessageTool?.(ctx) ??
     discordMessageActionsImpl.describeMessageTool?.(ctx) ??
     null,
@@ -309,17 +306,14 @@ function matchDiscordAcpConversation(params: {
   parentConversationId?: string;
 }) {
   if (params.bindingConversationId === params.conversationId) {
-    return { conversationId: params.conversationId, matchPriority: 2 };
+    return { matchPriority: 2 };
   }
   if (
     params.parentConversationId &&
     params.parentConversationId !== params.conversationId &&
     params.bindingConversationId === params.parentConversationId
   ) {
-    return {
-      conversationId: params.parentConversationId,
-      matchPriority: 1,
-    };
+    return { matchPriority: 1 };
   }
   return null;
 }
@@ -610,7 +604,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
             includeApplication: true,
           }),
         formatCapabilitiesProbe: ({ probe }) => {
-          const discordProbe = probe as DiscordProbe | undefined;
+          const discordProbe = probe as DiscordProbe;
           const lines = [];
           if (discordProbe?.bot?.username) {
             const botId = discordProbe.bot.id ? ` (${discordProbe.bot.id})` : "";

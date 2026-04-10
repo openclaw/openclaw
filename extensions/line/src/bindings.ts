@@ -41,10 +41,7 @@ export const lineBindingsAdapter = {
     if (!normalizedIncoming || compiledBinding.conversationId !== normalizedIncoming) {
       return null;
     }
-    return {
-      conversationId: normalizedIncoming,
-      matchPriority: 2,
-    };
+    return { matchPriority: 2 };
   },
   resolveCommandConversation: ({
     originatingTo,

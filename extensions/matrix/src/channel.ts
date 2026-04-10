@@ -227,17 +227,14 @@ function matchMatrixAcpConversation(params: {
     return null;
   }
   if (binding.conversationId === params.conversationId) {
-    return { conversationId: params.conversationId, matchPriority: 2 };
+    return { matchPriority: 2 };
   }
   if (
     params.parentConversationId &&
     params.parentConversationId !== params.conversationId &&
     binding.conversationId === params.parentConversationId
   ) {
-    return {
-      conversationId: params.parentConversationId,
-      matchPriority: 1,
-    };
+    return { matchPriority: 1 };
   }
   return null;
 }

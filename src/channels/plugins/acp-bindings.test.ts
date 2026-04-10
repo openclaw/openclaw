@@ -72,10 +72,10 @@ function createDiscordAcpPlugin(overrides?: {
         parentConversationId?: string;
       }) => {
         if (compiledBinding.conversationId === conversationId) {
-          return { conversationId, matchPriority: 2 };
+          return { matchPriority: 2 };
         }
         if (parentConversationId && compiledBinding.conversationId === parentConversationId) {
-          return { conversationId: parentConversationId, matchPriority: 1 };
+          return { matchPriority: 1 };
         }
         return null;
       },
@@ -200,6 +200,58 @@ describe("configured binding registry", () => {
       channel: "discord",
       accountId: "default",
       conversationId: "1479098716916023408",
+    });
+
+    expect(resolved).toBeNull();
+  });
+
+  it("assigns distinct session keys to different threads under the same parent channel", async () => {
+    const plugin = createDiscordAcpPlugin();
+    getChannelPluginMock.mockReturnValue(plugin);
+    const bindingRegistry = await importConfiguredBindings();
+    const parentChannelId = "1479098716916023408";
+
+    const thread1 = bindingRegistry.resolveConfiguredBindingRecord({
+      cfg: createConfig() as never,
+      channel: "discord",
+      accountId: "default",
+      conversationId: "1111111111111111111",
+      parentConversationId: parentChannelId,
+    });
+
+    const thread2 = bindingRegistry.resolveConfiguredBindingRecord({
+      cfg: createConfig() as never,
+      channel: "discord",
+      accountId: "default",
+      conversationId: "2222222222222222222",
+      parentConversationId: parentChannelId,
+    });
+
+    expect(thread1?.record.targetSessionKey).not.toBe(thread2?.record.targetSessionKey);
+    expect(thread1?.record.conversation.conversationId).toBe("1111111111111111111");
+    expect(thread2?.record.conversation.conversationId).toBe("2222222222222222222");
+  });
+
+  it("returns null for per-thread session keys via reverse lookup (thread IDs are runtime-only)", async () => {
+    const plugin = createDiscordAcpPlugin();
+    getChannelPluginMock.mockReturnValue(plugin);
+    const bindingRegistry = await importConfiguredBindings();
+
+    // The config binding targets the parent channel, not any specific thread.
+    // Reverse lookup materialises using rule.target (parent channel ID), so it can never
+    // reconstruct session keys that embed a runtime thread ID.
+    const threadSessionKey = buildConfiguredAcpSessionKey({
+      channel: "discord",
+      accountId: "default",
+      conversationId: "1111111111111111111",
+      agentId: "codex",
+      mode: "persistent",
+      backend: "acpx",
+    });
+
+    const resolved = bindingRegistry.resolveConfiguredBindingRecordBySessionKey({
+      cfg: createConfig() as never,
+      sessionKey: threadSessionKey,
     });
 
     expect(resolved).toBeNull();

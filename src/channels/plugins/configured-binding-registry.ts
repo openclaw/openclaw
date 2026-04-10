@@ -41,7 +41,10 @@ function resolveMaterializedConfiguredBinding(params: {
     materializedTarget: materializeConfiguredBindingRecord({
       rule: resolved.rule,
       accountId: conversation.accountId,
-      conversation: resolved.match,
+      conversation: {
+        conversationId: conversation.conversationId,
+        parentConversationId: conversation.parentConversationId,
+      },
     }),
   };
 }

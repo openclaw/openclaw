@@ -706,7 +706,7 @@ export type ChannelConfiguredBindingConversationRef = {
   parentConversationId?: string;
 };
 
-export type ChannelConfiguredBindingMatch = ChannelConfiguredBindingConversationRef & {
+export type ChannelConfiguredBindingMatch = {
   matchPriority?: number;
 };
 

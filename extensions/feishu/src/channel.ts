@@ -152,7 +152,7 @@ function describeFeishuMessageTool({
     enabledAccounts.length > 0 ||
     (!accountId &&
       cfg.channels?.feishu?.enabled !== false &&
-      Boolean(inspectFeishuCredentials(cfg.channels?.feishu as FeishuConfig | undefined)));
+      Boolean(inspectFeishuCredentials(cfg.channels?.feishu)));
   if (enabledAccounts.length === 0) {
     return {
       actions: [],
@@ -204,7 +204,7 @@ function setFeishuNamedAccountEnabled(
   accountId: string,
   enabled: boolean,
 ): ClawdbotConfig {
-  const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
+  const feishuCfg = cfg.channels?.feishu;
   return {
     ...cfg,
     channels: {
@@ -321,16 +321,7 @@ function matchFeishuAcpConversation(params: {
   if (!matchesCanonicalConversation && !matchesParentTopicForSenderScopedConversation) {
     return null;
   }
-  return {
-    conversationId: matchesParentTopicForSenderScopedConversation
-      ? binding.conversationId
-      : incoming.canonicalConversationId,
-    parentConversationId:
-      incoming.scope === "group_topic" || incoming.scope === "group_topic_sender"
-        ? incoming.chatId
-        : undefined,
-    matchPriority: matchesCanonicalConversation ? 2 : 1,
-  };
+  return { matchPriority: matchesCanonicalConversation ? 2 : 1 };
 }
 
 function resolveFeishuSenderScopedCommandConversation(params: {
@@ -609,7 +600,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           }
 
           // Delete specific account from accounts
-          const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
+          const feishuCfg = cfg.channels?.feishu as FeishuConfig;
           const accounts = { ...feishuCfg?.accounts };
           delete accounts[accountId];
 
