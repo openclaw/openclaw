@@ -8,6 +8,7 @@ import {
   resolveStorePath,
   type OpenClawConfig,
 } from "./heartbeat-recipients.runtime.js";
+import { normalizeWhatsAppTarget } from "./normalize.js";
 
 type HeartbeatRecipientsResult = { recipients: string[]; source: string };
 type HeartbeatRecipientsOpts = { to?: string; all?: boolean; accountId?: string };
@@ -52,7 +53,8 @@ export function resolveWhatsAppHeartbeatRecipients(
   opts: HeartbeatRecipientsOpts = {},
 ): HeartbeatRecipientsResult {
   if (opts.to) {
-    return { recipients: [normalizeE164(opts.to)], source: "flag" };
+    const normalizedTarget = normalizeWhatsAppTarget(opts.to);
+    return { recipients: normalizedTarget ? [normalizedTarget] : [], source: "flag" };
   }
 
   const sessionRecipients = getSessionRecipients(cfg);
