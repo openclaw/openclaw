@@ -729,17 +729,21 @@ export function renderApp(state: AppViewState) {
     }
     switch (state.agentsPanel) {
       case "files":
-        return void loadAgentFiles(state, agentId);
+        void loadAgentFiles(state, agentId);
+        return;
       case "skills":
-        return void loadAgentSkills(state, agentId);
+        void loadAgentSkills(state, agentId);
+        return;
       case "tools":
         void loadToolsCatalog(state, agentId);
-        return void refreshVisibleToolsEffectiveForCurrentSession(state);
+        void refreshVisibleToolsEffectiveForCurrentSession(state);
+        return;
     }
   };
   const refreshAgentsPanelSupplementalData = (panel: AppViewState["agentsPanel"]) => {
     if (panel === "channels") {
-      return void loadChannels(state, false);
+      void loadChannels(state, false);
+      return;
     }
     if (panel === "cron") {
       void state.loadCron();

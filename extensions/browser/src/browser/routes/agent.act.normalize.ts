@@ -318,4 +318,5 @@ export function normalizeActRequest(
       };
     }
   }
+  throw new Error("Unsupported browser act kind");
 }

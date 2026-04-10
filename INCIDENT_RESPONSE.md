@@ -43,12 +43,6 @@ Disclosure policy:
 - Critical/high incidents should receive coordinated disclosure, with CVE issuance when appropriate.
 - Low-risk hardening findings may be documented in release notes or advisories without CVE, depending on impact and user exposure.
 
-Every published incident update should include:
-
-1. Affected versions and fixed versions.
-2. Impact summary and trust-boundary context.
-3. Mitigation steps for users who cannot upgrade immediately.
-
 ## 5. Recovery and follow-up
 
 After shipping the fix:

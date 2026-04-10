@@ -20,6 +20,13 @@ API key auth, and dynamic model resolution.
   structure and manifest setup.
 </Info>
 
+<Tip>
+  Provider plugins add models to OpenClaw's normal inference loop. If the model
+  must run through a native agent daemon that owns threads, compaction, or tool
+  events, pair the provider with an [agent harness](/plugins/sdk-agent-harness)
+  instead of putting daemon protocol details in core.
+</Tip>
+
 ## Walkthrough
 
 <Steps>

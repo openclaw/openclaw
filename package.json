@@ -317,6 +317,10 @@
       "types": "./dist/plugin-sdk/cli-backend.d.ts",
       "default": "./dist/plugin-sdk/cli-backend.js"
     },
+    "./plugin-sdk/agent-harness": {
+      "types": "./dist/plugin-sdk/agent-harness.d.ts",
+      "default": "./dist/plugin-sdk/agent-harness.js"
+    },
     "./plugin-sdk/hook-runtime": {
       "types": "./dist/plugin-sdk/hook-runtime.d.ts",
       "default": "./dist/plugin-sdk/hook-runtime.js"
@@ -1099,6 +1103,7 @@
     "check:import-cycles": "node --import tsx scripts/check-import-cycles.ts",
     "check:loc": "node --import tsx scripts/check-ts-max-loc.ts --max 500",
     "check:no-conflict-markers": "node scripts/check-no-conflict-markers.mjs",
+    "codex-app-server:protocol:check": "node --import tsx scripts/check-codex-app-server-protocol.ts",
     "config:channels:check": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --check",
     "config:channels:gen": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --write",
     "config:docs:check": "node --import tsx scripts/generate-config-doc-baseline.ts --check",
@@ -1239,6 +1244,7 @@
     "test:docker:live-cli-backend:claude-subscription": "OPENCLAW_LIVE_CLI_BACKEND_AUTH=subscription OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6 OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG=1 OPENCLAW_LIVE_CLI_BACKEND_MODEL_SWITCH_PROBE=0 OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE=1 OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE=0 OPENCLAW_LIVE_CLI_BACKEND_MCP_PROBE=0 bash scripts/test-live-cli-backend-docker.sh",
     "test:docker:live-cli-backend:codex": "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.4 bash scripts/test-live-cli-backend-docker.sh",
     "test:docker:live-cli-backend:gemini": "OPENCLAW_LIVE_CLI_BACKEND_MODEL=google-gemini-cli/gemini-3-flash-preview bash scripts/test-live-cli-backend-docker.sh",
+    "test:docker:live-codex-harness": "bash scripts/test-live-codex-harness-docker.sh",
     "test:docker:live-gateway": "bash scripts/test-live-gateway-models-docker.sh",
     "test:docker:live-gateway:claude": "OPENCLAW_LIVE_GATEWAY_PROVIDERS=claude-cli OPENCLAW_LIVE_GATEWAY_MODELS=claude-cli/claude-sonnet-4-6 bash scripts/test-live-gateway-models-docker.sh",
     "test:docker:live-gateway:codex": "OPENCLAW_LIVE_GATEWAY_PROVIDERS=codex-cli OPENCLAW_LIVE_GATEWAY_MODELS=codex-cli/gpt-5.4 bash scripts/test-live-gateway-models-docker.sh",
@@ -1271,6 +1277,7 @@
     "test:install:smoke": "bash scripts/test-install-sh-docker.sh",
     "test:live": "node scripts/test-live.mjs",
     "test:live:cache": "bun scripts/check-live-cache.ts",
+    "test:live:codex-harness": "OPENCLAW_LIVE_CODEX_HARNESS=1 node scripts/test-live.mjs -- src/gateway/gateway-codex-harness.live.test.ts",
     "test:live:gateway-profiles": "node scripts/test-live.mjs -- src/gateway/gateway-models.profiles.live.test.ts",
     "test:live:media": "node --import tsx scripts/test-live-media.ts",
     "test:live:media:image": "node --import tsx scripts/test-live-media.ts image",
@@ -1444,7 +1451,7 @@
       "fast-xml-parser": "5.5.7",
       "request": "npm:@cypress/request@3.0.10",
       "request-promise": "npm:@cypress/request-promise@5.0.0",
-      "basic-ftp": "5.2.1",
+      "basic-ftp": "5.2.2",
       "file-type": "22.0.1",
       "form-data": "2.5.4",
       "minimatch": "10.2.4",

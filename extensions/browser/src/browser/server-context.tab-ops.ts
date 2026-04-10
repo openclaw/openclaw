@@ -1,5 +1,10 @@
 import { CDP_JSON_NEW_TIMEOUT_MS } from "./cdp-timeouts.js";
-import { fetchJson, fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js";
+import {
+  assertCdpEndpointAllowed,
+  fetchJson,
+  fetchOk,
+  normalizeCdpHttpBaseForJsonEndpoints,
+} from "./cdp.helpers.js";
 import { appendCdpPath, createTargetViaCdp, normalizeCdpWsUrl } from "./cdp.js";
 import { listChromeMcpTabs, openChromeMcpTab } from "./chrome-mcp.js";
 import type { ResolvedBrowserProfile } from "./config.js";
@@ -75,7 +80,9 @@ export function createProfileTabOps({
       const mod = await getPwAiModule({ mode: "strict" });
       const listPagesViaPlaywright = (mod as Partial<PwAiModule> | null)?.listPagesViaPlaywright;
       if (typeof listPagesViaPlaywright === "function") {
-        const pages = await listPagesViaPlaywright({ cdpUrl: profile.cdpUrl });
+        const ssrfPolicy = getSsrFPolicy();
+        await assertCdpEndpointAllowed(profile.cdpUrl, ssrfPolicy);
+        const pages = await listPagesViaPlaywright({ cdpUrl: profile.cdpUrl, ssrfPolicy });
         return pages.map((p) => ({
           targetId: p.targetId,
           title: p.title,
