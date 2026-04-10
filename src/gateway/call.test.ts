@@ -316,7 +316,7 @@ describe("callGateway url resolution", () => {
       token: "test-token",
     });
 
-    expect(loadConfig).toHaveBeenCalledTimes(1);
+    expect(loadConfig).not.toHaveBeenCalled();
     expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18800");
     expect(lastClientOptions?.token).toBe("test-token");
   });
