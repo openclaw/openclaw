@@ -8,7 +8,7 @@ function makeModel(id: string) {
     name: id,
     contextWindow: 4096,
     maxTokens: 1024,
-    input: ["text"] as const,
+    input: ["text"] as ("image" | "text")[],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     reasoning: false,
   };

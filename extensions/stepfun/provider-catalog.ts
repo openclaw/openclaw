@@ -44,6 +44,15 @@ const STEPFUN_PLAN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> = [
   buildStepFunModel(STEPFUN_FLASH_2603_MODEL_ID, "Step 3.5 Flash 2603"),
 ];
 
+/**
+ * All model IDs managed by the bundled StepFun catalogs.
+ * Used by onboarding to strip stale entries before reapplying.
+ */
+export const STEPFUN_ALL_MANAGED_MODEL_IDS: ReadonlySet<string> = new Set([
+  ...STEPFUN_STANDARD_MODEL_CATALOG.map((m) => m.id),
+  ...STEPFUN_PLAN_MODEL_CATALOG.map((m) => m.id),
+]);
+
 function cloneCatalog(models: ReadonlyArray<ModelDefinitionConfig>): ModelDefinitionConfig[] {
   return models.map((model) => ({ ...model }));
 }

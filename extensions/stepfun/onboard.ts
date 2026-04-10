@@ -6,9 +6,8 @@ import {
 import {
   buildStepFunPlanProvider,
   buildStepFunProvider,
-  STEPFUN_DEFAULT_MODEL_ID,
+  STEPFUN_ALL_MANAGED_MODEL_IDS,
   STEPFUN_DEFAULT_MODEL_REF,
-  STEPFUN_FLASH_2603_MODEL_ID,
   STEPFUN_PLAN_CN_BASE_URL,
   STEPFUN_PLAN_DEFAULT_MODEL_REF,
   STEPFUN_PLAN_INTL_BASE_URL,
@@ -26,11 +25,6 @@ export {
   STEPFUN_STANDARD_CN_BASE_URL,
   STEPFUN_STANDARD_INTL_BASE_URL,
 };
-
-const STEPFUN_MANAGED_MODEL_IDS = new Set([
-  STEPFUN_DEFAULT_MODEL_ID,
-  STEPFUN_FLASH_2603_MODEL_ID,
-]);
 
 function findProviderKey(
   providers: Record<string, unknown> | undefined,
@@ -52,7 +46,7 @@ function stripManagedStepFunModels(cfg: OpenClawConfig, providerId: string): Ope
   }
   const filteredModels = provider.models.filter((model) => {
     const id = typeof model?.id === "string" ? model.id.trim() : "";
-    return !STEPFUN_MANAGED_MODEL_IDS.has(id);
+    return !STEPFUN_ALL_MANAGED_MODEL_IDS.has(id);
   });
   return {
     ...cfg,
