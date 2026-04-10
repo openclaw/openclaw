@@ -197,6 +197,7 @@ describe("exec approvals store helpers", () => {
     expect(() =>
       saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
     ).toThrow(/Refusing to traverse symlink in exec approvals path/);
+    expect(fs.existsSync(path.join(realHome, ".openclaw"))).toBe(false);
   });
 
   it("adds trimmed allowlist entries once and persists generated ids", () => {

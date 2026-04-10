@@ -238,8 +238,8 @@ function mergeLegacyAgent(
 
 function ensureDir(filePath: string) {
   const dir = path.dirname(filePath);
-  fs.mkdirSync(dir, { recursive: true });
   assertNoSymlinkPathComponents(dir, resolveRequiredHomeDir());
+  fs.mkdirSync(dir, { recursive: true });
   const dirStat = fs.lstatSync(dir);
   if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
     throw new Error(`Refusing to use unsafe exec approvals directory: ${dir}`);
