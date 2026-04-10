@@ -7,6 +7,10 @@ const spawnSubagentDirectMock = vi.fn<(...args: unknown[]) => Promise<SpawnSubag
 const waitForAgentRunMock = vi.fn<(...args: unknown[]) => Promise<AgentWaitResult>>();
 const readLatestAssistantReplyMock = vi.fn<(...args: unknown[]) => Promise<string | undefined>>();
 const subagentRunsMap = new Map<string, { frozenResultText?: string | null }>();
+const outputCaptureGateMocks = vi.hoisted(() => ({
+  registerOutputCaptureGate: vi.fn(),
+  signalOutputCaptured: vi.fn(),
+}));
 
 vi.mock("../subagent-spawn.js", () => ({
   spawnSubagentDirect: (...args: unknown[]) => spawnSubagentDirectMock(...args),
@@ -19,6 +23,8 @@ vi.mock("../run-wait.js", () => ({
 
 vi.mock("../subagent-registry-memory.js", () => ({
   subagentRuns: subagentRunsMap,
+  registerOutputCaptureGate: outputCaptureGateMocks.registerOutputCaptureGate,
+  signalOutputCaptured: outputCaptureGateMocks.signalOutputCaptured,
 }));
 
 // Import after mocks are set up.
@@ -42,6 +48,8 @@ describe("sessions_delegate", () => {
     spawnSubagentDirectMock.mockReset();
     waitForAgentRunMock.mockReset();
     readLatestAssistantReplyMock.mockReset();
+    outputCaptureGateMocks.registerOutputCaptureGate.mockReset();
+    outputCaptureGateMocks.signalOutputCaptured.mockReset();
     subagentRunsMap.clear();
   });
 
@@ -136,6 +144,35 @@ describe("sessions_delegate", () => {
     const spawnParams = spawnSubagentDirectMock.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(spawnParams.expectsCompletionMessage).toBe(false);
   });
+
+  it("registers output capture gate before spawn and signals after output read", async () => {
+    spawnSubagentDirectMock.mockResolvedValue(makeAcceptedSpawn());
+    waitForAgentRunMock.mockResolvedValue({ status: "ok" });
+    subagentRunsMap.set("run-1", { frozenResultText: "done" });
+
+    await tool.execute("call-1", { task: "test" });
+
+    expect(outputCaptureGateMocks.registerOutputCaptureGate).toHaveBeenCalledWith("run-1");
+    expect(outputCaptureGateMocks.signalOutputCaptured).toHaveBeenCalledWith("run-1");
+  });
+
+  it("signals output capture gate on timeout", async () => {
+    spawnSubagentDirectMock.mockResolvedValue(makeAcceptedSpawn());
+    waitForAgentRunMock.mockResolvedValue({ status: "timeout" });
+
+    await tool.execute("call-1", { task: "test", timeoutSeconds: 1 });
+
+    expect(outputCaptureGateMocks.signalOutputCaptured).toHaveBeenCalledWith("run-1");
+  });
+
+  it("signals output capture gate on error", async () => {
+    spawnSubagentDirectMock.mockResolvedValue(makeAcceptedSpawn());
+    waitForAgentRunMock.mockResolvedValue({ status: "error", error: "boom" });
+
+    await tool.execute("call-1", { task: "test" });
+
+    expect(outputCaptureGateMocks.signalOutputCaptured).toHaveBeenCalledWith("run-1");
+  });
 });
 
 describe("sessions_delegate_batch", () => {
@@ -145,6 +182,8 @@ describe("sessions_delegate_batch", () => {
     spawnSubagentDirectMock.mockReset();
     waitForAgentRunMock.mockReset();
     readLatestAssistantReplyMock.mockReset();
+    outputCaptureGateMocks.registerOutputCaptureGate.mockReset();
+    outputCaptureGateMocks.signalOutputCaptured.mockReset();
     subagentRunsMap.clear();
   });
 

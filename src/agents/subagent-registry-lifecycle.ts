@@ -34,6 +34,7 @@ import {
   resolveAnnounceRetryDelayMs,
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
+import { waitForOutputCaptureGate } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function createSubagentRegistryLifecycleController(params: {
@@ -488,6 +489,13 @@ export function createSubagentRegistryLifecycleController(params: {
     if (entry.expectsCompletionMessage === false) {
       void (async () => {
         try {
+          // Wait for the delegate tool to finish reading the child output
+          // before we delete the session transcript or remove the run entry.
+          // The delegate tool registers a gate before spawning and signals
+          // it after readChildOutput completes. Timeout prevents stalling
+          // if the gate is never signalled (e.g. the delegate tool crashed).
+          await waitForOutputCaptureGate(runId, 30_000);
+
           const shouldDeleteAttachments =
             entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
           if (shouldDeleteAttachments) {

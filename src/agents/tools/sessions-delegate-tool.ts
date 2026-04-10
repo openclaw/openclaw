@@ -3,7 +3,11 @@ import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { waitForAgentRun, readLatestAssistantReply } from "../run-wait.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
-import { subagentRuns } from "../subagent-registry-memory.js";
+import {
+  registerOutputCaptureGate,
+  signalOutputCaptured,
+  subagentRuns,
+} from "../subagent-registry-memory.js";
 import { spawnSubagentDirect } from "../subagent-spawn.js";
 import {
   describeSessionsDelegateTool,
@@ -182,12 +186,17 @@ async function executeSingleDelegate(
   const childSessionKey = spawnResult.childSessionKey!;
   const runId = spawnResult.runId!;
 
+  // Register a gate so the lifecycle cleanup fast path waits for us to
+  // finish reading the child output before deleting the session/entry.
+  registerOutputCaptureGate(runId);
+
   const waitResult = await waitForAgentRun({
     runId,
     timeoutMs: timeoutSeconds * 1000,
   });
 
   if (waitResult.status === "timeout") {
+    signalOutputCaptured(runId);
     return {
       status: "timeout",
       runId,
@@ -198,6 +207,7 @@ async function executeSingleDelegate(
   }
 
   if (waitResult.status === "error") {
+    signalOutputCaptured(runId);
     return {
       status: "error",
       runId,
@@ -208,6 +218,7 @@ async function executeSingleDelegate(
   }
 
   const output = await readChildOutput({ runId, childSessionKey });
+  signalOutputCaptured(runId);
 
   return {
     status: "ok",

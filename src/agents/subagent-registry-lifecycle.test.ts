@@ -57,6 +57,14 @@ vi.mock("./subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(async () => false),
 }));
 
+const registryMemoryMocks = vi.hoisted(() => ({
+  waitForOutputCaptureGate: vi.fn(async () => true),
+}));
+
+vi.mock("./subagent-registry-memory.js", () => ({
+  waitForOutputCaptureGate: registryMemoryMocks.waitForOutputCaptureGate,
+}));
+
 vi.mock("./subagent-registry-cleanup.js", () => ({
   resolveCleanupCompletionReason: () => SUBAGENT_ENDED_REASON_COMPLETE,
   resolveDeferredCleanupDecision: () => ({ kind: "give-up", reason: "retry-limit" }),
@@ -328,5 +336,61 @@ describe("subagent registry lifecycle hardening", () => {
       browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
     ).not.toHaveBeenCalled();
     expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+  });
+
+  it("awaits output capture gate before deleting delegate child session", async () => {
+    const persist = vi.fn();
+    const deleteChildSession = vi.fn(async () => {});
+    const entry = createRunEntry({
+      expectsCompletionMessage: false,
+      cleanup: "delete",
+    });
+
+    // Track call order to verify gate is awaited before deletion.
+    const callOrder: string[] = [];
+    registryMemoryMocks.waitForOutputCaptureGate.mockImplementation(async () => {
+      callOrder.push("waitForOutputCaptureGate");
+      return true;
+    });
+    deleteChildSession.mockImplementation(async () => {
+      callOrder.push("deleteChildSession");
+    });
+
+    const controller = createSubagentRegistryLifecycleController({
+      runs: new Map([[entry.runId, entry]]),
+      resumedRuns: new Set(),
+      subagentAnnounceTimeoutMs: 1_000,
+      persist,
+      clearPendingLifecycleError: vi.fn(),
+      countPendingDescendantRuns: () => 0,
+      suppressAnnounceForSteerRestart: () => false,
+      shouldEmitEndedHookForRun: () => false,
+      emitSubagentEndedHookForRun: vi.fn(async () => {}),
+      notifyContextEngineSubagentEnded: vi.fn(async () => {}),
+      resumeSubagentRun: vi.fn(),
+      captureSubagentCompletionReply: vi.fn(async () => "done"),
+      runSubagentAnnounceFlow: vi.fn(async () => true),
+      deleteChildSession,
+      warn: vi.fn(),
+    });
+
+    await controller.completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: true,
+    });
+
+    await vi.waitFor(() => {
+      expect(persist).toHaveBeenCalled();
+    });
+
+    expect(registryMemoryMocks.waitForOutputCaptureGate).toHaveBeenCalledWith(entry.runId, 30_000);
+    expect(deleteChildSession).toHaveBeenCalledWith(entry.childSessionKey);
+    // Gate must be awaited before session deletion.
+    expect(callOrder.indexOf("waitForOutputCaptureGate")).toBeLessThan(
+      callOrder.indexOf("deleteChildSession"),
+    );
   });
 });
