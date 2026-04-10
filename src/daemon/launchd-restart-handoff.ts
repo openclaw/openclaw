@@ -85,6 +85,7 @@ fi
 `;
 
   if (mode === "kickstart") {
+    // Restart is explicit operator intent; undo any previous `launchctl disable`.
     return `service_target="$1"
 domain="$2"
 plist_path="$3"
@@ -98,6 +99,7 @@ fi
 `;
   }
 
+  // Restart is explicit operator intent; undo any previous `launchctl disable`.
   return `service_target="$1"
 domain="$2"
 plist_path="$3"

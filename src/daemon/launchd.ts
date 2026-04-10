@@ -205,6 +205,8 @@ async function bootstrapLaunchAgentOrThrow(params: {
   plistPath: string;
   actionHint: string;
 }) {
+  // `disable` state survives bootout and plist rewrites; explicit start/repair
+  // paths must clear it before asking launchd to load the job again.
   await execLaunchctl(["enable", params.serviceTarget]);
   const boot = await execLaunchctl(["bootstrap", params.domain, params.plistPath]);
   if (boot.code === 0) {
@@ -504,6 +506,8 @@ type LaunchAgentProbeResult =
   | { state: "unknown"; detail?: string };
 
 async function probeLaunchAgentState(serviceTarget: string): Promise<LaunchAgentProbeResult> {
+  // `launchctl print` output is not a stable API, so this is only a stop
+  // confirmation probe. Unknown output falls back to bootout instead of success.
   const probe = await execLaunchctl(["print", serviceTarget]);
   if (probe.code !== 0) {
     if (isLaunchctlNotLoaded(probe)) {
@@ -545,8 +549,8 @@ export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs
   const serviceTarget = `${domain}/${label}`;
 
   // Keep the LaunchAgent installed, but persistently suppress KeepAlive/RunAtLoad
-  // before stopping the current process. If disable fails, fall back to bootout so
-  // the command still leaves the gateway down.
+  // before stopping the current process. Without `disable`, launchd can relaunch
+  // the process as soon as `stop` exits.
   const disable = await execLaunchctl(["disable", serviceTarget]);
   if (disable.code !== 0) {
     await bootoutLaunchAgentOrThrow({
