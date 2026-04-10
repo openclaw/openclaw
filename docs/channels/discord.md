@@ -1162,7 +1162,11 @@ Required env keys for this baseline:
 - `OPENAI_API_KEY` for the `openai/*` path (`tools.media.audio` and `openai` TTS path)
 - Optional: Codex OAuth profile auth if you switch `channels.discord.voice.model` to `openai-codex/*`.
 
+For latency-sensitive voice sessions, start with a smaller/faster response model:
 
+- If you have Codex auth, `openai-codex/gpt-5.3-codex-spark` is typically lower-latency.
+- Otherwise use a fast OpenAI-family equivalent such as `openai/gpt-5.4-mini` or your provider's lowest-latency compatible choice.
+- Keep TTS/STT at deterministic settings while you tune VC model latency (for example keep `gpt-4o-mini-transcribe` / `gpt-4o-mini-tts`).
 
 Notes:
 
