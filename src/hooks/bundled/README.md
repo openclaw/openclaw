@@ -60,6 +60,20 @@ Runs `BOOT.md` whenever the gateway starts (after channels start).
 openclaw hooks enable boot-md
 ```
 
+### 🦞 minimax-1008-guard
+
+Intercepts MiniMax `insufficient balance (1008)` errors — the ones that usually mean "context window exceeded", not "you're out of money". Auto-compacts the session and prevents gateway hangs.
+
+**Events**: `session:patch`
+**What it does**: Detects 1008 billing errors, distinguishes context overflow from true billing issues, auto-recovers via `/compact`.
+**Why**: MiniMax returns 1008 for both context overflow and actual billing problems, but OpenClaw treats them identically — causing the gateway to hang indefinitely on long sessions. See [#24622](https://github.com/openclaw/openclaw/issues/24622).
+
+**Enable**:
+
+```bash
+openclaw hooks enable minimax-1008-guard
+```
+
 ## Hook Structure
 
 Each hook is a directory containing:
