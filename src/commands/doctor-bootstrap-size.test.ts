@@ -1,12 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as piEmbeddedHelpers from "../agents/pi-embedded-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 
 const note = vi.hoisted(() => vi.fn());
 const resolveAgentWorkspaceDir = vi.hoisted(() => vi.fn(() => "/tmp/workspace"));
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
 const resolveBootstrapContextForRun = vi.hoisted(() => vi.fn());
-const resolveBootstrapMaxChars = vi.hoisted(() => vi.fn(() => 20_000));
-const resolveBootstrapTotalMaxChars = vi.hoisted(() => vi.fn(() => 150_000));
 
 vi.mock("../terminal/note.js", () => ({
   note,
@@ -21,20 +20,12 @@ vi.mock("../agents/bootstrap-files.js", () => ({
   resolveBootstrapContextForRun,
 }));
 
-vi.mock("../agents/pi-embedded-helpers.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/pi-embedded-helpers.js")>(
-    "../agents/pi-embedded-helpers.js",
-  );
-  return {
-    ...actual,
-    resolveBootstrapMaxChars,
-    resolveBootstrapTotalMaxChars,
-  };
-});
-
 import { noteBootstrapFileSize } from "./doctor-bootstrap-size.js";
 
 describe("noteBootstrapFileSize", () => {
+  let resolveBootstrapMaxCharsSpy: ReturnType<typeof vi.spyOn>;
+  let resolveBootstrapTotalMaxCharsSpy: ReturnType<typeof vi.spyOn>;
+
   beforeEach(() => {
     note.mockClear();
     resolveBootstrapContextForRun.mockReset();
@@ -42,6 +33,17 @@ describe("noteBootstrapFileSize", () => {
       bootstrapFiles: [],
       contextFiles: [],
     });
+    resolveBootstrapMaxCharsSpy = vi
+      .spyOn(piEmbeddedHelpers, "resolveBootstrapMaxChars")
+      .mockReturnValue(20_000);
+    resolveBootstrapTotalMaxCharsSpy = vi
+      .spyOn(piEmbeddedHelpers, "resolveBootstrapTotalMaxChars")
+      .mockReturnValue(150_000);
+  });
+
+  afterEach(() => {
+    resolveBootstrapMaxCharsSpy.mockRestore();
+    resolveBootstrapTotalMaxCharsSpy.mockRestore();
   });
 
   it("emits a warning when bootstrap files are truncated", async () => {
