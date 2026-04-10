@@ -14,6 +14,8 @@ const getApiKeyForModelMock = vi.fn();
 const requireApiKeyMock = vi.fn();
 const resolveSessionAuthProfileOverrideMock = vi.fn();
 const getActiveEmbeddedRunSnapshotMock = vi.fn();
+const resolveSessionAgentIdMock = vi.fn();
+const resolveAgentWorkspaceDirMock = vi.fn();
 const prepareProviderRuntimeAuthMock = vi.fn();
 const diagDebugMock = vi.fn();
 
@@ -57,6 +59,11 @@ vi.mock("./model-auth.js", () => ({
 
 vi.mock("./pi-embedded-runner/runs.js", () => ({
   getActiveEmbeddedRunSnapshot: (...args: unknown[]) => getActiveEmbeddedRunSnapshotMock(...args),
+}));
+
+vi.mock("./agent-scope.js", () => ({
+  resolveSessionAgentId: (...args: unknown[]) => resolveSessionAgentIdMock(...args),
+  resolveAgentWorkspaceDir: (...args: unknown[]) => resolveAgentWorkspaceDirMock(...args),
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
@@ -199,6 +206,8 @@ describe("runBtwSideQuestion", () => {
     requireApiKeyMock.mockReset();
     resolveSessionAuthProfileOverrideMock.mockReset();
     getActiveEmbeddedRunSnapshotMock.mockReset();
+    resolveSessionAgentIdMock.mockReset();
+    resolveAgentWorkspaceDirMock.mockReset();
     prepareProviderRuntimeAuthMock.mockReset();
     diagDebugMock.mockReset();
 
@@ -215,6 +224,8 @@ describe("runBtwSideQuestion", () => {
     requireApiKeyMock.mockReturnValue("secret");
     resolveSessionAuthProfileOverrideMock.mockResolvedValue("profile-1");
     getActiveEmbeddedRunSnapshotMock.mockReturnValue(undefined);
+    resolveSessionAgentIdMock.mockReturnValue("main");
+    resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
     prepareProviderRuntimeAuthMock.mockResolvedValue(undefined);
   });
 
@@ -333,9 +344,11 @@ describe("runBtwSideQuestion", () => {
     expect(prepareProviderRuntimeAuthMock).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "github-copilot",
+        workspaceDir: "/tmp/workspace",
         context: expect.objectContaining({
           provider: "github-copilot",
           modelId: "gpt-5.4",
+          workspaceDir: "/tmp/workspace",
           apiKey: "github-token",
           authMode: "token",
           profileId: "profile-1",
