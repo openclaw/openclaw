@@ -117,7 +117,7 @@ describe("StepFun provider catalog", () => {
     );
   });
 
-  it("prefers the latest configured StepFun region when older profiles remain in the store", async () => {
+  it("prefers the latest configured StepFun region when multiple profiles exist in auth.order", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
 
     upsertAuthProfile({
@@ -157,6 +157,7 @@ describe("StepFun provider catalog", () => {
       agentDir,
     });
 
+    // Test with auth.order to verify inferLatestConfiguredRegion logic
     const providers = await resolveImplicitProvidersForTest({
       agentDir,
       env: {},
@@ -168,10 +169,15 @@ describe("StepFun provider catalog", () => {
             "stepfun:intl": { provider: "stepfun", mode: "api_key" },
             "stepfun-plan:intl": { provider: "stepfun-plan", mode: "api_key" },
           },
+          order: {
+            stepfun: ["stepfun:cn", "stepfun:intl"], // intl is latest
+            "stepfun-plan": ["stepfun-plan:cn", "stepfun-plan:intl"], // intl is latest
+          },
         },
       },
     });
 
+    // Should prefer intl (latest in auth.order) over cn (oldest)
     expect(providers?.stepfun?.baseUrl).toBe("https://api.stepfun.ai/v1");
     expect(providers?.["stepfun-plan"]?.baseUrl).toBe("https://api.stepfun.ai/step_plan/v1");
   });

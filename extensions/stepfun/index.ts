@@ -83,7 +83,9 @@ function inferLatestConfiguredRegion(ctx: ProviderCatalogContext): StepFunRegion
       continue;
     }
     // auth.order is an array where later entries are more recent
-    for (const profileId of matchingOrder) {
+    // Iterate in reverse to find the most recent matching profile
+    for (let i = matchingOrder.length - 1; i >= 0; i--) {
+      const profileId = matchingOrder[i];
       const region = inferRegionFromProfileId(typeof profileId === "string" ? profileId : "");
       if (region) {
         return region;
