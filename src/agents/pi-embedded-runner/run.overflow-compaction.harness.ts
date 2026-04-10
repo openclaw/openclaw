@@ -376,7 +376,12 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     redactRunIdentifier: vi.fn((value?: string) => value ?? ""),
   }));
 
+  const actualPiHelpers = await vi.importActual<typeof import("../pi-embedded-helpers.js")>(
+    "../pi-embedded-helpers.js",
+  );
+
   vi.doMock("../pi-embedded-helpers.js", () => ({
+    ...actualPiHelpers,
     formatBillingErrorMessage: mockedFormatBillingErrorMessage,
     classifyFailoverReason: mockedClassifyFailoverReason,
     extractObservedOverflowTokenCount: mockedExtractObservedOverflowTokenCount,
