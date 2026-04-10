@@ -286,6 +286,13 @@ describe("exec-policy CLI", () => {
       }),
       0,
     );
+    const [{ effectivePolicy }] = mocks.defaultRuntime.writeJson.mock.calls.at(-1) as [Record<
+      string,
+      unknown
+    >, number];
+    expect((effectivePolicy as { scopes: Record<string, unknown>[] }).scopes[0]).not.toHaveProperty(
+      "allowedDecisions",
+    );
   });
 
   it("applies the yolo preset to both config and approvals", async () => {

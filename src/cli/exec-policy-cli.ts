@@ -245,14 +245,15 @@ async function buildLocalExecPolicyShowPayload(): Promise<ExecPolicyShowPayload>
 }
 
 function buildExecPolicyShowScope(snapshot: ExecPolicyScopeSnapshot): ExecPolicyShowScope {
+  const { allowedDecisions: _allowedDecisions, ...baseScope } = snapshot;
   if (snapshot.host.requested !== "node") {
     return {
-      ...snapshot,
+      ...baseScope,
       runtimeApprovalsSource: "local-file",
     };
   }
   return {
-    ...snapshot,
+    ...baseScope,
     runtimeApprovalsSource: "node-runtime",
     security: {
       requested: snapshot.security.requested,
