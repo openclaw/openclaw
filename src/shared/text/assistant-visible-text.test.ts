@@ -167,10 +167,7 @@ describe("stripAssistantInternalScaffolding", () => {
     });
 
     it("strips dangling Qwen-style <tool_call> with nested XML to end", () => {
-      expectVisibleText(
-        "prefix\n<tool_call><function=read><parameter=path>/home",
-        "prefix\n",
-      );
+      expectVisibleText("prefix\n<tool_call><function=read><parameter=path>/home", "prefix\n");
     });
 
     it("does not close early on </tool_call> text inside JSON strings", () => {

@@ -127,6 +127,7 @@ export async function emitResetCommandHooks(params: {
         to,
         sessionKey: params.sessionKey,
         accountId: params.ctx.AccountId,
+        requesterSenderId: params.command.senderId,
         threadId: params.ctx.MessageThreadId,
         cfg: params.cfg,
       });

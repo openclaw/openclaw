@@ -338,9 +338,9 @@ export function ensurePageState(page: Page): PageState {
     });
     page.on("pageerror", (err: Error) => {
       state.errors.push({
-        message: err?.message ? String(err.message) : String(err),
-        name: err?.name ? String(err.name) : undefined,
-        stack: err?.stack ? String(err.stack) : undefined,
+        message: err.message || String(err),
+        name: err.name || undefined,
+        stack: err.stack || undefined,
         timestamp: new Date().toISOString(),
       });
       if (state.errors.length > MAX_PAGE_ERRORS) {
@@ -704,6 +704,36 @@ function isTopLevelNavigationRequest(page: Page, request: Request): boolean {
   }
 }
 
+function isSubframeDocumentNavigationRequest(page: Page, request: Request): boolean {
+  let sameMainFrame = false;
+  try {
+    sameMainFrame = request.frame() === page.mainFrame();
+  } catch {
+    // Fail closed: if frame resolution throws after the top-level check already
+    // determined this is NOT the main frame, treat it as a subframe document
+    // navigation so the SSRF guard still fires. Returning false here would let
+    // transient renderer churn skip the policy check entirely.
+    return true;
+  }
+  if (sameMainFrame) {
+    return false;
+  }
+
+  try {
+    if (request.isNavigationRequest()) {
+      return true;
+    }
+  } catch {
+    // Fall through to the resource-type check.
+  }
+
+  try {
+    return request.resourceType() === "document";
+  } catch {
+    return false;
+  }
+}
+
 function isPolicyDenyNavigationError(err: unknown): boolean {
   return err instanceof SsrFBlockedError || err instanceof InvalidBrowserNavigationUrlError;
 }
@@ -769,7 +799,10 @@ export async function gotoPageWithNavigationGuard(opts: {
       await route.abort().catch(() => {});
       return;
     }
-    if (!isTopLevelNavigationRequest(opts.page, request)) {
+    const isTopLevel = isTopLevelNavigationRequest(opts.page, request);
+    const isSubframeDocument =
+      !isTopLevel && isSubframeDocumentNavigationRequest(opts.page, request);
+    if (!isTopLevel && !isSubframeDocument) {
       await route.continue();
       return;
     }
@@ -780,7 +813,9 @@ export async function gotoPageWithNavigationGuard(opts: {
       });
     } catch (err) {
       if (isPolicyDenyNavigationError(err)) {
-        blockedError = err;
+        if (isTopLevel) {
+          blockedError = err;
+        }
         await route.abort().catch(() => {});
         return;
       }
@@ -1010,7 +1045,11 @@ export async function forceDisconnectPlaywrightForTarget(opts: {
   // disconnect Playwright's CDP connection.
   const targetId = normalizeOptionalString(opts.targetId) ?? "";
   if (targetId) {
-    await tryTerminateExecutionViaCdp({ cdpUrl: normalized, targetId, ssrfPolicy: opts.ssrfPolicy }).catch(() => {});
+    await tryTerminateExecutionViaCdp({
+      cdpUrl: normalized,
+      targetId,
+      ssrfPolicy: opts.ssrfPolicy,
+    }).catch(() => {});
   }
 
   // Fire-and-forget: don't await because browser.close() may hang on the stuck CDP pipe.

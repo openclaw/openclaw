@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { startQaGatewayChild } from "./gateway-child.js";
 import {
   defaultQaModelForMode,
@@ -292,21 +293,30 @@ async function callTelegramApi<T>(
   body?: Record<string, unknown>,
   timeoutMs = 15_000,
 ): Promise<T> {
-  const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
+  const { response, release } = await fetchWithSsrFGuard({
+    url: `https://api.telegram.org/bot${token}/${method}`,
+    init: {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body ?? {}),
     },
-    body: JSON.stringify(body ?? {}),
     signal: AbortSignal.timeout(timeoutMs),
+    policy: { hostnameAllowlist: ["api.telegram.org"] },
+    auditContext: "qa-lab-telegram-live",
   });
-  const payload = (await response.json()) as TelegramApiEnvelope<T>;
-  if (!response.ok || !payload.ok || payload.result === undefined) {
-    throw new Error(
-      payload.description?.trim() || `${method} failed with status ${response.status}`,
-    );
+  try {
+    const payload = (await response.json()) as TelegramApiEnvelope<T>;
+    if (!response.ok || !payload.ok || payload.result === undefined) {
+      throw new Error(
+        payload.description?.trim() || `${method} failed with status ${response.status}`,
+      );
+    }
+    return payload.result;
+  } finally {
+    await release();
   }
-  return payload.result;
 }
 
 async function getBotIdentity(token: string) {

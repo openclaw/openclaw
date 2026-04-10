@@ -139,7 +139,7 @@ function callHandler(params: Record<string, unknown> = {}) {
   const respond = (ok: boolean, payload?: unknown, error?: unknown) => {
     result = { ok, payload, error };
   };
-  commandsHandlers["commands.list"]({
+  void commandsHandlers["commands.list"]({
     params,
     respond,
     req: {} as never,

@@ -44,4 +44,13 @@ describe("agent defaults schema", () => {
   it("rejects invalid contextInjection values", () => {
     expect(() => AgentDefaultsSchema.parse({ contextInjection: "never" })).toThrow();
   });
+
+  it("accepts embeddedPi.executionContract", () => {
+    const result = AgentDefaultsSchema.parse({
+      embeddedPi: {
+        executionContract: "strict-agentic",
+      },
+    })!;
+    expect(result.embeddedPi?.executionContract).toBe("strict-agentic");
+  });
 });

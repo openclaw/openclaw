@@ -1,16 +1,5 @@
 import { vi } from "vitest";
 
-vi.mock("@mariozechner/pi-ai", async () => {
-  const original =
-    await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
-  return {
-    ...original,
-    getOAuthApiKey: () => undefined,
-    getOAuthProviders: () => [],
-    loginOpenAICodex: vi.fn(),
-  };
-});
-
 vi.mock("@mariozechner/pi-ai/oauth", () => ({
   getOAuthApiKey: () => undefined,
   getOAuthProviders: () => [],

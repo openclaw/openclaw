@@ -35,7 +35,7 @@ export function handleAgentStart(ctx: EmbeddedPiSubscribeContext) {
   });
 }
 
-export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
+export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<void> {
   const lastAssistant = ctx.state.lastAssistant;
   const isError = isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error";
   let lifecycleErrorText: string | undefined;
@@ -136,6 +136,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
         if (isPromiseLike<void>(onBlockReplyFlushResult)) {
           return onBlockReplyFlushResult;
         }
+        return undefined;
       });
     }
 
@@ -143,6 +144,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
     if (isPromiseLike<void>(onBlockReplyFlushResult)) {
       return onBlockReplyFlushResult;
     }
+    return undefined;
   };
 
   let lifecycleTerminalEmitted = false;
@@ -172,4 +174,5 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
   }
 
   emitLifecycleTerminalOnce();
+  return undefined;
 }

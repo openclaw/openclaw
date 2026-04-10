@@ -316,7 +316,7 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.resolveOutboundTarget).not.toHaveBeenCalled();
   });
 
-  it("falls back to the base session when the thread entry only has partial route metadata", async () => {
+  it("merges base session routing into partial thread metadata", async () => {
     mocks.consumeRestartSentinel.mockResolvedValue({
       payload: {
         sessionKey: "agent:main:matrix:channel:!lowercased:example.org:thread:$thread-event",
@@ -329,14 +329,20 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.loadSessionEntry
       .mockReturnValueOnce({
         cfg: {},
-        entry: { origin: { provider: "matrix", threadId: "$thread-event" } },
+        entry: {
+          origin: { provider: "matrix", accountId: "acct-thread", threadId: "$thread-event" },
+        },
       })
       .mockReturnValueOnce({
         cfg: {},
         entry: { lastChannel: "matrix", lastTo: "room:!MixedCase:example.org" },
       });
     mocks.deliveryContextFromSession
-      .mockReturnValueOnce({ channel: "matrix", threadId: "$thread-event" })
+      .mockReturnValueOnce({
+        channel: "matrix",
+        accountId: "acct-thread",
+        threadId: "$thread-event",
+      })
       .mockReturnValueOnce({ channel: "matrix", to: "room:!MixedCase:example.org" });
     mocks.resolveOutboundTarget.mockReturnValue({
       ok: true as const,
@@ -349,12 +355,14 @@ describe("scheduleRestartSentinelWake", () => {
       expect.objectContaining({
         channel: "matrix",
         to: "room:!MixedCase:example.org",
+        accountId: "acct-thread",
       }),
     );
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "matrix",
         to: "room:!MixedCase:example.org",
+        accountId: "acct-thread",
         threadId: "$thread-event",
       }),
     );

@@ -85,8 +85,8 @@ function createProfileContext(
 
   const { ensureTabAvailable, focusTab, closeTab } = createProfileSelectionOps({
     profile,
-    state,
     getProfileState,
+    getSsrFPolicy: () => state().resolved.ssrfPolicy,
     ensureBrowserAvailable,
     listTabs,
     openTab,

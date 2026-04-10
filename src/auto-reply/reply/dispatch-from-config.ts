@@ -351,6 +351,10 @@ export async function dispatchReplyFromConfig(params: {
       to: originatingTo,
       sessionKey: ctx.SessionKey,
       accountId: ctx.AccountId,
+      requesterSenderId: ctx.SenderId,
+      requesterSenderName: ctx.SenderName,
+      requesterSenderUsername: ctx.SenderUsername,
+      requesterSenderE164: ctx.SenderE164,
       threadId: routeThreadId,
       cfg,
       abortSignal,
@@ -374,6 +378,10 @@ export async function dispatchReplyFromConfig(params: {
         to: originatingTo,
         sessionKey: ctx.SessionKey,
         accountId: ctx.AccountId,
+        requesterSenderId: ctx.SenderId,
+        requesterSenderName: ctx.SenderName,
+        requesterSenderUsername: ctx.SenderUsername,
+        requesterSenderE164: ctx.SenderE164,
         threadId: routeThreadId,
         cfg,
         isGroup,
@@ -530,6 +538,10 @@ export async function dispatchReplyFromConfig(params: {
           to: originatingTo,
           sessionKey: ctx.SessionKey,
           accountId: ctx.AccountId,
+          requesterSenderId: ctx.SenderId,
+          requesterSenderName: ctx.SenderName,
+          requesterSenderUsername: ctx.SenderUsername,
+          requesterSenderE164: ctx.SenderE164,
           threadId: routeThreadId,
           cfg,
           isGroup,
@@ -587,6 +599,10 @@ export async function dispatchReplyFromConfig(params: {
           to: originatingTo,
           sessionKey: ctx.SessionKey,
           accountId: ctx.AccountId,
+          requesterSenderId: ctx.SenderId,
+          requesterSenderName: ctx.SenderName,
+          requesterSenderUsername: ctx.SenderUsername,
+          requesterSenderE164: ctx.SenderE164,
           threadId: routeThreadId,
           cfg,
           isGroup,
@@ -711,7 +727,7 @@ export async function dispatchReplyFromConfig(params: {
       }
       return parts.join("\n\n").trim() || "Planning next steps.";
     };
-    const maybeSendWorkingStatus = (label: string) => {
+    const maybeSendWorkingStatus = async (label: string): Promise<void> => {
       const normalizedLabel = normalizeWorkingLabel(label);
       if (
         !shouldEmitVerboseProgress() ||
@@ -728,11 +744,15 @@ export async function dispatchReplyFromConfig(params: {
         text: `Working: ${normalizedLabel}`,
       };
       if (shouldRouteToOriginating) {
-        return sendPayloadAsync(payload, undefined, false);
+        await sendPayloadAsync(payload, undefined, false);
+        return;
       }
       dispatcher.sendToolResult(payload);
     };
-    const sendPlanUpdate = (payload: { explanation?: string; steps?: string[] }) => {
+    const sendPlanUpdate = async (payload: {
+      explanation?: string;
+      steps?: string[];
+    }): Promise<void> => {
       if (!shouldEmitVerboseProgress()) {
         return;
       }
@@ -740,7 +760,8 @@ export async function dispatchReplyFromConfig(params: {
         text: formatPlanUpdateText(payload),
       };
       if (shouldRouteToOriginating) {
-        return sendPayloadAsync(replyPayload, undefined, false);
+        await sendPayloadAsync(replyPayload, undefined, false);
+        return;
       }
       dispatcher.sendToolResult(replyPayload);
     };
@@ -850,13 +871,13 @@ export async function dispatchReplyFromConfig(params: {
           };
           return run();
         },
-        onPlanUpdate: ({ phase, explanation, steps }) => {
+        onPlanUpdate: async ({ phase, explanation, steps }) => {
           if (phase !== "update") {
             return;
           }
-          return sendPlanUpdate({ explanation, steps });
+          await sendPlanUpdate({ explanation, steps });
         },
-        onApprovalEvent: ({ phase, status, command, message }) => {
+        onApprovalEvent: async ({ phase, status, command, message }) => {
           if (phase !== "requested") {
             return;
           }
@@ -864,9 +885,9 @@ export async function dispatchReplyFromConfig(params: {
           if (!label) {
             return;
           }
-          return maybeSendWorkingStatus(label);
+          await maybeSendWorkingStatus(label);
         },
-        onPatchSummary: ({ phase, summary, title }) => {
+        onPatchSummary: async ({ phase, summary, title }) => {
           if (phase !== "end") {
             return;
           }
@@ -874,7 +895,7 @@ export async function dispatchReplyFromConfig(params: {
           if (!label) {
             return;
           }
-          return maybeSendWorkingStatus(label);
+          await maybeSendWorkingStatus(label);
         },
         onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => {
           const run = async () => {
@@ -1012,6 +1033,10 @@ export async function dispatchReplyFromConfig(params: {
               to: originatingTo,
               sessionKey: ctx.SessionKey,
               accountId: ctx.AccountId,
+              requesterSenderId: ctx.SenderId,
+              requesterSenderName: ctx.SenderName,
+              requesterSenderUsername: ctx.SenderUsername,
+              requesterSenderE164: ctx.SenderE164,
               threadId: routeThreadId,
               cfg,
               isGroup,

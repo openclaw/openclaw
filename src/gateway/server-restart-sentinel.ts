@@ -161,7 +161,10 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
     baseSessionKey !== sessionKey
   ) {
     const { entry: baseEntry } = loadSessionEntry(baseSessionKey);
-    sessionDeliveryContext = deliveryContextFromSession(baseEntry);
+    sessionDeliveryContext = mergeDeliveryContext(
+      sessionDeliveryContext,
+      deliveryContextFromSession(baseEntry),
+    );
   }
 
   const origin = mergeDeliveryContext(sentinelContext, sessionDeliveryContext);
