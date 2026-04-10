@@ -997,7 +997,6 @@ export async function runEmbeddedAttempt(
       queueYieldInterruptForSession = () => {
         queueSessionsYieldInterruptMessage(activeSession);
       };
-      let loopHookActive = false;
       if (params.contextEngine?.info?.ownsCompaction !== true) {
         removeToolResultContextGuard = installToolResultContextGuard({
           agent: activeSession.agent,
@@ -1018,7 +1017,6 @@ export async function runEmbeddedAttempt(
           tokenBudget: params.contextTokenBudget,
           modelId: params.modelId,
         });
-        loopHookActive = true;
       }
       const cacheTrace = createCacheTrace({
         cfg: params.config,
@@ -2218,7 +2216,6 @@ export async function runEmbeddedAttempt(
             prePromptMessageCount,
             tokenBudget: params.contextTokenBudget,
             runtimeContext: afterTurnRuntimeContext,
-            skipAfterTurn: loopHookActive,
             runMaintenance: async (contextParams) =>
               await runContextEngineMaintenance({
                 contextEngine: contextParams.contextEngine as never,

@@ -199,9 +199,6 @@ export async function finalizeAttemptContextEngineTurn(params: {
   }) => Promise<unknown>;
   sessionManager: unknown;
   warn: (message: string) => void;
-  /** When true, skip the afterTurn/ingest calls because the loop hook already
-   *  handled per-iteration ingestion during the tool loop. Maintenance still runs. */
-  skipAfterTurn?: boolean;
 }) {
   if (!params.contextEngine) {
     return { postTurnFinalizationSucceeded: true };
@@ -209,8 +206,7 @@ export async function finalizeAttemptContextEngineTurn(params: {
 
   let postTurnFinalizationSucceeded = true;
 
-  if (!params.skipAfterTurn) {
-    if (typeof params.contextEngine.afterTurn === "function") {
+  if (typeof params.contextEngine.afterTurn === "function") {
       try {
         await params.contextEngine.afterTurn({
           sessionId: params.sessionIdUsed,
@@ -255,7 +251,7 @@ export async function finalizeAttemptContextEngineTurn(params: {
         }
       }
     }
-  }
+
 
   if (
     !params.promptError &&
