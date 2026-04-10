@@ -13,6 +13,7 @@ import { normalizeLowercaseStringOrEmpty, readStringValue } from "openclaw/plugi
 const log = createSubsystemLogger("anthropic-stream");
 
 const ANTHROPIC_CONTEXT_1M_BETA = "context-1m-2025-08-07";
+const ANTHROPIC_ADVISOR_BETA = "advisor-tool-2026-03-01";
 const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
 const PI_AI_DEFAULT_ANTHROPIC_BETAS = [
   "fine-grained-tool-streaming-2025-05-14",
@@ -221,16 +222,93 @@ export function resolveAnthropicServiceTier(
   return normalized;
 }
 
+const ANTHROPIC_ADVISOR_DEFAULT_MODEL = "claude-sonnet-4-6";
+
+function isValidAdvisorModel(model: string): boolean {
+  // Accept both bare "claude-*" and provider-qualified "anthropic/claude-*"
+  const bare = model.startsWith("anthropic/") ? model.slice("anthropic/".length) : model;
+  return /^claude-[a-z0-9.-]+$/.test(bare);
+}
+
+export function resolveAnthropicAdvisor(
+  extraParams: Record<string, unknown> | undefined,
+): { enabled: boolean; model: string } | undefined {
+  const advisor = extraParams?.advisor as
+    | { enabled?: boolean; model?: string }
+    | boolean
+    | undefined;
+  if (advisor === true) {
+    return { enabled: true, model: ANTHROPIC_ADVISOR_DEFAULT_MODEL };
+  }
+  if (
+    advisor &&
+    typeof advisor === "object" &&
+    !Array.isArray(advisor) &&
+    advisor.enabled !== false
+  ) {
+    const model =
+      typeof advisor.model === "string" ? advisor.model : ANTHROPIC_ADVISOR_DEFAULT_MODEL;
+    if (!isValidAdvisorModel(model)) {
+      log.warn(
+        `ignoring advisor config: model "${model}" is not a Claude model. ` +
+          `The advisor tool requires an Anthropic model (claude-*).`,
+      );
+      return undefined;
+    }
+    // Strip provider prefix — the API wants bare model IDs
+    const bareModel = model.startsWith("anthropic/") ? model.slice("anthropic/".length) : model;
+    return { enabled: true, model: bareModel };
+  }
+  return undefined;
+}
+
+export function createAnthropicAdvisorToolWrapper(
+  baseStreamFn: StreamFn | undefined,
+  advisorModel: string,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      const tools = Array.isArray(payloadObj.tools) ? payloadObj.tools : [];
+      const existingAdvisor = tools.find(
+        (t: Record<string, unknown>) => t && typeof t === "object" && t.name === "advisor",
+      ) as Record<string, unknown> | undefined;
+      if (existingAdvisor) {
+        if (existingAdvisor.type !== "advisor_20260301") {
+          log.warn(
+            `cannot inject advisor tool: a tool named "advisor" already exists ` +
+              `with type "${String(existingAdvisor.type)}". Rename it to avoid conflicts.`,
+          );
+        }
+      } else {
+        tools.push({
+          type: "advisor_20260301",
+          name: "advisor",
+          model: advisorModel,
+        });
+      }
+      payloadObj.tools = tools;
+    });
+  };
+}
+
 export function wrapAnthropicProviderStream(
   ctx: ProviderWrapStreamFnContext,
 ): StreamFn | undefined {
   const anthropicBetas = resolveAnthropicBetas(ctx.extraParams, ctx.modelId);
   const serviceTier = resolveAnthropicServiceTier(ctx.extraParams);
   const fastMode = resolveAnthropicFastMode(ctx.extraParams);
+  const advisor = resolveAnthropicAdvisor(ctx.extraParams);
+
+  // If advisor is enabled, ensure the advisor beta header is included
+  const effectiveBetas = advisor
+    ? [...(anthropicBetas ?? []), ANTHROPIC_ADVISOR_BETA]
+    : anthropicBetas;
+
   return composeProviderStreamWrappers(
     ctx.streamFn,
-    anthropicBetas?.length
-      ? (streamFn) => createAnthropicBetaHeadersWrapper(streamFn, anthropicBetas)
+    effectiveBetas?.length
+      ? (streamFn) => createAnthropicBetaHeadersWrapper(streamFn, effectiveBetas)
       : undefined,
     serviceTier
       ? (streamFn) => createAnthropicServiceTierWrapper(streamFn, serviceTier)
@@ -238,6 +316,7 @@ export function wrapAnthropicProviderStream(
     fastMode !== undefined
       ? (streamFn) => createAnthropicFastModeWrapper(streamFn, fastMode)
       : undefined,
+    advisor ? (streamFn) => createAnthropicAdvisorToolWrapper(streamFn, advisor.model) : undefined,
   );
 }
 

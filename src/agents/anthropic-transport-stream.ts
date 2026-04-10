@@ -60,7 +60,7 @@ type AnthropicTransportOptions = AnthropicOptions &
   Pick<SimpleStreamOptions, "reasoning" | "thinkingBudgets">;
 
 type TransportContentBlock =
-  | { type: "text"; text: string; index?: number }
+  | { type: "text"; text: string; serverToolDisplay?: boolean; index?: number }
   | {
       type: "thinking";
       thinking: string;
@@ -270,6 +270,11 @@ function convertAnthropicMessages(
       const blocks: Array<Record<string, unknown>> = [];
       for (const block of msg.content) {
         if (block.type === "text") {
+          // Skip synthetic display text for server tool results — these are
+          // only for local rendering, not for the API transcript.
+          if ((block as unknown as Record<string, unknown>).serverToolDisplay) {
+            continue;
+          }
           if (block.text.trim().length > 0) {
             blocks.push({
               type: "text",
@@ -310,6 +315,7 @@ function convertAnthropicMessages(
             name: isOAuthToken ? toClaudeCodeName(block.name) : block.name,
             input: block.arguments ?? {},
           });
+          continue;
         }
       }
       if (blocks.length > 0) {
@@ -369,6 +375,59 @@ function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
   }));
 }
 
+/**
+ * Returns true if the content block is a server_tool_use invocation marker
+ * (advisor, web_search, code_execution, etc.). These blocks are silently
+ * dropped during streaming — they are not stored in assistant content and
+ * not replayed to the API on subsequent turns.
+ */
+function isServerToolUseBlock(contentBlock: Record<string, unknown>): boolean {
+  return contentBlock.type === "server_tool_use";
+}
+
+/**
+ * Returns display text for a *_tool_result block, or null if the block is
+ * not a tool result. Readable results (plain text, errors, redacted markers)
+ * return a non-empty string that becomes a text block with serverToolDisplay
+ * set — visible to all renderers but skipped by convertAnthropicMessages on
+ * API replay. Untranslatable results return an empty string so the caller
+ * silently drops them (no prompt pollution).
+ *
+ * Encrypted content is NOT round-tripped to the API; the model's text response
+ * already incorporates the tool output, so follow-up turns have the context
+ * they need via normal assistant text.
+ */
+function translateServerToolResultBlock(contentBlock: Record<string, unknown>): string | null {
+  const blockType = contentBlock.type;
+  if (typeof blockType !== "string" || !blockType.endsWith("_tool_result")) {
+    return null;
+  }
+  const toolName = blockType.replace(/_tool_result$/, "");
+  const label = sanitizeTransportPayloadText(toolName.charAt(0).toUpperCase() + toolName.slice(1));
+  const content = contentBlock.content as Record<string, unknown> | undefined;
+  if (content && typeof content === "object") {
+    const contentType = content.type as string | undefined;
+    if (
+      typeof contentType === "string" &&
+      contentType.endsWith("_result") &&
+      typeof content.text === "string"
+    ) {
+      return `[${label}] ${sanitizeTransportPayloadText(content.text)}`;
+    }
+    if (typeof contentType === "string" && contentType.includes("redacted")) {
+      return `[${label} output (encrypted)]`;
+    }
+    if (typeof contentType === "string" && contentType.endsWith("_error")) {
+      const code = typeof content.error_code === "string" ? content.error_code : "unknown";
+      return `[${label} error: ${sanitizeTransportPayloadText(code)}]`;
+    }
+  }
+  // Untranslatable result (e.g. web_search_tool_result with array content).
+  // Empty string signals the caller to silently drop the block so we don't
+  // pollute prompt history with useless placeholders.
+  return "";
+}
+
 function mapStopReason(reason: string | undefined): string {
   switch (reason) {
     case "end_turn":
@@ -384,8 +443,11 @@ function mapStopReason(reason: string | undefined): string {
       return "error";
     case "stop_sequence":
       return "stop";
+    case "model_context_window_exceeded":
+    case "compaction":
+      return "length";
     default:
-      throw new Error(`Unhandled stop reason: ${String(reason)}`);
+      return "stop";
   }
 }
 
@@ -721,6 +783,45 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 contentIndex: output.content.length - 1,
                 partial: output as never,
               });
+              continue;
+            }
+            // Server-side tool blocks: server_tool_use is silently dropped,
+            // *_tool_result with readable text becomes a display-only text block.
+            // No round-tripping — the API continues fine without these blocks
+            // since the model's text response already incorporates the output.
+            // Encrypted content round-tripping is deferred to a follow-up.
+            if (!contentBlock || typeof contentBlock !== "object") {
+              // Malformed or missing content_block — skip safely instead of crashing
+              continue;
+            }
+            const rawBlock = contentBlock;
+            if (isServerToolUseBlock(rawBlock)) {
+              // server_tool_use: silently drop (invocation marker only)
+              continue;
+            }
+            const serverResultDisplayText = translateServerToolResultBlock(rawBlock);
+            if (serverResultDisplayText !== null) {
+              if (serverResultDisplayText) {
+                // Readable tool result → display-only text block.
+                // serverToolDisplay flag tells convertAnthropicMessages to skip
+                // it on replay so it doesn't pollute the API transcript.
+                // Cross-provider: survives as normal text (preserves context).
+                const block: TransportContentBlock = {
+                  type: "text",
+                  text: serverResultDisplayText,
+                  serverToolDisplay: true,
+                  index,
+                };
+                output.content.push(block);
+                stream.push({
+                  type: "text_start",
+                  contentIndex: output.content.length - 1,
+                  partial: output as never,
+                });
+              }
+              // Untranslatable results (e.g. web_search with array content):
+              // silently drop. No context growth, no pruning concern.
+              continue;
             }
             continue;
           }
@@ -816,6 +917,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 toolCall: block as never,
                 partial: output as never,
               });
+              continue;
             }
             continue;
           }
@@ -863,3 +965,9 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
     return eventStream as ReturnType<StreamFn>;
   };
 }
+
+export const __testing = {
+  mapStopReason,
+  isServerToolUseBlock,
+  translateServerToolResultBlock,
+};
