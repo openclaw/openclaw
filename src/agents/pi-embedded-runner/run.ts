@@ -597,6 +597,8 @@ export async function runEmbeddedPiAgent(
                 lastRunPromptUsage,
                 lastTurnTotal,
               }),
+              replayInvalid: accumulatedReplayInvalid ? true : undefined,
+              livenessState: "blocked",
             });
           }
           runLoopIterations += 1;
