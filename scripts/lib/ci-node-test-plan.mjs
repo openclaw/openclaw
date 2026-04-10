@@ -21,7 +21,7 @@ export function createNodeTestShards() {
 
     return [
       {
-        checkName: `checks-node-test-${shard.name}`,
+        checkName: `checks-node-core-test-${shard.name}`,
         shardName: shard.name,
         configs,
       },
