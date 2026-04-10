@@ -1286,6 +1286,39 @@ describe("runGatewayUpdate", () => {
     });
   });
 
+  it("updates global Volta installs when detected", async () => {
+    const voltaHome = path.join(tempDir, "volta-home");
+    const pkgRoot = path.join(
+      voltaHome,
+      "tools",
+      "image",
+      "packages",
+      "openclaw",
+      "lib",
+      "node_modules",
+      "openclaw",
+    );
+    await seedGlobalPackageRoot(pkgRoot);
+
+    const { calls, runCommand } = createGlobalInstallHarness({
+      pkgRoot,
+      installCommand: "volta install openclaw@latest",
+      onInstall: async () => {
+        await writeGlobalPackageVersion(pkgRoot);
+      },
+    });
+
+    await withEnvAsync({ VOLTA_HOME: voltaHome }, async () => {
+      const result = await runWithCommand(runCommand, { cwd: pkgRoot });
+
+      expect(result.status).toBe("ok");
+      expect(result.mode).toBe("volta");
+      expect(result.before?.version).toBe("1.0.0");
+      expect(result.after?.version).toBe("2.0.0");
+      expect(calls.some((call) => call === "volta install openclaw@latest")).toBe(true);
+    });
+  });
+
   it("rejects git roots that are not a openclaw checkout", async () => {
     await fs.mkdir(path.join(tempDir, ".git"));
     const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(tempDir);

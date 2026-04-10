@@ -51,6 +51,9 @@ describe("update global helpers", () => {
   });
 
   it("resolves global roots and package roots from runner output", async () => {
+    envSnapshot = captureEnv(["VOLTA_HOME"]);
+    process.env.VOLTA_HOME = path.join("/tmp", "volta-home");
+
     const runCommand: CommandRunner = async (argv) => {
       if (argv[0] === "npm") {
         return { stdout: "/tmp/npm-root\n", stderr: "", code: 0 };
@@ -66,9 +69,47 @@ describe("update global helpers", () => {
     await expect(resolveGlobalRoot("bun", runCommand, 1000)).resolves.toContain(
       path.join(".bun", "install", "global", "node_modules"),
     );
+    await expect(resolveGlobalRoot("volta", runCommand, 1000)).resolves.toBe(
+      path.join("/tmp", "volta-home", "tools", "image", "packages"),
+    );
     await expect(resolveGlobalPackageRoot("npm", runCommand, 1000)).resolves.toBe(
       path.join("/tmp/npm-root", "openclaw"),
     );
+    await expect(resolveGlobalPackageRoot("volta", runCommand, 1000)).resolves.toBe(
+      path.join(
+        "/tmp",
+        "volta-home",
+        "tools",
+        "image",
+        "packages",
+        "openclaw",
+        "lib",
+        "node_modules",
+        "openclaw",
+      ),
+    );
+    await expect(
+      resolveGlobalInstallTarget({
+        manager: "volta",
+        runCommand,
+        timeoutMs: 1000,
+      }),
+    ).resolves.toEqual({
+      manager: "volta",
+      command: "volta",
+      globalRoot: path.join("/tmp", "volta-home", "tools", "image", "packages"),
+      packageRoot: path.join(
+        "/tmp",
+        "volta-home",
+        "tools",
+        "image",
+        "packages",
+        "openclaw",
+        "lib",
+        "node_modules",
+        "openclaw",
+      ),
+    });
   });
 
   it("maps main and explicit install specs for global installs", () => {
@@ -110,13 +151,26 @@ describe("update global helpers", () => {
       const npmRoot = path.join(base, "npm-root");
       const pnpmRoot = path.join(base, "pnpm-root");
       const bunRoot = path.join(base, ".bun", "install", "global", "node_modules");
+      const voltaHome = path.join(base, ".volta");
+      const voltaPkgRoot = path.join(
+        voltaHome,
+        "tools",
+        "image",
+        "packages",
+        "openclaw",
+        "lib",
+        "node_modules",
+        "openclaw",
+      );
       const pkgRoot = path.join(pnpmRoot, "openclaw");
       await fs.mkdir(pkgRoot, { recursive: true });
       await fs.mkdir(path.join(npmRoot, "openclaw"), { recursive: true });
       await fs.mkdir(path.join(bunRoot, "openclaw"), { recursive: true });
+      await fs.mkdir(voltaPkgRoot, { recursive: true });
 
-      envSnapshot = captureEnv(["BUN_INSTALL"]);
+      envSnapshot = captureEnv(["BUN_INSTALL", "VOLTA_HOME"]);
       process.env.BUN_INSTALL = path.join(base, ".bun");
+      process.env.VOLTA_HOME = voltaHome;
 
       const runCommand: CommandRunner = async (argv) => {
         if (argv[0] === "npm") {
@@ -131,11 +185,15 @@ describe("update global helpers", () => {
       await expect(detectGlobalInstallManagerForRoot(runCommand, pkgRoot, 1000)).resolves.toBe(
         "pnpm",
       );
+      await expect(detectGlobalInstallManagerForRoot(runCommand, voltaPkgRoot, 1000)).resolves.toBe(
+        "volta",
+      );
       await expect(detectGlobalInstallManagerByPresence(runCommand, 1000)).resolves.toBe("npm");
 
       await fs.rm(path.join(npmRoot, "openclaw"), { recursive: true, force: true });
       await fs.rm(path.join(pnpmRoot, "openclaw"), { recursive: true, force: true });
-      await expect(detectGlobalInstallManagerByPresence(runCommand, 1000)).resolves.toBe("bun");
+      await fs.rm(path.join(bunRoot, "openclaw"), { recursive: true, force: true });
+      await expect(detectGlobalInstallManagerByPresence(runCommand, 1000)).resolves.toBe("volta");
     });
   });
 
@@ -292,6 +350,10 @@ describe("update global helpers", () => {
       manager: "npm",
       command: "npm",
     });
+    expect(resolveGlobalInstallCommand("volta")).toEqual({
+      manager: "volta",
+      command: "volta",
+    });
     expect(globalInstallArgs("npm", "openclaw@latest")).toEqual([
       "npm",
       "i",
@@ -313,6 +375,11 @@ describe("update global helpers", () => {
       "-g",
       "openclaw@latest",
     ]);
+    expect(globalInstallArgs("volta", "openclaw@latest")).toEqual([
+      "volta",
+      "install",
+      "openclaw@latest",
+    ]);
 
     expect(globalInstallFallbackArgs("npm", "openclaw@latest")).toEqual([
       "npm",
@@ -325,6 +392,7 @@ describe("update global helpers", () => {
       "--loglevel=error",
     ]);
     expect(globalInstallFallbackArgs("pnpm", "openclaw@latest")).toBeNull();
+    expect(globalInstallFallbackArgs("volta", "openclaw@latest")).toBeNull();
     expect(
       globalInstallArgs({ manager: "pnpm", command: "/opt/homebrew/bin/pnpm" }, "openclaw@latest"),
     ).toEqual(["/opt/homebrew/bin/pnpm", "add", "-g", "openclaw@latest"]);

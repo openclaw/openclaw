@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   checkDepsStatus,
   checkUpdateStatus,
@@ -227,7 +228,7 @@ describe("checkUpdateStatus", () => {
     });
   });
 
-  it("detects package installs for non-git roots", async () => {
+  it("reports unknown install manager for non-git roots outside a global install", async () => {
     await withTempDir({ prefix: "openclaw-update-check-" }, async (root) => {
       await fs.writeFile(
         path.join(root, "package.json"),
@@ -242,12 +243,51 @@ describe("checkUpdateStatus", () => {
       ).resolves.toMatchObject({
         root,
         installKind: "package",
-        packageManager: "npm",
+        packageManager: "unknown",
         git: undefined,
         registry: undefined,
         deps: {
           manager: "npm",
         },
+      });
+    });
+  });
+
+  it("detects Volta package installs for non-git roots", async () => {
+    await withTempDir({ prefix: "openclaw-update-check-" }, async (base) => {
+      const voltaHome = path.join(base, "volta-home");
+      const root = path.join(
+        voltaHome,
+        "tools",
+        "image",
+        "packages",
+        "openclaw",
+        "lib",
+        "node_modules",
+        "openclaw",
+      );
+      await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ packageManager: "pnpm@10.0.0" }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(root, "pnpm-lock.yaml"), "lock", "utf8");
+      await fs.writeFile(path.join(root, "node_modules", ".modules.yaml"), "marker", "utf8");
+
+      await withEnvAsync({ VOLTA_HOME: voltaHome }, async () => {
+        await expect(
+          checkUpdateStatus({ root, includeRegistry: false, fetchGit: false, timeoutMs: 1000 }),
+        ).resolves.toMatchObject({
+          root,
+          installKind: "package",
+          packageManager: "volta",
+          git: undefined,
+          registry: undefined,
+          deps: {
+            manager: "pnpm",
+          },
+        });
       });
     });
   });

@@ -8,7 +8,7 @@ import { pathExists } from "../utils.js";
 import { readPackageVersion } from "./package-json.js";
 import { applyPathPrepend } from "./path-prepend.js";
 
-export type GlobalInstallManager = "npm" | "pnpm" | "bun";
+export type GlobalInstallManager = "npm" | "pnpm" | "bun" | "volta";
 
 export type CommandRunner = (
   argv: string[],
@@ -191,6 +191,18 @@ function resolveBunGlobalRoot(): string {
   return path.join(bunInstall, "install", "global", "node_modules");
 }
 
+function resolveVoltaHome(): string {
+  return process.env.VOLTA_HOME?.trim() || path.join(os.homedir(), ".volta");
+}
+
+function resolveVoltaPackagesRoot(): string {
+  return path.join(resolveVoltaHome(), "tools", "image", "packages");
+}
+
+function resolveVoltaPackageRoot(packageName: string): string {
+  return path.join(resolveVoltaPackagesRoot(), packageName, "lib", "node_modules", packageName);
+}
+
 function inferNpmPrefixFromPackageRoot(pkgRoot?: string | null): string | null {
   const trimmed = pkgRoot?.trim();
   if (!trimmed) {
@@ -260,6 +272,9 @@ export async function resolveGlobalRoot(
   pkgRoot?: string | null,
 ): Promise<string | null> {
   const resolved = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
+  if (resolved.manager === "volta") {
+    return resolveVoltaPackagesRoot();
+  }
   if (resolved.manager === "bun") {
     return resolveBunGlobalRoot();
   }
@@ -278,7 +293,11 @@ export async function resolveGlobalPackageRoot(
   timeoutMs: number,
   pkgRoot?: string | null,
 ): Promise<string | null> {
-  const root = await resolveGlobalRoot(managerOrCommand, runCommand, timeoutMs, pkgRoot);
+  const resolved = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
+  if (resolved.manager === "volta") {
+    return resolveVoltaPackageRoot(PRIMARY_PACKAGE_NAME);
+  }
+  const root = await resolveGlobalRoot(resolved, runCommand, timeoutMs, pkgRoot);
   if (!root) {
     return null;
   }
@@ -301,7 +320,12 @@ export async function resolveGlobalInstallTarget(params: {
   return {
     ...command,
     globalRoot,
-    packageRoot: globalRoot ? path.join(globalRoot, PRIMARY_PACKAGE_NAME) : null,
+    packageRoot:
+      command.manager === "volta"
+        ? resolveVoltaPackageRoot(PRIMARY_PACKAGE_NAME)
+        : globalRoot
+          ? path.join(globalRoot, PRIMARY_PACKAGE_NAME)
+          : null,
   };
 }
 
@@ -311,6 +335,13 @@ export async function detectGlobalInstallManagerForRoot(
   timeoutMs: number,
 ): Promise<GlobalInstallManager | null> {
   const pkgReal = await tryRealpath(pkgRoot);
+
+  for (const name of ALL_PACKAGE_NAMES) {
+    const voltaExpectedReal = await tryRealpath(resolveVoltaPackageRoot(name));
+    if (path.resolve(voltaExpectedReal) === path.resolve(pkgReal)) {
+      return "volta";
+    }
+  }
 
   const candidates: Array<{
     manager: "npm" | "pnpm";
@@ -378,6 +409,11 @@ export async function detectGlobalInstallManagerByPresence(
       return "bun";
     }
   }
+  for (const name of ALL_PACKAGE_NAMES) {
+    if (await pathExists(resolveVoltaPackageRoot(name))) {
+      return "volta";
+    }
+  }
   return null;
 }
 
@@ -387,6 +423,9 @@ export function globalInstallArgs(
   pkgRoot?: string | null,
 ): string[] {
   const resolved = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
+  if (resolved.manager === "volta") {
+    return [resolved.command, "install", spec];
+  }
   if (resolved.manager === "pnpm") {
     return [resolved.command, "add", "-g", spec];
   }

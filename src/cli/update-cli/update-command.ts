@@ -743,7 +743,11 @@ async function maybeRestartService(params: {
 
   if (!params.opts.json) {
     defaultRuntime.log("");
-    if (params.result.mode === "npm" || params.result.mode === "pnpm") {
+    if (
+      params.result.mode === "npm" ||
+      params.result.mode === "pnpm" ||
+      params.result.mode === "volta"
+    ) {
       defaultRuntime.log(
         theme.muted(
           `Tip: Run \`${replaceCliName(formatCliCommand("openclaw doctor"), CLI_NAME)}\`, then \`${replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME)}\` to apply updates to a running gateway.`,

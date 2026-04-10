@@ -5,8 +5,10 @@ import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
 import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
 import { channelToNpmTag, type UpdateChannel } from "./update-channels.js";
+import { detectGlobalInstallManagerForRoot, type GlobalInstallManager } from "./update-global.js";
 
-export type PackageManager = "pnpm" | "bun" | "npm" | "unknown";
+export type PackageManager = GlobalInstallManager | "unknown";
+type WorkspacePackageManager = Exclude<PackageManager, "volta">;
 
 export type GitUpdateStatus = {
   root: string;
@@ -81,7 +83,21 @@ async function exists(p: string): Promise<boolean> {
 }
 
 async function detectPackageManager(root: string): Promise<PackageManager> {
-  return (await detectPackageManagerImpl(root)) ?? "unknown";
+  return ((await detectPackageManagerImpl(root)) as WorkspacePackageManager | null) ?? "unknown";
+}
+
+async function detectInstalledPackageManager(
+  root: string,
+  timeoutMs: number,
+): Promise<GlobalInstallManager | null> {
+  return await detectGlobalInstallManagerForRoot(
+    async (argv, options) => {
+      const res = await runCommandWithTimeout(argv, options);
+      return { stdout: res.stdout, stderr: res.stderr, code: res.code };
+    },
+    root,
+    timeoutMs,
+  );
 }
 
 async function detectGitRoot(root: string): Promise<string | null> {
@@ -392,12 +408,15 @@ export async function checkUpdateStatus(params: {
     };
   }
 
-  const [pm, gitRoot, registry] = await Promise.all([
+  const [workspaceManager, gitRoot, registry] = await Promise.all([
     detectPackageManager(root),
     detectGitRoot(root),
     params.includeRegistry ? fetchNpmLatestVersion({ timeoutMs }) : Promise.resolve(undefined),
   ]);
   const isGit = gitRoot && path.resolve(gitRoot) === root;
+  const installedPackageManager = !isGit
+    ? await detectInstalledPackageManager(root, timeoutMs)
+    : null;
 
   const installKind: UpdateCheckResult["installKind"] = isGit ? "git" : "package";
   const [git, deps] = await Promise.all([
@@ -408,13 +427,13 @@ export async function checkUpdateStatus(params: {
           fetch: Boolean(params.fetchGit),
         })
       : Promise.resolve(undefined),
-    checkDepsStatus({ root, manager: pm }),
+    checkDepsStatus({ root, manager: workspaceManager }),
   ]);
 
   return {
     root,
     installKind,
-    packageManager: pm,
+    packageManager: isGit ? workspaceManager : (installedPackageManager ?? "unknown"),
     git,
     deps,
     registry,
