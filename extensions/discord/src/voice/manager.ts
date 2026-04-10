@@ -773,6 +773,8 @@ export class DiscordVoiceManager {
 
     const prompt = formatVoiceIngressPrompt(transcript, speaker.label);
 
+    const modelOverride = normalizeOptionalString(this.params.discordConfig.voice?.model);
+
     const result = await agentCommandFromIngress(
       {
         message: prompt,
@@ -780,7 +782,8 @@ export class DiscordVoiceManager {
         agentId: entry.route.agentId,
         messageChannel: "discord",
         senderIsOwner: speaker.senderIsOwner,
-        allowModelOverride: false,
+        allowModelOverride: Boolean(modelOverride),
+        model: modelOverride,
         deliver: false,
       },
       this.params.runtime,
