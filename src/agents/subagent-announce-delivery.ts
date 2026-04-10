@@ -49,6 +49,43 @@ export function isInternalAnnounceRequesterSession(sessionKey: string | undefine
   return getSubagentDepthFromSessionStore(sessionKey) >= 1 || isCronSessionKey(sessionKey);
 }
 
+type ResolvedDirectAnnounceDeliveryTarget = {
+  shouldDeliverExternally: boolean;
+  channel?: string;
+  to?: string;
+  accountId?: string;
+  threadId?: string;
+};
+
+function resolveDirectAnnounceDeliveryTarget(params: {
+  requesterIsSubagent: boolean;
+  origin?: DeliveryContext;
+}): ResolvedDirectAnnounceDeliveryTarget {
+  const directChannelRaw =
+    typeof params.origin?.channel === "string" ? params.origin.channel.trim() : "";
+  const directChannel =
+    directChannelRaw && isDeliverableMessageChannel(directChannelRaw) ? directChannelRaw : "";
+  const directTo = typeof params.origin?.to === "string" ? params.origin.to.trim() : "";
+  const threadId =
+    params.origin?.threadId != null && params.origin.threadId !== ""
+      ? String(params.origin.threadId)
+      : undefined;
+  const shouldDeliverExternally =
+    !params.requesterIsSubagent && Boolean(directChannel) && Boolean(directTo);
+  if (!shouldDeliverExternally) {
+    return {
+      shouldDeliverExternally: false,
+    };
+  }
+  return {
+    shouldDeliverExternally: true,
+    channel: directChannel,
+    to: directTo,
+    accountId: params.origin?.accountId,
+    threadId,
+  };
+}
+
 function summarizeDeliveryError(error: unknown): string {
   if (error instanceof Error) {
     return error.message || "error";
@@ -422,24 +459,10 @@ async function sendSubagentAnnounceDirectly(params: {
       params.expectsCompletionMessage && completionDirectOrigin
         ? completionDirectOrigin
         : directOrigin;
-    const directChannelRaw =
-      typeof effectiveDirectOrigin?.channel === "string"
-        ? effectiveDirectOrigin.channel.trim()
-        : "";
-    const directChannel =
-      directChannelRaw && isDeliverableMessageChannel(directChannelRaw) ? directChannelRaw : "";
-    const directTo =
-      typeof effectiveDirectOrigin?.to === "string" ? effectiveDirectOrigin.to.trim() : "";
-    const hasDeliverableDirectTarget =
-      !params.requesterIsSubagent && Boolean(directChannel) && Boolean(directTo);
-    const shouldDeliverExternally =
-      !params.requesterIsSubagent &&
-      (!params.expectsCompletionMessage || hasDeliverableDirectTarget);
-
-    const threadId =
-      effectiveDirectOrigin?.threadId != null && effectiveDirectOrigin.threadId !== ""
-        ? String(effectiveDirectOrigin.threadId)
-        : undefined;
+    const externalTarget = resolveDirectAnnounceDeliveryTarget({
+      requesterIsSubagent: params.requesterIsSubagent,
+      origin: effectiveDirectOrigin,
+    });
     if (params.signal?.aborted) {
       return {
         delivered: false,
@@ -457,13 +480,13 @@ async function sendSubagentAnnounceDirectly(params: {
           params: {
             sessionKey: canonicalRequesterSessionKey,
             message: params.triggerMessage,
-            deliver: shouldDeliverExternally,
+            deliver: externalTarget.shouldDeliverExternally,
             bestEffortDeliver: params.bestEffortDeliver,
             internalEvents: params.internalEvents,
-            channel: shouldDeliverExternally ? directChannel : undefined,
-            accountId: shouldDeliverExternally ? effectiveDirectOrigin?.accountId : undefined,
-            to: shouldDeliverExternally ? directTo : undefined,
-            threadId: shouldDeliverExternally ? threadId : undefined,
+            channel: externalTarget.channel,
+            accountId: externalTarget.accountId,
+            to: externalTarget.to,
+            threadId: externalTarget.threadId,
             inputProvenance: {
               kind: "inter_session",
               sourceSessionKey: params.sourceSessionKey,
@@ -545,3 +568,7 @@ export async function deliverSubagentAnnouncement(params: {
       }),
   });
 }
+
+export const __testing = {
+  resolveDirectAnnounceDeliveryTarget,
+};
