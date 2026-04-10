@@ -68,6 +68,11 @@ import type {
   ClawHubSkillDetail,
   SkillMessage,
 } from "./controllers/skills.ts";
+import {
+  clearSourceTaskSelection as clearSourceTaskSelectionInternal,
+  loadSource as loadSourceInternal,
+  loadSourceTaskDetail as loadSourceTaskDetailInternal,
+} from "./controllers/source.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import { resolveAgentIdFromSessionKey } from "./session-key.ts";
@@ -95,6 +100,10 @@ import type {
   SkillStatusReport,
   StatusSummary,
   NostrProfile,
+  TaskFlowDetail,
+  TaskRunAggregateSummary,
+  TaskRunDetail,
+  TaskRunView,
   ToolsCatalogResult,
   ToolsEffectiveResult,
 } from "./types.ts";
@@ -177,6 +186,34 @@ export class OpenClawApp extends LitElement {
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatAttachments: ChatAttachment[] = [];
   @state() chatManualRefreshInFlight = false;
+  @state() sourceLoading = false;
+  @state() sourceError: string | null = null;
+  @state() sourceTasks: TaskRunView[] = [];
+  @state() sourceTaskSummary: TaskRunAggregateSummary = {
+    total: 0,
+    active: 0,
+    terminal: 0,
+    failures: 0,
+    byStatus: {
+      queued: 0,
+      running: 0,
+      succeeded: 0,
+      failed: 0,
+      timed_out: 0,
+      cancelled: 0,
+      lost: 0,
+    },
+    byRuntime: {
+      subagent: 0,
+      acp: 0,
+      cli: 0,
+      cron: 0,
+    },
+  };
+  @state() sourceFlows: TaskFlowDetail[] = [];
+  @state() sourceSelectedTaskId: string | null = null;
+  @state() sourceSelectedTask: TaskRunDetail | null = null;
+  @state() sourceSelectedTaskLoading = false;
   @state() navDrawerOpen = false;
 
   onSlashAction?: (action: string) => void;
@@ -639,6 +676,18 @@ export class OpenClawApp extends LitElement {
 
   async loadOverview() {
     await loadOverviewInternal(this as unknown as Parameters<typeof loadOverviewInternal>[0]);
+  }
+
+  async loadSource() {
+    await loadSourceInternal(this);
+  }
+
+  async loadSourceTaskDetail(taskId: string) {
+    await loadSourceTaskDetailInternal(this, taskId);
+  }
+
+  clearSourceTaskSelection() {
+    clearSourceTaskSelectionInternal(this);
   }
 
   async loadCron() {

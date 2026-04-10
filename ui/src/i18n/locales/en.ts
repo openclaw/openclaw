@@ -155,6 +155,7 @@ export const en: TranslationMap = {
     skills: "Skills",
     nodes: "Nodes",
     chat: "Chat",
+    source: "Source",
     config: "Config",
     communications: "Communications",
     appearance: "Appearance",
@@ -176,6 +177,7 @@ export const en: TranslationMap = {
     skills: "Skills and API keys.",
     nodes: "Paired devices and commands.",
     chat: "Gateway chat for quick interventions.",
+    source: "Task queue, flows, and Oracle runtime.",
     config: "Edit openclaw.json.",
     communications: "Channels, messages, and audio settings.",
     appearance: "Theme, UI, and setup wizard settings.",
@@ -185,6 +187,61 @@ export const en: TranslationMap = {
     debug: "Snapshots, events, RPC.",
     logs: "Live gateway logs.",
     dreams: "Memory dreaming, consolidation, and reflection.",
+  },
+  source: {
+    actions: {
+      refresh: "Refresh",
+      refreshing: "Refreshing…",
+    },
+    summary: {
+      title: "Source runtime",
+      subtitle: "Active tasks, blocked flows, and recent completions.",
+    },
+    stats: {
+      activeRuns: "Active runs",
+      reviewFlows: "Review flows",
+      doneRuns: "Done runs",
+      failures: "Failures",
+      totalFlows: "Total flows",
+      totalRuns: "Total runs",
+    },
+    runtime: {
+      title: "Runtime mix",
+      subtitle: "Current task counts by runtime.",
+    },
+    active: {
+      title: "Active",
+      subtitle: "Queued and running work.",
+      empty: "No active runs right now.",
+    },
+    review: {
+      title: "Needs review",
+      subtitle: "Blocked or waiting flows.",
+      empty: "No flows are blocked or waiting.",
+    },
+    done: {
+      title: "Recently done",
+      subtitle: "Latest terminal runs.",
+      empty: "No completed runs yet.",
+    },
+    selected: {
+      title: "Selected task",
+      loading: "Loading task detail…",
+      empty: "Select a run to inspect its detail.",
+      clear: "Clear",
+    },
+    labels: {
+      unknownTime: "Unknown time",
+      noCurrentStep: "No current step",
+      tasks: "tasks",
+      scope: "Scope",
+      timeline: "Timeline",
+      created: "Created",
+      started: "Started",
+      ended: "Ended",
+      progress: "Progress",
+      result: "Result",
+    },
   },
   overview: {
     access: {

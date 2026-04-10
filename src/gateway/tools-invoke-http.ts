@@ -31,7 +31,11 @@ import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
-const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
+const MEMORY_TOOL_NAMES = new Set([
+  "memory_search",
+  "memory_get",
+  "dali_local_v1_retrieve_context",
+]);
 
 type ToolsInvokeBody = {
   tool?: unknown;

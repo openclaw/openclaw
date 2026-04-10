@@ -1,5 +1,6 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { registerMemoryCli } from "./src/cli.js";
+import { createDaliLocalV1RetrieveContextTool } from "./src/dali-local-v1-tool.js";
 import { registerDreamingCommand } from "./src/dreaming-command.js";
 import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
 import {
@@ -55,6 +56,14 @@ export default definePluginEntry({
           agentSessionKey: ctx.sessionKey,
         }),
       { names: ["memory_get"] },
+    );
+
+    api.registerTool(
+      (ctx) =>
+        createDaliLocalV1RetrieveContextTool({
+          workspaceDir: ctx.workspaceDir,
+        }),
+      { name: "dali_local_v1_retrieve_context" },
     );
 
     api.registerCli(

@@ -177,3 +177,77 @@ CREATE TABLE IF NOT EXISTS adapter_registry (
 
 CREATE INDEX IF NOT EXISTS idx_adapter_registry_created_at ON adapter_registry(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_adapter_registry_base_model_id ON adapter_registry(base_model_id);
+
+CREATE TABLE IF NOT EXISTS document_corpora (
+  id TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  title TEXT NOT NULL,
+  root_path TEXT NOT NULL,
+  manifest_path TEXT,
+  vector_db_path TEXT,
+  location_index_path TEXT,
+  document_count INTEGER NOT NULL DEFAULT 0,
+  chunk_count INTEGER NOT NULL DEFAULT 0,
+  payload_json TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_document_corpora_updated_at
+  ON document_corpora(updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS documents (
+  id TEXT PRIMARY KEY,
+  corpus_id TEXT NOT NULL,
+  hash8 TEXT NOT NULL,
+  title TEXT NOT NULL,
+  topic TEXT,
+  published TEXT,
+  updated TEXT,
+  arxiv_id TEXT,
+  abstract_url TEXT,
+  source_url TEXT,
+  pdf_path TEXT,
+  raw_pdf_path TEXT,
+  text_path TEXT,
+  markdown_path TEXT,
+  record_path TEXT,
+  authors_json TEXT NOT NULL,
+  categories_json TEXT NOT NULL,
+  summary_text TEXT,
+  payload_json TEXT NOT NULL,
+  FOREIGN KEY (corpus_id) REFERENCES document_corpora(id) ON DELETE CASCADE,
+  UNIQUE (corpus_id, hash8)
+);
+
+CREATE INDEX IF NOT EXISTS idx_documents_corpus_id ON documents(corpus_id);
+CREATE INDEX IF NOT EXISTS idx_documents_topic ON documents(topic);
+CREATE INDEX IF NOT EXISTS idx_documents_published ON documents(published DESC);
+CREATE INDEX IF NOT EXISTS idx_documents_hash8 ON documents(hash8);
+
+CREATE TABLE IF NOT EXISTS document_chunks (
+  id TEXT PRIMARY KEY,
+  corpus_id TEXT NOT NULL,
+  document_id TEXT NOT NULL,
+  source_chunk_id TEXT,
+  chunk_index INTEGER NOT NULL,
+  text TEXT NOT NULL,
+  vector_dim INTEGER,
+  payload_json TEXT NOT NULL,
+  FOREIGN KEY (corpus_id) REFERENCES document_corpora(id) ON DELETE CASCADE,
+  FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE,
+  UNIQUE (document_id, chunk_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_document_chunks_corpus_id ON document_chunks(corpus_id);
+CREATE INDEX IF NOT EXISTS idx_document_chunks_document_id ON document_chunks(document_id);
+CREATE INDEX IF NOT EXISTS idx_document_chunks_source_chunk_id ON document_chunks(source_chunk_id);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS document_chunks_fts USING fts5(
+  chunk_id UNINDEXED,
+  document_id UNINDEXED,
+  corpus_id UNINDEXED,
+  hash8 UNINDEXED,
+  title,
+  topic,
+  text
+);

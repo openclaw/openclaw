@@ -81,12 +81,16 @@ class MemoryStoreTests(unittest.TestCase):
 
             self.assertNotIn("compaction_experiments", list_tables(db_path))
             self.assertNotIn("compaction_blocks", list_tables(db_path))
+            self.assertNotIn("documents", list_tables(db_path))
+            self.assertNotIn("document_chunks", list_tables(db_path))
 
             init_db(db_path)
 
             tables = list_tables(db_path)
             self.assertIn("compaction_experiments", tables)
             self.assertIn("compaction_blocks", tables)
+            self.assertIn("documents", tables)
+            self.assertIn("document_chunks", tables)
 
     def test_event_append_and_recent_list(self) -> None:
         with TemporaryDirectory() as tmp_dir:

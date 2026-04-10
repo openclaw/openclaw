@@ -178,6 +178,19 @@ import {
 } from "./sessions.js";
 import { PresenceEntrySchema, SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 import {
+  TaskFlowDetailSchema,
+  TaskFlowViewSchema,
+  TaskRunAggregateSummarySchema,
+  TaskRunDetailSchema,
+  TaskRunViewSchema,
+  TasksFlowsListParamsSchema,
+  TasksFlowsListResultSchema,
+  TasksListParamsSchema,
+  TasksListResultSchema,
+  TasksShowParamsSchema,
+  TasksShowResultSchema,
+} from "./tasks.js";
+import {
   WizardCancelParamsSchema,
   WizardNextParamsSchema,
   WizardNextResultSchema,
@@ -244,6 +257,17 @@ export const ProtocolSchemas = {
   SessionsCompactionRestoreResult: SessionsCompactionRestoreResultSchema,
   SessionsCreateParams: SessionsCreateParamsSchema,
   SessionsSendParams: SessionsSendParamsSchema,
+  TaskRunAggregateSummary: TaskRunAggregateSummarySchema,
+  TaskRunView: TaskRunViewSchema,
+  TaskRunDetail: TaskRunDetailSchema,
+  TaskFlowView: TaskFlowViewSchema,
+  TaskFlowDetail: TaskFlowDetailSchema,
+  TasksListParams: TasksListParamsSchema,
+  TasksListResult: TasksListResultSchema,
+  TasksShowParams: TasksShowParamsSchema,
+  TasksShowResult: TasksShowResultSchema,
+  TasksFlowsListParams: TasksFlowsListParamsSchema,
+  TasksFlowsListResult: TasksFlowsListResultSchema,
   SessionsMessagesSubscribeParams: SessionsMessagesSubscribeParamsSchema,
   SessionsMessagesUnsubscribeParams: SessionsMessagesUnsubscribeParamsSchema,
   SessionsAbortParams: SessionsAbortParamsSchema,

@@ -230,6 +230,28 @@ import {
   SessionsSendParamsSchema,
   type SessionsUsageParams,
   SessionsUsageParamsSchema,
+  type TaskFlowDetail,
+  TaskFlowDetailSchema,
+  type TaskFlowView,
+  TaskFlowViewSchema,
+  type TaskRunAggregateSummary,
+  TaskRunAggregateSummarySchema,
+  type TaskRunDetail,
+  TaskRunDetailSchema,
+  type TaskRunView,
+  TaskRunViewSchema,
+  type TasksFlowsListParams,
+  TasksFlowsListParamsSchema,
+  type TasksFlowsListResult,
+  TasksFlowsListResultSchema,
+  type TasksListParams,
+  TasksListParamsSchema,
+  type TasksListResult,
+  TasksListResultSchema,
+  type TasksShowParams,
+  TasksShowParamsSchema,
+  type TasksShowResult,
+  TasksShowResultSchema,
   type ShutdownEvent,
   ShutdownEventSchema,
   type SkillsBinsParams,
@@ -398,6 +420,23 @@ export const validateSessionsCompactionRestoreParams = ajv.compile<SessionsCompa
 );
 export const validateSessionsUsageParams =
   ajv.compile<SessionsUsageParams>(SessionsUsageParamsSchema);
+export const validateTasksListParams = ajv.compile<TasksListParams>(TasksListParamsSchema);
+export const validateTasksListResult = ajv.compile<TasksListResult>(TasksListResultSchema);
+export const validateTasksShowParams = ajv.compile<TasksShowParams>(TasksShowParamsSchema);
+export const validateTasksShowResult = ajv.compile<TasksShowResult>(TasksShowResultSchema);
+export const validateTasksFlowsListParams = ajv.compile<TasksFlowsListParams>(
+  TasksFlowsListParamsSchema,
+);
+export const validateTasksFlowsListResult = ajv.compile<TasksFlowsListResult>(
+  TasksFlowsListResultSchema,
+);
+export const validateTaskRunAggregateSummary = ajv.compile<TaskRunAggregateSummary>(
+  TaskRunAggregateSummarySchema,
+);
+export const validateTaskRunView = ajv.compile<TaskRunView>(TaskRunViewSchema);
+export const validateTaskRunDetail = ajv.compile<TaskRunDetail>(TaskRunDetailSchema);
+export const validateTaskFlowView = ajv.compile<TaskFlowView>(TaskFlowViewSchema);
+export const validateTaskFlowDetail = ajv.compile<TaskFlowDetail>(TaskFlowDetailSchema);
 export const validateConfigGetParams = ajv.compile<ConfigGetParams>(ConfigGetParamsSchema);
 export const validateConfigSetParams = ajv.compile<ConfigSetParams>(ConfigSetParamsSchema);
 export const validateConfigApplyParams = ajv.compile<ConfigApplyParams>(ConfigApplyParamsSchema);

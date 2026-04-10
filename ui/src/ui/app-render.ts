@@ -129,6 +129,7 @@ import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
 import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.ts";
 import { renderLoginGate } from "./views/login-gate.ts";
 import { renderOverview } from "./views/overview.ts";
+import { renderSource } from "./views/source.ts";
 
 // Lazy-loaded view modules – deferred so the initial bundle stays small.
 // Each loader resolves once; subsequent calls return the cached module.
@@ -1542,6 +1543,21 @@ export function renderApp(state: AppViewState) {
                 },
               }),
             )
+          : nothing}
+        ${state.tab === "source"
+          ? renderSource({
+              loading: state.sourceLoading,
+              error: state.sourceError,
+              tasks: state.sourceTasks,
+              taskSummary: state.sourceTaskSummary,
+              flows: state.sourceFlows,
+              selectedTaskId: state.sourceSelectedTaskId,
+              selectedTask: state.sourceSelectedTask,
+              selectedTaskLoading: state.sourceSelectedTaskLoading,
+              onRefresh: () => state.loadSource(),
+              onSelectTask: (taskId) => state.loadSourceTaskDetail(taskId),
+              onClearSelection: () => state.clearSourceTaskSelection(),
+            })
           : nothing}
         ${state.tab === "chat"
           ? renderChat({

@@ -1,5 +1,12 @@
 export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
 import type { CronJobBase } from "../../../src/cron/types-shared.js";
+import type {
+  TaskFlowDetail,
+  TaskFlowView,
+  TaskRunAggregateSummary,
+  TaskRunDetail,
+  TaskRunView,
+} from "../../../src/plugins/runtime/task-domain-types.js";
 import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 import type {
   GatewayAgentRow as SharedGatewayAgentRow,
@@ -7,6 +14,26 @@ import type {
   SessionsPatchResultBase,
 } from "../../../src/shared/session-types.js";
 export type { ConfigUiHint, ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
+export type {
+  TaskFlowDetail,
+  TaskFlowView,
+  TaskRunAggregateSummary,
+  TaskRunDetail,
+  TaskRunView,
+} from "../../../src/plugins/runtime/task-domain-types.js";
+
+export type TasksListResult = {
+  tasks: TaskRunView[];
+  summary: TaskRunAggregateSummary;
+};
+
+export type TasksShowResult = {
+  task: TaskRunDetail | null;
+};
+
+export type TasksFlowsListResult = {
+  flows: TaskFlowDetail[];
+};
 
 export type ChannelsStatusSnapshot = {
   ts: number;

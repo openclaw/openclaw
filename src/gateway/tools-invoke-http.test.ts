@@ -249,6 +249,7 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
+  vi.unstubAllEnvs();
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
   delete process.env.OPENCLAW_GATEWAY_PASSWORD;
   pluginHttpHandlers = [];
@@ -413,6 +414,31 @@ describe("POST /tools/invoke", () => {
 
     expect(res.status).toBe(200);
     expect(lastCreateOpenClawToolsContext?.allowGatewaySubagentBinding).toBe(true);
+  });
+
+  it("blocks dali_local_v1_retrieve_context when memory tools are disabled in tests", async () => {
+    vi.stubEnv("VITEST", "1");
+    cfg = {
+      ...cfg,
+      plugins: {
+        enabled: false,
+      },
+    };
+
+    const res = await invokeToolAuthed({
+      tool: "dali_local_v1_retrieve_context",
+      args: { query: "oracle" },
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: false,
+      error: {
+        type: "invalid_request",
+        message: expect.stringContaining("memory tools are disabled in tests"),
+      },
+    });
   });
 
   it("keeps plugin tools enabled for non-core tool invokes", async () => {

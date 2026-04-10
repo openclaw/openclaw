@@ -21,6 +21,7 @@ describe("buildPromptSection", () => {
     expect(result[1]).toContain("run memory_search");
     expect(result[1]).toContain("then use memory_get");
     expect(result[1]).toContain("indexed session transcripts");
+    expect(result[1]).toContain("do not guess");
     expect(result).toContain(
       "Citations: include Source: <path#line> when it helps the user verify memory snippets.",
     );
@@ -33,6 +34,7 @@ describe("buildPromptSection", () => {
     expect(result[1]).toContain("run memory_search");
     expect(result[1]).toContain("indexed session transcripts");
     expect(result[1]).not.toContain("then use memory_get");
+    expect(result[1]).toContain("do not guess");
   });
 
   it("limits the guidance to memory_get when only get is available", () => {
@@ -40,6 +42,7 @@ describe("buildPromptSection", () => {
     expect(result[0]).toBe("## Memory Recall");
     expect(result[1]).toContain("run memory_get");
     expect(result[1]).not.toContain("run memory_search");
+    expect(result[1]).toContain("do not guess");
   });
 
   it("includes citations-off instruction when citationsMode is off", () => {

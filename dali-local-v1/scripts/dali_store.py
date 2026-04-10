@@ -46,6 +46,17 @@ from memory_store import (  # noqa: E402
     status_snapshot,
     summary,
 )  # noqa: E402
+from document_store import (  # noqa: E402
+    DEFAULT_SOURCE_RESEARCH_CORPUS_ID,
+    DEFAULT_SOURCE_RESEARCH_CORPUS_ROOT,
+    get_document,
+    import_source_research_corpus,
+    list_document_corpora,
+    list_document_chunks_for_document,
+    list_documents,
+    search_document_chunks,
+)
+from retrieval_store import build_context_bundle  # noqa: E402
 from semantic_store import (  # noqa: E402
     DEFAULT_COLLECTION,
     DEFAULT_TIMEOUT_SECONDS,
@@ -108,6 +119,65 @@ def parse_args() -> argparse.Namespace:
 
     summary_cmd = sub.add_parser("summary", help="Print counts for major tables")
     summary_cmd.add_argument("--db-path", default=None, help="sqlite database path")
+
+    import_corpus_cmd = sub.add_parser(
+        "import-source-research-corpus",
+        help="Import the Source Research Corpus into the SQLite substrate",
+    )
+    import_corpus_cmd.add_argument("--db-path", default=None, help="sqlite database path")
+    import_corpus_cmd.add_argument(
+        "--corpus-root",
+        default=str(DEFAULT_SOURCE_RESEARCH_CORPUS_ROOT),
+        help="Path to the Source Research Corpus root",
+    )
+    import_corpus_cmd.add_argument(
+        "--corpus-id",
+        default=DEFAULT_SOURCE_RESEARCH_CORPUS_ID,
+        help="Corpus identifier stored in SQLite",
+    )
+    import_corpus_cmd.add_argument("--limit", type=int, default=None, help="Optional document limit")
+    import_corpus_cmd.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Delete existing rows for this corpus before re-importing",
+    )
+
+    corpora_cmd = sub.add_parser("list-corpora", help="List imported corpora")
+    corpora_cmd.add_argument("--db-path", default=None, help="sqlite database path")
+    corpora_cmd.add_argument("--limit", type=int, default=10, help="Number of rows")
+
+    docs_cmd = sub.add_parser("list-documents", help="List imported documents")
+    docs_cmd.add_argument("--db-path", default=None, help="sqlite database path")
+    docs_cmd.add_argument("--corpus-id", default=None, help="Optional corpus id filter")
+    docs_cmd.add_argument("--topic", default=None, help="Optional topic filter")
+    docs_cmd.add_argument("--limit", type=int, default=20, help="Number of rows")
+
+    show_doc_cmd = sub.add_parser("show-document", help="Show one imported document and optional chunk preview")
+    show_doc_cmd.add_argument("--db-path", default=None, help="sqlite database path")
+    show_doc_cmd.add_argument("--document-id", default=None, help="Exact document id")
+    show_doc_cmd.add_argument("--hash8", default=None, help="Document hash8")
+    show_doc_cmd.add_argument("--corpus-id", default=None, help="Optional corpus id filter")
+    show_doc_cmd.add_argument("--chunk-limit", type=int, default=5, help="Number of chunks to preview")
+
+    search_docs_cmd = sub.add_parser("search-documents", help="Search imported document chunks via SQLite FTS")
+    search_docs_cmd.add_argument("--db-path", default=None, help="sqlite database path")
+    search_docs_cmd.add_argument("--query", required=True, help="Search query text")
+    search_docs_cmd.add_argument("--corpus-id", default=None, help="Optional corpus id filter")
+    search_docs_cmd.add_argument("--topic", default=None, help="Optional topic filter")
+    search_docs_cmd.add_argument("--limit", type=int, default=8, help="Number of rows")
+
+    retrieve_cmd = sub.add_parser(
+        "retrieve-context",
+        help="Build an integrated context bundle from document hits and local reflections",
+    )
+    retrieve_cmd.add_argument("--db-path", default=None, help="sqlite database path")
+    retrieve_cmd.add_argument("--query", required=True, help="Search query text")
+    retrieve_cmd.add_argument("--corpus-id", default=None, help="Optional corpus id filter")
+    retrieve_cmd.add_argument("--topic", default=None, help="Optional topic filter")
+    retrieve_cmd.add_argument("--document-limit", type=int, default=4, help="Maximum documents")
+    retrieve_cmd.add_argument("--chunk-limit", type=int, default=2, help="Maximum excerpts per document")
+    retrieve_cmd.add_argument("--reflection-limit", type=int, default=3, help="Maximum reflections")
+    retrieve_cmd.add_argument("--max-chars", type=int, default=6000, help="Maximum context text length")
 
     append_event_cmd = sub.add_parser("append-event", help="Append one event")
     append_event_cmd.add_argument("--db-path", default=None, help="sqlite database path")
@@ -425,6 +495,90 @@ def main() -> int:
     if args.command == "summary":
         payload = {"dbPath": args.db_path, "counts": summary(args.db_path)}
         print(json.dumps(payload, indent=2))
+        return 0
+
+    if args.command == "import-source-research-corpus":
+        payload = import_source_research_corpus(
+            args.db_path,
+            corpus_root=args.corpus_root,
+            corpus_id=args.corpus_id,
+            limit=args.limit,
+            refresh=args.refresh,
+        )
+        print(json.dumps(payload, indent=2))
+        return 0
+
+    if args.command == "list-corpora":
+        print(json.dumps(list_document_corpora(args.db_path, limit=args.limit), indent=2))
+        return 0
+
+    if args.command == "list-documents":
+        print(
+            json.dumps(
+                list_documents(
+                    args.db_path,
+                    corpus_id=args.corpus_id,
+                    topic=args.topic,
+                    limit=args.limit,
+                ),
+                indent=2,
+            )
+        )
+        return 0
+
+    if args.command == "show-document":
+        try:
+            document = get_document(
+                args.db_path,
+                document_id=args.document_id,
+                hash8=args.hash8,
+                corpus_id=args.corpus_id,
+            )
+        except ValueError as exc:
+            print(json.dumps(_error_payload(str(exc), args.command), indent=2))
+            return 1
+        chunks = []
+        if document:
+            chunks = list_document_chunks_for_document(
+                args.db_path,
+                document_id=document["id"],
+                corpus_id=args.corpus_id,
+                limit=args.chunk_limit,
+            )
+        print(json.dumps({"document": document, "chunks": chunks}, indent=2))
+        return 0
+
+    if args.command == "search-documents":
+        print(
+            json.dumps(
+                search_document_chunks(
+                    args.db_path,
+                    query=args.query,
+                    corpus_id=args.corpus_id,
+                    topic=args.topic,
+                    limit=args.limit,
+                ),
+                indent=2,
+            )
+        )
+        return 0
+
+    if args.command == "retrieve-context":
+        print(
+            json.dumps(
+                build_context_bundle(
+                    args.db_path,
+                    query=args.query,
+                    corpus_id=args.corpus_id,
+                    topic=args.topic,
+                    document_limit=args.document_limit,
+                    chunk_limit=args.chunk_limit,
+                    reflection_limit=args.reflection_limit,
+                    max_chars=args.max_chars,
+                ),
+                indent=2,
+            )
+        )
         return 0
 
     if args.command == "status-snapshot":

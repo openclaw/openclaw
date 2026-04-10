@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -10,6 +11,9 @@ from typing import Any
 REQUIRED_TABLES = [
     "adapter_registry",
     "checkpoints",
+    "document_chunks",
+    "document_corpora",
+    "documents",
     "eval_runs",
     "compaction_blocks",
     "compaction_experiments",
@@ -43,6 +47,7 @@ ALLOWED_COMPACTION_APPROACHES = {
 DEFAULT_STAGE3_LEAKAGE_RISK_THRESHOLD = 0.2
 
 SCHEMA_PATH = Path(__file__).resolve().parents[1] / "sql" / "schema.sql"
+QUERY_TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
 
 
 def utc_now() -> str:
@@ -50,7 +55,9 @@ def utc_now() -> str:
 
 
 def _json_payload(payload: dict[str, Any] | list[Any] | None) -> str:
-    return json.dumps(payload or {}, sort_keys=True)
+    if payload is None:
+        payload = {}
+    return json.dumps(payload, sort_keys=True)
 
 
 def connect(db_path: str | Path) -> sqlite3.Connection:
@@ -657,6 +664,40 @@ def list_recent_reflections(db_path: str | Path, limit: int = 10) -> list[dict[s
             (limit,),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def search_reflections_text(db_path: str | Path, query: str, limit: int = 10) -> list[dict[str, Any]]:
+    tokens = [token.lower() for token in QUERY_TOKEN_RE.findall(query or "")]
+    if not tokens:
+        raise ValueError("query must include at least one alphanumeric token")
+
+    clauses = ["LOWER(reflection_text) LIKE ?" for _ in tokens]
+    values = [f"%{token}%" for token in tokens]
+
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT id, created_at, source_event_id, reflection_text, durable_claims_json,
+                   uncertainties_json, interdisciplinary_links_json, nca_signal,
+                   creative_fragment, memory_candidate_score, payload_json
+            FROM reflections
+            WHERE {' OR '.join(clauses)}
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (*values, max(limit * 4, limit)),
+        ).fetchall()
+
+    scored: list[dict[str, Any]] = []
+    for row in rows:
+        payload = dict(row)
+        haystack = (payload.get("reflection_text") or "").lower()
+        score = sum(1 for token in tokens if token in haystack)
+        payload["text_score"] = score
+        scored.append(payload)
+
+    scored.sort(key=lambda item: (int(item["text_score"]), item["created_at"], item["id"]), reverse=True)
+    return scored[:limit]
 
 
 def list_recent_compaction_experiments(db_path: str | Path, limit: int = 10) -> list[dict[str, Any]]:

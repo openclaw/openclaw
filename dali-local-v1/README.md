@@ -7,6 +7,7 @@ This slice intentionally starts small but real:
 - append-only SQLite schema for canonical event and audit storage
 - bootstrap script to create the local workspace directories and database
 - lightweight Python helpers for initializing the store and appending smoke-test events
+- canonical full-text document corpus tables with SQLite FTS search for imported research corpora
 - practical CLI for appending events/reflections/promotions, semantic indexing, and searching via Qdrant integration.
 
 ## Quick start
@@ -47,11 +48,23 @@ python3 dali-local-v1/scripts/dali_store.py --root dali-local-v1 audit-retention
 python3 dali-local-v1/scripts/dali_store.py --root dali-local-v1 migration-report
 python3 dali-local-v1/scripts/dali_store.py --root dali-local-v1 index-reflections --qdrant-url http://localhost:6333 --collection dali_local_v1_reflections --limit 200
 python3 dali-local-v1/scripts/dali_store.py --root dali-local-v1 search-reflections --query "what was learned" --qdrant-url http://localhost:6333
+python3 dali-local-v1/scripts/dali_store.py --root dali-local-v1 import-source-research-corpus --refresh
+python3 dali-local-v1/scripts/dali_store.py --root dali-local-v1 list-corpora
+python3 dali-local-v1/scripts/dali_store.py --root dali-local-v1 show-document --hash8 4eecdd9d --chunk-limit 3
+python3 dali-local-v1/scripts/dali_store.py --root dali-local-v1 search-documents --query "agent memory defense" --topic agent-memory
+python3 dali-local-v1/scripts/dali_store.py --root dali-local-v1 retrieve-context --query "agent memory defense" --topic agent-memory
 python3 dali-local-v1/scripts/dali_store.py --root dali-local-v1 summary
 
 Optional dependency note:
 - Install Qdrant SDK when you want real semantic search: `pip install qdrant-client`
 - Without it, `index-reflections --dry-run` and bootstrap/event workflows still work.
+
+Corpus note:
+- `import-source-research-corpus` defaults to `~/Desktop/source_research_corpus`
+- It imports canonical metadata plus chunk text into SQLite and keeps the existing LanceDB path recorded as corpus metadata rather than making vectors the primary substrate.
+- Missing chunk files are tolerated during import and surfaced in the JSON result instead of crashing the whole import.
+- `retrieve-context` is the higher-level retrieval path over the merged local-v1 substrate: it bundles document excerpts and any matching reflections into a ready-to-paste context block.
+- When OpenClaw runs in a workspace that contains `dali-local-v1/scripts/dali_store.py` and `dali-local-v1/state/dali.sqlite3`, the bundled `memory-core` plugin now exposes the agent tool `dali_local_v1_retrieve_context`. That tool shells out to the same `retrieve-context` CLI path, so agents can use the merged local-v1 document/reflection store directly without pretending it is generic memory.
 ```
 
 By default this creates `dali-local-v1/state/dali.sqlite3` and prints a JSON summary of initialized or appended records.

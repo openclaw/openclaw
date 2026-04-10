@@ -81,6 +81,14 @@ export type AppViewState = {
   chatModelCatalog: ModelCatalogEntry[];
   chatQueue: ChatQueueItem[];
   chatManualRefreshInFlight: boolean;
+  sourceLoading: boolean;
+  sourceError: string | null;
+  sourceTasks: import("./types.js").TaskRunView[];
+  sourceTaskSummary: import("./types.js").TaskRunAggregateSummary;
+  sourceFlows: import("./types.js").TaskFlowDetail[];
+  sourceSelectedTaskId: string | null;
+  sourceSelectedTask: import("./types.js").TaskRunDetail | null;
+  sourceSelectedTaskLoading: boolean;
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;
   chatNewMessagesBelow: boolean;
@@ -348,6 +356,9 @@ export type AppViewState = {
     setBorderRadius: (value: number) => void;
     applySettings: (next: UiSettings) => void;
     loadOverview: () => Promise<void>;
+    loadSource: () => Promise<void>;
+    loadSourceTaskDetail: (taskId: string) => Promise<void>;
+    clearSourceTaskSelection: () => void;
     loadAssistantIdentity: () => Promise<void>;
     loadCron: () => Promise<void>;
     handleWhatsAppStart: (force: boolean) => Promise<void>;

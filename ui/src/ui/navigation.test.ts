@@ -27,6 +27,7 @@ describe("iconForTab", () => {
 
   it("returns stable icons for known tabs", () => {
     expect(iconForTab("chat")).toBe("messageSquare");
+    expect(iconForTab("source")).toBe("book");
     expect(iconForTab("overview")).toBe("barChart");
     expect(iconForTab("channels")).toBe("link");
     expect(iconForTab("instances")).toBe("radio");
@@ -57,6 +58,7 @@ describe("titleForTab", () => {
 
   it("returns expected titles", () => {
     expect(titleForTab("chat")).toBe("Chat");
+    expect(titleForTab("source")).toBe("Source");
     expect(titleForTab("overview")).toBe("Overview");
     expect(titleForTab("cron")).toBe("Cron Jobs");
   });
@@ -72,6 +74,7 @@ describe("subtitleForTab", () => {
 
   it("returns descriptive subtitles", () => {
     expect(subtitleForTab("chat")).toContain("quick interventions");
+    expect(subtitleForTab("source")).toContain("Oracle runtime");
     expect(subtitleForTab("config")).toContain("openclaw.json");
   });
 });
@@ -116,6 +119,7 @@ describe("normalizePath", () => {
 describe("pathForTab", () => {
   it("returns correct path without base", () => {
     expect(pathForTab("chat")).toBe("/chat");
+    expect(pathForTab("source")).toBe("/source");
     expect(pathForTab("overview")).toBe("/overview");
   });
 
@@ -128,6 +132,7 @@ describe("pathForTab", () => {
 describe("tabFromPath", () => {
   it("returns tab for valid path", () => {
     expect(tabFromPath("/chat")).toBe("chat");
+    expect(tabFromPath("/source")).toBe("source");
     expect(tabFromPath("/overview")).toBe("overview");
     expect(tabFromPath("/sessions")).toBe("sessions");
     expect(tabFromPath("/dreaming")).toBe("dreams");
@@ -160,6 +165,7 @@ describe("inferBasePathFromPathname", () => {
 
   it("returns empty string for direct tab path", () => {
     expect(inferBasePathFromPathname("/chat")).toBe("");
+    expect(inferBasePathFromPathname("/source")).toBe("");
     expect(inferBasePathFromPathname("/overview")).toBe("");
     expect(inferBasePathFromPathname("/dreaming")).toBe("");
     expect(inferBasePathFromPathname("/dreams")).toBe("");
