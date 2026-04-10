@@ -48,7 +48,7 @@ function guardedResponse(body: unknown, headers?: Record<string, string>) {
 // Helper: mock a guarded fetch that returns binary content (authenticated download).
 function guardedBinaryResponse(data: Buffer, mimeType: string) {
   return {
-    response: new Response(data, {
+    response: new Response(new Uint8Array(data), {
       status: 200,
       headers: { "content-type": mimeType },
     }),
@@ -102,7 +102,7 @@ describe("openrouter video generation provider", () => {
 
     // Download unsigned URL uses raw fetchWithTimeout
     fetchWithTimeoutMock.mockResolvedValueOnce(
-      new Response(Buffer.from("video-bytes"), {
+      new Response(new Uint8Array(Buffer.from("video-bytes")), {
         status: 200,
         headers: { "content-type": "video/mp4" },
       }),

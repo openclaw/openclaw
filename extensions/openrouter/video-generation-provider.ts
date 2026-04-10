@@ -13,6 +13,7 @@ import {
   postJsonRequest,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { OPENROUTER_BASE_URL, resolveConfiguredBaseUrl } from "./openrouter-config.js";
 const DEFAULT_OPENROUTER_VIDEO_MODEL = "google/veo-3.1";
@@ -87,7 +88,7 @@ async function pollOpenRouterVideo(params: {
   headers: Headers;
   timeoutMs: number;
   fetchFn: typeof fetch;
-  dispatcherPolicy?: unknown;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
 }): Promise<OpenRouterVideoPollResponse> {
   for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
     const { response, release } = await fetchWithTimeoutGuarded(
@@ -127,7 +128,7 @@ async function downloadOpenRouterVideo(params: {
   timeoutMs: number;
   fetchFn: typeof fetch;
   unsignedUrl?: string;
-  dispatcherPolicy?: unknown;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
 }): Promise<GeneratedVideoAsset> {
   const isUnsigned = Boolean(params.unsignedUrl);
   const url =
