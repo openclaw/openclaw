@@ -5,7 +5,7 @@ import type {
 } from "openclaw/plugin-sdk/speech";
 import {
   assertOkOrThrowHttpError,
-  fetchWithTimeout,
+  fetchWithTimeoutGuarded,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
@@ -151,7 +151,7 @@ export function buildOpenrouterSpeechProvider(): SpeechProviderPlugin {
         throw new Error("OpenRouter API key missing for speech synthesis");
       }
 
-      const { baseUrl, headers } = resolveProviderHttpRequestConfig({
+      const { baseUrl, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
         baseUrl: resolveConfiguredBaseUrl(req.cfg) ?? config.baseUrl,
         defaultBaseUrl: OPENROUTER_BASE_URL,
         allowPrivateNetwork: false,
@@ -173,7 +173,7 @@ export function buildOpenrouterSpeechProvider(): SpeechProviderPlugin {
 
       const requestHeaders = new Headers(headers);
       requestHeaders.set("Content-Type", "application/json");
-      const response = await fetchWithTimeout(
+      const { response, release } = await fetchWithTimeoutGuarded(
         `${baseUrl}/chat/completions`,
         {
           method: "POST",
@@ -188,20 +188,26 @@ export function buildOpenrouterSpeechProvider(): SpeechProviderPlugin {
         },
         req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         fetch,
+        { dispatcherPolicy, auditContext: "openrouter-speech-synthesize" },
       );
-      await assertOkOrThrowHttpError(response, "OpenRouter speech synthesis failed");
 
-      const { audioBuffer } = await collectStreamedAudio(response);
-      if (audioBuffer.length === 0) {
-        throw new Error("OpenRouter speech synthesis response missing audio data");
+      try {
+        await assertOkOrThrowHttpError(response, "OpenRouter speech synthesis failed");
+
+        const { audioBuffer } = await collectStreamedAudio(response);
+        if (audioBuffer.length === 0) {
+          throw new Error("OpenRouter speech synthesis response missing audio data");
+        }
+
+        return {
+          audioBuffer,
+          outputFormat: mimeType,
+          fileExtension,
+          voiceCompatible: req.target === "voice-note" && format === "opus",
+        };
+      } finally {
+        await release();
       }
-
-      return {
-        audioBuffer,
-        outputFormat: mimeType,
-        fileExtension,
-        voiceCompatible: req.target === "voice-note" && format === "opus",
-      };
     },
   };
 }

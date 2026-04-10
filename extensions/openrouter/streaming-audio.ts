@@ -15,6 +15,40 @@ type SseAudioChunk = {
   }>;
 };
 
+function parseSseLine(
+  line: string,
+  audioBuffers: Buffer[],
+  transcriptParts: string[],
+): "done" | "continue" {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("data:")) {
+    return "continue";
+  }
+  const payload = trimmed.slice(5).trim();
+  if (payload === "[DONE]") {
+    return "done";
+  }
+  let parsed: SseAudioChunk;
+  try {
+    parsed = JSON.parse(payload) as SseAudioChunk;
+  } catch {
+    return "continue";
+  }
+  const audioDelta = parsed.choices?.[0]?.delta?.audio;
+  if (!audioDelta) {
+    return "continue";
+  }
+  const data = audioDelta.data;
+  if (typeof data === "string" && data.length > 0) {
+    audioBuffers.push(Buffer.from(data, "base64"));
+  }
+  const transcript = audioDelta.transcript;
+  if (typeof transcript === "string" && transcript.length > 0) {
+    transcriptParts.push(transcript);
+  }
+  return "continue";
+}
+
 export async function collectStreamedAudio(
   response: Response,
 ): Promise<{ audioBuffer: Buffer; transcript: string }> {
@@ -30,6 +64,7 @@ export async function collectStreamedAudio(
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let reachedDone = false;
 
   for (;;) {
     const { done, value } = await reader.read();
@@ -42,33 +77,19 @@ export async function collectStreamedAudio(
     buffer = lines.pop() ?? "";
 
     for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith("data:")) {
-        continue;
-      }
-      const payload = trimmed.slice(5).trim();
-      if (payload === "[DONE]") {
-        continue;
-      }
-      let parsed: SseAudioChunk;
-      try {
-        parsed = JSON.parse(payload) as SseAudioChunk;
-      } catch {
-        continue;
-      }
-      const audioDelta = parsed.choices?.[0]?.delta?.audio;
-      if (!audioDelta) {
-        continue;
-      }
-      const data = audioDelta.data;
-      if (typeof data === "string" && data.length > 0) {
-        audioBuffers.push(Buffer.from(data, "base64"));
-      }
-      const transcript = audioDelta.transcript;
-      if (typeof transcript === "string" && transcript.length > 0) {
-        transcriptParts.push(transcript);
+      if (parseSseLine(line, audioBuffers, transcriptParts) === "done") {
+        reachedDone = true;
+        break;
       }
     }
+    if (reachedDone) {
+      break;
+    }
+  }
+
+  // Flush any remaining data in the buffer that wasn't terminated by a newline.
+  if (!reachedDone && buffer.trim()) {
+    parseSseLine(buffer, audioBuffers, transcriptParts);
   }
 
   return {

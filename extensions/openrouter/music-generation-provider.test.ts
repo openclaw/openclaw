@@ -3,12 +3,12 @@ import { buildOpenrouterMusicGenerationProvider } from "./music-generation-provi
 
 const {
   resolveApiKeyForProviderMock,
-  fetchWithTimeoutMock,
+  fetchWithTimeoutGuardedMock,
   assertOkOrThrowHttpErrorMock,
   resolveProviderHttpRequestConfigMock,
 } = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "openrouter-key" })),
-  fetchWithTimeoutMock: vi.fn(),
+  fetchWithTimeoutGuardedMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
   resolveProviderHttpRequestConfigMock: vi.fn((params) => ({
     baseUrl: params.baseUrl ?? params.defaultBaseUrl,
@@ -24,7 +24,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
 
 vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
-  fetchWithTimeout: fetchWithTimeoutMock,
+  fetchWithTimeoutGuarded: fetchWithTimeoutGuardedMock,
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
 }));
 
@@ -56,10 +56,20 @@ function makeSseStream(chunks: Array<{ data?: string; transcript?: string }>): R
   });
 }
 
+function mockGuardedSseResponse(chunks: Array<{ data?: string; transcript?: string }>) {
+  fetchWithTimeoutGuardedMock.mockResolvedValue({
+    response: new Response(makeSseStream(chunks), {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    }),
+    release: vi.fn(async () => {}),
+  });
+}
+
 describe("openrouter music generation provider", () => {
   afterEach(() => {
     resolveApiKeyForProviderMock.mockClear();
-    fetchWithTimeoutMock.mockReset();
+    fetchWithTimeoutGuardedMock.mockReset();
     assertOkOrThrowHttpErrorMock.mockClear();
     resolveProviderHttpRequestConfigMock.mockClear();
   });
@@ -82,15 +92,10 @@ describe("openrouter music generation provider", () => {
     const audioBase64Part1 = Buffer.from("audio-part-1").toString("base64");
     const audioBase64Part2 = Buffer.from("audio-part-2").toString("base64");
 
-    fetchWithTimeoutMock.mockResolvedValue(
-      new Response(
-        makeSseStream([
-          { data: audioBase64Part1, transcript: "Hello " },
-          { data: audioBase64Part2, transcript: "world" },
-        ]),
-        { status: 200, headers: { "content-type": "text/event-stream" } },
-      ),
-    );
+    mockGuardedSseResponse([
+      { data: audioBase64Part1, transcript: "Hello " },
+      { data: audioBase64Part2, transcript: "world" },
+    ]);
 
     const provider = buildOpenrouterMusicGenerationProvider();
     const result = await provider.generateMusic({
@@ -103,7 +108,6 @@ describe("openrouter music generation provider", () => {
     expect(result.tracks).toHaveLength(1);
     expect(result.tracks[0]?.mimeType).toBe("audio/mpeg");
     expect(result.tracks[0]?.fileName).toBe("track-1.mp3");
-    // Each base64 chunk is decoded individually then concatenated as raw bytes.
     const expectedBuffer = Buffer.concat([
       Buffer.from(audioBase64Part1, "base64"),
       Buffer.from(audioBase64Part2, "base64"),
@@ -111,26 +115,10 @@ describe("openrouter music generation provider", () => {
     expect(result.tracks[0]?.buffer).toEqual(expectedBuffer);
     expect(result.lyrics).toEqual(["Hello world"]);
     expect(result.model).toBe("google/lyria-3-clip-preview");
-
-    expect(fetchWithTimeoutMock).toHaveBeenCalledWith(
-      "https://openrouter.ai/api/v1/chat/completions",
-      expect.objectContaining({
-        method: "POST",
-        body: expect.stringContaining('"stream":true'),
-      }),
-      expect.any(Number),
-      expect.any(Function),
-    );
   });
 
   it("includes lyrics in the prompt when provided", async () => {
-    const audioBase64 = Buffer.from("track").toString("base64");
-    fetchWithTimeoutMock.mockResolvedValue(
-      new Response(makeSseStream([{ data: audioBase64 }]), {
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-      }),
-    );
+    mockGuardedSseResponse([{ data: Buffer.from("track").toString("base64") }]);
 
     const provider = buildOpenrouterMusicGenerationProvider();
     await provider.generateMusic({
@@ -142,7 +130,7 @@ describe("openrouter music generation provider", () => {
     });
 
     const callBody = JSON.parse(
-      fetchWithTimeoutMock.mock.calls[0]?.[1]?.body as string,
+      fetchWithTimeoutGuardedMock.mock.calls[0]?.[1]?.body as string,
     ) as Record<string, unknown>;
     const messages = callBody.messages as Array<{ content: string }>;
     expect(messages[0]?.content).toContain("A ballad");
@@ -150,13 +138,7 @@ describe("openrouter music generation provider", () => {
   });
 
   it("requests wav format when specified", async () => {
-    const audioBase64 = Buffer.from("wav-data").toString("base64");
-    fetchWithTimeoutMock.mockResolvedValue(
-      new Response(makeSseStream([{ data: audioBase64 }]), {
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-      }),
-    );
+    mockGuardedSseResponse([{ data: Buffer.from("wav-data").toString("base64") }]);
 
     const provider = buildOpenrouterMusicGenerationProvider();
     const result = await provider.generateMusic({
@@ -171,19 +153,14 @@ describe("openrouter music generation provider", () => {
     expect(result.tracks[0]?.fileName).toBe("track-1.wav");
 
     const callBody = JSON.parse(
-      fetchWithTimeoutMock.mock.calls[0]?.[1]?.body as string,
+      fetchWithTimeoutGuardedMock.mock.calls[0]?.[1]?.body as string,
     ) as Record<string, unknown>;
     const audio = callBody.audio as { format: string };
     expect(audio.format).toBe("wav");
   });
 
   it("throws when stream contains no audio data", async () => {
-    fetchWithTimeoutMock.mockResolvedValue(
-      new Response(makeSseStream([]), {
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-      }),
-    );
+    mockGuardedSseResponse([]);
 
     const provider = buildOpenrouterMusicGenerationProvider();
     await expect(

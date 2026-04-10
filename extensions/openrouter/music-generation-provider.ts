@@ -7,7 +7,7 @@ import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
-  fetchWithTimeout,
+  fetchWithTimeoutGuarded,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
@@ -67,7 +67,7 @@ export function buildOpenrouterMusicGenerationProvider(): MusicGenerationProvide
         throw new Error("OpenRouter API key missing");
       }
 
-      const { baseUrl, headers } = resolveProviderHttpRequestConfig({
+      const { baseUrl, headers, dispatcherPolicy } = resolveProviderHttpRequestConfig({
         baseUrl: resolveConfiguredBaseUrl(req.cfg),
         defaultBaseUrl: OPENROUTER_BASE_URL,
         allowPrivateNetwork: false,
@@ -84,7 +84,7 @@ export function buildOpenrouterMusicGenerationProvider(): MusicGenerationProvide
 
       const requestHeaders = new Headers(headers);
       requestHeaders.set("Content-Type", "application/json");
-      const response = await fetchWithTimeout(
+      const { response, release } = await fetchWithTimeoutGuarded(
         `${baseUrl}/chat/completions`,
         {
           method: "POST",
@@ -99,31 +99,36 @@ export function buildOpenrouterMusicGenerationProvider(): MusicGenerationProvide
         },
         req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         fetch,
+        { dispatcherPolicy, auditContext: "openrouter-music-generate" },
       );
-      await assertOkOrThrowHttpError(response, "OpenRouter music generation failed");
 
-      const { audioBuffer, transcript } = await collectStreamedAudio(response);
-      if (audioBuffer.length === 0) {
-        throw new Error("OpenRouter music generation response missing audio data");
+      try {
+        await assertOkOrThrowHttpError(response, "OpenRouter music generation failed");
+        const { audioBuffer, transcript } = await collectStreamedAudio(response);
+        if (audioBuffer.length === 0) {
+          throw new Error("OpenRouter music generation response missing audio data");
+        }
+
+        const mimeType = audioFormat === "wav" ? "audio/wav" : "audio/mpeg";
+        const track: GeneratedMusicAsset = {
+          buffer: audioBuffer,
+          mimeType,
+          fileName: `track-1.${audioFormat}`,
+        };
+
+        return {
+          tracks: [track],
+          ...(transcript ? { lyrics: [transcript] } : {}),
+          model,
+          metadata: {
+            audioFormat,
+            instrumental: req.instrumental === true,
+            ...(normalizeOptionalString(req.lyrics) ? { requestedLyrics: true } : {}),
+          },
+        };
+      } finally {
+        await release();
       }
-
-      const mimeType = audioFormat === "wav" ? "audio/wav" : "audio/mpeg";
-      const track: GeneratedMusicAsset = {
-        buffer: audioBuffer,
-        mimeType,
-        fileName: `track-1.${audioFormat}`,
-      };
-
-      return {
-        tracks: [track],
-        ...(transcript ? { lyrics: [transcript] } : {}),
-        model,
-        metadata: {
-          audioFormat,
-          instrumental: req.instrumental === true,
-          ...(normalizeOptionalString(req.lyrics) ? { requestedLyrics: true } : {}),
-        },
-      };
     },
   };
 }

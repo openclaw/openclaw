@@ -6,7 +6,7 @@ const {
   assertOkOrThrowHttpErrorMock,
   resolveProviderHttpRequestConfigMock,
 } = vi.hoisted(() => ({
-  fetchWithTimeoutMock: vi.fn(),
+  fetchWithTimeoutGuardedMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
   resolveProviderHttpRequestConfigMock: vi.fn((params) => ({
     baseUrl: params.baseUrl ?? params.defaultBaseUrl,
@@ -18,7 +18,7 @@ const {
 
 vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
-  fetchWithTimeout: fetchWithTimeoutMock,
+  fetchWithTimeoutGuarded: fetchWithTimeoutGuardedMock,
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
 }));
 
@@ -51,22 +51,23 @@ function makeSseStream(chunks: Array<{ data?: string; transcript?: string }>): R
 }
 
 function mockSseResponse(chunks: Array<{ data?: string; transcript?: string }>) {
-  fetchWithTimeoutMock.mockResolvedValue(
-    new Response(makeSseStream(chunks), {
+  fetchWithTimeoutGuardedMock.mockResolvedValue({
+    response: new Response(makeSseStream(chunks), {
       status: 200,
       headers: { "content-type": "text/event-stream" },
     }),
-  );
+    release: vi.fn(async () => {}),
+  });
 }
 
 function parseRequestBody(): Record<string, unknown> {
-  const body = fetchWithTimeoutMock.mock.calls[0]?.[1]?.body as string;
+  const body = fetchWithTimeoutGuardedMock.mock.calls[0]?.[1]?.body as string;
   return JSON.parse(body) as Record<string, unknown>;
 }
 
 describe("openrouter speech provider", () => {
   afterEach(() => {
-    fetchWithTimeoutMock.mockReset();
+    fetchWithTimeoutGuardedMock.mockReset();
     assertOkOrThrowHttpErrorMock.mockClear();
     resolveProviderHttpRequestConfigMock.mockClear();
     vi.unstubAllEnvs();
