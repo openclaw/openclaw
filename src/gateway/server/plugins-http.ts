@@ -87,29 +87,43 @@ export function createGatewayPluginRequestHandler(params: {
       log.warn(`plugin http route blocked without gateway auth (${pathContext.canonicalPath})`);
       return false;
     }
+    const gatewayRequestAuth = dispatchContext?.gatewayRequestAuth;
+    const gatewayRequestOperatorScopes = dispatchContext?.gatewayRequestOperatorScopes;
+
+    // Fail closed before invoking any handlers when matched gateway routes are
+    // missing the runtime auth/scope context they require.
+    for (const route of matchedRoutes) {
+      if (route.auth !== "gateway") {
+        continue;
+      }
+      if (route.gatewayRuntimeScopeSurface === "trusted-operator") {
+        if (!gatewayRequestAuth) {
+          log.warn(
+            `plugin http route blocked without caller auth context (${pathContext.canonicalPath})`,
+          );
+          return false;
+        }
+        continue;
+      }
+      if (gatewayRequestOperatorScopes === undefined) {
+        log.warn(
+          `plugin http route blocked without caller scope context (${pathContext.canonicalPath})`,
+        );
+        return false;
+      }
+    }
 
     for (const route of matchedRoutes) {
       let runtimeScopes: readonly string[] = [];
       if (route.auth === "gateway") {
         if (route.gatewayRuntimeScopeSurface === "trusted-operator") {
-          if (!dispatchContext?.gatewayRequestAuth) {
-            log.warn(
-              `plugin http route blocked without caller auth context (${pathContext.canonicalPath})`,
-            );
-            return false;
-          }
           runtimeScopes = resolvePluginRouteRuntimeOperatorScopes(
             req,
-            dispatchContext.gatewayRequestAuth,
+            gatewayRequestAuth!,
             "trusted-operator",
           );
-        } else if (dispatchContext?.gatewayRequestOperatorScopes === undefined) {
-          log.warn(
-            `plugin http route blocked without caller scope context (${pathContext.canonicalPath})`,
-          );
-          return false;
         } else {
-          runtimeScopes = dispatchContext.gatewayRequestOperatorScopes;
+          runtimeScopes = gatewayRequestOperatorScopes!;
         }
       }
 
