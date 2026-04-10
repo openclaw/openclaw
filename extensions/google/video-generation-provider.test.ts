@@ -161,11 +161,13 @@ describe("google video generation provider", () => {
 
   it("falls back to REST when the SDK returns a 404 for text-only prompts", async () => {
     vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "google-key",
+      apiKey: JSON.stringify({ token: "oauth-token", projectId: "demo-project" }),
       source: "env",
       mode: "api-key",
     });
-    generateVideosMock.mockRejectedValue(new Error(JSON.stringify({ error: { code: 404 } })));
+    generateVideosMock.mockRejectedValue(
+      Object.assign(new Error("sdk 404"), { status: 404 satisfies number }),
+    );
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({
@@ -197,7 +199,7 @@ describe("google video generation provider", () => {
     const provider = buildGoogleVideoGenerationProvider();
     const result = await provider.generateVideo({
       provider: "google",
-      model: "veo-3.1-lite-generate-preview",
+      model: "google/models/veo-3.1-lite-generate-preview",
       prompt: "A tiny robot watering a windowsill garden",
       cfg: {},
     });
@@ -206,13 +208,21 @@ describe("google video generation provider", () => {
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
       "/models/veo-3.1-lite-generate-preview:predictLongRunning",
     );
+    expect(String(fetchMock.mock.calls[0]?.[0])).not.toContain("%2F");
     expect(String(fetchMock.mock.calls[1]?.[0])).toBe("https://video.example/rest-123.mp4");
+    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
+      "Bearer oauth-token",
+    );
+    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("x-goog-api-key")).toBeNull();
+    expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get("authorization")).toBe(
+      "Bearer oauth-token",
+    );
     expect(downloadFileMock).not.toHaveBeenCalled();
     expect(result.videos).toHaveLength(1);
     expect(result.videos[0]?.buffer.equals(Buffer.from("rest-video"))).toBe(true);
   });
 
-  it("falls back to REST when the SDK returns an empty result", async () => {
+  it("falls back to REST when the SDK returns an empty result and decodes raw REST inline video", async () => {
     vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "google-key",
       source: "env",
@@ -231,14 +241,16 @@ describe("google video generation provider", () => {
           done: true,
           name: "operations/rest-456",
           response: {
-            generatedVideos: [
-              {
-                video: {
-                  videoBytes: Buffer.from("rest-inline-video").toString("base64"),
-                  mimeType: "video/mp4",
+            generateVideoResponse: {
+              generatedSamples: [
+                {
+                  video: {
+                    encodedVideo: Buffer.from("rest-inline-video").toString("base64"),
+                    encoding: "video/mp4",
+                  },
                 },
-              },
-            ],
+              ],
+            },
           },
         }),
     });
@@ -254,6 +266,7 @@ describe("google video generation provider", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(result.videos).toHaveLength(1);
+    expect(result.videos[0]?.mimeType).toBe("video/mp4");
     expect(result.videos[0]?.buffer.equals(Buffer.from("rest-inline-video"))).toBe(true);
   });
 

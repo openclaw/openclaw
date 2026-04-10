@@ -10,7 +10,7 @@ import type {
   VideoGenerationProvider,
   VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
-import { normalizeGoogleApiBaseUrl } from "./api.js";
+import { normalizeGoogleApiBaseUrl, parseGeminiAuth } from "./api.js";
 
 const DEFAULT_GOOGLE_VIDEO_MODEL = "veo-3.1-fast-generate-preview";
 const DEFAULT_TIMEOUT_MS = 180_000;
@@ -160,19 +160,23 @@ function resolveInputVideo(req: VideoGenerationRequest) {
 async function requestGoogleVideoJson(params: {
   url: string;
   method: "GET" | "POST";
-  apiKey: string;
+  headers: Record<string, string>;
   body?: string;
   timeoutMs?: number;
 }): Promise<unknown> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), params.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   try {
+    const headers = { ...params.headers };
+    if (
+      params.body &&
+      !Object.keys(headers).some((headerName) => headerName.toLowerCase() === "content-type")
+    ) {
+      headers["content-type"] = "application/json";
+    }
     const response = await fetch(params.url, {
       method: params.method,
-      headers: {
-        "x-goog-api-key": params.apiKey,
-        ...(params.body ? { "content-type": "application/json" } : {}),
-      },
+      headers,
       ...(params.body ? { body: params.body } : {}),
       signal: controller.signal,
     });
@@ -211,6 +215,10 @@ function parseGoogleApiErrorCode(payload: unknown): number | undefined {
 
 function extractGoogleApiErrorCode(error: unknown): number | undefined {
   if (error instanceof Error) {
+    const statusCode = (error as Error & { status?: unknown }).status;
+    if (typeof statusCode === "number") {
+      return statusCode;
+    }
     try {
       return parseGoogleApiErrorCode(JSON.parse(error.message));
     } catch {
@@ -241,7 +249,7 @@ function extractGeneratedVideos(operation: unknown): Array<{ video: unknown }> {
 
 async function downloadGoogleVideoUri(params: {
   uri: string;
-  apiKey: string;
+  headers: Record<string, string>;
   timeoutMs?: number;
 }): Promise<Buffer> {
   const controller = new AbortController();
@@ -249,7 +257,7 @@ async function downloadGoogleVideoUri(params: {
   try {
     const response = await fetch(params.uri, {
       method: "GET",
-      headers: { "x-goog-api-key": params.apiKey },
+      headers: params.headers,
       signal: controller.signal,
     });
     if (!response.ok) {
@@ -326,7 +334,7 @@ async function generateGoogleVideoViaSdk(params: {
 
 async function generateGoogleVideoViaRest(params: {
   baseUrl: string;
-  apiKey: string;
+  headers: Record<string, string>;
   timeoutMs?: number;
   model: string;
   prompt: string;
@@ -346,9 +354,9 @@ async function generateGoogleVideoViaRest(params: {
   };
 
   let operation = await requestGoogleVideoJson({
-    url: `${params.baseUrl}/models/${encodeURIComponent(params.model)}:predictLongRunning`,
+    url: `${params.baseUrl}/${resolveGoogleVideoRestModelPath(params.model)}:predictLongRunning`,
     method: "POST",
-    apiKey: params.apiKey,
+    headers: params.headers,
     body: JSON.stringify(submitBody),
     timeoutMs: params.timeoutMs,
   });
@@ -365,7 +373,7 @@ async function generateGoogleVideoViaRest(params: {
     operation = await requestGoogleVideoJson({
       url: `${params.baseUrl}/${opName}`,
       method: "GET",
-      apiKey: params.apiKey,
+      headers: params.headers,
       timeoutMs: params.timeoutMs,
     });
   }
@@ -379,7 +387,7 @@ async function generateGoogleVideoViaRest(params: {
 
 async function toGoogleVideoResult(params: {
   operation: unknown;
-  apiKey: string;
+  headers: Record<string, string>;
   timeoutMs?: number;
   model: string;
   client?: GoogleGenAI;
@@ -397,12 +405,25 @@ async function toGoogleVideoResult(params: {
     videos: await Promise.all(
       generatedVideos.map(async (entry, index) => {
         const inline = entry.video as
-          | { videoBytes?: string; uri?: string; mimeType?: string }
+          | {
+              videoBytes?: string;
+              encodedVideo?: string;
+              uri?: string;
+              mimeType?: string;
+              encoding?: string;
+            }
           | undefined;
-        if (inline?.videoBytes) {
+        const inlineVideoBytes = normalizeOptionalString(
+          inline?.videoBytes || inline?.encodedVideo,
+        );
+        const inlineMimeType =
+          normalizeOptionalString(inline?.mimeType) ||
+          normalizeOptionalString(inline?.encoding) ||
+          "video/mp4";
+        if (inlineVideoBytes) {
           return {
-            buffer: Buffer.from(inline.videoBytes, "base64"),
-            mimeType: normalizeOptionalString(inline.mimeType) || "video/mp4",
+            buffer: Buffer.from(inlineVideoBytes, "base64"),
+            mimeType: inlineMimeType,
             fileName: `video-${index + 1}.mp4`,
           };
         }
@@ -411,10 +432,10 @@ async function toGoogleVideoResult(params: {
             return {
               buffer: await downloadGoogleVideoUri({
                 uri: inline.uri,
-                apiKey: params.apiKey,
+                headers: params.headers,
                 timeoutMs: params.timeoutMs,
               }),
-              mimeType: normalizeOptionalString(inline.mimeType) || "video/mp4",
+              mimeType: inlineMimeType,
               fileName: `video-${index + 1}.mp4`,
             };
           } catch (err) {
@@ -444,6 +465,20 @@ async function toGoogleVideoResult(params: {
     model: params.model,
     metadata: typeof op.name === "string" ? { operationName: op.name } : undefined,
   };
+}
+
+function resolveGoogleVideoRestModelPath(model: string): string {
+  const trimmed = normalizeOptionalString(model) || DEFAULT_GOOGLE_VIDEO_MODEL;
+  if (trimmed.startsWith("google/models/")) {
+    return trimmed.slice("google/".length);
+  }
+  if (trimmed.startsWith("models/")) {
+    return trimmed;
+  }
+  if (trimmed.startsWith("google/")) {
+    return `models/${trimmed.slice("google/".length)}`;
+  }
+  return `models/${trimmed}`;
 }
 
 async function downloadGeneratedVideo(params: {
@@ -552,6 +587,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
 
       const configuredBaseUrl = resolveConfiguredGoogleVideoBaseUrl(req);
       const baseUrl = resolveGoogleVideoBaseUrl(req);
+      const authHeaders = parseGeminiAuth(auth.apiKey).headers;
       const durationSeconds = resolveDurationSeconds(req.durationSeconds);
       const model = normalizeOptionalString(req.model) || DEFAULT_GOOGLE_VIDEO_MODEL;
       const aspectRatio = resolveAspectRatio({ aspectRatio: req.aspectRatio, size: req.size });
@@ -582,7 +618,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
           });
           return await toGoogleVideoResult({
             operation,
-            apiKey: auth.apiKey,
+            headers: authHeaders,
             timeoutMs: req.timeoutMs,
             model,
             client,
@@ -593,7 +629,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
           }
           const operation = await generateGoogleVideoViaRest({
             baseUrl,
-            apiKey: auth.apiKey,
+            headers: authHeaders,
             timeoutMs: req.timeoutMs,
             model,
             prompt: req.prompt,
@@ -604,7 +640,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
           });
           return await toGoogleVideoResult({
             operation,
-            apiKey: auth.apiKey,
+            headers: authHeaders,
             timeoutMs: req.timeoutMs,
             model,
           });
@@ -624,7 +660,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
       });
       return await toGoogleVideoResult({
         operation,
-        apiKey: auth.apiKey,
+        headers: authHeaders,
         timeoutMs: req.timeoutMs,
         model,
         client,
