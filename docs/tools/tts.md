@@ -58,6 +58,7 @@ key into `messages.tts.providers.<provider>.apiKey` unless you want a TTS-specif
 - [OpenAI Audio API reference](https://platform.openai.com/docs/api-reference/audio)
 - [ElevenLabs Text to Speech](https://elevenlabs.io/docs/api-reference/text-to-speech)
 - [ElevenLabs Authentication](https://elevenlabs.io/docs/api-reference/authentication)
+- [Mistral Voxtral TTS](https://docs.mistral.ai/capabilities/audio/text_to_speech)
 - [MiniMax T2A v2 API](https://platform.minimaxi.com/document/T2A%20V2)
 - [node-edge-tts](https://github.com/SchneeHertz/node-edge-tts)
 - [Microsoft Speech output formats](https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech#audio-outputs)
@@ -263,7 +264,7 @@ Then run:
   - `tagged` only sends audio when the reply includes `[[tts:key=value]]` directives or a `[[tts:text]]...[[/tts:text]]` block.
 - `enabled`: legacy toggle (doctor migrates this to `auto`).
 - `mode`: `"final"` (default) or `"all"` (includes tool/block replies).
-- `provider`: speech provider id such as `"elevenlabs"`, `"microsoft"`, `"minimax"`, or `"openai"` (fallback is automatic).
+- `provider`: speech provider id such as `"elevenlabs"`, `"microsoft"`, `"minimax"`, `"mistral"`, or `"openai"` (fallback is automatic).
 - If `provider` is **unset**, OpenClaw uses the first configured speech provider in registry auto-select order.
 - Legacy `provider: "edge"` still works and is normalized to `microsoft`.
 - `summaryModel`: optional cheap model for auto-summary; defaults to `agents.defaults.model.primary`.
@@ -293,6 +294,10 @@ Then run:
 - `providers.minimax.speed`: playback speed `0.5..2.0` (default 1.0).
 - `providers.minimax.vol`: volume `(0, 10]` (default 1.0; must be greater than 0).
 - `providers.minimax.pitch`: pitch shift `-12..12` (default 0).
+- `providers.mistral.baseUrl`: override Mistral TTS endpoint (default `https://api.mistral.ai/v1`, env: `MISTRAL_TTS_BASE_URL`; also inherits `models.providers.mistral.baseUrl` when set).
+- `providers.mistral.model`: Voxtral TTS model (default `voxtral-mini-tts-2603`).
+- `providers.mistral.voice`: Voxtral voice name (e.g. `gb_oliver_excited`). See [Voxtral TTS docs](https://docs.mistral.ai/capabilities/audio/text_to_speech) for available voices.
+- `providers.mistral.speed`: playback speed multiplier (e.g. `1.0` = normal).
 - `providers.microsoft.enabled`: allow Microsoft speech usage (default `true`; no API key).
 - `providers.microsoft.voice`: Microsoft neural voice name (e.g. `en-US-MichelleNeural`).
 - `providers.microsoft.lang`: language code (e.g. `en-US`).
@@ -327,9 +332,10 @@ Here you go.
 
 Available directive keys (when enabled):
 
-- `provider` (registered speech provider id, for example `openai`, `elevenlabs`, `minimax`, or `microsoft`; requires `allowProvider: true`)
-- `voice` (OpenAI voice) or `voiceId` (ElevenLabs / MiniMax)
-- `model` (OpenAI TTS model, ElevenLabs model id, or MiniMax model)
+- `provider` (registered speech provider id, for example `openai`, `elevenlabs`, `minimax`, `mistral`, or `microsoft`; requires `allowProvider: true`)
+- `voice` (OpenAI or Mistral voice) or `voiceId` (ElevenLabs / MiniMax)
+- `mistralVoiceId` / `mistralModelId` (Mistral-specific aliases for `voice` / `model`)
+- `model` (OpenAI TTS model, ElevenLabs model id, MiniMax model, or Mistral model)
 - `stability`, `similarityBoost`, `style`, `speed`, `useSpeakerBoost`
 - `vol` / `volume` (MiniMax volume, 0-10)
 - `pitch` (MiniMax pitch, -12 to 12)
@@ -388,6 +394,7 @@ These override `messages.tts.*` for that host.
   - 48kHz / 64kbps is a good voice message tradeoff.
 - **Other channels**: MP3 (`mp3_44100_128` from ElevenLabs, `mp3` from OpenAI).
   - 44.1kHz / 128kbps is the default balance for speech clarity.
+- **Mistral**: Opus voice messages (Feishu / Matrix / Telegram / WhatsApp) or MP3 (other channels), matching the OpenAI/ElevenLabs pattern. Telephony output uses WAV decoded to s16le PCM internally.
 - **MiniMax**: MP3 (`speech-2.8-hd` model, 32kHz sample rate). Voice-note format not natively supported; use OpenAI or ElevenLabs for guaranteed Opus voice messages.
 - **Microsoft**: uses `microsoft.outputFormat` (default `audio-24khz-48kbitrate-mono-mp3`).
   - The bundled transport accepts an `outputFormat`, but not all formats are available from the service.

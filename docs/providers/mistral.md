@@ -128,6 +128,7 @@ The media transcription path uses `/v1/audio/transcriptions`. The default audio 
             mistral: {
               voice: "gb_oliver_excited",
               model: "voxtral-mini-tts-2603",
+              speed: 1.0,
               apiKey: "mistral_api_key",
               baseUrl: "https://api.mistral.ai/v1",
             },
@@ -138,6 +139,10 @@ The media transcription path uses `/v1/audio/transcriptions`. The default audio 
     ```
 
     `openclaw onboard --auth-choice mistral-api-key` makes the same key available to Mistral TTS. Set `messages.tts.provider` to `"mistral"` or use `/tts provider mistral`; no separate TTS API key is required. TTS path uses `/v1/audio/speech`.
+
+    - TTS base URL defaults to `https://api.mistral.ai/v1` and inherits `models.providers.mistral.baseUrl` when set. Override with `messages.tts.providers.mistral.baseUrl` or `MISTRAL_TTS_BASE_URL`.
+    - `speed` adjusts playback rate (e.g. `1.0` = normal). Omit to use the Voxtral API default.
+    - Model-driven directives support `voice` / `mistralVoiceId` and `model` / `mistralModelId` overrides per reply.
 
   </Accordion>
 
