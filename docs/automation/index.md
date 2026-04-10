@@ -103,6 +103,7 @@ See [Heartbeat](/gateway/heartbeat).
 - **Standing orders** give the agent persistent context and authority boundaries.
 - **Task Flow** coordinates multi-step flows above individual tasks.
 - **Tasks** automatically track all detached work so you can inspect and audit it.
+- **Session trace relays** forward selected session activity into an operator chat when you need lightweight oversight.
 
 ## Related
 
@@ -110,6 +111,7 @@ See [Heartbeat](/gateway/heartbeat).
 - [Background Tasks](/automation/tasks) — task ledger for all detached work
 - [Task Flow](/automation/taskflow) — durable multi-step flow orchestration
 - [Hooks](/automation/hooks) — event-driven lifecycle scripts
+- [Feishu Session Trace Relay](/automation/feishu-session-trace) — forward selected session activity into Feishu
 - [Standing Orders](/automation/standing-orders) — persistent agent instructions
 - [Heartbeat](/gateway/heartbeat) — periodic main-session turns
 - [Configuration Reference](/gateway/configuration-reference) — all config keys
