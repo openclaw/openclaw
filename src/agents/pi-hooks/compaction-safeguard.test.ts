@@ -2017,6 +2017,39 @@ async function expectWorkspaceSummaryEmptyForAgentsAlias(
 }
 
 describe("readWorkspaceContextForSummary", () => {
+  it("reads the configured subagent AGENTS source when runtime context targets a subagent", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
+    try {
+      fs.writeFileSync(path.join(root, "AGENTS.md"), "## Session Startup\nmain rules\n");
+      fs.writeFileSync(
+        path.join(root, "SUBAGENTS.md"),
+        "## Session Startup\nsubagent rules\n\n## Red Lines\nstay narrow\n",
+      );
+
+      const result = await readWorkspaceContextForSummary({
+        workspaceDir: root,
+        cfg: {
+          agents: {
+            defaults: {
+              subagents: {
+                agentsFile: "SUBAGENTS.md",
+              },
+            },
+          },
+        } as OpenClawConfig,
+        sessionKey: "agent:main:subagent:task-1",
+        modelProviderId: "openai",
+        modelId: "gpt-5.4",
+      });
+
+      expect(result).toContain("subagent rules");
+      expect(result).toContain("stay narrow");
+      expect(result).not.toContain("main rules");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it.runIf(process.platform !== "win32")(
     "returns empty when AGENTS.md is a symlink escape",
     async () => {

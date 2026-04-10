@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { resolveEffectiveAgentsBootstrapFileForRun } from "../../agents/bootstrap-files.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -56,8 +57,8 @@ function formatDateStamp(nowMs: number, timezone: string): string {
 }
 
 /**
- * Read critical sections from workspace AGENTS.md for post-compaction injection.
- * Returns formatted system event text, or null if no AGENTS.md or no relevant sections.
+ * Read critical sections from the effective AGENTS source for post-compaction injection.
+ * Returns formatted system event text, or null if no effective AGENTS source or no relevant sections.
  * Substitutes YYYY-MM-DD placeholders with the real date so agents read the correct
  * daily memory files instead of guessing based on training cutoff.
  */
@@ -65,8 +66,25 @@ export async function readPostCompactionContext(
   workspaceDir: string,
   cfg?: OpenClawConfig,
   nowMs?: number,
+  runContext?: {
+    sessionKey?: string;
+    sessionId?: string;
+    agentId?: string;
+    modelProviderId?: string;
+    modelId?: string;
+  },
 ): Promise<string | null> {
-  const agentsPath = path.join(workspaceDir, "AGENTS.md");
+  const { bootstrapFile } = await resolveEffectiveAgentsBootstrapFileForRun({
+    workspaceDir,
+    config: cfg,
+    sessionKey: runContext?.sessionKey,
+    sessionId: runContext?.sessionId,
+    agentId: runContext?.agentId,
+    modelProviderId: runContext?.modelProviderId,
+    modelId: runContext?.modelId,
+  });
+  const agentsPath = bootstrapFile.path;
+  const agentsLabel = path.basename(agentsPath) || "AGENTS.md";
 
   try {
     const opened = await openBoundaryFile({
@@ -85,7 +103,7 @@ export async function readPostCompactionContext(
       }
     })();
 
-    // Extract configured sections from AGENTS.md (default: Session Startup + Red Lines).
+    // Extract configured sections from the effective AGENTS source (default: Session Startup + Red Lines).
     // An explicit empty array disables post-compaction context injection entirely.
     const configuredSections = cfg?.agents?.defaults?.compaction?.postCompactionSections;
     const sectionNames = Array.isArray(configuredSections)
@@ -101,7 +119,7 @@ export async function readPostCompactionContext(
 
     // Fall back to legacy section names ("Every Session" / "Safety") when using
     // defaults and the current headings aren't found — preserves compatibility
-    // with older AGENTS.md templates. The fallback also applies when the user
+    // with older AGENTS templates. The fallback also applies when the user
     // explicitly configures the default pair, so that pinning the documented
     // defaults never silently changes behavior vs. leaving the field unset.
     const isDefaultSections =
@@ -142,8 +160,8 @@ export async function readPostCompactionContext(
         `Re-read the sections injected below (${displayNames.join(", ")}) and follow your configured startup procedure before responding to the user.`;
 
     const sectionLabel = isDefaultSections
-      ? "Critical rules from AGENTS.md:"
-      : `Injected sections from AGENTS.md (${displayNames.join(", ")}):`;
+      ? `Critical rules from ${agentsLabel}:`
+      : `Injected sections from ${agentsLabel} (${displayNames.join(", ")}):`;
 
     return (
       "[Post-compaction context refresh]\n\n" +
