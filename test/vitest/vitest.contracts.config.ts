@@ -1,5 +1,5 @@
 import { defineConfig } from "vitest/config";
-import { sharedVitestConfig } from "./vitest.shared.config.ts";
+import { nonIsolatedRunnerPath, sharedVitestConfig } from "./vitest.shared.config.ts";
 
 const base = sharedVitestConfig as Record<string, unknown>;
 const baseTest = sharedVitestConfig.test ?? {};
@@ -10,7 +10,7 @@ export function createContractsVitestConfig() {
     test: {
       ...baseTest,
       isolate: false,
-      runner: "./test/non-isolated-runner.ts",
+      runner: nonIsolatedRunnerPath,
       setupFiles: baseTest.setupFiles ?? [],
       include: [
         "src/channels/plugins/contracts/**/*.test.ts",

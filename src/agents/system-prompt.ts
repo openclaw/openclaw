@@ -44,6 +44,8 @@ const CONTEXT_FILE_ORDER = new Map<string, number>([
 ]);
 
 const DYNAMIC_CONTEXT_FILE_BASENAMES = new Set(["heartbeat.md"]);
+const DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK =
+  "Default heartbeat prompt:\n`Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`";
 
 function normalizeContextFilePath(pathValue: string): string {
   return pathValue.trim().replace(/\\/g, "/");
@@ -56,6 +58,13 @@ function getContextFileBasename(pathValue: string): string {
 
 function isDynamicContextFile(pathValue: string): boolean {
   return DYNAMIC_CONTEXT_FILE_BASENAMES.has(getContextFileBasename(pathValue));
+}
+
+function sanitizeContextFileContentForPrompt(content: string): string {
+  // Claude Code subscription mode rejects this exact prompt-policy quote when it
+  // appears in system context. The live heartbeat user turn still carries the
+  // actual instruction, and the generated heartbeat section below covers behavior.
+  return content.replaceAll(DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK, "").replace(/\n{3,}/g, "\n\n");
 }
 
 function sortContextFilesForPrompt(contextFiles: EmbeddedContextFile[]): EmbeddedContextFile[] {
@@ -103,9 +112,22 @@ function buildProjectContextSection(params: {
     lines.push("");
   }
   for (const file of params.files) {
-    lines.push(`## ${file.path}`, "", file.content, "");
+    lines.push(`## ${file.path}`, "", sanitizeContextFileContentForPrompt(file.content), "");
   }
   return lines;
+}
+
+function buildHeartbeatSection(params: { isMinimal: boolean; heartbeatPrompt?: string }) {
+  if (params.isMinimal || !params.heartbeatPrompt) {
+    return [];
+  }
+  return [
+    "## Heartbeats",
+    "If the current user message is a heartbeat poll and nothing needs attention, reply exactly:",
+    "HEARTBEAT_OK",
+    'If something needs attention, do NOT include "HEARTBEAT_OK"; reply with the alert text instead.',
+    "",
+  ];
 }
 
 function buildSkillsSection(params: { skillsPrompt?: string; readToolName: string }) {
@@ -625,9 +647,6 @@ export function buildAgentSystemPrompt(params: {
               }`
             : "",
           params.sandboxInfo.browserBridgeUrl ? "Sandbox browser: enabled." : "",
-          params.sandboxInfo.browserNoVncUrl
-            ? `Sandbox browser observer (noVNC): ${sanitizeForPromptLiteral(params.sandboxInfo.browserNoVncUrl)}`
-            : "",
           params.sandboxInfo.hostBrowserAllowed === true
             ? "Host browser control: allowed."
             : params.sandboxInfo.hostBrowserAllowed === false
@@ -754,18 +773,7 @@ export function buildAgentSystemPrompt(params: {
     lines.push(providerDynamicSuffix, "");
   }
 
-  // Skip heartbeats for subagent/none modes
-  if (!isMinimal && heartbeatPrompt) {
-    lines.push(
-      "## Heartbeats",
-      `Heartbeat prompt: ${heartbeatPrompt}`,
-      "If you receive a heartbeat poll (a user message matching the heartbeat prompt above), and there is nothing that needs attention, reply exactly:",
-      "HEARTBEAT_OK",
-      'OpenClaw treats a leading/trailing "HEARTBEAT_OK" as a heartbeat ack (and may discard it).',
-      'If something needs attention, do NOT include "HEARTBEAT_OK"; reply with the alert text instead.',
-      "",
-    );
-  }
+  lines.push(...buildHeartbeatSection({ isMinimal, heartbeatPrompt }));
 
   lines.push(
     "## Runtime",

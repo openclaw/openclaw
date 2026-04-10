@@ -322,6 +322,29 @@ function enableLineCurrentConversationBindings(): void {
   });
 }
 
+function enableTelegramCurrentConversationBindings(): void {
+  replaceSpawnConfig({
+    ...hoisted.state.cfg,
+    channels: {
+      ...hoisted.state.cfg.channels,
+      telegram: {
+        threadBindings: {
+          enabled: true,
+        },
+      },
+    },
+  });
+  registerSessionBindingAdapter({
+    channel: "telegram",
+    accountId: "default",
+    capabilities: createSessionBindingCapabilities(),
+    bind: async (input) => await hoisted.sessionBindingBindMock(input),
+    listBySession: (targetSessionKey) => hoisted.sessionBindingListBySessionMock(targetSessionKey),
+    resolveByConversation: (ref) => hoisted.sessionBindingResolveByConversationMock(ref),
+    unbind: async (input) => await hoisted.sessionBindingUnbindMock(input),
+  });
+}
+
 describe("spawnAcpDirect", () => {
   beforeEach(() => {
     replaceSpawnConfig(createDefaultSpawnConfig());
@@ -607,6 +630,128 @@ describe("spawnAcpDirect", () => {
       deliver: true,
       channel: "matrix",
       to: "channel:!room:example",
+      threadId: "child-thread",
+    });
+  });
+
+  it("keeps canonical Matrix room casing for ACP thread bindings", async () => {
+    enableMatrixAcpThreadBindings();
+    hoisted.sessionBindingBindMock.mockImplementationOnce(
+      async (input: {
+        targetSessionKey: string;
+        conversation: { accountId: string; conversationId: string; parentConversationId?: string };
+        metadata?: Record<string, unknown>;
+      }) =>
+        createSessionBinding({
+          targetSessionKey: input.targetSessionKey,
+          conversation: {
+            channel: "matrix",
+            accountId: input.conversation.accountId,
+            conversationId: "child-thread",
+            parentConversationId: input.conversation.parentConversationId ?? "!Room:Example.org",
+          },
+          metadata: {
+            boundBy:
+              typeof input.metadata?.boundBy === "string" ? input.metadata.boundBy : "system",
+            agentId: "codex",
+            webhookId: "wh-1",
+          },
+        }),
+    );
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:matrix:channel:!room:example.org",
+        agentChannel: "matrix",
+        agentAccountId: "default",
+        agentTo: "room:!Room:Example.org",
+        agentGroupId: "!room:example.org",
+      },
+    );
+
+    expect(result.status, JSON.stringify(result)).toBe("accepted");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "child",
+        conversation: expect.objectContaining({
+          channel: "matrix",
+          accountId: "default",
+          conversationId: "!Room:Example.org",
+        }),
+      }),
+    );
+    expectAgentGatewayCall({
+      deliver: true,
+      channel: "matrix",
+      to: "channel:!Room:Example.org",
+      threadId: "child-thread",
+    });
+  });
+
+  it("preserves Matrix parent room casing when binding from an existing thread", async () => {
+    enableMatrixAcpThreadBindings();
+    hoisted.sessionBindingBindMock.mockImplementationOnce(
+      async (input: {
+        targetSessionKey: string;
+        conversation: { accountId: string; conversationId: string; parentConversationId?: string };
+        metadata?: Record<string, unknown>;
+      }) =>
+        createSessionBinding({
+          targetSessionKey: input.targetSessionKey,
+          conversation: {
+            channel: "matrix",
+            accountId: input.conversation.accountId,
+            conversationId: "child-thread",
+            parentConversationId: input.conversation.parentConversationId ?? "!Room:Example.org",
+          },
+          metadata: {
+            boundBy:
+              typeof input.metadata?.boundBy === "string" ? input.metadata.boundBy : "system",
+            agentId: "codex",
+            webhookId: "wh-1",
+          },
+        }),
+    );
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:matrix:channel:!room:example.org:thread:$thread-root",
+        agentChannel: "matrix",
+        agentAccountId: "default",
+        agentTo: "room:!Room:Example.org",
+        agentThreadId: "$thread-root",
+        agentGroupId: "!room:example.org",
+      },
+    );
+
+    expect(result.status, JSON.stringify(result)).toBe("accepted");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "child",
+        conversation: expect.objectContaining({
+          channel: "matrix",
+          accountId: "default",
+          conversationId: "$thread-root",
+          parentConversationId: "!Room:Example.org",
+        }),
+      }),
+    );
+    expectAgentGatewayCall({
+      deliver: true,
+      channel: "matrix",
+      to: "channel:!Room:Example.org",
       threadId: "child-thread",
     });
   });
@@ -932,6 +1077,58 @@ describe("spawnAcpDirect", () => {
       );
     },
   );
+
+  it("preserves LINE fallback conversation precedence when groupId is present", async () => {
+    enableLineCurrentConversationBindings();
+    hoisted.sessionBindingBindMock.mockImplementationOnce(
+      async (input: {
+        targetSessionKey: string;
+        conversation: { accountId: string; conversationId: string };
+        metadata?: Record<string, unknown>;
+      }) =>
+        createSessionBinding({
+          targetSessionKey: input.targetSessionKey,
+          conversation: {
+            channel: "line",
+            accountId: input.conversation.accountId,
+            conversationId: input.conversation.conversationId,
+          },
+          metadata: {
+            boundBy:
+              typeof input.metadata?.boundBy === "string" ? input.metadata.boundBy : "system",
+            agentId: "codex",
+          },
+        }),
+    );
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:line:direct:R1234567890abcdef1234567890abcdef",
+        agentChannel: "line",
+        agentAccountId: "default",
+        agentTo: "line:user:U1234567890abcdef1234567890abcdef",
+        agentGroupId: "line:room:R1234567890abcdef1234567890abcdef",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "line",
+          accountId: "default",
+          conversationId: "R1234567890abcdef1234567890abcdef",
+        }),
+      }),
+    );
+  });
 
   it.each([
     {
@@ -1522,27 +1719,7 @@ describe("spawnAcpDirect", () => {
   });
 
   it("binds Telegram forum-topic ACP sessions to the current topic", async () => {
-    replaceSpawnConfig({
-      ...hoisted.state.cfg,
-      channels: {
-        ...hoisted.state.cfg.channels,
-        telegram: {
-          threadBindings: {
-            enabled: true,
-          },
-        },
-      },
-    });
-    registerSessionBindingAdapter({
-      channel: "telegram",
-      accountId: "default",
-      capabilities: createSessionBindingCapabilities(),
-      bind: async (input) => await hoisted.sessionBindingBindMock(input),
-      listBySession: (targetSessionKey) =>
-        hoisted.sessionBindingListBySessionMock(targetSessionKey),
-      resolveByConversation: (ref) => hoisted.sessionBindingResolveByConversationMock(ref),
-      unbind: async (input) => await hoisted.sessionBindingUnbindMock(input),
-    });
+    enableTelegramCurrentConversationBindings();
 
     const result = await spawnAcpDirect(
       {
@@ -1580,28 +1757,44 @@ describe("spawnAcpDirect", () => {
     expect(agentCall?.params?.channel).toBe("telegram");
   });
 
-  it("preserves topic-qualified Telegram targets without a separate threadId", async () => {
-    replaceSpawnConfig({
-      ...hoisted.state.cfg,
-      channels: {
-        ...hoisted.state.cfg.channels,
-        telegram: {
-          threadBindings: {
-            enabled: true,
-          },
-        },
+  it("drops self-parent Telegram current-conversation refs before binding", async () => {
+    enableTelegramCurrentConversationBindings();
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
       },
-    });
-    registerSessionBindingAdapter({
-      channel: "telegram",
-      accountId: "default",
-      capabilities: createSessionBindingCapabilities(),
-      bind: async (input) => await hoisted.sessionBindingBindMock(input),
-      listBySession: (targetSessionKey) =>
-        hoisted.sessionBindingListBySessionMock(targetSessionKey),
-      resolveByConversation: (ref) => hoisted.sessionBindingResolveByConversationMock(ref),
-      unbind: async (input) => await hoisted.sessionBindingUnbindMock(input),
-    });
+      {
+        agentSessionKey: "agent:main:telegram:direct:6098642967",
+        agentChannel: "telegram",
+        agentAccountId: "default",
+        agentTo: "telegram:6098642967",
+      },
+    );
+
+    const accepted = expectAcceptedSpawn(result);
+    expect(accepted.mode).toBe("session");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "6098642967",
+        }),
+      }),
+    );
+    const bindCall = hoisted.sessionBindingBindMock.mock.calls.at(-1)?.[0] as
+      | { conversation?: { parentConversationId?: string } }
+      | undefined;
+    expect(bindCall?.conversation?.parentConversationId).toBeUndefined();
+  });
+
+  it("preserves topic-qualified Telegram targets without a separate threadId", async () => {
+    enableTelegramCurrentConversationBindings();
 
     const result = await spawnAcpDirect(
       {

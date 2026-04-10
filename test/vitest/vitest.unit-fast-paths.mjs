@@ -58,7 +58,11 @@ const broadUnitFastCandidateSkipGlobs = [
   "**/*.live.test.ts",
   "test/fixtures/**/*.test.ts",
   "test/setup-home-isolation.test.ts",
+  "src/channels/plugins/contracts/**/*.test.ts",
+  "src/config/**/*.test.ts",
   "src/gateway/**/*.test.ts",
+  "src/media-generation/**/*.contract.test.ts",
+  "src/plugin-sdk/browser-subpaths.test.ts",
   "src/security/**/*.test.ts",
   "src/secrets/**/*.test.ts",
 ];

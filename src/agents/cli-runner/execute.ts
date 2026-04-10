@@ -113,6 +113,33 @@ const CLI_ENV_AUTH_LOG_KEYS = [
   "OPENROUTER_API_KEY",
 ] as const;
 
+const CLI_BACKEND_PRESERVE_ENV = "OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV";
+
+function parseCliBackendPreserveEnv(raw: string | undefined): Set<string> {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return new Set();
+  }
+  if (trimmed.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      return new Set(
+        Array.isArray(parsed)
+          ? parsed.filter((entry): entry is string => typeof entry === "string")
+          : [],
+      );
+    } catch {
+      return new Set();
+    }
+  }
+  return new Set(
+    trimmed
+      .split(/[,\s]+/)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0),
+  );
+}
+
 function listPresentCliAuthEnvKeys(env: Record<string, string | undefined>): string[] {
   return CLI_ENV_AUTH_LOG_KEYS.filter((key) => {
     const value = env[key];
@@ -236,7 +263,11 @@ export async function executePreparedCliRun(
             baseEnv: process.env,
             blockPathOverrides: true,
           });
+          const preservedEnv = parseCliBackendPreserveEnv(process.env[CLI_BACKEND_PRESERVE_ENV]);
           for (const key of backend.clearEnv ?? []) {
+            if (preservedEnv.has(key)) {
+              continue;
+            }
             delete next[key];
           }
           if (backend.env && Object.keys(backend.env).length > 0) {

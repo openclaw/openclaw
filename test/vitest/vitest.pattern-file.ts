@@ -46,12 +46,45 @@ export function loadPatternListFromEnv(
 }
 
 export function loadPatternListFromArgv(argv: string[] = process.argv): string[] | null {
-  const patterns = argv
-    .slice(2)
-    .filter((value) => value !== "run" && value !== "watch" && value !== "bench")
-    .filter((value) => !value.startsWith("-"))
-    .filter(looksLikeCliIncludePattern)
-    .map(normalizeCliPattern);
+  const optionValueFlags = new Set([
+    "-c",
+    "-r",
+    "-t",
+    "--config",
+    "--dir",
+    "--environment",
+    "--exclude",
+    "--maxWorkers",
+    "--mode",
+    "--outputFile",
+    "--pool",
+    "--project",
+    "--reporter",
+    "--root",
+    "--shard",
+    "--testNamePattern",
+  ]);
+  const values: string[] = [];
+  let skipNext = false;
+  for (const value of argv.slice(2)) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
+    if (value === "run" || value === "watch" || value === "bench") {
+      continue;
+    }
+    if (optionValueFlags.has(value)) {
+      skipNext = true;
+      continue;
+    }
+    if (value.startsWith("-")) {
+      continue;
+    }
+    values.push(value);
+  }
+
+  const patterns = values.filter(looksLikeCliIncludePattern).map(normalizeCliPattern);
 
   return patterns.length > 0 ? [...new Set(patterns)] : null;
 }

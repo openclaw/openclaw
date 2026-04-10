@@ -22,13 +22,13 @@ import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
 import type {
   CliBackendConfig,
   ModelProviderAuthMode,
   ModelProviderConfig,
 } from "../config/types.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
 import type { OperatorScope } from "../gateway/method-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";

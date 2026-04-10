@@ -22,6 +22,7 @@ async function runQaSuite(opts: {
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
+  cliAuthMode?: string;
   scenarioIds?: string[];
   concurrency?: number;
   runner?: string;
@@ -32,6 +33,20 @@ async function runQaSuite(opts: {
 }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaSuiteCommand(opts);
+}
+
+async function runQaTelegram(opts: {
+  repoRoot?: string;
+  outputDir?: string;
+  providerMode?: QaProviderModeInput;
+  primaryModel?: string;
+  alternateModel?: string;
+  fastMode?: boolean;
+  scenarioIds?: string[];
+  sutAccountId?: string;
+}) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaTelegramCommand(opts);
 }
 
 async function runQaCharacterEval(opts: {
@@ -152,6 +167,10 @@ export function registerQaLabCli(program: Command) {
     )
     .option("--model <ref>", "Primary provider/model ref")
     .option("--alt-model <ref>", "Alternate provider/model ref")
+    .option(
+      "--cli-auth-mode <mode>",
+      "CLI backend auth mode for live Claude CLI runs: auto, api-key, or subscription",
+    )
     .option("--scenario <id>", "Run only the named QA scenario (repeatable)", collectString, [])
     .option("--concurrency <count>", "Scenario worker concurrency", (value: string) =>
       Number(value),
@@ -169,6 +188,7 @@ export function registerQaLabCli(program: Command) {
         providerMode?: QaProviderModeInput;
         model?: string;
         altModel?: string;
+        cliAuthMode?: string;
         scenario?: string[];
         concurrency?: number;
         fast?: boolean;
@@ -185,12 +205,60 @@ export function registerQaLabCli(program: Command) {
           primaryModel: opts.model,
           alternateModel: opts.altModel,
           fastMode: opts.fast,
+          cliAuthMode: opts.cliAuthMode,
           scenarioIds: opts.scenario,
           concurrency: opts.concurrency,
           image: opts.image,
           cpus: opts.cpus,
           memory: opts.memory,
           disk: opts.disk,
+        });
+      },
+    );
+
+  qa.command("telegram")
+    .description("Run the manual Telegram live QA lane against a private bot-to-bot group harness")
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+    .option("--output-dir <path>", "Telegram QA artifact directory")
+    .option(
+      "--provider-mode <mode>",
+      "Provider mode: mock-openai or live-frontier (legacy live-openai still works)",
+      "live-frontier",
+    )
+    .option("--model <ref>", "Primary provider/model ref")
+    .option("--alt-model <ref>", "Alternate provider/model ref")
+    .option(
+      "--scenario <id>",
+      "Run only the named Telegram QA scenario (repeatable)",
+      collectString,
+      [],
+    )
+    .option("--fast", "Enable provider fast mode where supported", false)
+    .option(
+      "--sut-account <id>",
+      "Temporary Telegram account id inside the QA gateway config",
+      "sut",
+    )
+    .action(
+      async (opts: {
+        repoRoot?: string;
+        outputDir?: string;
+        providerMode?: QaProviderModeInput;
+        model?: string;
+        altModel?: string;
+        scenario?: string[];
+        fast?: boolean;
+        sutAccount?: string;
+      }) => {
+        await runQaTelegram({
+          repoRoot: opts.repoRoot,
+          outputDir: opts.outputDir,
+          providerMode: opts.providerMode,
+          primaryModel: opts.model,
+          alternateModel: opts.altModel,
+          fastMode: opts.fast,
+          scenarioIds: opts.scenario,
+          sutAccountId: opts.sutAccount,
         });
       },
     );

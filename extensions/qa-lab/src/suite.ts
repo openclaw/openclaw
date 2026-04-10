@@ -22,7 +22,7 @@ import {
   reportsMissingDiscoveryFiles,
 } from "./discovery-eval.js";
 import { extractQaToolPayload } from "./extract-tool-payload.js";
-import { startQaGatewayChild } from "./gateway-child.js";
+import { startQaGatewayChild, type QaCliBackendAuthMode } from "./gateway-child.js";
 import type {
   QaLabLatestReport,
   QaLabScenarioOutcome,
@@ -78,6 +78,7 @@ export type QaSuiteRunParams = {
   alternateModel?: string;
   fastMode?: boolean;
   thinkingDefault?: QaThinkingLevel;
+  claudeCliAuthMode?: QaCliBackendAuthMode;
   scenarioIds?: string[];
   lab?: QaLabServerHandle;
   startLab?: QaSuiteStartLabFn;
@@ -1369,6 +1370,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
               alternateModel,
               fastMode,
               thinkingDefault: params?.thinkingDefault,
+              claudeCliAuthMode: params?.claudeCliAuthMode,
               scenarioIds: [scenario.id],
               concurrency: 1,
             });
@@ -1491,6 +1493,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     alternateModel,
     fastMode,
     thinkingDefault: params?.thinkingDefault,
+    claudeCliAuthMode: params?.claudeCliAuthMode,
     controlUiEnabled: true,
   });
   lab.setControlUi({

@@ -1,14 +1,13 @@
-import type { ChannelId } from "../channels/plugins/types.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
 } from "../media-understanding/types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
-import type { CommandArgs } from "./commands-registry.types.js";
+import type { CommandArgs } from "./commands-args.types.js";
 import type { ReplyThreadingPolicy } from "./types.js";
 
 /** Valid message channels for routing. */
-export type OriginatingChannelType = ChannelId;
+export type OriginatingChannelType = string & { readonly __originatingChannelBrand?: never };
 
 export type StickerContextMetadata = {
   cachedDescription?: string;

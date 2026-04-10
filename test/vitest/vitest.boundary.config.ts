@@ -1,7 +1,7 @@
 import { defineProject } from "vitest/config";
 import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
 import { resolveVitestIsolation } from "./vitest.scoped-config.ts";
-import { sharedVitestConfig } from "./vitest.shared.config.ts";
+import { nonIsolatedRunnerPath, sharedVitestConfig } from "./vitest.shared.config.ts";
 import { boundaryTestFiles } from "./vitest.unit-paths.mjs";
 
 export function loadBoundaryIncludePatternsFromEnv(
@@ -22,7 +22,7 @@ export function createBoundaryVitestConfig(
       ...sharedVitestConfig.test,
       name: "boundary",
       isolate,
-      ...(isolate ? { runner: undefined } : { runner: "./test/non-isolated-runner.ts" }),
+      ...(isolate ? { runner: undefined } : { runner: nonIsolatedRunnerPath }),
       include: loadBoundaryIncludePatternsFromEnv(env) ?? cliIncludePatterns ?? boundaryTestFiles,
       ...(cliIncludePatterns !== null ? { passWithNoTests: true } : {}),
       // Boundary workers still need the shared isolated HOME/bootstrap. Only

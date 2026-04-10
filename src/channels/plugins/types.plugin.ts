@@ -1,5 +1,4 @@
-import type { ChannelSetupWizardAdapter } from "./setup-wizard-types.js";
-import type { ChannelSetupWizard } from "./setup-wizard.js";
+import type { ChannelSetupWizard, ChannelSetupWizardAdapter } from "./setup-wizard-types.js";
 import type {
   ChannelApprovalCapability,
   ChannelAuthAdapter,

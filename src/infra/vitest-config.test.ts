@@ -203,12 +203,13 @@ describe("base vitest config", () => {
   });
 
   it("keeps the base setup file minimal", () => {
-    expect(baseConfig.test?.setupFiles).toEqual(["test/setup.ts"]);
+    expect(baseConfig.test?.setupFiles).toHaveLength(1);
+    expect(baseConfig.test?.setupFiles?.[0]).toMatch(/(?:^|\/)test\/setup\.ts$/u);
   });
 
   it("keeps the base runner non-isolated by default", () => {
     expect(baseConfig.test?.isolate).toBe(false);
-    expect(baseConfig.test?.runner).toBe("./test/non-isolated-runner.ts");
+    expect(baseConfig.test?.runner).toMatch(/(?:^|\/)test\/non-isolated-runner\.ts$/u);
   });
 });
 

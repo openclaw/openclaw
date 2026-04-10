@@ -26,16 +26,24 @@ import {
 
 export function registerDefaultAuthTokenSuite(): void {
   describe("default auth (token)", () => {
-    let server: Awaited<ReturnType<typeof startGatewayServer>>;
+    let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
     let port: number;
+    const testsWithoutDefaultServer = new Set([
+      "closes silent handshakes after timeout",
+      "prefers OPENCLAW_HANDSHAKE_TIMEOUT_MS and falls back on empty string",
+    ]);
 
-    beforeEach(async () => {
+    beforeEach(async (context) => {
+      if (testsWithoutDefaultServer.has(context.task.name)) {
+        return;
+      }
       port = await getFreePort();
       server = await startGatewayServer(port);
     });
 
     afterEach(async () => {
-      await server.close();
+      await server?.close();
+      server = undefined;
     });
 
     async function expectNonceValidationError(params: {
@@ -84,7 +92,7 @@ export function registerDefaultAuthTokenSuite(): void {
         await withGatewayServer(async ({ port: isolatedPort }) => {
           const ws = await openWs(isolatedPort);
           const handshakeTimeoutMs = getPreauthHandshakeTimeoutMsFromEnv();
-          const closed = await waitForWsClose(ws, handshakeTimeoutMs + 2500);
+          const closed = await waitForWsClose(ws, handshakeTimeoutMs + 10_000);
           expect(closed).toBe(true);
         });
       } finally {

@@ -119,9 +119,7 @@ function resolveCdpPortRangeStart(
 const normalizeStringList = normalizeOptionalTrimmedStringList;
 
 function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | undefined {
-  const rawPolicy = cfg?.ssrfPolicy as
-    | (BrowserConfig["ssrfPolicy"] & { allowPrivateNetwork?: boolean })
-    | undefined;
+  const rawPolicy = cfg?.ssrfPolicy;
   const allowPrivateNetwork = rawPolicy?.allowPrivateNetwork;
   const dangerouslyAllowPrivateNetwork = rawPolicy?.dangerouslyAllowPrivateNetwork;
   const allowedHostnames = normalizeStringList(rawPolicy?.allowedHostnames);
@@ -129,9 +127,7 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
   const hasExplicitPrivateSetting =
     allowPrivateNetwork !== undefined || dangerouslyAllowPrivateNetwork !== undefined;
   const resolvedAllowPrivateNetwork =
-    dangerouslyAllowPrivateNetwork === true ||
-    allowPrivateNetwork === true ||
-    !hasExplicitPrivateSetting;
+    dangerouslyAllowPrivateNetwork === true || allowPrivateNetwork === true;
 
   if (
     !resolvedAllowPrivateNetwork &&
@@ -139,7 +135,9 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
     !allowedHostnames &&
     !hostnameAllowlist
   ) {
-    return undefined;
+    // Keep the default policy object present so CDP guards still enforce
+    // fail-closed private-network checks on unconfigured installs.
+    return {};
   }
 
   return {

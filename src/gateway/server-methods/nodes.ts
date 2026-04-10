@@ -518,6 +518,15 @@ export async function waitForNodeReconnect(params: {
   return Boolean(params.context.nodeRegistry.get(params.nodeId));
 }
 
+/**
+ * Remove cached wake/nudge state for a node that has disconnected.
+ * Called from the WS close handler to prevent unbounded growth.
+ */
+export function clearNodeWakeState(nodeId: string): void {
+  nodeWakeById.delete(nodeId);
+  nodeWakeNudgeById.delete(nodeId);
+}
+
 export const nodeHandlers: GatewayRequestHandlers = {
   "node.pair.request": async ({ params, respond, context }) => {
     if (!validateNodePairRequestParams(params)) {

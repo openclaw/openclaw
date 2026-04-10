@@ -23,6 +23,18 @@ describe("unit-fast vitest lane", () => {
     expect(config.test?.include).toContain("src/commands/status-overview-values.test.ts");
   });
 
+  it("does not treat moved config paths as CLI include filters", () => {
+    const config = createUnitFastVitestConfig(
+      {},
+      {
+        argv: ["node", "vitest", "run", "--config", "test/vitest/vitest.unit-fast.config.ts"],
+      },
+    );
+
+    expect(config.test?.include).toContain("src/plugin-sdk/provider-entry.test.ts");
+    expect(config.test?.include).toContain("src/commands/status-overview-values.test.ts");
+  });
+
   it("keeps obvious stateful files out of the unit-fast lane", () => {
     expect(isUnitFastTestFile("src/plugin-sdk/temp-path.test.ts")).toBe(false);
     expect(resolveUnitFastTestIncludePattern("src/plugin-sdk/temp-path.ts")).toBeNull();

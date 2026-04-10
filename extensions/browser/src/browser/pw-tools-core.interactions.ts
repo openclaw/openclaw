@@ -379,25 +379,6 @@ function createAbortPromiseWithListener(
     },
   };
 }
-
-async function assertPostInteractionNavigationSafe(opts: {
-  cdpUrl: string;
-  page: Awaited<ReturnType<typeof getPageForTargetId>>;
-  ssrfPolicy?: SsrFPolicy;
-  targetId?: string;
-}): Promise<void> {
-  if (!opts.ssrfPolicy) {
-    return;
-  }
-  await assertPageNavigationCompletedSafely({
-    cdpUrl: opts.cdpUrl,
-    page: opts.page,
-    response: null,
-    ssrfPolicy: opts.ssrfPolicy,
-    targetId: opts.targetId,
-  });
-}
-
 export async function highlightViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -559,12 +540,16 @@ export async function pressKeyViaPlaywright(opts: {
   }
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
-  await page.keyboard.press(key, {
-    delay: Math.max(0, Math.floor(opts.delayMs ?? 0)),
-  });
-  await assertPostInteractionNavigationSafe({
+  const previousUrl = page.url();
+  await assertInteractionNavigationCompletedSafely({
+    action: async () => {
+      await page.keyboard.press(key, {
+        delay: Math.max(0, Math.floor(opts.delayMs ?? 0)),
+      });
+    },
     cdpUrl: opts.cdpUrl,
     page,
+    previousUrl,
     ssrfPolicy: opts.ssrfPolicy,
     targetId: opts.targetId,
   });
@@ -597,10 +582,14 @@ export async function typeViaPlaywright(opts: {
       await locator.fill(text, { timeout });
     }
     if (opts.submit) {
-      await locator.press("Enter", { timeout });
-      await assertPostInteractionNavigationSafe({
+      const previousUrl = page.url();
+      await assertInteractionNavigationCompletedSafely({
+        action: async () => {
+          await locator.press("Enter", { timeout });
+        },
         cdpUrl: opts.cdpUrl,
         page,
+        previousUrl,
         ssrfPolicy: opts.ssrfPolicy,
         targetId: opts.targetId,
       });
