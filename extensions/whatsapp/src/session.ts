@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import type { Agent } from "node:https";
+import path from "node:path";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import { resolveAmbientNodeProxyAgent } from "openclaw/plugin-sdk/extension-shared";
@@ -36,10 +38,45 @@ export {
 } from "./auth-store.js";
 
 const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
+const CREDS_FILE_MODE = 0o600;
 
 // Per-authDir queues so multi-account creds saves don't block each other.
 const credsSaveQueues = new Map<string, Promise<void>>();
 const CREDS_SAVE_FLUSH_TIMEOUT_MS = 15_000;
+
+function serializeBaileysJson(_key: string, value: unknown) {
+  if (
+    Buffer.isBuffer(value) ||
+    value instanceof Uint8Array ||
+    (typeof value === "object" && value !== null && "type" in value && value.type === "Buffer")
+  ) {
+    const data =
+      typeof value === "object" && value !== null && "data" in value ? value.data : value;
+    return { type: "Buffer", data: Buffer.from(data as Uint8Array).toString("base64") };
+  }
+  return value;
+}
+
+async function writeCredsJsonAtomic(authDir: string, creds: unknown): Promise<void> {
+  const credsPath = resolveWebCredsPath(authDir);
+  const tempPath = path.join(
+    path.dirname(credsPath),
+    `${path.basename(credsPath)}.${randomUUID()}.tmp`,
+  );
+  try {
+    await fs.writeFile(tempPath, JSON.stringify(creds, serializeBaileysJson), {
+      encoding: "utf-8",
+      mode: CREDS_FILE_MODE,
+    });
+    await fs.rename(tempPath, credsPath);
+  } catch (error) {
+    await fs.rm(tempPath, { force: true }).catch(() => {
+      // best-effort cleanup for interrupted writes
+    });
+    throw error;
+  }
+}
+
 function enqueueSaveCreds(
   authDir: string,
   saveCreds: () => Promise<void> | void,
@@ -89,7 +126,7 @@ async function safeSaveCreds(
   try {
     await Promise.resolve(saveCreds());
     try {
-      fsSync.chmodSync(resolveWebCredsPath(authDir), 0o600);
+      fsSync.chmodSync(resolveWebCredsPath(authDir), CREDS_FILE_MODE);
     } catch {
       // best-effort on platforms that support it
     }
@@ -118,7 +155,8 @@ export async function createWaSocket(
   await ensureDir(authDir);
   const sessionLogger = getChildLogger({ module: "web-session" });
   maybeRestoreCredsFromBackup(authDir);
-  const { state, saveCreds } = await useMultiFileAuthState(authDir);
+  const { state } = await useMultiFileAuthState(authDir);
+  const saveCreds = () => writeCredsJsonAtomic(authDir, state.creds);
   const { version } = await fetchLatestBaileysVersion();
   const agent = await resolveEnvProxyAgent(sessionLogger);
   const sock = makeWASocket({
