@@ -159,6 +159,14 @@ model_instructions_file="..."`). Codex does not expose a Claude-style
 `--append-system-prompt` flag, so OpenClaw writes the assembled prompt to a
 temporary file for each fresh Codex CLI session.
 
+The bundled Anthropic `claude-cli` backend receives the OpenClaw skills snapshot
+two ways: the compact OpenClaw skills catalog in the appended system prompt, and
+a temporary Claude Code plugin passed with `--plugin-dir`. The plugin contains
+only the eligible skills for that agent/session, so Claude Code's native skill
+resolver sees the same filtered set that OpenClaw would otherwise advertise in
+the prompt. Skill env/API key overrides are still applied by OpenClaw to the
+child process environment for the run.
+
 ## Sessions
 
 - If the CLI supports sessions, set `sessionArg` (e.g. `--session-id`) or

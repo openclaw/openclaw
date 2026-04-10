@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "../../config/config.js";
 import type { DmPolicy, GroupPolicy } from "../../config/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SecretInput } from "../../config/types.secrets.js";
 import { resolveSecretInputModeForEnvSelection } from "../../plugins/provider-auth-mode.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
@@ -12,14 +12,12 @@ import {
 } from "./setup-helpers.js";
 import type {
   ChannelSetupDmPolicy,
-  PromptAccountId,
-  PromptAccountIdParams,
-} from "./setup-wizard-types.js";
-import type {
   ChannelSetupWizard,
   ChannelSetupWizardAllowFromEntry,
   ChannelSetupWizardStatus,
-} from "./setup-wizard.js";
+  PromptAccountId,
+  PromptAccountIdParams,
+} from "./setup-wizard-types.js";
 
 let providerAuthInputPromise:
   | Promise<Pick<typeof import("../../plugins/provider-auth-ref.js"), "promptSecretRefForSetup">>

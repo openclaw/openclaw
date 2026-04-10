@@ -233,7 +233,7 @@ export function addEnvBackedPiCredentials(
   // pi-coding-agent hides providers from its registry when auth storage lacks
   // a matching credential entry. Mirror env-backed provider auth here so
   // live/model discovery sees the same providers runtime auth can use.
-  for (const provider of Object.keys(resolveProviderEnvApiKeyCandidates())) {
+  for (const provider of Object.keys(resolveProviderEnvApiKeyCandidates({ env }))) {
     if (next[provider]) {
       continue;
     }

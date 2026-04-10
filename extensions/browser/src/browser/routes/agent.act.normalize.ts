@@ -4,7 +4,7 @@ import {
   ACT_MAX_WAIT_TIME_MS,
   normalizeActBoundedNonNegativeMs,
 } from "../act-policy.js";
-import type { BrowserActRequest, BrowserFormField } from "../client-actions-core.js";
+import type { BrowserActRequest, BrowserFormField } from "../client-actions.types.js";
 import { normalizeBrowserFormField } from "../form-fields.js";
 import {
   type ActKind,

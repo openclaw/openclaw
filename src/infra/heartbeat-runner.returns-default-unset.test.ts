@@ -1195,7 +1195,14 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
-  type HeartbeatFileState = "empty" | "actionable" | "missing" | "read-error";
+  type HeartbeatFileState =
+    | "empty"
+    | "actionable"
+    | "legacy-comment-only"
+    | "fenced-empty"
+    | "fenced-actionable"
+    | "missing"
+    | "read-error";
 
   async function runHeartbeatFileScenario(params: {
     fileState: HeartbeatFileState;
@@ -1214,10 +1221,45 @@ describe("runHeartbeatOnce", () => {
         "# HEARTBEAT.md\n\n## Tasks\n\n",
         "utf-8",
       );
+    } else if (params.fileState === "legacy-comment-only") {
+      // Compatibility case for the pre-198de10523 template shape, before the
+      // docs template started wrapping the scaffold in a fenced ```markdown block.
+      await fs.writeFile(
+        path.join(workspaceDir, "HEARTBEAT.md"),
+        `# Keep this file empty (or with only comments) to skip heartbeat API calls.
+
+# Add tasks below when you want the agent to check something periodically.
+`,
+        "utf-8",
+      );
+    } else if (params.fileState === "fenced-empty") {
+      await fs.writeFile(
+        path.join(workspaceDir, "HEARTBEAT.md"),
+        `# HEARTBEAT.md Template
+
+\`\`\`markdown
+# Keep this file empty (or with only comments) to skip heartbeat API calls.
+
+# Add tasks below when you want the agent to check something periodically.
+\`\`\`
+`,
+        "utf-8",
+      );
     } else if (params.fileState === "actionable") {
       await fs.writeFile(
         path.join(workspaceDir, "HEARTBEAT.md"),
         "# HEARTBEAT.md\n\n- Check server logs\n- Review pending PRs\n",
+        "utf-8",
+      );
+    } else if (params.fileState === "fenced-actionable") {
+      await fs.writeFile(
+        path.join(workspaceDir, "HEARTBEAT.md"),
+        `\`\`\`markdown
+# Keep this file empty when you want to skip.
+
+- Check server logs
+\`\`\`
+`,
         "utf-8",
       );
     } else if (params.fileState === "read-error") {
@@ -1310,6 +1352,22 @@ describe("runHeartbeatOnce", () => {
         expectedReplyCalls: 0,
       },
       {
+        name: "legacy comment-only template + interval skips",
+        fileState: "legacy-comment-only",
+        expectedStatus: "skipped",
+        expectedSkipReason: "empty-heartbeat-file",
+        expectedSendCalls: 0,
+        expectedReplyCalls: 0,
+      },
+      {
+        name: "fenced empty template + interval skips",
+        fileState: "fenced-empty",
+        expectedStatus: "skipped",
+        expectedSkipReason: "empty-heartbeat-file",
+        expectedSendCalls: 0,
+        expectedReplyCalls: 0,
+      },
+      {
         name: "empty file + wake runs",
         fileState: "empty",
         reason: "wake",
@@ -1332,6 +1390,13 @@ describe("runHeartbeatOnce", () => {
       {
         name: "actionable file runs",
         fileState: "actionable",
+        expectedStatus: "ran",
+        expectedSendCalls: 1,
+        expectedReplyCalls: 1,
+      },
+      {
+        name: "fenced actionable template runs",
+        fileState: "fenced-actionable",
         expectedStatus: "ran",
         expectedSendCalls: 1,
         expectedReplyCalls: 1,

@@ -4,7 +4,8 @@ import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { registerContextEngineForOwner } from "../context-engine/registry.js";
 import type { OperatorScope } from "../gateway/method-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
-import { registerInternalHook } from "../hooks/internal-hooks.js";
+import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { HookEntry } from "../hooks/types.js";
 import {
   NODE_EXEC_APPROVALS_COMMANDS,
@@ -46,7 +47,7 @@ import type {
   PluginCommandRegistration,
   PluginConversationBindingResolvedHandlerRegistration,
   PluginHookRegistration,
-  PluginHttpRouteRegistration,
+  PluginHttpRouteRegistration as RegistryTypesPluginHttpRouteRegistration,
   PluginMemoryEmbeddingProviderRegistration,
   PluginNodeHostCommandRegistration,
   PluginProviderRegistration,
@@ -75,6 +76,7 @@ import type {
   OpenClawPluginCliRegistrar,
   OpenClawPluginCommandDefinition,
   PluginConversationBindingResolvedEvent,
+  OpenClawPluginGatewayRuntimeScopeSurface,
   OpenClawPluginHttpRouteParams,
   OpenClawPluginHookOptions,
   OpenClawPluginNodeHostCommand,
@@ -99,6 +101,9 @@ import type {
   WebSearchProviderPlugin,
 } from "./types.js";
 
+export type PluginHttpRouteRegistration = RegistryTypesPluginHttpRouteRegistration & {
+  gatewayRuntimeScopeSurface?: OpenClawPluginGatewayRuntimeScopeSurface;
+};
 type PluginOwnedProviderRegistration<T extends { id: string }> = {
   pluginId: string;
   pluginName?: string;
@@ -115,7 +120,6 @@ export type {
   PluginCommandRegistration,
   PluginConversationBindingResolvedHandlerRegistration,
   PluginHookRegistration,
-  PluginHttpRouteRegistration,
   PluginMemoryEmbeddingProviderRegistration,
   PluginNodeHostCommandRegistration,
   PluginProviderRegistration,
@@ -156,6 +160,11 @@ const constrainLegacyPromptInjectionHook = (
 };
 
 export { createEmptyPluginRegistry } from "./registry-empty.js";
+
+const ACTIVE_PLUGIN_HOOK_REGISTRATIONS_KEY = Symbol.for("openclaw.activePluginHookRegistrations");
+const activePluginHookRegistrations = resolveGlobalSingleton<
+  Map<string, Array<{ event: string; handler: Parameters<typeof registerInternalHook>[1] }>>
+>(ACTIVE_PLUGIN_HOOK_REGISTRATIONS_KEY, () => new Map());
 
 export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registry = createEmptyPluginRegistry();
@@ -273,9 +282,20 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       return;
     }
 
+    const previousRegistrations = activePluginHookRegistrations.get(name) ?? [];
+    for (const registration of previousRegistrations) {
+      unregisterInternalHook(registration.event, registration.handler);
+    }
+
+    const nextRegistrations: Array<{
+      event: string;
+      handler: Parameters<typeof registerInternalHook>[1];
+    }> = [];
     for (const event of normalizedEvents) {
       registerInternalHook(event, handler);
+      nextRegistrations.push({ event, handler });
     }
+    activePluginHookRegistrations.set(name, nextRegistrations);
   };
 
   const registerGatewayMethod = (
@@ -390,6 +410,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         handler: params.handler,
         auth: params.auth,
         match,
+        ...(params.gatewayRuntimeScopeSurface
+          ? { gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface }
+          : {}),
         source: record.source,
       };
       return;
@@ -401,6 +424,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       handler: params.handler,
       auth: params.auth,
       match,
+      ...(params.gatewayRuntimeScopeSurface
+        ? { gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface }
+        : {}),
       source: record.source,
     });
   };
@@ -840,6 +866,11 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
     const existing = registry.services.find((entry) => entry.service.id === id);
     if (existing) {
+      // Idempotent: the same plugin can hit registration twice across snapshot vs
+      // activating loads (see #62033). Keep the first registration.
+      if (existing.pluginId === record.id) {
+        return;
+      }
       pushDiagnostic({
         level: "error",
         pluginId: record.id,

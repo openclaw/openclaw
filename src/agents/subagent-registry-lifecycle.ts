@@ -61,6 +61,7 @@ export function createSubagentRegistryLifecycleController(params: {
   }): Promise<void>;
   resumeSubagentRun(runId: string): void;
   captureSubagentCompletionReply: typeof captureSubagentCompletionReply;
+  cleanupBrowserSessionsForLifecycleEnd?: typeof cleanupBrowserSessionsForLifecycleEnd;
   runSubagentAnnounceFlow: typeof runSubagentAnnounceFlow;
   warn(message: string, meta?: Record<string, unknown>): void;
 }) {
@@ -608,7 +609,7 @@ export function createSubagentRegistryLifecycleController(params: {
       return;
     }
 
-    await cleanupBrowserSessionsForLifecycleEnd({
+    await (params.cleanupBrowserSessionsForLifecycleEnd ?? cleanupBrowserSessionsForLifecycleEnd)({
       sessionKeys: [entry.childSessionKey],
       onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
     });

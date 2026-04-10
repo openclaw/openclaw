@@ -27,6 +27,10 @@ export function applyLocalTsgoPolicy(args, env, hostResources) {
   const nextEnv = { ...env };
   const nextArgs = [...args];
 
+  if (!hasFlag(nextArgs, "--declaration") && !nextArgs.includes("-d")) {
+    insertBeforeSeparator(nextArgs, "--declaration", "false");
+  }
+
   if (!isLocalCheckEnabled(nextEnv)) {
     return { env: nextEnv, args: nextArgs };
   }

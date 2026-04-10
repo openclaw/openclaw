@@ -54,11 +54,14 @@ function loadSetupRegistryRuntime(): SetupRegistryRuntimeModule | null {
 }
 
 export function resolvePluginSetupCliBackendRuntime(params: { backend: string }) {
+  const normalized = normalizeProviderId(params.backend);
   const runtime = loadSetupRegistryRuntime();
   if (runtime) {
-    return runtime.resolvePluginSetupCliBackend(params);
+    const resolved = runtime.resolvePluginSetupCliBackend(params);
+    if (resolved) {
+      return resolved;
+    }
   }
-  const normalized = normalizeProviderId(params.backend);
   return resolveBundledSetupCliBackends().find(
     (entry) => normalizeProviderId(entry.backend.id) === normalized,
   );

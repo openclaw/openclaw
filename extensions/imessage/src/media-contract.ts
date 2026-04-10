@@ -1,5 +1,5 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { mergeInboundPathRoots } from "openclaw/plugin-sdk/media-runtime";
-import type { OpenClawConfig } from "../runtime-api.js";
 import { resolveIMessageAccount } from "./accounts.js";
 
 export const DEFAULT_IMESSAGE_ATTACHMENT_ROOTS = ["/Users/*/Library/Messages/Attachments"] as const;

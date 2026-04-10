@@ -34,6 +34,17 @@ export type PluginManifestModelSupport = {
   modelPatterns?: string[];
 };
 
+export type PluginManifestCommandAliasKind = "runtime-slash";
+
+export type PluginManifestCommandAlias = {
+  /** Command-like name users may put in plugin config by mistake. */
+  name: string;
+  /** Command family, used for targeted diagnostics. */
+  kind?: PluginManifestCommandAliasKind;
+  /** Optional root CLI command that handles related CLI operations. */
+  cliCommand?: string;
+};
+
 export type PluginManifestConfigLiteral = string | number | boolean | null;
 
 export type PluginManifestDangerousConfigFlag = {
@@ -108,6 +119,11 @@ export type PluginManifest = {
   modelSupport?: PluginManifestModelSupport;
   /** Cheap startup activation lookup for plugin-owned CLI inference backends. */
   cliBackends?: string[];
+  /**
+   * Plugin-owned command aliases that should resolve to this plugin during
+   * config diagnostics before runtime loads.
+   */
+  commandAliases?: PluginManifestCommandAlias[];
   /** Cheap provider-auth env lookup without booting plugin runtime. */
   providerAuthEnvVars?: Record<string, string[]>;
   /** Provider ids that should reuse another provider id for auth lookup. */
@@ -357,6 +373,38 @@ function normalizeManifestModelSupport(value: unknown): PluginManifestModelSuppo
   return Object.keys(modelSupport).length > 0 ? modelSupport : undefined;
 }
 
+function normalizeManifestCommandAliases(value: unknown): PluginManifestCommandAlias[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const normalized: PluginManifestCommandAlias[] = [];
+  for (const entry of value) {
+    if (typeof entry === "string") {
+      const name = normalizeOptionalString(entry) ?? "";
+      if (name) {
+        normalized.push({ name });
+      }
+      continue;
+    }
+    if (!isRecord(entry)) {
+      continue;
+    }
+    const name = normalizeOptionalString(entry.name) ?? "";
+    if (!name) {
+      continue;
+    }
+    const kind = entry.kind === "runtime-slash" ? entry.kind : undefined;
+    const cliCommand = normalizeOptionalString(entry.cliCommand) ?? "";
+    normalized.push({
+      name,
+      ...(kind ? { kind } : {}),
+      ...(cliCommand ? { cliCommand } : {}),
+    });
+  }
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 function normalizeProviderAuthChoices(
   value: unknown,
 ): PluginManifestProviderAuthChoice[] | undefined {
@@ -539,6 +587,7 @@ export function loadPluginManifest(
   const providerDiscoveryEntry = normalizeOptionalString(raw.providerDiscoveryEntry);
   const modelSupport = normalizeManifestModelSupport(raw.modelSupport);
   const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
+  const commandAliases = normalizeManifestCommandAliases(raw.commandAliases);
   const providerAuthEnvVars = normalizeStringListRecord(raw.providerAuthEnvVars);
   const providerAuthAliases = normalizeStringRecord(raw.providerAuthAliases);
   const channelEnvVars = normalizeStringListRecord(raw.channelEnvVars);
@@ -569,6 +618,7 @@ export function loadPluginManifest(
       providerDiscoveryEntry,
       modelSupport,
       cliBackends,
+      commandAliases,
       providerAuthEnvVars,
       providerAuthAliases,
       channelEnvVars,

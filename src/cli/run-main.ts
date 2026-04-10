@@ -11,6 +11,7 @@ import { isMainModule } from "../infra/is-main.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { enableConsoleCapture } from "../logging.js";
+import { resolveManifestCommandAliasOwner } from "../plugins/manifest-registry.js";
 import { hasMemoryRuntime } from "../plugins/memory-state.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -78,6 +79,38 @@ export function resolveMissingPluginCommandMessage(
           .map((entry) => normalizeOptionalLowercaseString(entry))
           .filter(Boolean)
       : [];
+  const commandAlias = resolveManifestCommandAliasOwner({
+    command: normalizedPluginId,
+    config,
+  });
+  const parentPluginId = commandAlias?.pluginId;
+  if (parentPluginId) {
+    if (allow.length > 0 && !allow.includes(parentPluginId)) {
+      return (
+        `"${normalizedPluginId}" is not a plugin; it is a command provided by the ` +
+        `"${parentPluginId}" plugin. Add "${parentPluginId}" to \`plugins.allow\` ` +
+        `instead of "${normalizedPluginId}".`
+      );
+    }
+    if (config?.plugins?.entries?.[parentPluginId]?.enabled === false) {
+      return (
+        `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
+        `\`plugins.entries.${parentPluginId}.enabled=false\`. Re-enable that entry if you want ` +
+        "the bundled plugin command surface."
+      );
+    }
+    if (commandAlias.kind === "runtime-slash") {
+      const cliHint = commandAlias.cliCommand
+        ? `Use \`openclaw ${commandAlias.cliCommand}\` for related CLI operations, or `
+        : "Use ";
+      return (
+        `"${normalizedPluginId}" is a runtime slash command (/${normalizedPluginId}), not a CLI command. ` +
+        `It is provided by the "${parentPluginId}" plugin. ` +
+        `${cliHint}\`/${normalizedPluginId}\` in a chat session.`
+      );
+    }
+  }
+
   if (allow.length > 0 && !allow.includes(normalizedPluginId)) {
     return (
       `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +

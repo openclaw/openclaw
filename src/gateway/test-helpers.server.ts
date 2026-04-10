@@ -607,7 +607,7 @@ export async function startGatewayServer(port: number, opts?: GatewayServerOptio
   return server;
 }
 
-async function startGatewayServerWithRetries(params: {
+export async function startGatewayServerWithRetries(params: {
   port: number;
   opts?: GatewayServerOptions;
 }): Promise<{ port: number; server: Awaited<ReturnType<typeof startGatewayServer>> }> {

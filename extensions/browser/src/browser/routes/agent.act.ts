@@ -10,7 +10,7 @@ import {
   pressChromeMcpKey,
   resizeChromeMcpPage,
 } from "../chrome-mcp.js";
-import type { BrowserActRequest } from "../client-actions-core.js";
+import type { BrowserActRequest } from "../client-actions.types.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import { matchBrowserUrlPattern } from "../url-pattern.js";

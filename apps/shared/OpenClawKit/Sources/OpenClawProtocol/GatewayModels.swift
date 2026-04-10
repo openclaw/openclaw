@@ -2510,17 +2510,20 @@ public struct AgentSummary: Codable, Sendable {
 public struct AgentsCreateParams: Codable, Sendable {
     public let name: String
     public let workspace: String
+    public let model: String?
     public let emoji: String?
     public let avatar: String?
 
     public init(
         name: String,
         workspace: String,
+        model: String?,
         emoji: String?,
         avatar: String?)
     {
         self.name = name
         self.workspace = workspace
+        self.model = model
         self.emoji = emoji
         self.avatar = avatar
     }
@@ -2528,6 +2531,7 @@ public struct AgentsCreateParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case name
         case workspace
+        case model
         case emoji
         case avatar
     }
@@ -2538,17 +2542,20 @@ public struct AgentsCreateResult: Codable, Sendable {
     public let agentid: String
     public let name: String
     public let workspace: String
+    public let model: String?
 
     public init(
         ok: Bool,
         agentid: String,
         name: String,
-        workspace: String)
+        workspace: String,
+        model: String?)
     {
         self.ok = ok
         self.agentid = agentid
         self.name = name
         self.workspace = workspace
+        self.model = model
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2556,6 +2563,7 @@ public struct AgentsCreateResult: Codable, Sendable {
         case agentid = "agentId"
         case name
         case workspace
+        case model
     }
 }
 
@@ -2564,6 +2572,7 @@ public struct AgentsUpdateParams: Codable, Sendable {
     public let name: String?
     public let workspace: String?
     public let model: String?
+    public let emoji: String?
     public let avatar: String?
 
     public init(
@@ -2571,12 +2580,14 @@ public struct AgentsUpdateParams: Codable, Sendable {
         name: String?,
         workspace: String?,
         model: String?,
+        emoji: String?,
         avatar: String?)
     {
         self.agentid = agentid
         self.name = name
         self.workspace = workspace
         self.model = model
+        self.emoji = emoji
         self.avatar = avatar
     }
 
@@ -2585,6 +2596,7 @@ public struct AgentsUpdateParams: Codable, Sendable {
         case name
         case workspace
         case model
+        case emoji
         case avatar
     }
 }
@@ -4260,6 +4272,7 @@ public struct ChatEvent: Codable, Sendable {
     public let state: AnyCodable
     public let message: AnyCodable?
     public let errormessage: String?
+    public let errorkind: AnyCodable?
     public let usage: AnyCodable?
     public let stopreason: String?
 
@@ -4270,6 +4283,7 @@ public struct ChatEvent: Codable, Sendable {
         state: AnyCodable,
         message: AnyCodable?,
         errormessage: String?,
+        errorkind: AnyCodable?,
         usage: AnyCodable?,
         stopreason: String?)
     {
@@ -4279,6 +4293,7 @@ public struct ChatEvent: Codable, Sendable {
         self.state = state
         self.message = message
         self.errormessage = errormessage
+        self.errorkind = errorkind
         self.usage = usage
         self.stopreason = stopreason
     }
@@ -4290,6 +4305,7 @@ public struct ChatEvent: Codable, Sendable {
         case state
         case message
         case errormessage = "errorMessage"
+        case errorkind = "errorKind"
         case usage
         case stopreason = "stopReason"
     }

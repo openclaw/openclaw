@@ -1,4 +1,3 @@
-import type { ChannelId } from "../channels/plugins/types.js";
 import {
   CHANNEL_IDS,
   getChatChannelMeta,
@@ -18,6 +17,8 @@ import {
   normalizeGatewayClientName,
 } from "../gateway/protocol/client-info.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+
+type ChannelId = string & { readonly __openclawChannelIdBrand?: never };
 
 export const INTERNAL_MESSAGE_CHANNEL = "webchat" as const;
 export type InternalMessageChannel = typeof INTERNAL_MESSAGE_CHANNEL;

@@ -24,6 +24,8 @@ import {
   createMSTeamsTokenProvider,
   loadMSTeamsSdkWithAuth,
 } from "./sdk.js";
+import { createMSTeamsSsoTokenStoreFs } from "./sso-token-store.js";
+import type { MSTeamsSsoDeps } from "./sso.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 import { applyMSTeamsWebhookTimeouts } from "./webhook-timeouts.js";
 
@@ -233,6 +235,22 @@ export async function monitorMSTeamsProvider(
 
   const adapter = createMSTeamsAdapter(app, sdk);
 
+  // Build SSO deps when the operator has opted in and a connection name
+  // is configured. Leaving `sso` undefined matches the pre-SSO behavior
+  // (the plugin will still ack signin invokes, but will not attempt a
+  // Bot Framework token exchange or persist anything).
+  let ssoDeps: MSTeamsSsoDeps | undefined;
+  if (msteamsCfg.sso?.enabled && msteamsCfg.sso.connectionName) {
+    ssoDeps = {
+      tokenProvider,
+      tokenStore: createMSTeamsSsoTokenStoreFs(),
+      connectionName: msteamsCfg.sso.connectionName,
+    };
+    log.debug?.("msteams sso enabled", {
+      connectionName: msteamsCfg.sso.connectionName,
+    });
+  }
+
   // Build a simple ActivityHandler-compatible object
   const handler = buildActivityHandler();
   registerMSTeamsHandlers(handler, {
@@ -246,6 +264,7 @@ export async function monitorMSTeamsProvider(
     conversationStore,
     pollStore,
     log,
+    sso: ssoDeps,
   });
 
   // Create Express server
