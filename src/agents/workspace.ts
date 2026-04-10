@@ -500,7 +500,15 @@ export async function loadWorkspaceBootstrapFileFromPath(params: {
   name: WorkspaceBootstrapFileName;
 }): Promise<WorkspaceBootstrapFile> {
   const resolvedDir = resolveUserPath(params.workspaceDir);
-  const normalizedFilePath = normalizeOptionalString(params.filePath) ?? params.filePath;
+  const normalizedFilePath = normalizeOptionalString(params.filePath);
+  if (!normalizedFilePath) {
+    return {
+      name: params.name,
+      path: path.join(resolvedDir, params.name),
+      missing: true,
+      unavailableReason: "path",
+    };
+  }
   const resolvedPath = normalizedFilePath.startsWith("~")
     ? resolveUserPath(normalizedFilePath)
     : path.isAbsolute(normalizedFilePath)
