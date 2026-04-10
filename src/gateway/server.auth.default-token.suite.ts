@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import {
   connectReq,
@@ -20,6 +20,7 @@ import {
   startGatewayServer,
   TEST_OPERATOR_CLIENT,
   waitForWsClose,
+  withGatewayServer,
   withRuntimeVersionEnv,
 } from "./server.auth.shared.js";
 
@@ -28,12 +29,12 @@ export function registerDefaultAuthTokenSuite(): void {
     let server: Awaited<ReturnType<typeof startGatewayServer>>;
     let port: number;
 
-    beforeAll(async () => {
+    beforeEach(async () => {
       port = await getFreePort();
       server = await startGatewayServer(port);
     });
 
-    afterAll(async () => {
+    afterEach(async () => {
       await server.close();
     });
 
@@ -80,10 +81,12 @@ export function registerDefaultAuthTokenSuite(): void {
       const prevHandshakeTimeout = process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
       process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = "20";
       try {
-        const ws = await openWs(port);
-        const handshakeTimeoutMs = getPreauthHandshakeTimeoutMsFromEnv();
-        const closed = await waitForWsClose(ws, handshakeTimeoutMs + 500);
-        expect(closed).toBe(true);
+        await withGatewayServer(async ({ port: isolatedPort }) => {
+          const ws = await openWs(isolatedPort);
+          const handshakeTimeoutMs = getPreauthHandshakeTimeoutMsFromEnv();
+          const closed = await waitForWsClose(ws, handshakeTimeoutMs + 2500);
+          expect(closed).toBe(true);
+        });
       } finally {
         if (prevHandshakeTimeout === undefined) {
           delete process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;

@@ -2,7 +2,7 @@
 // Keep this list additive and scoped to the bundled Matrix surface.
 
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";
-import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
+import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
 
 type MatrixFacadeModule = typeof import("@openclaw/matrix/contract-api.js");
 

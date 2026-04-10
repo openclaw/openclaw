@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { runPreparedCliAgent } from "./cli-runner.js";
 import {
   createManagedRun,
   enqueueSystemEventMock,
   requestHeartbeatNowMock,
-  setupCliRunnerTestModule,
   supervisorSpawnMock,
 } from "./cli-runner.test-support.js";
 import { executePreparedCliRun } from "./cli-runner/execute.js";
@@ -139,7 +139,7 @@ describe("runCliAgent reliability", () => {
   });
 
   it("rethrows the retry failure when session-expired recovery retry also fails", async () => {
-    const runCliAgent = await setupCliRunnerTestModule();
+    supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
         reason: "exit",
@@ -166,18 +166,13 @@ describe("runCliAgent reliability", () => {
     );
 
     await expect(
-      runCliAgent({
-        sessionId: "s1",
-        sessionKey: "agent:main:subagent:retry",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/tmp",
-        prompt: "hi",
-        provider: "codex-cli",
-        model: "gpt-5.4",
-        timeoutMs: 1_000,
-        runId: "run-retry-failure",
-        cliSessionId: "thread-123",
-      }),
+      runPreparedCliAgent(
+        buildPreparedContext({
+          sessionKey: "agent:main:subagent:retry",
+          runId: "run-retry-failure",
+          cliSessionId: "thread-123",
+        }),
+      ),
     ).rejects.toThrow("rate limit exceeded");
 
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);

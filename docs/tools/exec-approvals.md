@@ -557,8 +557,8 @@ Shared behavior:
 - Slack approvers can be explicit (`execApprovals.approvers`) or inferred from `commands.ownerAllowFrom`
 - Slack native buttons preserve approval id kind, so `plugin:` ids can resolve plugin approvals
   without a second Slack-local fallback layer
-- Matrix native DM/channel routing is exec-only; Matrix plugin approvals stay on the shared
-  same-chat `/approve` and optional `approvals.plugin` forwarding paths
+- Matrix native DM/channel routing and reaction shortcuts handle both exec and plugin approvals;
+  plugin authorization still comes from `channels.matrix.dm.allowFrom`
 - the requester does not need to be an approver
 - the originating chat can approve directly with `/approve` when that chat already supports commands and replies
 - native Discord approval buttons route by approval id kind: `plugin:` ids go

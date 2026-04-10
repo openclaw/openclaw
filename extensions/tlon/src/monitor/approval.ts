@@ -7,6 +7,7 @@
 
 // Extensions cannot import core internals directly, so use node:crypto here.
 import { randomBytes } from "node:crypto";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { PendingApproval } from "../settings.js";
 
 export type { PendingApproval };
@@ -106,7 +107,7 @@ export type ApprovalResponse = {
  *   - "block" permanently blocks the ship via Tlon's native blocking
  */
 export function parseApprovalResponse(text: string): ApprovalResponse | null {
-  const trimmed = text.trim().toLowerCase();
+  const trimmed = normalizeLowercaseStringOrEmpty(text);
 
   // Match "approve", "deny", or "block" optionally followed by an ID
   const match = trimmed.match(/^(approve|deny|block)(?:\s+(.+))?$/);
@@ -125,7 +126,7 @@ export function parseApprovalResponse(text: string): ApprovalResponse | null {
  * Used to determine if we should intercept the message before normal processing.
  */
 export function isApprovalResponse(text: string): boolean {
-  const trimmed = text.trim().toLowerCase();
+  const trimmed = normalizeLowercaseStringOrEmpty(text);
   return trimmed.startsWith("approve") || trimmed.startsWith("deny") || trimmed.startsWith("block");
 }
 
@@ -229,7 +230,7 @@ export type AdminCommand =
  *   - "pending" - list all pending approvals
  */
 export function parseAdminCommand(text: string): AdminCommand | null {
-  const trimmed = text.trim().toLowerCase();
+  const trimmed = normalizeLowercaseStringOrEmpty(text);
 
   // "blocked" - list blocked ships
   if (trimmed === "blocked") {

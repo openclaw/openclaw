@@ -2,6 +2,7 @@ import { defineProject } from "vitest/config";
 import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
 import { resolveVitestIsolation } from "./vitest.scoped-config.ts";
 import { sharedVitestConfig } from "./vitest.shared.config.ts";
+import { unitFastTestFiles } from "./vitest.unit-fast-paths.mjs";
 import {
   isBundledPluginDependentUnitTestFile,
   unitTestAdditionalExcludePatterns,
@@ -59,6 +60,7 @@ export function createUnitVitestConfigWithOptions(
         ...new Set([
           ...exclude,
           ...baseExcludePatterns,
+          ...unitFastTestFiles,
           ...(options.extraExcludePatterns ?? []),
           ...loadExtraExcludePatternsFromEnv(env),
         ]),

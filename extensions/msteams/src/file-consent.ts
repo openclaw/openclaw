@@ -9,6 +9,7 @@
  */
 
 import { lookup } from "node:dns/promises";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { buildUserAgent } from "./user-agent.js";
 
 /**
@@ -78,7 +79,7 @@ export function isPrivateOrReservedIP(ip: string): boolean {
   }
 
   // IPv6 checks
-  const normalized = ip.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(ip);
   // ::1 loopback
   if (normalized === "::1") {
     return true;
@@ -128,7 +129,7 @@ export async function validateConsentUploadUrl(
   }
 
   // 2. Hostname allowlist check
-  const hostname = parsed.hostname.toLowerCase();
+  const hostname = normalizeLowercaseStringOrEmpty(parsed.hostname);
   const allowlist = opts?.allowlist ?? CONSENT_UPLOAD_HOST_ALLOWLIST;
   const hostAllowed = allowlist.some(
     (entry) => hostname === entry || hostname.endsWith(`.${entry}`),

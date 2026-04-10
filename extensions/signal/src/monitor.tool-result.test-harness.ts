@@ -27,6 +27,9 @@ const streamMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const signalCheckMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const signalRpcRequestMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const spawnSignalDaemonMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
+const signalToolResultSessionStorePath = vi.hoisted(
+  () => `/tmp/openclaw-signal-tool-result-sessions-${process.pid}.json`,
+);
 
 export function getSignalToolResultTestMocks(): SignalToolResultTestMocks {
   return {
@@ -102,7 +105,7 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
   return {
     ...actual,
     loadConfig: () => config,
-    resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions.json"),
+    resolveStorePath: vi.fn(() => signalToolResultSessionStorePath),
     updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
     readSessionUpdatedAt: vi.fn(() => undefined),
     recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
@@ -207,6 +210,7 @@ export function installSignalToolResultTestHooks() {
     resetInboundDedupe();
     config = {
       messages: { responsePrefix: "PFX" },
+      session: { store: signalToolResultSessionStorePath },
       channels: {
         signal: { autoStart: false, dmPolicy: "open", allowFrom: ["*"] },
       },

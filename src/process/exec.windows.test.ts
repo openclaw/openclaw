@@ -2,7 +2,7 @@ import type { execFile as execFileType } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const execFileMock = vi.hoisted(() =>
@@ -91,14 +91,16 @@ function expectCmdWrappedInvocation(params: {
 }
 
 describe("windows command wrapper behavior", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ runCommandWithTimeout, runExec } = await import("./exec.js"));
   });
 
-  afterEach(() => {
+  beforeEach(() => {
     spawnMock.mockReset();
     execFileMock.mockReset();
+  });
+
+  afterEach(() => {
     vi.restoreAllMocks();
   });
 

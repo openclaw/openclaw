@@ -4,6 +4,7 @@ import {
   VerifierEvent,
 } from "matrix-js-sdk/lib/crypto-api/verification.js";
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
+import { formatMatrixErrorMessage } from "../errors.js";
 
 export type MatrixVerificationMethod = "sas" | "show-qr" | "scan-qr";
 type MatrixVerificationPhase = VerificationPhase | -1;
@@ -330,7 +331,7 @@ export class MatrixVerificationManager {
       })
       .catch((err) => {
         session.acceptRequested = false;
-        session.error = err instanceof Error ? err.message : String(err);
+        session.error = formatMatrixErrorMessage(err);
         this.touchVerificationSession(session);
       });
   }
@@ -415,7 +416,7 @@ export class MatrixVerificationManager {
     });
     verifier.on(VerifierEvent.Cancel, (err) => {
       this.clearSasAutoConfirmTimer(session);
-      session.error = err instanceof Error ? err.message : String(err);
+      session.error = formatMatrixErrorMessage(err);
       this.touchVerificationSession(session);
     });
     this.ensureVerificationStarted(session);
@@ -448,7 +449,7 @@ export class MatrixVerificationManager {
           this.touchVerificationSession(session);
         })
         .catch((err) => {
-          session.error = err instanceof Error ? err.message : String(err);
+          session.error = formatMatrixErrorMessage(err);
           this.touchVerificationSession(session);
         });
     }, SAS_AUTO_CONFIRM_DELAY_MS);
@@ -466,7 +467,7 @@ export class MatrixVerificationManager {
         this.touchVerificationSession(session);
       })
       .catch((err) => {
-        session.error = err instanceof Error ? err.message : String(err);
+        session.error = formatMatrixErrorMessage(err);
         this.touchVerificationSession(session);
       });
   }

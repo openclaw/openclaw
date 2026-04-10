@@ -1,6 +1,7 @@
 import type { Api } from "@mariozechner/pi-ai";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.js";
 import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
 import {
   attachModelProviderRequestTransport,
@@ -68,13 +69,13 @@ function isLegacyFoundryVisionModelCandidate(params: {
   modelId?: string;
   modelName?: string;
 }): boolean {
-  if (params.provider?.trim().toLowerCase() !== "microsoft-foundry") {
+  if (normalizeOptionalLowercaseString(params.provider) !== "microsoft-foundry") {
     return false;
   }
   const normalizedCandidates = [params.modelId, params.modelName]
     .filter((value): value is string => typeof value === "string")
-    .map((value) => value.trim().toLowerCase())
-    .filter(Boolean);
+    .map((value) => normalizeOptionalLowercaseString(value))
+    .filter((value): value is string => Boolean(value));
   return normalizedCandidates.some(
     (candidate) =>
       candidate.startsWith("gpt-") ||

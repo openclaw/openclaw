@@ -256,6 +256,8 @@ export const sharedVitestConfig = {
       "vitest.media.config.ts",
       "vitest.media-understanding.config.ts",
       "vitest.performance-config.ts",
+      "vitest.unit-fast.config.ts",
+      "vitest.unit-fast-paths.mjs",
       "vitest.scoped-config.ts",
       "vitest.shared-core.config.ts",
       "vitest.shared.config.ts",

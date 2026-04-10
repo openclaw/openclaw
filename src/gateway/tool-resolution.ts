@@ -21,6 +21,8 @@ import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
 
+export type GatewayScopedToolSurface = "http" | "loopback";
+
 export function resolveGatewayScopedTools(params: {
   cfg: ReturnType<typeof loadConfig>;
   sessionKey: string;
@@ -30,6 +32,7 @@ export function resolveGatewayScopedTools(params: {
   agentThreadId?: string;
   allowGatewaySubagentBinding?: boolean;
   allowMediaInvokeCommands?: boolean;
+  surface?: GatewayScopedToolSurface;
   excludeToolNames?: Iterable<string>;
   disablePluginTools?: boolean;
 }) {
@@ -111,10 +114,12 @@ export function resolveGatewayScopedTools(params: {
     ],
   });
 
+  const surface = params.surface ?? "http";
   const gatewayToolsCfg = params.cfg.gateway?.tools;
-  const defaultGatewayDeny = DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter(
-    (name) => !gatewayToolsCfg?.allow?.includes(name),
-  );
+  const defaultGatewayDeny =
+    surface === "http"
+      ? DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter((name) => !gatewayToolsCfg?.allow?.includes(name))
+      : [];
   const gatewayDenySet = new Set([
     ...defaultGatewayDeny,
     ...(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []),

@@ -12,6 +12,7 @@ import {
   type OpenClawConfig,
   type SecretInput,
 } from "openclaw/plugin-sdk/setup";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import {
   inspectFeishuCredentials,
   resolveDefaultFeishuAccountId,
@@ -102,7 +103,7 @@ function isFeishuConfigured(cfg: OpenClawConfig, accountId?: string | null): boo
       return false;
     }
     const rec = value as Record<string, unknown>;
-    const source = normalizeString(rec.source)?.toLowerCase();
+    const source = normalizeOptionalLowercaseString(normalizeString(rec.source));
     const id = normalizeString(rec.id);
     if (source === "env" && id) {
       return Boolean(normalizeString(process.env[id]));

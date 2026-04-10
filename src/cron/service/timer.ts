@@ -2,6 +2,7 @@ import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import {
   completeTaskRunByRunId,
   createRunningTaskRun,
@@ -21,6 +22,7 @@ import type {
 import {
   computeJobPreviousRunAtMs,
   computeJobNextRunAtMs,
+  hasScheduledNextRunAtMs,
   isJobEnabled,
   nextWakeAtMs,
   recomputeNextRunsForMaintenance,
@@ -262,10 +264,7 @@ function resolveDeliveryStatus(params: { job: CronJob; delivered?: boolean }): C
 }
 
 function normalizeCronMessageChannel(input: unknown): CronMessageChannel | undefined {
-  if (typeof input !== "string") {
-    return undefined;
-  }
-  const channel = input.trim().toLowerCase();
+  const channel = normalizeOptionalLowercaseString(input);
   return channel ? (channel as CronMessageChannel) : undefined;
 }
 
@@ -608,12 +607,8 @@ export function armTimer(state: CronServiceState) {
     const jobCount = state.store?.jobs.length ?? 0;
     const enabledCount = state.store?.jobs.filter((j) => j.enabled).length ?? 0;
     const withNextRun =
-      state.store?.jobs.filter(
-        (j) =>
-          j.enabled &&
-          typeof j.state.nextRunAtMs === "number" &&
-          Number.isFinite(j.state.nextRunAtMs),
-      ).length ?? 0;
+      state.store?.jobs.filter((j) => j.enabled && hasScheduledNextRunAtMs(j.state.nextRunAtMs))
+        .length ?? 0;
     state.deps.log.debug(
       { jobCount, enabledCount, withNextRun },
       "cron: armTimer skipped - no jobs with nextRunAtMs",
@@ -867,15 +862,10 @@ function isRunnableJob(params: {
     return false;
   }
   const next = job.state.nextRunAtMs;
-  if (typeof next === "number" && Number.isFinite(next) && nowMs >= next) {
+  if (hasScheduledNextRunAtMs(next) && nowMs >= next) {
     return true;
   }
-  if (
-    typeof next === "number" &&
-    Number.isFinite(next) &&
-    next > nowMs &&
-    isErrorBackoffPending(job, nowMs)
-  ) {
+  if (hasScheduledNextRunAtMs(next) && next > nowMs && isErrorBackoffPending(job, nowMs)) {
     // Respect active retry backoff windows on restart, but allow missed-slot
     // replay once the backoff window has elapsed.
     return false;

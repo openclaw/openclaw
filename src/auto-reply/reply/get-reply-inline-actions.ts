@@ -8,6 +8,10 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
 import {
   listReservedChatSlashCommandNames,
@@ -57,12 +61,12 @@ function resolveSlashCommandName(commandBodyNormalized: string): string | null {
     return null;
   }
   const match = trimmed.match(/^\/([^\s:]+)(?::|\s|$)/);
-  const name = match?.[1]?.trim().toLowerCase() ?? "";
+  const name = normalizeOptionalLowercaseString(match?.[1]) ?? "";
   return name ? name : null;
 }
 
 function expandBundleCommandPromptTemplate(template: string, args?: string): string {
-  const normalizedArgs = args?.trim() || "";
+  const normalizedArgs = normalizeOptionalString(args) || "";
   const rendered = template.includes("$ARGUMENTS")
     ? template.replaceAll("$ARGUMENTS", normalizedArgs)
     : template;

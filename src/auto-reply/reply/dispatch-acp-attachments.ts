@@ -1,6 +1,7 @@
 import type { AcpTurnAttachment } from "../../acp/control-plane/manager.types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { FinalizedMsgContext } from "../templating.js";
 
 let dispatchAcpMediaRuntimePromise: Promise<
@@ -32,7 +33,7 @@ export async function resolveAcpAttachments(params: {
   const mediaAttachments = runtime
     .normalizeAttachments(params.ctx)
     .map((attachment) =>
-      attachment.path?.trim() ? { ...attachment, url: undefined } : attachment,
+      normalizeOptionalString(attachment.path) ? { ...attachment, url: undefined } : attachment,
     );
   const cache = new runtime.MediaAttachmentCache(mediaAttachments, {
     localPathRoots: runtime.resolveMediaAttachmentLocalRoots({
@@ -46,7 +47,7 @@ export async function resolveAcpAttachments(params: {
     if (!mediaType.startsWith("image/")) {
       continue;
     }
-    if (!attachment.path?.trim()) {
+    if (!normalizeOptionalString(attachment.path)) {
       continue;
     }
     try {

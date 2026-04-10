@@ -12,6 +12,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import {
   maybeRepairLegacyOAuthProfileIds,
   noteAuthProfileHealth,
+  noteLegacyCodexProviderOverride,
 } from "../commands/doctor-auth.js";
 import { noteBootstrapFileSize } from "../commands/doctor-bootstrap-size.js";
 import { noteChromeMcpBrowserReadiness } from "../commands/doctor-browser.js";
@@ -147,6 +148,7 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
     prompter: ctx.prompter,
     allowKeychainPrompt: ctx.options.nonInteractive !== true && Boolean(process.stdin.isTTY),
   });
+  noteLegacyCodexProviderOverride(ctx.cfg);
   ctx.gatewayDetails = buildGatewayConnectionDetails({ config: ctx.cfg });
   if (ctx.gatewayDetails.remoteFallbackNote) {
     note(ctx.gatewayDetails.remoteFallbackNote, "Gateway");

@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
 import {
+  type BundledPluginMetadata,
   clearBundledPluginMetadataCache,
   listBundledPluginMetadata,
   resolveBundledPluginGeneratedPath,
@@ -13,6 +15,11 @@ import {
   pluginTestRepoRoot as repoRoot,
   writeJson,
 } from "./generated-plugin-test-helpers.js";
+import {
+  getPackageManifestMetadata,
+  loadPluginManifest,
+  type PackageManifest,
+} from "./manifest.js";
 import { collectBundledRuntimeSidecarPaths } from "./runtime-sidecar-paths-baseline.js";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "./runtime-sidecar-paths.js";
 
@@ -74,12 +81,43 @@ function expectArtifactPresence(
   }
 }
 
+function listRepoBundledPluginMetadata(): readonly BundledPluginMetadata[] {
+  return listBundledPluginMetadata({
+    rootDir: repoRoot,
+    includeSyntheticChannelConfigs: false,
+  });
+}
+
+function readPackageManifest(pluginDir: string): PackageManifest | undefined {
+  const packagePath = path.join(pluginDir, "package.json");
+  return fs.existsSync(packagePath)
+    ? (JSON.parse(fs.readFileSync(packagePath, "utf8")) as PackageManifest)
+    : undefined;
+}
+
+function collectRepoBundledChannelConfigsForTest(dirName: string) {
+  const pluginDir = path.join(repoRoot, "extensions", dirName);
+  const manifest = loadPluginManifest(pluginDir, false);
+  if (!manifest.ok) {
+    throw manifest.error;
+  }
+  return collectBundledChannelConfigs({
+    pluginDir,
+    manifest: manifest.manifest,
+    packageManifest: getPackageManifestMetadata(readPackageManifest(pluginDir)),
+  });
+}
+
 describe("bundled plugin metadata", () => {
   it(
     "matches the runtime metadata snapshot",
     { timeout: BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS },
     () => {
-      expect(listBundledPluginMetadata({ rootDir: repoRoot })).toEqual(listBundledPluginMetadata());
+      expect(listRepoBundledPluginMetadata()).toEqual(
+        listBundledPluginMetadata({
+          includeSyntheticChannelConfigs: false,
+        }),
+      );
     },
   );
 
@@ -94,7 +132,7 @@ describe("bundled plugin metadata", () => {
   );
 
   it("captures setup-entry metadata for bundled channel plugins", () => {
-    const discord = listBundledPluginMetadata().find((entry) => entry.dirName === "discord");
+    const discord = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "discord");
     expect(discord?.source).toEqual({ source: "./index.ts", built: "index.js" });
     expect(discord?.setupSource).toEqual({ source: "./setup-entry.ts", built: "setup-entry.js" });
     expectArtifactPresence(discord?.publicSurfaceArtifacts, {
@@ -105,7 +143,7 @@ describe("bundled plugin metadata", () => {
       contains: ["runtime-api.js"],
     });
     expect(discord?.manifest.id).toBe("discord");
-    expect(discord?.manifest.channelConfigs?.discord).toEqual(
+    expect(collectRepoBundledChannelConfigsForTest("discord")?.discord).toEqual(
       expect.objectContaining({
         schema: expect.objectContaining({ type: "object" }),
       }),
@@ -113,8 +151,7 @@ describe("bundled plugin metadata", () => {
   });
 
   it("loads tlon channel config metadata from the lightweight schema surface", () => {
-    const tlon = listBundledPluginMetadata().find((entry) => entry.dirName === "tlon");
-    expect(tlon?.manifest.channelConfigs?.tlon).toEqual(
+    expect(collectRepoBundledChannelConfigsForTest("tlon")?.tlon).toEqual(
       expect.objectContaining({
         schema: expect.objectContaining({ type: "object" }),
       }),
@@ -122,13 +159,13 @@ describe("bundled plugin metadata", () => {
   });
 
   it("keeps bundled persisted-auth metadata on channel package manifests", () => {
-    const whatsapp = listBundledPluginMetadata().find((entry) => entry.dirName === "whatsapp");
+    const whatsapp = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "whatsapp");
     expect(whatsapp?.packageManifest?.channel?.persistedAuthState).toEqual({
       specifier: "./auth-presence",
       exportName: "hasAnyWhatsAppAuth",
     });
 
-    const matrix = listBundledPluginMetadata().find((entry) => entry.dirName === "matrix");
+    const matrix = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "matrix");
     expect(matrix?.packageManifest?.channel?.persistedAuthState).toEqual({
       specifier: "./auth-presence",
       exportName: "hasAnyMatrixAuth",
@@ -136,7 +173,7 @@ describe("bundled plugin metadata", () => {
   });
 
   it("keeps bundled configured-state metadata on channel package manifests", () => {
-    const configuredChannels = listBundledPluginMetadata()
+    const configuredChannels = listRepoBundledPluginMetadata()
       .filter((entry) => ["discord", "irc", "slack", "telegram"].includes(entry.dirName))
       .map((entry) => ({
         dir: entry.dirName,
@@ -175,13 +212,13 @@ describe("bundled plugin metadata", () => {
   });
 
   it("excludes test-only public surface artifacts", () => {
-    listBundledPluginMetadata().forEach((entry) =>
+    listRepoBundledPluginMetadata().forEach((entry) =>
       expectTestOnlyArtifactsExcluded(entry.publicSurfaceArtifacts ?? []),
     );
   });
 
   it("keeps config schemas on all bundled plugin manifests", () => {
-    for (const entry of listBundledPluginMetadata()) {
+    for (const entry of listRepoBundledPluginMetadata()) {
       expect(entry.manifest.configSchema).toEqual(expect.any(Object));
     }
   });

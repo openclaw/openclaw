@@ -7,6 +7,10 @@
  */
 
 import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
+import {
   sendC2CMessage,
   sendDmMessage,
   sendGroupMessage,
@@ -151,7 +155,7 @@ export async function parseAndSendMediaTags(
 
   const tagCounts = mediaTagMatches.reduce(
     (acc, m) => {
-      const t = m[1].toLowerCase();
+      const t = normalizeLowercaseStringOrEmpty(m[1]);
       acc[t] = (acc[t] ?? 0) + 1;
       return acc;
     },
@@ -184,8 +188,8 @@ export async function parseAndSendMediaTags(
       sendQueue.push({ type: "text", content: filterInternalMarkers(textBefore) });
     }
 
-    const tagName = match[1].toLowerCase();
-    let mediaPath = decodeMediaPath(match[2]?.trim() ?? "", log, prefix);
+    const tagName = normalizeLowercaseStringOrEmpty(match[1]);
+    let mediaPath = decodeMediaPath(normalizeOptionalString(match[2]) ?? "", log, prefix);
 
     if (mediaPath) {
       const typeMap: Record<string, QueueItem["type"]> = {

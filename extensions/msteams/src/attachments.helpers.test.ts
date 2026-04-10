@@ -183,6 +183,22 @@ describe("msteams attachment helpers", () => {
     it.each(ATTACHMENT_PLACEHOLDER_CASES)("$label", ({ attachments, expected }) => {
       expect(buildMSTeamsAttachmentPlaceholder(attachments)).toBe(expected);
     });
+
+    it("respects inline image limits when counting placeholder images", () => {
+      const attachments = [
+        {
+          contentType: "text/html",
+          content: `<img src="data:image/png;base64,${"A".repeat(16)}" />`,
+        },
+      ];
+
+      expect(
+        buildMSTeamsAttachmentPlaceholder(attachments, {
+          maxInlineBytes: 4,
+          maxInlineTotalBytes: 4,
+        }),
+      ).toBe("<media:document>");
+    });
   });
 
   describe("buildMSTeamsGraphMessageUrls", () => {

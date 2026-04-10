@@ -774,6 +774,19 @@ Security and trust notes:
 Custom `mcpServers` still work as before. The built-in plugin-tools bridge is an
 additional opt-in convenience, not a replacement for generic MCP server config.
 
+### Runtime timeout configuration
+
+The bundled `acpx` plugin defaults embedded runtime turns to a 120-second
+timeout. This gives slower harnesses such as Gemini CLI enough time to complete
+ACP startup and initialization. Override it if your host needs a different
+runtime limit:
+
+```bash
+openclaw config set plugins.entries.acpx.config.timeoutSeconds 180
+```
+
+Restart the gateway after changing this value.
+
 ## Permission configuration
 
 ACP sessions run non-interactively — there is no TTY to approve or deny file-write and shell-exec permission prompts. The acpx plugin provides two config keys that control how permissions are handled:

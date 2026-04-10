@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { collectSlackSecurityAuditFindings } from "../../test/helpers/channels/security-audit-contract.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { collectSlackSecurityAuditFindings } from "../plugin-sdk/slack.js";
 import { withChannelSecurityStateDir } from "./audit-channel-security.test-helpers.js";
 
 const { readChannelAllowFromStoreMock } = vi.hoisted(() => ({

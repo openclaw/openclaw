@@ -7,6 +7,10 @@ import {
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import type { ChannelSetupInput } from "openclaw/plugin-sdk/setup";
 import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringifiedOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
+import {
   DEFAULT_ACCOUNT_ID,
   applyQQBotAccountConfig,
   listQQBotAccountIds,
@@ -116,8 +120,8 @@ export function formatQQBotAllowFrom(params: {
   allowFrom: Array<string | number> | undefined | null;
 }): string[] {
   return (params.allowFrom ?? [])
-    .map((entry) => String(entry).trim())
-    .filter(Boolean)
+    .map((entry) => normalizeStringifiedOptionalString(entry))
+    .filter((entry): entry is string => Boolean(entry))
     .map((entry) => entry.replace(/^qqbot:/i, ""))
     .map((entry) => entry.toUpperCase());
 }
@@ -160,7 +164,7 @@ export const qqbotConfigAdapter = {
 
 export const qqbotSetupAdapterShared = {
   resolveAccountId: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string | null }) =>
-    accountId?.trim().toLowerCase() || resolveDefaultQQBotAccountId(cfg),
+    normalizeLowercaseStringOrEmpty(accountId) || resolveDefaultQQBotAccountId(cfg),
   applyAccountName: ({
     cfg,
     accountId,

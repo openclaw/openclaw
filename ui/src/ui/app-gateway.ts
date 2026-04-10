@@ -43,6 +43,7 @@ import {
 import { GatewayBrowserClient } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import type { UiSettings } from "./storage.ts";
+import { normalizeOptionalString } from "./string-coerce.ts";
 import type {
   AgentsListResult,
   PresenceEntry,
@@ -111,7 +112,7 @@ export function resolveControlUiClientVersion(params: {
   serverVersion: string | null;
   pageUrl?: string;
 }): string | undefined {
-  const serverVersion = params.serverVersion?.trim();
+  const serverVersion = normalizeOptionalString(params.serverVersion);
   if (!serverVersion) {
     return undefined;
   }
@@ -137,16 +138,16 @@ function normalizeSessionKeyForDefaults(
   value: string | undefined,
   defaults: SessionDefaultsSnapshot,
 ): string {
-  const raw = (value ?? "").trim();
-  const mainSessionKey = defaults.mainSessionKey?.trim();
+  const raw = normalizeOptionalString(value) ?? "";
+  const mainSessionKey = normalizeOptionalString(defaults.mainSessionKey);
   if (!mainSessionKey) {
     return raw;
   }
   if (!raw) {
     return mainSessionKey;
   }
-  const mainKey = defaults.mainKey?.trim() || "main";
-  const defaultAgentId = defaults.defaultAgentId?.trim();
+  const mainKey = normalizeOptionalString(defaults.mainKey) ?? "main";
+  const defaultAgentId = normalizeOptionalString(defaults.defaultAgentId);
   const isAlias =
     raw === "main" ||
     raw === mainKey ||
@@ -217,8 +218,8 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
   });
   const client = new GatewayBrowserClient({
     url: host.settings.gatewayUrl,
-    token: host.settings.token.trim() ? host.settings.token : undefined,
-    password: host.password.trim() ? host.password : undefined,
+    token: normalizeOptionalString(host.settings.token) ? host.settings.token : undefined,
+    password: normalizeOptionalString(host.password) ? host.password : undefined,
     clientName: "openclaw-control-ui",
     clientVersion,
     mode: "webchat",
@@ -397,10 +398,7 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
 
   if (evt.event === "shutdown") {
     const payload = evt.payload as { reason?: unknown; restartExpectedMs?: unknown } | undefined;
-    const reason =
-      payload && typeof payload.reason === "string" && payload.reason.trim()
-        ? payload.reason.trim()
-        : "gateway stopping";
+    const reason = normalizeOptionalString(payload?.reason) ?? "gateway stopping";
     const shutdownMessage =
       typeof payload?.restartExpectedMs === "number"
         ? `Restarting: ${reason}`

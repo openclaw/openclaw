@@ -1,7 +1,6 @@
 import type { ChannelSetupWizardAdapter } from "./setup-wizard-types.js";
 import type { ChannelSetupWizard } from "./setup-wizard.js";
 import type {
-  ChannelApprovalAdapter,
   ChannelApprovalCapability,
   ChannelAuthAdapter,
   ChannelCommandAdapter,
@@ -104,13 +103,13 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   status?: ChannelStatusAdapter<ResolvedAccount, Probe, Audit>;
   gatewayMethods?: string[];
   gateway?: ChannelGatewayAdapter<ResolvedAccount>;
+  // Login/logout and channel-auth only. Approval auth lives on approvalCapability.
   auth?: ChannelAuthAdapter;
   approvalCapability?: ChannelApprovalCapability;
   elevated?: ChannelElevatedAdapter;
   commands?: ChannelCommandAdapter;
   lifecycle?: ChannelLifecycleAdapter;
   secrets?: ChannelSecretsAdapter;
-  approvals?: ChannelApprovalAdapter;
   allowlist?: ChannelAllowlistAdapter;
   doctor?: ChannelDoctorAdapter;
   bindings?: ChannelConfiguredBindingProvider;

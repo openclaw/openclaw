@@ -207,4 +207,83 @@ describe("spawnSubagentDirect seam flow", () => {
       }
     }
   });
+
+  it("forwards normalized thinking to the agent run", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: unknown }) => {
+        calls.push(request);
+        if (request.method === "agent") {
+          return { runId: "run-thinking", status: "accepted", acceptedAt: 1000 };
+        }
+        if (request.method?.startsWith("sessions.")) {
+          return { ok: true };
+        }
+        return {};
+      },
+    );
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock);
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "verify thinking forwarding",
+        thinking: "high",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+    });
+    const agentCall = calls.find((call) => call.method === "agent");
+    expect(agentCall?.params).toMatchObject({
+      thinking: "high",
+    });
+  });
+
+  it("returns an error when the initial model patch is rejected", async () => {
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: unknown }) => {
+        if (request.method === "sessions.patch") {
+          const model = (request.params as { model?: unknown } | undefined)?.model;
+          if (model === "bad-model") {
+            throw new Error("invalid model: bad-model");
+          }
+          return { ok: true };
+        }
+        if (request.method === "agent") {
+          return { runId: "run-1", status: "accepted", acceptedAt: 1000 };
+        }
+        if (request.method === "sessions.delete") {
+          return { ok: true };
+        }
+        return {};
+      },
+    );
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "verify patch rejection",
+        model: "bad-model",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      childSessionKey: expect.stringMatching(/^agent:main:subagent:/),
+    });
+    expect(String(result.error ?? "")).toContain("invalid model");
+    expect(
+      hoisted.callGatewayMock.mock.calls.some(
+        (call) => (call[0] as { method?: string }).method === "agent",
+      ),
+    ).toBe(false);
+  });
 });

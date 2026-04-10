@@ -6,6 +6,7 @@ import {
   normalizeAssistantPhase,
   parseAssistantTextSignature,
 } from "../shared/chat-message-content.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   normalizeOpenAIStrictToolParameters,
   resolveOpenAIStrictToolFlagForInventory,
@@ -39,7 +40,7 @@ function toNonEmptyString(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
   }
-  const trimmed = value.trim();
+  const trimmed = normalizeOptionalString(value) ?? "";
   return trimmed.length > 0 ? trimmed : null;
 }
 
@@ -223,7 +224,7 @@ function extractReasoningSummaryText(value: unknown): string {
         return "";
       }
       const record = item as { text?: unknown };
-      return typeof record.text === "string" ? record.text.trim() : "";
+      return normalizeOptionalString(record.text) ?? "";
     })
     .filter(Boolean)
     .join("\n")
@@ -239,7 +240,7 @@ function extractResponseReasoningText(item: unknown): string {
   if (summaryText) {
     return summaryText;
   }
-  return typeof record.content === "string" ? record.content.trim() : "";
+  return normalizeOptionalString(record.content) ?? "";
 }
 
 export function convertTools(

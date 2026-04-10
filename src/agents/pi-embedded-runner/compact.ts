@@ -7,7 +7,6 @@ import {
   estimateTokens,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
-import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -34,6 +33,7 @@ import {
 import type { ProviderRuntimeModel } from "../../plugins/types.js";
 import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -56,6 +56,7 @@ import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
+import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import {
   applyAuthHeaderOverride,
   applyLocalNoAuthHeaderOverride,
@@ -92,6 +93,7 @@ import {
   resolveSkillsPromptForRun,
   type SkillSnapshot,
 } from "../skills.js";
+import { resolveSystemPromptOverride } from "../system-prompt-override.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { classifyCompactionReason, resolveCompactionFailureReason } from "./compact-reasons.js";
 import {
@@ -143,7 +145,7 @@ import {
 } from "./tool-schema-runtime.js";
 import { splitSdkTools } from "./tool-split.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
-import { describeUnknownError, mapThinkingLevel } from "./utils.js";
+import { mapThinkingLevel } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
 
 export type CompactEmbeddedPiSessionParams = {
@@ -215,6 +217,63 @@ function hasRealConversationContent(
 
 function createCompactionDiagId(): string {
   return `cmp-${Date.now().toString(36)}-${generateSecureToken(4)}`;
+}
+
+function prepareCompactionSessionAgent(params: {
+  session: { agent: { streamFn?: unknown } };
+  providerStreamFn: unknown;
+  shouldUseWebSocketTransport: boolean;
+  wsApiKey?: string;
+  sessionId: string;
+  signal: AbortSignal;
+  effectiveModel: ProviderRuntimeModel;
+  resolvedApiKey?: string;
+  authStorage: unknown;
+  config?: OpenClawConfig;
+  provider: string;
+  modelId: string;
+  thinkLevel: ThinkLevel;
+  sessionAgentId: string;
+  effectiveWorkspace: string;
+  agentDir: string;
+}) {
+  params.session.agent.streamFn = resolveEmbeddedAgentStreamFn({
+    currentStreamFn: resolveEmbeddedAgentBaseStreamFn({ session: params.session as never }),
+    providerStreamFn: params.providerStreamFn as never,
+    shouldUseWebSocketTransport: params.shouldUseWebSocketTransport,
+    wsApiKey: params.wsApiKey,
+    sessionId: params.sessionId,
+    signal: params.signal,
+    model: params.effectiveModel,
+    resolvedApiKey: params.resolvedApiKey,
+    authStorage: params.authStorage as never,
+  });
+  return applyExtraParamsToAgent(
+    params.session.agent as never,
+    params.config,
+    params.provider,
+    params.modelId,
+    undefined,
+    params.thinkLevel,
+    params.sessionAgentId,
+    params.effectiveWorkspace,
+    params.effectiveModel,
+    params.agentDir,
+  );
+}
+
+function resolveCompactionProviderStream(params: {
+  effectiveModel: ProviderRuntimeModel;
+  config?: OpenClawConfig;
+  agentDir: string;
+  effectiveWorkspace: string;
+}) {
+  return registerProviderStreamForModel({
+    model: params.effectiveModel,
+    cfg: params.config,
+    agentDir: params.agentDir,
+    workspaceDir: params.effectiveWorkspace,
+  });
 }
 
 function normalizeObservedTokenCount(value: unknown): number | undefined {
@@ -395,7 +454,7 @@ export async function compactEmbeddedPiSessionDirect(
       authStorage.setRuntimeApiKey(runtimeModel.provider, runtimeApiKey);
     }
   } catch (err) {
-    const reason = describeUnknownError(err);
+    const reason = formatErrorMessage(err);
     return fail(reason);
   }
 
@@ -579,10 +638,12 @@ export async function compactEmbeddedPiSessionDirect(
     if (promptCapabilities.length > 0) {
       runtimeCapabilities ??= [];
       const seenCapabilities = new Set(
-        runtimeCapabilities.map((cap) => String(cap).trim().toLowerCase()),
+        runtimeCapabilities
+          .map((cap) => normalizeOptionalLowercaseString(String(cap)))
+          .filter(Boolean),
       );
       for (const capability of promptCapabilities) {
-        const normalizedCapability = capability.trim().toLowerCase();
+        const normalizedCapability = normalizeOptionalLowercaseString(capability);
         if (!normalizedCapability || seenCapabilities.has(normalizedCapability)) {
           continue;
         }
@@ -650,7 +711,6 @@ export async function compactEmbeddedPiSessionDirect(
     const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
     const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
     const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
-    const isDefaultAgent = sessionAgentId === defaultAgentId;
     const promptMode =
       isSubagentSessionKey(params.sessionKey) || isCronSessionKey(params.sessionKey)
         ? "minimal"
@@ -681,36 +741,42 @@ export async function compactEmbeddedPiSessionDirect(
     });
     const buildSystemPromptOverride = (defaultThinkLevel: ThinkLevel) =>
       createSystemPromptOverride(
-        buildEmbeddedSystemPrompt({
-          workspaceDir: effectiveWorkspace,
-          defaultThinkLevel,
-          reasoningLevel: params.reasoningLevel ?? "off",
-          extraSystemPrompt: params.extraSystemPrompt,
-          ownerNumbers: params.ownerNumbers,
-          ownerDisplay: ownerDisplay.ownerDisplay,
-          ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
-          reasoningTagHint,
-          heartbeatPrompt: isDefaultAgent
-            ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
-            : undefined,
-          skillsPrompt,
-          docsPath: docsPath ?? undefined,
-          ttsHint,
-          promptMode,
-          acpEnabled: params.config?.acp?.enabled !== false,
-          runtimeInfo,
-          reactionGuidance,
-          messageToolHints,
-          sandboxInfo,
-          tools: effectiveTools,
-          modelAliasLines: buildModelAliasLines(params.config),
-          userTimezone,
-          userTime,
-          userTimeFormat,
-          contextFiles,
-          memoryCitationsMode: params.config?.memory?.citations,
-          promptContribution,
-        }),
+        resolveSystemPromptOverride({
+          config: params.config,
+          agentId: sessionAgentId,
+        }) ??
+          buildEmbeddedSystemPrompt({
+            workspaceDir: effectiveWorkspace,
+            defaultThinkLevel,
+            reasoningLevel: params.reasoningLevel ?? "off",
+            extraSystemPrompt: params.extraSystemPrompt,
+            ownerNumbers: params.ownerNumbers,
+            ownerDisplay: ownerDisplay.ownerDisplay,
+            ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
+            reasoningTagHint,
+            heartbeatPrompt: resolveHeartbeatPromptForSystemPrompt({
+              config: params.config,
+              agentId: sessionAgentId,
+              defaultAgentId,
+            }),
+            skillsPrompt,
+            docsPath: docsPath ?? undefined,
+            ttsHint,
+            promptMode,
+            acpEnabled: params.config?.acp?.enabled !== false,
+            runtimeInfo,
+            reactionGuidance,
+            messageToolHints,
+            sandboxInfo,
+            tools: effectiveTools,
+            modelAliasLines: buildModelAliasLines(params.config),
+            userTimezone,
+            userTime,
+            userTimeFormat,
+            contextFiles,
+            memoryCitationsMode: params.config?.memory?.citations,
+            promptContribution,
+          }),
       );
 
     const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
@@ -779,11 +845,11 @@ export async function compactEmbeddedPiSessionDirect(
         sandboxEnabled: !!sandbox?.enabled,
       });
 
-      const providerStreamFn = registerProviderStreamForModel({
-        model: effectiveModel,
-        cfg: params.config,
+      const providerStreamFn = resolveCompactionProviderStream({
+        effectiveModel,
+        config: params.config,
         agentDir,
-        workspaceDir: effectiveWorkspace,
+        effectiveWorkspace,
       });
       const shouldUseWebSocketTransport = shouldUseOpenAIWebSocketTransport({
         provider,
@@ -824,29 +890,24 @@ export async function compactEmbeddedPiSessionDirect(
           applySystemPromptOverrideToSession(session, buildSystemPromptOverride(thinkLevel)());
           // Compaction builds the same embedded system prompt, so it must flow
           // through the same transport/payload shaping stack as normal turns.
-          session.agent.streamFn = resolveEmbeddedAgentStreamFn({
-            currentStreamFn: resolveEmbeddedAgentBaseStreamFn({ session }),
+          prepareCompactionSessionAgent({
+            session,
             providerStreamFn,
             shouldUseWebSocketTransport,
             wsApiKey,
             sessionId: params.sessionId,
             signal: runAbortController.signal,
-            model: effectiveModel,
+            effectiveModel,
             resolvedApiKey: hasRuntimeAuthExchange ? undefined : apiKeyInfo?.apiKey,
             authStorage,
-          });
-          applyExtraParamsToAgent(
-            session.agent,
-            params.config,
+            config: params.config,
             provider,
             modelId,
-            undefined,
             thinkLevel,
             sessionAgentId,
             effectiveWorkspace,
-            effectiveModel,
             agentDir,
-          );
+          });
 
           const prior = await sanitizeSessionHistory({
             messages: session.messages,
@@ -993,7 +1054,7 @@ export async function compactEmbeddedPiSessionDirect(
               }
             } catch (err) {
               log.warn("[compaction] failed to harden manual compaction boundary", {
-                errorMessage: err instanceof Error ? err.message : String(err),
+                errorMessage: formatErrorMessage(err),
               });
             }
           }
@@ -1028,7 +1089,7 @@ export async function compactEmbeddedPiSessionDirect(
               checkpointSnapshotRetained = storedCheckpoint !== null;
             } catch (err) {
               log.warn("failed to persist compaction checkpoint", {
-                errorMessage: err instanceof Error ? err.message : String(err),
+                errorMessage: formatErrorMessage(err),
               });
             }
           }
@@ -1103,7 +1164,7 @@ export async function compactEmbeddedPiSessionDirect(
           };
         } catch (err) {
           const fallbackThinking = pickFallbackThinkingLevel({
-            message: describeUnknownError(err),
+            message: formatErrorMessage(err),
             attempted: attemptedThinking,
           });
           if (fallbackThinking) {
@@ -1149,7 +1210,7 @@ export async function compactEmbeddedPiSessionDirect(
     }
   } catch (err) {
     const reason = resolveCompactionFailureReason({
-      reason: describeUnknownError(err),
+      reason: formatErrorMessage(err),
       safeguardCancelReason: consumeCompactionSafeguardCancelReason(compactionSessionManager),
     });
     return fail(reason);
@@ -1319,7 +1380,7 @@ export async function compactEmbeddedPiSession(
               checkpointSnapshotRetained = storedCheckpoint !== null;
             } catch (err) {
               log.warn("failed to persist compaction checkpoint", {
-                errorMessage: err instanceof Error ? err.message : String(err),
+                errorMessage: formatErrorMessage(err),
               });
             }
           }
@@ -1392,6 +1453,8 @@ export const __testing = {
   estimateTokensAfterCompaction,
   buildBeforeCompactionHookMetrics,
   hardenManualCompactionBoundary,
+  resolveCompactionProviderStream,
+  prepareCompactionSessionAgent,
   runBeforeCompactionHooks,
   runAfterCompactionHooks,
   runPostCompactionSideEffects,

@@ -8,6 +8,7 @@ import {
   resolveFreshSessionTotalTokens,
   type SessionSystemPromptReport,
 } from "../../config/sessions/types.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { estimateTokensFromChars } from "../../utils/cjk-chars.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
@@ -76,7 +77,7 @@ async function resolveContextReport(
 
 export async function buildContextReply(params: HandleCommandsParams): Promise<ReplyPayload> {
   const args = parseContextArgs(params.command.commandBodyNormalized);
-  const sub = args.split(/\s+/).filter(Boolean)[0]?.toLowerCase() ?? "";
+  const sub = normalizeLowercaseStringOrEmpty(args.split(/\s+/).filter(Boolean)[0]);
 
   if (!sub || sub === "help") {
     return {

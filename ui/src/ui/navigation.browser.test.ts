@@ -92,6 +92,72 @@ describe("control UI routing", () => {
     expect(dreamsLink).not.toBeNull();
   });
 
+  it("renders the dreaming view on the /dreaming route", async () => {
+    const app = mountApp("/dreaming");
+    app.dreamingStatus = {
+      enabled: true,
+      timezone: "Europe/Madrid",
+      verboseLogging: false,
+      storageMode: "inline",
+      separateReports: false,
+      shortTermCount: 2,
+      recallSignalCount: 1,
+      dailySignalCount: 1,
+      groundedSignalCount: 0,
+      totalSignalCount: 2,
+      phaseSignalCount: 0,
+      lightPhaseHitCount: 0,
+      remPhaseHitCount: 0,
+      promotedTotal: 1,
+      promotedToday: 1,
+      shortTermEntries: [],
+      signalEntries: [],
+      promotedEntries: [],
+      phases: {
+        light: { enabled: true, cron: "", managedCronPresent: false, lookbackDays: 7, limit: 20 },
+        deep: {
+          enabled: true,
+          cron: "",
+          managedCronPresent: false,
+          limit: 20,
+          minScore: 0.75,
+          minRecallCount: 3,
+          minUniqueQueries: 2,
+          recencyHalfLifeDays: 7,
+        },
+        rem: {
+          enabled: true,
+          cron: "",
+          managedCronPresent: false,
+          lookbackDays: 7,
+          limit: 20,
+          minPatternStrength: 0.6,
+        },
+      },
+    };
+    app.dreamDiaryPath = "DREAMS.md";
+    app.dreamDiaryContent = [
+      "# Dream Diary",
+      "",
+      "<!-- openclaw:dreaming:diary:start -->",
+      "",
+      "---",
+      "",
+      "*January 1, 2026*",
+      "",
+      "What Happened",
+      "1. Stable operator rule surfaced.",
+      "",
+      "<!-- openclaw:dreaming:diary:end -->",
+    ].join("\n");
+    app.requestUpdate();
+    await app.updateComplete;
+
+    expect(app.tab).toBe("dreams");
+    expect(app.querySelector(".dreams__tab")).not.toBeNull();
+    expect(app.querySelector(".dreams__lobster")).not.toBeNull();
+  });
+
   it("renders the refreshed top navigation shell", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;
@@ -357,8 +423,46 @@ describe("control UI routing", () => {
     if (!container) {
       return;
     }
-    expect(container.scrollTop).toBeGreaterThanOrEqual(0);
-    expect(container.textContent).toContain("Line 59");
+    let finalScrollTop = 0;
+    Object.defineProperty(container, "clientHeight", {
+      value: 180,
+      configurable: true,
+    });
+    Object.defineProperty(container, "scrollHeight", {
+      value: 960,
+      configurable: true,
+    });
+    Object.defineProperty(container, "scrollTop", {
+      configurable: true,
+      get: () => finalScrollTop,
+      set: (value: number) => {
+        finalScrollTop = value;
+      },
+    });
+    Object.defineProperty(container, "scrollTo", {
+      configurable: true,
+      value: ({ top }: { top: number }) => {
+        finalScrollTop = top;
+      },
+    });
+    const targetScrollTop = container.scrollHeight;
+    expect(targetScrollTop).toBeGreaterThan(container.clientHeight);
+    app.chatMessages = [
+      ...app.chatMessages,
+      {
+        role: "assistant",
+        content: `Line 60 - ${"x".repeat(200)}`,
+        timestamp: Date.now() + 60,
+      },
+    ];
+    await app.updateComplete;
+    for (let i = 0; i < 10; i++) {
+      if (container.scrollTop === targetScrollTop) {
+        break;
+      }
+      await nextFrame();
+    }
+    expect(container.scrollTop).toBe(targetScrollTop);
   });
 
   it("hydrates token from query params and strips them", async () => {

@@ -8,6 +8,7 @@ import {
   type PinnedDispatcherPolicy,
 } from "openclaw/plugin-sdk/fetch-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
 import {
   resolveTelegramAutoSelectFamilyDecision,
@@ -160,7 +161,7 @@ function shouldBypassEnvProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env
   if (noProxyValue === "*") {
     return true;
   }
-  const targetHostname = TELEGRAM_API_HOSTNAME.toLowerCase();
+  const targetHostname = normalizeLowercaseStringOrEmpty(TELEGRAM_API_HOSTNAME);
   const targetPort = 443;
   const noProxyEntries = noProxyValue.split(/[,\s]/);
   for (let i = 0; i < noProxyEntries.length; i++) {
@@ -169,7 +170,9 @@ function shouldBypassEnvProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env
       continue;
     }
     const parsed = entry.match(/^(.+):(\d+)$/);
-    const entryHostname = (parsed ? parsed[1] : entry).replace(/^\*?\./, "").toLowerCase();
+    const entryHostname = normalizeLowercaseStringOrEmpty(
+      (parsed ? parsed[1] : entry).replace(/^\*?\./, ""),
+    );
     const entryPort = parsed ? Number.parseInt(parsed[2], 10) : 0;
     if (entryPort && entryPort !== targetPort) {
       continue;
@@ -399,7 +402,9 @@ function formatErrorCodes(err: unknown): string {
 function shouldUseTelegramTransportFallback(err: unknown): boolean {
   const ctx: TelegramTransportFallbackContext = {
     message:
-      err && typeof err === "object" && "message" in err ? String(err.message).toLowerCase() : "",
+      err && typeof err === "object" && "message" in err
+        ? normalizeLowercaseStringOrEmpty(String(err.message))
+        : "",
     codes: collectErrorCodes(err),
   };
   for (const rule of TELEGRAM_TRANSPORT_FALLBACK_RULES) {

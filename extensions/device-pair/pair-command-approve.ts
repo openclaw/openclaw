@@ -1,3 +1,7 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { approveDevicePairing, listDevicePairing } from "./api.js";
 import { formatPendingRequests } from "./notify.js";
 
@@ -30,7 +34,7 @@ export function selectPendingApprovalRequest(params: {
       : { reply: buildMultiplePendingApprovalReply(params.pending) };
   }
 
-  if (params.requested.toLowerCase() === "latest") {
+  if (normalizeLowercaseStringOrEmpty(params.requested) === "latest") {
     return {
       pending: [...params.pending].toSorted((a, b) => (b.ts ?? 0) - (a.ts ?? 0))[0],
     };
@@ -43,8 +47,8 @@ export function selectPendingApprovalRequest(params: {
 }
 
 function formatApprovedPairingReply(approved: ApprovedPairingEntry): { text: string } {
-  const label = approved.device.displayName?.trim() || approved.device.deviceId;
-  const platform = approved.device.platform?.trim();
+  const label = normalizeOptionalString(approved.device.displayName) || approved.device.deviceId;
+  const platform = normalizeOptionalString(approved.device.platform);
   const platformLabel = platform ? ` (${platform})` : "";
   return { text: `✅ Paired ${label}${platformLabel}.` };
 }

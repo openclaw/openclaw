@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { parseFeishuCommentTarget } from "./comment-target.js";
@@ -27,7 +28,7 @@ function normalizePossibleLocalImagePath(text: string | undefined): string | nul
     return null;
   }
 
-  const ext = path.extname(raw).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(raw));
   const isImageExt = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"].includes(
     ext,
   );

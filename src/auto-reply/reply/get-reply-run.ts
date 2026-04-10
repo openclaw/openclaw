@@ -13,6 +13,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { resolveEnvelopeFormatOptions } from "../envelope.js";
@@ -48,6 +49,33 @@ import type { TypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+
+export function buildExecOverridePromptHint(params: {
+  execOverrides?: ExecOverrides;
+  elevatedLevel: ElevatedLevel;
+}): string | undefined {
+  const exec = params.execOverrides;
+  if (!exec && params.elevatedLevel === "off") {
+    return undefined;
+  }
+  const parts = [
+    exec?.host ? `host=${exec.host}` : undefined,
+    exec?.security ? `security=${exec.security}` : undefined,
+    exec?.ask ? `ask=${exec.ask}` : undefined,
+    exec?.node ? `node=${exec.node}` : undefined,
+  ].filter(Boolean);
+  const execLine =
+    parts.length > 0
+      ? `Current session exec defaults: ${parts.join(" ")}.`
+      : "Current session exec defaults: inherited from configured agent/global defaults.";
+  const elevatedLine = `Current elevated level: ${params.elevatedLevel}.`;
+  return [
+    "## Current Exec Session State",
+    execLine,
+    elevatedLine,
+    "If the user asks to run a command, use the current exec state above. Do not assume a prior denial still applies after `/exec` or `/elevated` changed.",
+  ].join("\n");
+}
 
 let piEmbeddedRuntimePromise: Promise<typeof import("../../agents/pi-embedded.runtime.js")> | null =
   null;
@@ -220,7 +248,7 @@ export async function runPreparedReply(
         silentToken: SILENT_REPLY_TOKEN,
       })
     : "";
-  const groupSystemPrompt = sessionCtx.GroupSystemPrompt?.trim() ?? "";
+  const groupSystemPrompt = normalizeOptionalString(sessionCtx.GroupSystemPrompt) ?? "";
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
     { includeFormattingHints: !useFastReplyRuntime },
@@ -230,6 +258,10 @@ export async function runPreparedReply(
     groupChatContext,
     groupIntro,
     groupSystemPrompt,
+    buildExecOverridePromptHint({
+      execOverrides,
+      elevatedLevel: resolvedElevatedLevel,
+    }),
   ].filter(Boolean);
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
@@ -256,7 +288,7 @@ export async function runPreparedReply(
     isNewSession
       ? {
           ...sessionCtx,
-          ...(sessionCtx.ThreadHistoryBody?.trim()
+          ...(normalizeOptionalString(sessionCtx.ThreadHistoryBody)
             ? { InboundHistory: undefined, ThreadStarterBody: undefined }
             : {}),
         }
@@ -306,8 +338,8 @@ export async function runPreparedReply(
     }
   }
   const prefixedBodyCore = prefixedBodyBase;
-  const threadStarterBody = ctx.ThreadStarterBody?.trim();
-  const threadHistoryBody = ctx.ThreadHistoryBody?.trim();
+  const threadStarterBody = normalizeOptionalString(ctx.ThreadStarterBody);
+  const threadHistoryBody = normalizeOptionalString(ctx.ThreadHistoryBody);
   const threadContextNote = threadHistoryBody
     ? `[Thread history - for context]\n${threadHistoryBody}`
     : threadStarterBody
@@ -542,12 +574,14 @@ export async function runPreparedReply(
       }),
       agentAccountId: sessionCtx.AccountId,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
-      groupChannel: sessionCtx.GroupChannel?.trim() ?? sessionCtx.GroupSubject?.trim(),
-      groupSpace: sessionCtx.GroupSpace?.trim() ?? undefined,
-      senderId: sessionCtx.SenderId?.trim() || undefined,
-      senderName: sessionCtx.SenderName?.trim() || undefined,
-      senderUsername: sessionCtx.SenderUsername?.trim() || undefined,
-      senderE164: sessionCtx.SenderE164?.trim() || undefined,
+      groupChannel:
+        normalizeOptionalString(sessionCtx.GroupChannel) ??
+        normalizeOptionalString(sessionCtx.GroupSubject),
+      groupSpace: normalizeOptionalString(sessionCtx.GroupSpace),
+      senderId: normalizeOptionalString(sessionCtx.SenderId),
+      senderName: normalizeOptionalString(sessionCtx.SenderName),
+      senderUsername: normalizeOptionalString(sessionCtx.SenderUsername),
+      senderE164: normalizeOptionalString(sessionCtx.SenderE164),
       senderIsOwner: command.senderIsOwner,
       sessionFile: preparedSessionState.sessionFile,
       workspaceDir,

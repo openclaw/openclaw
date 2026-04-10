@@ -4,16 +4,41 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
-import { providerSupportsNativePdfDocument } from "../../media-understanding/defaults.js";
+import { bundledProviderSupportsNativePdfDocument } from "../../media-understanding/bundled-defaults.js";
 import { extractAssistantText } from "../pi-embedded-utils.js";
 
 export type PdfModelConfig = { primary?: string; fallbacks?: string[] };
+
+export function resolvePdfInputs(record: Record<string, unknown>): string[] {
+  const pdfCandidates: string[] = [];
+  if (typeof record.pdf === "string") {
+    pdfCandidates.push(record.pdf);
+  }
+  if (Array.isArray(record.pdfs)) {
+    pdfCandidates.push(...record.pdfs.filter((v): v is string => typeof v === "string"));
+  }
+
+  const seenPdfs = new Set<string>();
+  const pdfInputs: string[] = [];
+  for (const candidate of pdfCandidates) {
+    const trimmed = candidate.trim();
+    if (!trimmed || seenPdfs.has(trimmed)) {
+      continue;
+    }
+    seenPdfs.add(trimmed);
+    pdfInputs.push(trimmed);
+  }
+  if (pdfInputs.length === 0) {
+    throw new Error("pdf required: provide a path or URL to a PDF document");
+  }
+  return pdfInputs;
+}
 
 /**
  * Check whether a provider supports native PDF document input.
  */
 export function providerSupportsNativePdf(provider: string): boolean {
-  return providerSupportsNativePdfDocument({ providerId: provider });
+  return bundledProviderSupportsNativePdfDocument(provider);
 }
 
 /**

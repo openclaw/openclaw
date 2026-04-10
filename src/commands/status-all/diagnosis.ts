@@ -14,6 +14,7 @@ import {
   formatPluginCompatibilityNotice,
   type PluginCompatibilityNotice,
 } from "../../plugins/status.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { NodeOnlyGatewayInfo } from "../status.node-mode.js";
 import { formatTimeAgo, redactSecrets } from "./format.js";
 import { readFileTailLines, summarizeLogTail } from "./gateway.js";
@@ -136,7 +137,7 @@ export async function appendStatusAllDiagnosis(params: {
     emitCheck("Restart sentinel: none", "ok");
   }
 
-  const lastErrClean = params.lastErr?.trim() ?? "";
+  const lastErrClean = normalizeOptionalString(params.lastErr) ?? "";
   const isTrivialLastErr = lastErrClean.length < 8 || lastErrClean === "}" || lastErrClean === "{";
   if (lastErrClean && !isTrivialLastErr) {
     lines.push("");

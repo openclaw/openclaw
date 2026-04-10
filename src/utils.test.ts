@@ -50,6 +50,15 @@ describe("resolveConfigDir", () => {
 
     expect(resolveConfigDir(env)).toBe(path.resolve("/tmp/openclaw-home", "state"));
   });
+
+  it("falls back to the config file directory when only OPENCLAW_CONFIG_PATH is set", () => {
+    const env = {
+      HOME: "/tmp/openclaw-home",
+      OPENCLAW_CONFIG_PATH: "~/profiles/dev/openclaw.json",
+    } as NodeJS.ProcessEnv;
+
+    expect(resolveConfigDir(env)).toBe(path.resolve("/tmp/openclaw-home", "profiles", "dev"));
+  });
 });
 
 describe("resolveHomeDir", () => {

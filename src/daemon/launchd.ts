@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   GATEWAY_LAUNCH_AGENT_LABEL,
   resolveGatewayServiceDescription,
@@ -301,7 +302,7 @@ export async function readLaunchAgentRuntime(
   }
   const parsed = parseLaunchctlPrint(res.stdout || res.stderr || "");
   const plistExists = await launchAgentPlistExists(env);
-  const state = parsed.state?.toLowerCase();
+  const state = normalizeLowercaseStringOrEmpty(parsed.state);
   const status = state === "running" || parsed.pid ? "running" : state ? "stopped" : "unknown";
   return {
     status,
@@ -331,7 +332,7 @@ export async function repairLaunchAgentBootstrap(args: {
   let repairStatus: LaunchAgentBootstrapRepairResult["status"] = "repaired";
   if (boot.code !== 0) {
     const detail = (boot.stderr || boot.stdout).trim();
-    const normalized = detail.toLowerCase();
+    const normalized = normalizeLowercaseStringOrEmpty(detail);
     const alreadyLoaded = boot.code === 130 || normalized.includes("already exists in domain");
     if (!alreadyLoaded) {
       return { ok: false, status: "bootstrap-failed", detail: detail || undefined };
@@ -447,7 +448,7 @@ export async function uninstallLaunchAgent({
 }
 
 function isLaunchctlNotLoaded(res: { stdout: string; stderr: string; code: number }): boolean {
-  const detail = (res.stderr || res.stdout).toLowerCase();
+  const detail = normalizeLowercaseStringOrEmpty(res.stderr || res.stdout);
   return (
     detail.includes("no such process") ||
     detail.includes("could not find service") ||
@@ -456,7 +457,7 @@ function isLaunchctlNotLoaded(res: { stdout: string; stderr: string; code: numbe
 }
 
 function isUnsupportedGuiDomain(detail: string): boolean {
-  const normalized = detail.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(detail);
   return (
     normalized.includes("domain does not support specified action") ||
     normalized.includes("bootstrap failed: 125")

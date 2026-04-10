@@ -6,6 +6,7 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { ChatLog } from "./components/chat-log.js";
 import type { GatewayAgentsList, GatewayChatClient } from "./gateway-chat.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
@@ -71,7 +72,7 @@ export function createSessionActions(context: SessionActionContext) {
     state.sessionScope = result.scope ?? state.sessionScope;
     state.agents = result.agents.map((agent) => ({
       id: normalizeAgentId(agent.id),
-      name: agent.name?.trim() || undefined,
+      name: normalizeOptionalString(agent.name),
     }));
     agentNames.clear();
     for (const agent of state.agents) {

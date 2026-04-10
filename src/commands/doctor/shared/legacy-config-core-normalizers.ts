@@ -1,11 +1,15 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "../../../agents/model-selection.js";
-import { shouldMoveSingleAccountChannelKey } from "../../../channels/plugins/setup-helpers.js";
+import { resolveSingleAccountKeysToMove } from "../../../channels/plugins/setup-helpers.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../../../config/defaults.js";
 import { normalizeTalkSection } from "../../../config/talk.js";
 import { DEFAULT_GOOGLE_API_BASE_URL } from "../../../infra/google-api-base-url.js";
 import { DEFAULT_ACCOUNT_ID } from "../../../routing/session-key.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../../shared/string-coerce.js";
 import { isRecord } from "./legacy-config-record-shared.js";
 
 function buildLegacyTalkProviderCompat(
@@ -48,7 +52,7 @@ export function normalizeLegacyBrowserConfig(
       if (!isRecord(rawProfile)) {
         continue;
       }
-      const rawDriver = typeof rawProfile.driver === "string" ? rawProfile.driver.trim() : "";
+      const rawDriver = normalizeOptionalString(rawProfile.driver) ?? "";
       if (rawDriver !== "extension") {
         continue;
       }
@@ -128,19 +132,16 @@ export function seedMissingDefaultAccountsFromSingleAccountBase(
     if (accountKeys.length === 0) {
       continue;
     }
-    const hasDefault = accountKeys.some((key) => key.trim().toLowerCase() === DEFAULT_ACCOUNT_ID);
+    const hasDefault = accountKeys.some(
+      (key) => normalizeOptionalLowercaseString(key) === DEFAULT_ACCOUNT_ID,
+    );
     if (hasDefault) {
       continue;
     }
-
-    const keysToMove = Object.entries(rawChannel)
-      .filter(([key, value]) => {
-        if (key === "accounts" || key === "enabled" || value === undefined) {
-          return false;
-        }
-        return shouldMoveSingleAccountChannelKey({ channelKey: channelId, key });
-      })
-      .map(([key]) => key);
+    const keysToMove = resolveSingleAccountKeysToMove({
+      channelKey: channelId,
+      channel: rawChannel,
+    });
     if (keysToMove.length === 0) {
       continue;
     }
@@ -256,12 +257,11 @@ export function normalizeLegacyNanoBananaSkill(
   }
 
   const legacyEnv = isRecord(rawLegacyEntry.env) ? rawLegacyEntry.env : undefined;
-  const legacyEnvApiKey =
-    typeof legacyEnv?.GEMINI_API_KEY === "string" ? legacyEnv.GEMINI_API_KEY.trim() : "";
+  const legacyEnvApiKey = normalizeOptionalString(legacyEnv?.GEMINI_API_KEY) ?? "";
   const legacyApiKey =
     legacyEnvApiKey ||
     (typeof rawLegacyEntry.apiKey === "string"
-      ? rawLegacyEntry.apiKey.trim()
+      ? normalizeOptionalString(rawLegacyEntry.apiKey)
       : rawLegacyEntry.apiKey && isRecord(rawLegacyEntry.apiKey)
         ? structuredClone(rawLegacyEntry.apiKey)
         : undefined);
@@ -547,7 +547,7 @@ export function normalizeLegacyMistralModelMaxTokens(
       if (!isRecord(model)) {
         return model;
       }
-      const modelId = typeof model.id === "string" ? model.id.trim() : "";
+      const modelId = normalizeOptionalString(model.id) ?? "";
       const contextWindow =
         typeof model.contextWindow === "number" && Number.isFinite(model.contextWindow)
           ? model.contextWindow
