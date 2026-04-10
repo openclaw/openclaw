@@ -138,4 +138,41 @@ describe("createCodexDynamicToolBridge", () => {
       ],
     });
   });
+
+  it("does not record messaging side effects when the send fails", async () => {
+    const tool = createTool({
+      name: "message",
+      execute: vi.fn(async () => {
+        throw new Error("send failed");
+      }),
+    });
+    const bridge = createCodexDynamicToolBridge({
+      tools: [tool],
+      signal: new AbortController().signal,
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      tool: "message",
+      arguments: {
+        action: "send",
+        text: "not delivered",
+        provider: "slack",
+        to: "C123",
+      },
+    });
+
+    expect(result).toEqual({
+      success: false,
+      contentItems: [{ type: "inputText", text: "send failed" }],
+    });
+    expect(bridge.telemetry).toMatchObject({
+      didSendViaMessagingTool: false,
+      messagingToolSentTexts: [],
+      messagingToolSentMediaUrls: [],
+      messagingToolSentTargets: [],
+    });
+  });
 });

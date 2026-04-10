@@ -104,6 +104,23 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.assistantTexts).toEqual([]);
   });
 
+  it("preserves sessions_yield detection in attempt results", () => {
+    const params = createParams();
+    const projector = new CodexAppServerEventProjector(params, "thread-1", "turn-1");
+
+    const result = projector.buildResult(
+      {
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        messagingToolSentTargets: [],
+      },
+      { yieldDetected: true },
+    );
+
+    expect(result.yieldDetected).toBe(true);
+  });
+
   it("projects reasoning end, plan updates, compaction state, and tool metadata", async () => {
     const onReasoningStream = vi.fn();
     const onReasoningEnd = vi.fn();
