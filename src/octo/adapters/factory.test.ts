@@ -72,23 +72,52 @@ describe("createAdapter (M2-04)", () => {
     expect(adapter.type).toBe("cli_exec");
   });
 
-  it("throws AdapterError(not_supported) for structured_subagent", () => {
+  it("creates structured_subagent adapter when bridge is provided", () => {
+    const mockBridge = {
+      spawn: async () => ({ runId: "r", sessionKey: "k" }),
+      cancel: async () => {},
+      getHistory: async () => ({ messages: [] }),
+      isAlive: async () => true,
+    };
+    const adapter = createAdapter("structured_subagent", {
+      ...makeDeps(),
+      sessionsSpawnBridge: mockBridge,
+    });
+    expect(adapter).toBeDefined();
+    expect(adapter.type).toBe("structured_subagent");
+  });
+
+  it("throws AdapterError(not_supported) for structured_subagent without bridge", () => {
     expect(() => createAdapter("structured_subagent", makeDeps())).toThrow(AdapterError);
     try {
       createAdapter("structured_subagent", makeDeps());
     } catch (err) {
       expect(err).toBeInstanceOf(AdapterError);
       expect((err as AdapterError).code).toBe("not_supported");
+      expect((err as AdapterError).message).toContain("sessionsSpawnBridge");
     }
   });
 
-  it("throws AdapterError(not_supported) for structured_acp", () => {
+  it("creates structured_acp adapter when bridge is provided", () => {
+    const mockBridge = {
+      spawn: async () => ({ sessionKey: "k" }),
+      steer: async () => {},
+      close: async () => {},
+      isAlive: async () => true,
+    };
+    const adapter = createAdapter("structured_acp", { ...makeDeps(), acpxBridge: mockBridge });
+    expect(adapter).toBeDefined();
+    expect(adapter.type).toBe("structured_acp");
+  });
+
+  it("throws AdapterError(not_supported) for structured_acp without bridge", () => {
     expect(() => createAdapter("structured_acp", makeDeps())).toThrow(AdapterError);
     try {
       createAdapter("structured_acp", makeDeps());
     } catch (err) {
       expect(err).toBeInstanceOf(AdapterError);
       expect((err as AdapterError).code).toBe("not_supported");
+      expect((err as AdapterError).message).toContain("acpxBridge");
     }
   });
 });
