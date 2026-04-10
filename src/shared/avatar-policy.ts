@@ -65,10 +65,10 @@ export function isWorkspaceRelativeAvatarPath(value: string): boolean {
 
 export function isPathWithinRoot(rootDir: string, targetPath: string): boolean {
   const relative = path.relative(rootDir, targetPath);
-  if (relative === "") {
-    return true;
-  }
-  return !relative.startsWith("..") && !path.isAbsolute(relative);
+  return (
+    relative === "" ||
+    (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
+  );
 }
 
 export function looksLikeAvatarPath(value: string): boolean {
