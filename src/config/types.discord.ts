@@ -126,6 +126,38 @@ export type DiscordVoiceAutoJoinConfig = {
   channelId: string;
 };
 
+export type DiscordVoiceCaptureConfig = {
+  /** Minimum audio segment duration in seconds before processing (default: 1.0). */
+  minSegmentSeconds?: number;
+  /** Silence gap in milliseconds that ends a speech segment (default: 1000). */
+  silenceDurationMs?: number;
+  /** Cooldown in milliseconds after TTS playback ends before accepting new speech (default: 2500). */
+  playbackCooldownMs?: number;
+  /** Minimum RMS energy on a 0–32768 scale for a segment to be considered speech (default: 300). */
+  minRmsEnergy?: number;
+};
+
+export type DiscordVoiceWakeWordConfig = {
+  /** Enable wake word gating for voice capture (default: false). */
+  enabled?: boolean;
+  /** Wake word engine to use (default: "openwakeword"). */
+  engine?: "openwakeword";
+  /** Trigger phrases the engine listens for. Falls back to global voicewake triggers if unset. */
+  triggers?: string[];
+  /** Minimum detection confidence 0.0–1.0 (default: 0.7). */
+  confidence?: number;
+  /** Path to the Python interpreter for the sidecar (default: "python3"). */
+  pythonPath?: string;
+  /** Path to a custom openWakeWord model file (.onnx). */
+  modelPath?: string;
+  /** Rolling lookback buffer duration in seconds (default: 1.5). */
+  lookbackSeconds?: number;
+  /** Hard capture timeout in seconds (default: 30). */
+  captureTimeoutSeconds?: number;
+  /** Minimum post-strip transcript length to send to the agent (default: 2). */
+  minCommandLength?: number;
+};
+
 export type DiscordVoiceConfig = {
   /** Enable Discord voice channel conversations (default: true). */
   enabled?: boolean;
@@ -137,6 +169,10 @@ export type DiscordVoiceConfig = {
   decryptionFailureTolerance?: number;
   /** Optional TTS overrides for Discord voice output. */
   tts?: TtsConfig;
+  /** Voice capture and VAD tuning parameters. */
+  capture?: DiscordVoiceCaptureConfig;
+  /** Wake word detection configuration. When enabled, STT is gated behind a trigger phrase. */
+  wakeWord?: DiscordVoiceWakeWordConfig;
 };
 
 export type DiscordExecApprovalConfig = {

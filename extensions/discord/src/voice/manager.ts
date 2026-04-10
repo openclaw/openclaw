@@ -23,15 +23,22 @@ import { formatMention } from "../mentions.js";
 import { normalizeDiscordSlug, resolveDiscordOwnerAccess } from "../monitor/allow-list.js";
 import { formatDiscordUserTag } from "../monitor/format.js";
 import { authorizeDiscordVoiceIngress } from "./access.js";
+import { computeRmsEnergy } from "./audio-utils.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
+import { WakeWordSidecar } from "./wake-word-sidecar.js";
+import { WakeWordSession } from "./wake-word-session.js";
+import type { SidecarDetectionEvent, DiscordVoiceWakeWordConfig } from "./wake-word-types.js";
+import { WAKE_WORD_DEFAULTS } from "./wake-word-types.js";
 
 const require = createRequire(import.meta.url);
 
 const SAMPLE_RATE = 48_000;
 const CHANNELS = 2;
 const BIT_DEPTH = 16;
-const MIN_SEGMENT_SECONDS = 0.35;
-const SILENCE_DURATION_MS = 1_000;
+const DEFAULT_MIN_SEGMENT_SECONDS = 1.0;
+const DEFAULT_SILENCE_DURATION_MS = 1_000;
+const DEFAULT_PLAYBACK_COOLDOWN_MS = 2_500;
+const DEFAULT_MIN_RMS_ENERGY = 300;
 const PLAYBACK_READY_TIMEOUT_MS = 15_000;
 const SPEAKING_READY_TIMEOUT_MS = 60_000;
 const DECRYPT_FAILURE_WINDOW_MS = 30_000;
@@ -67,6 +74,9 @@ type VoiceSessionEntry = {
   decryptFailureCount: number;
   lastDecryptFailureAt: number;
   decryptRecoveryInFlight: boolean;
+  lastPlaybackEndedAt: number;
+  /** Per-user wake word sessions (keyed by Discord user ID). Only populated when wake word is enabled. */
+  wakeWordSessions?: Map<string, WakeWordSession>;
   stop: () => void;
 };
 
@@ -240,6 +250,13 @@ export class DiscordVoiceManager {
   private readonly voiceEnabled: boolean;
   private autoJoinTask: Promise<void> | null = null;
   private readonly ownerAllowFrom: string[];
+  private readonly allowDangerousNameMatching: boolean;
+  private readonly minSegmentSeconds: number;
+  private readonly silenceDurationMs: number;
+  private readonly playbackCooldownMs: number;
+  private readonly minRmsEnergy: number;
+  private readonly wakeWordConfig: DiscordVoiceWakeWordConfig | undefined;
+  private wakeWordSidecar: WakeWordSidecar | null = null;
   private readonly speakerContextCache = new Map<
     string,
     {
@@ -266,6 +283,51 @@ export class DiscordVoiceManager {
     this.voiceEnabled = params.discordConfig.voice?.enabled !== false;
     this.ownerAllowFrom =
       params.discordConfig.allowFrom ?? params.discordConfig.dm?.allowFrom ?? [];
+    this.allowDangerousNameMatching = isDangerousNameMatchingEnabled(params.discordConfig);
+    const capture = params.discordConfig.voice?.capture;
+    this.minSegmentSeconds = capture?.minSegmentSeconds ?? DEFAULT_MIN_SEGMENT_SECONDS;
+    this.silenceDurationMs = capture?.silenceDurationMs ?? DEFAULT_SILENCE_DURATION_MS;
+    this.playbackCooldownMs = capture?.playbackCooldownMs ?? DEFAULT_PLAYBACK_COOLDOWN_MS;
+    this.minRmsEnergy = capture?.minRmsEnergy ?? DEFAULT_MIN_RMS_ENERGY;
+    this.wakeWordConfig = params.discordConfig.voice?.wakeWord;
+  }
+
+  private isWakeWordEnabled(): boolean {
+    return this.wakeWordConfig?.enabled === true;
+  }
+
+  private ensureWakeWordSidecar(): WakeWordSidecar {
+    if (this.wakeWordSidecar) {
+      return this.wakeWordSidecar;
+    }
+    const cfg = this.wakeWordConfig!;
+    const triggers = cfg.triggers ?? ["openclaw", "claude", "computer"];
+    this.wakeWordSidecar = new WakeWordSidecar({
+      pythonPath: cfg.pythonPath,
+      triggers,
+      confidence: cfg.confidence,
+      modelPath: cfg.modelPath,
+      onDetection: (event: SidecarDetectionEvent) => {
+        this.handleWakeWordDetection(event);
+      },
+    });
+    void this.wakeWordSidecar.start();
+    return this.wakeWordSidecar;
+  }
+
+  private handleWakeWordDetection(event: SidecarDetectionEvent): void {
+    // Route detection to all active wake word sessions.
+    // In Phase 1 (single user), typically only one session is active per guild.
+    for (const entry of this.sessions.values()) {
+      if (!entry.wakeWordSessions) {
+        continue;
+      }
+      for (const session of entry.wakeWordSessions.values()) {
+        if (session.getState() === "listening") {
+          session.handleDetection(event);
+        }
+      }
+    }
   }
 
   setBotUserId(id?: string) {
@@ -450,6 +512,8 @@ export class DiscordVoiceManager {
       decryptFailureCount: 0,
       lastDecryptFailureAt: 0,
       decryptRecoveryInFlight: false,
+      lastPlaybackEndedAt: 0,
+      wakeWordSessions: this.isWakeWordEnabled() ? new Map() : undefined,
       stop: () => {
         if (speakingHandler) {
           connection.receiver.speaking.off("start", speakingHandler);
@@ -516,6 +580,12 @@ export class DiscordVoiceManager {
     if (params.channelId && params.channelId !== entry.channelId) {
       return { ok: false, message: "Not connected to that voice channel." };
     }
+    if (entry.wakeWordSessions) {
+      for (const session of entry.wakeWordSessions.values()) {
+        session.destroy();
+      }
+      entry.wakeWordSessions.clear();
+    }
     entry.stop();
     this.sessions.delete(guildId);
     logVoiceVerbose(`leave: disconnected from guild ${guildId} channel ${entry.channelId}`);
@@ -529,9 +599,19 @@ export class DiscordVoiceManager {
 
   async destroy(): Promise<void> {
     for (const entry of this.sessions.values()) {
+      if (entry.wakeWordSessions) {
+        for (const session of entry.wakeWordSessions.values()) {
+          session.destroy();
+        }
+        entry.wakeWordSessions.clear();
+      }
       entry.stop();
     }
     this.sessions.clear();
+    if (this.wakeWordSidecar) {
+      this.wakeWordSidecar.destroy();
+      this.wakeWordSidecar = null;
+    }
   }
 
   private enqueueProcessing(entry: VoiceSessionEntry, task: () => Promise<void>) {
@@ -554,19 +634,40 @@ export class DiscordVoiceManager {
       return;
     }
 
+    // Post-playback cooldown: suppress events that are likely the bot's own
+    // TTS output being picked up by nearby microphones.
+    if (
+      this.playbackCooldownMs > 0 &&
+      entry.lastPlaybackEndedAt > 0 &&
+      Date.now() - entry.lastPlaybackEndedAt < this.playbackCooldownMs
+    ) {
+      logVoiceVerbose(
+        `capture suppressed (playback cooldown): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+      );
+      return;
+    }
+
+    if (this.isWakeWordEnabled() && entry.wakeWordSessions) {
+      await this.handleSpeakingStartWakeWord(entry, userId);
+    } else {
+      await this.handleSpeakingStartLegacy(entry, userId);
+    }
+  }
+
+  /**
+   * Legacy speaking handler: triggers STT on every speaking event (no wake word gating).
+   */
+  private async handleSpeakingStartLegacy(entry: VoiceSessionEntry, userId: string) {
     entry.activeSpeakers.add(userId);
     logVoiceVerbose(
       `capture start: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
     );
     const voiceSdk = loadDiscordVoiceSdk();
-    if (entry.player.state.status === voiceSdk.AudioPlayerStatus.Playing) {
-      entry.player.stop(true);
-    }
 
     const stream = entry.connection.receiver.subscribe(userId, {
       end: {
         behavior: voiceSdk.EndBehaviorType.AfterSilence,
-        duration: SILENCE_DURATION_MS,
+        duration: this.silenceDurationMs,
       },
     });
     stream.on("error", (err) => {
@@ -582,15 +683,36 @@ export class DiscordVoiceManager {
         return;
       }
       this.resetDecryptFailureState(entry);
+
+      // RMS energy gate: discard low-energy segments (noise, music).
+      const rmsEnergy = computeRmsEnergy(pcm);
+      if (rmsEnergy < this.minRmsEnergy) {
+        logVoiceVerbose(
+          `capture below energy threshold (rms=${rmsEnergy.toFixed(0)}, min=${this.minRmsEnergy}): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+        );
+        return;
+      }
+
       const { path: wavPath, durationSeconds } = await writeWavFile(pcm);
-      if (durationSeconds < MIN_SEGMENT_SECONDS) {
+      if (durationSeconds < this.minSegmentSeconds) {
         logVoiceVerbose(
           `capture too short (${durationSeconds.toFixed(2)}s): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
         );
         return;
       }
+
+      // Barge-in: only interrupt current playback AFTER the segment has
+      // passed both the energy gate and duration check.  This prevents
+      // background noise from cutting off the bot's TTS output.
+      if (entry.player.state.status === voiceSdk.AudioPlayerStatus.Playing) {
+        logVoiceVerbose(
+          `barge-in: stopping playback for speech from user ${userId}`,
+        );
+        entry.player.stop(true);
+      }
+
       logVoiceVerbose(
-        `capture ready (${durationSeconds.toFixed(2)}s): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+        `capture ready (${durationSeconds.toFixed(2)}s, rms=${rmsEnergy.toFixed(0)}): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
       );
       this.enqueueProcessing(entry, async () => {
         await this.processSegment({ entry, wavPath, userId, durationSeconds });
@@ -598,6 +720,220 @@ export class DiscordVoiceManager {
     } finally {
       entry.activeSpeakers.delete(userId);
     }
+  }
+
+  /**
+   * Wake word speaking handler: subscribes with EndBehaviorType.Manual for
+   * continuous listening. Decoded PCM chunks are routed through a WakeWordSession
+   * which feeds 16kHz audio to the sidecar and manages the state machine.
+   */
+  private async handleSpeakingStartWakeWord(entry: VoiceSessionEntry, userId: string) {
+    // If this user already has an active wake word session, skip.
+    if (entry.wakeWordSessions!.has(userId)) {
+      return;
+    }
+
+    entry.activeSpeakers.add(userId);
+    logVoiceVerbose(
+      `wake word capture start: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+    );
+
+    const sidecar = this.ensureWakeWordSidecar();
+    const voiceSdk = loadDiscordVoiceSdk();
+    const cfg = this.wakeWordConfig!;
+
+    const session = new WakeWordSession({
+      sidecar,
+      config: {
+        lookbackSeconds: cfg.lookbackSeconds,
+        silenceDurationMs: this.silenceDurationMs,
+        minRmsEnergy: this.minRmsEnergy,
+        captureTimeoutSeconds: cfg.captureTimeoutSeconds,
+        minCommandLength: cfg.minCommandLength,
+        triggers: cfg.triggers ?? ["openclaw", "claude", "computer"],
+      },
+      callbacks: {
+        onUtterance: (pcm: Buffer) => {
+          this.handleWakeWordUtterance(entry, userId, pcm, session);
+        },
+        onWakeDetected: () => {
+          // Barge-in on wake word detection (not ambient speech).
+          if (entry.player.state.status === voiceSdk.AudioPlayerStatus.Playing) {
+            logVoiceVerbose(
+              `wake barge-in: stopping playback for wake word from user ${userId}`,
+            );
+            entry.player.stop(true);
+          }
+        },
+      },
+    });
+
+    entry.wakeWordSessions!.set(userId, session);
+
+    // Subscribe with Manual end behavior for continuous listening.
+    const stream = entry.connection.receiver.subscribe(userId, {
+      end: {
+        behavior: voiceSdk.EndBehaviorType.Manual,
+      },
+    });
+    stream.on("error", (err) => {
+      this.handleReceiveError(entry, err);
+    });
+
+    // Create a per-chunk opus decoder for the continuous stream.
+    const selected = createOpusDecoder();
+    if (!selected) {
+      entry.wakeWordSessions!.delete(userId);
+      entry.activeSpeakers.delete(userId);
+      return;
+    }
+
+    stream.on("data", (chunk: Buffer) => {
+      if (!chunk || chunk.length === 0) {
+        return;
+      }
+      try {
+        const decoded = selected.decoder.decode(chunk);
+        if (decoded && decoded.length > 0) {
+          session.feedAudio(Buffer.from(decoded));
+        }
+      } catch {
+        // Decode errors are expected occasionally; skip the chunk.
+      }
+    });
+
+    stream.on("end", () => {
+      logVoiceVerbose(
+        `wake word stream ended: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+      );
+      session.destroy();
+      entry.wakeWordSessions!.delete(userId);
+      entry.activeSpeakers.delete(userId);
+    });
+  }
+
+  /**
+   * Called by WakeWordSession when a complete utterance is ready for STT.
+   */
+  private handleWakeWordUtterance(
+    entry: VoiceSessionEntry,
+    userId: string,
+    pcm: Buffer,
+    session: WakeWordSession,
+  ) {
+    this.enqueueProcessing(entry, async () => {
+      try {
+        const { path: wavPath, durationSeconds } = await writeWavFile(pcm);
+        logVoiceVerbose(
+          `wake word utterance (${durationSeconds.toFixed(2)}s): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+        );
+
+        const transcript = await transcribeAudio({
+          cfg: this.params.cfg,
+          agentId: entry.route.agentId,
+          filePath: wavPath,
+        });
+        if (!transcript) {
+          logVoiceVerbose(
+            `wake word transcription empty: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+          );
+          session.returnToListening();
+          return;
+        }
+
+        // Strip the wake word from the transcript.
+        const stripped = session.stripWakeWord(transcript);
+
+        // Empty command guard: if post-strip text is too short, discard.
+        if (!session.isCommandValid(stripped)) {
+          logVoiceVerbose(
+            `wake word command too short after stripping (${JSON.stringify(stripped)}): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+          );
+          session.returnToListening();
+          return;
+        }
+
+        logVoiceVerbose(
+          `wake word command: "${stripped}" (${stripped.length} chars): guild ${entry.guildId} channel ${entry.channelId}`,
+        );
+
+        // Use the stripped transcript for agent invocation.
+        const speaker = await this.resolveSpeakerContext(entry.guildId, userId);
+        const prompt = speaker.label ? `${speaker.label}: ${stripped}` : stripped;
+
+        const result = await agentCommandFromIngress(
+          {
+            message: prompt,
+            sessionKey: entry.route.sessionKey,
+            agentId: entry.route.agentId,
+            messageChannel: "discord",
+            senderIsOwner: speaker.senderIsOwner,
+            allowModelOverride: false,
+            deliver: false,
+          },
+          this.params.runtime,
+        );
+
+        const replyText = (result.payloads ?? [])
+          .map((payload) => payload.text)
+          .filter((text) => typeof text === "string" && text.trim())
+          .join("\n")
+          .trim();
+
+        if (!replyText) {
+          logVoiceVerbose(
+            `wake word reply empty: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+          );
+          session.returnToListening();
+          return;
+        }
+
+        // TTS playback — same as legacy path.
+        const { cfg: ttsCfg, resolved: ttsConfig } = resolveVoiceTtsConfig({
+          cfg: this.params.cfg,
+          override: this.params.discordConfig.voice?.tts,
+        });
+        const directive = parseTtsDirectives(replyText, ttsConfig.modelOverrides, {
+          cfg: ttsCfg,
+          providerConfigs: ttsConfig.providerConfigs,
+        });
+        const speakText = directive.overrides.ttsText ?? directive.cleanedText.trim();
+        if (!speakText) {
+          session.returnToListening();
+          return;
+        }
+
+        const ttsResult = await textToSpeech({
+          text: speakText,
+          cfg: ttsCfg,
+          channel: "discord",
+          overrides: directive.overrides,
+        });
+        if (!ttsResult.success || !ttsResult.audioPath) {
+          logger.warn(`discord voice: TTS failed: ${ttsResult.error ?? "unknown error"}`);
+          session.returnToListening();
+          return;
+        }
+
+        this.enqueuePlayback(entry, async () => {
+          const voiceSdk = loadDiscordVoiceSdk();
+          const resource = voiceSdk.createAudioResource(ttsResult.audioPath!);
+          entry.player.play(resource);
+          try {
+            await voiceSdk
+              .entersState(entry.player, voiceSdk.AudioPlayerStatus.Playing, PLAYBACK_READY_TIMEOUT_MS)
+              .catch(() => undefined);
+            await voiceSdk
+              .entersState(entry.player, voiceSdk.AudioPlayerStatus.Idle, SPEAKING_READY_TIMEOUT_MS)
+              .catch(() => undefined);
+          } finally {
+            entry.lastPlaybackEndedAt = Date.now();
+          }
+        });
+      } finally {
+        session.returnToListening();
+      }
+    });
   }
 
   private async processSegment(params: {
@@ -724,12 +1060,17 @@ export class DiscordVoiceManager {
       const voiceSdk = loadDiscordVoiceSdk();
       const resource = voiceSdk.createAudioResource(audioPath);
       entry.player.play(resource);
-      await voiceSdk
-        .entersState(entry.player, voiceSdk.AudioPlayerStatus.Playing, PLAYBACK_READY_TIMEOUT_MS)
-        .catch(() => undefined);
-      await voiceSdk
-        .entersState(entry.player, voiceSdk.AudioPlayerStatus.Idle, SPEAKING_READY_TIMEOUT_MS)
-        .catch(() => undefined);
+      try {
+        await voiceSdk
+          .entersState(entry.player, voiceSdk.AudioPlayerStatus.Playing, PLAYBACK_READY_TIMEOUT_MS)
+          .catch(() => undefined);
+        await voiceSdk
+          .entersState(entry.player, voiceSdk.AudioPlayerStatus.Idle, SPEAKING_READY_TIMEOUT_MS)
+          .catch(() => undefined);
+      } finally {
+        // Record when playback finished (or timed out) for cooldown suppression.
+        entry.lastPlaybackEndedAt = Date.now();
+      }
       logVoiceVerbose(`playback done: guild ${entry.guildId} channel ${entry.channelId}`);
     });
   }

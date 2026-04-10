@@ -485,6 +485,31 @@ const DiscordVoiceAutoJoinSchema = z
   })
   .strict();
 
+const DiscordVoiceCaptureSchema = z
+  .object({
+    minSegmentSeconds: z.number().min(0.1).max(10).optional(),
+    silenceDurationMs: z.number().int().min(300).max(5000).optional(),
+    playbackCooldownMs: z.number().int().min(0).max(30000).optional(),
+    minRmsEnergy: z.number().int().min(0).max(32768).optional(),
+  })
+  .strict()
+  .optional();
+
+const DiscordVoiceWakeWordSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    engine: z.enum(["openwakeword"]).optional(),
+    triggers: z.array(z.string().min(1)).optional(),
+    confidence: z.number().min(0).max(1).optional(),
+    pythonPath: z.string().optional(),
+    modelPath: z.string().optional(),
+    lookbackSeconds: z.number().min(0.5).max(5).optional(),
+    captureTimeoutSeconds: z.number().min(5).max(120).optional(),
+    minCommandLength: z.number().int().min(1).max(100).optional(),
+  })
+  .strict()
+  .optional();
+
 const DiscordVoiceSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -492,6 +517,8 @@ const DiscordVoiceSchema = z
     daveEncryption: z.boolean().optional(),
     decryptionFailureTolerance: z.number().int().min(0).optional(),
     tts: TtsConfigSchema.optional(),
+    capture: DiscordVoiceCaptureSchema,
+    wakeWord: DiscordVoiceWakeWordSchema,
   })
   .strict()
   .optional();

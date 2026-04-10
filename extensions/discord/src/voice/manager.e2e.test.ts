@@ -533,4 +533,124 @@ describe("DiscordVoiceManager", () => {
     expect(client.fetchGuild).toHaveBeenCalledWith("g1");
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
   });
+
+  describe("voice capture filtering", () => {
+    type SessionEntry = {
+      lastPlaybackEndedAt: number;
+      activeSpeakers: Set<string>;
+      player: { state: { status: string }; stop: ReturnType<typeof vi.fn> };
+      connection: ReturnType<typeof createConnectionMock>;
+      guildId: string;
+      channelId: string;
+    };
+
+    const getSession = (
+      manager: InstanceType<typeof managerModule.DiscordVoiceManager>,
+    ): SessionEntry =>
+      (manager as unknown as { sessions: Map<string, SessionEntry> }).sessions.get(
+        "g1",
+      ) as SessionEntry;
+
+    const callHandleSpeakingStart = async (
+      manager: InstanceType<typeof managerModule.DiscordVoiceManager>,
+      userId: string,
+    ) =>
+      await (
+        manager as unknown as {
+          handleSpeakingStart: (entry: SessionEntry, userId: string) => Promise<void>;
+        }
+      ).handleSpeakingStart(getSession(manager), userId);
+
+    it("suppresses speech events during playback cooldown", async () => {
+      const manager = createManager({
+        voice: { capture: { playbackCooldownMs: 5000 } },
+      });
+      await manager.join({ guildId: "g1", channelId: "1001" });
+
+      const session = getSession(manager);
+      session.lastPlaybackEndedAt = Date.now();
+
+      await callHandleSpeakingStart(manager, "u-other");
+
+      // The receiver.subscribe should NOT have been called because
+      // we're within the cooldown window.
+      expect(session.connection.receiver.subscribe).not.toHaveBeenCalled();
+    });
+
+    it("allows speech events after cooldown expires", async () => {
+      const manager = createManager({
+        voice: { capture: { playbackCooldownMs: 100 } },
+      });
+      await manager.join({ guildId: "g1", channelId: "1001" });
+
+      const session = getSession(manager);
+      session.lastPlaybackEndedAt = Date.now() - 200;
+
+      await callHandleSpeakingStart(manager, "u-other");
+
+      // Cooldown has expired, so the receiver should subscribe to the audio.
+      expect(session.connection.receiver.subscribe).toHaveBeenCalledWith(
+        "u-other",
+        expect.any(Object),
+      );
+    });
+
+    it("suppresses loud noise during playback cooldown", async () => {
+      const manager = createManager({
+        voice: {
+          capture: { playbackCooldownMs: 5000, minRmsEnergy: 50 },
+        },
+      });
+      await manager.join({ guildId: "g1", channelId: "1001" });
+
+      const session = getSession(manager);
+      session.lastPlaybackEndedAt = Date.now();
+
+      await callHandleSpeakingStart(manager, "u-other");
+
+      // Even though energy threshold is very low, cooldown takes
+      // precedence and blocks the event entirely.
+      expect(session.connection.receiver.subscribe).not.toHaveBeenCalled();
+    });
+
+    it("reads capture config for minSegmentSeconds", () => {
+      const manager = createManager({
+        voice: { capture: { minSegmentSeconds: 2.5 } },
+      });
+      const resolved = (
+        manager as unknown as { minSegmentSeconds: number }
+      ).minSegmentSeconds;
+      expect(resolved).toBe(2.5);
+    });
+
+    it("uses default capture config when unset", () => {
+      const manager = createManager();
+      const resolved = (
+        manager as unknown as {
+          minSegmentSeconds: number;
+          silenceDurationMs: number;
+          playbackCooldownMs: number;
+          minRmsEnergy: number;
+        }
+      );
+      expect(resolved.minSegmentSeconds).toBe(1.0);
+      expect(resolved.silenceDurationMs).toBe(1000);
+      expect(resolved.playbackCooldownMs).toBe(2500);
+      expect(resolved.minRmsEnergy).toBe(300);
+    });
+
+    it("does not barge-in when player is idle", async () => {
+      const manager = createManager({
+        voice: { capture: { playbackCooldownMs: 0, minRmsEnergy: 0 } },
+      });
+      await manager.join({ guildId: "g1", channelId: "1001" });
+
+      const session = getSession(manager);
+      session.player.state.status = "idle";
+
+      await callHandleSpeakingStart(manager, "u-other");
+
+      expect(session.player.stop).not.toHaveBeenCalled();
+    });
+  });
 });

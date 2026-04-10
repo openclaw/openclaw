@@ -137,6 +137,46 @@ export const discordChannelConfigUiHints = {
     label: "Discord Voice Text-to-Speech",
     help: "Optional TTS overrides for Discord voice playback (merged with messages.tts).",
   },
+  "voice.wakeWord": {
+    label: "Discord Voice Wake Word",
+    help: "Wake word detection configuration. When enabled, STT is gated behind a trigger phrase (e.g. 'hey calvin').",
+  },
+  "voice.wakeWord.enabled": {
+    label: "Discord Wake Word Enabled",
+    help: "Enable wake word gating for voice capture (default: false). When enabled, the bot only processes speech that begins with a configured trigger phrase.",
+  },
+  "voice.wakeWord.engine": {
+    label: "Discord Wake Word Engine",
+    help: 'Wake word detection engine (default: "openwakeword"). Requires a Python 3.9+ sidecar with openwakeword installed.',
+  },
+  "voice.wakeWord.triggers": {
+    label: "Discord Wake Word Triggers",
+    help: 'Trigger phrases the engine listens for (e.g. ["hey calvin", "openclaw"]). Falls back to global voicewake triggers if unset.',
+  },
+  "voice.wakeWord.confidence": {
+    label: "Discord Wake Word Confidence",
+    help: "Minimum detection confidence threshold 0.0–1.0 (default: 0.7). Lower values increase sensitivity but may cause false positives.",
+  },
+  "voice.wakeWord.pythonPath": {
+    label: "Discord Wake Word Python Path",
+    help: 'Path to the Python interpreter for the openWakeWord sidecar (default: "python3").',
+  },
+  "voice.wakeWord.modelPath": {
+    label: "Discord Wake Word Model Path",
+    help: "Path to a custom openWakeWord model file (.onnx). If unset, built-in models are used.",
+  },
+  "voice.wakeWord.lookbackSeconds": {
+    label: "Discord Wake Word Lookback",
+    help: "Rolling lookback buffer duration in seconds (default: 1.5). Compensates for detection latency so the start of the command is not lost.",
+  },
+  "voice.wakeWord.captureTimeoutSeconds": {
+    label: "Discord Wake Word Capture Timeout",
+    help: "Hard timeout in seconds for utterance capture after wake word detection (default: 30). Partial utterances are sent to STT when hit.",
+  },
+  "voice.wakeWord.minCommandLength": {
+    label: "Discord Wake Word Min Command Length",
+    help: "Minimum post-strip transcript length to send to the agent (default: 2). Shorter transcripts are discarded.",
+  },
   "pluralkit.enabled": {
     label: "Discord PluralKit Enabled",
     help: "Resolve PluralKit proxied messages and treat system members as distinct senders.",
