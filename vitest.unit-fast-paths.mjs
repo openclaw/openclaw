@@ -73,6 +73,10 @@ const disqualifyingPatterns = [
     pattern: /\bvi\.(?:mock|doMock|unmock|doUnmock|importActual|resetModules)\s*\(/u,
   },
   {
+    code: "module-mocking-helper",
+    pattern: /runtime-module-mocks/u,
+  },
+  {
     code: "vitest-mock-api",
     pattern: /\bvi\b/u,
   },

@@ -77,7 +77,7 @@ function parseExecDirectiveArgs(raw: string): Omit<
     if (idx === -1) {
       return null;
     }
-    const key = token.slice(0, idx).trim().toLowerCase();
+    const key = normalizeOptionalLowercaseString(token.slice(0, idx));
     const value = token.slice(idx + 1).trim();
     if (!key) {
       return null;

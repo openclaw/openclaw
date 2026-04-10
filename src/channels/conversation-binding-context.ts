@@ -153,6 +153,8 @@ export function resolveConversationBindingContext(
     senderId: normalizeOptionalString(params.senderId),
     sessionKey: normalizeOptionalString(params.sessionKey),
     parentSessionKey: normalizeOptionalString(params.parentSessionKey),
+    from: normalizeOptionalString(params.from),
+    chatType: normalizeOptionalString(params.chatType),
     originatingTo: params.originatingTo ?? undefined,
     commandTo: params.commandTo ?? undefined,
     fallbackTo: params.fallbackTo ?? undefined,

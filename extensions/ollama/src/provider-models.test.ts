@@ -41,7 +41,7 @@ describe("ollama provider models", () => {
   });
 
   it("sets models with vision capability from /api/show capabilities", async () => {
-    const models: OllamaTagModel[] = [{ name: "kimi-k2.5:cloud" }, { name: "glm-5:cloud" }];
+    const models: OllamaTagModel[] = [{ name: "kimi-k2.5:cloud" }, { name: "glm-5.1:cloud" }];
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = requestUrl(input);
       if (!url.endsWith("/api/show")) {
@@ -54,7 +54,7 @@ describe("ollama provider models", () => {
           capabilities: ["vision", "thinking", "completion", "tools"],
         });
       }
-      if (body.name === "glm-5:cloud") {
+      if (body.name === "glm-5.1:cloud") {
         return jsonResponse({
           model_info: { "glm5.context_length": 202752 },
           capabilities: ["thinking", "completion", "tools"],
@@ -73,7 +73,7 @@ describe("ollama provider models", () => {
         capabilities: ["vision", "thinking", "completion", "tools"],
       },
       {
-        name: "glm-5:cloud",
+        name: "glm-5.1:cloud",
         contextWindow: 202752,
         capabilities: ["thinking", "completion", "tools"],
       },
@@ -88,7 +88,7 @@ describe("ollama provider models", () => {
     ]);
     expect(visionModel.input).toEqual(["text", "image"]);
 
-    const textModel = buildOllamaModelDefinition("glm-5:cloud", 202752, ["completion", "tools"]);
+    const textModel = buildOllamaModelDefinition("glm-5.1:cloud", 202752, ["completion", "tools"]);
     expect(textModel.input).toEqual(["text"]);
 
     const noCapabilities = buildOllamaModelDefinition("unknown-model", 65536);

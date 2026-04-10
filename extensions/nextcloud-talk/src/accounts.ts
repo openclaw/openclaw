@@ -1,6 +1,9 @@
 import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/channel-core";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import {
   createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
@@ -11,7 +14,7 @@ import { normalizeResolvedSecretInputString } from "./secret-input.js";
 import type { CoreConfig, NextcloudTalkAccountConfig } from "./types.js";
 
 function isTruthyEnvValue(value?: string): boolean {
-  const normalized = normalizeOptionalString(value)?.toLowerCase() ?? "";
+  const normalized = normalizeLowercaseStringOrEmpty(value);
   return normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on";
 }
 

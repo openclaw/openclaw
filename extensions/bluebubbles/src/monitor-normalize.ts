@@ -589,7 +589,7 @@ export function parseTapbackText(params: {
   quotedText: string;
 } | null {
   const trimmed = params.text.trim();
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   if (!trimmed) {
     return null;
   }

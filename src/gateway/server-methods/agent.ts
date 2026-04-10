@@ -28,7 +28,10 @@ import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { createRunningTaskRun } from "../../tasks/task-executor.js";
 import {
   normalizeDeliveryContext,
@@ -429,7 +432,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
     }
 
-    const agentIdRaw = typeof request.agentId === "string" ? request.agentId.trim() : "";
+    const agentIdRaw = normalizeOptionalString(request.agentId) ?? "";
     const agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : undefined;
     if (agentId) {
       const knownAgents = listAgentIds(cfg);
@@ -446,10 +449,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
     }
 
-    const requestedSessionKeyRaw =
-      typeof request.sessionKey === "string" && request.sessionKey.trim()
-        ? request.sessionKey.trim()
-        : undefined;
+    const requestedSessionKeyRaw = normalizeOptionalString(request.sessionKey);
     if (
       requestedSessionKeyRaw &&
       classifySessionKeyShape(requestedSessionKeyRaw) === "malformed_agent"
@@ -502,7 +502,8 @@ export const agentHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      const resetReason = resetCommandMatch[1]?.toLowerCase() === "new" ? "new" : "reset";
+      const resetReason =
+        normalizeOptionalLowercaseString(resetCommandMatch[1]) === "new" ? "new" : "reset";
       const resetResult = await runSessionResetFromAgent({
         key: requestedSessionKey,
         reason: resetReason,
@@ -513,7 +514,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
       requestedSessionKey = resetResult.key;
       resolvedSessionId = resetResult.sessionId ?? resolvedSessionId;
-      const postResetMessage = resetCommandMatch[2]?.trim() ?? "";
+      const postResetMessage = normalizeOptionalString(resetCommandMatch[2]) ?? "";
       if (postResetMessage) {
         message = postResetMessage;
       } else {
@@ -540,7 +541,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       isNewSession = !entry;
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
-      const labelValue = request.label?.trim() || entry?.label;
+      const labelValue = normalizeOptionalString(request.label) || entry?.label;
       const sessionAgent = resolveAgentIdFromSessionKey(canonicalKey);
       spawnedByValue = canonicalizeSpawnedByForAgent(cfg, sessionAgent, entry?.spawnedBy);
       let inheritedGroup:
@@ -863,8 +864,8 @@ export const agentHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = params;
-    const agentIdRaw = typeof p.agentId === "string" ? p.agentId.trim() : "";
-    const sessionKeyRaw = typeof p.sessionKey === "string" ? p.sessionKey.trim() : "";
+    const agentIdRaw = normalizeOptionalString(p.agentId) ?? "";
+    const sessionKeyRaw = normalizeOptionalString(p.sessionKey) ?? "";
     let agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : undefined;
     if (sessionKeyRaw) {
       if (classifySessionKeyShape(sessionKeyRaw) === "malformed_agent") {

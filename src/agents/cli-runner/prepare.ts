@@ -135,15 +135,17 @@ export async function prepareCliRunContext(
       : undefined,
     warn: (message) => cliBackendLog.warn(message),
   });
-  const reusableCliSession = resolveCliSessionReuse({
-    binding:
-      params.cliSessionBinding ??
-      (params.cliSessionId ? { sessionId: params.cliSessionId } : undefined),
-    authProfileId: params.authProfileId,
-    authEpoch,
-    extraSystemPromptHash,
-    mcpConfigHash: preparedBackend.mcpConfigHash,
-  });
+  const reusableCliSession = params.cliSessionBinding
+    ? resolveCliSessionReuse({
+        binding: params.cliSessionBinding,
+        authProfileId: params.authProfileId,
+        authEpoch,
+        extraSystemPromptHash,
+        mcpConfigHash: preparedBackend.mcpConfigHash,
+      })
+    : params.cliSessionId
+      ? { sessionId: params.cliSessionId }
+      : {};
   if (reusableCliSession.invalidatedReason) {
     cliBackendLog.info(
       `cli session reset: provider=${params.provider} reason=${reusableCliSession.invalidatedReason}`,

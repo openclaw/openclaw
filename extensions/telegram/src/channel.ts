@@ -21,7 +21,6 @@ import {
   resolveOutboundSendDep,
   type OutboundSendDeps,
 } from "openclaw/plugin-sdk/outbound-runtime";
-import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 import {
   buildOutboundBaseSessionKey,
   normalizeOutboundThreadId,
@@ -32,7 +31,10 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { resolveTelegramAccount, type ResolvedTelegramAccount } from "./accounts.js";
 import { resolveTelegramAutoThreadId } from "./action-threading.js";
 import { lookupTelegramChatId } from "./api-fetch.js";
@@ -54,6 +56,7 @@ import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import * as monitorModule from "./monitor.js";
 import { looksLikeTelegramTargetId, normalizeTelegramMessagingTarget } from "./normalize.js";
 import { sendTelegramPayloadMessages } from "./outbound-adapter.js";
+import { telegramOutboundBaseAdapter } from "./outbound-base.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
 import type { TelegramProbe } from "./probe.js";
 import * as probeModule from "./probe.js";
@@ -273,15 +276,18 @@ function targetsMatchTelegramReplySuppression(params: {
   const origin = parseTelegramTarget(params.originTarget);
   const target = parseTelegramTarget(params.targetKey);
   const originThreadId =
-    origin.messageThreadId != null && String(origin.messageThreadId).trim()
-      ? String(origin.messageThreadId).trim()
+    origin.messageThreadId != null && normalizeOptionalString(String(origin.messageThreadId))
+      ? normalizeOptionalString(String(origin.messageThreadId))
       : undefined;
   const targetThreadId =
-    params.targetThreadId?.trim() ||
-    (target.messageThreadId != null && String(target.messageThreadId).trim()
-      ? String(target.messageThreadId).trim()
+    normalizeOptionalString(params.targetThreadId) ||
+    (target.messageThreadId != null && normalizeOptionalString(String(target.messageThreadId))
+      ? normalizeOptionalString(String(target.messageThreadId))
       : undefined);
-  if (origin.chatId.trim().toLowerCase() !== target.chatId.trim().toLowerCase()) {
+  if (
+    normalizeOptionalLowercaseString(origin.chatId) !==
+    normalizeOptionalLowercaseString(target.chatId)
+  ) {
     return false;
   }
   if (originThreadId && targetThreadId) {
@@ -298,8 +304,8 @@ function resolveTelegramCommandConversation(params: {
 }) {
   const chatId = [params.originatingTo, params.commandTo, params.fallbackTo]
     .map((candidate) => {
-      const trimmed = candidate?.trim();
-      return trimmed ? parseTelegramTarget(trimmed).chatId.trim() : "";
+      const trimmed = normalizeOptionalString(candidate) ?? "";
+      return trimmed ? (normalizeOptionalString(parseTelegramTarget(trimmed).chatId) ?? "") : "";
     })
     .find((candidate) => candidate.length > 0);
   if (!chatId) {
@@ -325,12 +331,13 @@ function resolveTelegramInboundConversation(params: {
   conversationId?: string;
   threadId?: string | number;
 }) {
-  const rawTarget = params.to?.trim() || params.conversationId?.trim() || "";
+  const rawTarget =
+    normalizeOptionalString(params.to) ?? normalizeOptionalString(params.conversationId) ?? "";
   if (!rawTarget) {
     return null;
   }
   const parsedTarget = parseTelegramTarget(rawTarget);
-  const chatId = parsedTarget.chatId.trim();
+  const chatId = normalizeOptionalString(parsedTarget.chatId) ?? "";
   if (!chatId) {
     return null;
   }
@@ -408,7 +415,7 @@ function shouldStripTelegramThreadFromAnnounceOrigin(params: {
     threadId?: string | number;
   };
 }): boolean {
-  const requesterChannel = params.requester.channel?.trim().toLowerCase();
+  const requesterChannel = normalizeOptionalLowercaseString(params.requester.channel);
   if (requesterChannel && requesterChannel !== "telegram") {
     return true;
   }
@@ -893,6 +900,7 @@ export const telegramPlugin = createChatChannelPlugin({
           accountId: account.accountId,
           config: ctx.cfg,
           runtime: ctx.runtime,
+          channelRuntime: ctx.channelRuntime,
           abortSignal: ctx.abortSignal,
           useWebhook: Boolean(account.config.webhookUrl),
           webhookUrl: account.config.webhookUrl,
@@ -990,11 +998,7 @@ export const telegramPlugin = createChatChannelPlugin({
   },
   outbound: {
     base: {
-      deliveryMode: "direct",
-      chunker: chunkMarkdownText,
-      chunkerMode: "markdown",
-      textChunkLimit: 4000,
-      pollMaxOptions: 10,
+      ...telegramOutboundBaseAdapter,
       shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
         shouldSuppressLocalTelegramExecApprovalPrompt({
           cfg,

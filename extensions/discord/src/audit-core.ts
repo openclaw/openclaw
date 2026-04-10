@@ -3,7 +3,7 @@ import type {
   DiscordGuildEntry,
 } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { isRecord } from "openclaw/plugin-sdk/text-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
 export type DiscordChannelPermissionsAuditEntry = {
   channelId: string;
@@ -50,7 +50,7 @@ export function listConfiguredGuildChannelKeys(
       continue;
     }
     for (const [key, value] of Object.entries(channelsRaw)) {
-      const channelId = String(key).trim();
+      const channelId = normalizeOptionalString(String(key)) ?? "";
       if (!channelId) {
         continue;
       }
@@ -88,7 +88,7 @@ export async function auditDiscordChannelPermissionsWithFetcher(params: {
   }>;
 }): Promise<DiscordChannelPermissionsAudit> {
   const started = Date.now();
-  const token = params.token?.trim() ?? "";
+  const token = normalizeOptionalString(params.token) ?? "";
   if (!token || params.channelIds.length === 0) {
     return {
       ok: true,

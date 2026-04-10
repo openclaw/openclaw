@@ -553,7 +553,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
 
     const cfg = loadConfig();
-    const rawName = String(params.name ?? "").trim();
+    const rawName = normalizeOptionalString(String(params.name ?? "")) ?? "";
     const agentId = normalizeAgentId(rawName);
     if (agentId === DEFAULT_AGENT_ID) {
       respond(
@@ -573,7 +573,9 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const workspaceDir = resolveUserPath(String(params.workspace ?? "").trim());
+    const workspaceDir = resolveUserPath(
+      normalizeOptionalString(String(params.workspace ?? "")) ?? "",
+    );
 
     // Resolve agentDir against the config we're about to persist (vs the pre-write config),
     // so subsequent resolutions can't disagree about the agent's directory.

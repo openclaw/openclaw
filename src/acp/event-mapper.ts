@@ -7,6 +7,7 @@ import type {
 } from "@agentclientprotocol/sdk";
 import {
   hasNonEmptyString,
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   readStringValue,
 } from "../shared/string-coerce.js";
@@ -315,7 +316,7 @@ export function inferToolKind(name?: string): ToolKind {
   if (!name) {
     return "other";
   }
-  const normalized = name.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(name);
   if (normalized.includes("read")) {
     return "read";
   }

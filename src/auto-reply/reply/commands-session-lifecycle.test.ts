@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../../test/helpers/import-fresh.ts";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -487,8 +486,13 @@ function expectIdleTimeoutSetReply(
 }
 
 describe("/session idle and /session max-age", () => {
+  beforeEach(async () => {
+    if (!handleSessionCommand) {
+      ({ handleSessionCommand } = await import("./commands-session.js"));
+    }
+  });
+
   beforeEach(() => {
-    vi.resetModules();
     hoisted.setThreadBindingIdleTimeoutBySessionKeyMock.mockReset();
     hoisted.setThreadBindingMaxAgeBySessionKeyMock.mockReset();
     hoisted.setMatrixThreadBindingIdleTimeoutBySessionKeyMock.mockReset();
@@ -497,13 +501,6 @@ describe("/session idle and /session max-age", () => {
     hoisted.setTelegramThreadBindingMaxAgeBySessionKeyMock.mockReset();
     hoisted.sessionBindingResolveByConversationMock.mockReset().mockReturnValue(null);
     vi.useRealTimers();
-  });
-
-  beforeEach(async () => {
-    ({ handleSessionCommand } = await importFreshModule<typeof import("./commands-session.js")>(
-      import.meta.url,
-      "./commands-session.js?scope=commands-session-lifecycle",
-    ));
   });
 
   it("sets idle timeout for the focused thread-chat session", async () => {

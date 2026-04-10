@@ -27,6 +27,42 @@ export type MediaGenerationTaskHandle = {
   taskLabel: string;
 };
 
+type CreateMediaGenerationTaskRunParams = {
+  sessionKey?: string;
+  requesterOrigin?: DeliveryContext;
+  prompt: string;
+  providerId?: string;
+};
+
+type RecordMediaGenerationTaskProgressParams = {
+  handle: MediaGenerationTaskHandle | null;
+  progressSummary: string;
+  eventSummary?: string;
+};
+
+type CompleteMediaGenerationTaskRunParams = {
+  handle: MediaGenerationTaskHandle | null;
+  provider: string;
+  model: string;
+  count: number;
+  paths: string[];
+};
+
+type FailMediaGenerationTaskRunParams = {
+  handle: MediaGenerationTaskHandle | null;
+  error: unknown;
+};
+
+type WakeMediaGenerationTaskCompletionParams = {
+  config?: OpenClawConfig;
+  handle: MediaGenerationTaskHandle | null;
+  status: "ok" | "error";
+  statusLabel: string;
+  result: string;
+  mediaUrls?: string[];
+  statsLine?: string;
+};
+
 export function createMediaGenerationTaskRun(params: {
   sessionKey?: string;
   requesterOrigin?: DeliveryContext;
@@ -291,4 +327,56 @@ export async function wakeMediaGenerationTaskCompletion(params: {
       error: delivery.error,
     });
   }
+}
+
+export function createMediaGenerationTaskLifecycle(params: {
+  toolName: string;
+  taskKind: string;
+  label: string;
+  queuedProgressSummary: string;
+  generatedLabel: string;
+  failureProgressSummary: string;
+  eventSource: AgentInternalEvent["source"];
+  announceType: string;
+  completionLabel: string;
+}) {
+  return {
+    createTaskRun(runParams: CreateMediaGenerationTaskRunParams): MediaGenerationTaskHandle | null {
+      return createMediaGenerationTaskRun({
+        ...runParams,
+        toolName: params.toolName,
+        taskKind: params.taskKind,
+        label: params.label,
+        queuedProgressSummary: params.queuedProgressSummary,
+      });
+    },
+
+    recordTaskProgress(progressParams: RecordMediaGenerationTaskProgressParams) {
+      recordMediaGenerationTaskProgress(progressParams);
+    },
+
+    completeTaskRun(completionParams: CompleteMediaGenerationTaskRunParams) {
+      completeMediaGenerationTaskRun({
+        ...completionParams,
+        generatedLabel: params.generatedLabel,
+      });
+    },
+
+    failTaskRun(failureParams: FailMediaGenerationTaskRunParams) {
+      failMediaGenerationTaskRun({
+        ...failureParams,
+        progressSummary: params.failureProgressSummary,
+      });
+    },
+
+    async wakeTaskCompletion(completionParams: WakeMediaGenerationTaskCompletionParams) {
+      await wakeMediaGenerationTaskCompletion({
+        ...completionParams,
+        eventSource: params.eventSource,
+        announceType: params.announceType,
+        toolName: params.toolName,
+        completionLabel: params.completionLabel,
+      });
+    },
+  };
 }

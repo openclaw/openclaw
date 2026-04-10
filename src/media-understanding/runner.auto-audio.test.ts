@@ -1,12 +1,32 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runCapability } from "./runner.js";
 import { withAudioFixture } from "./runner.test-utils.js";
 import type { AudioTranscriptionRequest, MediaUnderstandingProvider } from "./types.js";
+
+const modelAuthMocks = vi.hoisted(() => ({
+  hasAvailableAuthForProvider: vi.fn(() => true),
+  resolveApiKeyForProvider: vi.fn(async () => ({
+    apiKey: "test-key",
+    source: "test",
+    mode: "api-key",
+  })),
+  requireApiKey: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? "test-key"),
+}));
+
+vi.mock("../agents/model-auth.js", () => ({
+  hasAvailableAuthForProvider: modelAuthMocks.hasAvailableAuthForProvider,
+  resolveApiKeyForProvider: modelAuthMocks.resolveApiKeyForProvider,
+  requireApiKey: modelAuthMocks.requireApiKey,
+}));
+
+vi.mock("../plugins/capability-provider-runtime.js", () => ({
+  resolvePluginCapabilityProviders: () => [],
+}));
 
 function createProviderRegistry(
   providers: Record<string, MediaUnderstandingProvider>,

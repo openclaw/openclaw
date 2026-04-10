@@ -10,6 +10,7 @@ import {
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { msteamsActionsAdapter } from "./actions.js";
 import { msTeamsApprovalAuth } from "./approval-auth.js";
 import {
@@ -28,6 +29,7 @@ import { formatUnknownError } from "./errors.js";
 import { resolveMSTeamsGroupToolPolicy } from "./policy.js";
 import type { ProbeMSTeamsResult } from "./probe.js";
 import {
+  looksLikeMSTeamsTargetId,
   normalizeMSTeamsMessagingTarget,
   normalizeMSTeamsUserInput,
   parseMSTeamsConversationId,
@@ -148,7 +150,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
             configured: account.configured,
           }),
       },
-      auth: msTeamsApprovalAuth,
+      approvalCapability: msTeamsApprovalAuth,
       doctor: {
         dmAllowFromMode: "topOnly",
         groupModel: "hybrid",
@@ -165,21 +167,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         normalizeTarget: normalizeMSTeamsMessagingTarget,
         resolveOutboundSessionRoute: (params) => resolveMSTeamsOutboundSessionRoute(params),
         targetResolver: {
-          looksLikeId: (raw) => {
-            const trimmed = raw.trim();
-            if (!trimmed) {
-              return false;
-            }
-            if (/^conversation:/i.test(trimmed)) {
-              return true;
-            }
-            if (/^user:/i.test(trimmed)) {
-              // Only treat as ID if the value after user: looks like a UUID
-              const id = trimmed.slice("user:".length).trim();
-              return /^[0-9a-fA-F-]{16,}$/.test(id);
-            }
-            return trimmed.includes("@thread");
-          },
+          looksLikeId: (raw) => looksLikeMSTeamsTargetId(raw),
           hint: "<conversationId|user:ID|conversation:ID>",
         },
       },
@@ -324,7 +312,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         formatCapabilitiesProbe: ({ probe }) => {
           const teamsProbe = probe as ProbeMSTeamsResult | undefined;
           const lines: Array<{ text: string; tone?: "error" }> = [];
-          const appId = typeof teamsProbe?.appId === "string" ? teamsProbe.appId.trim() : "";
+          const appId = normalizeOptionalString(teamsProbe?.appId) ?? "";
           if (appId) {
             lines.push({ text: `App: ${appId}` });
           }

@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
 import { type SsrFPolicy, resolvePinnedHostnameWithPolicy } from "../infra/net/ssrf.js";
@@ -5,7 +6,7 @@ import { rawDataToString } from "../infra/ws.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { getDirectAgentForCdp, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import { CDP_HTTP_REQUEST_TIMEOUT_MS, CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-timeouts.js";
-import { resolveBrowserRateLimitMessage } from "./client-fetch.js";
+import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
 
 export { isLoopbackHost };
 
@@ -106,7 +107,7 @@ export function getHeadersWithAuth(url: string, headers: Record<string, string> 
   try {
     const parsed = new URL(url);
     const hasAuthHeader = Object.keys(mergedHeaders).some(
-      (key) => key.toLowerCase() === "authorization",
+      (key) => normalizeLowercaseStringOrEmpty(key) === "authorization",
     );
     if (hasAuthHeader) {
       return mergedHeaders;

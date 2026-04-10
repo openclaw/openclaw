@@ -19,8 +19,9 @@ import {
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
 import { getChildLogger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { logDebug } from "openclaw/plugin-sdk/text-runtime";
+import { logDebug, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDefaultDiscordAccountId } from "../accounts.js";
+import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
 import {
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordSlug,
@@ -233,18 +234,16 @@ export function shouldIgnoreBoundThreadWebhookMessage(params: {
   webhookId?: string | null;
   threadBinding?: BoundThreadLookupRecordLike;
 }): boolean {
-  const webhookId = params.webhookId?.trim() || "";
+  const webhookId = normalizeOptionalString(params.webhookId) ?? "";
   if (!webhookId) {
     return false;
   }
   const boundWebhookId =
-    typeof params.threadBinding?.webhookId === "string"
-      ? params.threadBinding.webhookId.trim()
-      : typeof params.threadBinding?.metadata?.webhookId === "string"
-        ? params.threadBinding.metadata.webhookId.trim()
-        : "";
+    normalizeOptionalString(params.threadBinding?.webhookId) ??
+    normalizeOptionalString(params.threadBinding?.metadata?.webhookId) ??
+    "";
   if (!boundWebhookId) {
-    const threadId = params.threadId?.trim() || "";
+    const threadId = normalizeOptionalString(params.threadId) ?? "";
     if (!threadId) {
       return false;
     }
@@ -624,7 +623,12 @@ export async function preflightDiscordMessage(
     }),
     parentConversationId: earlyThreadParentId,
   });
-  const bindingConversationId = isDirectMessage ? `user:${author.id}` : messageChannelId;
+  const bindingConversationId = isDirectMessage
+    ? (resolveDiscordConversationIdentity({
+        isDirectMessage,
+        userId: author.id,
+      }) ?? `user:${author.id}`)
+    : messageChannelId;
   let threadBinding: SessionBindingRecord | undefined;
   threadBinding =
     conversationRuntime.getSessionBindingService().resolveByConversation({

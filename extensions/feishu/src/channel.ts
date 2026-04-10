@@ -635,7 +635,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             },
           }),
       },
-      auth: feishuApprovalAuth,
+      approvalCapability: feishuApprovalAuth,
       secrets: {
         secretTargetRegistryEntries,
         collectRuntimeConfigAssignments,

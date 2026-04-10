@@ -2,6 +2,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearMemoryEmbeddingProviders as clearRegistry,
@@ -376,5 +377,124 @@ describe("memory index", () => {
 
     const noResults = await manager.search("nonexistent_xyz_keyword");
     expect(noResults.length).toBe(0);
+  });
+
+  it("prefers exact session transcript hits in FTS-only mode", async () => {
+    forceNoProvider = true;
+    const stateDir = path.join(workspaceDir, ".state-session-ranking");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    try {
+      const cfg = createCfg({
+        storePath: path.join(workspaceDir, "index-fts-session-ranking.sqlite"),
+        sources: ["memory", "sessions"],
+        sessionMemory: true,
+        minScore: 0,
+        hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+      });
+      const result = await getMemorySearchManager({ cfg, agentId: "main" });
+      const manager = requireManager(result);
+      managersForCleanup.add(manager);
+      resetManagerForTest(manager);
+
+      const memoryPath = path.join(workspaceDir, "MEMORY.md");
+      await fs.writeFile(memoryPath, "Project Nebula stale codename: ORBIT-9.\n", "utf8");
+      const staleAt = new Date("2020-01-01T00:00:00.000Z");
+      await fs.utimes(memoryPath, staleAt, staleAt);
+
+      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const transcriptPath = path.join(sessionsDir, "session-ranking.jsonl");
+      const now = Date.parse("2026-04-07T15:25:04.113Z");
+      await fs.writeFile(
+        transcriptPath,
+        [
+          JSON.stringify({
+            type: "session",
+            id: "session-ranking",
+            timestamp: new Date(now - 60_000).toISOString(),
+          }),
+          JSON.stringify({
+            type: "message",
+            message: {
+              role: "user",
+              timestamp: new Date(now - 30_000).toISOString(),
+              content: [{ type: "text", text: "What is the current Project Nebula codename?" }],
+            },
+          }),
+          JSON.stringify({
+            type: "message",
+            message: {
+              role: "assistant",
+              timestamp: new Date(now).toISOString(),
+              content: [{ type: "text", text: "The current Project Nebula codename is ORBIT-10." }],
+            },
+          }),
+        ].join("\n") + "\n",
+        "utf8",
+      );
+
+      await manager.sync({ reason: "test", force: true });
+      const results = await manager.search("current Project Nebula codename ORBIT-10", {
+        minScore: 0,
+        maxResults: 3,
+      });
+
+      expect(results[0]?.source).toBe("sessions");
+      expect(results[0]?.snippet).toContain("ORBIT-10");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("bootstraps an empty index on first search so session transcript hits are available", async () => {
+    forceNoProvider = true;
+    const stateDir = path.join(workspaceDir, ".state-session-bootstrap");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    try {
+      const cfg = createCfg({
+        storePath: path.join(workspaceDir, "index-fts-session-bootstrap.sqlite"),
+        sources: ["memory", "sessions"],
+        sessionMemory: true,
+        minScore: 0,
+        hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+      });
+      const result = await getMemorySearchManager({ cfg, agentId: "main" });
+      const manager = requireManager(result);
+      managersForCleanup.add(manager);
+      resetManagerForTest(manager);
+
+      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const transcriptPath = path.join(sessionsDir, "session-bootstrap.jsonl");
+      await fs.writeFile(
+        transcriptPath,
+        [
+          JSON.stringify({
+            type: "session",
+            id: "session-bootstrap",
+            timestamp: "2026-04-07T15:24:04.113Z",
+          }),
+          JSON.stringify({
+            type: "message",
+            message: {
+              role: "assistant",
+              timestamp: "2026-04-07T15:25:04.113Z",
+              content: [{ type: "text", text: "The current Project Nebula codename is ORBIT-10." }],
+            },
+          }),
+        ].join("\n") + "\n",
+        "utf8",
+      );
+
+      const results = await manager.search("current Project Nebula codename ORBIT-10", {
+        minScore: 0,
+        maxResults: 3,
+      });
+
+      expect(results[0]?.source).toBe("sessions");
+      expect(results[0]?.snippet).toContain("ORBIT-10");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

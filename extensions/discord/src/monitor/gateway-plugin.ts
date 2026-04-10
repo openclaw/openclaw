@@ -5,6 +5,7 @@ import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import * as undici from "undici";
 import * as ws from "ws";
 import { validateDiscordProxyUrl } from "../proxy-fetch.js";
@@ -57,7 +58,7 @@ function isTransientDiscordGatewayResponse(status: number, body: string): boolea
   if (status >= 500) {
     return true;
   }
-  const normalized = body.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(body);
   return (
     normalized.includes("upstream connect error") ||
     normalized.includes("disconnect/reset before headers") ||

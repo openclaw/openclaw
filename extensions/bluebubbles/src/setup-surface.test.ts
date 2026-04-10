@@ -1,6 +1,7 @@
 import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   createSetupWizardAdapter,
@@ -321,6 +322,36 @@ describe("resolveBlueBubblesAccount", () => {
 
     expect(resolved.configured).toBe(true);
     expect(resolved.baseUrl).toBe("http://localhost:1234");
+  });
+
+  it("strips stale legacy private-network aliases after canonical normalization", () => {
+    const resolved = resolveBlueBubblesAccount({
+      cfg: {
+        channels: {
+          bluebubbles: {
+            network: {
+              allowPrivateNetwork: true,
+            },
+            accounts: {
+              work: {
+                serverUrl: "http://localhost:1234",
+                password: "secret", // pragma: allowlist secret
+                network: {
+                  dangerouslyAllowPrivateNetwork: false,
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved.config.network).toEqual({
+      dangerouslyAllowPrivateNetwork: false,
+    });
+    expect("allowPrivateNetwork" in resolved.config).toBe(false);
+    expect(isPrivateNetworkOptInEnabled(resolved.config)).toBe(false);
   });
 });
 

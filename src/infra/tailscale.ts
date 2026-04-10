@@ -4,7 +4,10 @@ import { promptYesNo } from "../cli/prompt.js";
 import { danger, info, logVerbose, shouldLogVerbose, warn } from "../globals.js";
 import { runExec } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import { ensureBinary } from "./binaries.js";
 
@@ -272,7 +275,7 @@ function isPermissionDeniedError(err: unknown): boolean {
   if (code.toUpperCase() === "EACCES") {
     return true;
   }
-  const combined = `${stdout}\n${stderr}\n${message}`.toLowerCase();
+  const combined = normalizeLowercaseStringOrEmpty(`${stdout}\n${stderr}\n${message}`);
   return (
     combined.includes("permission denied") ||
     combined.includes("access denied") ||

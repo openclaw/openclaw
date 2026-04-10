@@ -1,6 +1,10 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { formatUnknownText } from "../format.ts";
 import { icons as sharedIcons } from "../icons.ts";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../string-coerce.ts";
 import type { ConfigUiHints } from "../types.ts";
 import {
   defaultValue,
@@ -218,7 +222,7 @@ export function parseConfigSearchQuery(query: string): ConfigSearchCriteria {
   const seen = new Set<string>();
   const raw = query.trim();
   const stripped = raw.replace(/(^|\s)tag:([^\s]+)/gi, (_, leading: string, token: string) => {
-    const normalized = token.trim().toLowerCase();
+    const normalized = normalizeLowercaseStringOrEmpty(token);
     if (normalized && !seen.has(normalized)) {
       seen.add(normalized);
       tags.push(normalized);
@@ -226,7 +230,7 @@ export function parseConfigSearchQuery(query: string): ConfigSearchCriteria {
     return leading;
   });
   return {
-    text: stripped.trim().toLowerCase(),
+    text: normalizeLowercaseStringOrEmpty(stripped),
     tags,
   };
 }
@@ -245,7 +249,7 @@ function normalizeTags(raw: unknown): string[] {
     if (!tag) {
       continue;
     }
-    const key = tag.toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(tag);
     if (seen.has(key)) {
       continue;
     }
@@ -277,7 +281,7 @@ function matchesText(text: string, candidates: Array<string | undefined>): boole
     return true;
   }
   for (const candidate of candidates) {
-    if (candidate && candidate.toLowerCase().includes(text)) {
+    if (normalizeOptionalLowercaseString(candidate)?.includes(text)) {
       return true;
     }
   }
@@ -288,7 +292,7 @@ function matchesTags(filterTags: string[], fieldTags: string[]): boolean {
   if (filterTags.length === 0) {
     return true;
   }
-  const normalized = new Set(fieldTags.map((tag) => tag.toLowerCase()));
+  const normalized = new Set(fieldTags.map((tag) => normalizeLowercaseStringOrEmpty(tag)));
   return filterTags.every((tag) => normalized.has(tag));
 }
 

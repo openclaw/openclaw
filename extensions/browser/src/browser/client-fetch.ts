@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { formatCliCommand } from "../cli/command-format.js";
 import { loadConfig } from "../config/config.js";
@@ -8,6 +9,7 @@ import {
   createBrowserControlContext,
   startBrowserControlServiceFromConfig,
 } from "./control-service.js";
+import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
 import { createBrowserRouteDispatcher } from "./routes/dispatcher.js";
 
 // Application-level error from the browser control service (service is reachable
@@ -103,34 +105,8 @@ const BROWSER_TOOL_MODEL_HINT =
   "Do NOT retry the browser tool — it will keep failing. " +
   "Use an alternative approach or inform the user that the browser is currently unavailable.";
 
-const BROWSER_SERVICE_RATE_LIMIT_MESSAGE =
-  "Browser service rate limit reached. " +
-  "Wait for the current session to complete, or retry later.";
-
-const BROWSERBASE_RATE_LIMIT_MESSAGE =
-  "Browserbase rate limit reached (max concurrent sessions). " +
-  "Wait for the current session to complete, or upgrade your plan.";
-
 function isRateLimitStatus(status: number): boolean {
   return status === 429;
-}
-
-function isBrowserbaseUrl(url: string): boolean {
-  if (!isAbsoluteHttp(url)) {
-    return false;
-  }
-  try {
-    const host = normalizeLowercaseStringOrEmpty(new URL(url).hostname);
-    return host === "browserbase.com" || host.endsWith(".browserbase.com");
-  } catch {
-    return false;
-  }
-}
-
-export function resolveBrowserRateLimitMessage(url: string): string {
-  return isBrowserbaseUrl(url)
-    ? BROWSERBASE_RATE_LIMIT_MESSAGE
-    : BROWSER_SERVICE_RATE_LIMIT_MESSAGE;
 }
 
 function resolveBrowserFetchOperatorHint(url: string): string {
@@ -141,8 +117,9 @@ function resolveBrowserFetchOperatorHint(url: string): string {
 }
 
 function normalizeErrorMessage(err: unknown): string {
-  if (err instanceof Error && err.message.trim().length > 0) {
-    return err.message.trim();
+  const message = err instanceof Error ? normalizeOptionalString(err.message) : undefined;
+  if (message) {
+    return message;
   }
   return String(err);
 }

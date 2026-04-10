@@ -44,6 +44,7 @@ import {
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import {
   normalizeOptionalLowercaseString,
@@ -224,7 +225,7 @@ function resolvePlacementWithoutChannelPlugin(params: {
 }
 
 function normalizeLineConversationIdFallback(value: string | undefined): string | undefined {
-  const trimmed = value?.trim() ?? "";
+  const trimmed = normalizeOptionalString(value) ?? "";
   if (!trimmed) {
     return undefined;
   }
@@ -249,7 +250,7 @@ function normalizeTelegramConversationIdFallback(params: {
     return `${explicitGroupId}:topic:${explicitThreadId}`;
   }
 
-  const trimmed = params.to?.trim() ?? "";
+  const trimmed = normalizeOptionalString(params.to) ?? "";
   if (!trimmed) {
     return undefined;
   }
@@ -260,6 +261,13 @@ function normalizeTelegramConversationIdFallback(params: {
   }
   return /^-?\d+$/.test(normalized) ? normalized : undefined;
 }
+
+const threadBindingFallbackConversationResolvers = {
+  line: (params: { to?: string; groupId?: string }) =>
+    normalizeLineConversationIdFallback(params.groupId ?? params.to),
+  telegram: (params: { to?: string; threadId?: string | number; groupId?: string }) =>
+    normalizeTelegramConversationIdFallback(params),
+} as const;
 
 function resolveSpawnMode(params: {
   requestedMode?: SpawnAcpMode;
@@ -303,7 +311,7 @@ function isHeartbeatEnabledForSessionAgent(params: {
     resolveAgentConfig(params.cfg, requesterAgentId)?.heartbeat?.every ??
     params.cfg.agents?.defaults?.heartbeat?.every ??
     DEFAULT_HEARTBEAT_EVERY;
-  const trimmedEvery = typeof heartbeatEvery === "string" ? heartbeatEvery.trim() : "";
+  const trimmedEvery = normalizeOptionalString(heartbeatEvery) ?? "";
   if (!trimmedEvery) {
     return false;
   }
@@ -349,10 +357,10 @@ function hasSessionLocalHeartbeatRelayRoute(params: {
 
   // Explicit delivery overrides are not session-local and can route updates
   // to unrelated destinations (for example a pinned ops channel).
-  if (typeof heartbeat?.to === "string" && heartbeat.to.trim().length > 0) {
+  if (normalizeOptionalString(heartbeat?.to)) {
     return false;
   }
-  if (typeof heartbeat?.accountId === "string" && heartbeat.accountId.trim().length > 0) {
+  if (normalizeOptionalString(heartbeat?.accountId)) {
     return false;
   }
 
@@ -387,7 +395,7 @@ function resolveTargetAcpAgentId(params: {
 }
 
 function normalizeOptionalAgentId(value: string | undefined | null): string | undefined {
-  const trimmed = (value ?? "").trim();
+  const trimmed = normalizeOptionalString(value) ?? "";
   if (!trimmed) {
     return undefined;
   }
@@ -430,7 +438,7 @@ async function resolveRuntimeCwdForAcpSpawn(params: {
   if (!params.resolvedCwd) {
     return undefined;
   }
-  if (typeof params.explicitCwd === "string" && params.explicitCwd.trim()) {
+  if (normalizeOptionalString(params.explicitCwd)) {
     return params.resolvedCwd;
   }
   try {
@@ -449,7 +457,7 @@ function resolveRequesterInternalSessionKey(params: {
   requesterSessionKey?: string;
 }): string {
   const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
-  const requesterSessionKey = params.requesterSessionKey?.trim();
+  const requesterSessionKey = normalizeOptionalString(params.requesterSessionKey);
   return requesterSessionKey
     ? resolveInternalSessionKey({
         key: requesterSessionKey,
@@ -505,20 +513,17 @@ function resolveConversationIdForThreadBinding(params: {
         isGroup: true,
       })?.conversationId
     : null;
-  if (pluginResolvedConversationId?.trim()) {
-    return pluginResolvedConversationId.trim();
+  if (normalizeOptionalString(pluginResolvedConversationId)) {
+    return normalizeOptionalString(pluginResolvedConversationId);
   }
-  if (channelKey === "line") {
-    const lineConversationId = normalizeLineConversationIdFallback(params.groupId ?? params.to);
-    if (lineConversationId) {
-      return lineConversationId;
-    }
-  }
-  if (channelKey === "telegram") {
-    const telegramConversationId = normalizeTelegramConversationIdFallback(params);
-    if (telegramConversationId) {
-      return telegramConversationId;
-    }
+  const compatibilityConversationId =
+    channelKey && Object.hasOwn(threadBindingFallbackConversationResolvers, channelKey)
+      ? threadBindingFallbackConversationResolvers[
+          channelKey as keyof typeof threadBindingFallbackConversationResolvers
+        ](params)
+      : undefined;
+  if (compatibilityConversationId) {
+    return compatibilityConversationId;
   }
   const genericConversationId = resolveConversationIdFromTargets({
     threadId: params.threadId,
@@ -536,7 +541,7 @@ function resolveAcpSpawnChannelAccountId(params: {
   accountId?: string;
 }): string | undefined {
   const channel = normalizeOptionalLowercaseString(params.channel);
-  const explicitAccountId = params.accountId?.trim();
+  const explicitAccountId = normalizeOptionalString(params.accountId);
   if (explicitAccountId) {
     return explicitAccountId;
   }
@@ -545,9 +550,7 @@ function resolveAcpSpawnChannelAccountId(params: {
   }
   const channels = params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>;
   const configuredDefaultAccountId = channels?.[channel]?.defaultAccount;
-  return typeof configuredDefaultAccountId === "string" && configuredDefaultAccountId.trim()
-    ? configuredDefaultAccountId.trim()
-    : "default";
+  return normalizeOptionalString(configuredDefaultAccountId) ?? "default";
 }
 
 function prepareAcpThreadBinding(params: {
@@ -663,7 +666,7 @@ function resolveAcpSpawnRequesterState(params: {
       : false;
   const hasThreadContext =
     typeof params.ctx.agentThreadId === "string"
-      ? params.ctx.agentThreadId.trim().length > 0
+      ? Boolean(normalizeOptionalString(params.ctx.agentThreadId))
       : params.ctx.agentThreadId != null;
   const requesterAgentId = requesterParsedSession?.agentId;
 
@@ -887,9 +890,11 @@ function resolveAcpSpawnBootstrapDeliveryPlan(params: {
     parentConversationId: params.binding?.conversation.parentConversationId,
   });
   const inferredDeliveryTo =
-    (bindingMatchesRequesterConversation ? params.requester.origin?.to?.trim() : undefined) ??
+    (bindingMatchesRequesterConversation
+      ? normalizeOptionalString(params.requester.origin?.to)
+      : undefined) ??
     boundDeliveryTarget.to ??
-    params.requester.origin?.to?.trim() ??
+    normalizeOptionalString(params.requester.origin?.to) ??
     formatConversationTarget({
       channel: params.requester.origin?.channel,
       conversationId: deliveryThreadId,
@@ -932,7 +937,7 @@ export async function spawnAcpDirect(
     });
   }
   const streamToParentRequested = params.streamTo === "parent";
-  const parentSessionKey = ctx.agentSessionKey?.trim();
+  const parentSessionKey = normalizeOptionalString(ctx.agentSessionKey);
   if (streamToParentRequested && !parentSessionKey) {
     return createAcpSpawnFailure({
       status: "error",
@@ -1108,6 +1113,19 @@ export async function spawnAcpDirect(
           childSessionKey: sessionKey,
         })
       : undefined;
+  // Resolve parent session delivery context so system events route to the
+  // correct thread/topic instead of falling back to the main DM.
+  const parentDeliveryCtx =
+    effectiveStreamToParent && parentSessionKey
+      ? deliveryContextFromSession(
+          loadSessionStore(
+            resolveStorePath(cfg.session?.store, {
+              agentId: resolveAgentIdFromSessionKey(parentSessionKey),
+            }),
+          )[parentSessionKey],
+        )
+      : undefined;
+
   let parentRelay: AcpSpawnParentRelayHandle | undefined;
   if (effectiveStreamToParent && parentSessionKey) {
     // Register relay before dispatch so fast lifecycle failures are not missed.
@@ -1117,6 +1135,7 @@ export async function spawnAcpDirect(
       childSessionKey: sessionKey,
       agentId: targetAgentId,
       logPath: streamLogPath,
+      deliveryContext: parentDeliveryCtx,
       emitStartNotice: false,
     });
   }
@@ -1136,8 +1155,9 @@ export async function spawnAcpDirect(
       },
       timeoutMs: 10_000,
     });
-    if (typeof response?.runId === "string" && response.runId.trim()) {
-      childRunId = response.runId.trim();
+    const responseRunId = normalizeOptionalString(response?.runId);
+    if (responseRunId) {
+      childRunId = responseRunId;
     }
   } catch (err) {
     parentRelay?.dispose();
@@ -1165,6 +1185,7 @@ export async function spawnAcpDirect(
         childSessionKey: sessionKey,
         agentId: targetAgentId,
         logPath: streamLogPath,
+        deliveryContext: parentDeliveryCtx,
         emitStartNotice: false,
       });
     }
@@ -1181,7 +1202,7 @@ export async function spawnAcpDirect(
         label: params.label,
         task: params.task,
         preferMetadata: true,
-        deliveryStatus: requesterInternalKey.trim() ? "pending" : "parent_missing",
+        deliveryStatus: requesterInternalKey ? "pending" : "parent_missing",
         startedAt: Date.now(),
       });
     } catch (error) {
@@ -1213,7 +1234,7 @@ export async function spawnAcpDirect(
       label: params.label,
       task: params.task,
       preferMetadata: true,
-      deliveryStatus: requesterInternalKey.trim() ? "pending" : "parent_missing",
+      deliveryStatus: requesterInternalKey ? "pending" : "parent_missing",
       startedAt: Date.now(),
     });
   } catch (error) {

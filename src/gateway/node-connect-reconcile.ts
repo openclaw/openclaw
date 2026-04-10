@@ -22,6 +22,16 @@ export type NodeConnectPairingReconcileResult = {
   pendingPairing?: PendingNodePairingResult;
 };
 
+function resolveApprovedReconnectCommands(params: {
+  pairedCommands: readonly string[] | undefined;
+  allowlist: Set<string>;
+}) {
+  return normalizeDeclaredNodeCommands({
+    declaredCommands: Array.isArray(params.pairedCommands) ? params.pairedCommands : [],
+    allowlist: params.allowlist,
+  });
+}
+
 function buildNodePairingRequestInput(params: {
   nodeId: string;
   connectParams: ConnectParams;
@@ -72,6 +82,28 @@ export async function reconcileNodePairingOnConnect(params: {
     return {
       nodeId,
       effectiveCommands: declared,
+      pendingPairing,
+    };
+  }
+
+  const approvedCommands = resolveApprovedReconnectCommands({
+    pairedCommands: params.pairedNode.commands,
+    allowlist,
+  });
+  const hasCommandUpgrade = declared.some((command) => !approvedCommands.includes(command));
+
+  if (hasCommandUpgrade) {
+    const pendingPairing = await params.requestPairing(
+      buildNodePairingRequestInput({
+        nodeId,
+        connectParams: params.connectParams,
+        commands: declared,
+        remoteIp: params.reportedClientIp,
+      }),
+    );
+    return {
+      nodeId,
+      effectiveCommands: approvedCommands,
       pendingPairing,
     };
   }

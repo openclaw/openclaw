@@ -2,6 +2,7 @@ import type { ConversationRef } from "../infra/outbound/session-binding-service.
 import { normalizeAccountId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
@@ -189,7 +190,7 @@ export async function resolveSubagentCompletionOrigin(params: {
   expectsCompletionMessage: boolean;
 }): Promise<DeliveryContext | undefined> {
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
-  const channel = requesterOrigin?.channel?.trim().toLowerCase();
+  const channel = normalizeOptionalLowercaseString(requesterOrigin?.channel);
   const to = requesterOrigin?.to?.trim();
   const accountId = normalizeAccountId(requesterOrigin?.accountId);
   const threadId =

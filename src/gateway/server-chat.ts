@@ -1,10 +1,18 @@
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import {
+  SILENT_REPLY_TOKEN,
+  startsWithSilentToken,
+  stripLeadingSilentToken,
+} from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
+import {
+  isSuppressedControlReplyLeadFragment,
+  isSuppressedControlReplyText,
+} from "./control-reply-text.js";
 import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
 import { persistGatewaySessionLifecycleEvent } from "./server-chat.persist-session-lifecycle.runtime.js";
 import { deriveGatewaySessionLifecycleSnapshot } from "./session-lifecycle-state.js";
@@ -76,20 +84,6 @@ function normalizeHeartbeatChatFinalText(params: {
     return { suppress: true, text: "" };
   }
   return { suppress: false, text: stripped.text };
-}
-
-function isSilentReplyLeadFragment(text: string): boolean {
-  const normalized = text.trim().toUpperCase();
-  if (!normalized) {
-    return false;
-  }
-  if (!/^[A-Z_]+$/.test(normalized)) {
-    return false;
-  }
-  if (normalized === SILENT_REPLY_TOKEN) {
-    return false;
-  }
-  return SILENT_REPLY_TOKEN.startsWith(normalized);
 }
 
 function appendUniqueSuffix(base: string, suffix: string): string {
@@ -201,6 +195,7 @@ export function createChatRunRegistry(): ChatRunRegistry {
 
 export type ChatRunState = {
   registry: ChatRunRegistry;
+  rawBuffers: Map<string, string>;
   buffers: Map<string, string>;
   deltaSentAt: Map<string, number>;
   /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
@@ -211,6 +206,7 @@ export type ChatRunState = {
 
 export function createChatRunState(): ChatRunState {
   const registry = createChatRunRegistry();
+  const rawBuffers = new Map<string, string>();
   const buffers = new Map<string, string>();
   const deltaSentAt = new Map<string, number>();
   const deltaLastBroadcastLen = new Map<string, number>();
@@ -218,6 +214,7 @@ export function createChatRunState(): ChatRunState {
 
   const clear = () => {
     registry.clear();
+    rawBuffers.clear();
     buffers.clear();
     deltaSentAt.clear();
     deltaLastBroadcastLen.clear();
@@ -226,6 +223,7 @@ export function createChatRunState(): ChatRunState {
 
   return {
     registry,
+    rawBuffers,
     buffers,
     deltaSentAt,
     deltaLastBroadcastLen,
@@ -474,6 +472,7 @@ export function createAgentEventHandler({
   const pendingTerminalLifecycleErrors = new Map<string, NodeJS.Timeout>();
 
   const clearBufferedChatState = (clientRunId: string) => {
+    chatRunState.rawBuffers.delete(clientRunId);
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
     chatRunState.deltaLastBroadcastLen.delete(clientRunId);
@@ -672,20 +671,32 @@ export function createAgentEventHandler({
     const cleanedText = stripInlineDirectiveTagsForDisplay(text).text;
     const cleanedDelta =
       typeof delta === "string" ? stripInlineDirectiveTagsForDisplay(delta).text : "";
-    const previousText = chatRunState.buffers.get(clientRunId) ?? "";
-    const mergedText = resolveMergedAssistantText({
-      previousText,
+    const previousRawText = chatRunState.rawBuffers.get(clientRunId) ?? "";
+    const mergedRawText = resolveMergedAssistantText({
+      previousText: previousRawText,
       nextText: cleanedText,
       nextDelta: cleanedDelta,
     });
-    if (!mergedText) {
+    if (!mergedRawText) {
       return;
     }
+    chatRunState.rawBuffers.set(clientRunId, mergedRawText);
+    if (isSuppressedControlReplyText(mergedRawText)) {
+      chatRunState.buffers.set(clientRunId, "");
+      return;
+    }
+    if (isSuppressedControlReplyLeadFragment(mergedRawText)) {
+      chatRunState.buffers.set(clientRunId, mergedRawText);
+      return;
+    }
+    const mergedText = startsWithSilentToken(mergedRawText, SILENT_REPLY_TOKEN)
+      ? stripLeadingSilentToken(mergedRawText, SILENT_REPLY_TOKEN)
+      : mergedRawText;
     chatRunState.buffers.set(clientRunId, mergedText);
-    if (isSilentReplyText(mergedText, SILENT_REPLY_TOKEN)) {
+    if (isSuppressedControlReplyText(mergedText)) {
       return;
     }
-    if (isSilentReplyLeadFragment(mergedText)) {
+    if (isSuppressedControlReplyLeadFragment(mergedText)) {
       return;
     }
     if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
@@ -724,7 +735,7 @@ export function createAgentEventHandler({
     });
     const text = normalizedHeartbeatText.text.trim();
     const shouldSuppressSilent =
-      normalizedHeartbeatText.suppress || isSilentReplyText(text, SILENT_REPLY_TOKEN);
+      normalizedHeartbeatText.suppress || isSuppressedControlReplyText(text);
     return { text, shouldSuppressSilent };
   };
 
@@ -735,7 +746,7 @@ export function createAgentEventHandler({
     seq: number,
   ) => {
     const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId);
-    const shouldSuppressSilentLeadFragment = isSilentReplyLeadFragment(text);
+    const shouldSuppressSilentLeadFragment = isSuppressedControlReplyLeadFragment(text);
     const shouldSuppressHeartbeatStreaming = shouldHideHeartbeatChatOutput(
       clientRunId,
       sourceRunId,
@@ -788,6 +799,7 @@ export function createAgentEventHandler({
     // Only flush if the buffer has grown since the last broadcast to avoid duplicates.
     flushBufferedChatDeltaIfNeeded(sessionKey, clientRunId, sourceRunId, seq);
     chatRunState.deltaLastBroadcastLen.delete(clientRunId);
+    chatRunState.rawBuffers.delete(clientRunId);
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
     if (jobState === "done") {

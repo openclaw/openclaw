@@ -1,5 +1,8 @@
 import type { SkillCommandSpec } from "../agents/skills.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import { getChatCommands } from "./commands-registry.data.js";
 
 export function listReservedChatSlashCommandNames(extraNames: string[] = []): Set<string> {
@@ -13,7 +16,7 @@ export function listReservedChatSlashCommandNames(extraNames: string[] = []): Se
       if (!trimmed.startsWith("/")) {
         continue;
       }
-      reserved.add(trimmed.slice(1).toLowerCase());
+      reserved.add(normalizeLowercaseStringOrEmpty(trimmed.slice(1)));
     }
   }
   for (const name of extraNames) {

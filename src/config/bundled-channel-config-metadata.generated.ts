@@ -12122,7 +12122,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       },
       "streaming.nativeTransport": {
         label: "Slack Native Streaming",
-        help: "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming.mode is partial (default: true).",
+        help: "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming.mode is partial (default: true). Requires a reply thread target; top-level DMs stay on the non-thread fallback path.",
       },
       "thread.historyScope": {
         label: "Slack Thread History Scope",

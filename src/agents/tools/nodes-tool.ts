@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveNodePairApprovalScopes } from "../../infra/node-pairing-authz.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
@@ -13,6 +14,7 @@ import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
 import { executeNodeCommandAction, type NodeCommandAction } from "./nodes-tool-commands.js";
 import { executeNodeMediaAction, MEDIA_INVOKE_ACTIONS } from "./nodes-tool-media.js";
 import { resolveNodeId } from "./nodes-utils.js";
+import { isOpenClawOwnerOnlyCoreToolName } from "./owner-only-tools.js";
 
 const NODES_TOOL_ACTIONS = [
   "status",
@@ -73,7 +75,7 @@ async function resolveNodePairApproveScopes(
 }
 
 function isPairingRequiredMessage(message: string): boolean {
-  const lower = message.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(message);
   return lower.includes("pairing required") || lower.includes("not_paired");
 }
 
@@ -148,7 +150,7 @@ export function createNodesTool(options?: {
   return {
     label: "Nodes",
     name: "nodes",
-    ownerOnly: true,
+    ownerOnly: isOpenClawOwnerOnlyCoreToolName("nodes"),
     description:
       "Discover and control paired nodes (status/describe/pairing/notify/camera/photos/screen/location/notifications/invoke).",
     parameters: NodesToolSchema,

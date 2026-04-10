@@ -26,7 +26,9 @@ Most days:
 - Faster local full-suite run on a roomy machine: `pnpm test:max`
 - Direct Vitest watch loop: `pnpm test:watch`
 - Direct file targeting now routes extension/channel paths too: `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts`
+- Prefer targeted runs first when you are iterating on a single failure.
 - Docker-backed QA site: `pnpm qa:lab:up`
+- Linux VM-backed QA lane: `pnpm openclaw qa suite --runner multipass --scenario channel-chat-baseline`
 
 When you touch tests or want extra confidence:
 
@@ -39,6 +41,26 @@ When debugging real providers/models (requires real creds):
 - Target one live file quietly: `pnpm test:live -- src/agents/models.profiles.live.test.ts`
 
 Tip: when you only need one failing case, prefer narrowing live tests via the allowlist env vars described below.
+
+## QA-specific runners
+
+These commands sit beside the main test suites when you need QA-lab realism:
+
+- `pnpm openclaw qa suite`
+  - Runs repo-backed QA scenarios directly on the host.
+- `pnpm openclaw qa suite --runner multipass`
+  - Runs the same QA suite inside a disposable Multipass Linux VM.
+  - Keeps the same scenario-selection behavior as `qa suite` on the host.
+  - Reuses the same provider/model selection flags as `qa suite`.
+  - Live runs forward the supported QA auth inputs that are practical for the guest:
+    env-based provider keys, the QA live provider config path, and `CODEX_HOME`
+    when present.
+  - Output dirs must stay under the repo root so the guest can write back through
+    the mounted workspace.
+  - Writes the normal QA report + summary plus Multipass logs under
+    `.artifacts/qa-e2e/...`.
+- `pnpm qa:lab:up`
+  - Starts the Docker-backed QA site for operator-style QA work.
 
 ## Test suites (what runs where)
 
@@ -203,6 +225,7 @@ Live tests are split into two layers so we can isolate failures:
   - `OPENCLAW_LIVE_MODELS=modern` to run the modern allowlist (Opus/Sonnet 4.6+, GPT-5.x + Codex, Gemini 3, GLM 4.7, MiniMax M2.7, Grok 4)
   - `OPENCLAW_LIVE_MODELS=all` is an alias for the modern allowlist
   - or `OPENCLAW_LIVE_MODELS="openai/gpt-5.4,anthropic/claude-opus-4-6,..."` (comma allowlist)
+  - Modern/all sweeps default to a curated high-signal cap; set `OPENCLAW_LIVE_MAX_MODELS=0` for an exhaustive modern sweep or a positive number for a smaller cap.
 - How to select providers:
   - `OPENCLAW_LIVE_PROVIDERS="google,google-antigravity,google-gemini-cli"` (comma allowlist)
 - Where keys come from:
@@ -234,6 +257,7 @@ Live tests are split into two layers so we can isolate failures:
   - Default: modern allowlist (Opus/Sonnet 4.6+, GPT-5.x + Codex, Gemini 3, GLM 4.7, MiniMax M2.7, Grok 4)
   - `OPENCLAW_LIVE_GATEWAY_MODELS=all` is an alias for the modern allowlist
   - Or set `OPENCLAW_LIVE_GATEWAY_MODELS="provider/model"` (or comma list) to narrow
+  - Modern/all gateway sweeps default to a curated high-signal cap; set `OPENCLAW_LIVE_GATEWAY_MAX_MODELS=0` for an exhaustive modern sweep or a positive number for a smaller cap.
 - How to select providers (avoid “OpenRouter everything”):
   - `OPENCLAW_LIVE_GATEWAY_PROVIDERS="google,google-antigravity,google-gemini-cli,openai,anthropic,zai,minimax"` (comma allowlist)
 - Tool + image probes are always on in this live test:
@@ -272,6 +296,7 @@ openclaw models list --json
   - `OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG="--image"` to pass image file paths as CLI args instead of prompt injection.
   - `OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE="repeat"` (or `"list"`) to control how image args are passed when `IMAGE_ARG` is set.
   - `OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE=1` to send a second turn and validate resume flow.
+  - `OPENCLAW_LIVE_CLI_BACKEND_MODEL_SWITCH_PROBE=0` to disable the default Claude Sonnet -> Opus same-session continuity probe (set to `1` to force it on when the selected model supports a switch target).
 
 Example:
 
@@ -301,6 +326,7 @@ Notes:
 - It runs the live CLI-backend smoke inside the repo Docker image as the non-root `node` user.
 - It resolves CLI smoke metadata from the owning extension, then installs the matching Linux CLI package (`@anthropic-ai/claude-code`, `@openai/codex`, or `@google/gemini-cli`) into a cached writable prefix at `OPENCLAW_DOCKER_CLI_TOOLS_DIR` (default: `~/.cache/openclaw/docker-cli-tools`).
 - The live CLI-backend smoke now exercises the same end-to-end flow for Claude, Codex, and Gemini: text turn, image classification turn, then MCP `cron` tool call verified through the gateway CLI.
+- Claude's default smoke also patches the session from Sonnet to Opus and verifies the resumed session still remembers an earlier note.
 
 ## Live: ACP bind smoke (`/acp spawn ... --bind here`)
 
@@ -448,7 +474,7 @@ Live tests discover credentials the same way the CLI does. Practical implication
 - Per-agent auth profiles: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (this is what “profile keys” means in the live tests)
 - Config: `~/.openclaw/openclaw.json` (or `OPENCLAW_CONFIG_PATH`)
 - Legacy state dir: `~/.openclaw/credentials/` (copied into the staged live home when present, but not the main profile-key store)
-- Live local runs copy the active config, per-agent `auth-profiles.json` files, legacy `credentials/`, and supported external CLI auth dirs into a temp test home by default; `agents.*.workspace` / `agentDir` path overrides are stripped in that staged config so probes stay off your real host workspace.
+- Live local runs copy the active config, per-agent `auth-profiles.json` files, legacy `credentials/`, and supported external CLI auth dirs into a temp test home by default; staged live homes skip `workspace/` and `sandboxes/`, and `agents.*.workspace` / `agentDir` path overrides are stripped so probes stay off your real host workspace.
 
 If you want to rely on env keys (e.g. exported in your `~/.profile`), run local tests after `source ~/.profile`, or use the Docker runners below (they can mount `~/.profile` into the container).
 

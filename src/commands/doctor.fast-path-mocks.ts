@@ -26,6 +26,8 @@ vi.mock("./doctor-gateway-health.js", () => ({
 }));
 
 vi.mock("./doctor-memory-search.js", () => ({
+  maybeRepairMemoryRecallHealth: vi.fn().mockResolvedValue(undefined),
+  noteMemoryRecallHealth: vi.fn().mockResolvedValue(undefined),
   noteMemorySearchHealth: vi.fn().mockResolvedValue(undefined),
 }));
 

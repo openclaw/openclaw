@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { MatrixClient } from "../sdk.js";
 import { chunkMatrixText, sendMessageMatrix } from "../send.js";
@@ -15,7 +16,7 @@ function shouldSuppressReasoningReplyText(text?: string): boolean {
   if (!trimmedStart) {
     return false;
   }
-  if (trimmedStart.toLowerCase().startsWith("reasoning:")) {
+  if (normalizeLowercaseStringOrEmpty(trimmedStart).startsWith("reasoning:")) {
     return true;
   }
   THINKING_TAG_RE.lastIndex = 0;

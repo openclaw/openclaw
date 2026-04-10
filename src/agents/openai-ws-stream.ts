@@ -39,6 +39,7 @@ import {
   encodeAssistantTextSignature,
   normalizeAssistantPhase,
 } from "../shared/chat-message-content.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveOpenAIStrictToolSetting } from "./openai-tool-schema.js";
 import {
   getOpenAIWebSocketErrorDetails,
@@ -347,7 +348,7 @@ function isOpenAIApiBaseUrl(baseUrl?: string): boolean {
     const url = new URL(trimmed);
     return (
       url.protocol === "https:" &&
-      url.hostname.toLowerCase() === "api.openai.com" &&
+      normalizeLowercaseStringOrEmpty(url.hostname) === "api.openai.com" &&
       /^\/v1\/?$/u.test(url.pathname)
     );
   } catch {
@@ -369,7 +370,7 @@ function isAzureOpenAIBaseUrl(baseUrl?: string): boolean {
     return false;
   }
   try {
-    return new URL(trimmed).hostname.toLowerCase().endsWith(".openai.azure.com");
+    return normalizeLowercaseStringOrEmpty(new URL(trimmed).hostname).endsWith(".openai.azure.com");
   } catch {
     return false;
   }

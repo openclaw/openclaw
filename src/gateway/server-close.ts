@@ -6,10 +6,33 @@ import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
+
+export async function runGatewayClosePrelude(params: {
+  stopDiagnostics?: () => void;
+  clearSkillsRefreshTimer?: () => void;
+  skillsChangeUnsub?: () => void;
+  disposeAuthRateLimiter?: () => void;
+  disposeBrowserAuthRateLimiter: () => void;
+  stopModelPricingRefresh?: () => void;
+  stopChannelHealthMonitor?: () => void;
+  clearSecretsRuntimeSnapshot?: () => void;
+  closeMcpServer?: () => Promise<void>;
+}): Promise<void> {
+  params.stopDiagnostics?.();
+  params.clearSkillsRefreshTimer?.();
+  params.skillsChangeUnsub?.();
+  params.disposeAuthRateLimiter?.();
+  params.disposeBrowserAuthRateLimiter();
+  params.stopModelPricingRefresh?.();
+  params.stopChannelHealthMonitor?.();
+  params.clearSecretsRuntimeSnapshot?.();
+  await params.closeMcpServer?.().catch(() => {});
+}
 
 export function createGatewayCloseHandler(params: {
   bonjourStop: (() => Promise<void>) | null;
@@ -42,7 +65,7 @@ export function createGatewayCloseHandler(params: {
 }) {
   return async (opts?: { reason?: string; restartExpectedMs?: number | null }) => {
     try {
-      const reasonRaw = typeof opts?.reason === "string" ? opts.reason.trim() : "";
+      const reasonRaw = normalizeOptionalString(opts?.reason) ?? "";
       const reason = reasonRaw || "gateway stopping";
       const restartExpectedMs =
         typeof opts?.restartExpectedMs === "number" && Number.isFinite(opts.restartExpectedMs)

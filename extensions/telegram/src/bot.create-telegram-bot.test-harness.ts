@@ -8,6 +8,7 @@ import {
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-runtime";
 import type { MockFn } from "openclaw/plugin-sdk/testing";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { beforeEach, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
 
@@ -208,7 +209,7 @@ function createModelsProviderDataFromConfig(cfg: OpenClawConfig): {
 } {
   const byProvider = new Map<string, Set<string>>();
   const add = (providerRaw: string | undefined, modelRaw: string | undefined) => {
-    const provider = providerRaw?.trim().toLowerCase();
+    const provider = normalizeLowercaseStringOrEmpty(providerRaw);
     const model = modelRaw?.trim();
     if (!provider || !model) {
       return;

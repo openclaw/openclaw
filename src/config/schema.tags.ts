@@ -1,5 +1,5 @@
+import type { ConfigUiHint, ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
 
 export const CONFIG_TAGS = [
   "security",
@@ -142,7 +142,7 @@ function addTags(set: Set<ConfigTag>, tags: ReadonlyArray<ConfigTag>): void {
 }
 
 export function deriveTagsForPath(path: string, hint?: ConfigUiHint): ConfigTag[] {
-  const lowerPath = path.toLowerCase();
+  const lowerPath = normalizeLowercaseStringOrEmpty(path);
   const override = resolveOverride(path);
   if (override) {
     return normalizeTags(override);

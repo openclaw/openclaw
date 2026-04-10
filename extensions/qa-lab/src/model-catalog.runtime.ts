@@ -1,8 +1,10 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { buildQaGatewayConfig } from "./qa-gateway-config.js";
+
+const QA_FRONTIER_PROVIDER_IDS = ["anthropic", "google", "openai"] as const;
 
 type ModelRow = {
   key: string;
@@ -58,7 +60,9 @@ export function selectQaRunnerModelOptions(rows: ModelRow[]): QaRunnerModelOptio
 }
 
 export async function loadQaRunnerModelOptions(params: { repoRoot: string }) {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qa-model-catalog-"));
+  const tempRoot = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-qa-model-catalog-"),
+  );
   const workspaceDir = path.join(tempRoot, "workspace");
   const stateDir = path.join(tempRoot, "state");
   const homeDir = path.join(tempRoot, "home");
@@ -76,9 +80,11 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string }) {
       gatewayToken: "qa-model-catalog",
       qaBusBaseUrl: "http://127.0.0.1:9",
       workspaceDir,
-      providerMode: "live-openai",
+      providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.4",
-      alternateModel: "openai/gpt-5.4",
+      alternateModel: "anthropic/claude-sonnet-4-6",
+      enabledProviderIds: [...QA_FRONTIER_PROVIDER_IDS],
+      imageGenerationModel: null,
       controlUiEnabled: false,
     });
     await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");

@@ -359,6 +359,20 @@ describe("discordPlugin outbound", () => {
 });
 
 describe("discordPlugin bindings", () => {
+  it("derives DM current conversation ids from direct sender context", () => {
+    const result = discordPlugin.bindings?.resolveCommandConversation?.({
+      accountId: "default",
+      chatType: "direct",
+      from: "discord:123456789012345678",
+      originatingTo: "channel:dm-channel-1",
+      fallbackTo: "channel:dm-channel-1",
+    });
+
+    expect(result).toEqual({
+      conversationId: "user:123456789012345678",
+    });
+  });
+
   it("preserves user-prefixed current conversation ids for DM binds", () => {
     const result = discordPlugin.bindings?.resolveCommandConversation?.({
       accountId: "default",
