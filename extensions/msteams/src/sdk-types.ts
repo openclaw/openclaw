@@ -21,7 +21,7 @@ export type MSTeamsActivity = {
     name?: string;
     isGroup?: boolean;
   };
-  recipient?: { id?: string; name?: string };
+  recipient?: { id?: string; name?: string; aadObjectId?: string };
   text?: string;
   textFormat?: string;
   locale?: string;
