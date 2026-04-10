@@ -29,6 +29,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
 describe("telegram live qa runtime", () => {
   afterEach(() => {
     fetchWithSsrFGuardMock.mockClear();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -235,6 +236,8 @@ describe("telegram live qa runtime", () => {
   });
 
   it("adds an abort deadline to Telegram API requests", async () => {
+    const controller = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
     let signal: AbortSignal | undefined;
     vi.stubGlobal(
       "fetch",
@@ -252,9 +255,10 @@ describe("telegram live qa runtime", () => {
     await expect(__testing.callTelegramApi("token", "getMe", undefined, 25)).resolves.toEqual({
       id: 42,
     });
-    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(timeoutSpy).toHaveBeenCalledWith(25);
+    expect(signal).toBe(controller.signal);
     expect(signal?.aborted).toBe(false);
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    controller.abort();
     expect(signal?.aborted).toBe(true);
   });
 
