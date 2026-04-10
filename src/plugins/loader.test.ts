@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { listAgentHarnessIds } from "../agents/harness/registry.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import {
   clearInternalHooks,
@@ -1450,6 +1451,49 @@ module.exports = { id: "throws-after-import", register() {} };`,
     ]);
 
     clearPluginCommands();
+  });
+
+  it("clears plugin agent harnesses during activating reloads", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "codex-harness",
+      filename: "codex-harness.cjs",
+      body: `module.exports = {
+        id: "codex-harness",
+        register(api) {
+          api.registerAgentHarness({
+            id: "codex",
+            label: "Codex",
+            supports: () => ({ supported: true }),
+            runAttempt: async () => ({ ok: false, error: "unused" }),
+          });
+        },
+      };`,
+    });
+
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["codex-harness"],
+        },
+      },
+      onlyPluginIds: ["codex-harness"],
+    });
+    expect(listAgentHarnessIds()).toEqual(["codex"]);
+
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: makeTempDir(),
+      config: {
+        plugins: {
+          allow: [],
+        },
+      },
+    });
+    expect(listAgentHarnessIds()).toEqual([]);
   });
 
   it("does not register internal hooks globally during non-activating loads", () => {

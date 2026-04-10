@@ -2,6 +2,7 @@ import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { ACP_SESSION_IDENTITY_RENDERER_VERSION } from "../acp/runtime/session-identifiers.js";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { selectAgentHarness } from "../agents/harness/selection.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import {
   getModelRefStatus,
@@ -11,6 +12,7 @@ import {
 } from "../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
+import { resolveEmbeddedAgentRuntime } from "../agents/pi-embedded-runner/runtime.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { cleanStaleLockFiles } from "../agents/session-write-lock.js";
 import { scheduleSubagentOrphanRecovery } from "../agents/subagent-registry.js";
@@ -59,6 +61,12 @@ async function prewarmConfiguredPrimaryModel(params: {
     defaultModel: DEFAULT_MODEL,
   });
   if (isCliProvider(provider, params.cfg)) {
+    return;
+  }
+  if (resolveEmbeddedAgentRuntime() !== "auto") {
+    return;
+  }
+  if (selectAgentHarness({ provider, modelId: model }).id !== "pi") {
     return;
   }
   const agentDir = resolveOpenClawAgentDir();
