@@ -1,5 +1,4 @@
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 import type { AgentEvent, BtwEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
@@ -34,7 +33,6 @@ type EventHandlerContext = {
   setActivityStatus: (text: string) => void;
   refreshSessionInfo?: () => Promise<void>;
   loadHistory?: () => Promise<void>;
-  noteLocalRunId?: (runId: string) => void;
   isLocalRunId?: (runId: string) => boolean;
   forgetLocalRunId?: (runId: string) => void;
   clearLocalRunIds?: () => void;
@@ -52,7 +50,6 @@ export function createEventHandlers(context: EventHandlerContext) {
     setActivityStatus,
     refreshSessionInfo,
     loadHistory,
-    noteLocalRunId,
     isLocalRunId,
     forgetLocalRunId,
     clearLocalRunIds,
@@ -98,18 +95,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     sessionRuns.clear();
     streamAssembler = new TuiStreamAssembler();
     pendingHistoryRefresh = false;
-    state.pendingOptimisticUserMessage = false;
     clearLocalRunIds?.();
     clearLocalBtwRunIds?.();
     btw.clear();
-  };
-
-  const flushPendingHistoryRefreshIfIdle = () => {
-    if (!pendingHistoryRefresh || state.activeChatRunId) {
-      return;
-    }
-    pendingHistoryRefresh = false;
-    void loadHistory?.();
   };
 
   const noteSessionRun = (runId: string) => {
@@ -130,6 +118,22 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
   };
 
+  const busyActivityStatuses = new Set(["sending", "waiting", "streaming", "running"]);
+
+  /**
+   * When the gateway finalizes a run whose runId no longer matches activeChatRunId, we normally
+   * avoid touching the status line so a concurrent run can keep showing streaming/running.
+   * If activeChatRunId is already null and no other session runs remain in flight, the UI can be
+   * stuck on "streaming" from deltas that targeted a run whose final arrived "inactive" (e.g.
+   * active pointer cleared or reassigned during failover / multi-stage tool flows). Clear in
+   * that orphaned case only — and only when the current status is still a busy indicator, so we
+   * never overwrite a terminal status (error/aborted) set by the most recent active run.
+   */
+  const shouldClearOrphanedActivityStatus = (): boolean =>
+    !state.activeChatRunId &&
+    sessionRuns.size === 0 &&
+    busyActivityStatuses.has(state.activityStatus);
+
   const finalizeRun = (params: {
     runId: string;
     wasActiveRun: boolean;
@@ -137,11 +141,14 @@ export function createEventHandlers(context: EventHandlerContext) {
   }) => {
     noteFinalizedRun(params.runId);
     clearActiveRunIfMatch(params.runId);
-    flushPendingHistoryRefreshIfIdle();
     if (params.wasActiveRun) {
       setActivityStatus(params.status);
+    } else if (shouldClearOrphanedActivityStatus()) {
+      // Orphan path only dismisses stuck busy UI; do not surface error from a non-active run.
+      setActivityStatus("idle");
     }
     void refreshSessionInfo?.();
+    tryFlushPendingHistoryRefresh();
   };
 
   const terminateRun = (params: {
@@ -152,9 +159,10 @@ export function createEventHandlers(context: EventHandlerContext) {
     streamAssembler.drop(params.runId);
     sessionRuns.delete(params.runId);
     clearActiveRunIfMatch(params.runId);
-    flushPendingHistoryRefreshIfIdle();
     if (params.wasActiveRun) {
       setActivityStatus(params.status);
+    } else if (shouldClearOrphanedActivityStatus()) {
+      setActivityStatus("idle");
     }
     void refreshSessionInfo?.();
   };
@@ -167,6 +175,26 @@ export function createEventHandlers(context: EventHandlerContext) {
     return sessionRuns.has(activeRunId);
   };
 
+  /**
+   * Apply a deferred history reload once it is safe: no in-flight runs remain, and any
+   * activeChatRunId has at least one chat event in this handler (avoids loadHistory racing a
+   * newly active run that has not emitted yet — overlapping local runs).
+   */
+  const tryFlushPendingHistoryRefresh = () => {
+    if (!pendingHistoryRefresh || !loadHistory) {
+      return;
+    }
+    const activeId = state.activeChatRunId;
+    if (activeId && !sessionRuns.has(activeId)) {
+      return;
+    }
+    if (sessionRuns.size > 0) {
+      return;
+    }
+    pendingHistoryRefresh = false;
+    void loadHistory();
+  };
+
   const maybeRefreshHistoryForRun = (
     runId: string,
     opts?: { allowLocalWithoutDisplayableFinal?: boolean },
@@ -174,18 +202,17 @@ export function createEventHandlers(context: EventHandlerContext) {
     const isLocalRun = isLocalRunId?.(runId) ?? false;
     if (isLocalRun) {
       forgetLocalRunId?.(runId);
-      // Local runs with displayable output do not need a history reload.
       if (!opts?.allowLocalWithoutDisplayableFinal) {
-        return;
-      }
-      // Defer the reload if a newer run is active so we preserve the pending
-      // user message, then flush once that active run finishes.
-      if (state.activeChatRunId && state.activeChatRunId !== runId) {
-        pendingHistoryRefresh = true;
         return;
       }
     }
     if (hasConcurrentActiveRun(runId)) {
+      pendingHistoryRefresh = true;
+      return;
+    }
+    const activeId = state.activeChatRunId;
+    if (activeId && activeId !== runId && !sessionRuns.has(activeId)) {
+      pendingHistoryRefresh = true;
       return;
     }
     pendingHistoryRefresh = false;
@@ -193,8 +220,8 @@ export function createEventHandlers(context: EventHandlerContext) {
   };
 
   const isSameSessionKey = (left: string | undefined, right: string | undefined): boolean => {
-    const normalizedLeft = normalizeLowercaseStringOrEmpty(left);
-    const normalizedRight = normalizeLowercaseStringOrEmpty(right);
+    const normalizedLeft = (left ?? "").trim().toLowerCase();
+    const normalizedRight = (right ?? "").trim().toLowerCase();
     if (!normalizedLeft || !normalizedRight) {
       return false;
     }
@@ -232,13 +259,10 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
     }
+    const priorActiveChatRunId = state.activeChatRunId;
     noteSessionRun(evt.runId);
     if (!state.activeChatRunId && !isLocalBtwRunId?.(evt.runId)) {
       state.activeChatRunId = evt.runId;
-      if (state.pendingOptimisticUserMessage) {
-        noteLocalRunId?.(evt.runId);
-        state.pendingOptimisticUserMessage = false;
-      }
     }
     if (evt.state === "delta") {
       const displayText = streamAssembler.ingestDelta(evt.runId, evt.message, state.showThinking);
@@ -250,7 +274,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     if (evt.state === "final") {
       const isLocalBtwRun = isLocalBtwRunId?.(evt.runId) ?? false;
-      const wasActiveRun = state.activeChatRunId === evt.runId;
+      const wasActiveRun = priorActiveChatRunId === evt.runId;
       if (!evt.message && isLocalBtwRun) {
         forgetLocalBtwRunId?.(evt.runId);
         noteFinalizedRun(evt.runId);
@@ -305,18 +329,19 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     if (evt.state === "aborted") {
       forgetLocalBtwRunId?.(evt.runId);
-      const wasActiveRun = state.activeChatRunId === evt.runId;
+      const wasActiveRun = priorActiveChatRunId === evt.runId;
       chatLog.addSystem("run aborted");
       terminateRun({ runId: evt.runId, wasActiveRun, status: "aborted" });
       maybeRefreshHistoryForRun(evt.runId);
     }
     if (evt.state === "error") {
       forgetLocalBtwRunId?.(evt.runId);
-      const wasActiveRun = state.activeChatRunId === evt.runId;
+      const wasActiveRun = priorActiveChatRunId === evt.runId;
       chatLog.addSystem(`run error: ${evt.errorMessage ?? "unknown"}`);
       terminateRun({ runId: evt.runId, wasActiveRun, status: "error" });
       maybeRefreshHistoryForRun(evt.runId);
     }
+    tryFlushPendingHistoryRefresh();
     tui.requestRender();
   };
 
