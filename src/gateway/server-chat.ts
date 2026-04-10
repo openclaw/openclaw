@@ -93,19 +93,14 @@ function appendUniqueSuffix(base: string, suffix: string): string {
   if (!base) {
     return suffix;
   }
-  if (base.endsWith(suffix)) {
-    return base;
-  }
-  const maxOverlap = Math.min(base.length, suffix.length);
-  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
-    if (base.slice(-overlap) === suffix.slice(0, overlap)) {
-      return base + suffix.slice(overlap);
-    }
-  }
+  // Assistant `delta` is defined as new characters only (`cleanedText.slice(previousCleaned.length)`
+  // in the embedded subscriber). Overlap-based merging incorrectly collapses legitimate repeats
+  // (digits, CJK, etc.): e.g. base "...k1" + delta "19" → "...k19" instead of "...k119", or
+  // "...c7bc32" + "2c" → "...c7bc32c" instead of "...c7bc322c".
   return base + suffix;
 }
 
-function resolveMergedAssistantText(params: {
+export function resolveMergedAssistantText(params: {
   previousText: string;
   nextText: string;
   nextDelta: string;
