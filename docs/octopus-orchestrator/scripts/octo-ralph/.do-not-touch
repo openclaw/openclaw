@@ -1,0 +1,35 @@
+# Paths the Ralph loop must never modify.
+#
+# Each line is either a glob (relative to repo root) or a literal path.
+# The post-task.sh script will enforce this on the last commit.
+#
+# The rule is: the loop may modify ONLY paths under src/octo/ and the
+# four explicitly allowed files under docs/octopus-orchestrator/.
+# Everything else — including all architecture docs — is read-only.
+
+# Architecture and planning docs — human-reviewed
+docs/octopus-orchestrator/PRD.md
+docs/octopus-orchestrator/HLD.md
+docs/octopus-orchestrator/LLD.md
+docs/octopus-orchestrator/implementation-plan.md
+docs/octopus-orchestrator/landscape-review.md
+docs/octopus-orchestrator/recommendation.md
+docs/octopus-orchestrator/DECISIONS.md
+docs/octopus-orchestrator/INTEGRATION.md
+docs/octopus-orchestrator/CONFIG.md
+docs/octopus-orchestrator/TEST-STRATEGY.md
+docs/octopus-orchestrator/OBSERVABILITY.md
+docs/octopus-orchestrator/COMPATIBILITY.md
+docs/octopus-orchestrator/BOOTSTRAP.md
+docs/octopus-orchestrator/PROMPT.md
+
+# Loop infrastructure — human-managed
+docs/octopus-orchestrator/scripts/octo-ralph/loop.sh
+docs/octopus-orchestrator/scripts/octo-ralph/pre-task.sh
+docs/octopus-orchestrator/scripts/octo-ralph/post-task.sh
+docs/octopus-orchestrator/scripts/octo-ralph/has-eligible-task.sh
+docs/octopus-orchestrator/scripts/octo-ralph/verify.sh
+docs/octopus-orchestrator/scripts/octo-ralph/.do-not-touch
+
+# Everything else in the OpenClaw repo — out of scope
+# (src/octo/** is the only place the loop is permitted to write)
