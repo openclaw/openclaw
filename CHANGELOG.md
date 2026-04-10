@@ -136,6 +136,8 @@ Docs: https://docs.openclaw.ai
 - Media/security: honor sender-scoped `toolsBySender` policy for outbound host-media reads so denied senders cannot trigger host file disclosure via attachment hydration. (#64459) Thanks @eleqtrizit.
 - Browser/security: reject strict-policy hostname navigation unless the hostname is an explicit allowlist exception or IP literal, and route CDP HTTP discovery through the pinned SSRF fetch path. (#64367) Thanks @eleqtrizit.
 
+- Logging/security: redact Gmail watcher `--hook-token` values from startup logging and `logs.tail` output. (#62661) Thanks @eleqtrizit.
+
 ## 2026.4.9
 
 ### Changes
