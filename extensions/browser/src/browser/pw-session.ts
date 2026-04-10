@@ -427,11 +427,13 @@ function observeBrowser(browser: Browser) {
 
 async function connectBrowser(cdpUrl: string, ssrfPolicy?: SsrFPolicy): Promise<ConnectedBrowser> {
   const normalized = normalizeCdpUrl(cdpUrl);
-  await assertCdpEndpointAllowed(normalized, ssrfPolicy);
   const cached = cachedByCdpUrl.get(normalized);
   if (cached) {
     return cached;
   }
+  // Run SSRF policy check only on cache miss so transient DNS failures
+  // do not break active sessions that already hold a live CDP connection.
+  await assertCdpEndpointAllowed(normalized, ssrfPolicy);
   const connecting = connectingByCdpUrl.get(normalized);
   if (connecting) {
     return await connecting;
@@ -896,7 +898,9 @@ function cdpSocketNeedsAttach(wsUrl: string): boolean {
 async function tryTerminateExecutionViaCdp(opts: {
   cdpUrl: string;
   targetId: string;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
+  await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(opts.cdpUrl);
   const listUrl = appendCdpPath(cdpHttpBase, "/json/list");
 
@@ -985,6 +989,7 @@ export async function forceDisconnectPlaywrightForTarget(opts: {
   cdpUrl: string;
   targetId?: string;
   reason?: string;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
   const normalized = normalizeCdpUrl(opts.cdpUrl);
   const cur = cachedByCdpUrl.get(normalized);
@@ -1005,7 +1010,7 @@ export async function forceDisconnectPlaywrightForTarget(opts: {
   // disconnect Playwright's CDP connection.
   const targetId = normalizeOptionalString(opts.targetId) ?? "";
   if (targetId) {
-    await tryTerminateExecutionViaCdp({ cdpUrl: normalized, targetId }).catch(() => {});
+    await tryTerminateExecutionViaCdp({ cdpUrl: normalized, targetId, ssrfPolicy: opts.ssrfPolicy }).catch(() => {});
   }
 
   // Fire-and-forget: don't await because browser.close() may hang on the stuck CDP pipe.
