@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildOpenrouterSpeechProvider } from "./speech-provider.js";
 
 const {
-  fetchWithTimeoutMock,
+  fetchWithTimeoutGuardedMock,
   assertOkOrThrowHttpErrorMock,
   resolveProviderHttpRequestConfigMock,
 } = vi.hoisted(() => ({

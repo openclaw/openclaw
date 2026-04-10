@@ -6,12 +6,14 @@ const {
   postJsonRequestMock,
   assertOkOrThrowHttpErrorMock,
   fetchWithTimeoutMock,
+  fetchWithTimeoutGuardedMock,
   resolveProviderHttpRequestConfigMock,
 } = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "openrouter-key" })),
   postJsonRequestMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
   fetchWithTimeoutMock: vi.fn(),
+  fetchWithTimeoutGuardedMock: vi.fn(),
   resolveProviderHttpRequestConfigMock: vi.fn((params) => ({
     baseUrl: params.baseUrl ?? params.defaultBaseUrl,
     allowPrivateNetwork: Boolean(params.allowPrivateNetwork),
@@ -28,8 +30,31 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
   postJsonRequest: postJsonRequestMock,
   fetchWithTimeout: fetchWithTimeoutMock,
+  fetchWithTimeoutGuarded: fetchWithTimeoutGuardedMock,
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
 }));
+
+// Helper: mock a guarded fetch response (poll uses guarded transport).
+function guardedResponse(body: unknown, headers?: Record<string, string>) {
+  return {
+    response: new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json", ...headers },
+    }),
+    release: vi.fn(async () => {}),
+  };
+}
+
+// Helper: mock a guarded fetch that returns binary content (authenticated download).
+function guardedBinaryResponse(data: Buffer, mimeType: string) {
+  return {
+    response: new Response(data, {
+      status: 200,
+      headers: { "content-type": mimeType },
+    }),
+    release: vi.fn(async () => {}),
+  };
+}
 
 describe("openrouter video generation provider", () => {
   afterEach(() => {
@@ -37,6 +62,7 @@ describe("openrouter video generation provider", () => {
     postJsonRequestMock.mockReset();
     assertOkOrThrowHttpErrorMock.mockClear();
     fetchWithTimeoutMock.mockReset();
+    fetchWithTimeoutGuardedMock.mockReset();
     resolveProviderHttpRequestConfigMock.mockClear();
   });
 
@@ -53,7 +79,6 @@ describe("openrouter video generation provider", () => {
   });
 
   it("submits a video request, polls, and downloads the result", async () => {
-    // Submit returns job id and polling URL
     postJsonRequestMock.mockResolvedValue({
       response: {
         json: async () => ({
@@ -65,26 +90,23 @@ describe("openrouter video generation provider", () => {
       release: vi.fn(async () => {}),
     });
 
-    // Poll returns completed with unsigned URL
-    fetchWithTimeoutMock
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            id: "video-job-1",
-            generation_id: "gen-abc",
-            status: "completed",
-            unsigned_urls: ["https://openrouter.ai/api/v1/videos/video-job-1/content?index=0"],
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        ),
-      )
-      // Download returns video bytes
-      .mockResolvedValueOnce(
-        new Response(Buffer.from("video-bytes"), {
-          status: 200,
-          headers: { "content-type": "video/mp4" },
-        }),
-      );
+    // Poll (guarded) returns completed with unsigned URL
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce(
+      guardedResponse({
+        id: "video-job-1",
+        generation_id: "gen-abc",
+        status: "completed",
+        unsigned_urls: ["https://cdn.openrouter.ai/videos/video-job-1.mp4"],
+      }),
+    );
+
+    // Download unsigned URL uses raw fetchWithTimeout
+    fetchWithTimeoutMock.mockResolvedValueOnce(
+      new Response(Buffer.from("video-bytes"), {
+        status: 200,
+        headers: { "content-type": "video/mp4" },
+      }),
+    );
 
     const provider = buildOpenrouterVideoGenerationProvider();
     const result = await provider.generateVideo({
@@ -111,6 +133,37 @@ describe("openrouter video generation provider", () => {
     );
   });
 
+  it("uses guarded download when no unsigned URL is available", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          id: "video-auth",
+          polling_url: "https://openrouter.ai/api/v1/videos/video-auth",
+          status: "pending",
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    fetchWithTimeoutGuardedMock
+      .mockResolvedValueOnce(
+        guardedResponse({ id: "video-auth", status: "completed", unsigned_urls: [] }),
+      )
+      .mockResolvedValueOnce(guardedBinaryResponse(Buffer.from("auth-video"), "video/mp4"));
+
+    const provider = buildOpenrouterVideoGenerationProvider();
+    const result = await provider.generateVideo({
+      provider: "openrouter",
+      model: "google/veo-3.1",
+      prompt: "authenticated download",
+      cfg: {},
+    });
+
+    expect(result.videos[0]?.buffer.toString()).toBe("auth-video");
+    // No raw fetchWithTimeout call since download went through guarded path
+    expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
+  });
+
   it("passes duration, resolution, and aspect_ratio", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: {
@@ -123,19 +176,11 @@ describe("openrouter video generation provider", () => {
       release: vi.fn(async () => {}),
     });
 
-    fetchWithTimeoutMock
+    fetchWithTimeoutGuardedMock
       .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({ id: "video-job-2", status: "completed", unsigned_urls: [] }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        ),
+        guardedResponse({ id: "video-job-2", status: "completed", unsigned_urls: [] }),
       )
-      .mockResolvedValueOnce(
-        new Response(Buffer.from("mp4"), {
-          status: 200,
-          headers: { "content-type": "video/mp4" },
-        }),
-      );
+      .mockResolvedValueOnce(guardedBinaryResponse(Buffer.from("mp4"), "video/mp4"));
 
     const provider = buildOpenrouterVideoGenerationProvider();
     await provider.generateVideo({
@@ -173,11 +218,8 @@ describe("openrouter video generation provider", () => {
       release: vi.fn(async () => {}),
     });
 
-    fetchWithTimeoutMock.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({ id: "video-job-fail", status: "failed" }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce(
+      guardedResponse({ id: "video-job-fail", status: "failed" }),
     );
 
     const provider = buildOpenrouterVideoGenerationProvider();
@@ -203,19 +245,11 @@ describe("openrouter video generation provider", () => {
       release: vi.fn(async () => {}),
     });
 
-    fetchWithTimeoutMock
+    fetchWithTimeoutGuardedMock
       .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({ id: "video-i2v", status: "completed", unsigned_urls: [] }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        ),
+        guardedResponse({ id: "video-i2v", status: "completed", unsigned_urls: [] }),
       )
-      .mockResolvedValueOnce(
-        new Response(Buffer.from("mp4"), {
-          status: 200,
-          headers: { "content-type": "video/mp4" },
-        }),
-      );
+      .mockResolvedValueOnce(guardedBinaryResponse(Buffer.from("mp4"), "video/mp4"));
 
     const provider = buildOpenrouterVideoGenerationProvider();
     await provider.generateVideo({
