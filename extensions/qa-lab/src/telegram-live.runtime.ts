@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { startQaGatewayChild } from "./gateway-child.js";
+import { startQaLiveLaneGateway } from "./live-gateway.runtime.js";
 import {
   defaultQaModelForMode,
   normalizeQaProviderMode,
@@ -699,7 +700,7 @@ export async function runTelegramQaLive(params: {
     flushTelegramUpdates(runtimeEnv.sutToken),
   ]);
 
-  const gateway = await startQaGatewayChild({
+  const gatewayHarness = await startQaLiveLaneGateway({
     repoRoot,
     qaBusBaseUrl: "http://127.0.0.1:43123",
     providerMode,
@@ -719,7 +720,7 @@ export async function runTelegramQaLive(params: {
   const scenarioResults: TelegramQaScenarioResult[] = [];
   let canaryFailure: string | null = null;
   try {
-    await waitForTelegramChannelRunning(gateway, sutAccountId);
+    await waitForTelegramChannelRunning(gatewayHarness.gateway, sutAccountId);
     try {
       await runCanary({
         driverToken: runtimeEnv.driverToken,
@@ -782,7 +783,7 @@ export async function runTelegramQaLive(params: {
       }
     }
   } finally {
-    await gateway.stop();
+    await gatewayHarness.stop();
   }
 
   const finishedAt = new Date().toISOString();

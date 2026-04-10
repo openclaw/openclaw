@@ -4,6 +4,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { startQaGatewayChild } from "./gateway-child.js";
+import { startQaLiveLaneGateway } from "./live-gateway.runtime.js";
 import {
   createMatrixQaClient,
   provisionMatrixQaRoom,
@@ -55,6 +56,7 @@ type MatrixQaSummary = {
   sutAccountId: string;
   userIds: {
     driver: string;
+    observer: string;
     sut: string;
   };
 };
@@ -211,7 +213,7 @@ async function waitForMatrixChannelReady(
 }
 
 function buildMentionPrompt(sutUserId: string, token: string) {
-  return `${sutUserId} reply with exactly: ${token}`;
+  return `${sutUserId} reply with only this exact marker: ${token}`;
 }
 
 async function runMatrixCanary(params: {
@@ -334,6 +336,7 @@ export async function runMatrixQaLive(params: {
       return await provisionMatrixQaRoom({
         baseUrl: harness.baseUrl,
         driverLocalpart: `qa-driver-${runSuffix}`,
+        observerLocalpart: `qa-observer-${runSuffix}`,
         registrationToken: harness.registrationToken,
         roomName: `OpenClaw Matrix QA ${runSuffix}`,
         sutLocalpart: `qa-sut-${runSuffix}`,
@@ -357,12 +360,12 @@ export async function runMatrixQaLive(params: {
     },
   ];
   const scenarioResults: MatrixQaScenarioResult[] = [];
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | null = null;
+  let gatewayHarness: Awaited<ReturnType<typeof startQaLiveLaneGateway>> | null = null;
   let canaryFailed = false;
   let canarySince: string | undefined;
 
   try {
-    gateway = await startQaGatewayChild({
+    gatewayHarness = await startQaLiveLaneGateway({
       repoRoot,
       qaBusBaseUrl: "http://127.0.0.1:43123",
       providerMode,
@@ -381,7 +384,7 @@ export async function runMatrixQaLive(params: {
           sutUserId: provisioning.sut.userId,
         }),
     });
-    await waitForMatrixChannelReady(gateway, sutAccountId);
+    await waitForMatrixChannelReady(gatewayHarness.gateway, sutAccountId);
     checks.push({
       name: "Matrix channel ready",
       status: "pass",
@@ -446,7 +449,7 @@ export async function runMatrixQaLive(params: {
       }
     }
   } finally {
-    await gateway?.stop().catch(() => {});
+    await gatewayHarness?.stop().catch(() => {});
     await harness.stop().catch(() => {});
   }
 
@@ -468,6 +471,7 @@ export async function runMatrixQaLive(params: {
     notes: [
       `roomId: ${provisioning.roomId}`,
       `driver: ${provisioning.driver.userId}`,
+      `observer: ${provisioning.observer.userId}`,
       `sut: ${provisioning.sut.userId}`,
       `homeserver: ${harness.baseUrl}`,
       `image: ${harness.image}`,
@@ -500,6 +504,7 @@ export async function runMatrixQaLive(params: {
     sutAccountId,
     userIds: {
       driver: provisioning.driver.userId,
+      observer: provisioning.observer.userId,
       sut: provisioning.sut.userId,
     },
   };
@@ -550,6 +555,7 @@ export async function runMatrixQaLive(params: {
 export const __testing = {
   MATRIX_QA_SCENARIOS,
   buildMatrixQaConfig,
+  buildMentionPrompt,
   buildObservedEventsArtifact,
   findScenario,
   waitForMatrixChannelReady,

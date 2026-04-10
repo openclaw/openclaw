@@ -20,6 +20,24 @@ type MatrixQaRoomCreateResponse = {
   room_id?: string;
 };
 
+type MatrixQaSendMessageContent = {
+  body: string;
+  format?: "org.matrix.custom.html";
+  formatted_body?: string;
+  "m.mentions"?: {
+    user_ids?: string[];
+  };
+  "m.relates_to"?: {
+    rel_type: "m.thread";
+    event_id: string;
+    is_falling_back: true;
+    "m.in_reply_to": {
+      event_id: string;
+    };
+  };
+  msgtype: "m.text";
+};
+
 type MatrixQaSyncResponse = {
   next_batch?: string;
   rooms?: {
@@ -82,6 +100,7 @@ export type MatrixQaRegisteredAccount = {
 
 export type MatrixQaProvisionResult = {
   driver: MatrixQaRegisteredAccount;
+  observer: MatrixQaRegisteredAccount;
   roomId: string;
   sut: MatrixQaRegisteredAccount;
 };
@@ -89,13 +108,86 @@ export type MatrixQaProvisionResult = {
 function buildMatrixThreadRelation(threadRootEventId: string, replyToEventId?: string) {
   return {
     "m.relates_to": {
-      rel_type: "m.thread",
+      rel_type: "m.thread" as const,
       event_id: threadRootEventId,
-      is_falling_back: true,
+      is_falling_back: true as const,
       "m.in_reply_to": {
         event_id: replyToEventId?.trim() || threadRootEventId,
       },
     },
+  };
+}
+
+function escapeMatrixHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => {
+    switch (char) {
+      case "&":
+        return "&amp;";
+      case "<":
+        return "&lt;";
+      case ">":
+        return "&gt;";
+      case '"':
+        return "&quot;";
+      case "'":
+        return "&#39;";
+      default:
+        return char;
+    }
+  });
+}
+
+function buildMatrixMentionLink(userId: string) {
+  const href = `https://matrix.to/#/${encodeURIComponent(userId)}`;
+  const label = escapeMatrixHtml(userId);
+  return `<a href="${href}">${label}</a>`;
+}
+
+function buildMatrixQaMessageContent(params: {
+  body: string;
+  mentionUserIds?: string[];
+  replyToEventId?: string;
+  threadRootEventId?: string;
+}): MatrixQaSendMessageContent {
+  const body = params.body;
+  const uniqueMentionUserIds = [...new Set(params.mentionUserIds?.filter(Boolean) ?? [])];
+  const formattedParts: string[] = [];
+  let cursor = 0;
+  let usedFormattedMention = false;
+
+  while (cursor < body.length) {
+    let matchedUserId: string | null = null;
+    for (const userId of uniqueMentionUserIds) {
+      if (body.startsWith(userId, cursor)) {
+        matchedUserId = userId;
+        break;
+      }
+    }
+    if (matchedUserId) {
+      formattedParts.push(buildMatrixMentionLink(matchedUserId));
+      cursor += matchedUserId.length;
+      usedFormattedMention = true;
+      continue;
+    }
+    formattedParts.push(escapeMatrixHtml(body[cursor] ?? ""));
+    cursor += 1;
+  }
+
+  return {
+    body,
+    msgtype: "m.text",
+    ...(usedFormattedMention
+      ? {
+          format: "org.matrix.custom.html" as const,
+          formatted_body: formattedParts.join(""),
+        }
+      : {}),
+    ...(uniqueMentionUserIds.length > 0
+      ? { "m.mentions": { user_ids: uniqueMentionUserIds } }
+      : {}),
+    ...(params.threadRootEventId
+      ? buildMatrixThreadRelation(params.threadRootEventId, params.replyToEventId)
+      : {}),
   };
 }
 
@@ -387,16 +479,7 @@ export function createMatrixQaClient(params: {
       const result = await requestMatrixJson<{ event_id?: string }>({
         accessToken: params.accessToken,
         baseUrl: params.baseUrl,
-        body: {
-          body: opts.body,
-          msgtype: "m.text",
-          ...(opts.mentionUserIds && opts.mentionUserIds.length > 0
-            ? { "m.mentions": { user_ids: opts.mentionUserIds } }
-            : {}),
-          ...(opts.threadRootEventId
-            ? buildMatrixThreadRelation(opts.threadRootEventId, opts.replyToEventId)
-            : {}),
-        },
+        body: buildMatrixQaMessageContent(opts),
         endpoint: `/_matrix/client/v3/rooms/${encodeURIComponent(opts.roomId)}/send/m.room.message/${encodeURIComponent(txnId)}`,
         fetchImpl,
         method: "PUT",
@@ -488,6 +571,7 @@ export async function provisionMatrixQaRoom(params: {
   fetchImpl?: FetchLike;
   roomName: string;
   driverLocalpart: string;
+  observerLocalpart: string;
   registrationToken: string;
   sutLocalpart: string;
 }) {
@@ -507,13 +591,19 @@ export async function provisionMatrixQaRoom(params: {
     password: `sut-${randomUUID()}`,
     registrationToken: params.registrationToken,
   });
+  const observer = await anonClient.registerWithToken({
+    deviceName: "OpenClaw Matrix QA Observer",
+    localpart: params.observerLocalpart,
+    password: `observer-${randomUUID()}`,
+    registrationToken: params.registrationToken,
+  });
   const driverClient = createMatrixQaClient({
     accessToken: driver.accessToken,
     baseUrl: params.baseUrl,
     fetchImpl: params.fetchImpl,
   });
   const roomId = await driverClient.createPrivateRoom({
-    inviteUserIds: [sut.userId],
+    inviteUserIds: [sut.userId, observer.userId],
     name: params.roomName,
   });
   await joinRoomWithRetry({
@@ -522,14 +612,22 @@ export async function provisionMatrixQaRoom(params: {
     fetchImpl: params.fetchImpl,
     roomId,
   });
+  await joinRoomWithRetry({
+    accessToken: observer.accessToken,
+    baseUrl: params.baseUrl,
+    fetchImpl: params.fetchImpl,
+    roomId,
+  });
   return {
     driver,
+    observer,
     roomId,
     sut,
   } satisfies MatrixQaProvisionResult;
 }
 
 export const __testing = {
+  buildMatrixQaMessageContent,
   buildMatrixThreadRelation,
   normalizeMatrixQaObservedEvent,
   resolveNextRegistrationAuth,
