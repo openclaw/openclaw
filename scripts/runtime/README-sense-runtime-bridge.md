@@ -1244,3 +1244,122 @@ Routing loop behavior change:
 - if `check_gpu_runtime` resolves to `start_nim_runtime`, the loop now runs that remediation once
 - if `nim_status_info.nim_ready == false`, the loop stops with `final_state = nim_not_ready`
 - if the follow-up missing requirements resolve to `configure_provider`, the loop stops with `final_state = provider_not_ready`
+
+# Upgrade Alignment Plan
+
+Current fork baseline after the `2026.4.9` version bump:
+
+- fork `main` is the source of truth for:
+  - NemoClaw Slack control
+  - `extensions/sense-worker`
+  - current Docker release fixes
+  - current SSH-side production gateway behavior
+- upstream `openclaw/openclaw` remains the source of truth for:
+  - core platform releases
+  - broader Slack plugin evolution
+  - mobile and desktop platform changes
+  - release train versioning
+
+The fork should not absorb large upstream deltas in one jump.
+Use narrow upgrade lanes with one PR per intent.
+
+Slack, NemoClaw, and Docker alignment plan:
+
+1. freeze the current fork surface
+   - treat the following as protected behavior:
+     - `/nemoclaw help`
+     - `/nemoclaw digest`
+     - `/nemoclaw recent`
+     - `/nemoclaw failures`
+     - `/nemoclaw job <id>`
+     - `/nemoclaw gpu`
+     - `/nemoclaw run ...`
+   - keep current Docker release expectations working:
+     - lowercase GHCR tags
+     - lockfile-compatible `pnpm prune --prod`
+     - runnable `ghcr.io/<repo>:main`
+
+2. split upstream tracking into three PR lanes
+   - `release/version`
+     - package version
+     - changelog alignment where safe
+     - image/version smoke checks
+   - `docker/release-flow`
+     - workflow trigger changes
+     - cache strategy
+     - release artifact behavior
+     - no Slack or NemoClaw changes in this lane
+   - `slack/runtime-surface`
+     - Slack plugin API changes
+     - slash/interactions/runtime changes
+     - only after the fork command surface is documented and snapshotted
+
+3. verify each lane against the same three smoke surfaces
+   - local Docker smoke:
+     - `docker run --rm ghcr.io/<lowercased github.repository>:main openclaw --version`
+   - SSH-side prod gateway smoke:
+     - `help`
+     - `recent`
+     - `gpu`
+   - Slack live smoke:
+     - `digest`
+     - `failures`
+     - `run status`
+
+4. treat upstream Slack changes as adapter work, not direct replacement
+   - upstream Slack is evolving quickly and touches security, threading, and interaction routing
+   - fork-specific NemoClaw behavior should stay in `extensions/sense-worker`
+   - upstream Slack changes should be pulled only when the integration boundary is clear:
+     - command entry
+     - slash dispatch
+     - response threading
+     - auth/security hooks
+
+5. update docs only after each lane lands
+   - keep this file and related Slack docs aligned with the actually deployed fork behavior
+
+macOS and T550 Ubuntu alignment plan:
+
+1. keep the topology explicit
+   - local clean development repo:
+     - `/Users/deepnoa/openclaw-main`
+   - remote production repo on Ubuntu:
+     - `/home/deepnoa/openclaw`
+   - remote runtime state:
+     - `/home/deepnoa/.openclaw`
+   - local ad-hoc gateway:
+     - `127.0.0.1:18789 / 18791`
+   - SSH-side primary gateway:
+     - `127.0.0.1:19001 / 19003`
+
+2. do not assume the repo itself is mounted from macOS
+   - current evidence confirms `/mnt/nas` is mounted on Ubuntu
+   - current evidence does not confirm that `/home/deepnoa/openclaw` is a live mount of the macOS repo
+   - verify deploy/update flow before changing platform assumptions
+
+3. normalize version checks across all surfaces
+   - local repo `package.json`
+   - Docker image `openclaw --version`
+   - SSH-side `openclaw --version`
+   - gateway-reported version where available
+
+4. keep service ownership on Ubuntu explicit
+   - `openclaw-gateway.service` should continue to point at:
+     - `WorkingDirectory=/home/deepnoa/openclaw`
+     - `OPENCLAW_STATE_DIR=/home/deepnoa/.openclaw`
+   - any repo sync or deploy step should update that tree deliberately
+
+5. separate local experiments from production runtime
+   - use the local ad-hoc gateway only for smoke tests and temporary experiments
+   - use the SSH-side primary gateway for production-like validation and for the configured agent set:
+     - `Universal`
+     - `dev`
+     - `ops`
+     - `research`
+
+6. if a macOS or T550 sync path exists, document and reduce it to one route
+   - acceptable examples:
+     - git pull on Ubuntu
+     - explicit rsync
+     - explicit deploy script
+   - avoid mixed update paths that make version provenance unclear
