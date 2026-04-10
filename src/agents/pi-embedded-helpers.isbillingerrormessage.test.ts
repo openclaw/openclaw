@@ -1106,10 +1106,22 @@ describe("classifyFailoverReason", () => {
 describe("classifyProviderRuntimeFailureKind", () => {
   it("classifies missing scope failures", () => {
     expect(
-      classifyProviderRuntimeFailureKind(
-        '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write"}}',
-      ),
+      classifyProviderRuntimeFailureKind({
+        provider: "openai-codex",
+        message:
+          '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write"}}',
+      }),
     ).toBe("auth_scope");
+  });
+
+  it("does not classify non-Codex permission errors as missing scope failures", () => {
+    expect(
+      classifyProviderRuntimeFailureKind({
+        provider: "openai",
+        message:
+          '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write"}}',
+      }),
+    ).not.toBe("auth_scope");
   });
 
   it("classifies OAuth refresh failures", () => {
