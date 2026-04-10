@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Observation
 import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
@@ -11,10 +12,10 @@ private let webChatSwiftLogger = Logger(subsystem: "ai.openclaw", category: "Web
 private let webChatThinkingLevelDefaultsKey = "openclaw.webchat.thinkingLevel"
 
 private enum WebChatSwiftUILayout {
-    static let windowSize = NSSize(width: 500, height: 840)
-    static let panelSize = NSSize(width: 480, height: 640)
-    static let windowMinSize = NSSize(width: 480, height: 360)
-    static let anchorPadding: CGFloat = 8
+    static let windowSize = NSSize(width: 560, height: 900)
+    static let panelSize = NSSize(width: 520, height: 700)
+    static let windowMinSize = NSSize(width: 520, height: 420)
+    static let anchorPadding: CGFloat = 10
 }
 
 struct MacGatewayChatTransport: OpenClawChatTransport {
@@ -217,7 +218,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
 final class WebChatSwiftUIWindowController {
     private let presentation: WebChatPresentation
     private let sessionKey: String
-    private let hosting: NSHostingController<OpenClawChatView>
+    private let hosting: NSHostingController<MacChatChromeView>
     private let contentController: NSViewController
     private var window: NSWindow?
     private var dismissMonitor: Any?
@@ -239,12 +240,18 @@ final class WebChatSwiftUIWindowController {
                 UserDefaults.standard.set(level, forKey: webChatThinkingLevelDefaultsKey)
             })
         let accent = Self.color(fromHex: AppStateStore.shared.seamColorHex)
-        self.hosting = NSHostingController(rootView: OpenClawChatView(
+        self.hosting = NSHostingController(rootView: MacChatChromeView(
             viewModel: vm,
-            showsSessionSwitcher: true,
-            userAccent: accent))
+            userAccent: accent,
+            presentation: presentation,
+            onClose: {}))
         self.contentController = Self.makeContentController(for: presentation, hosting: self.hosting)
         self.window = Self.makeWindow(for: presentation, contentViewController: self.contentController)
+        self.hosting.rootView = MacChatChromeView(
+            viewModel: vm,
+            userAccent: accent,
+            presentation: presentation,
+            onClose: { [weak self] in self?.close() })
     }
 
     deinit {}
@@ -354,16 +361,18 @@ final class WebChatSwiftUIWindowController {
         case .window:
             let window = NSWindow(
                 contentRect: NSRect(origin: .zero, size: WebChatSwiftUILayout.windowSize),
-                styleMask: [.titled, .closable, .resizable, .miniaturizable],
+                styleMask: [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView],
                 backing: .buffered,
                 defer: false)
             window.title = "OpenClaw Chat"
             window.contentViewController = contentViewController
             window.isReleasedWhenClosed = false
-            window.titleVisibility = .visible
-            window.titlebarAppearsTransparent = false
+            window.titleVisibility = .hidden
+            window.titlebarAppearsTransparent = true
             window.backgroundColor = .clear
             window.isOpaque = false
+            window.toolbarStyle = .unifiedCompact
+            window.isMovableByWindowBackground = true
             window.center()
             WindowPlacement.ensureOnScreen(window: window, defaultSize: WebChatSwiftUILayout.windowSize)
             window.minSize = WebChatSwiftUILayout.windowMinSize
@@ -385,6 +394,7 @@ final class WebChatSwiftUIWindowController {
             panel.titlebarAppearsTransparent = true
             panel.backgroundColor = .clear
             panel.isOpaque = false
+            panel.isMovableByWindowBackground = true
             panel.contentViewController = contentViewController
             panel.becomesKeyOnlyIfNeeded = true
             panel.contentView?.wantsLayer = true
@@ -400,11 +410,11 @@ final class WebChatSwiftUIWindowController {
 
     private static func makeContentController(
         for presentation: WebChatPresentation,
-        hosting: NSHostingController<OpenClawChatView>) -> NSViewController
+        hosting: NSHostingController<MacChatChromeView>) -> NSViewController
     {
         let controller = NSViewController()
         let effectView = NSVisualEffectView()
-        effectView.material = .sidebar
+        effectView.material = presentation.isPanel ? .hudWindow : .underWindowBackground
         effectView.blendingMode = switch presentation {
         case .panel:
             .withinWindow
@@ -416,13 +426,13 @@ final class WebChatSwiftUIWindowController {
         effectView.layer?.cornerCurve = .continuous
         let cornerRadius: CGFloat = switch presentation {
         case .panel:
-            16
+            22
         case .window:
             0
         }
         effectView.layer?.cornerRadius = cornerRadius
         effectView.layer?.masksToBounds = true
-        effectView.layer?.backgroundColor = NSColor.clear.cgColor
+        effectView.layer?.backgroundColor = NSColor.black.withAlphaComponent(presentation.isPanel ? 0.18 : 0.08).cgColor
 
         effectView.translatesAutoresizingMaskIntoConstraints = true
         effectView.autoresizingMask = [.width, .height]
@@ -461,5 +471,110 @@ final class WebChatSwiftUIWindowController {
 
     private static func color(fromHex raw: String?) -> Color? {
         ColorHexSupport.color(fromHex: raw)
+    }
+}
+
+@MainActor
+private struct MacChatChromeView: View {
+    @Bindable var viewModel: OpenClawChatViewModel
+    let userAccent: Color?
+    let presentation: WebChatPresentation
+    let onClose: () -> Void
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color.black.opacity(self.presentation.isPanel ? 0.82 : 0.74),
+                    Color(red: 0.06, green: 0.08, blue: 0.12).opacity(0.94),
+                    Color(red: 0.03, green: 0.04, blue: 0.07).opacity(0.98),
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing)
+
+            VStack(spacing: 0) {
+                self.header
+                OpenClawChatView(
+                    viewModel: self.viewModel,
+                    showsSessionSwitcher: true,
+                    userAccent: self.userAccent)
+            }
+        }
+        .overlay(alignment: .top) {
+            LinearGradient(
+                colors: [.white.opacity(0.16), .clear],
+                startPoint: .top,
+                endPoint: .bottom)
+                .frame(height: 44)
+                .allowsHitTesting(false)
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(self.viewModel.healthOK ? Color.green : Color.orange)
+                    .frame(width: 8, height: 8)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("OpenClaw Chat")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.96))
+                    Text(self.sessionLabel)
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.56))
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            if self.viewModel.pendingRunCount > 0 {
+                Label("\(self.viewModel.pendingRunCount)", systemImage: "sparkles")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.78))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(Color.white.opacity(0.08))
+                            .overlay(
+                                Capsule(style: .continuous)
+                                    .strokeBorder(Color.white.opacity(0.12), lineWidth: 0.8)))
+            }
+
+            if self.presentation.isPanel {
+                Button(action: self.onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.8))
+                        .frame(width: 24, height: 24)
+                        .background(
+                            Circle()
+                                .fill(Color.white.opacity(0.08))
+                                .overlay(Circle().strokeBorder(Color.white.opacity(0.12), lineWidth: 0.8)))
+                }
+                .buttonStyle(.plain)
+                .help("Close")
+            }
+        }
+        .padding(.horizontal, self.presentation.isPanel ? 14 : 18)
+        .padding(.top, self.presentation.isPanel ? 12 : 10)
+        .padding(.bottom, 10)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Color.white.opacity(0.08))
+                .frame(height: 0.8)
+        }
+    }
+
+    private var sessionLabel: String {
+        let match = self.viewModel.sessions.first { $0.key == self.viewModel.sessionKey }
+        let label = match?.displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let label, !label.isEmpty {
+            return label
+        }
+        return self.viewModel.sessionKey
     }
 }
