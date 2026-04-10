@@ -20,14 +20,11 @@ export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
  * Check if HEARTBEAT.md content is "effectively empty" - meaning it has no actionable tasks.
  * This allows skipping heartbeat API calls when no tasks are configured.
  *
- * A file is considered effectively empty if, after dropping HTML comment blocks
- * and any leading YAML frontmatter, every remaining line is one of:
- * - Whitespace / empty
- * - A markdown ATX header (`#`, `##`, ...) — including a leading `# ...` title
- * - An empty list item stub (`- `, `- [ ]`, `* `, `+ `)
- * - A bare `tasks:` declaration line (combined with the runner's
- *   `parseHeartbeatTasks(content).length === 0` gate, this still requires
- *   that no tasks were actually parsed before skipping)
+ * A file is considered effectively empty if it contains only:
+ * - Whitespace / empty lines
+ * - Markdown ATX headers (`#`, `##`, ...)
+ * - Markdown fence markers such as ``` or ```markdown
+ * - Empty list item stubs (`- `, `- [ ]`, `* `, `+ `)
  *
  * Note: A missing file returns false (not effectively empty) so the LLM can still
  * decide what to do. This function is only for when the file exists but has no content.
@@ -40,19 +37,7 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
     return false;
   }
 
-  // Strip HTML comment blocks (including multi-line) so files that document
-  // themselves with `<!-- ... -->` instead of markdown headers still count
-  // as empty. Without this, a workspace template like
-  //   <!-- Add tasks below when you want periodic checks. -->
-  // would defeat the skip path and trigger a full heartbeat API call.
-  let stripped = content.replace(/<!--[\s\S]*?-->/g, "");
-
-  // Strip a leading YAML frontmatter block. Keep this narrow: a top-of-file
-  // `--- ... ---` block can also be ordinary markdown content, and treating
-  // that as frontmatter would incorrectly skip real heartbeat instructions.
-  stripped = stripLeadingYamlFrontmatter(stripped);
-
-  const lines = stripped.split("\n");
+  const lines = content.split("\n");
   for (const line of lines) {
     const trimmed = line.trim();
     // Skip empty lines
@@ -69,11 +54,9 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
     if (/^[-*+]\s*(\[[\sXx]?\]\s*)?$/.test(trimmed)) {
       continue;
     }
-    // Skip a bare `tasks:` line. The runner additionally requires
-    // `parseHeartbeatTasks(content).length === 0` before skipping, so a
-    // declared-but-empty tasks block still routes to the skip path while
-    // any line that actually parses as a task keeps the LLM call.
-    if (/^tasks:\s*$/i.test(trimmed)) {
+    // Ignore markdown fence markers that were added for doc rendering but do
+    // not carry task semantics in the workspace template body.
+    if (/^```[A-Za-z0-9_-]*$/.test(trimmed)) {
       continue;
     }
     // Found a non-empty, non-comment line - there's actionable content
@@ -81,49 +64,6 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
   }
   // All lines were either empty or comments
   return true;
-}
-
-function stripLeadingYamlFrontmatter(content: string): string {
-  const lines = content.split(/\r?\n/);
-  let start = 0;
-  while (start < lines.length && !lines[start]?.trim()) {
-    start += 1;
-  }
-
-  if (lines[start]?.trim() !== "---") {
-    return content;
-  }
-
-  let end = start + 1;
-  while (end < lines.length && lines[end]?.trim() !== "---") {
-    end += 1;
-  }
-  if (end >= lines.length) {
-    return content;
-  }
-
-  const bodyLines = lines.slice(start + 1, end);
-  let sawYamlField = false;
-  for (const line of bodyLines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) {
-      continue;
-    }
-    if (/^[A-Za-z0-9_-]+:\s*(?:.*)?$/.test(trimmed)) {
-      sawYamlField = true;
-      continue;
-    }
-    if (sawYamlField && (/^\s+.+$/.test(line) || /^-\s+.+$/.test(trimmed))) {
-      continue;
-    }
-    return content;
-  }
-
-  if (!sawYamlField && bodyLines.some((line) => line.trim())) {
-    return content;
-  }
-
-  return [...lines.slice(0, start), ...lines.slice(end + 1)].join("\n");
 }
 
 export function resolveHeartbeatPrompt(raw?: string): string {
