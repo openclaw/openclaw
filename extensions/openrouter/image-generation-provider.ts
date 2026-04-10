@@ -18,14 +18,16 @@ const OPENROUTER_IMAGE_MODELS = [
   "google/gemini-3.1-flash-image-preview",
   "black-forest-labs/flux.2-pro",
 ] as const;
-// Image-only models use modalities: ["image"]; dual-output models use ["image", "text"].
-const IMAGE_ONLY_MODEL_PREFIXES = ["black-forest-labs/", "sourceful/"] as const;
+// Dual-output models support both image and text in the same response.
+// Default to image-only since that is universally supported; only known
+// dual-output model families opt into ["image", "text"].
+const DUAL_OUTPUT_MODEL_PREFIXES = ["google/", "openai/"] as const;
 
 function resolveImageModalities(model: string): string[] {
-  if (IMAGE_ONLY_MODEL_PREFIXES.some((prefix) => model.startsWith(prefix))) {
-    return ["image"];
+  if (DUAL_OUTPUT_MODEL_PREFIXES.some((prefix) => model.startsWith(prefix))) {
+    return ["image", "text"];
   }
-  return ["image", "text"];
+  return ["image"];
 }
 
 const OPENROUTER_IMAGE_ASPECT_RATIOS = [

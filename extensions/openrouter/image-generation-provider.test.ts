@@ -166,7 +166,7 @@ describe("openrouter image generation provider", () => {
     ).rejects.toThrow("OpenRouter image generation response missing image data");
   });
 
-  it("uses image-only modalities for Flux models", async () => {
+  it("uses dual-output modalities for Google models and image-only for others", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: {
         json: async () => ({
