@@ -50,25 +50,16 @@ function createManifestRegistryFixture() {
         cliBackends: ["demo-cli"],
       },
       {
+        id: "voice-call",
+        channels: [],
+        origin: "bundled",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+      {
         id: "memory-core",
         kind: "memory",
-        channels: [],
-        origin: "bundled",
-        enabledByDefault: undefined,
-        providers: [],
-        cliBackends: [],
-      },
-      {
-        id: "memory-lancedb",
-        kind: "memory",
-        channels: [],
-        origin: "bundled",
-        enabledByDefault: undefined,
-        providers: [],
-        cliBackends: [],
-      },
-      {
-        id: "voice-call",
         channels: [],
         origin: "bundled",
         enabledByDefault: undefined,
@@ -215,9 +206,9 @@ describe("resolveGatewayStartupPluginIds", () => {
     [
       "includes explicitly enabled non-channel sidecars in startup scope",
       createStartupConfig({
-        enabledPluginIds: ["demo-global-sidecar", "voice-call"],
+        enabledPluginIds: ["demo-global-sidecar", "voice-call", "memory-core"],
       }),
-      ["demo-channel", "browser", "voice-call", "demo-global-sidecar"],
+      ["demo-channel", "browser", "voice-call", "memory-core", "demo-global-sidecar"],
     ],
     [
       "keeps default-enabled startup sidecars when a restrictive allowlist permits them",
@@ -250,6 +241,9 @@ describe("resolveGatewayStartupPluginIds", () => {
           "voice-call": {
             enabled: true,
           },
+          "memory-core": {
+            enabled: true,
+          },
         },
       },
     } as OpenClawConfig;
@@ -261,74 +255,12 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
-  it("includes memory-core at startup when dreaming is enabled", () => {
+  it("includes explicitly enabled memory plugins in startup scope", () => {
     expectStartupPluginIdsCase({
-      config: {
-        channels: {},
-        plugins: {
-          entries: {
-            "memory-core": {
-              enabled: true,
-              config: {
-                dreaming: {
-                  enabled: true,
-                },
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
-      expected: ["browser", "memory-core"],
-    });
-  });
-
-  it("includes the selected memory-slot plugin and memory-core when dreaming is enabled", () => {
-    expectStartupPluginIdsCase({
-      config: {
-        plugins: {
-          slots: {
-            memory: "memory-lancedb",
-          },
-          entries: {
-            "memory-core": {
-              enabled: true,
-            },
-            "memory-lancedb": {
-              enabled: true,
-              config: {
-                dreaming: {
-                  enabled: true,
-                },
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
-      expected: ["demo-channel", "browser", "memory-core", "memory-lancedb"],
-    });
-  });
-
-  it("does not bypass activation policy for dreaming startup owners", () => {
-    expectStartupPluginIdsCase({
-      config: {
-        channels: {},
-        plugins: {
-          slots: {
-            memory: "memory-lancedb",
-          },
-          entries: {
-            "memory-lancedb": {
-              enabled: false,
-              config: {
-                dreaming: {
-                  enabled: true,
-                },
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
-      expected: ["browser"],
+      config: createStartupConfig({
+        enabledPluginIds: ["memory-core"],
+      }),
+      expected: ["demo-channel", "browser", "memory-core"],
     });
   });
 });

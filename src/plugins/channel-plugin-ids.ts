@@ -1,11 +1,6 @@
 import { listPotentialConfiguredChannelIds } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
-  resolveMemoryDreamingConfig,
-  resolveMemoryDreamingPluginConfig,
-  resolveMemoryDreamingPluginId,
-} from "../memory-host-sdk/dreaming.js";
-import {
   createPluginActivationSource,
   normalizePluginsConfig,
   resolveEffectivePluginActivationState,
@@ -29,19 +24,16 @@ function hasRuntimeContractSurface(plugin: PluginManifestRecord): boolean {
   );
 }
 
+function isGatewayStartupMemoryPlugin(plugin: PluginManifestRecord): boolean {
+  return hasKind(plugin.kind, "memory");
+}
+
 function isGatewayStartupSidecar(plugin: PluginManifestRecord): boolean {
   return plugin.channels.length === 0 && !hasRuntimeContractSurface(plugin);
 }
 
-function resolveGatewayStartupDreamingPluginIds(config: OpenClawConfig): Set<string> {
-  const dreamingConfig = resolveMemoryDreamingConfig({
-    pluginConfig: resolveMemoryDreamingPluginConfig(config),
-    cfg: config,
-  });
-  if (!dreamingConfig.enabled) {
-    return new Set();
-  }
-  return new Set(["memory-core", resolveMemoryDreamingPluginId(config)]);
+function shouldConsiderForGatewayStartup(plugin: PluginManifestRecord): boolean {
+  return isGatewayStartupSidecar(plugin) || isGatewayStartupMemoryPlugin(plugin);
 }
 
 export function resolveChannelPluginIds(params: {
@@ -112,7 +104,6 @@ export function resolveGatewayStartupPluginIds(params: {
   const activationSource = createPluginActivationSource({
     config: params.activationSourceConfig ?? params.config,
   });
-  const startupDreamingPluginIds = resolveGatewayStartupDreamingPluginIds(params.config);
   return loadPluginManifestRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -122,6 +113,9 @@ export function resolveGatewayStartupPluginIds(params: {
       if (plugin.channels.some((channelId) => configuredChannelIds.has(channelId))) {
         return true;
       }
+      if (!shouldConsiderForGatewayStartup(plugin)) {
+        return false;
+      }
       const activationState = resolveEffectivePluginActivationState({
         id: plugin.id,
         origin: plugin.origin,
@@ -130,22 +124,13 @@ export function resolveGatewayStartupPluginIds(params: {
         enabledByDefault: plugin.enabledByDefault,
         activationSource,
       });
-      const isAllowedStartupActivation = (): boolean => {
-        if (!activationState.enabled) {
-          return false;
-        }
-        if (plugin.origin !== "bundled") {
-          return activationState.explicitlyEnabled;
-        }
-        return activationState.source === "explicit" || activationState.source === "default";
-      };
-      if (startupDreamingPluginIds.has(plugin.id)) {
-        return isAllowedStartupActivation();
-      }
-      if (!isGatewayStartupSidecar(plugin)) {
+      if (!activationState.enabled) {
         return false;
       }
-      return isAllowedStartupActivation();
+      if (plugin.origin !== "bundled") {
+        return activationState.explicitlyEnabled;
+      }
+      return activationState.source === "explicit" || activationState.source === "default";
     })
     .map((plugin) => plugin.id);
 }
