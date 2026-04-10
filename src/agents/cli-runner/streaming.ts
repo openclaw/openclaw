@@ -6,10 +6,74 @@
  */
 
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { createInterface } from "node:readline";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 const log = createSubsystemLogger("agent/cli-streaming");
+
+// On Windows, `spawn("claude", ...)` fails with ENOENT because the
+// npm-generated shim is `claude.cmd`, and Node's spawn cannot execute
+// .cmd/.bat files without a shell. `shell: true` is unsafe when user
+// input is in argv (cmd.exe interprets &, |, >, etc.). We resolve the
+// command via PATH, and if it's a .cmd/.bat we wrap the call through
+// `cmd.exe /d /s /c` with windowsVerbatimArguments + manual escaping,
+// matching cross-spawn's approach.
+function resolveWindowsCommand(
+  command: string,
+  args: readonly string[],
+  env: NodeJS.ProcessEnv,
+): { command: string; args: string[]; extra: { windowsVerbatimArguments?: boolean } } {
+  if (process.platform !== "win32") {
+    return { command, args: [...args], extra: {} };
+  }
+  const resolved = findOnPath(command, env);
+  if (!resolved) {
+    return { command, args: [...args], extra: {} };
+  }
+  const ext = path.extname(resolved).toLowerCase();
+  if (ext !== ".cmd" && ext !== ".bat") {
+    return { command: resolved, args: [...args], extra: {} };
+  }
+  const escaped = [quoteForCmd(resolved), ...args.map(quoteForCmd)].join(" ");
+  return {
+    command: env.COMSPEC || "cmd.exe",
+    args: ["/d", "/s", "/c", escaped],
+    extra: { windowsVerbatimArguments: true },
+  };
+}
+
+function findOnPath(command: string, env: NodeJS.ProcessEnv): string | undefined {
+  if (path.isAbsolute(command) && existsSync(command)) {
+    return command;
+  }
+  const dirs = (env.PATH || env.Path || "").split(path.delimiter).filter(Boolean);
+  const exts = (env.PATHEXT || ".COM;.EXE;.BAT;.CMD")
+    .split(";")
+    .map((e) => e.trim())
+    .filter(Boolean);
+  for (const dir of dirs) {
+    for (const ext of ["", ...exts]) {
+      const candidate = path.join(dir, command + ext);
+      if (existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  }
+  return undefined;
+}
+
+// Quote an argument for safe passage through `cmd.exe /c`. Wraps in
+// double quotes and escapes embedded quotes + cmd.exe metacharacters.
+function quoteForCmd(arg: string): string {
+  // Escape backslashes that precede a double quote (Windows CRT rules),
+  // then escape the quote itself.
+  const quoted = '"' + arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, "$1$1") + '"';
+  // Escape cmd.exe metacharacters that would otherwise be interpreted
+  // even inside quotes when the outer shell parses the command line.
+  return quoted.replace(/([()%!^"<>&|])/g, "^$1");
+}
 
 /**
  * Strip CLI line number prefixes from tool output.
@@ -119,10 +183,12 @@ export async function runStreamingCli(options: StreamingCliOptions): Promise<{
     let usage: CliUsage | undefined;
     let settled = false;
 
-    const child = spawn(command, args, {
+    const resolved = resolveWindowsCommand(command, args, env ?? process.env);
+    const child = spawn(resolved.command, resolved.args, {
       cwd,
       env: env ?? process.env,
       stdio: ["pipe", "pipe", "pipe"],
+      ...resolved.extra,
     });
 
     const timer = setTimeout(() => {
