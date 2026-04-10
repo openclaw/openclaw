@@ -134,6 +134,36 @@ function createCronHarness(
   };
 }
 
+function createDelayedCronHarness() {
+  const activeHarness = createCronHarness();
+  const pendingHarness = createCronHarness();
+  let ready = false;
+
+  const cron: CronParam = {
+    async list(opts) {
+      return await (ready ? activeHarness.cron : pendingHarness.cron).list(opts);
+    },
+    async add(input) {
+      return await (ready ? activeHarness.cron : pendingHarness.cron).add(input);
+    },
+    async update(id, patch) {
+      return await (ready ? activeHarness.cron : pendingHarness.cron).update(id, patch);
+    },
+    async remove(id) {
+      return await (ready ? activeHarness.cron : pendingHarness.cron).remove(id);
+    },
+  };
+
+  return {
+    cron,
+    activeHarness,
+    pendingHarness,
+    setReady(nextReady: boolean) {
+      ready = nextReady;
+    },
+  };
+}
+
 function getBeforeAgentReplyHandler(
   onMock: ReturnType<typeof vi.fn>,
 ): (
@@ -709,6 +739,125 @@ describe("short-term dreaming cron reconciliation", () => {
 });
 
 describe("gateway startup reconciliation", () => {
+  it("retries startup reconciliation until cron is ready", async () => {
+    clearInternalHooks();
+    vi.useFakeTimers();
+    const logger = createLogger();
+    const delayed = createDelayedCronHarness();
+    const api: DreamingPluginApiTestDouble = {
+      config: { plugins: { entries: {} } },
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      registerHook: (event: string, handler: Parameters<typeof registerInternalHook>[1]) => {
+        registerInternalHook(event, handler);
+      },
+      on: vi.fn(),
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      await triggerInternalHook(
+        createInternalHookEvent("gateway", "startup", "gateway:startup", {
+          cfg: {
+            hooks: { internal: { enabled: true } },
+            plugins: {
+              entries: {
+                "memory-core": {
+                  config: {
+                    dreaming: {
+                      enabled: true,
+                      frequency: "15 4 * * *",
+                      timezone: "UTC",
+                    },
+                  },
+                },
+              },
+            },
+          } as OpenClawConfig,
+          deps: { cron: delayed.cron },
+        }),
+      );
+
+      expect(delayed.pendingHarness.addCalls).toHaveLength(1);
+      expect(delayed.activeHarness.addCalls).toHaveLength(0);
+
+      delayed.setReady(true);
+      await vi.advanceTimersByTimeAsync(constants.STARTUP_CRON_RECONCILE_RETRY_DELAYS_MS[0]);
+
+      expect(delayed.activeHarness.addCalls).toHaveLength(1);
+      expect(delayed.activeHarness.addCalls[0]).toMatchObject({
+        schedule: {
+          kind: "cron",
+          expr: "15 4 * * *",
+          tz: "UTC",
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+      clearInternalHooks();
+    }
+  });
+
+  it("stops startup retries once the active cron already has the managed job", async () => {
+    clearInternalHooks();
+    vi.useFakeTimers();
+    const logger = createLogger();
+    const delayed = createDelayedCronHarness();
+    const api: DreamingPluginApiTestDouble = {
+      config: { plugins: { entries: {} } },
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      registerHook: (event: string, handler: Parameters<typeof registerInternalHook>[1]) => {
+        registerInternalHook(event, handler);
+      },
+      on: vi.fn(),
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      await triggerInternalHook(
+        createInternalHookEvent("gateway", "startup", "gateway:startup", {
+          cfg: {
+            hooks: { internal: { enabled: true } },
+            plugins: {
+              entries: {
+                "memory-core": {
+                  config: {
+                    dreaming: {
+                      enabled: true,
+                      frequency: "15 4 * * *",
+                      timezone: "UTC",
+                    },
+                  },
+                },
+              },
+            },
+          } as OpenClawConfig,
+          deps: { cron: delayed.cron },
+        }),
+      );
+
+      delayed.setReady(true);
+      await vi.advanceTimersByTimeAsync(constants.STARTUP_CRON_RECONCILE_RETRY_DELAYS_MS[0]);
+      expect(delayed.activeHarness.addCalls).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(
+        constants.STARTUP_CRON_RECONCILE_RETRY_DELAYS_MS
+          .slice(1)
+          .reduce((sum, delay) => sum + delay, 0),
+      );
+
+      expect(delayed.activeHarness.addCalls).toHaveLength(1);
+      expect(delayed.activeHarness.updateCalls).toHaveLength(0);
+      expect(delayed.activeHarness.jobs).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+      clearInternalHooks();
+    }
+  });
+
   it("uses the startup cfg when reconciling the managed dreaming cron job", async () => {
     clearInternalHooks();
     const logger = createLogger();

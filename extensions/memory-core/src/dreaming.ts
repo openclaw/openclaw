@@ -36,6 +36,7 @@ const LEGACY_REM_SLEEP_CRON_NAME = "Memory REM Dreaming";
 const LEGACY_REM_SLEEP_CRON_TAG = "[managed-by=memory-core.dreaming.rem]";
 const LEGACY_REM_SLEEP_EVENT_TEXT = "__openclaw_memory_core_rem_sleep__";
 const RUNTIME_CRON_RECONCILE_INTERVAL_MS = 60_000;
+const STARTUP_CRON_RECONCILE_RETRY_DELAYS_MS = [250, 1_000, 5_000, 15_000] as const;
 
 type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
 
@@ -618,6 +619,8 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
 
 export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void {
   let startupCronSource: StartupCronSourceRefs | null = null;
+  let startupRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  let startupRetryGeneration = 0;
   let unavailableCronWarningEmitted = false;
   let lastRuntimeReconcileAtMs = 0;
   let lastRuntimeConfigKey: string | null = null;
@@ -639,10 +642,21 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       config.storage?.separateReports ? "separate" : "inline",
     ].join("|");
 
+  const clearStartupRetryTimer = () => {
+    if (!startupRetryTimer) {
+      return;
+    }
+    clearTimeout(startupRetryTimer);
+    startupRetryTimer = null;
+  };
+
   const reconcileManagedDreamingCron = async (params: {
-    reason: "startup" | "runtime";
+    reason: "startup" | "startup-retry" | "runtime";
     startupEvent?: unknown;
-  }): Promise<ShortTermPromotionDreamingConfig> => {
+  }): Promise<{
+    config: ShortTermPromotionDreamingConfig;
+    result: ReconcileResult;
+  }> => {
     const startupCfg =
       params.reason === "startup" && params.startupEvent !== undefined
         ? resolveStartupConfigFromEvent(params.startupEvent, api.config)
@@ -677,32 +691,92 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         lastRuntimeConfigKey === configKey &&
         lastRuntimeCronRef === cron
       ) {
-        return config;
+        return {
+          config,
+          result: { status: "noop", removed: 0 },
+        };
       }
       lastRuntimeReconcileAtMs = now;
       lastRuntimeConfigKey = configKey;
       lastRuntimeCronRef = cron;
     }
-    await reconcileShortTermDreamingCronJob({
+    const result = await reconcileShortTermDreamingCronJob({
       cron,
       config,
       logger: api.logger,
     });
-    return config;
+    return { config, result };
+  };
+
+  const scheduleStartupReconcileRetries = () => {
+    clearStartupRetryTimer();
+    const generation = ++startupRetryGeneration;
+    let attemptIndex = 0;
+
+    const queueNextRetry = () => {
+      if (generation !== startupRetryGeneration) {
+        return;
+      }
+      if (attemptIndex >= STARTUP_CRON_RECONCILE_RETRY_DELAYS_MS.length) {
+        startupRetryTimer = null;
+        return;
+      }
+      const delayMs = STARTUP_CRON_RECONCILE_RETRY_DELAYS_MS[attemptIndex++];
+      startupRetryTimer = setTimeout(() => {
+        void (async () => {
+          if (generation !== startupRetryGeneration) {
+            return;
+          }
+          try {
+            const { config, result } = await reconcileManagedDreamingCron({
+              reason: "startup-retry",
+            });
+            if (!config.enabled || result.status !== "unavailable") {
+              clearStartupRetryTimer();
+              return;
+            }
+          } catch (err) {
+            api.logger.warn(
+              `memory-core: dreaming startup retry reconciliation failed: ${formatErrorMessage(err)}`,
+            );
+          }
+          queueNextRetry();
+        })();
+      }, delayMs);
+      startupRetryTimer.unref?.();
+    };
+
+    queueNextRetry();
   };
 
   api.registerHook(
     "gateway:startup",
     async (event: unknown) => {
       try {
-        await reconcileManagedDreamingCron({
+        const { config } = await reconcileManagedDreamingCron({
           reason: "startup",
           startupEvent: event,
         });
+        if (config.enabled) {
+          scheduleStartupReconcileRetries();
+        } else {
+          clearStartupRetryTimer();
+        }
       } catch (err) {
         api.logger.error(
           `memory-core: dreaming startup reconciliation failed: ${formatErrorMessage(err)}`,
         );
+        const startupCfg = resolveStartupConfigFromEvent(event, api.config);
+        const config = resolveShortTermPromotionDreamingConfig({
+          pluginConfig:
+            resolveMemoryCorePluginConfig(startupCfg) ??
+            resolveMemoryCorePluginConfig(api.config) ??
+            api.pluginConfig,
+          cfg: startupCfg,
+        });
+        if (config.enabled) {
+          scheduleStartupReconcileRetries();
+        }
       }
     },
     { name: "memory-core-short-term-dreaming-cron" },
@@ -747,5 +821,6 @@ export const __testing = {
     DEFAULT_DREAMING_MIN_RECALL_COUNT: DEFAULT_MEMORY_DREAMING_MIN_RECALL_COUNT,
     DEFAULT_DREAMING_MIN_UNIQUE_QUERIES: DEFAULT_MEMORY_DREAMING_MIN_UNIQUE_QUERIES,
     DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS: DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS,
+    STARTUP_CRON_RECONCILE_RETRY_DELAYS_MS,
   },
 };
