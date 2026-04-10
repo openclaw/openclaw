@@ -194,7 +194,26 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       maxInlineBytes: mediaMaxBytes,
       maxInlineTotalBytes: mediaMaxBytes,
     });
-    const rawBody = text || attachmentPlaceholder;
+    // If text and attachments are both empty but activity.value is present,
+    // this is a messageBack card action (Action.Submit). Serialize the value
+    // payload so it reaches the agent instead of being dropped. (#60952)
+    // Accept any truthy value — object, string, or primitive — since
+    // messageBack payloads are not guaranteed to be objects.
+    let rawBody = text || attachmentPlaceholder;
+    if (!rawBody && activity.value != null) {
+      try {
+        const serialized =
+          typeof activity.value === "string" ? activity.value : JSON.stringify(activity.value);
+        if (serialized) {
+          rawBody = `[CARD_ACTION] ${serialized}`;
+          log.info("messageBack card action detected; forwarding value payload", {
+            valueType: typeof activity.value,
+          });
+        }
+      } catch {
+        log.warn("failed to serialize messageBack value payload");
+      }
+    }
     const quoteInfo = extractMSTeamsQuoteInfo(attachments);
     let quoteSenderId: string | undefined;
     let quoteSenderName: string | undefined;

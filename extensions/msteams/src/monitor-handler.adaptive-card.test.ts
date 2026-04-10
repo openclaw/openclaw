@@ -139,7 +139,7 @@ describe("msteams adaptive card action invoke", () => {
   it("forwards adaptive card invoke values to the agent as message text", async () => {
     const deps = createDeps();
     const { handler, run } = createActivityHandler();
-    const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
+    const _registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
       run: NonNullable<MSTeamsActivityHandler["run"]>;
     };
     const payload = {
@@ -196,5 +196,145 @@ describe("msteams adaptive card action invoke", () => {
         SenderId: "user-aad",
       },
     });
+  });
+});
+
+describe("msteams messageBack card action (#60952)", () => {
+  beforeEach(() => {
+    runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mockClear();
+  });
+
+  it("forwards messageBack value payload to the agent as [CARD_ACTION]", async () => {
+    const deps = createDeps();
+    const { handler, run } = createActivityHandler();
+    const _registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
+      run: NonNullable<MSTeamsActivityHandler["run"]>;
+    };
+    const value = { intent: "approve", env: "prod" };
+
+    await run({
+      activity: {
+        id: "msg-1",
+        type: "message",
+        channelId: "msteams",
+        serviceUrl: "https://service.example.test",
+        text: "",
+        from: {
+          id: "user-bf",
+          aadObjectId: "user-aad",
+          name: "User",
+        },
+        recipient: {
+          id: "bot-id",
+          name: "Bot",
+        },
+        conversation: {
+          id: "19:personal-chat;messageid=abc123",
+          conversationType: "personal",
+        },
+        channelData: {},
+        attachments: [],
+        value,
+      },
+      sendActivity: vi.fn(async () => ({ id: "activity-id" })),
+      sendActivities: async () => [],
+    } as unknown as MSTeamsTurnContext);
+
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalledTimes(
+      1,
+    );
+    const call =
+      runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock.calls[0]?.[0];
+    expect(call).toMatchObject({
+      ctxPayload: {
+        RawBody: `[CARD_ACTION] ${JSON.stringify(value)}`,
+        SessionKey: "msteams:direct:user-aad",
+        SenderId: "user-aad",
+      },
+    });
+  });
+
+  it("forwards string messageBack value payload", async () => {
+    const deps = createDeps();
+    const { handler, run } = createActivityHandler();
+    const _registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
+      run: NonNullable<MSTeamsActivityHandler["run"]>;
+    };
+
+    await run({
+      activity: {
+        id: "msg-2",
+        type: "message",
+        channelId: "msteams",
+        serviceUrl: "https://service.example.test",
+        text: "",
+        from: {
+          id: "user-bf",
+          aadObjectId: "user-aad",
+          name: "User",
+        },
+        recipient: {
+          id: "bot-id",
+          name: "Bot",
+        },
+        conversation: {
+          id: "19:personal-chat;messageid=abc456",
+          conversationType: "personal",
+        },
+        channelData: {},
+        attachments: [],
+        value: "quick-approve",
+      },
+      sendActivity: vi.fn(async () => ({ id: "activity-id" })),
+      sendActivities: async () => [],
+    } as unknown as MSTeamsTurnContext);
+
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalledTimes(
+      1,
+    );
+    const call =
+      runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock.calls[0]?.[0];
+    expect(call).toMatchObject({
+      ctxPayload: {
+        RawBody: "[CARD_ACTION] quick-approve",
+      },
+    });
+  });
+
+  it("still drops genuinely empty messages (no text, no value, no attachments)", async () => {
+    const deps = createDeps();
+    const { handler, run } = createActivityHandler();
+    const _registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
+      run: NonNullable<MSTeamsActivityHandler["run"]>;
+    };
+
+    await run({
+      activity: {
+        id: "msg-3",
+        type: "message",
+        channelId: "msteams",
+        serviceUrl: "https://service.example.test",
+        text: "",
+        from: {
+          id: "user-bf",
+          aadObjectId: "user-aad",
+          name: "User",
+        },
+        recipient: {
+          id: "bot-id",
+          name: "Bot",
+        },
+        conversation: {
+          id: "19:personal-chat;messageid=abc789",
+          conversationType: "personal",
+        },
+        channelData: {},
+        attachments: [],
+      },
+      sendActivity: vi.fn(async () => ({ id: "activity-id" })),
+      sendActivities: async () => [],
+    } as unknown as MSTeamsTurnContext);
+
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).not.toHaveBeenCalled();
   });
 });
