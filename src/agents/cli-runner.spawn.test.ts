@@ -11,6 +11,7 @@ import {
   makeBootstrapWarn as realMakeBootstrapWarn,
   resolveBootstrapContextForRun as realResolveBootstrapContextForRun,
 } from "./bootstrap-files.js";
+import { runClaudeCliAgent } from "./cli-runner.js";
 import {
   createManagedRun,
   mockSuccessfulCliRun,
@@ -21,7 +22,6 @@ import {
 import { buildCliEnvAuthLog, executePreparedCliRun } from "./cli-runner/execute.js";
 import { buildSystemPrompt } from "./cli-runner/helpers.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
-import { runClaudeCliAgent } from "./cli-runner.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 
 beforeEach(() => {
@@ -258,7 +258,6 @@ describe("runCliAgent spawn path", () => {
     expect(input.argv).not.toContain("hi");
   });
 
-<<<<<<< HEAD
   it("passes OpenClaw skills to Claude as a session plugin", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-skills-"));
     const skillDir = path.join(workspaceDir, "skills", "weather");
