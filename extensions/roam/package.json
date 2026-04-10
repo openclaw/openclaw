@@ -6,6 +6,10 @@
   "dependencies": {
     "zod": "^4.3.6"
   },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"

@@ -34,6 +34,7 @@ Docs: https://docs.openclaw.ai
 - Memory/active-memory: default QMD recall to search and surface better search-path telemetry so memory-backed recall works more predictably out of the box. (#65068) Thanks @Takhoffman.
 - Docs/providers: expand bundled provider docs with richer capability, env-var, and setup guidance across provider pages.
 - Docs/memory-wiki: add the recommended QMD + bridge-mode hybrid recipe plus zero-artifact troubleshooting guidance for `memory-wiki` bridge setups. (#63165) Thanks @sercada and @vincentkoc.
+- Roam: add Roam HQ as a bundled channel plugin with full API integration, bot persona support, media attachments, typing indicators, webhook auto-subscription, multi-account routing, DM pairing, group allowlists, and mention gating.
 
 ### Fixes
 
