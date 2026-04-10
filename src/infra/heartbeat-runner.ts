@@ -143,19 +143,31 @@ function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
   return list.some((entry) => Boolean(entry?.heartbeat));
 }
 
+/**
+ * Returns `undefined` when the effective config is empty (`{}`).
+ * An empty object is treated as an explicit opt-out so that
+ * `heartbeat: {}` disables heartbeats instead of inheriting all defaults.
+ */
 function resolveHeartbeatConfig(
   cfg: OpenClawConfig,
   agentId?: string,
 ): HeartbeatConfig | undefined {
   const defaults = cfg.agents?.defaults?.heartbeat;
   if (!agentId) {
-    return defaults;
+    return isEmptyHeartbeatConfig(defaults) ? undefined : defaults;
   }
   const overrides = resolveAgentConfig(cfg, agentId)?.heartbeat;
   if (!defaults && !overrides) {
     return overrides;
   }
-  return { ...defaults, ...overrides };
+  const merged = { ...defaults, ...overrides };
+  return isEmptyHeartbeatConfig(merged) ? undefined : merged;
+}
+
+/** True when the heartbeat config is an empty object with no meaningful keys. */
+function isEmptyHeartbeatConfig(config: HeartbeatConfig | undefined): boolean {
+  if (!config) return false; // undefined/null is not "empty config"
+  return Object.keys(config).length === 0;
 }
 
 function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
