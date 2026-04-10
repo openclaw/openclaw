@@ -630,6 +630,53 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
     expect(decision).toEqual({ kind: "drop", reason: "from me" });
   });
 
+  it("does not drop reflected inbound when destination_caller_id is absent (#63980)", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
+
+    const selfChatCache = createSelfChatCache();
+    const createdAt = "2026-03-24T12:00:00.000Z";
+
+    const outbound = resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 10003,
+          sender: "+15550008888",
+          chat_identifier: "+15550008888",
+          text: "outbound",
+          created_at: createdAt,
+          is_from_me: true,
+          is_group: false,
+        },
+        messageText: "outbound",
+        bodyText: "outbound",
+        selfChatCache,
+      }),
+    );
+    expect(outbound).toEqual({ kind: "drop", reason: "from me" });
+
+    vi.advanceTimersByTime(2200);
+
+    const reflection = resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 10004,
+          sender: "+15550008888",
+          chat_identifier: "+15550008888",
+          text: "outbound",
+          created_at: createdAt,
+          is_from_me: false,
+          is_group: false,
+        },
+        messageText: "outbound",
+        bodyText: "outbound",
+        selfChatCache,
+      }),
+    );
+
+    expect(reflection.kind).toBe("dispatch");
+  });
+
   it("normal DM is_from_me=true is still dropped (regression test)", () => {
     const selfChatCache = createSelfChatCache();
 
