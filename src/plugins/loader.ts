@@ -1087,11 +1087,11 @@ function activatePluginRegistry(
 
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
   // Snapshot (non-activating) loads must disable the cache to avoid storing a registry
-  // whose commands were never globally registered.
+  // whose commands were never globally registered.  Auto-correct rather than throwing
+  // so that indirect callers (e.g. model-fallback provider resolution) that omit cache
+  // still get safe behaviour instead of a hard crash.
   if (options.activate === false && options.cache !== false) {
-    throw new Error(
-      "loadOpenClawPlugins: activate:false requires cache:false to prevent command registry divergence",
-    );
+    options = { ...options, cache: false };
   }
   const {
     env,
