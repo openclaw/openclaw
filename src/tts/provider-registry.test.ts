@@ -8,6 +8,7 @@ const loadPluginManifestRegistryMock = vi.fn(() => ({
   plugins: [
     { id: "elevenlabs", origin: "bundled", contracts: { speechProviders: [{}] } },
     { id: "microsoft", origin: "bundled", contracts: { speechProviders: [{}] } },
+    { id: "mistral", origin: "bundled", contracts: { speechProviders: [{}] } },
     { id: "openai", origin: "bundled", contracts: { speechProviders: [{}] } },
   ],
 }));
