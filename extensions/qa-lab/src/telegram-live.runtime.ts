@@ -325,7 +325,7 @@ async function flushTelegramUpdates(token: string) {
     }
     offset = (updates.at(-1)?.update_id ?? offset) + 1;
   }
-  return offset;
+  throw new Error("timed out after 15000ms draining Telegram updates");
 }
 
 async function sendGroupMessage(token: string, groupId: string, text: string) {
@@ -471,8 +471,7 @@ function classifyCanaryReply(params: {
 }) {
   if (
     params.message.chatId !== Number(params.groupId) ||
-    params.message.senderId !== params.sutBotId ||
-    !params.message.text.trim()
+    params.message.senderId !== params.sutBotId
   ) {
     return "ignore" as const;
   }

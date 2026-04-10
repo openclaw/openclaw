@@ -166,6 +166,29 @@ describe("telegram live qa runtime", () => {
     ).toBe("match");
   });
 
+  it("classifies threaded blank sut replies as matches", () => {
+    expect(
+      __testing.classifyCanaryReply({
+        groupId: "-100123",
+        sutBotId: 88,
+        driverMessageId: 55,
+        message: {
+          updateId: 3,
+          messageId: 11,
+          chatId: -100123,
+          senderId: 88,
+          senderIsBot: true,
+          senderUsername: "sut_bot",
+          text: "",
+          replyToMessageId: 55,
+          timestamp: 1_700_000_002_000,
+          inlineButtons: [],
+          mediaKinds: ["photo"],
+        },
+      }),
+    ).toBe("match");
+  });
+
   it("redacts observed message content by default in artifacts", () => {
     expect(
       __testing.buildObservedMessagesArtifact({
