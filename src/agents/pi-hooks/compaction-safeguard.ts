@@ -682,35 +682,39 @@ async function readWorkspaceContextForSummary(
 ): Promise<string> {
   const MAX_SUMMARY_CONTEXT_CHARS = 2000;
   const workspaceDir = runtime?.workspaceDir ?? process.cwd();
-  const agentsPath = (
-    await resolveEffectiveAgentsBootstrapFileForRun({
-      workspaceDir,
-      config: runtime?.cfg,
-      sessionKey: runtime?.sessionKey,
-      sessionId: runtime?.sessionId,
-      agentId: runtime?.agentId,
-      modelProviderId: runtime?.modelProviderId,
-      modelId: runtime?.modelId,
-    })
-  ).bootstrapFile.path;
+  const { bootstrapFile } = await resolveEffectiveAgentsBootstrapFileForRun({
+    workspaceDir,
+    config: runtime?.cfg,
+    sessionKey: runtime?.sessionKey,
+    sessionId: runtime?.sessionId,
+    agentId: runtime?.agentId,
+    modelProviderId: runtime?.modelProviderId,
+    modelId: runtime?.modelId,
+  });
+  const agentsPath = bootstrapFile.path;
+  const cachedContent = bootstrapFile.content;
 
   try {
-    const opened = await openBoundaryFile({
-      absolutePath: agentsPath,
-      rootPath: workspaceDir,
-      boundaryLabel: "workspace root",
-    });
-    if (!opened.ok) {
-      return "";
-    }
+    const content =
+      cachedContent ??
+      (await (async () => {
+        const opened = await openBoundaryFile({
+          absolutePath: agentsPath,
+          rootPath: workspaceDir,
+          boundaryLabel: "workspace root",
+        });
+        if (!opened.ok) {
+          return "";
+        }
 
-    const content = (() => {
-      try {
-        return fs.readFileSync(opened.fd, "utf-8");
-      } finally {
-        fs.closeSync(opened.fd);
-      }
-    })();
+        return (() => {
+          try {
+            return fs.readFileSync(opened.fd, "utf-8");
+          } finally {
+            fs.closeSync(opened.fd);
+          }
+        })();
+      })());
     // Accept legacy section names ("Every Session", "Safety") as fallback
     // for backward compatibility with older AGENTS.md templates.
     let sections = extractSections(content, ["Session Startup", "Red Lines"]);
