@@ -306,8 +306,7 @@ export const en: TranslationMap = {
     advanced: {
       eyebrow: "Operator Review",
       title: "Grounded Replay + Promotion",
-      description:
-        "Inspect grounded replay output and use maintenance actions without cluttering the main Dreaming scene.",
+      description: "",
       stagedTitle: "Grounded Replay",
       shortTermTitle: "Short-term Queue",
       signalsTitle: "Signal Hotspots",

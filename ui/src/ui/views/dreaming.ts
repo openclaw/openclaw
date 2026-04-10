@@ -464,6 +464,7 @@ function renderAdvancedEntryList(
 
 function renderAdvancedSection(props: DreamingProps) {
   const groundedEntries = props.shortTermEntries.filter((entry) => entry.groundedCount > 0);
+  const description = t("dreaming.advanced.description");
 
   return html`
     <section class="dreams-advanced">
@@ -471,7 +472,9 @@ function renderAdvancedSection(props: DreamingProps) {
         <div class="dreams-advanced__intro">
           <span class="dreams-advanced__eyebrow">${t("dreaming.advanced.eyebrow")}</span>
           <h2 class="dreams-advanced__title">${t("dreaming.advanced.title")}</h2>
-          <p class="dreams-advanced__description">${t("dreaming.advanced.description")}</p>
+          ${description
+            ? html`<p class="dreams-advanced__description">${description}</p>`
+            : nothing}
         </div>
         <div class="dreams-advanced__actions">
           <button

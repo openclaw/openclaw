@@ -281,6 +281,7 @@ export const pt_BR: TranslationMap = {
     tabs: {
       scene: "Cena",
       diary: "Diário",
+      advanced: "Advanced",
     },
     header: {
       refresh: "Atualizar",
@@ -299,6 +300,26 @@ export const pt_BR: TranslationMap = {
       reset: "Redefinir",
       clearGrounded: "Limpar Grounded",
       working: "Trabalhando…",
+    },
+    phase: {
+      light: "Light",
+      deep: "Deep",
+      rem: "Rem",
+      off: "off",
+    },
+    advanced: {
+      eyebrow: "Operator Review",
+      title: "Grounded Replay + Promotion",
+      description: "",
+      stagedTitle: "Grounded Replay",
+      shortTermTitle: "Short-term Queue",
+      signalsTitle: "Signal Hotspots",
+      promotedTitle: "Recent Promotions",
+      emptyGrounded: "No staged grounded replay entries right now.",
+      emptyShortTerm: "No short-term entries to inspect.",
+      emptySignals: "No signal-rich entries to inspect.",
+      emptyPromoted: "No recent promotions to inspect.",
+      updatedPrefix: "updated",
     },
     stats: {
       shortTerm: "Curto prazo",

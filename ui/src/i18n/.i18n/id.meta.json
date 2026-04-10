@@ -1,11 +1,29 @@
 {
-  "fallbackKeys": [],
-  "generatedAt": "2026-04-08T22:29:08.047Z",
+  "fallbackKeys": [
+    "dreaming.advanced.description",
+    "dreaming.advanced.emptyGrounded",
+    "dreaming.advanced.emptyPromoted",
+    "dreaming.advanced.emptyShortTerm",
+    "dreaming.advanced.emptySignals",
+    "dreaming.advanced.eyebrow",
+    "dreaming.advanced.promotedTitle",
+    "dreaming.advanced.shortTermTitle",
+    "dreaming.advanced.signalsTitle",
+    "dreaming.advanced.stagedTitle",
+    "dreaming.advanced.title",
+    "dreaming.advanced.updatedPrefix",
+    "dreaming.phase.deep",
+    "dreaming.phase.light",
+    "dreaming.phase.off",
+    "dreaming.phase.rem",
+    "dreaming.tabs.advanced"
+  ],
+  "generatedAt": "2026-04-10T05:01:01.320Z",
   "locale": "id",
   "model": "gpt-5.4",
   "provider": "openai",
-  "sourceHash": "71d21531de8217b5c289e0daef2b7db7098384a0e9dcd05961bf414c956189fa",
-  "totalKeys": 667,
+  "sourceHash": "65fe3752d8469d3ef02b7a2a971e73c53f2824d3cac6478ad4b8a594ba8fa4d0",
+  "totalKeys": 684,
   "translatedKeys": 667,
   "workflow": 1
 }

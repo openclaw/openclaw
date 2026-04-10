@@ -285,6 +285,7 @@ export const ja_JP: TranslationMap = {
     tabs: {
       scene: "Scene",
       diary: "Diary",
+      advanced: "Advanced",
     },
     header: {
       refresh: "更新",
@@ -303,6 +304,26 @@ export const ja_JP: TranslationMap = {
       reset: "リセット",
       clearGrounded: "グラウンデッドをクリア",
       working: "処理中…",
+    },
+    phase: {
+      light: "Light",
+      deep: "Deep",
+      rem: "Rem",
+      off: "off",
+    },
+    advanced: {
+      eyebrow: "Operator Review",
+      title: "Grounded Replay + Promotion",
+      description: "",
+      stagedTitle: "Grounded Replay",
+      shortTermTitle: "Short-term Queue",
+      signalsTitle: "Signal Hotspots",
+      promotedTitle: "Recent Promotions",
+      emptyGrounded: "No staged grounded replay entries right now.",
+      emptyShortTerm: "No short-term entries to inspect.",
+      emptySignals: "No signal-rich entries to inspect.",
+      emptyPromoted: "No recent promotions to inspect.",
+      updatedPrefix: "updated",
     },
     stats: {
       shortTerm: "短期",
