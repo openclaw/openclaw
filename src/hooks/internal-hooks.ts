@@ -189,6 +189,8 @@ export interface InternalHookEvent {
 
 export type InternalHookHandler = (event: InternalHookEvent) => Promise<void> | void;
 
+export type InternalHookSource = "file" | "plugin";
+
 /**
  * Registry of hook handlers by event key.
  *
@@ -198,12 +200,28 @@ export type InternalHookHandler = (event: InternalHookEvent) => Promise<void> | 
  * splitting). Without the singleton, handlers registered in one chunk
  * are invisible to triggerInternalHook in another chunk, causing hooks
  * to silently fire with zero handlers.
+ *
+ * We maintain two separate registries:
+ * - `handlers`: for file-based hooks (loaded from ~/.openclaw/hooks/)
+ * - `pluginHandlers`: for plugin-registered hooks (registered during plugin init)
+ *
+ * This separation ensures that `clearInternalHooks()` (which refreshes file hooks)
+ * does not accidentally clear plugin hooks that are registered at a different
+ * point in the startup lifecycle.
  */
 const INTERNAL_HOOK_HANDLERS_KEY = Symbol.for("openclaw.internalHookHandlers");
+const INTERNAL_PLUGIN_HOOK_HANDLERS_KEY = Symbol.for("openclaw.internalPluginHookHandlers");
+
 const handlers = resolveGlobalSingleton<Map<string, InternalHookHandler[]>>(
   INTERNAL_HOOK_HANDLERS_KEY,
   () => new Map<string, InternalHookHandler[]>(),
 );
+
+const pluginHandlers = resolveGlobalSingleton<Map<string, InternalHookHandler[]>>(
+  INTERNAL_PLUGIN_HOOK_HANDLERS_KEY,
+  () => new Map<string, InternalHookHandler[]>(),
+);
+
 const log = createSubsystemLogger("internal-hooks");
 
 /**
@@ -211,25 +229,31 @@ const log = createSubsystemLogger("internal-hooks");
  *
  * @param eventKey - Event type (e.g., 'command') or specific action (e.g., 'command:new')
  * @param handler - Function to call when the event is triggered
+ * @param opts - Optional settings including source ('file' or 'plugin')
  *
  * @example
  * ```ts
- * // Listen to all command events
+ * // Listen to all command events (file hook, default)
  * registerInternalHook('command', async (event) => {
  *   console.log('Command:', event.action);
  * });
  *
- * // Listen only to /new commands
+ * // Listen only to /new commands (plugin hook)
  * registerInternalHook('command:new', async (event) => {
  *   await saveSessionToMemory(event);
- * });
+ * }, { source: 'plugin' });
  * ```
  */
-export function registerInternalHook(eventKey: string, handler: InternalHookHandler): void {
-  if (!handlers.has(eventKey)) {
-    handlers.set(eventKey, []);
+export function registerInternalHook(
+  eventKey: string,
+  handler: InternalHookHandler,
+  opts?: { source?: InternalHookSource },
+): void {
+  const targetHandlers = opts?.source === "plugin" ? pluginHandlers : handlers;
+  if (!targetHandlers.has(eventKey)) {
+    targetHandlers.set(eventKey, []);
   }
-  handlers.get(eventKey)!.push(handler);
+  targetHandlers.get(eventKey)!.push(handler);
 }
 
 /**
@@ -237,9 +261,15 @@ export function registerInternalHook(eventKey: string, handler: InternalHookHand
  *
  * @param eventKey - Event key the handler was registered for
  * @param handler - The handler function to remove
+ * @param opts - Optional settings including source ('file' or 'plugin')
  */
-export function unregisterInternalHook(eventKey: string, handler: InternalHookHandler): void {
-  const eventHandlers = handlers.get(eventKey);
+export function unregisterInternalHook(
+  eventKey: string,
+  handler: InternalHookHandler,
+  opts?: { source?: InternalHookSource },
+): void {
+  const targetHandlers = opts?.source === "plugin" ? pluginHandlers : handlers;
+  const eventHandlers = targetHandlers.get(eventKey);
   if (!eventHandlers) {
     return;
   }
@@ -251,28 +281,50 @@ export function unregisterInternalHook(eventKey: string, handler: InternalHookHa
 
   // Clean up empty handler arrays
   if (eventHandlers.length === 0) {
-    handlers.delete(eventKey);
+    targetHandlers.delete(eventKey);
   }
 }
 
 /**
- * Clear all registered hooks (useful for testing)
+ * Clear file-based hooks only (loaded from ~/.openclaw/hooks/).
+ * Plugin hooks are preserved since they have a different lifecycle.
  */
 export function clearInternalHooks(): void {
   handlers.clear();
 }
 
 /**
- * Get all registered event keys (useful for debugging)
+ * Clear all hooks including both file-based and plugin hooks.
+ * Use this only in tests or when completely resetting the hook system.
+ */
+export function clearAllInternalHooks(): void {
+  handlers.clear();
+  pluginHandlers.clear();
+}
+
+/**
+ * Clear plugin hooks only.
+ * Use this when unloading plugins.
+ */
+export function clearPluginInternalHooks(): void {
+  pluginHandlers.clear();
+}
+
+/**
+ * Get all registered event keys from both file and plugin hooks (useful for debugging)
  */
 export function getRegisteredEventKeys(): string[] {
-  return Array.from(handlers.keys());
+  const keys = new Set([...handlers.keys(), ...pluginHandlers.keys()]);
+  return Array.from(keys);
 }
 
 export function hasInternalHookListeners(type: InternalHookEventType, action: string): boolean {
-  return (
-    (handlers.get(type)?.length ?? 0) > 0 || (handlers.get(`${type}:${action}`)?.length ?? 0) > 0
-  );
+  const hasFileListeners =
+    (handlers.get(type)?.length ?? 0) > 0 || (handlers.get(`${type}:${action}`)?.length ?? 0) > 0;
+  const hasPluginListeners =
+    (pluginHandlers.get(type)?.length ?? 0) > 0 ||
+    (pluginHandlers.get(`${type}:${action}`)?.length ?? 0) > 0;
+  return hasFileListeners || hasPluginListeners;
 }
 
 /**
@@ -282,6 +334,7 @@ export function hasInternalHookListeners(type: InternalHookEventType, action: st
  * 1. The general event type (e.g., 'command')
  * 2. The specific event:action combination (e.g., 'command:new')
  *
+ * Handlers from both file hooks and plugin hooks are invoked.
  * Handlers are called in registration order. Errors are caught and logged
  * but don't prevent other handlers from running.
  *
@@ -292,9 +345,17 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
     return;
   }
 
-  const typeHandlers = handlers.get(event.type) ?? [];
-  const specificHandlers = handlers.get(`${event.type}:${event.action}`) ?? [];
-  const allHandlers = [...typeHandlers, ...specificHandlers];
+  const fileTypeHandlers = handlers.get(event.type) ?? [];
+  const fileSpecificHandlers = handlers.get(`${event.type}:${event.action}`) ?? [];
+  const pluginTypeHandlers = pluginHandlers.get(event.type) ?? [];
+  const pluginSpecificHandlers = pluginHandlers.get(`${event.type}:${event.action}`) ?? [];
+
+  const allHandlers = [
+    ...fileTypeHandlers,
+    ...fileSpecificHandlers,
+    ...pluginTypeHandlers,
+    ...pluginSpecificHandlers,
+  ];
 
   for (const handler of allHandlers) {
     try {
