@@ -23,6 +23,7 @@ function createStubPluginRegistry(): PluginRegistry {
     webFetchProviders: [],
     webSearchProviders: [],
     memoryEmbeddingProviders: [],
+    agentHarnesses: [],
     gatewayHandlers: {},
     httpRoutes: [],
     cliRegistrars: [],
