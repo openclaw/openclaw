@@ -5,11 +5,7 @@ import {
   buildTextObservationFields,
   sanitizeForConsole,
 } from "./pi-embedded-error-observation.js";
-import {
-  classifyFailoverReason,
-  classifyProviderRuntimeFailureKind,
-  formatAssistantErrorText,
-} from "./pi-embedded-helpers.js";
+import { classifyFailoverReason, formatAssistantErrorText } from "./pi-embedded-helpers.js";
 import {
   consumePendingToolMediaReply,
   hasAssistantVisibleReply,
@@ -55,10 +51,6 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
     const failoverReason = classifyFailoverReason(rawError ?? "", {
       provider: lastAssistant.provider,
     });
-    const providerRuntimeFailureKind = classifyProviderRuntimeFailureKind({
-      message: rawError ?? "",
-      provider: lastAssistant.provider,
-    });
     const errorText = (friendlyError || lastAssistant.errorMessage || "LLM request failed.").trim();
     const observedError = buildApiErrorObservationFields(rawError, {
       provider: lastAssistant.provider,
@@ -83,7 +75,6 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
       model: lastAssistant.model,
       provider: lastAssistant.provider,
       ...observedError,
-      providerRuntimeFailureKind,
       consoleMessage: `embedded run agent end: runId=${safeRunId} isError=true model=${safeModel} provider=${safeProvider} error=${safeErrorText}${rawErrorConsoleSuffix}`,
     });
   } else {
