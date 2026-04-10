@@ -141,7 +141,7 @@ export class RealtimeCallHandler {
       maxPayload: MAX_REALTIME_MESSAGE_BYTES,
     });
     wss.handleUpgrade(request, socket, head, (ws) => {
-      const bridgeRef: { current?: ActiveRealtimeVoiceBridge } = {};
+      let bridge: ActiveRealtimeVoiceBridge | null = null;
       let initialized = false;
 
       ws.on("message", (data: Buffer) => {
@@ -160,10 +160,9 @@ export class RealtimeCallHandler {
             if (!nextBridge) {
               return;
             }
-            bridgeRef.current = nextBridge;
+            bridge = nextBridge;
             return;
           }
-          const bridge = bridgeRef.current;
           if (!bridge) {
             return;
           }
@@ -193,9 +192,7 @@ export class RealtimeCallHandler {
       });
 
       ws.on("close", () => {
-        if (bridgeRef.current) {
-          bridgeRef.current.close();
-        }
+        bridge?.close();
       });
 
       ws.on("error", (error) => {
@@ -240,7 +237,7 @@ export class RealtimeCallHandler {
     callSid: string,
     ws: WebSocket,
     callerMeta: Omit<PendingStreamToken, "expiry">,
-  ) {
+  ): ActiveRealtimeVoiceBridge | null {
     const registration = this.registerCallInManager(callSid, callerMeta);
     if (!registration) {
       ws.close(1008, "Caller rejected by policy");
@@ -326,7 +323,7 @@ export class RealtimeCallHandler {
         );
       },
       onReady: () => {
-        bridge?.triggerGreeting?.(initialGreetingInstructions);
+        bridgeRef.current?.triggerGreeting?.(initialGreetingInstructions);
       },
       onError: (error) => {
         console.error("[voice-call] realtime voice error:", error.message);
@@ -351,14 +348,15 @@ export class RealtimeCallHandler {
       },
     });
 
+    bridgeRef.current = bridge;
+
     bridge.connect().catch((error: Error) => {
       console.error("[voice-call] Failed to connect realtime bridge:", error);
-      bridge?.close();
+      bridge.close();
       emitCallEnd("error");
       ws.close(1011, "Failed to connect");
     });
 
-    bridgeRef.current = bridge;
     return bridge;
   }
 
