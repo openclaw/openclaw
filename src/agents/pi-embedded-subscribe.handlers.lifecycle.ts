@@ -78,10 +78,10 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
       isError: true,
       error: safeErrorText,
       failoverReason,
-      providerRuntimeFailureKind,
       model: lastAssistant.model,
       provider: lastAssistant.provider,
       ...observedError,
+      providerRuntimeFailureKind,
       consoleMessage: `embedded run agent end: runId=${safeRunId} isError=true model=${safeModel} provider=${safeProvider} error=${safeErrorText}${rawErrorConsoleSuffix}`,
     });
     emitAgentEvent({
