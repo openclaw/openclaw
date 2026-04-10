@@ -72,4 +72,21 @@ describe("agent defaults schema", () => {
     expect(() => AgentDefaultsSchema.parse({ heartbeat: { timeoutSeconds: 0 } })).toThrow();
     expect(() => AgentEntrySchema.parse({ id: "ops", heartbeat: { timeoutSeconds: 0 } })).toThrow();
   });
+
+  it("accepts model-aware AGENTS file overrides", () => {
+    expect(() =>
+      AgentDefaultsSchema.parse({
+        agentsFile: "AGENTS.gpt.md",
+        agentsFilesByModel: {
+          "openai/gpt-5.4": "AGENTS.gpt-5.4.md",
+        },
+        subagents: {
+          agentsFile: "SUBAGENTS.md",
+          agentsFilesByModel: {
+            "openai/gpt-5.4": "SUBAGENTS.gpt-5.4.md",
+          },
+        },
+      }),
+    ).not.toThrow();
+  });
 });

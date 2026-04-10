@@ -1,4 +1,5 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { AgentCompactionIdentifierPolicy } from "../../config/types.agent-defaults.js";
 import { createSessionManagerRuntimeRegistry } from "./session-manager-runtime-registry.js";
 
@@ -17,6 +18,13 @@ export type CompactionSafeguardRuntimeValue = {
   recentTurnsPreserve?: number;
   qualityGuardEnabled?: boolean;
   qualityGuardMaxRetries?: number;
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  agentId?: string;
+  modelProviderId?: string;
+  modelId?: string;
   /**
    * Id of a registered compaction provider plugin.
    * When set and found in the compaction provider registry, the provider's
