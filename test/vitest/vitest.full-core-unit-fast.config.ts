@@ -6,9 +6,6 @@ export default defineConfig({
   test: {
     ...sharedVitestConfig.test,
     runner: undefined,
-    projects: [
-      "test/vitest/vitest.unit-fast-a.config.ts",
-      "test/vitest/vitest.unit-fast-b.config.ts",
-    ],
+    projects: ["test/vitest/vitest.unit-fast.config.ts"],
   },
 });

@@ -10,10 +10,7 @@ export const fullSuiteVitestShards = [
   {
     config: "test/vitest/vitest.full-core-unit-fast.config.ts",
     name: "core-unit-fast",
-    projects: [
-      "test/vitest/vitest.unit-fast-a.config.ts",
-      "test/vitest/vitest.unit-fast-b.config.ts",
-    ],
+    projects: ["test/vitest/vitest.unit-fast.config.ts"],
   },
   {
     config: "test/vitest/vitest.full-core-unit-src.config.ts",

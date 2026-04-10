@@ -40,8 +40,6 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   ["test/vitest/vitest.contracts.config.ts", 165],
   ["test/vitest/vitest.tasks.config.ts", 165],
   ["test/vitest/vitest.channels.config.ts", 164],
-  ["test/vitest/vitest.unit-fast-a.config.ts", 161],
-  ["test/vitest/vitest.unit-fast-b.config.ts", 161],
   ["test/vitest/vitest.unit-fast.config.ts", 160],
   ["test/vitest/vitest.auto-reply-reply.config.ts", 155],
   ["test/vitest/vitest.infra.config.ts", 145],
