@@ -105,4 +105,21 @@ describe("startQaLiveLaneGateway", () => {
     expect(gatewayStop).toHaveBeenCalledTimes(1);
     expect(mockStop).toHaveBeenCalledTimes(1);
   });
+
+  it("reports both gateway and mock shutdown failures together", async () => {
+    gatewayStop.mockRejectedValueOnce(new Error("gateway down"));
+    mockStop.mockRejectedValueOnce(new Error("mock down"));
+    const harness = await startQaLiveLaneGateway({
+      repoRoot: "/tmp/openclaw-repo",
+      qaBusBaseUrl: "http://127.0.0.1:43123",
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.4",
+      alternateModel: "mock-openai/gpt-5.4-alt",
+      controlUiEnabled: false,
+    });
+
+    await expect(harness.stop()).rejects.toThrow(
+      "failed to stop QA live lane resources:\ngateway stop failed: gateway down\nmock provider stop failed: mock down",
+    );
+  });
 });

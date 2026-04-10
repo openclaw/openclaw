@@ -1,9 +1,20 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { __testing, provisionMatrixQaRoom } from "./matrix-driver-client.js";
 import { __testing as liveTesting } from "./matrix-live.runtime.js";
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("matrix live qa runtime", () => {
+  it("ships both Matrix live QA scenarios by default", () => {
+    expect(liveTesting.findScenario().map((scenario) => scenario.id)).toEqual([
+      "matrix-thread-follow-up",
+      "matrix-thread-isolation",
+    ]);
+  });
+
   it("uses the repo-wide exact marker prompt shape for Matrix canaries", () => {
     expect(liveTesting.buildMentionPrompt("@sut:matrix-qa.test", "MATRIX_QA_CANARY_TOKEN")).toBe(
       "@sut:matrix-qa.test reply with only this exact marker: MATRIX_QA_CANARY_TOKEN",
@@ -108,6 +119,72 @@ describe("matrix live qa runtime", () => {
     expect(() => liveTesting.findScenario(["matrix-thread-follow-up", "typo-scenario"])).toThrow(
       "unknown Matrix QA scenario id(s): typo-scenario",
     );
+  });
+
+  it("treats only connected, healthy Matrix accounts as ready", () => {
+    expect(liveTesting.isMatrixAccountReady({ running: true, connected: true })).toBe(true);
+    expect(liveTesting.isMatrixAccountReady({ running: true, connected: false })).toBe(false);
+    expect(
+      liveTesting.isMatrixAccountReady({
+        running: true,
+        connected: true,
+        restartPending: true,
+      }),
+    ).toBe(false);
+    expect(
+      liveTesting.isMatrixAccountReady({
+        running: true,
+        connected: true,
+        healthState: "degraded",
+      }),
+    ).toBe(false);
+  });
+
+  it("waits past not-ready Matrix status snapshots until the account is really ready", async () => {
+    vi.useFakeTimers();
+    const gateway = {
+      call: vi
+        .fn()
+        .mockResolvedValueOnce({
+          channelAccounts: {
+            matrix: [{ accountId: "sut", running: true, connected: false }],
+          },
+        })
+        .mockResolvedValueOnce({
+          channelAccounts: {
+            matrix: [{ accountId: "sut", running: true, connected: true }],
+          },
+        }),
+    };
+
+    const waitPromise = liveTesting.waitForMatrixChannelReady(gateway as never, "sut", {
+      timeoutMs: 1_000,
+      pollMs: 100,
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(waitPromise).resolves.toBeUndefined();
+    expect(gateway.call).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails readiness when the Matrix account never reaches a healthy connected state", async () => {
+    vi.useFakeTimers();
+    const gateway = {
+      call: vi.fn().mockResolvedValue({
+        channelAccounts: {
+          matrix: [{ accountId: "sut", running: true, connected: true, healthState: "degraded" }],
+        },
+      }),
+    };
+
+    const waitPromise = liveTesting.waitForMatrixChannelReady(gateway as never, "sut", {
+      timeoutMs: 250,
+      pollMs: 100,
+    });
+    const expectation = expect(waitPromise).rejects.toThrow(
+      'matrix account "sut" did not become ready',
+    );
+    await vi.advanceTimersByTimeAsync(300);
+    await expectation;
   });
 });
 

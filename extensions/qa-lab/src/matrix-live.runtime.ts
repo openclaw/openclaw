@@ -22,12 +22,41 @@ import {
 } from "./run-config.js";
 
 type MatrixQaScenarioDefinition = {
-  id: "matrix-thread-follow-up";
+  id: "matrix-thread-follow-up" | "matrix-thread-isolation";
   timeoutMs: number;
   title: string;
 };
 
+type MatrixQaReplyArtifact = {
+  eventId: string;
+  mentions?: MatrixQaObservedEvent["mentions"];
+  relatesTo?: MatrixQaObservedEvent["relatesTo"];
+  sender?: string;
+  tokenMatched: boolean;
+};
+
+type MatrixQaCanaryArtifact = {
+  driverEventId: string;
+  reply: MatrixQaReplyArtifact;
+  token: string;
+};
+
+type MatrixQaScenarioArtifacts = {
+  driverEventId?: string;
+  rootEventId?: string;
+  reply?: MatrixQaReplyArtifact;
+  threadDriverEventId?: string;
+  threadReply?: MatrixQaReplyArtifact;
+  threadRootEventId?: string;
+  threadToken?: string;
+  token?: string;
+  topLevelDriverEventId?: string;
+  topLevelReply?: MatrixQaReplyArtifact;
+  topLevelToken?: string;
+};
+
 type MatrixQaScenarioResult = {
+  artifacts?: MatrixQaScenarioArtifacts;
   details: string;
   id: string;
   status: "fail" | "pass";
@@ -49,6 +78,8 @@ type MatrixQaSummary = {
     roomId: string;
     serverName: string;
   };
+  canary?: MatrixQaCanaryArtifact;
+  observedEventCount: number;
   observedEventsPath: string;
   reportPath: string;
   scenarios: MatrixQaScenarioResult[];
@@ -75,6 +106,11 @@ const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     id: "matrix-thread-follow-up",
     timeoutMs: 60_000,
     title: "Matrix thread follow-up reply",
+  },
+  {
+    id: "matrix-thread-isolation",
+    timeoutMs: 75_000,
+    title: "Matrix top-level reply stays out of prior thread",
   },
 ];
 
@@ -172,12 +208,32 @@ function findScenario(ids?: string[]) {
   return selected;
 }
 
+function isMatrixAccountReady(entry?: {
+  connected?: boolean;
+  healthState?: string;
+  restartPending?: boolean;
+  running?: boolean;
+}): boolean {
+  return Boolean(
+    entry?.running === true &&
+    entry.connected === true &&
+    entry.restartPending !== true &&
+    (entry.healthState === undefined || entry.healthState === "healthy"),
+  );
+}
+
 async function waitForMatrixChannelReady(
   gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
   accountId: string,
+  opts?: {
+    pollMs?: number;
+    timeoutMs?: number;
+  },
 ) {
+  const pollMs = opts?.pollMs ?? 500;
+  const timeoutMs = opts?.timeoutMs ?? 60_000;
   const startedAt = Date.now();
-  while (Date.now() - startedAt < 60_000) {
+  while (Date.now() - startedAt < timeoutMs) {
     try {
       const payload = (await gateway.call(
         "channels.status",
@@ -197,18 +253,13 @@ async function waitForMatrixChannelReady(
       };
       const accounts = payload.channelAccounts?.matrix ?? [];
       const match = accounts.find((entry) => entry.accountId === accountId);
-      if (
-        match?.running === true &&
-        match.connected === true &&
-        match.restartPending !== true &&
-        (match.healthState === undefined || match.healthState === "healthy")
-      ) {
+      if (isMatrixAccountReady(match)) {
         return;
       }
     } catch {
       // retry
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
   }
   throw new Error(`matrix account "${accountId}" did not become ready`);
 }
@@ -217,20 +268,80 @@ function buildMentionPrompt(sutUserId: string, token: string) {
   return `${sutUserId} reply with only this exact marker: ${token}`;
 }
 
-async function runMatrixCanary(params: {
+function buildMatrixReplyArtifact(
+  event: MatrixQaObservedEvent,
+  token: string,
+): MatrixQaReplyArtifact {
+  return {
+    eventId: event.eventId,
+    mentions: event.mentions,
+    relatesTo: event.relatesTo,
+    sender: event.sender,
+    tokenMatched: (event.body ?? "").includes(token),
+  };
+}
+
+function buildMatrixReplyDetails(label: string, artifact: MatrixQaReplyArtifact) {
+  return [
+    `${label} event: ${artifact.eventId}`,
+    `${label} token matched: ${artifact.tokenMatched ? "yes" : "no"}`,
+    `${label} rel_type: ${artifact.relatesTo?.relType ?? "<none>"}`,
+    `${label} in_reply_to: ${artifact.relatesTo?.inReplyToId ?? "<none>"}`,
+    `${label} is_falling_back: ${artifact.relatesTo?.isFallingBack === true ? "true" : "false"}`,
+  ];
+}
+
+function assertTopLevelReplyArtifact(label: string, artifact: MatrixQaReplyArtifact) {
+  if (!artifact.tokenMatched) {
+    throw new Error(`${label} did not contain the expected token`);
+  }
+  if (artifact.relatesTo !== undefined) {
+    throw new Error(`${label} unexpectedly included relation metadata`);
+  }
+}
+
+function assertThreadReplyArtifact(
+  artifact: MatrixQaReplyArtifact,
+  params: {
+    expectedRootEventId: string;
+    label: string;
+  },
+) {
+  if (!artifact.tokenMatched) {
+    throw new Error(`${params.label} did not contain the expected token`);
+  }
+  if (artifact.relatesTo?.relType !== "m.thread") {
+    throw new Error(`${params.label} did not use m.thread`);
+  }
+  if (artifact.relatesTo.eventId !== params.expectedRootEventId) {
+    throw new Error(
+      `${params.label} targeted ${artifact.relatesTo.eventId ?? "<none>"} instead of ${params.expectedRootEventId}`,
+    );
+  }
+  if (artifact.relatesTo.isFallingBack !== true) {
+    throw new Error(`${params.label} did not set is_falling_back`);
+  }
+  if (!artifact.relatesTo.inReplyToId) {
+    throw new Error(`${params.label} did not set m.in_reply_to`);
+  }
+}
+
+async function runTopLevelMentionScenario(params: {
   baseUrl: string;
   driverAccessToken: string;
   observedEvents: MatrixQaObservedEvent[];
   roomId: string;
+  since?: string;
   sutUserId: string;
+  timeoutMs: number;
+  tokenPrefix: string;
 }) {
   const client = createMatrixQaClient({
     accessToken: params.driverAccessToken,
     baseUrl: params.baseUrl,
   });
-  let since = await client.primeRoom();
-  const token = `MATRIX_QA_CANARY_${randomUUID().slice(0, 8).toUpperCase()}`;
-  await client.sendTextMessage({
+  const token = `${params.tokenPrefix}_${randomUUID().slice(0, 8).toUpperCase()}`;
+  const driverEventId = await client.sendTextMessage({
     body: buildMentionPrompt(params.sutUserId, token),
     mentionUserIds: [params.sutUserId],
     roomId: params.roomId,
@@ -243,13 +354,13 @@ async function runMatrixCanary(params: {
       (event.body ?? "").includes(token) &&
       event.relatesTo === undefined,
     roomId: params.roomId,
-    since,
-    timeoutMs: 45_000,
+    since: params.since,
+    timeoutMs: params.timeoutMs,
   });
-  since = matched.since;
   return {
-    event: matched.event,
-    since,
+    driverEventId,
+    reply: buildMatrixReplyArtifact(matched.event, token),
+    since: matched.since,
     token,
   };
 }
@@ -293,11 +404,38 @@ async function runThreadScenario(params: {
     timeoutMs: params.timeoutMs,
   });
   return {
-    driverThreadEventId,
-    replyEvent: matched.event,
+    driverEventId: driverThreadEventId,
+    reply: buildMatrixReplyArtifact(matched.event, token),
     rootEventId,
     since: matched.since,
     token,
+  };
+}
+
+async function runThreadIsolationScenario(params: {
+  baseUrl: string;
+  driverAccessToken: string;
+  observedEvents: MatrixQaObservedEvent[];
+  roomId: string;
+  since?: string;
+  sutUserId: string;
+  timeoutMs: number;
+}) {
+  const threadPhase = await runThreadScenario(params);
+  const topLevelPhase = await runTopLevelMentionScenario({
+    baseUrl: params.baseUrl,
+    driverAccessToken: params.driverAccessToken,
+    observedEvents: params.observedEvents,
+    roomId: params.roomId,
+    since: threadPhase.since,
+    sutUserId: params.sutUserId,
+    timeoutMs: params.timeoutMs,
+    tokenPrefix: "MATRIX_QA_TOPLEVEL",
+  });
+  return {
+    since: topLevelPhase.since,
+    threadPhase,
+    topLevelPhase,
   };
 }
 
@@ -362,6 +500,7 @@ export async function runMatrixQaLive(params: {
   ];
   const scenarioResults: MatrixQaScenarioResult[] = [];
   const cleanupErrors: string[] = [];
+  let canaryArtifact: MatrixQaCanaryArtifact | undefined;
   let gatewayHarness: Awaited<ReturnType<typeof startQaLiveLaneGateway>> | null = null;
   let canaryFailed = false;
   let canarySince: string | undefined;
@@ -394,18 +533,32 @@ export async function runMatrixQaLive(params: {
     });
 
     try {
-      const canary = await runMatrixCanary({
+      const canaryPrimeClient = createMatrixQaClient({
+        accessToken: provisioning.driver.accessToken,
+        baseUrl: harness.baseUrl,
+      });
+      canarySince = await canaryPrimeClient.primeRoom();
+      const canary = await runTopLevelMentionScenario({
         baseUrl: harness.baseUrl,
         driverAccessToken: provisioning.driver.accessToken,
         observedEvents,
         roomId: provisioning.roomId,
+        since: canarySince,
         sutUserId: provisioning.sut.userId,
+        timeoutMs: 45_000,
+        tokenPrefix: "MATRIX_QA_CANARY",
       });
+      assertTopLevelReplyArtifact("canary reply", canary.reply);
+      canaryArtifact = {
+        driverEventId: canary.driverEventId,
+        reply: canary.reply,
+        token: canary.token,
+      };
       canarySince = canary.since;
       checks.push({
         name: "Matrix canary",
         status: "pass",
-        details: `reply event ${canary.event.eventId} contained ${canary.token}`,
+        details: buildMatrixReplyDetails("reply", canary.reply).join("\n"),
       });
     } catch (error) {
       canaryFailed = true;
@@ -419,7 +572,41 @@ export async function runMatrixQaLive(params: {
     if (!canaryFailed) {
       for (const scenario of scenarios) {
         try {
-          const result = await runThreadScenario({
+          if (scenario.id === "matrix-thread-follow-up") {
+            const result = await runThreadScenario({
+              baseUrl: harness.baseUrl,
+              driverAccessToken: provisioning.driver.accessToken,
+              observedEvents,
+              roomId: provisioning.roomId,
+              since: canarySince,
+              sutUserId: provisioning.sut.userId,
+              timeoutMs: scenario.timeoutMs,
+            });
+            assertThreadReplyArtifact(result.reply, {
+              expectedRootEventId: result.rootEventId,
+              label: "thread reply",
+            });
+            canarySince = result.since;
+            scenarioResults.push({
+              artifacts: {
+                driverEventId: result.driverEventId,
+                reply: result.reply,
+                rootEventId: result.rootEventId,
+                token: result.token,
+              },
+              id: scenario.id,
+              title: scenario.title,
+              status: "pass",
+              details: [
+                `root event: ${result.rootEventId}`,
+                `driver thread event: ${result.driverEventId}`,
+                ...buildMatrixReplyDetails("reply", result.reply),
+              ].join("\n"),
+            });
+            continue;
+          }
+
+          const result = await runThreadIsolationScenario({
             baseUrl: harness.baseUrl,
             driverAccessToken: provisioning.driver.accessToken,
             observedEvents,
@@ -428,16 +615,31 @@ export async function runMatrixQaLive(params: {
             sutUserId: provisioning.sut.userId,
             timeoutMs: scenario.timeoutMs,
           });
+          assertThreadReplyArtifact(result.threadPhase.reply, {
+            expectedRootEventId: result.threadPhase.rootEventId,
+            label: "thread isolation reply",
+          });
+          assertTopLevelReplyArtifact("top-level follow-up reply", result.topLevelPhase.reply);
           canarySince = result.since;
           scenarioResults.push({
+            artifacts: {
+              threadDriverEventId: result.threadPhase.driverEventId,
+              threadReply: result.threadPhase.reply,
+              threadRootEventId: result.threadPhase.rootEventId,
+              threadToken: result.threadPhase.token,
+              topLevelDriverEventId: result.topLevelPhase.driverEventId,
+              topLevelReply: result.topLevelPhase.reply,
+              topLevelToken: result.topLevelPhase.token,
+            },
             id: scenario.id,
             title: scenario.title,
             status: "pass",
             details: [
-              `root event: ${result.rootEventId}`,
-              `driver thread event: ${result.driverThreadEventId}`,
-              `sut reply event: ${result.replyEvent.eventId}`,
-              `reply rel_type: ${result.replyEvent.relatesTo?.relType ?? "<none>"}`,
+              `thread root event: ${result.threadPhase.rootEventId}`,
+              `thread driver event: ${result.threadPhase.driverEventId}`,
+              ...buildMatrixReplyDetails("thread reply", result.threadPhase.reply),
+              `top-level driver event: ${result.topLevelPhase.driverEventId}`,
+              ...buildMatrixReplyDetails("top-level reply", result.topLevelPhase.reply),
             ].join("\n"),
           });
         } catch (error) {
@@ -515,6 +717,8 @@ export async function runMatrixQaLive(params: {
       roomId: provisioning.roomId,
       serverName: harness.serverName,
     },
+    canary: canaryArtifact,
+    observedEventCount: observedEvents.length,
     observedEventsPath,
     reportPath,
     scenarios: scenarioResults,
@@ -590,5 +794,6 @@ export const __testing = {
   buildMentionPrompt,
   buildObservedEventsArtifact,
   findScenario,
+  isMatrixAccountReady,
   waitForMatrixChannelReady,
 };
