@@ -1,0 +1,58 @@
+name: Agent Cloud Control
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_local_smoke:
+        description: "Run local smoke test on self-hosted Windows runner"
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    - cron: "*/30 * * * *"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/agent-cloud-control.yml"
+      - "scripts/ci/validate_openclaw_stack.py"
+      - "tools/openclaw-local-guard.ps1"
+      - "tools/openclaw-cdp-proxy.js"
+      - "docs/openclaw-cloud-local-stability.md"
+
+jobs:
+  cloud-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate Cloud/Local Control Files
+        run: python scripts/ci/validate_openclaw_stack.py
+
+  local-smoke:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.run_local_smoke == 'true' }}
+    runs-on:
+      - self-hosted
+      - windows
+      - openclaw
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Local Smoke
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Path .tmp -Force | Out-Null
+          .\tools\openclaw-local-guard.ps1 -Action smoke -JsonOut ".tmp\openclaw-local-health.json"
+
+      - name: Upload Local Health Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-local-health
+          path: .tmp/openclaw-local-health.json
