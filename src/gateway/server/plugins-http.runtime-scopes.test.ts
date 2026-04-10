@@ -216,7 +216,7 @@ describe("plugin HTTP route runtime scopes", () => {
       registry: createTestRegistry({
         httpRoutes: [
           createRoute({
-            path: "/secure-admin-hook",
+            path: "/secure/admin-hook",
             auth: "gateway",
             match: "exact",
             handler: async () => {
@@ -250,7 +250,7 @@ describe("plugin HTTP route runtime scopes", () => {
 
     const response = makeMockHttpResponse();
     const handled = await handler(
-      { url: "/secure-admin-hook" } as IncomingMessage,
+      { url: "/secure/admin-hook" } as IncomingMessage,
       response.res,
       undefined,
       {
