@@ -29,21 +29,17 @@ export type SessionsState = {
   sessionsCheckpointErrorByKey: Record<string, string>;
 };
 
-function checkpointSignature(
+function checkpointSummarySignature(
   row:
     | {
-        key: string;
         compactionCheckpointCount?: number;
         latestCompactionCheckpoint?: { checkpointId?: string; createdAt?: number } | null;
       }
     | undefined,
 ): string {
-  return JSON.stringify({
-    key: row?.key ?? "",
-    count: row?.compactionCheckpointCount ?? 0,
-    latestCheckpointId: row?.latestCompactionCheckpoint?.checkpointId ?? "",
-    latestCreatedAt: row?.latestCompactionCheckpoint?.createdAt ?? 0,
-  });
+  return `${row?.compactionCheckpointCount ?? 0}:${
+    row?.latestCompactionCheckpoint?.checkpointId ?? ""
+  }:${row?.latestCompactionCheckpoint?.createdAt ?? 0}`;
 }
 
 function invalidateCheckpointCacheForKey(state: SessionsState, key: string) {
@@ -183,7 +179,7 @@ export async function loadSessions(
       let expandedNeedsRefetch = false;
       for (const row of res.sessions) {
         const previous = previousRows.get(row.key);
-        if (checkpointSignature(previous) !== checkpointSignature(row)) {
+        if (checkpointSummarySignature(previous) !== checkpointSummarySignature(row)) {
           invalidateCheckpointCacheForKey(state, row.key);
           if (state.sessionsExpandedCheckpointKey === row.key) {
             expandedNeedsRefetch = true;
