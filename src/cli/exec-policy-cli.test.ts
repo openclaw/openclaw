@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import fs from "node:fs";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -90,6 +89,7 @@ const mocks = vi.hoisted(() => {
       hash: "approvals-hash",
       file: approvalsState,
     })),
+    restoreExecApprovalsSnapshot: vi.fn(),
     saveExecApprovals: vi.fn((file: ExecApprovalsFile) => {
       approvalsState = file;
     }),
@@ -116,6 +116,7 @@ vi.mock("../infra/exec-approvals.js", async () => {
   return {
     ...actual,
     readExecApprovalsSnapshot: mocks.readExecApprovalsSnapshot,
+    restoreExecApprovalsSnapshot: mocks.restoreExecApprovalsSnapshot,
     saveExecApprovals: mocks.saveExecApprovals,
   };
 });
@@ -201,6 +202,8 @@ describe("exec-policy CLI", () => {
       hash: "approvals-hash",
       file: mocks.getApprovals(),
     }));
+    mocks.restoreExecApprovalsSnapshot.mockReset();
+    mocks.restoreExecApprovalsSnapshot.mockImplementation((_snapshot: ExecApprovalsSnapshot) => {});
     mocks.saveExecApprovals.mockReset();
     mocks.saveExecApprovals.mockImplementation((file: ExecApprovalsFile) => {
       mocks.setApprovals(file);
@@ -378,7 +381,6 @@ describe("exec-policy CLI", () => {
   });
 
   it("rolls back approvals if the config write fails after approvals save", async () => {
-    const writeFileSyncSpy = vi.spyOn(fs, "writeFileSync").mockImplementation(() => undefined);
     const originalApprovals = structuredClone(mocks.getApprovals());
     const originalRaw = JSON.stringify(originalApprovals, null, 2);
     const originalSnapshot = {
@@ -409,12 +411,11 @@ describe("exec-policy CLI", () => {
     ).rejects.toThrow("__exit__:1");
 
     expect(mocks.saveExecApprovals).toHaveBeenCalledTimes(1);
-    expect(writeFileSyncSpy).toHaveBeenCalledWith("/tmp/exec-approvals.json", originalRaw, "utf8");
+    expect(mocks.restoreExecApprovalsSnapshot).toHaveBeenCalledWith(originalSnapshot);
     expect(mocks.runtimeErrors).toEqual(["config write failed"]);
   });
 
   it("removes a newly-written approvals file when config replacement fails and the original file was missing", async () => {
-    const rmSyncSpy = vi.spyOn(fs, "rmSync").mockImplementation(() => undefined);
     const missingSnapshot = {
       path: "/tmp/missing-exec-approvals.json",
       exists: false,
@@ -442,11 +443,10 @@ describe("exec-policy CLI", () => {
       runExecPolicyCommand(["exec-policy", "set", "--security", "full"]),
     ).rejects.toThrow("__exit__:1");
 
-    expect(rmSyncSpy).toHaveBeenCalledWith("/tmp/missing-exec-approvals.json", { force: true });
+    expect(mocks.restoreExecApprovalsSnapshot).toHaveBeenCalledWith(missingSnapshot);
   });
 
   it("does not clobber a newer approvals write during rollback", async () => {
-    const writeFileSyncSpy = vi.spyOn(fs, "writeFileSync").mockImplementation(() => undefined);
     const originalApprovals = structuredClone(mocks.getApprovals());
     const originalRaw = JSON.stringify(originalApprovals, null, 2);
     const originalSnapshot: ExecApprovalsSnapshot = {
@@ -485,7 +485,7 @@ describe("exec-policy CLI", () => {
       runExecPolicyCommand(["exec-policy", "set", "--security", "full"]),
     ).rejects.toThrow("__exit__:1");
 
-    expect(writeFileSyncSpy).not.toHaveBeenCalled();
+    expect(mocks.restoreExecApprovalsSnapshot).not.toHaveBeenCalled();
     expect(mocks.saveExecApprovals).toHaveBeenCalledTimes(1);
     expect(mocks.runtimeErrors).toEqual(["config write failed"]);
   });

@@ -13,6 +13,7 @@ import {
   normalizeExecSecurity,
   normalizeExecTarget,
   readExecApprovalsSnapshot,
+  restoreExecApprovalsSnapshot,
   saveExecApprovals,
   type ExecApprovalsFile,
   type ExecAsk,
@@ -285,13 +286,7 @@ async function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPol
     if (currentApprovalsSnapshot.hash !== writtenApprovalsHash) {
       throw err;
     }
-    if (!approvalsSnapshot.exists) {
-      fs.rmSync(approvalsSnapshot.path, { force: true });
-    } else if (approvalsSnapshot.raw !== null) {
-      fs.writeFileSync(approvalsSnapshot.path, approvalsSnapshot.raw, "utf8");
-    } else {
-      saveExecApprovals(approvalsSnapshot.file);
-    }
+    restoreExecApprovalsSnapshot(approvalsSnapshot);
     throw err;
   }
   return await buildLocalExecPolicyShowPayload();

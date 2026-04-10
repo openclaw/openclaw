@@ -480,10 +480,14 @@ export function loadExecApprovals(): ExecApprovalsFile {
 
 export function saveExecApprovals(file: ExecApprovalsFile) {
   const filePath = resolveExecApprovalsPath();
+  const raw = `${JSON.stringify(file, null, 2)}\n`;
+  writeExecApprovalsRaw(filePath, raw);
+}
+
+function writeExecApprovalsRaw(filePath: string, raw: string) {
   const dir = ensureDir(filePath);
   assertSafeExecApprovalsDestination(filePath);
   const tempPath = path.join(dir, `.exec-approvals.${process.pid}.${crypto.randomUUID()}.tmp`);
-  const raw = `${JSON.stringify(file, null, 2)}\n`;
   let tempWritten = false;
   try {
     fs.writeFileSync(tempPath, raw, { mode: 0o600, flag: "wx" });
@@ -499,6 +503,18 @@ export function saveExecApprovals(file: ExecApprovalsFile) {
   } catch {
     // best-effort on platforms without chmod
   }
+}
+
+export function restoreExecApprovalsSnapshot(snapshot: ExecApprovalsSnapshot): void {
+  if (!snapshot.exists) {
+    fs.rmSync(snapshot.path, { force: true });
+    return;
+  }
+  if (snapshot.raw !== null) {
+    writeExecApprovalsRaw(snapshot.path, snapshot.raw);
+    return;
+  }
+  saveExecApprovals(snapshot.file);
 }
 
 export function ensureExecApprovals(): ExecApprovalsFile {
