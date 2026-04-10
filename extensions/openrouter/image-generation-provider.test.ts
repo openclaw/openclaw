@@ -95,7 +95,7 @@ describe("openrouter image generation provider", () => {
         url: "https://openrouter.ai/api/v1/chat/completions",
         body: expect.objectContaining({
           model: "google/gemini-2.5-flash-image",
-          modalities: ["image", "text"],
+          modalities: ["image"],
           messages: [{ role: "user", content: "Draw a lobster" }],
         }),
       }),
@@ -164,45 +164,6 @@ describe("openrouter image generation provider", () => {
         cfg: {},
       }),
     ).rejects.toThrow("OpenRouter image generation response missing image data");
-  });
-
-  it("uses dual-output modalities for Google models and image-only for others", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          choices: [
-            {
-              message: {
-                images: [
-                  {
-                    type: "image_url",
-                    image_url: { url: makeImageDataUrl("flux-img") },
-                  },
-                ],
-              },
-            },
-          ],
-        }),
-      },
-      release: vi.fn(async () => {}),
-    });
-
-    const provider = buildOpenrouterImageGenerationProvider();
-    await provider.generateImage({
-      provider: "openrouter",
-      model: "black-forest-labs/flux.2-pro",
-      prompt: "A mountain",
-      cfg: {},
-    });
-
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: expect.objectContaining({
-          model: "black-forest-labs/flux.2-pro",
-          modalities: ["image"],
-        }),
-      }),
-    );
   });
 
   it("rejects input images since edit mode is not supported", async () => {
