@@ -1,5 +1,7 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { OutboundMediaAccess } from "../../media/load-options.js";
+import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import type { PollInput } from "../../polls.js";
 import { normalizePollInput } from "../../polls.js";
 import {
@@ -58,6 +60,7 @@ type MessageSendParams = {
   channel?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
+  mediaAccess?: Pick<OutboundMediaAccess, "localRoots" | "workspaceDir">;
   gifPlayback?: boolean;
   forceDocument?: boolean;
   accountId?: string;
@@ -287,6 +290,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       gifPlayback: params.gifPlayback,
       forceDocument: params.forceDocument,
       deps: params.deps,
+      mediaAccess: params.mediaAccess,
       bestEffort: params.bestEffort,
       abortSignal: params.abortSignal,
       silent: params.silent,
@@ -310,6 +314,17 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     };
   }
 
+  const gatewayMediaAccess =
+    params.mediaAccess ??
+    resolveAgentScopedOutboundMediaAccess({
+      cfg,
+      agentId: params.agentId,
+      sessionKey: params.requesterSessionKey ?? params.mirror?.sessionKey,
+      accountId: params.requesterAccountId ?? params.accountId,
+      requesterSenderId: params.requesterSenderId,
+      mediaSources: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
+    });
+
   const result = await callMessageGateway<{ messageId: string }>({
     gateway: params.gateway,
     method: "send",
@@ -318,6 +333,17 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       message: params.content,
       mediaUrl: params.mediaUrl,
       mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : params.mediaUrls,
+      mediaAccess:
+        gatewayMediaAccess.localRoots?.length || gatewayMediaAccess.workspaceDir
+          ? {
+              ...(gatewayMediaAccess.localRoots?.length
+                ? { mediaLocalRoots: gatewayMediaAccess.localRoots }
+                : {}),
+              ...(gatewayMediaAccess.workspaceDir
+                ? { workspaceDir: gatewayMediaAccess.workspaceDir }
+                : {}),
+            }
+          : undefined,
       gifPlayback: params.gifPlayback,
       accountId: params.accountId,
       agentId: params.agentId,

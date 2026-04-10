@@ -308,6 +308,21 @@ describe("gateway url override hardening", () => {
         },
       },
     },
+    {
+      name: "forwards media access into gateway send params",
+      params: {
+        agentId: "work",
+        mediaUrl: "file:///tmp/report.pdf",
+      },
+      expected: {
+        params: {
+          mediaAccess: {
+            mediaLocalRoots: expect.arrayContaining(["/tmp/openclaw"]),
+            workspaceDir: expect.stringContaining("workspace-work"),
+          },
+        },
+      },
+    },
   ])("$name", async ({ params, expected }) => {
     expect(await sendMattermostGatewayMessage(params)).toMatchObject(expected);
   });

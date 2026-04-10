@@ -225,6 +225,32 @@ describe("gateway send mirroring", () => {
     );
   });
 
+  it("forwards explicit media access into outbound delivery", async () => {
+    mockDeliverySuccess("m-media-access");
+
+    await runSend({
+      to: "channel:C1",
+      message: "hi",
+      mediaUrl: "file:///tmp/report.pdf",
+      mediaAccess: {
+        mediaLocalRoots: ["/tmp/workspace", "  ", "/tmp/uploads"],
+        workspaceDir: "/tmp/workspace",
+      },
+      channel: "slack",
+      idempotencyKey: "idem-media-access",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        mediaAccess: {
+          localRoots: ["/tmp/workspace", "/tmp/uploads"],
+          workspaceDir: "/tmp/workspace",
+        },
+      }),
+    );
+  });
+
   it("forwards gateway client scopes into outbound delivery", async () => {
     mockDeliverySuccess("m-scope");
 

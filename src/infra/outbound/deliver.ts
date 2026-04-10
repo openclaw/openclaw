@@ -129,6 +129,7 @@ type ChannelHandlerParams = {
   threadId?: string | number | null;
   identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
+  mediaAccess?: OutboundMediaAccess;
   gifPlayback?: boolean;
   forceDocument?: boolean;
   silent?: boolean;
@@ -568,6 +569,7 @@ async function deliverOutboundPayloadsCore(
     cfg,
     agentId: params.session?.agentId ?? params.mirror?.agentId,
     mediaSources: collectPayloadMediaSources(payloads),
+    mediaAccess: params.mediaAccess,
     sessionKey: params.session?.key,
     messageProvider: params.session?.key ? undefined : channel,
     accountId: params.session?.requesterAccountId ?? accountId,

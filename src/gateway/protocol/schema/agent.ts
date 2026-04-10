@@ -41,6 +41,15 @@ export const SendParamsSchema = Type.Object(
     message: Type.Optional(Type.String()),
     mediaUrl: Type.Optional(Type.String()),
     mediaUrls: Type.Optional(Type.Array(Type.String())),
+    mediaAccess: Type.Optional(
+      Type.Object(
+        {
+          mediaLocalRoots: Type.Optional(Type.Array(Type.String())),
+          workspaceDir: Type.Optional(Type.String()),
+        },
+        { additionalProperties: false },
+      ),
+    ),
     gifPlayback: Type.Optional(Type.Boolean()),
     channel: Type.Optional(Type.String()),
     accountId: Type.Optional(Type.String()),

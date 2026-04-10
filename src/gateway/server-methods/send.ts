@@ -197,6 +197,10 @@ export const sendHandlers: GatewayRequestHandlers = {
       message?: string;
       mediaUrl?: string;
       mediaUrls?: string[];
+      mediaAccess?: {
+        mediaLocalRoots?: string[];
+        workspaceDir?: string;
+      };
       gifPlayback?: boolean;
       channel?: string;
       accountId?: string;
@@ -229,6 +233,20 @@ export const sendHandlers: GatewayRequestHandlers = {
       ? request.mediaUrls
           .map((entry) => normalizeOptionalString(entry))
           .filter((entry): entry is string => Boolean(entry))
+      : undefined;
+    const explicitMediaAccess = request.mediaAccess
+      ? {
+          ...(Array.isArray(request.mediaAccess.mediaLocalRoots)
+            ? {
+                localRoots: request.mediaAccess.mediaLocalRoots
+                  .map((entry) => normalizeOptionalString(entry))
+                  .filter((entry): entry is string => Boolean(entry)),
+              }
+            : {}),
+          ...(normalizeOptionalString(request.mediaAccess.workspaceDir)
+            ? { workspaceDir: normalizeOptionalString(request.mediaAccess.workspaceDir) }
+            : {}),
+        }
       : undefined;
     if (!message && !mediaUrl && (mediaUrls?.length ?? 0) === 0) {
       respond(
@@ -344,6 +362,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           gifPlayback: request.gifPlayback,
           threadId: threadId ?? null,
           deps: outboundDeps,
+          mediaAccess: explicitMediaAccess,
           gatewayClientScopes: client?.connect?.scopes ?? [],
           mirror: outboundSessionKey
             ? {
