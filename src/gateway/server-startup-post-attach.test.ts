@@ -46,6 +46,7 @@ vi.mock("../agents/subagent-registry.js", () => ({
 }));
 
 vi.mock("../config/paths.js", () => ({
+  STATE_DIR: "/tmp/openclaw-state",
   resolveStateDir: vi.fn(() => "/tmp/openclaw-state"),
 }));
 
