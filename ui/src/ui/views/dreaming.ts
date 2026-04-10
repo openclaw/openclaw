@@ -100,7 +100,6 @@ export type DreamingProps = {
     rem: DreamingPhaseInfo;
   };
   shortTermEntries: DreamingEntry[];
-  signalEntries: DreamingEntry[];
   promotedEntries: DreamingEntry[];
   dreamingOf: string | null;
   nextCycle: string | null;
@@ -431,6 +430,36 @@ function formatCompactDateTime(value: string): string {
   });
 }
 
+function compareWaitingEntryByRecency(a: DreamingEntry, b: DreamingEntry): number {
+  const aMs = a.lastRecalledAt ? Date.parse(a.lastRecalledAt) : Number.NEGATIVE_INFINITY;
+  const bMs = b.lastRecalledAt ? Date.parse(b.lastRecalledAt) : Number.NEGATIVE_INFINITY;
+  if (Number.isFinite(aMs) || Number.isFinite(bMs)) {
+    if (bMs !== aMs) {
+      return bMs - aMs;
+    }
+  }
+  if (b.totalSignalCount !== a.totalSignalCount) {
+    return b.totalSignalCount - a.totalSignalCount;
+  }
+  return a.path.localeCompare(b.path);
+}
+
+function compareWaitingEntryBySignals(a: DreamingEntry, b: DreamingEntry): number {
+  if (b.totalSignalCount !== a.totalSignalCount) {
+    return b.totalSignalCount - a.totalSignalCount;
+  }
+  if (b.phaseHitCount !== a.phaseHitCount) {
+    return b.phaseHitCount - a.phaseHitCount;
+  }
+  return compareWaitingEntryByRecency(a, b);
+}
+
+function sortWaitingEntries(entries: DreamingEntry[], sort: AdvancedWaitingSort): DreamingEntry[] {
+  return sort === "signals"
+    ? entries.toSorted(compareWaitingEntryBySignals)
+    : entries.toSorted(compareWaitingEntryByRecency);
+}
+
 function describeWaitingEntryOrigin(entry: DreamingEntry): string {
   const hasGroundedReplay = entry.groundedCount > 0;
   const hasLiveSupport = entry.recallCount > 0 || entry.dailyCount > 0;
@@ -500,8 +529,7 @@ function renderAdvancedEntryList(params: {
 
 function renderAdvancedSection(props: DreamingProps) {
   const groundedEntries = props.shortTermEntries.filter((entry) => entry.groundedCount > 0);
-  const waitingEntries =
-    _advancedWaitingSort === "signals" ? props.signalEntries : props.shortTermEntries;
+  const waitingEntries = sortWaitingEntries(props.shortTermEntries, _advancedWaitingSort);
   const description = t("dreaming.advanced.description");
   const summary = [
     `${groundedEntries.length} ${t("dreaming.advanced.summaryFromDailyLog")}`,

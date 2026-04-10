@@ -1937,7 +1937,6 @@ export function renderApp(state: AppViewState) {
               promotedCount: state.dreamingStatus?.promotedToday ?? 0,
               phases: state.dreamingStatus?.phases ?? undefined,
               shortTermEntries: state.dreamingStatus?.shortTermEntries ?? [],
-              signalEntries: state.dreamingStatus?.signalEntries ?? [],
               promotedEntries: state.dreamingStatus?.promotedEntries ?? [],
               dreamingOf: null,
               nextCycle: dreamingNextCycle,
