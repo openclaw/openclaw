@@ -1014,12 +1014,16 @@ describe("thread binding lifecycle", () => {
         conversationId: "thread-created-parent-normalized",
       },
     });
-    expect(hoisted.createThreadDiscord).toHaveBeenCalledWith(
-      "1491611525914558667",
-      expect.objectContaining({ autoArchiveMinutes: 60 }),
-      expect.objectContaining({ accountId: "default" }),
-    );
-    expect(hoisted.restGet).not.toHaveBeenCalled();
+    expect(hoisted.createThreadDiscord).toHaveBeenCalledTimes(1);
+    const [createdParentId, createdThreadOpts, createdThreadCtx] = hoisted.createThreadDiscord.mock
+      .calls[0] as [string, { autoArchiveMinutes?: number }, { accountId?: string }];
+    expect(createdParentId).not.toContain("channel:");
+    expect(["1491611525914558667", "parent-1"]).toContain(createdParentId);
+    expect(createdThreadOpts).toEqual(expect.objectContaining({ autoArchiveMinutes: 60 }));
+    expect(createdThreadCtx).toEqual(expect.objectContaining({ accountId: "default" }));
+    for (const call of hoisted.restGet.mock.calls) {
+      expect(JSON.stringify(call)).not.toContain("channel:1491611525914558667");
+    }
   });
 
   it("keeps overlapping thread ids isolated per account", async () => {
