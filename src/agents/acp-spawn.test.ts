@@ -550,6 +550,11 @@ describe("spawnAcpDirect", () => {
       expect.objectContaining({
         targetKind: "session",
         placement: "child",
+        conversation: expect.objectContaining({
+          channel: "discord",
+          accountId: "default",
+          conversationId: "parent-channel",
+        }),
       }),
     );
     expectResolvedIntroTextInBindMetadata();
