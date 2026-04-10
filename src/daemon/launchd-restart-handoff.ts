@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveGatewayLaunchAgentLabel } from "./constants.js";
 
 export type LaunchdRestartHandoffMode = "kickstart" | "start-after-exit";
@@ -23,7 +24,7 @@ export type LaunchdRestartTarget = {
 function assertValidLaunchAgentLabel(label: string): string {
   const trimmed = label.trim();
   if (!/^[A-Za-z0-9._-]+$/.test(trimmed)) {
-    throw new Error(`Invalid launchd label: ${trimmed}`);
+    throw new Error(`Invalid launchd label: ${sanitizeForLog(trimmed)}`);
   }
   return trimmed;
 }
