@@ -9,13 +9,9 @@ import {
 } from "openclaw/plugin-sdk/agent-harness";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexServerNotification } from "./protocol.js";
-import {
-  buildThreadResumeParams,
-  buildTurnStartParams,
-  runCodexAppServerAttempt,
-  __testing,
-} from "./run-attempt.js";
+import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
 import { writeCodexAppServerBinding } from "./session-binding.js";
+import { buildThreadResumeParams, buildTurnStartParams } from "./thread-lifecycle.js";
 
 let tempDir: string;
 

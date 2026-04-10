@@ -92,6 +92,7 @@ describe("openai plugin", () => {
           ],
         }),
       } as Response,
+      finalUrl: "https://api.openai.com/v1/images/generations",
       release: vi.fn(async () => {}),
     });
     vi.spyOn(providerHttp, "assertOkOrThrowHttpError").mockResolvedValue(undefined);
@@ -159,6 +160,7 @@ describe("openai plugin", () => {
           ],
         }),
       } as Response,
+      finalUrl: "https://api.openai.com/v1/images/edits",
       release: vi.fn(async () => {}),
     });
     vi.spyOn(providerHttp, "assertOkOrThrowHttpError").mockResolvedValue(undefined);

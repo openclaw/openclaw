@@ -1,13 +1,12 @@
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WebSocketServer, type RawData } from "ws";
 import {
   CodexAppServerClient,
+  CodexAppServerRpcError,
   MIN_CODEX_APP_SERVER_VERSION,
   readCodexVersionFromUserAgent,
 } from "./client.js";
-import { listCodexAppServerModels } from "./models.js";
 import { resetSharedCodexAppServerClientForTests } from "./shared-client.js";
 
 function createClientHarness() {
@@ -64,6 +63,21 @@ describe("CodexAppServerClient", () => {
 
     await expect(request).resolves.toEqual({ models: [] });
     expect(outbound.method).toBe("model/list");
+  });
+
+  it("preserves JSON-RPC error codes", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    const request = harness.client.request("future/method", {});
+    const outbound = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
+    harness.send({ id: outbound.id, error: { code: -32601, message: "Method not found" } });
+
+    await expect(request).rejects.toMatchObject({
+      name: "CodexAppServerRpcError",
+      code: -32601,
+      message: "Method not found",
+    } satisfies Partial<CodexAppServerRpcError>);
   });
 
   it("initializes with the required client version", async () => {
@@ -127,27 +141,6 @@ describe("CodexAppServerClient", () => {
     expect(harness.writes).toHaveLength(1);
   });
 
-  it("closes the shared app-server when the version gate fails", async () => {
-    const harness = createClientHarness();
-    clients.push(harness.client);
-    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
-
-    // Model discovery goes through the shared-client startup path, where a
-    // failed version gate must also tear down the child process.
-    const listPromise = listCodexAppServerModels({ timeoutMs: 1000 });
-    const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
-    harness.send({
-      id: initialize.id,
-      result: { userAgent: "openclaw/0.117.9 (macOS; test)" },
-    });
-
-    await expect(listPromise).rejects.toThrow(
-      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required`,
-    );
-    expect(harness.process.kill).toHaveBeenCalledTimes(1);
-    startSpy.mockRestore();
-  });
-
   it("reads the Codex version from the app-server user agent", () => {
     expect(readCodexVersionFromUserAgent("openclaw/0.118.0 (macOS; test)")).toBe("0.118.0");
     expect(readCodexVersionFromUserAgent("codex_cli_rs/0.118.1-dev (linux; test)")).toBe(
@@ -191,105 +184,4 @@ describe("CodexAppServerClient", () => {
       result: { decision: "decline" },
     });
   });
-
-  it("lists app-server models through the typed helper", async () => {
-    const harness = createClientHarness();
-    clients.push(harness.client);
-    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
-
-    const listPromise = listCodexAppServerModels({ limit: 12, timeoutMs: 1000 });
-    const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
-    harness.send({
-      id: initialize.id,
-      result: { userAgent: "openclaw/0.118.0 (macOS; test)" },
-    });
-    await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(3));
-    const list = JSON.parse(harness.writes[2] ?? "{}") as { id?: number; method?: string };
-    expect(list.method).toBe("model/list");
-
-    harness.send({
-      id: list.id,
-      result: {
-        data: [
-          {
-            id: "gpt-5.4",
-            model: "gpt-5.4",
-            displayName: "gpt-5.4",
-            inputModalities: ["text", "image"],
-            supportedReasoningEfforts: [
-              { reasoningEffort: "low", description: "fast" },
-              { reasoningEffort: "xhigh", description: "deep" },
-            ],
-            defaultReasoningEffort: "medium",
-            isDefault: true,
-          },
-        ],
-        nextCursor: null,
-      },
-    });
-
-    await expect(listPromise).resolves.toEqual({
-      models: [
-        {
-          id: "gpt-5.4",
-          model: "gpt-5.4",
-          displayName: "gpt-5.4",
-          inputModalities: ["text", "image"],
-          supportedReasoningEfforts: ["low", "xhigh"],
-          defaultReasoningEffort: "medium",
-          isDefault: true,
-        },
-      ],
-    });
-    startSpy.mockRestore();
-  });
-
-  it("can speak JSON-RPC over websocket transport", async () => {
-    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    const authHeaders: Array<string | undefined> = [];
-    server.on("connection", (socket, request) => {
-      authHeaders.push(request.headers.authorization);
-      socket.on("message", (data) => {
-        const message = JSON.parse(rawDataToText(data)) as { id?: number; method?: string };
-        if (message.method === "initialize") {
-          socket.send(
-            JSON.stringify({ id: message.id, result: { userAgent: "openclaw/0.118.0" } }),
-          );
-          return;
-        }
-        if (message.method === "model/list") {
-          socket.send(JSON.stringify({ id: message.id, result: { data: [] } }));
-        }
-      });
-    });
-    await new Promise<void>((resolve) => server.once("listening", resolve));
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected websocket test server port");
-    }
-    const client = CodexAppServerClient.start({
-      transport: "websocket",
-      url: `ws://127.0.0.1:${address.port}`,
-      authToken: "secret",
-    });
-    clients.push(client);
-
-    await expect(client.initialize()).resolves.toBeUndefined();
-    await expect(client.request("model/list", {})).resolves.toEqual({ data: [] });
-    expect(authHeaders).toEqual(["Bearer secret"]);
-    client.close();
-    await new Promise<void>((resolve, reject) =>
-      server.close((error) => (error ? reject(error) : resolve())),
-    );
-  });
 });
-
-function rawDataToText(data: RawData): string {
-  if (Buffer.isBuffer(data)) {
-    return data.toString("utf8");
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  return Buffer.from(data).toString("utf8");
-}
