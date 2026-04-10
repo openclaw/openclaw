@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn(),
   resolveOutboundTarget: vi.fn(),
   deliverOutboundPayloads: vi.fn(),
+  deliverOutboundPayloadsWithStatus: vi.fn(),
   resolveRuntimePluginRegistry: vi.fn(),
 }));
 
@@ -42,13 +43,8 @@ vi.mock("./targets.js", () => ({
 
 vi.mock("./deliver.js", () => ({
   deliverOutboundPayloads: mocks.deliverOutboundPayloads,
-  deliverOutboundPayloadsWithStatus: async (...args: unknown[]) => {
-    const results = await mocks.deliverOutboundPayloads(...args);
-    return {
-      results,
-      blockedByHook: Array.isArray(results) && results.length === 0,
-    };
-  },
+  deliverOutboundPayloadsWithStatus: (...args: unknown[]) =>
+    mocks.deliverOutboundPayloadsWithStatus(...args),
 }));
 
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -69,6 +65,7 @@ describe("sendMessage", () => {
     mocks.getChannelPlugin.mockClear();
     mocks.resolveOutboundTarget.mockClear();
     mocks.deliverOutboundPayloads.mockClear();
+    mocks.deliverOutboundPayloadsWithStatus.mockReset();
     mocks.resolveRuntimePluginRegistry.mockClear();
 
     mocks.getChannelPlugin.mockReturnValue({
@@ -76,6 +73,10 @@ describe("sendMessage", () => {
     });
     mocks.resolveOutboundTarget.mockImplementation(({ to }: { to: string }) => ({ ok: true, to }));
     mocks.deliverOutboundPayloads.mockResolvedValue([{ channel: "mattermost", messageId: "m1" }]);
+    mocks.deliverOutboundPayloadsWithStatus.mockImplementation(async (...args: unknown[]) => {
+      const results = await mocks.deliverOutboundPayloads(...args);
+      return { results, blockedByHook: false };
+    });
   });
 
   it("passes explicit agentId to outbound delivery for scoped media roots", async () => {
@@ -145,7 +146,10 @@ describe("sendMessage", () => {
   });
 
   it("surfaces explicit blocked outcomes when message_sending cancels delivery", async () => {
-    mocks.deliverOutboundPayloads.mockResolvedValue([]);
+    mocks.deliverOutboundPayloadsWithStatus.mockResolvedValue({
+      results: [],
+      blockedByHook: true,
+    });
 
     await expect(
       sendMessage({

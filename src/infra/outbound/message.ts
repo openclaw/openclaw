@@ -276,7 +276,7 @@ export async function sendResolvedDirectMessage(params: {
     gatewayClientScopes: params.gatewayClientScopes,
   });
   const result = delivery.results.at(-1);
-  const blocked = delivery.blockedByHook;
+  const blocked = delivery.blockedByHook && !result;
   return {
     channel: params.channel,
     to: params.to,
@@ -290,7 +290,9 @@ export async function sendResolvedDirectMessage(params: {
           blockedReason: DEFAULT_MESSAGE_SEND_BLOCKED_REASON,
         }
       : {}),
-    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...((params.agentId ?? session?.agentId)
+      ? { agentId: params.agentId ?? session?.agentId }
+      : {}),
     ...(session?.key ? { sessionKey: session.key } : {}),
     ...(params.requestId ? { requestId: params.requestId } : {}),
   };
@@ -372,6 +374,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     });
   }
 
+  const requestId = await resolveGatewayIdempotencyKey(params.idempotencyKey);
   const result = await callMessageGateway<{ messageId: string }>({
     gateway: params.gateway,
     method: "send",
@@ -385,7 +388,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       agentId: params.agentId,
       channel,
       sessionKey: params.mirror?.sessionKey,
-      idempotencyKey: await resolveGatewayIdempotencyKey(params.idempotencyKey),
+      idempotencyKey: requestId,
     },
   });
 
@@ -396,9 +399,11 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     mediaUrl: primaryMediaUrl,
     mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
     result,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...((params.agentId ?? params.mirror?.agentId)
+      ? { agentId: params.agentId ?? params.mirror?.agentId }
+      : {}),
     ...(params.mirror?.sessionKey ? { sessionKey: params.mirror.sessionKey } : {}),
-    ...(params.idempotencyKey ? { requestId: params.idempotencyKey } : {}),
+    requestId,
   };
 }
 

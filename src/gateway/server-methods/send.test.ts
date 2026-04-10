@@ -7,6 +7,7 @@ type ResolveOutboundTarget = typeof import("../../infra/outbound/targets.js").re
 
 const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(),
+  deliverOutboundPayloadsWithStatus: vi.fn(),
   appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
   recordSessionMetaFromInbound: vi.fn(async () => ({ ok: true })),
   resolveOutboundTarget: vi.fn<ResolveOutboundTarget>(() => ({ ok: true, to: "resolved" })),
@@ -89,14 +90,9 @@ vi.mock("../../infra/outbound/channel-selection.js", () => ({
 }));
 
 vi.mock("../../infra/outbound/deliver.js", () => ({
-  deliverOutboundPayloads: mocks.deliverOutboundPayloads,
-  deliverOutboundPayloadsWithStatus: async (...args: unknown[]) => {
-    const results = await mocks.deliverOutboundPayloads(...args);
-    return {
-      results,
-      blockedByHook: Array.isArray(results) && results.length === 0,
-    };
-  },
+  deliverOutboundPayloads: mocks.deliverOutboundPayloadsWithStatus,
+  deliverOutboundPayloadsWithStatus: (...args: unknown[]) =>
+    mocks.deliverOutboundPayloadsWithStatus(...args),
 }));
 
 vi.mock("../../config/sessions.js", async () => {
@@ -161,7 +157,7 @@ async function runPollWithClient(
 }
 
 function expectDeliverySessionMirror(params: { agentId: string; sessionKey: string }) {
-  expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+  expect(mocks.deliverOutboundPayloadsWithStatus).toHaveBeenCalledWith(
     expect.objectContaining({
       session: expect.objectContaining({
         agentId: params.agentId,
@@ -176,7 +172,19 @@ function expectDeliverySessionMirror(params: { agentId: string; sessionKey: stri
 }
 
 function mockDeliverySuccess(messageId: string) {
-  mocks.deliverOutboundPayloads.mockResolvedValue([{ messageId, channel: "slack" }]);
+  mocks.deliverOutboundPayloadsWithStatus.mockResolvedValue([{ messageId, channel: "slack" }]);
+  mocks.deliverOutboundPayloadsWithStatus.mockResolvedValue({
+    results: [{ messageId, channel: "slack" }],
+    blockedByHook: false,
+  });
+}
+
+function mockDeliveryBlocked() {
+  mocks.deliverOutboundPayloadsWithStatus.mockResolvedValue([]);
+  mocks.deliverOutboundPayloadsWithStatus.mockResolvedValue({
+    results: [],
+    blockedByHook: true,
+  });
 }
 
 describe("gateway send mirroring", () => {
@@ -206,6 +214,7 @@ describe("gateway send mirroring", () => {
     });
     mocks.sendPoll.mockResolvedValue({ messageId: "poll-1" });
     mocks.getChannelPlugin.mockReturnValue({ outbound: { sendPoll: mocks.sendPoll } });
+    mocks.deliverOutboundPayloadsWithStatus.mockReset();
     await loadFreshSendHandlersForTest();
   });
 
@@ -219,7 +228,7 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-media-only",
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+    expect(mocks.deliverOutboundPayloadsWithStatus).toHaveBeenCalledWith(
       expect.objectContaining({
         payloads: [{ text: "", mediaUrl: "https://example.com/a.png", mediaUrls: undefined }],
       }),
@@ -245,7 +254,7 @@ describe("gateway send mirroring", () => {
       { connect: { scopes: ["operator.write"] } },
     );
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+    expect(mocks.deliverOutboundPayloadsWithStatus).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "slack",
         gatewayClientScopes: ["operator.write"],
@@ -266,7 +275,7 @@ describe("gateway send mirroring", () => {
       { connect: { scopes: [] } },
     );
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+    expect(mocks.deliverOutboundPayloadsWithStatus).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "slack",
         gatewayClientScopes: [],
@@ -282,7 +291,7 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-empty",
     });
 
-    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(mocks.deliverOutboundPayloadsWithStatus).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
@@ -300,7 +309,7 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-webchat",
     });
 
-    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(mocks.deliverOutboundPayloadsWithStatus).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
@@ -327,7 +336,7 @@ describe("gateway send mirroring", () => {
     });
 
     expect(mocks.resolveMessageChannelSelection).toHaveBeenCalled();
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalled();
+    expect(mocks.deliverOutboundPayloadsWithStatus).toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ messageId: "m-single-send" }),
@@ -377,7 +386,7 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-missing-channel-ambiguous",
     });
 
-    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(mocks.deliverOutboundPayloadsWithStatus).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
@@ -498,7 +507,7 @@ describe("gateway send mirroring", () => {
   });
 
   it("does not mirror when delivery returns no results", async () => {
-    mocks.deliverOutboundPayloads.mockResolvedValue([]);
+    mocks.deliverOutboundPayloadsWithStatus.mockResolvedValue([]);
 
     await runSend({
       to: "channel:C1",
@@ -508,7 +517,7 @@ describe("gateway send mirroring", () => {
       sessionKey: "agent:main:main",
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+    expect(mocks.deliverOutboundPayloadsWithStatus).toHaveBeenCalledWith(
       expect.objectContaining({
         mirror: expect.objectContaining({
           sessionKey: "agent:main:main",
@@ -529,7 +538,7 @@ describe("gateway send mirroring", () => {
       sessionKey: "agent:main:main",
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+    expect(mocks.deliverOutboundPayloadsWithStatus).toHaveBeenCalledWith(
       expect.objectContaining({
         mirror: expect.objectContaining({
           sessionKey: "agent:main:main",
@@ -552,7 +561,7 @@ describe("gateway send mirroring", () => {
       sessionKey: "agent:main:main",
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+    expect(mocks.deliverOutboundPayloadsWithStatus).toHaveBeenCalledWith(
       expect.objectContaining({
         mirror: expect.objectContaining({
           sessionKey: "agent:main:main",
@@ -574,7 +583,7 @@ describe("gateway send mirroring", () => {
       sessionKey: "agent:main:slack:channel:C123",
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+    expect(mocks.deliverOutboundPayloadsWithStatus).toHaveBeenCalledWith(
       expect.objectContaining({
         mirror: expect.objectContaining({
           sessionKey: "agent:main:slack:channel:c123",
@@ -593,7 +602,7 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-4",
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+    expect(mocks.deliverOutboundPayloadsWithStatus).toHaveBeenCalledWith(
       expect.objectContaining({
         mirror: expect.objectContaining({
           sessionKey: "agent:main:slack:channel:resolved",
@@ -614,7 +623,7 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-agent-explicit",
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+    expect(mocks.deliverOutboundPayloadsWithStatus).toHaveBeenCalledWith(
       expect.objectContaining({
         session: expect.objectContaining({
           agentId: "work",
@@ -699,7 +708,7 @@ describe("gateway send mirroring", () => {
     });
 
     expect(mocks.ensureOutboundSessionEntry).not.toHaveBeenCalled();
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+    expect(mocks.deliverOutboundPayloadsWithStatus).toHaveBeenCalledWith(
       expect.objectContaining({
         session: expect.objectContaining({
           agentId: "work",
@@ -725,7 +734,7 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-agent-precedence",
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+    expect(mocks.deliverOutboundPayloadsWithStatus).toHaveBeenCalledWith(
       expect.objectContaining({
         session: expect.objectContaining({
           agentId: "work",
@@ -768,7 +777,7 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-thread",
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+    expect(mocks.deliverOutboundPayloadsWithStatus).toHaveBeenCalledWith(
       expect.objectContaining({
         threadId: "1710000000.9999",
       }),
@@ -788,7 +797,7 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-target-fail",
     });
 
-    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(mocks.deliverOutboundPayloadsWithStatus).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
@@ -803,9 +812,10 @@ describe("gateway send mirroring", () => {
 
   it("recovers cold plugin resolution for threaded sends", async () => {
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "123" });
-    mocks.deliverOutboundPayloads.mockResolvedValue([
-      { messageId: "m-threaded", channel: "slack" },
-    ]);
+    mocks.deliverOutboundPayloadsWithStatus.mockResolvedValue({
+      results: [{ messageId: "m-threaded", channel: "slack" }],
+      blockedByHook: false,
+    });
     const outboundPlugin = { outbound: { sendPoll: mocks.sendPoll } };
     mocks.getChannelPlugin
       .mockReturnValueOnce(undefined)
@@ -820,7 +830,7 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-cold-thread",
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+    expect(mocks.deliverOutboundPayloadsWithStatus).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "slack",
         to: "123",
@@ -836,7 +846,7 @@ describe("gateway send mirroring", () => {
   });
 
   it("returns explicit blocked denial when message_sending cancels gateway send delivery", async () => {
-    mocks.deliverOutboundPayloads.mockResolvedValue([]);
+    mockDeliveryBlocked();
 
     const { respond } = await runSend({
       to: "channel:C1",
