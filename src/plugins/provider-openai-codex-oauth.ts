@@ -49,6 +49,10 @@ function normalizeOpenAICodexAuthorizeUrl(rawUrl: string): string {
   }
 }
 
+export const __testing = {
+  normalizeOpenAICodexAuthorizeUrl,
+};
+
 export async function loginOpenAICodexOAuth(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
