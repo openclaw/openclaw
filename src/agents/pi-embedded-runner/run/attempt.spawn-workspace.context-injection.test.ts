@@ -16,7 +16,12 @@ async function resolveBootstrapContext(params: {
   bootstrapContextMode?: string;
   bootstrapContextRunKind?: string;
   completed?: boolean;
-  resolver?: () => Promise<{ bootstrapFiles: unknown[]; contextFiles: unknown[] }>;
+  resolver?: () => Promise<{
+    bootstrapFiles: unknown[];
+    contextFiles: unknown[];
+    bootstrapSignature?: string;
+  }>;
+  signatureResolver?: () => Promise<string | undefined>;
 }) {
   const hasCompletedBootstrapTurn = vi.fn(async () => params.completed ?? false);
   const resolveBootstrapContextForRun =
@@ -25,17 +30,24 @@ async function resolveBootstrapContext(params: {
       bootstrapFiles: [],
       contextFiles: [],
     }));
+  const resolveBootstrapSignatureForRun = params.signatureResolver ?? vi.fn(async () => undefined);
 
   const result = await resolveAttemptBootstrapContext({
     contextInjectionMode: params.contextInjectionMode ?? "always",
     bootstrapContextMode: params.bootstrapContextMode ?? "full",
     bootstrapContextRunKind: params.bootstrapContextRunKind ?? "default",
     sessionFile: "/tmp/session.jsonl",
+    resolveBootstrapSignatureForRun,
     hasCompletedBootstrapTurn,
     resolveBootstrapContextForRun,
   });
 
-  return { result, hasCompletedBootstrapTurn, resolveBootstrapContextForRun };
+  return {
+    result,
+    hasCompletedBootstrapTurn,
+    resolveBootstrapContextForRun,
+    resolveBootstrapSignatureForRun,
+  };
 }
 
 describe("embedded attempt context injection", () => {
@@ -117,6 +129,29 @@ describe("embedded attempt context injection", () => {
     expect(result.shouldRecordCompletedBootstrapTurn).toBe(false);
     expect(hasCompletedBootstrapTurn).not.toHaveBeenCalled();
     expect(resolveBootstrapContextForRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not resolve bootstrap signatures when continuation checks cannot apply", async () => {
+    const { resolveBootstrapSignatureForRun } = await resolveBootstrapContext({
+      contextInjectionMode: "always",
+    });
+
+    expect(resolveBootstrapSignatureForRun).not.toHaveBeenCalled();
+  });
+
+  it("passes the resolved bootstrap signature into continuation checks", async () => {
+    const { hasCompletedBootstrapTurn, resolveBootstrapSignatureForRun } =
+      await resolveBootstrapContext({
+        contextInjectionMode: "continuation-skip",
+        completed: true,
+        signatureResolver: vi.fn(async () => "agents:/tmp/AGENTS.hook.md"),
+      });
+
+    expect(resolveBootstrapSignatureForRun).toHaveBeenCalledTimes(1);
+    expect(hasCompletedBootstrapTurn).toHaveBeenCalledWith(
+      "/tmp/session.jsonl",
+      "agents:/tmp/AGENTS.hook.md",
+    );
   });
 
   it("runs full bootstrap injection after a successful non-heartbeat turn", async () => {

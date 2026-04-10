@@ -46,7 +46,6 @@ import {
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
   hasCompletedBootstrapTurn,
   makeBootstrapWarn,
-  resolveEffectiveAgentsBootstrapFileForRun,
   resolveBootstrapContextForRun,
   resolveContextInjectionMode,
 } from "../../bootstrap-files.js";
@@ -401,6 +400,23 @@ export async function runEmbeddedAttempt(
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const contextInjectionMode = resolveContextInjectionMode(params.config);
+    let bootstrapContextPromise:
+      | Promise<Awaited<ReturnType<typeof resolveBootstrapContextForRun>>>
+      | undefined;
+    const resolveAttemptBootstrapFiles = () =>
+      (bootstrapContextPromise ??=
+        resolveBootstrapContextForRun({
+          workspaceDir: effectiveWorkspace,
+          config: params.config,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          agentId: params.agentId,
+          modelProviderId: params.provider,
+          modelId: params.modelId,
+          warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
+          contextMode: params.bootstrapContextMode,
+          runKind: params.bootstrapContextRunKind,
+        }));
     const {
       bootstrapFiles: hookAdjustedBootstrapFiles,
       contextFiles,
@@ -412,31 +428,9 @@ export async function runEmbeddedAttempt(
       bootstrapContextRunKind: params.bootstrapContextRunKind,
       sessionFile: params.sessionFile,
       resolveBootstrapSignatureForRun: async () =>
-        (
-          await resolveEffectiveAgentsBootstrapFileForRun({
-            workspaceDir: effectiveWorkspace,
-            config: params.config,
-            sessionKey: params.sessionKey,
-            sessionId: params.sessionId,
-            agentId: params.agentId,
-            modelProviderId: params.provider,
-            modelId: params.modelId,
-          })
-        ).bootstrapSignature,
+        (await resolveAttemptBootstrapFiles()).bootstrapSignature,
       hasCompletedBootstrapTurn,
-      resolveBootstrapContextForRun: async () =>
-        await resolveBootstrapContextForRun({
-          workspaceDir: effectiveWorkspace,
-          config: params.config,
-          sessionKey: params.sessionKey,
-          sessionId: params.sessionId,
-          agentId: params.agentId,
-          modelProviderId: params.provider,
-          modelId: params.modelId,
-          warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
-          contextMode: params.bootstrapContextMode,
-          runKind: params.bootstrapContextRunKind,
-        }),
+      resolveBootstrapContextForRun: resolveAttemptBootstrapFiles,
     });
     const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
     const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);

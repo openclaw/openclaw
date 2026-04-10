@@ -29,10 +29,14 @@ export async function resolveAttemptBootstrapContext<
     shouldRecordCompletedBootstrapTurn: boolean;
   }
 > {
-  const bootstrapSignature = await params.resolveBootstrapSignatureForRun?.();
-  const isContinuationTurn =
+  const shouldCheckContinuationTurn =
     params.contextInjectionMode === "continuation-skip" &&
-    params.bootstrapContextRunKind !== "heartbeat" &&
+    params.bootstrapContextRunKind !== "heartbeat";
+  const bootstrapSignature = shouldCheckContinuationTurn
+    ? await params.resolveBootstrapSignatureForRun?.()
+    : undefined;
+  const isContinuationTurn =
+    shouldCheckContinuationTurn &&
     (await (bootstrapSignature
       ? params.hasCompletedBootstrapTurn(params.sessionFile, bootstrapSignature)
       : params.hasCompletedBootstrapTurn(params.sessionFile)));
