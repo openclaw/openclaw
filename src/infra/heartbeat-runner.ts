@@ -520,7 +520,8 @@ async function resolveHeartbeatPreflight(params: {
     reasonFlags.isExecEventReason ||
     reasonFlags.isCronEventReason ||
     reasonFlags.isWakeReason ||
-    hasTaggedCronEvents;
+    hasTaggedCronEvents ||
+    hasWakeRequestedEvents;
   const basePreflight = {
     ...reasonFlags,
     session,

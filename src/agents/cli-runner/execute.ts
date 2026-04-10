@@ -409,7 +409,10 @@ export async function executePreparedCliRun(
                 "It may have been waiting for interactive input or an approval prompt.",
                 "For Claude Code, prefer --permission-mode bypassPermissions --print.",
               ].join(" ");
-              executeDeps.enqueueSystemEvent(stallNotice, { sessionKey: params.sessionKey });
+              executeDeps.enqueueSystemEvent(stallNotice, {
+                sessionKey: params.sessionKey,
+                wakeRequested: true,
+              });
               executeDeps.requestHeartbeatNow(
                 scopedHeartbeatWakeOptions(params.sessionKey, { reason: "cli:watchdog:stall" }),
               );
