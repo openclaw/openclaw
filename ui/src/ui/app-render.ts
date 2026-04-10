@@ -173,9 +173,9 @@ function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
 }
 
 function resolveDreamingNextCycle(
-  status: { phases: Record<string, { enabled: boolean; nextRunAtMs?: number }> } | null,
+  status: { phases?: Record<string, { enabled: boolean; nextRunAtMs?: number }> } | null,
 ): string | null {
-  if (!status) {
+  if (!status?.phases) {
     return null;
   }
   const nextRunAtMs = Object.values(status.phases)
