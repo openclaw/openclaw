@@ -124,6 +124,21 @@ describe("restart sentinel", () => {
     );
   });
 
+  it("omits doctor hint on successful restart wake pings", () => {
+    const payload = {
+      kind: "config-patch" as const,
+      status: "ok" as const,
+      ts: Date.now(),
+      message: "Restart completed",
+      doctorHint: "Run openclaw doctor",
+      stats: { mode: "config.patch" },
+    };
+
+    expect(formatRestartSentinelMessage(payload)).toBe(
+      ["Gateway restart config-patch ok (config.patch)", "Restart completed"].join("\n"),
+    );
+  });
+
   it("trims log tails", () => {
     const text = "a".repeat(9000);
     const trimmed = trimLogTail(text, 8000);
