@@ -589,7 +589,7 @@ describe("subagent registry steer restarts", () => {
     });
   });
 
-  it("still emits killed cleanup hooks when runtime plugin loading fails", async () => {
+  it("skips killed cleanup hooks when runtime plugin loading fails", async () => {
     const childSessionKey = "agent:main:subagent:killed-plugin-load-error";
 
     registerRun({
@@ -609,21 +609,28 @@ describe("subagent registry steer restarts", () => {
       }),
     ).toBe(1);
 
-    await vi.waitFor(() => {
-      expect(runSubagentEndedHookMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          targetSessionKey: childSessionKey,
-          reason: "subagent-killed",
-          runId: "run-killed-plugin-load-error",
-          outcome: "killed",
-          error: "manual kill",
-        }),
-        expect.objectContaining({
-          runId: "run-killed-plugin-load-error",
-          childSessionKey,
-        }),
-      );
-    });
+    expect(runSubagentEndedHookMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetSessionKey: childSessionKey,
+        reason: "subagent-killed",
+        runId: "run-killed-plugin-load-error",
+      }),
+      expect.anything(),
+    );
+
+    await flushAnnounce();
+    expect(runSubagentEndedHookMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetSessionKey: childSessionKey,
+        reason: "subagent-killed",
+        runId: "run-killed-plugin-load-error",
+      }),
+      expect.anything(),
+    );
+
+    const run = listMainRuns()[0];
+    expect(run?.cleanupHandled).toBe(true);
+    expect(typeof run?.cleanupCompletedAt).toBe("number");
   });
 
   it("treats a child session as inactive when only a stale older row is still unended", async () => {

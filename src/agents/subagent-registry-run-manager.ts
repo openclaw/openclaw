@@ -433,6 +433,7 @@ export function createSubagentRunManager(params: {
           cleanup: entry.cleanup,
           completedAt: now,
         });
+        let runtimePluginsReady = false;
         try {
           const cfg = loadConfig();
           ensureRuntimePluginsLoaded({
@@ -440,6 +441,7 @@ export function createSubagentRunManager(params: {
             workspaceDir: entry.workspaceDir,
             allowGatewaySubagentBinding: true,
           });
+          runtimePluginsReady = true;
         } catch (err) {
           log.warn("failed to initialize runtime plugins for killed subagent cleanup", {
             err,
@@ -447,18 +449,20 @@ export function createSubagentRunManager(params: {
             childSessionKey: entry.childSessionKey,
           });
         }
-        void emitSubagentEndedHookOnce({
-          entry,
-          reason: SUBAGENT_ENDED_REASON_KILLED,
-          sendFarewell: true,
-          accountId: entry.requesterOrigin?.accountId,
-          outcome: SUBAGENT_ENDED_OUTCOME_KILLED,
-          error: reason,
-          inFlightRunIds: params.endedHookInFlightRunIds,
-          persist: () => params.persist(),
-        }).catch(() => {
-          // Hook failures should not break termination flow.
-        });
+        if (runtimePluginsReady) {
+          void emitSubagentEndedHookOnce({
+            entry,
+            reason: SUBAGENT_ENDED_REASON_KILLED,
+            sendFarewell: true,
+            accountId: entry.requesterOrigin?.accountId,
+            outcome: SUBAGENT_ENDED_OUTCOME_KILLED,
+            error: reason,
+            inFlightRunIds: params.endedHookInFlightRunIds,
+            persist: () => params.persist(),
+          }).catch(() => {
+            // Hook failures should not break termination flow.
+          });
+        }
       }
     }
     return updated;
