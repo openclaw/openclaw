@@ -146,6 +146,41 @@
 - Pure test additions/fixes generally do **not** need a changelog entry unless they alter user-facing behavior or the user asks for one.
 - Mobile: before using a simulator, check for connected real devices (iOS + Android) and prefer them when available.
 
+## Multi-Agent Identification Rules
+
+This repository is developed by multiple AI agents in parallel. Use the following conventions to identify who made a change.
+
+### Branch Prefixes
+
+| Prefix          | Agent       | Environment  |
+| --------------- | ----------- | ------------ |
+| `codex/`        | Codex (any) | Mac or Sense |
+| `claude/mac-`   | Claude      | Mac          |
+| `claude/sense-` | Claude      | Sense        |
+
+### Commit Scope Identification
+
+Claude agents must include `(claude)` as the commit scope:
+
+- `feat(claude): <description>`
+- `fix(claude): <description>`
+- `docs(claude): <description>`
+
+Codex agents use task-descriptive scopes without the `claude` marker.
+
+### Workflow Reference
+
+- Claude (Mac) full workflow: `docs/git/claude-workflow.md`
+- Codex workflow: follows `DEEPNOA_RULES.md` + `PR_WORKFLOW.md`
+
+### Safety Rules (all agents)
+
+- Never push to `main` directly.
+- Never use `--force`, `git stash`, or `git rebase` on shared branches.
+- Never modify another agent's branch.
+- Always use `scripts/committer` for commits (never `git add .` or bare `git commit`).
+- Merging to `main` is a human-only action.
+
 ## Commit & Pull Request Guidelines
 
 **Full maintainer PR workflow (optional):** If you want the repo's end-to-end maintainer workflow (triage order, quality bar, rebase rules, commit/changelog conventions, co-contributor policy, and the `review-pr` > `prepare-pr` > `merge-pr` pipeline), see `.agents/skills/PR_WORKFLOW.md`. Maintainers may use other workflows; when a maintainer specifies a workflow, follow that. If no workflow is specified, default to PR_WORKFLOW.
