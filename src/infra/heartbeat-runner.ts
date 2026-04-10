@@ -511,17 +511,21 @@ async function resolveHeartbeatPreflight(params: {
     event.contextKey?.startsWith("cron:"),
   );
   const hasWakeRequestedEvents = pendingEventEntries.some((event) => event.wakeRequested);
+  // For isolated heartbeat sessions, exclude wake events from base-session inspection
+  // because isolated sessions run on `:heartbeat` keys and cannot drain base-session events
+  const useIsolatedSession = params.heartbeat?.isolatedSession === true;
+  const canConsumeWakeEvents = !useIsolatedSession && hasWakeRequestedEvents;
   const shouldInspectPendingEvents =
     reasonFlags.isExecEventReason ||
     reasonFlags.isCronEventReason ||
     hasTaggedCronEvents ||
-    hasWakeRequestedEvents;
+    canConsumeWakeEvents;
   const shouldBypassFileGates =
     reasonFlags.isExecEventReason ||
     reasonFlags.isCronEventReason ||
     reasonFlags.isWakeReason ||
     hasTaggedCronEvents ||
-    hasWakeRequestedEvents;
+    canConsumeWakeEvents;
   const basePreflight = {
     ...reasonFlags,
     session,
