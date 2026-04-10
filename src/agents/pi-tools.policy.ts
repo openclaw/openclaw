@@ -136,9 +136,47 @@ function normalizeProviderKey(value: string): string {
   return normalizeLowercaseStringOrEmpty(value);
 }
 
+function collectUniqueStrings(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const resolved: string[] = [];
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    resolved.push(trimmed);
+  }
+  return resolved;
+}
+
+function buildScopedGroupIdCandidates(groupId?: string | null): string[] {
+  const raw = groupId?.trim();
+  if (!raw) {
+    return [];
+  }
+  const topicSenderMatch = raw.match(/^(.+):topic:([^:]+):sender:([^:]+)$/i);
+  if (topicSenderMatch) {
+    const [, chatId, topicId] = topicSenderMatch;
+    // Sender-scoped sessions still inherit topic/base group tool policies.
+    return collectUniqueStrings([raw, `${chatId}:topic:${topicId}`, chatId]);
+  }
+  const topicMatch = raw.match(/^(.+):topic:([^:]+)$/i);
+  if (topicMatch) {
+    const [, chatId, topicId] = topicMatch;
+    return collectUniqueStrings([`${chatId}:topic:${topicId}`, chatId]);
+  }
+  const senderMatch = raw.match(/^(.+):sender:([^:]+)$/i);
+  if (senderMatch) {
+    const [, chatId] = senderMatch;
+    return collectUniqueStrings([raw, chatId]);
+  }
+  return [raw];
+}
+
 function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   channel?: string;
-  groupId?: string;
+  groupIds?: string[];
 } {
   const raw = (sessionKey ?? "").trim();
   if (!raw) {
@@ -148,21 +186,22 @@ function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   const conversationKey = threadId ? baseSessionKey : raw;
   const conversation = parseRawSessionConversationRef(conversationKey);
   if (conversation) {
-    if (/:(?:sender|thread|topic):/iu.test(conversation.rawId)) {
-      const resolvedConversation = resolveSessionConversation({
-        channel: conversation.channel,
-        kind: conversation.kind,
-        rawId: conversation.rawId,
-      });
-      const groupId = resolvedConversation?.baseConversationId;
-      if (groupId) {
-        return {
+    const resolvedConversation = /:(?:sender|thread|topic):/iu.test(conversation.rawId)
+      ? resolveSessionConversation({
           channel: conversation.channel,
-          groupId,
-        };
-      }
-    }
-    return { channel: conversation.channel, groupId: conversation.rawId };
+          kind: conversation.kind,
+          rawId: conversation.rawId,
+        })
+      : null;
+    return {
+      channel: conversation.channel,
+      groupIds: collectUniqueStrings([
+        ...buildScopedGroupIdCandidates(conversation.rawId),
+        resolvedConversation?.id,
+        resolvedConversation?.baseConversationId,
+        ...(resolvedConversation?.parentConversationCandidates ?? []),
+      ]),
+    };
   }
   const base = conversationKey ?? raw;
   const parts = base.split(":").filter(Boolean);
@@ -181,7 +220,10 @@ function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   if (!groupId) {
     return {};
   }
-  return { channel: normalizeLowercaseStringOrEmpty(channel), groupId };
+  return {
+    channel: normalizeLowercaseStringOrEmpty(channel),
+    groupIds: buildScopedGroupIdCandidates(groupId),
+  };
 }
 
 function resolveProviderToolPolicy(params: {
@@ -331,8 +373,12 @@ export function resolveGroupToolPolicy(params: {
   }
   const sessionContext = resolveGroupContextFromSessionKey(params.sessionKey);
   const spawnedContext = resolveGroupContextFromSessionKey(params.spawnedBy);
-  const groupId = params.groupId ?? sessionContext.groupId ?? spawnedContext.groupId;
-  if (!groupId) {
+  const groupIds = collectUniqueStrings([
+    ...buildScopedGroupIdCandidates(params.groupId),
+    ...(sessionContext.groupIds ?? []),
+    ...(spawnedContext.groupIds ?? []),
+  ]);
+  if (groupIds.length === 0) {
     return undefined;
   }
   const channelRaw = params.messageProvider ?? sessionContext.channel ?? spawnedContext.channel;
@@ -346,8 +392,8 @@ export function resolveGroupToolPolicy(params: {
   } catch {
     plugin = undefined;
   }
-  const toolsConfig =
-    plugin?.groups?.resolveToolPolicy?.({
+  for (const groupId of groupIds) {
+    const toolsConfig = plugin?.groups?.resolveToolPolicy?.({
       cfg: params.config,
       groupId,
       groupChannel: params.groupChannel,
@@ -357,18 +403,24 @@ export function resolveGroupToolPolicy(params: {
       senderName: params.senderName,
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
-    }) ??
-    resolveChannelGroupToolsPolicy({
-      cfg: params.config,
-      channel,
-      groupId,
-      accountId: params.accountId,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
     });
-  return pickSandboxToolPolicy(toolsConfig);
+    const policy = pickSandboxToolPolicy(toolsConfig);
+    if (policy) {
+      return policy;
+    }
+  }
+  const configTools = resolveChannelGroupToolsPolicy({
+    cfg: params.config,
+    channel,
+    groupId: groupIds[0],
+    groupIdCandidates: groupIds.slice(1),
+    accountId: params.accountId,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+  });
+  return pickSandboxToolPolicy(configTools);
 }
 
 export { isToolAllowedByPolicies, isToolAllowedByPolicyName } from "./tool-policy-match.js";
