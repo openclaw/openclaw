@@ -170,6 +170,14 @@ export function buildQaAgenticParityComparison(params: {
     });
 
   const failures: string[] = [];
+  const coverageMismatch = scenarioComparisons.filter(
+    (scenario) => scenario.candidateStatus === "missing" || scenario.baselineStatus === "missing",
+  );
+  for (const scenario of coverageMismatch) {
+    failures.push(
+      `Scenario coverage mismatch for ${scenario.name}: ${params.candidateLabel}=${scenario.candidateStatus}, ${params.baselineLabel}=${scenario.baselineStatus}.`,
+    );
+  }
   if (candidateMetrics.completionRate < baselineMetrics.completionRate) {
     failures.push(
       `${params.candidateLabel} completion rate ${formatPercent(candidateMetrics.completionRate)} is below ${params.baselineLabel} ${formatPercent(baselineMetrics.completionRate)}.`,

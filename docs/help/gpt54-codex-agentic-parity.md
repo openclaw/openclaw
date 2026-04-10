@@ -100,6 +100,23 @@ flowchart TD
     H --> I["Scenario report and parity gate"]
 ```
 
+## Release flow
+
+```mermaid
+flowchart LR
+    A["Merged runtime slices (PR A-C)"] --> B["Run GPT-5.4 parity pack"]
+    A --> C["Run Opus 4.6 parity pack"]
+    B --> D["qa-suite-summary.json"]
+    C --> E["qa-suite-summary.json"]
+    D --> F["qa parity-report"]
+    E --> F
+    F --> G["qa-agentic-parity-report.md"]
+    F --> H["qa-agentic-parity-summary.json"]
+    H --> I{"Gate pass?"}
+    I -- "yes" --> J["Evidence-backed parity claim"]
+    I -- "no" --> K["Keep runtime/review loop open"]
+```
+
 ## Scenario pack
 
 The first-wave parity pack currently covers four scenarios:
@@ -120,6 +137,15 @@ Checks that the model can read source and docs, synthesize findings, and continu
 
 Checks that mixed-mode tasks involving attachments remain actionable and do not collapse into vague narration.
 
+## Scenario matrix
+
+| Scenario                           | What it tests                          | Good GPT-5.4 behavior                                                         | Failure signal                                                                |
+| ---------------------------------- | -------------------------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `approval-turn-tool-followthrough` | Short approval turns after a plan      | Starts the first concrete tool action immediately instead of restating intent | plan-only follow-up, no tool activity, or blocked turn without a real blocker |
+| `model-switch-tool-continuity`     | Runtime/model switching under tool use | Preserves task context and continues acting coherently                        | resets into commentary, loses tool context, or stops after switch             |
+| `source-docs-discovery-report`     | Source reading + synthesis + action    | Finds sources, uses tools, and produces a useful report without stalling      | thin summary, missing tool work, or incomplete-turn stop                      |
+| `image-understanding-attachment`   | Attachment-driven agentic work         | Interprets the attachment, connects it to tools, and continues the task       | vague narration, attachment ignored, or no concrete next action               |
+
 ## Release gate
 
 GPT-5.4 can only be considered at parity or better when the merged runtime passes the parity pack and the runtime-truthfulness regressions at the same time.
@@ -138,6 +164,11 @@ For the first-wave harness, the gate compares:
 - unintended-stop rate
 - valid-tool-call rate
 - fake-success count
+
+Parity evidence is intentionally split across two layers:
+
+- PR D proves same-scenario GPT-5.4 vs Opus 4.6 behavior with QA-lab
+- PR B deterministic suites prove auth, proxy, DNS, and `/elevated full` truthfulness outside the harness
 
 ## Who should enable `strict-agentic`
 

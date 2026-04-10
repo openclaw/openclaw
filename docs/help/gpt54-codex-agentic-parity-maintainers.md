@@ -122,3 +122,22 @@ Do not claim GPT-5.4 parity or superiority over Opus 4.6 until:
 - PR D runs the first-wave parity pack cleanly
 - runtime-truthfulness regression suites remain green
 - the parity report shows no fake-success cases and no regression in stop behavior
+
+```mermaid
+flowchart LR
+    A["PR A-C merged"] --> B["Run GPT-5.4 parity pack"]
+    A --> C["Run Opus 4.6 parity pack"]
+    B --> D["qa-suite-summary.json"]
+    C --> E["qa-suite-summary.json"]
+    D --> F["qa parity-report"]
+    E --> F
+    F --> G["Markdown report + JSON verdict"]
+    G --> H{"Pass?"}
+    H -- "yes" --> I["Parity claim allowed"]
+    H -- "no" --> J["Keep runtime fixes / review loop open"]
+```
+
+The parity harness is not the only evidence source. Keep this split explicit in review:
+
+- PR D owns the scenario-based GPT-5.4 vs Opus 4.6 comparison
+- PR B deterministic suites still own auth/proxy/DNS and full-access truthfulness evidence
