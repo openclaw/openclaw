@@ -6,6 +6,23 @@ import {
   type MatrixQaObservedEvent,
 } from "./matrix-driver-client.js";
 
+function resolveRequestUrl(input: RequestInfo | URL) {
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.toString();
+  }
+  return input.url;
+}
+
+function parseJsonRequestBody(init?: RequestInit) {
+  if (typeof init?.body !== "string") {
+    return {};
+  }
+  return JSON.parse(init.body) as Record<string, unknown>;
+}
+
 describe("matrix driver client", () => {
   it("builds Matrix HTML mentions for QA driver messages", () => {
     expect(
@@ -214,10 +231,10 @@ describe("matrix driver client", () => {
 
   it("sends Matrix reactions through the protocol send endpoint", async () => {
     const fetchImpl: typeof fetch = async (input, init) => {
-      expect(String(input)).toContain(
+      expect(resolveRequestUrl(input)).toContain(
         "/_matrix/client/v3/rooms/!room%3Amatrix-qa.test/send/m.reaction/",
       );
-      expect(JSON.parse(String(init?.body))).toEqual({
+      expect(parseJsonRequestBody(init)).toEqual({
         "m.relates_to": {
           rel_type: "m.annotation",
           event_id: "$msg-1",
@@ -248,9 +265,8 @@ describe("matrix driver client", () => {
   it("provisions a three-member room so Matrix QA runs in a group context", async () => {
     const createRoomBodies: Array<Record<string, unknown>> = [];
     const fetchImpl: typeof fetch = async (input, init) => {
-      const url = String(input);
-      const body =
-        typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : {};
+      const url = resolveRequestUrl(input);
+      const body = parseJsonRequestBody(init);
       if (url.endsWith("/_matrix/client/v3/register")) {
         const username = typeof body.username === "string" ? body.username : "";
         const auth = typeof body.auth === "object" && body.auth ? body.auth : undefined;
