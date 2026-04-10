@@ -442,10 +442,9 @@ export function setTabFromRoute(host: SettingsHost, next: Tab) {
 
 function updateBrowserHistory(url: URL, replace: boolean) {
   if (replace) {
-    window.history.replaceState({}, "", url.toString());
-    return;
+    return window.history.replaceState({}, "", url.toString());
   }
-  window.history.pushState({}, "", url.toString());
+  return window.history.pushState({}, "", url.toString());
 }
 
 function applyTabSelection(
