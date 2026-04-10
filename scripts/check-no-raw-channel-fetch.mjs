@@ -16,7 +16,7 @@ const sourceRoots = ["src/channels", "src/routing", "src/line", "extensions"];
 const allowedRawFetchCallsites = new Set([
   bundledPluginCallsite("bluebubbles", "src/test-harness.ts", 128),
   bundledPluginCallsite("bluebubbles", "src/types.ts", 181),
-  bundledPluginCallsite("browser", "src/browser/cdp.helpers.ts", 253),
+  bundledPluginCallsite("browser", "src/browser/cdp.helpers.ts", 268),
   bundledPluginCallsite("browser", "src/browser/client-fetch.ts", 192),
   bundledPluginCallsite("browser", "src/browser/test-fetch.ts", 24),
   bundledPluginCallsite("browser", "src/browser/test-fetch.ts", 27),
