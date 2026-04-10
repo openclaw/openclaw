@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { applyChannelDoctorCompatibilityMigrations } from "./channel-legacy-config-migrate.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./legacy-config-migrations.js";
 
@@ -17,7 +16,7 @@ export function applyLegacyDoctorMigrations(raw: unknown): {
   }
   const compat = applyChannelDoctorCompatibilityMigrations(next);
   changes.push(...compat.changes);
-  if (changes.length === 0 || isDeepStrictEqual(compat.next, original)) {
+  if (changes.length === 0) {
     return { next: null, changes: [] };
   }
   return { next: compat.next, changes };

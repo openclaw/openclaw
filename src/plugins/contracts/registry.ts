@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { loadBundledCapabilityRuntimeRegistry } from "../bundled-capability-runtime.js";
 import {
   loadPluginManifestRegistry,
@@ -384,7 +385,9 @@ function resolveWebSearchCredentialValue(provider: WebSearchProviderPlugin): unk
   if (envVar === "OPENROUTER_API_KEY") {
     return "openrouter-test";
   }
-  return envVar.toLowerCase().includes("api_key") ? `${provider.id}-test` : "sk-test";
+  return normalizeLowercaseStringOrEmpty(envVar).includes("api_key")
+    ? `${provider.id}-test`
+    : "sk-test";
 }
 
 function resolveWebFetchCredentialValue(provider: WebFetchProviderPlugin): unknown {
@@ -395,7 +398,9 @@ function resolveWebFetchCredentialValue(provider: WebFetchProviderPlugin): unkno
   if (!envVar) {
     return `${provider.id}-test`;
   }
-  return envVar.toLowerCase().includes("api_key") ? `${provider.id}-test` : "sk-test";
+  return normalizeLowercaseStringOrEmpty(envVar).includes("api_key")
+    ? `${provider.id}-test`
+    : "sk-test";
 }
 
 function loadWebFetchProviderContractRegistry(): WebFetchProviderContractEntry[] {

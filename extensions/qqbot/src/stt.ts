@@ -6,23 +6,14 @@
 
 import * as fs from "node:fs";
 import path from "node:path";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { asRecord, readString } from "./config-record-shared.js";
 import { sanitizeFileName } from "./utils/platform.js";
 
 export interface STTConfig {
   baseUrl: string;
   apiKey: string;
   model: string;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function readString(record: Record<string, unknown> | undefined, key: string): string | undefined {
-  const value = record?.[key];
-  return typeof value === "string" ? value : undefined;
 }
 
 export function resolveSTTConfig(cfg: Record<string, unknown>): STTConfig | null {
@@ -99,5 +90,5 @@ export async function transcribeAudio(
   }
 
   const result = (await resp.json()) as { text?: string };
-  return result.text?.trim() || null;
+  return normalizeOptionalString(result.text) ?? null;
 }

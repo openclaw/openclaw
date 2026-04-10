@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import {
   createChannelReplyPipeline,
   logTypingFailure,
@@ -47,7 +48,9 @@ export function createMSTeamsReplyDispatcher(params: {
 }) {
   const core = getMSTeamsRuntime();
   const msteamsCfg = params.cfg.channels?.msteams;
-  const conversationType = params.conversationRef.conversation?.conversationType?.toLowerCase();
+  const conversationType = normalizeOptionalLowercaseString(
+    params.conversationRef.conversation?.conversationType,
+  );
   const isTypingSupported = conversationType === "personal" || conversationType === "groupchat";
 
   const sendTypingIndicator = isTypingSupported

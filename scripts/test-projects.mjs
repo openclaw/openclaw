@@ -6,6 +6,7 @@ import {
   buildFullSuiteVitestRunPlans,
   createVitestRunSpecs,
   parseTestProjectsArgs,
+  resolveParallelFullSuiteConcurrency,
   resolveChangedTargetArgs,
   writeVitestIncludeFile,
 } from "./test-projects.test-support.mjs";
@@ -23,6 +24,56 @@ const releaseLock = acquireLocalHeavyCheckLockSync({
 });
 let lockReleased = false;
 
+const FULL_SUITE_CONFIG_WEIGHT = new Map([
+  ["test/vitest/vitest.gateway.config.ts", 180],
+  ["test/vitest/vitest.gateway-server.config.ts", 180],
+  ["test/vitest/vitest.gateway-core.config.ts", 179],
+  ["test/vitest/vitest.gateway-client.config.ts", 178],
+  ["test/vitest/vitest.gateway-methods.config.ts", 177],
+  ["test/vitest/vitest.commands.config.ts", 175],
+  ["test/vitest/vitest.agents.config.ts", 170],
+  ["test/vitest/vitest.extensions.config.ts", 168],
+  ["test/vitest/vitest.tasks.config.ts", 165],
+  ["test/vitest/vitest.unit-fast.config.ts", 160],
+  ["test/vitest/vitest.auto-reply-reply.config.ts", 155],
+  ["test/vitest/vitest.infra.config.ts", 145],
+  ["test/vitest/vitest.secrets.config.ts", 140],
+  ["test/vitest/vitest.cron.config.ts", 135],
+  ["test/vitest/vitest.wizard.config.ts", 130],
+  ["test/vitest/vitest.unit-src.config.ts", 125],
+  ["test/vitest/vitest.extension-channels.config.ts", 100],
+  ["test/vitest/vitest.extension-matrix.config.ts", 98],
+  ["test/vitest/vitest.extension-providers.config.ts", 96],
+  ["test/vitest/vitest.extension-telegram.config.ts", 94],
+  ["test/vitest/vitest.extension-whatsapp.config.ts", 92],
+  ["test/vitest/vitest.auto-reply-core.config.ts", 90],
+  ["test/vitest/vitest.cli.config.ts", 86],
+  ["test/vitest/vitest.channels.config.ts", 84],
+  ["test/vitest/vitest.plugins.config.ts", 82],
+  ["test/vitest/vitest.bundled.config.ts", 80],
+  ["test/vitest/vitest.commands-light.config.ts", 48],
+  ["test/vitest/vitest.plugin-sdk.config.ts", 46],
+  ["test/vitest/vitest.auto-reply-top-level.config.ts", 45],
+  ["test/vitest/vitest.unit-ui.config.ts", 40],
+  ["test/vitest/vitest.plugin-sdk-light.config.ts", 38],
+  ["test/vitest/vitest.daemon.config.ts", 36],
+  ["test/vitest/vitest.boundary.config.ts", 34],
+  ["test/vitest/vitest.tooling.config.ts", 32],
+  ["test/vitest/vitest.unit-security.config.ts", 30],
+  ["test/vitest/vitest.unit-support.config.ts", 28],
+  ["test/vitest/vitest.contracts.config.ts", 26],
+  ["test/vitest/vitest.extension-zalo.config.ts", 24],
+  ["test/vitest/vitest.extension-bluebubbles.config.ts", 22],
+  ["test/vitest/vitest.extension-irc.config.ts", 20],
+  ["test/vitest/vitest.extension-feishu.config.ts", 18],
+  ["test/vitest/vitest.extension-mattermost.config.ts", 16],
+  ["test/vitest/vitest.extension-messaging.config.ts", 14],
+  ["test/vitest/vitest.extension-acpx.config.ts", 10],
+  ["test/vitest/vitest.extension-diffs.config.ts", 8],
+  ["test/vitest/vitest.extension-memory.config.ts", 6],
+  ["test/vitest/vitest.extension-msteams.config.ts", 4],
+  ["test/vitest/vitest.extension-voice-call.config.ts", 2],
+]);
 const releaseLockOnce = () => {
   if (lockReleased) {
     return;
@@ -69,6 +120,59 @@ function runVitestSpec(spec) {
   });
 }
 
+function applyDefaultParallelVitestWorkerBudget(specs, env) {
+  if (env.OPENCLAW_VITEST_MAX_WORKERS || env.OPENCLAW_TEST_WORKERS) {
+    return specs;
+  }
+  return specs.map((spec) => ({
+    ...spec,
+    env: {
+      ...spec.env,
+      OPENCLAW_VITEST_MAX_WORKERS: "2",
+    },
+  }));
+}
+
+function orderFullSuiteSpecsForParallelRun(specs) {
+  return specs.toSorted((a, b) => {
+    const weightDelta =
+      (FULL_SUITE_CONFIG_WEIGHT.get(b.config) ?? 0) - (FULL_SUITE_CONFIG_WEIGHT.get(a.config) ?? 0);
+    if (weightDelta !== 0) {
+      return weightDelta;
+    }
+    return a.config.localeCompare(b.config);
+  });
+}
+
+async function runVitestSpecsParallel(specs, concurrency) {
+  let nextIndex = 0;
+  let exitCode = 0;
+
+  const runWorker = async () => {
+    for (;;) {
+      const index = nextIndex;
+      nextIndex += 1;
+      const spec = specs[index];
+      if (!spec) {
+        return;
+      }
+      console.error(`[test] starting ${spec.config}`);
+      const result = await runVitestSpec(spec);
+      if (result.signal) {
+        releaseLockOnce();
+        process.kill(process.pid, result.signal);
+        return;
+      }
+      if (result.code !== 0) {
+        exitCode = exitCode || result.code;
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: concurrency }, () => runWorker()));
+  return exitCode;
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const { targetArgs } = parseTestProjectsArgs(args, process.cwd());
@@ -98,6 +202,29 @@ async function main() {
           baseEnv: process.env,
           cwd: process.cwd(),
         });
+
+  const isFullSuiteRun =
+    targetArgs.length === 0 &&
+    changedTargetArgs === null &&
+    !runSpecs.some((spec) => spec.watchMode);
+  if (isFullSuiteRun) {
+    const concurrency = resolveParallelFullSuiteConcurrency(runSpecs.length, process.env);
+    if (concurrency > 1) {
+      const parallelSpecs = applyDefaultParallelVitestWorkerBudget(
+        orderFullSuiteSpecsForParallelRun(runSpecs),
+        process.env,
+      );
+      console.error(
+        `[test] running ${parallelSpecs.length} Vitest shards with parallelism ${concurrency}`,
+      );
+      const parallelExitCode = await runVitestSpecsParallel(parallelSpecs, concurrency);
+      releaseLockOnce();
+      if (parallelExitCode !== 0) {
+        process.exit(parallelExitCode);
+      }
+      return;
+    }
+  }
 
   let exitCode = 0;
   for (const spec of runSpecs) {

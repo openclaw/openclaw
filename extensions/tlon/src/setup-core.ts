@@ -10,6 +10,10 @@ import {
   type ChannelSetupWizard,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { buildTlonAccountFields } from "./account-fields.js";
 import { normalizeShip } from "./targets.js";
 import { listTlonAccountIds, resolveTlonAccount, type TlonResolvedAccount } from "./types.js";
@@ -78,8 +82,10 @@ export function createTlonSetupWizardBase(params: TlonSetupWizardBaseParams): Ch
         message: "Ship name",
         placeholder: "~sampel-palnet",
         currentValue: ({ cfg, accountId }) => resolveTlonAccount(cfg, accountId).ship ?? undefined,
-        validate: ({ value }) => (String(value ?? "").trim() ? undefined : "Required"),
-        normalizeValue: ({ value }) => normalizeShip(String(value).trim()),
+        validate: ({ value }) =>
+          normalizeStringifiedOptionalString(value) ? undefined : "Required",
+        normalizeValue: ({ value }) =>
+          normalizeShip(normalizeStringifiedOptionalString(value) ?? ""),
         applySet: async ({ cfg, accountId, value }) =>
           applyTlonSetupConfig({
             cfg,
@@ -99,7 +105,7 @@ export function createTlonSetupWizardBase(params: TlonSetupWizardBaseParams): Ch
           }
           return undefined;
         },
-        normalizeValue: ({ value }) => String(value).trim(),
+        normalizeValue: ({ value }) => normalizeStringifiedOptionalString(value) ?? "",
         applySet: async ({ cfg, accountId, value }) =>
           applyTlonSetupConfig({
             cfg,
@@ -112,8 +118,9 @@ export function createTlonSetupWizardBase(params: TlonSetupWizardBaseParams): Ch
         message: "Login code",
         placeholder: "lidlut-tabwed-pillex-ridrup",
         currentValue: ({ cfg, accountId }) => resolveTlonAccount(cfg, accountId).code ?? undefined,
-        validate: ({ value }) => (String(value ?? "").trim() ? undefined : "Required"),
-        normalizeValue: ({ value }) => String(value).trim(),
+        validate: ({ value }) =>
+          normalizeStringifiedOptionalString(value) ? undefined : "Required",
+        normalizeValue: ({ value }) => normalizeStringifiedOptionalString(value) ?? "",
         applySet: async ({ cfg, accountId, value }) =>
           applyTlonSetupConfig({
             cfg,
@@ -206,9 +213,9 @@ export const tlonSetupAdapter: ChannelSetupAdapter = {
   validateInput: createSetupInputPresenceValidator({
     validate: ({ cfg, accountId, input }) => {
       const resolved = resolveTlonAccount(cfg, accountId ?? undefined);
-      const ship = input.ship?.trim() || resolved.ship;
-      const url = input.url?.trim() || resolved.url;
-      const code = input.code?.trim() || resolved.code;
+      const ship = normalizeOptionalString(input.ship) || resolved.ship;
+      const url = normalizeOptionalString(input.url) || resolved.url;
+      const code = normalizeOptionalString(input.code) || resolved.code;
       if (!ship) {
         return "Tlon requires --ship.";
       }

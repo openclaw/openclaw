@@ -6,6 +6,8 @@ import { callGateway } from "../../gateway/call.js";
 import { logVerbose } from "../../globals.js";
 import { isApprovalNotFoundError } from "../../infra/approval-errors.js";
 import { resolveApprovalCommandAuthorization } from "../../infra/channel-approval-auth.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { resolveChannelAccountId } from "./channel-context.js";
 import { requireGatewayClientScopeForInternalChannel } from "./command-gates.js";
@@ -52,8 +54,8 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
     return { ok: false, error: APPROVE_USAGE_TEXT };
   }
 
-  const first = tokens[0].toLowerCase();
-  const second = tokens[1].toLowerCase();
+  const first = normalizeLowercaseStringOrEmpty(tokens[0]);
+  const second = normalizeLowercaseStringOrEmpty(tokens[1]);
 
   if (DECISION_ALIASES[first]) {
     return {
@@ -79,7 +81,7 @@ function buildResolvedByLabel(params: Parameters<CommandHandler>[0]): string {
 }
 
 function formatApprovalSubmitError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return formatErrorMessage(error);
 }
 
 type ApprovalMethod = "exec.approval.resolve" | "plugin.approval.resolve";

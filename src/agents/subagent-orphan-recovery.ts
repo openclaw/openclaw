@@ -29,6 +29,18 @@ const log = createSubsystemLogger("subagent-orphan-recovery");
 /** Delay before attempting recovery to let the gateway finish bootstrapping. */
 const DEFAULT_RECOVERY_DELAY_MS = 5_000;
 
+function isRestartAbortedTimeoutRun(
+  runRecord: SubagentRunRecord,
+  entry: SessionEntry | undefined,
+): boolean {
+  return (
+    entry?.abortedLastRun === true &&
+    runRecord.outcome?.status === "timeout" &&
+    typeof runRecord.endedAt === "number" &&
+    runRecord.endedAt > 0
+  );
+}
+
 /**
  * Build the resume message for an orphaned subagent.
  */
@@ -150,11 +162,6 @@ export async function recoverOrphanedSubagentSessions(params: {
     const storeCache = new Map<string, Record<string, SessionEntry>>();
 
     for (const [runId, runRecord] of activeRuns.entries()) {
-      // Only consider runs that haven't ended yet
-      if (typeof runRecord.endedAt === "number" && runRecord.endedAt > 0) {
-        continue;
-      }
-
       const childSessionKey = runRecord.childSessionKey?.trim();
       if (!childSessionKey) {
         continue;
@@ -176,6 +183,17 @@ export async function recoverOrphanedSubagentSessions(params: {
 
         const entry = store[childSessionKey];
         if (!entry) {
+          result.skipped++;
+          continue;
+        }
+
+        // Restart-aborted subagents can be marked ended with a timeout outcome
+        // before the gateway comes back up to resume them.
+        if (
+          typeof runRecord.endedAt === "number" &&
+          runRecord.endedAt > 0 &&
+          !isRestartAbortedTimeoutRun(runRecord, entry)
+        ) {
           result.skipped++;
           continue;
         }

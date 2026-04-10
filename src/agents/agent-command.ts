@@ -27,6 +27,7 @@ import {
   emitAgentEvent,
   registerAgentRunContext,
 } from "../infra/agent-events.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -35,6 +36,7 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { applyVerboseOverride } from "../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveMessageChannel } from "../utils/message-channel.js";
 import {
@@ -251,7 +253,7 @@ async function prepareAgentCommandExecution(
     throw new Error('Invalid verbose level. Use "on", "full", or "off".');
   }
 
-  const laneRaw = typeof opts.lane === "string" ? opts.lane.trim() : "";
+  const laneRaw = normalizeOptionalString(opts.lane) ?? "";
   const isSubagentLane = laneRaw === String(AGENT_LANE_SUBAGENT);
   const timeoutSecondsRaw =
     opts.timeout !== undefined
@@ -480,7 +482,7 @@ async function agentCommandInternal(
         });
       } catch (error) {
         log.warn(
-          `ACP transcript persistence failed for ${sessionKey}: ${error instanceof Error ? error.message : String(error)}`,
+          `ACP transcript persistence failed for ${sessionKey}: ${formatErrorMessage(error)}`,
         );
       }
 

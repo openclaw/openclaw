@@ -3,7 +3,11 @@
 
 export { logInboundDrop } from "../channels/logging.js";
 export { createAuthRateLimiter } from "../gateway/auth-rate-limit.js";
-export { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
+export {
+  resolveMentionGating,
+  resolveMentionGatingWithBypass,
+  resolveInboundMentionDecision,
+} from "../channels/mention-gating.js";
 export type { AllowlistMatch } from "../channels/plugins/allowlist-match.js";
 export {
   buildChannelKeyCandidates,

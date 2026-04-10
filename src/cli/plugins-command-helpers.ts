@@ -6,6 +6,7 @@ import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub.js";
 import { applyExclusiveSlotSelection } from "../plugins/slots.js";
 import { buildPluginDiagnosticsReport } from "../plugins/status.js";
 import { defaultRuntime } from "../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { theme } from "../terminal/theme.js";
 
 type HookInternalEntryLike = Record<string, unknown> & { enabled?: boolean };
@@ -14,7 +15,7 @@ export function resolveFileNpmSpecToLocalPath(
   raw: string,
 ): { ok: true; path: string } | { ok: false; error: string } | null {
   const trimmed = raw.trim();
-  if (!trimmed.toLowerCase().startsWith("file:")) {
+  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("file:")) {
     return null;
   }
   const rest = trimmed.slice("file:".length);

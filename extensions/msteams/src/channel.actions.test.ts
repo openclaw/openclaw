@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { msteamsActionsAdapter } from "./actions.js";
 
 const {
   editMessageMSTeamsMock,
@@ -39,8 +40,6 @@ vi.mock("./channel.runtime.js", () => ({
     unpinMessageMSTeams: unpinMessageMSTeamsMock,
   },
 }));
-
-import { msteamsPlugin } from "./channel.js";
 
 const actionMocks = [
   editMessageMSTeamsMock,
@@ -88,7 +87,7 @@ function okMSTeamsActionDetails(action: string, details?: Record<string, unknown
 }
 
 function requireMSTeamsHandleAction() {
-  const handleAction = msteamsPlugin.actions?.handleAction;
+  const handleAction = msteamsActionsAdapter.handleAction;
   if (!handleAction) {
     throw new Error("msteams actions.handleAction unavailable");
   }
@@ -218,7 +217,7 @@ describe("msteamsPlugin message actions", () => {
 
   it("advertises upload-file in the message tool surface", () => {
     expect(
-      msteamsPlugin.actions?.describeMessageTool?.({
+      msteamsActionsAdapter.describeMessageTool?.({
         cfg: {
           channels: {
             msteams: {

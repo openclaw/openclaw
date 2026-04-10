@@ -3,6 +3,10 @@ import type { MessagingToolSend } from "../../agents/pi-embedded-runner.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import type { ReplyPayload } from "../types.js";
 
 export function filterMessagingToolDuplicates(params: {
@@ -25,7 +29,7 @@ export function filterMessagingToolMediaDuplicates(params: {
     if (!trimmed) {
       return "";
     }
-    if (!trimmed.toLowerCase().startsWith("file://")) {
+    if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("file://")) {
       return trimmed;
     }
     try {
@@ -61,11 +65,11 @@ export function filterMessagingToolMediaDuplicates(params: {
 }
 
 function normalizeProviderForComparison(value?: string): string | undefined {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }
-  const lowered = trimmed.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
   const normalizedChannel = normalizeChannelId(trimmed);
   if (normalizedChannel) {
     return normalizedChannel;
@@ -74,14 +78,14 @@ function normalizeProviderForComparison(value?: string): string | undefined {
 }
 
 function normalizeThreadIdForComparison(value?: string): string | undefined {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }
   if (/^-?\d+$/.test(trimmed)) {
     return String(Number.parseInt(trimmed, 10));
   }
-  return trimmed.toLowerCase();
+  return normalizeLowercaseStringOrEmpty(trimmed);
 }
 
 function resolveTargetProviderForComparison(params: {

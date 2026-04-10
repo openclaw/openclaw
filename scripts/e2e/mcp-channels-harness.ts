@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -6,7 +7,9 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { WebSocket } from "ws";
 import { z } from "zod";
 import { PROTOCOL_VERSION } from "../../src/gateway/protocol/index.ts";
+import { formatErrorMessage } from "../../src/infra/errors.ts";
 import { rawDataToString } from "../../src/infra/ws.ts";
+import { readStringValue } from "../../src/shared/string-coerce.ts";
 
 export const ClaudeChannelNotificationSchema = z.object({
   method: z.literal("notifications/claude/channel"),
@@ -65,8 +68,7 @@ export function extractTextFromGatewayPayload(
   if (!first || typeof first !== "object") {
     return undefined;
   }
-  const text = (first as { text?: unknown }).text;
-  return typeof text === "string" ? text : undefined;
+  return readStringValue((first as { text?: unknown }).text);
 }
 
 export async function waitFor<T>(
@@ -329,6 +331,10 @@ export async function connectMcpClient(params: {
   gatewayUrl: string;
   gatewayToken: string;
 }): Promise<McpClientHandle> {
+  const tokenDir = "/tmp/openclaw-mcp-client";
+  const tokenFile = `${tokenDir}/gateway.token`;
+  mkdirSync(tokenDir, { recursive: true });
+  writeFileSync(tokenFile, `${params.gatewayToken}\n`, { encoding: "utf8", mode: 0o600 });
   const transport = new StdioClientTransport({
     command: "node",
     args: [
@@ -337,8 +343,8 @@ export async function connectMcpClient(params: {
       "serve",
       "--url",
       params.gatewayUrl,
-      "--token",
-      params.gatewayToken,
+      "--token-file",
+      tokenFile,
       "--claude-channel-mode",
       "on",
     ],
@@ -379,7 +385,7 @@ export async function maybeApprovePendingBridgePairing(
       pending?: Array<{ requestId?: string; role?: string }>;
     }>("device.pair.list", {});
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatErrorMessage(error);
     if (message.includes("missing scope: operator.pairing")) {
       return false;
     }

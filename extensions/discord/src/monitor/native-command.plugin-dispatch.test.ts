@@ -282,9 +282,10 @@ async function expectPairCommandReply(params: {
   );
 
   expect(dispatchSpy).not.toHaveBeenCalled();
-  expect(params.interaction.reply).toHaveBeenCalledWith(
+  expect(params.interaction.followUp).toHaveBeenCalledWith(
     expect.objectContaining({ content: "paired:now" }),
   );
+  expect(params.interaction.reply).not.toHaveBeenCalled();
 }
 
 async function createStatusCommand(cfg: OpenClawConfig) {
@@ -465,12 +466,13 @@ describe("Discord native plugin command dispatch", () => {
 
     expect(executeSpy).not.toHaveBeenCalled();
     expect(dispatchSpy).not.toHaveBeenCalled();
-    expect(interaction.reply).toHaveBeenCalledWith(
+    expect(interaction.followUp).toHaveBeenCalledWith(
       expect.objectContaining({
         content: "You are not authorized to use this command.",
         ephemeral: true,
       }),
     );
+    expect(interaction.reply).not.toHaveBeenCalled();
   });
 
   it("rejects group DM slash commands outside dm.groupChannels before dispatch", async () => {
@@ -501,11 +503,12 @@ describe("Discord native plugin command dispatch", () => {
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
     expect(dispatchSpy).not.toHaveBeenCalled();
-    expect(interaction.reply).toHaveBeenCalledWith(
+    expect(interaction.followUp).toHaveBeenCalledWith(
       expect.objectContaining({
         content: "This group DM is not allowed.",
       }),
     );
+    expect(interaction.reply).not.toHaveBeenCalled();
   });
 
   it("executes matched plugin commands directly without invoking the agent dispatcher", async () => {
@@ -540,9 +543,10 @@ describe("Discord native plugin command dispatch", () => {
 
     expect(executeSpy).toHaveBeenCalledTimes(1);
     expect(dispatchSpy).not.toHaveBeenCalled();
-    expect(interaction.reply).toHaveBeenCalledWith(
+    expect(interaction.followUp).toHaveBeenCalledWith(
       expect.objectContaining({ content: "direct plugin output" }),
     );
+    expect(interaction.reply).not.toHaveBeenCalled();
   });
 
   it("forwards Discord thread metadata into direct plugin command execution", async () => {

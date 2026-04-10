@@ -67,6 +67,32 @@ Current bundled provider examples:
 ## How to migrate
 
 <Steps>
+  <Step title="Migrate approval-native handlers to capability facts">
+    Approval-capable channel plugins now expose native approval behavior through
+    `approvalCapability.nativeRuntime` plus the shared runtime-context registry.
+
+    Key changes:
+
+    - Replace `approvalCapability.handler.loadRuntime(...)` with
+      `approvalCapability.nativeRuntime`
+    - Move approval-specific auth/delivery off legacy `plugin.auth` /
+      `plugin.approvals` wiring and onto `approvalCapability`
+    - `ChannelPlugin.approvals` has been removed from the public channel-plugin
+      contract; move delivery/native/render fields onto `approvalCapability`
+    - `plugin.auth` remains for channel login/logout flows only; approval auth
+      hooks there are no longer read by core
+    - Register channel-owned runtime objects such as clients, tokens, or Bolt
+      apps through `openclaw/plugin-sdk/channel-runtime-context`
+    - Do not send plugin-owned reroute notices from native approval handlers;
+      core now owns routed-elsewhere notices from actual delivery results
+    - When passing `channelRuntime` into `createChannelManager(...)`, provide a
+      real `createPluginRuntime().channel` surface. Partial stubs are rejected.
+
+    See `/plugins/sdk-channel-plugins` for the current approval capability
+    layout.
+
+  </Step>
+
   <Step title="Audit Windows wrapper fallback behavior">
     If your plugin uses `openclaw/plugin-sdk/windows-spawn`, unresolved Windows
     `.cmd`/`.bat` wrappers now fail closed unless you explicitly pass
@@ -201,8 +227,12 @@ Current bundled provider examples:
   | `plugin-sdk/approval-auth-runtime` | Approval auth helpers | Approver resolution, same-chat action auth |
   | `plugin-sdk/approval-client-runtime` | Approval client helpers | Native exec approval profile/filter helpers |
   | `plugin-sdk/approval-delivery-runtime` | Approval delivery helpers | Native approval capability/delivery adapters |
+  | `plugin-sdk/approval-gateway-runtime` | Approval gateway helpers | Shared approval gateway-resolution helper |
+  | `plugin-sdk/approval-handler-adapter-runtime` | Approval adapter helpers | Lightweight native approval adapter loading helpers for hot channel entrypoints |
+  | `plugin-sdk/approval-handler-runtime` | Approval handler helpers | Broader approval handler runtime helpers; prefer the narrower adapter/gateway seams when they are enough |
   | `plugin-sdk/approval-native-runtime` | Approval target helpers | Native approval target/account binding helpers |
   | `plugin-sdk/approval-reply-runtime` | Approval reply helpers | Exec/plugin approval reply payload helpers |
+  | `plugin-sdk/channel-runtime-context` | Channel runtime-context helpers | Generic channel runtime-context register/get/watch helpers |
   | `plugin-sdk/security-runtime` | Security helpers | Shared trust, DM gating, external-content, and secret-collection helpers |
   | `plugin-sdk/ssrf-policy` | SSRF policy helpers | Host allowlist and private-network policy helpers |
   | `plugin-sdk/ssrf-runtime` | SSRF runtime helpers | Pinned-dispatcher, guarded fetch, SSRF policy helpers |
@@ -215,6 +245,7 @@ Current bundled provider examples:
   | `plugin-sdk/allow-from` | Allowlist formatting | `formatAllowFromLowercase` |
   | `plugin-sdk/allowlist-resolution` | Allowlist input mapping | `mapAllowlistResolutionInputs` |
   | `plugin-sdk/command-auth` | Command gating and command-surface helpers | `resolveControlCommandGate`, sender-authorization helpers, command registry helpers |
+  | `plugin-sdk/command-status` | Command status/help renderers | `buildCommandsMessage`, `buildCommandsMessagePaginated`, `buildHelpMessage` |
   | `plugin-sdk/secret-input` | Secret input parsing | Secret input helpers |
   | `plugin-sdk/webhook-ingress` | Webhook request helpers | Webhook target utilities |
   | `plugin-sdk/webhook-request-guards` | Webhook body guard helpers | Request body read/limit helpers |
@@ -232,6 +263,7 @@ Current bundled provider examples:
   | `plugin-sdk/request-url` | Request URL helpers | Extract string URLs from request-like inputs |
   | `plugin-sdk/run-command` | Timed command helpers | Timed command runner with normalized stdout/stderr |
   | `plugin-sdk/param-readers` | Param readers | Common tool/CLI param readers |
+  | `plugin-sdk/tool-payload` | Tool payload extraction | Extract normalized payloads from tool result objects |
   | `plugin-sdk/tool-send` | Tool send extraction | Extract canonical send target fields from tool args |
   | `plugin-sdk/temp-path` | Temp path helpers | Shared temp-download path helpers |
   | `plugin-sdk/logging-core` | Logging helpers | Subsystem logger and redaction helpers |
@@ -249,7 +281,8 @@ Current bundled provider examples:
   | `plugin-sdk/provider-onboard` | Provider onboarding patches | Onboarding config helpers |
   | `plugin-sdk/provider-http` | Provider HTTP helpers | Generic provider HTTP/endpoint capability helpers |
   | `plugin-sdk/provider-web-fetch` | Provider web-fetch helpers | Web-fetch provider registration/cache helpers |
-  | `plugin-sdk/provider-web-search-contract` | Provider web-search contract helpers | Narrow web-search config/credential contract helpers such as `enablePluginInConfig`, `resolveProviderWebSearchPluginConfig`, and scoped credential setters/getters |
+  | `plugin-sdk/provider-web-search-config-contract` | Provider web-search config helpers | Narrow web-search config/credential helpers for providers that do not need plugin-enable wiring |
+  | `plugin-sdk/provider-web-search-contract` | Provider web-search contract helpers | Narrow web-search config/credential contract helpers such as `createWebSearchProviderContractFields`, `enablePluginInConfig`, `resolveProviderWebSearchPluginConfig`, and scoped credential setters/getters |
   | `plugin-sdk/provider-web-search` | Provider web-search helpers | Web-search provider registration/cache/runtime helpers |
   | `plugin-sdk/provider-tools` | Provider tool/schema compat helpers | `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks`, Gemini schema cleanup + diagnostics, and xAI compat helpers such as `resolveXaiModelCompatPatch` / `applyXaiModelCompat` |
   | `plugin-sdk/provider-usage` | Provider usage helpers | `fetchClaudeUsage`, `fetchGeminiUsage`, `fetchGithubCopilotUsage`, and other provider usage helpers |

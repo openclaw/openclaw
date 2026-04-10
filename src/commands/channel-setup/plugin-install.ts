@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { getChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import { resolveBundledInstallPlanForCatalogEntry } from "../../cli/plugin-install-plan.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -22,6 +21,7 @@ import type { PluginRegistry } from "../../plugins/registry.js";
 import { getActivePluginChannelRegistry } from "../../plugins/runtime.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
+import { getTrustedChannelPluginCatalogEntry } from "./trusted-catalog.js";
 
 type InstallChoice = "npm" | "local" | "skip";
 
@@ -274,7 +274,8 @@ function resolveScopedChannelPluginId(params: {
     return explicitPluginId;
   }
   return (
-    getChannelPluginCatalogEntry(params.channel, {
+    getTrustedChannelPluginCatalogEntry(params.channel, {
+      cfg: params.cfg,
       workspaceDir: params.workspaceDir,
     })?.pluginId ?? resolveUniqueManifestScopedChannelPluginId(params)
   );

@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
@@ -137,13 +138,13 @@ function shouldApplyPlanningOnlyRetryGuard(params: {
 }
 
 function normalizeAckPrompt(text: string): string {
-  return text
+  const normalized = text
     .normalize("NFKC")
     .trim()
-    .toLowerCase()
     .replace(/[\p{P}\p{S}]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
+  return normalizeLowercaseStringOrEmpty(normalized);
 }
 
 export function isLikelyExecutionAckPrompt(text: string): boolean {

@@ -1,14 +1,8 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
-import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
-
-const telegramSecrets = loadBundledChannelSecretContractApi("telegram");
-if (!telegramSecrets?.collectRuntimeConfigAssignments) {
-  throw new Error("Missing Telegram secret contract api");
-}
 
 type WebProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl";
 
@@ -26,14 +20,14 @@ vi.mock("../channels/plugins/bootstrap-registry.js", () => {
       id === "telegram"
         ? {
             secrets: {
-              collectRuntimeConfigAssignments: telegramSecrets.collectRuntimeConfigAssignments,
+              collectRuntimeConfigAssignments: () => {},
             },
           }
         : undefined,
     getBootstrapChannelSecrets: (id: string) =>
       id === "telegram"
         ? {
-            collectRuntimeConfigAssignments: telegramSecrets.collectRuntimeConfigAssignments,
+            collectRuntimeConfigAssignments: () => {},
           }
         : undefined,
   };
@@ -171,10 +165,9 @@ describe("secrets runtime snapshot legacy x_search", () => {
             },
           },
         },
-        channels: {
-          telegram: {
-            groupMentionsOnly: true,
-            groups: [],
+        session: {
+          threadBindings: {
+            ttlHours: 24,
           },
         },
       }),

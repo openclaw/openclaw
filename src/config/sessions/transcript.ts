@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
   resolveDefaultSessionStorePath,
@@ -184,7 +185,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   } catch (err) {
     return {
       ok: false,
-      reason: err instanceof Error ? err.message : String(err),
+      reason: formatErrorMessage(err),
     };
   }
 

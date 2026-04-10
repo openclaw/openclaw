@@ -16,11 +16,14 @@ import {
 import { resolveCliAuthEpoch } from "../cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
+import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
 } from "../pi-embedded-helpers.js";
+import { resolveSkillsPromptForRun } from "../skills.js";
+import { resolveSystemPromptOverride } from "../system-prompt-override.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
@@ -33,9 +36,6 @@ const prepareDeps = {
   resolveBootstrapContextForRun: resolveBootstrapContextForRunImpl,
   getActiveMcpLoopbackRuntime,
   createMcpLoopbackServerConfig,
-  resolveHeartbeatPrompt: async (
-    prompt: Parameters<typeof import("../../auto-reply/heartbeat.js").resolveHeartbeatPrompt>[0],
-  ) => (await import("../../auto-reply/heartbeat.js")).resolveHeartbeatPrompt(prompt),
   resolveOpenClawDocsPath: async (
     params: Parameters<typeof import("../docs-path.js").resolveOpenClawDocsPath>[0],
   ) => (await import("../docs-path.js")).resolveOpenClawDocsPath(params),
@@ -113,10 +113,12 @@ export async function prepareCliRunContext(
     config: params.config,
     agentId: params.agentId,
   });
-  const mcpLoopbackRuntime =
-    backendResolved.id === "claude-cli" ? prepareDeps.getActiveMcpLoopbackRuntime() : undefined;
+  const mcpLoopbackRuntime = backendResolved.bundleMcp
+    ? prepareDeps.getActiveMcpLoopbackRuntime()
+    : undefined;
   const preparedBackend = await prepareCliBundleMcpConfig({
     enabled: backendResolved.bundleMcp,
+    mode: backendResolved.bundleMcpMode,
     backend: backendResolved.config,
     workspaceDir,
     config: params.config,
@@ -134,43 +136,58 @@ export async function prepareCliRunContext(
       : undefined,
     warn: (message) => cliBackendLog.warn(message),
   });
-  const reusableCliSession = resolveCliSessionReuse({
-    binding:
-      params.cliSessionBinding ??
-      (params.cliSessionId ? { sessionId: params.cliSessionId } : undefined),
-    authProfileId: params.authProfileId,
-    authEpoch,
-    extraSystemPromptHash,
-    mcpConfigHash: preparedBackend.mcpConfigHash,
-  });
+  const reusableCliSession = params.cliSessionBinding
+    ? resolveCliSessionReuse({
+        binding: params.cliSessionBinding,
+        authProfileId: params.authProfileId,
+        authEpoch,
+        extraSystemPromptHash,
+        mcpConfigHash: preparedBackend.mcpConfigHash,
+      })
+    : params.cliSessionId
+      ? { sessionId: params.cliSessionId }
+      : {};
   if (reusableCliSession.invalidatedReason) {
     cliBackendLog.info(
       `cli session reset: provider=${params.provider} reason=${reusableCliSession.invalidatedReason}`,
     );
   }
-  const heartbeatPrompt =
-    sessionAgentId === defaultAgentId
-      ? await prepareDeps.resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
-      : undefined;
+  const heartbeatPrompt = resolveHeartbeatPromptForSystemPrompt({
+    config: params.config,
+    agentId: sessionAgentId,
+    defaultAgentId,
+  });
   const docsPath = await prepareDeps.resolveOpenClawDocsPath({
     workspaceDir,
     argv1: process.argv[1],
     cwd: process.cwd(),
     moduleUrl: import.meta.url,
   });
-  const systemPrompt = buildSystemPrompt({
+  const skillsPrompt = resolveSkillsPromptForRun({
+    skillsSnapshot: params.skillsSnapshot,
     workspaceDir,
     config: params.config,
-    defaultThinkLevel: params.thinkLevel,
-    extraSystemPrompt,
-    ownerNumbers: params.ownerNumbers,
-    heartbeatPrompt,
-    docsPath: docsPath ?? undefined,
-    tools: [],
-    contextFiles,
-    modelDisplay,
     agentId: sessionAgentId,
   });
+  const systemPrompt =
+    resolveSystemPromptOverride({
+      config: params.config,
+      agentId: sessionAgentId,
+    }) ??
+    buildSystemPrompt({
+      workspaceDir,
+      config: params.config,
+      defaultThinkLevel: params.thinkLevel,
+      extraSystemPrompt,
+      ownerNumbers: params.ownerNumbers,
+      heartbeatPrompt,
+      docsPath: docsPath ?? undefined,
+      skillsPrompt,
+      tools: [],
+      contextFiles,
+      modelDisplay,
+      agentId: sessionAgentId,
+    });
   const systemPromptReport = buildSystemPromptReport({
     source: "run",
     generatedAt: Date.now(),
@@ -190,7 +207,7 @@ export async function prepareCliRunContext(
     systemPrompt,
     bootstrapFiles,
     injectedFiles: contextFiles,
-    skillsPrompt: "",
+    skillsPrompt,
     tools: [],
   });
 

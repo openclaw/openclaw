@@ -21,11 +21,13 @@ import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveMemoryBackendConfig } from "../memory-host-sdk/engine-storage.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { asNullableObjectRecord } from "../shared/record-coerce.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
 type DoctorPrompterLike = {
   confirmRuntimeRepair: (params: { message: string; initialValue?: boolean }) => Promise<boolean>;
+  note?: typeof note;
 };
 
 function countLabel(count: number, singular: string, plural = `${singular}s`): string {
@@ -420,7 +422,7 @@ export function detectMacCloudSyncedStateDir(
 }
 
 function isPairingPolicy(value: unknown): boolean {
-  return typeof value === "string" && value.trim().toLowerCase() === "pairing";
+  return normalizeOptionalLowercaseString(value) === "pairing";
 }
 
 function hasPairingPolicy(value: unknown): boolean {
@@ -448,7 +450,7 @@ function hasPairingPolicy(value: unknown): boolean {
 }
 
 function isSlashRoutingSessionKey(sessionKey: string): boolean {
-  const raw = sessionKey.trim().toLowerCase();
+  const raw = normalizeOptionalLowercaseString(sessionKey);
   if (!raw) {
     return false;
   }
@@ -460,8 +462,8 @@ function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boo
   if (env.OPENCLAW_OAUTH_DIR?.trim()) {
     return true;
   }
-  const channels = cfg.channels;
-  if (!isRecord(channels)) {
+  const channels = asNullableObjectRecord(cfg.channels);
+  if (!channels) {
     return false;
   }
   for (const channelId of listBundledChannelPluginIds()) {
@@ -493,6 +495,7 @@ export async function noteStateIntegrity(
 ) {
   const warnings: string[] = [];
   const changes: string[] = [];
+  const noteFn = prompter.note ?? note;
   const env = process.env;
   const homedir = () => resolveRequiredHomeDir(env, os.homedir);
   const stateDir = resolveStateDir(env, homedir);
@@ -828,10 +831,10 @@ export async function noteStateIntegrity(
   }
 
   if (warnings.length > 0) {
-    note(warnings.join("\n"), "State integrity");
+    noteFn(warnings.join("\n"), "State integrity");
   }
   if (changes.length > 0) {
-    note(changes.join("\n"), "Doctor changes");
+    noteFn(changes.join("\n"), "Doctor changes");
   }
 }
 

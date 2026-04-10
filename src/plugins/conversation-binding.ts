@@ -8,11 +8,16 @@ import {
   unbindConversationBindingRecord,
 } from "../bindings/records.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { writeJsonAtomic } from "../infra/json-files.js";
 import { type ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { getActivePluginRegistry } from "./runtime.js";
 import type {
   PluginConversationBinding,
@@ -153,7 +158,7 @@ function resolveApprovalsPath(): string {
 }
 
 function normalizeChannel(value: string): string {
-  return value.trim().toLowerCase();
+  return normalizeOptionalLowercaseString(value) ?? "";
 }
 
 function normalizeConversation(params: PluginBindingConversation): PluginBindingConversation {
@@ -161,11 +166,11 @@ function normalizeConversation(params: PluginBindingConversation): PluginBinding
     channel: normalizeChannel(params.channel),
     accountId: params.accountId.trim() || "default",
     conversationId: params.conversationId.trim(),
-    parentConversationId: params.parentConversationId?.trim() || undefined,
+    parentConversationId: normalizeOptionalString(params.parentConversationId),
     threadId:
       typeof params.threadId === "number"
         ? Math.trunc(params.threadId)
-        : params.threadId?.toString().trim() || undefined,
+        : normalizeOptionalString(params.threadId?.toString()),
   };
 }
 
@@ -344,8 +349,7 @@ function loadApprovalsFromDisk(): PluginBindingApprovalsFile {
           pluginId: typeof entry.pluginId === "string" ? entry.pluginId : "",
           pluginName: typeof entry.pluginName === "string" ? entry.pluginName : undefined,
           channel: typeof entry.channel === "string" ? normalizeChannel(entry.channel) : "",
-          accountId:
-            typeof entry.accountId === "string" ? entry.accountId.trim() || "default" : "default",
+          accountId: normalizeOptionalString(entry.accountId) ?? "default",
           approvedAt:
             typeof entry.approvedAt === "number" && Number.isFinite(entry.approvedAt)
               ? Math.floor(entry.approvedAt)
@@ -426,8 +430,8 @@ function buildBindingMetadata(params: {
     pluginId: params.pluginId,
     pluginName: params.pluginName,
     pluginRoot: params.pluginRoot,
-    summary: params.summary?.trim() || undefined,
-    detachHint: params.detachHint?.trim() || undefined,
+    summary: normalizeOptionalString(params.summary),
+    detachHint: normalizeOptionalString(params.detachHint),
   };
 }
 
@@ -620,7 +624,7 @@ function resolvePluginBindingDisplayName(binding: {
   pluginId: string;
   pluginName?: string;
 }): string {
-  return binding.pluginName?.trim() || binding.pluginId;
+  return normalizeOptionalString(binding.pluginName) || binding.pluginId;
 }
 
 function buildDetachHintSuffix(detachHint?: string): string {
@@ -803,9 +807,9 @@ export async function requestPluginConversationBinding(params: {
     pluginRoot: params.pluginRoot,
     conversation,
     requestedAt: Date.now(),
-    requestedBySenderId: params.requestedBySenderId?.trim() || undefined,
-    summary: params.binding?.summary?.trim() || undefined,
-    detachHint: params.binding?.detachHint?.trim() || undefined,
+    requestedBySenderId: normalizeOptionalString(params.requestedBySenderId),
+    summary: normalizeOptionalString(params.binding?.summary),
+    detachHint: normalizeOptionalString(params.binding?.detachHint),
   };
   pendingRequests.set(request.id, request);
   logPluginBindingLifecycleEvent({
@@ -957,7 +961,7 @@ async function notifyPluginConversationBindingResolved(params: {
       await registration.handler(event);
     } catch (error) {
       log.warn(
-        `plugin binding resolved callback failed plugin=${registration.pluginId} root=${registration.pluginRoot ?? "<none>"}: ${error instanceof Error ? error.message : String(error)}`,
+        `plugin binding resolved callback failed plugin=${registration.pluginId} root=${registration.pluginRoot ?? "<none>"}: ${formatErrorMessage(error)}`,
       );
     }
   }

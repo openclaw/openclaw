@@ -136,7 +136,36 @@ describe("subagent-orphan-recovery", () => {
     });
 
     expect(result.recovered).toBe(0);
+    expect(result.skipped).toBe(1);
     expect(gateway.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("recovers restart-aborted timeout runs even when the registry marked them ended", async () => {
+    vi.mocked(sessions.loadSessionStore).mockReturnValue({
+      "agent:main:subagent:test-session-1": {
+        sessionId: "session-abc",
+        updatedAt: Date.now(),
+        abortedLastRun: true,
+      },
+    });
+
+    const activeRuns = createActiveRuns(
+      createTestRunRecord({
+        endedAt: Date.now() - 1_000,
+        outcome: {
+          status: "timeout",
+        },
+      }),
+    );
+
+    const result = await recoverOrphanedSubagentSessions({
+      getActiveRuns: () => activeRuns,
+    });
+
+    expect(result.recovered).toBe(1);
+    expect(result.failed).toBe(0);
+    expect(result.skipped).toBe(0);
+    expect(gateway.callGateway).toHaveBeenCalledOnce();
   });
 
   it("handles multiple orphaned sessions", async () => {

@@ -28,7 +28,7 @@ function resolveMatrixDmSessionKey(params: {
       kind: "channel",
       id: params.roomId,
     },
-  }).toLowerCase();
+  });
 }
 
 function shouldApplyMatrixPerRoomDmSessionScope(params: {

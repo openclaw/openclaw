@@ -26,13 +26,24 @@ export {
   shouldDebounceTextInbound,
 } from "../channels/inbound-debounce-policy.js";
 export type {
+  InboundMentionFacts,
+  InboundMentionPolicy,
+  InboundImplicitMentionKind,
+  InboundMentionDecision,
   MentionGateParams,
   MentionGateResult,
   MentionGateWithBypassParams,
   MentionGateWithBypassResult,
+  ResolveInboundMentionDecisionFlatParams,
+  ResolveInboundMentionDecisionNestedParams,
+  ResolveInboundMentionDecisionParams,
 } from "../channels/mention-gating.js";
 export {
+  implicitMentionKindWhen,
+  resolveInboundMentionDecision,
+  // @deprecated Prefer `resolveInboundMentionDecision({ facts, policy })`.
   resolveMentionGating,
+  // @deprecated Prefer `resolveInboundMentionDecision({ facts, policy })`.
   resolveMentionGatingWithBypass,
 } from "../channels/mention-gating.js";
 export type { NormalizedLocation } from "../channels/location.js";

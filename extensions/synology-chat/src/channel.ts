@@ -20,6 +20,7 @@ import {
 } from "openclaw/plugin-sdk/channel-policy";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { synologyChatApprovalAuth } from "./approval-auth.js";
 import { sendMessage, sendFileUrl } from "./client.js";
@@ -42,7 +43,7 @@ const resolveSynologyChatDmPolicy = createScopedDmSecurityResolver<ResolvedSynol
   policyPathSuffix: "dmPolicy",
   defaultPolicy: "allowlist",
   approveHint: "openclaw pairing approve synology-chat <code>",
-  normalizeEntry: (raw) => raw.toLowerCase().trim(),
+  normalizeEntry: (raw) => normalizeLowercaseStringOrEmpty(raw),
 });
 
 type SynologyChannelGatewayContext = {
@@ -89,7 +90,7 @@ const synologyChatConfigAdapter = createHybridChannelConfigAdapter<ResolvedSynol
   ],
   resolveAllowFrom: (account) => account.allowedUserIds,
   formatAllowFrom: (allowFrom) =>
-    allowFrom.map((entry) => String(entry).trim().toLowerCase()).filter(Boolean),
+    allowFrom.map((entry) => normalizeLowercaseStringOrEmpty(String(entry))).filter(Boolean),
 });
 
 const collectSynologyChatSecurityWarnings =
@@ -226,7 +227,7 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
       config: {
         ...synologyChatConfigAdapter,
       },
-      auth: synologyChatApprovalAuth,
+      approvalCapability: synologyChatApprovalAuth,
       messaging: {
         normalizeTarget: (target: string) => {
           const trimmed = target.trim();
@@ -307,7 +308,7 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
       text: {
         idLabel: "synologyChatUserId",
         message: "OpenClaw: your access has been approved.",
-        normalizeAllowEntry: (entry: string) => entry.toLowerCase().trim(),
+        normalizeAllowEntry: (entry: string) => normalizeLowercaseStringOrEmpty(entry),
         notify: async ({ cfg, id, message }) => {
           const account = resolveAccount(cfg);
           if (!account.incomingUrl) {

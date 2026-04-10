@@ -375,6 +375,51 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("sends telegram media to an explicit target once instead of fanning out over allowFrom", async () => {
+    const sendMedia = vi.fn().mockResolvedValue({ channel: "telegram", messageId: "t1" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "telegram",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: vi.fn().mockResolvedValue({ channel: "telegram", messageId: "text-1" }),
+              sendMedia,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {
+        channels: {
+          telegram: {
+            botToken: "tok",
+            allowFrom: ["111", "222", "333"],
+          },
+        },
+      },
+      channel: "telegram",
+      to: "123",
+      payloads: [{ text: "HEARTBEAT_OK", mediaUrl: "https://example.com/img.png" }],
+      skipQueue: true,
+    });
+
+    expect(sendMedia).toHaveBeenCalledTimes(1);
+    expect(sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "123",
+        text: "HEARTBEAT_OK",
+        mediaUrl: "https://example.com/img.png",
+        accountId: undefined,
+      }),
+    );
+  });
+
   it("forwards audioAsVoice through generic plugin media delivery", async () => {
     const sendMedia = vi.fn(async () => ({
       channel: "matrix" as const,
@@ -567,14 +612,14 @@ describe("deliverOutboundPayloads", () => {
     expect(chunker).toHaveBeenNthCalledWith(1, text, 4000);
   });
 
-  it("does not pass iMessage media maxBytes on plain text sends", async () => {
+  it("passes config through for iMessage media sends so the channel runtime can resolve limits", async () => {
     const sendIMessage = vi.fn().mockResolvedValue({ messageId: "i1" });
     setActivePluginRegistry(
       createTestRegistry([
         {
           pluginId: "imessage",
           source: "test",
-          plugin: createIMessageTestPlugin({ outbound: imessageOutboundForTest }),
+          plugin: createIMessageTestPlugin(),
         },
       ]),
     );
@@ -586,11 +631,18 @@ describe("deliverOutboundPayloads", () => {
       cfg,
       channel: "imessage",
       to: "chat_id:42",
-      payloads: [{ text: "hello" }],
+      payloads: [{ text: "hello", mediaUrls: ["https://example.com/a.png"] }],
       deps: { imessage: sendIMessage },
     });
 
-    expect(sendIMessage).toHaveBeenCalledWith("chat_id:42", "hello", { accountId: undefined });
+    expect(sendIMessage).toHaveBeenCalledWith(
+      "chat_id:42",
+      "hello",
+      expect.objectContaining({
+        config: cfg,
+        mediaUrl: "https://example.com/a.png",
+      }),
+    );
   });
 
   it("normalizes payloads and drops empty entries", () => {

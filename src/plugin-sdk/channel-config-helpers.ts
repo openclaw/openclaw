@@ -15,6 +15,7 @@ import type { ChannelConfigAdapter } from "../channels/plugins/types.adapters.js
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 
 const INTERNAL_MESSAGE_CHANNEL = "webchat";
@@ -113,7 +114,7 @@ export function canBypassConfigWritePolicy(params: {
   return canBypassConfigWritePolicyShared({
     ...params,
     isInternalMessageChannel: (channel) =>
-      channel?.trim().toLowerCase() === INTERNAL_MESSAGE_CHANNEL,
+      normalizeOptionalLowercaseString(channel) === INTERNAL_MESSAGE_CHANNEL,
   });
 }
 

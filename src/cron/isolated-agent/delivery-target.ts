@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import { loadSessionStore } from "../../config/sessions/store-load.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { tryResolveLoadedOutboundTarget } from "../../infra/outbound/targets-loaded.js";
 import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-session.js";
@@ -106,7 +107,7 @@ export async function resolveDeliveryTarget(
         const selection = await resolveMessageChannelSelection({ cfg });
         fallbackChannel = selection.channel;
       } catch (err) {
-        const detail = err instanceof Error ? err.message : String(err);
+        const detail = formatErrorMessage(err);
         channelResolutionError = new Error(
           `${detail} Set delivery.channel explicitly or use a main session with a previous channel.`,
         );

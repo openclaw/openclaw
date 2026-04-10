@@ -22,7 +22,12 @@ import { hasPollCreationParams } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { type GatewayClientMode, type GatewayClientName } from "../../utils/message-channel.js";
+import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import {
@@ -143,9 +148,10 @@ export function getToolResult(
 function collectActionMediaSourceHints(params: Record<string, unknown>): string[] {
   const sources: string[] = [];
   for (const key of ["media", "mediaUrl", "path", "filePath", "fileUrl"] as const) {
-    const value = params[key];
-    if (typeof value === "string" && value.trim()) {
-      sources.push(value);
+    const source = typeof params[key] === "string" ? params[key] : undefined;
+    const normalized = normalizeOptionalString(source);
+    if (normalized && source) {
+      sources.push(source);
     }
   }
   return sources;
@@ -230,7 +236,7 @@ async function resolveActionTarget(params: {
   accountId?: string | null;
 }): Promise<ResolvedMessagingTarget | undefined> {
   let resolvedTarget: ResolvedMessagingTarget | undefined;
-  const toRaw = typeof params.args.to === "string" ? params.args.to.trim() : "";
+  const toRaw = normalizeOptionalString(params.args.to) ?? "";
   if (toRaw) {
     const resolved = await resolveResolvedTargetOrThrow({
       cfg: params.cfg,
@@ -241,8 +247,7 @@ async function resolveActionTarget(params: {
     params.args.to = resolved.to;
     resolvedTarget = resolved;
   }
-  const channelIdRaw =
-    typeof params.args.channelId === "string" ? params.args.channelId.trim() : "";
+  const channelIdRaw = normalizeOptionalString(params.args.channelId) ?? "";
   if (channelIdRaw) {
     const resolved = await resolveResolvedTargetOrThrow({
       cfg: params.cfg,
@@ -331,7 +336,7 @@ async function handleBroadcastAction(
   }
   const channelHint = readStringParam(params, "channel");
   const targetChannels =
-    channelHint && channelHint.trim().toLowerCase() !== "all"
+    channelHint && normalizeOptionalLowercaseString(channelHint) !== "all"
       ? [await resolveChannel(input.cfg, { channel: channelHint }, input.toolContext)]
       : await (async () => {
           const configured = await listConfiguredMessageChannels(input.cfg);
@@ -381,14 +386,14 @@ async function handleBroadcastAction(
           channel: targetChannel,
           to: target,
           ok: false,
-          error: err instanceof Error ? err.message : String(err),
+          error: formatErrorMessage(err),
         });
       }
     }
   }
   return {
     kind: "broadcast",
-    channel: targetChannels[0] ?? channelHint?.trim().toLowerCase() ?? "unknown",
+    channel: targetChannels[0] ?? normalizeOptionalLowercaseString(channelHint) ?? "unknown",
     action: "broadcast",
     handledBy: input.dryRun ? "dry-run" : "core",
     payload: { results },
@@ -444,7 +449,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   const mergedMediaUrls: string[] = [];
   const seenMedia = new Set<string>();
   const pushMedia = (value?: string | null) => {
-    const trimmed = value?.trim();
+    const trimmed = normalizeOptionalString(value);
     if (!trimmed) {
       return;
     }

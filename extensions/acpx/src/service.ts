@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   AcpRuntime,
   OpenClawPluginService,
@@ -145,9 +146,7 @@ export function createAcpxRuntimeService(
           if (currentRevision !== lifecycleRevision) {
             return;
           }
-          ctx.logger.warn(
-            `embedded acpx runtime setup failed: ${err instanceof Error ? err.message : String(err)}`,
-          );
+          ctx.logger.warn(`embedded acpx runtime setup failed: ${formatErrorMessage(err)}`);
         }
       })();
     },

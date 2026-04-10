@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import Ajv from "ajv";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   formatXHighModelHint,
   normalizeThinkLevel,
@@ -96,8 +97,8 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       const defaultsModel = api.config?.agents?.defaults?.model;
       const primary =
         typeof defaultsModel === "string"
-          ? defaultsModel.trim()
-          : (defaultsModel?.primary?.trim() ?? undefined);
+          ? normalizeOptionalString(defaultsModel)
+          : normalizeOptionalString(defaultsModel?.primary);
       const primaryProvider = typeof primary === "string" ? primary.split("/")[0] : undefined;
       const primaryModel =
         typeof primary === "string" ? primary.split("/").slice(1).join("/") : undefined;

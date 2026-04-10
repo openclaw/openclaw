@@ -6,9 +6,9 @@ import type { HandleCommandsParams } from "./commands-types.js";
 import { parseInlineDirectives } from "./directive-handling.parse.js";
 
 const triggerInternalHookMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-
-vi.mock("../../channels/plugins/binding-targets.js", () => ({
-  resetConfiguredBindingTargetInPlace: vi.fn().mockResolvedValue({ ok: false, skipped: true }),
+const resetMocks = vi.hoisted(() => ({
+  resetConfiguredBindingTargetInPlace: vi.fn().mockResolvedValue({ ok: true as const }),
+  resolveBoundAcpThreadSessionKey: vi.fn(() => undefined as string | undefined),
 }));
 
 vi.mock("../../hooks/internal-hooks.js", () => ({
@@ -37,8 +37,12 @@ vi.mock("../commands-registry.js", () => ({
   shouldHandleTextCommands: () => true,
 }));
 
+vi.mock("../../channels/plugins/binding-targets.js", () => ({
+  resetConfiguredBindingTargetInPlace: resetMocks.resetConfiguredBindingTargetInPlace,
+}));
+
 vi.mock("./commands-acp/targets.js", () => ({
-  resolveBoundAcpThreadSessionKey: vi.fn(() => undefined),
+  resolveBoundAcpThreadSessionKey: resetMocks.resolveBoundAcpThreadSessionKey,
 }));
 
 vi.mock("./commands-handlers.runtime.js", () => ({
@@ -96,6 +100,8 @@ function buildResetParams(
 describe("handleCommands reset hooks", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetMocks.resetConfiguredBindingTargetInPlace.mockResolvedValue({ ok: true });
+    resetMocks.resolveBoundAcpThreadSessionKey.mockReturnValue(undefined);
   });
 
   it("triggers hooks for /new commands", async () => {
@@ -148,5 +154,63 @@ describe("handleCommands reset hooks", () => {
       expect(triggerInternalHookMock, testCase.name).toHaveBeenCalledWith(testCase.expectedCall);
       triggerInternalHookMock.mockClear();
     }
+  });
+
+  it("uses gateway session reset for bound ACP sessions", async () => {
+    resetMocks.resolveBoundAcpThreadSessionKey.mockReturnValue(
+      "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
+    );
+    const params = buildResetParams(
+      "/reset",
+      {
+        commands: { text: true },
+        channels: { discord: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      {
+        Provider: "discord",
+        Surface: "discord",
+        CommandSource: "native",
+      },
+    );
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(resetMocks.resetConfiguredBindingTargetInPlace).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      sessionKey: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
+      reason: "reset",
+      commandSource: "discord:native",
+    });
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "✅ ACP session reset in place." },
+    });
+    expect(triggerInternalHookMock).not.toHaveBeenCalled();
+    expect(params.command.resetHookTriggered).toBe(true);
+  });
+
+  it("keeps tail dispatch after a bound ACP reset", async () => {
+    resetMocks.resolveBoundAcpThreadSessionKey.mockReturnValue(
+      "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
+    );
+    const params = buildResetParams(
+      "/new who are you",
+      {
+        commands: { text: true },
+        channels: { discord: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      {
+        Provider: "discord",
+        Surface: "discord",
+        CommandSource: "native",
+      },
+    );
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toEqual({ shouldContinue: false });
+    expect(params.ctx.Body).toBe("who are you");
+    expect(params.ctx.CommandBody).toBe("who are you");
+    expect(params.ctx.AcpDispatchTailAfterReset).toBe(true);
   });
 });

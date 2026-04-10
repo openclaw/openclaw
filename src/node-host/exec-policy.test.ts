@@ -127,12 +127,13 @@ describe("evaluateSystemRunPolicy", () => {
     expect(denied.errorMessage).toBe("SYSTEM_RUN_DENIED: allowlist miss");
   });
 
-  it("treats shell wrappers as allowlist misses", () => {
-    const denied = expectDeniedDecision(
+  it("keeps POSIX shell wrapper decisions tied to allowlist analysis", () => {
+    const allowed = expectAllowedDecision(
       evaluateSystemRunPolicy(buildPolicyParams({ shellWrapperInvocation: true })),
     );
-    expect(denied.shellWrapperBlocked).toBe(true);
-    expect(denied.errorMessage).toContain("shell wrappers like sh/bash/zsh -c");
+    expect(allowed.shellWrapperBlocked).toBe(false);
+    expect(allowed.analysisOk).toBe(true);
+    expect(allowed.allowlistSatisfied).toBe(true);
   });
 
   it("keeps Windows-specific guidance for cmd.exe wrappers", () => {

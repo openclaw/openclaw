@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { dispatchInboundReplyWithBase } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { buildQaTarget, sendQaBusMessage, type QaBusMessage } from "./bus-client.js";
 import { getQaChannelRuntime } from "./runtime.js";

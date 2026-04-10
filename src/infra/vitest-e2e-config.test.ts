@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { BUNDLED_PLUGIN_E2E_TEST_GLOB } from "../../vitest.bundled-plugin-paths.ts";
-import e2eConfig from "../../vitest.e2e.config.ts";
+import { BUNDLED_PLUGIN_E2E_TEST_GLOB } from "../../test/vitest/vitest.bundled-plugin-paths.ts";
+import e2eConfig from "../../test/vitest/vitest.e2e.config.ts";
 
 describe("e2e vitest config", () => {
   it("runs as a standalone config instead of inheriting unit projects", () => {
@@ -11,6 +11,9 @@ describe("e2e vitest config", () => {
     expect(e2eConfig.test?.include).toEqual([
       "test/**/*.e2e.test.ts",
       "src/**/*.e2e.test.ts",
+      "src/gateway/gateway.test.ts",
+      "src/gateway/server.startup-matrix-migration.integration.test.ts",
+      "src/gateway/sessions-history-http.test.ts",
       BUNDLED_PLUGIN_E2E_TEST_GLOB,
     ]);
     expect(e2eConfig.test?.pool).toBe("threads");

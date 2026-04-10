@@ -1,4 +1,9 @@
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/core";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import {
   azLoginDeviceCode,
   azLoginDeviceCodeWithOptions,
@@ -62,8 +67,9 @@ export function listFoundryResources(subscriptionId?: string): FoundryResourceOp
       if (account.kind !== "AIServices") {
         continue;
       }
-      const endpoint = account.customSubdomain?.trim()
-        ? `https://${account.customSubdomain.trim()}.services.ai.azure.com`
+      const customSubdomain = normalizeOptionalString(account.customSubdomain);
+      const endpoint = customSubdomain
+        ? `https://${customSubdomain}.services.ai.azure.com`
         : undefined;
       if (!endpoint) {
         continue;
@@ -246,7 +252,7 @@ async function promptEndpointAndModelBase(
       placeholder: "https://xxx.openai.azure.com or https://xxx.services.ai.azure.com",
       ...(options?.endpointInitialValue ? { initialValue: options.endpointInitialValue } : {}),
       validate: (v) => {
-        const val = String(v ?? "").trim();
+        const val = normalizeStringifiedOptionalString(v) ?? "";
         if (!val) {
           return "Endpoint URL is required";
         }
@@ -265,7 +271,7 @@ async function promptEndpointAndModelBase(
       ...(options?.modelInitialValue ? { initialValue: options.modelInitialValue } : {}),
       placeholder: "gpt-4o",
       validate: (v) => {
-        const val = String(v ?? "").trim();
+        const val = normalizeStringifiedOptionalString(v) ?? "";
         if (!val) {
           return "Model ID is required";
         }
@@ -346,21 +352,21 @@ export function extractTenantSuggestions(
   const seen = new Set<string>();
   const regex = /([0-9a-fA-F-]{36})(?:\s+'([^'\r\n]+)')?/g;
   for (const match of rawMessage.matchAll(regex)) {
-    const id = match[1]?.trim();
+    const id = normalizeOptionalString(match[1]);
     if (!id || seen.has(id)) {
       continue;
     }
     seen.add(id);
     suggestions.push({
       id,
-      ...(match[2]?.trim() ? { label: match[2].trim() } : {}),
+      ...(normalizeOptionalString(match[2]) ? { label: normalizeOptionalString(match[2]) } : {}),
     });
   }
   return suggestions;
 }
 
 export function isValidTenantIdentifier(value: string): boolean {
-  const trimmed = value.trim();
+  const trimmed = normalizeOptionalString(value) ?? "";
   if (!trimmed) {
     return false;
   }
@@ -402,7 +408,7 @@ export async function promptTenantId(
       message: params?.required ? "Azure tenant ID" : "Azure tenant ID (optional)",
       placeholder: params?.suggestions?.[0]?.id ?? "00000000-0000-0000-0000-000000000000",
       validate: (value) => {
-        const trimmed = String(value ?? "").trim();
+        const trimmed = normalizeStringifiedOptionalString(value) ?? "";
         if (!trimmed) {
           return params?.required ? "Tenant ID is required" : undefined;
         }
@@ -422,7 +428,7 @@ export async function loginWithTenantFallback(
     await azLoginDeviceCode();
     return { account: getLoggedInAccount() };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatErrorMessage(error);
     const isAzureTenantError =
       /AADSTS\d+/i.test(message) ||
       /no subscriptions found/i.test(message) ||

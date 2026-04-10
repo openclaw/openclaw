@@ -7,8 +7,8 @@ import {
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
-import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import {
@@ -26,6 +26,8 @@ import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-model-compat.js";
 import { resolveProviderSystemPromptContribution } from "../../../plugins/provider-runtime.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
+import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
+import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
 import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
@@ -57,6 +59,7 @@ import {
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
+import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { buildModelAliasLines } from "../../model-alias-lines.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
@@ -97,13 +100,15 @@ import {
   applySkillEnvOverridesFromSnapshot,
   resolveSkillsPromptForRun,
 } from "../../skills.js";
+import { resolveSystemPromptOverride } from "../../system-prompt-override.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
+import { normalizeUsage, type NormalizedUsage, type UsageLike } from "../../usage.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
-import { isCacheTtlEligibleProvider } from "../cache-ttl.js";
+import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
@@ -151,11 +156,14 @@ import {
   normalizeProviderToolSchemas,
 } from "../tool-schema-runtime.js";
 import { splitSdkTools } from "../tool-split.js";
-import { describeUnknownError, mapThinkingLevel } from "../utils.js";
+import { mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import {
   assembleAttemptContextEngine,
+  buildContextEnginePromptCacheInfo,
+  findCurrentAttemptAssistantMessage,
   finalizeAttemptContextEngineTurn,
+  resolveAttemptBootstrapContext,
   runAttemptContextEngineBootstrap,
 } from "./attempt.context-engine-helpers.js";
 import {
@@ -240,6 +248,7 @@ export {
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
 } from "../../../plugin-sdk/ollama-runtime.js";
+
 export {
   decodeHtmlEntitiesInObject,
   wrapStreamFnRepairMalformedToolCallArguments,
@@ -391,20 +400,18 @@ export async function runEmbeddedAttempt(
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const contextInjectionMode = resolveContextInjectionMode(params.config);
-    const isContinuationTurn =
-      contextInjectionMode === "continuation-skip" &&
-      params.bootstrapContextRunKind !== "heartbeat" &&
-      (await hasCompletedBootstrapTurn(params.sessionFile));
-    const shouldRecordCompletedBootstrapTurn =
-      !isContinuationTurn &&
-      params.bootstrapContextMode !== "lightweight" &&
-      params.bootstrapContextRunKind !== "heartbeat";
-    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } = isContinuationTurn
-      ? {
-          bootstrapFiles: [],
-          contextFiles: [],
-        }
-      : await resolveBootstrapContextForRun({
+    const {
+      bootstrapFiles: hookAdjustedBootstrapFiles,
+      contextFiles,
+      shouldRecordCompletedBootstrapTurn,
+    } = await resolveAttemptBootstrapContext({
+      contextInjectionMode,
+      bootstrapContextMode: params.bootstrapContextMode,
+      bootstrapContextRunKind: params.bootstrapContextRunKind,
+      sessionFile: params.sessionFile,
+      hasCompletedBootstrapTurn,
+      resolveBootstrapContextForRun: async () =>
+        await resolveBootstrapContextForRun({
           workspaceDir: effectiveWorkspace,
           config: params.config,
           sessionKey: params.sessionKey,
@@ -412,7 +419,8 @@ export async function runEmbeddedAttempt(
           warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
           contextMode: params.bootstrapContextMode,
           runKind: params.bootstrapContextRunKind,
-        });
+        }),
+    });
     const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
     const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
     const bootstrapAnalysis = analyzeBootstrapBudget({
@@ -603,10 +611,12 @@ export async function runEmbeddedAttempt(
     if (promptCapabilities.length > 0) {
       runtimeCapabilities ??= [];
       const seenCapabilities = new Set(
-        runtimeCapabilities.map((cap) => String(cap).trim().toLowerCase()),
+        runtimeCapabilities
+          .map((cap) => normalizeOptionalLowercaseString(String(cap)))
+          .filter(Boolean),
       );
       for (const capability of promptCapabilities) {
-        const normalizedCapability = capability.trim().toLowerCase();
+        const normalizedCapability = normalizeOptionalLowercaseString(capability);
         if (!normalizedCapability || seenCapabilities.has(normalizedCapability)) {
           continue;
         }
@@ -694,10 +704,17 @@ export async function runEmbeddedAttempt(
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
     const ownerDisplay = resolveOwnerDisplaySetting(params.config);
     const heartbeatPrompt = shouldInjectHeartbeatPrompt({
+      config: params.config,
+      agentId: sessionAgentId,
+      defaultAgentId,
       isDefaultAgent,
       trigger: params.trigger,
     })
-      ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
+      ? resolveHeartbeatPromptForSystemPrompt({
+          config: params.config,
+          agentId: sessionAgentId,
+          defaultAgentId,
+        })
       : undefined;
     const promptContribution = resolveProviderSystemPromptContribution({
       provider: params.provider,
@@ -716,35 +733,41 @@ export async function runEmbeddedAttempt(
       },
     });
 
-    const appendPrompt = buildEmbeddedSystemPrompt({
-      workspaceDir: effectiveWorkspace,
-      defaultThinkLevel: params.thinkLevel,
-      reasoningLevel: params.reasoningLevel ?? "off",
-      extraSystemPrompt: params.extraSystemPrompt,
-      ownerNumbers: params.ownerNumbers,
-      ownerDisplay: ownerDisplay.ownerDisplay,
-      ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
-      reasoningTagHint,
-      heartbeatPrompt,
-      skillsPrompt: effectiveSkillsPrompt,
-      docsPath: docsPath ?? undefined,
-      ttsHint,
-      workspaceNotes,
-      reactionGuidance,
-      promptMode: effectivePromptMode,
-      acpEnabled: params.config?.acp?.enabled !== false,
-      runtimeInfo,
-      messageToolHints,
-      sandboxInfo,
-      tools: effectiveTools,
-      modelAliasLines: buildModelAliasLines(params.config),
-      userTimezone,
-      userTime,
-      userTimeFormat,
-      contextFiles,
-      memoryCitationsMode: params.config?.memory?.citations,
-      promptContribution,
-    });
+    const appendPrompt =
+      resolveSystemPromptOverride({
+        config: params.config,
+        agentId: sessionAgentId,
+      }) ??
+      buildEmbeddedSystemPrompt({
+        workspaceDir: effectiveWorkspace,
+        defaultThinkLevel: params.thinkLevel,
+        reasoningLevel: params.reasoningLevel ?? "off",
+        extraSystemPrompt: params.extraSystemPrompt,
+        ownerNumbers: params.ownerNumbers,
+        ownerDisplay: ownerDisplay.ownerDisplay,
+        ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
+        reasoningTagHint,
+        heartbeatPrompt,
+        skillsPrompt: effectiveSkillsPrompt,
+        docsPath: docsPath ?? undefined,
+        ttsHint,
+        workspaceNotes,
+        reactionGuidance,
+        promptMode: effectivePromptMode,
+        acpEnabled: params.config?.acp?.enabled !== false,
+        runtimeInfo,
+        messageToolHints,
+        sandboxInfo,
+        tools: effectiveTools,
+        modelAliasLines: buildModelAliasLines(params.config),
+        userTimezone,
+        userTime,
+        userTimeFormat,
+        contextFiles,
+        includeMemorySection: !params.contextEngine || params.contextEngine.info.id === "legacy",
+        memoryCitationsMode: params.config?.memory?.citations,
+        promptContribution,
+      });
     const systemPromptReport = buildSystemPromptReport({
       source: "run",
       generatedAt: Date.now(),
@@ -1022,6 +1045,12 @@ export async function runEmbeddedAttempt(
         params.model,
         agentDir,
       );
+      const effectivePromptCacheRetention = resolveCacheRetention(
+        effectiveExtraParams,
+        params.provider,
+        params.model.api,
+        params.modelId,
+      );
       const agentTransportOverride = resolveAgentTransportOverride({
         settingsManager,
         effectiveExtraParams,
@@ -1185,7 +1214,10 @@ export async function runEmbeddedAttempt(
       let idleTimeoutTrigger: ((error: Error) => void) | undefined;
 
       // Wrap stream with idle timeout detection
-      const idleTimeoutMs = resolveLlmIdleTimeoutMs(params.config);
+      const idleTimeoutMs = resolveLlmIdleTimeoutMs({
+        cfg: params.config,
+        trigger: params.trigger,
+      });
       if (idleTimeoutMs > 0) {
         activeSession.agent.streamFn = streamWithIdleTimeout(
           activeSession.agent.streamFn,
@@ -1256,6 +1288,8 @@ export async function runEmbeddedAttempt(
               sessionKey: params.sessionKey,
               messages: activeSession.messages,
               tokenBudget: params.contextTokenBudget,
+              availableTools: new Set(effectiveTools.map((tool) => tool.name)),
+              citationsMode: params.config?.memory?.citations,
               modelId: params.modelId,
               ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
             });
@@ -1294,6 +1328,7 @@ export async function runEmbeddedAttempt(
       let aborted = Boolean(params.abortSignal?.aborted);
       let yieldAborted = false;
       let timedOut = false;
+      let idleTimedOut = false;
       let timedOutDuringCompaction = false;
       const getAbortReason = (signal: AbortSignal): unknown =>
         "reason" in signal ? (signal as { reason?: unknown }).reason : undefined;
@@ -1343,6 +1378,7 @@ export async function runEmbeddedAttempt(
         void activeSession.abort();
       };
       idleTimeoutTrigger = (error) => {
+        idleTimedOut = true;
         abortRun(true, error);
       };
       const abortable = <T>(promise: Promise<T>): Promise<T> => {
@@ -1431,6 +1467,10 @@ export async function runEmbeddedAttempt(
         },
         abort: abortRun,
       };
+      let lastAssistant: AgentMessage | undefined;
+      let attemptUsage: NormalizedUsage | undefined;
+      let cacheBreak: ReturnType<typeof completePromptCacheObservation> = null;
+      let promptCache: EmbeddedRunAttemptResult["promptCache"];
       if (params.replyOperation) {
         params.replyOperation.attachBackend(queueHandle);
       }
@@ -1568,8 +1608,7 @@ export async function runEmbeddedAttempt(
               `hooks: prepended context to prompt (${hookResult.prependContext.length} chars)`,
             );
           }
-          const legacySystemPrompt =
-            typeof hookResult?.systemPrompt === "string" ? hookResult.systemPrompt.trim() : "";
+          const legacySystemPrompt = normalizeOptionalString(hookResult?.systemPrompt) ?? "";
           if (legacySystemPrompt) {
             applySystemPromptOverrideToSession(activeSession, legacySystemPrompt);
             systemPromptText = legacySystemPrompt;
@@ -1602,12 +1641,7 @@ export async function runEmbeddedAttempt(
             provider: params.provider,
             modelId: params.modelId,
             modelApi: params.model.api,
-            cacheRetention: resolveCacheRetention(
-              effectiveExtraParams,
-              params.provider,
-              params.model.api,
-              params.modelId,
-            ),
+            cacheRetention: effectivePromptCacheRetention,
             streamStrategy,
             transport: effectiveAgentTransport,
             systemPrompt: systemPromptText,
@@ -1983,6 +2017,51 @@ export async function runEmbeddedAttempt(
         messagesSnapshot = snapshotSelection.messagesSnapshot;
         sessionIdUsed = snapshotSelection.sessionIdUsed;
 
+        lastAssistant = messagesSnapshot
+          .slice()
+          .toReversed()
+          .find((m) => m.role === "assistant");
+        const currentAttemptAssistant = findCurrentAttemptAssistantMessage({
+          messagesSnapshot,
+          prePromptMessageCount,
+        });
+        attemptUsage = getUsageTotals();
+        cacheBreak = cacheObservabilityEnabled
+          ? completePromptCacheObservation({
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+              usage: attemptUsage,
+            })
+          : null;
+        const lastCallUsage = normalizeUsage(
+          (currentAttemptAssistant as { usage?: UsageLike } | undefined)?.usage,
+        );
+        const promptCacheObservation =
+          cacheObservabilityEnabled &&
+          (cacheBreak || promptCacheChangesForTurn || typeof attemptUsage?.cacheRead === "number")
+            ? {
+                broke: Boolean(cacheBreak),
+                ...(typeof cacheBreak?.previousCacheRead === "number"
+                  ? { previousCacheRead: cacheBreak.previousCacheRead }
+                  : {}),
+                ...(typeof cacheBreak?.cacheRead === "number"
+                  ? { cacheRead: cacheBreak.cacheRead }
+                  : typeof attemptUsage?.cacheRead === "number"
+                    ? { cacheRead: attemptUsage.cacheRead }
+                    : {}),
+                changes: cacheBreak?.changes ?? promptCacheChangesForTurn,
+              }
+            : undefined;
+        promptCache = buildContextEnginePromptCacheInfo({
+          retention: effectivePromptCacheRetention,
+          lastCallUsage,
+          observation: promptCacheObservation,
+          lastCacheTouchAt: readLastCacheTtlTimestamp(sessionManager, {
+            provider: params.provider,
+            modelId: params.modelId,
+          }),
+        });
+
         if (promptError && promptErrorSource === "prompt" && !compactionOccurredThisAttempt) {
           try {
             sessionManager.appendCustomEntry("openclaw:prompt-error", {
@@ -1992,7 +2071,7 @@ export async function runEmbeddedAttempt(
               provider: params.provider,
               model: params.modelId,
               api: params.model.api,
-              error: describeUnknownError(promptError),
+              error: formatErrorMessage(promptError),
             });
           } catch (entryErr) {
             log.warn(`failed to persist prompt error entry: ${String(entryErr)}`);
@@ -2005,6 +2084,7 @@ export async function runEmbeddedAttempt(
             attempt: params,
             workspaceDir: effectiveWorkspace,
             agentDir,
+            promptCache,
           });
           await finalizeAttemptContextEngineTurn({
             contextEngine: params.contextEngine,
@@ -2071,7 +2151,7 @@ export async function runEmbeddedAttempt(
               {
                 messages: messagesSnapshot,
                 success: !aborted && !promptError,
-                error: promptError ? describeUnknownError(promptError) : undefined,
+                error: promptError ? formatErrorMessage(promptError) : undefined,
                 durationMs: Date.now() - promptStartedAt,
               },
               {
@@ -2116,24 +2196,13 @@ export async function runEmbeddedAttempt(
         params.abortSignal?.removeEventListener?.("abort", onAbort);
       }
 
-      const lastAssistant = messagesSnapshot
-        .slice()
-        .toReversed()
-        .find((m) => m.role === "assistant");
-
       const toolMetasNormalized = toolMetas
         .filter(
           (entry): entry is { toolName: string; meta?: string } =>
             typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
         )
         .map((entry) => ({ toolName: entry.toolName, meta: entry.meta }));
-      const attemptUsage = getUsageTotals();
       if (cacheObservabilityEnabled) {
-        const cacheBreak = completePromptCacheObservation({
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          usage: attemptUsage,
-        });
         if (cacheBreak) {
           const changeSummary =
             cacheBreak.changes?.map((change) => `${change.code}(${change.detail})`).join(", ") ??
@@ -2211,8 +2280,10 @@ export async function runEmbeddedAttempt(
         itemLifecycle: getItemLifecycle(),
         aborted,
         timedOut,
+        idleTimedOut,
         timedOutDuringCompaction,
         promptError,
+        promptErrorSource,
         preflightRecovery,
         sessionIdUsed,
         bootstrapPromptWarningSignaturesSeen: bootstrapPromptWarning.warningSignaturesSeen,
@@ -2232,6 +2303,7 @@ export async function runEmbeddedAttempt(
           lastAssistant?.errorMessage && isCloudCodeAssistFormatError(lastAssistant.errorMessage),
         ),
         attemptUsage,
+        promptCache,
         compactionCount: getCompactionCount(),
         // Client tool call detected (OpenResponses hosted tools)
         clientToolCall: clientToolCallDetected ?? undefined,

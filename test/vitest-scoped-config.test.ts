@@ -2,59 +2,72 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { createAcpVitestConfig } from "../vitest.acp.config.ts";
-import { createAgentsVitestConfig } from "../vitest.agents.config.ts";
-import { createAutoReplyCoreVitestConfig } from "../vitest.auto-reply-core.config.ts";
-import { createAutoReplyReplyVitestConfig } from "../vitest.auto-reply-reply.config.ts";
-import { createAutoReplyTopLevelVitestConfig } from "../vitest.auto-reply-top-level.config.ts";
-import { createAutoReplyVitestConfig } from "../vitest.auto-reply.config.ts";
-import { createChannelsVitestConfig } from "../vitest.channels.config.ts";
-import { createCliVitestConfig } from "../vitest.cli.config.ts";
-import { createCommandsLightVitestConfig } from "../vitest.commands-light.config.ts";
-import { createCommandsVitestConfig } from "../vitest.commands.config.ts";
-import { createCronVitestConfig } from "../vitest.cron.config.ts";
-import { createDaemonVitestConfig } from "../vitest.daemon.config.ts";
-import { createExtensionAcpxVitestConfig } from "../vitest.extension-acpx.config.ts";
-import { createExtensionBlueBubblesVitestConfig } from "../vitest.extension-bluebubbles.config.ts";
-import { createExtensionChannelsVitestConfig } from "../vitest.extension-channels.config.ts";
-import { createExtensionDiffsVitestConfig } from "../vitest.extension-diffs.config.ts";
-import { createExtensionFeishuVitestConfig } from "../vitest.extension-feishu.config.ts";
-import { createExtensionIrcVitestConfig } from "../vitest.extension-irc.config.ts";
-import { createExtensionMatrixVitestConfig } from "../vitest.extension-matrix.config.ts";
-import { createExtensionMattermostVitestConfig } from "../vitest.extension-mattermost.config.ts";
-import { createExtensionMemoryVitestConfig } from "../vitest.extension-memory.config.ts";
-import { createExtensionMessagingVitestConfig } from "../vitest.extension-messaging.config.ts";
-import { createExtensionMsTeamsVitestConfig } from "../vitest.extension-msteams.config.ts";
-import { createExtensionProvidersVitestConfig } from "../vitest.extension-providers.config.ts";
-import { createExtensionTelegramVitestConfig } from "../vitest.extension-telegram.config.ts";
-import { createExtensionVoiceCallVitestConfig } from "../vitest.extension-voice-call.config.ts";
-import { createExtensionWhatsAppVitestConfig } from "../vitest.extension-whatsapp.config.ts";
-import { createExtensionZaloVitestConfig } from "../vitest.extension-zalo.config.ts";
-import { createExtensionsVitestConfig } from "../vitest.extensions.config.ts";
-import { createGatewayVitestConfig } from "../vitest.gateway.config.ts";
-import { createHooksVitestConfig } from "../vitest.hooks.config.ts";
-import { createInfraVitestConfig } from "../vitest.infra.config.ts";
-import { createLoggingVitestConfig } from "../vitest.logging.config.ts";
-import { createMediaUnderstandingVitestConfig } from "../vitest.media-understanding.config.ts";
-import { createMediaVitestConfig } from "../vitest.media.config.ts";
-import { createPluginSdkLightVitestConfig } from "../vitest.plugin-sdk-light.config.ts";
-import { createPluginSdkVitestConfig } from "../vitest.plugin-sdk.config.ts";
-import { createPluginsVitestConfig } from "../vitest.plugins.config.ts";
-import { createProcessVitestConfig } from "../vitest.process.config.ts";
-import { createRuntimeConfigVitestConfig } from "../vitest.runtime-config.config.ts";
-import { createScopedVitestConfig, resolveVitestIsolation } from "../vitest.scoped-config.ts";
-import { createSecretsVitestConfig } from "../vitest.secrets.config.ts";
-import { createSharedCoreVitestConfig } from "../vitest.shared-core.config.ts";
-import { createTasksVitestConfig } from "../vitest.tasks.config.ts";
-import { createToolingVitestConfig } from "../vitest.tooling.config.ts";
-import { createTuiVitestConfig } from "../vitest.tui.config.ts";
-import { createUiVitestConfig } from "../vitest.ui.config.ts";
-import { createUtilsVitestConfig } from "../vitest.utils.config.ts";
-import { createWizardVitestConfig } from "../vitest.wizard.config.ts";
 import { BUNDLED_PLUGIN_TEST_GLOB, bundledPluginFile } from "./helpers/bundled-plugin-paths.js";
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
+import { createAcpVitestConfig } from "./vitest/vitest.acp.config.ts";
+import { createAgentsVitestConfig } from "./vitest/vitest.agents.config.ts";
+import { createAutoReplyCoreVitestConfig } from "./vitest/vitest.auto-reply-core.config.ts";
+import { createAutoReplyReplyVitestConfig } from "./vitest/vitest.auto-reply-reply.config.ts";
+import { createAutoReplyTopLevelVitestConfig } from "./vitest/vitest.auto-reply-top-level.config.ts";
+import { createAutoReplyVitestConfig } from "./vitest/vitest.auto-reply.config.ts";
+import bundledVitestConfig from "./vitest/vitest.bundled.config.ts";
+import { createChannelsVitestConfig } from "./vitest/vitest.channels.config.ts";
+import { createCliVitestConfig } from "./vitest/vitest.cli.config.ts";
+import { createCommandsLightVitestConfig } from "./vitest/vitest.commands-light.config.ts";
+import { createCommandsVitestConfig } from "./vitest/vitest.commands.config.ts";
+import { createCronVitestConfig } from "./vitest/vitest.cron.config.ts";
+import { createDaemonVitestConfig } from "./vitest/vitest.daemon.config.ts";
+import { createExtensionAcpxVitestConfig } from "./vitest/vitest.extension-acpx.config.ts";
+import { createExtensionBlueBubblesVitestConfig } from "./vitest/vitest.extension-bluebubbles.config.ts";
+import { createExtensionChannelsVitestConfig } from "./vitest/vitest.extension-channels.config.ts";
+import { createExtensionDiffsVitestConfig } from "./vitest/vitest.extension-diffs.config.ts";
+import { createExtensionFeishuVitestConfig } from "./vitest/vitest.extension-feishu.config.ts";
+import { createExtensionIrcVitestConfig } from "./vitest/vitest.extension-irc.config.ts";
+import { createExtensionMatrixVitestConfig } from "./vitest/vitest.extension-matrix.config.ts";
+import { createExtensionMattermostVitestConfig } from "./vitest/vitest.extension-mattermost.config.ts";
+import { createExtensionMemoryVitestConfig } from "./vitest/vitest.extension-memory.config.ts";
+import { createExtensionMessagingVitestConfig } from "./vitest/vitest.extension-messaging.config.ts";
+import { createExtensionMsTeamsVitestConfig } from "./vitest/vitest.extension-msteams.config.ts";
+import { createExtensionProvidersVitestConfig } from "./vitest/vitest.extension-providers.config.ts";
+import { createExtensionTelegramVitestConfig } from "./vitest/vitest.extension-telegram.config.ts";
+import { createExtensionVoiceCallVitestConfig } from "./vitest/vitest.extension-voice-call.config.ts";
+import { createExtensionWhatsAppVitestConfig } from "./vitest/vitest.extension-whatsapp.config.ts";
+import { createExtensionZaloVitestConfig } from "./vitest/vitest.extension-zalo.config.ts";
+import { createExtensionsVitestConfig } from "./vitest/vitest.extensions.config.ts";
+import { createGatewayVitestConfig } from "./vitest/vitest.gateway.config.ts";
+import { createHooksVitestConfig } from "./vitest/vitest.hooks.config.ts";
+import { createInfraVitestConfig } from "./vitest/vitest.infra.config.ts";
+import { createLoggingVitestConfig } from "./vitest/vitest.logging.config.ts";
+import { createMediaUnderstandingVitestConfig } from "./vitest/vitest.media-understanding.config.ts";
+import { createMediaVitestConfig } from "./vitest/vitest.media.config.ts";
+import { createPluginSdkLightVitestConfig } from "./vitest/vitest.plugin-sdk-light.config.ts";
+import { createPluginSdkVitestConfig } from "./vitest/vitest.plugin-sdk.config.ts";
+import { createPluginsVitestConfig } from "./vitest/vitest.plugins.config.ts";
+import { createProcessVitestConfig } from "./vitest/vitest.process.config.ts";
+import { createRuntimeConfigVitestConfig } from "./vitest/vitest.runtime-config.config.ts";
+import { createScopedVitestConfig, resolveVitestIsolation } from "./vitest/vitest.scoped-config.ts";
+import { createSecretsVitestConfig } from "./vitest/vitest.secrets.config.ts";
+import { createSharedCoreVitestConfig } from "./vitest/vitest.shared-core.config.ts";
+import { createTasksVitestConfig } from "./vitest/vitest.tasks.config.ts";
+import { createToolingVitestConfig } from "./vitest/vitest.tooling.config.ts";
+import { createTuiVitestConfig } from "./vitest/vitest.tui.config.ts";
+import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
+import { bundledPluginDependentUnitTestFiles } from "./vitest/vitest.unit-paths.mjs";
+import { createUtilsVitestConfig } from "./vitest/vitest.utils.config.ts";
+import { createWizardVitestConfig } from "./vitest/vitest.wizard.config.ts";
 
 const EXTENSIONS_CHANNEL_GLOB = ["extensions", "channel", "**"].join("/");
+
+function bundledExcludePatternCouldMatchFile(pattern: string, file: string): boolean {
+  if (pattern === file) {
+    return true;
+  }
+  if (pattern.endsWith("/**")) {
+    const prefix = pattern.slice(0, -3);
+    return file === prefix || file.startsWith(`${prefix}/`);
+  }
+  return false;
+}
 
 describe("resolveVitestIsolation", () => {
   it("defaults shared scoped configs to the non-isolated runner", () => {
@@ -138,6 +151,15 @@ describe("createScopedVitestConfig", () => {
       "test/setup-openclaw-runtime.ts",
     ]);
   });
+
+  it("keeps bundled unit test includes out of the bundled exclude list", () => {
+    const excludePatterns = bundledVitestConfig.test?.exclude ?? [];
+    for (const file of bundledPluginDependentUnitTestFiles) {
+      expect(
+        excludePatterns.some((pattern) => bundledExcludePatternCouldMatchFile(pattern, file)),
+      ).toBe(false);
+    }
+  });
 });
 
 describe("scoped vitest configs", () => {
@@ -203,7 +225,6 @@ describe("scoped vitest configs", () => {
       defaultAutoReplyTopLevelConfig,
       defaultAutoReplyReplyConfig,
       defaultToolingConfig,
-      defaultUiConfig,
     ]) {
       expect(config.test?.pool).toBe("threads");
       expect(config.test?.isolate).toBe(false);
@@ -215,10 +236,15 @@ describe("scoped vitest configs", () => {
       expect(config.test?.isolate).toBe(false);
       expect(config.test?.runner).toBe("./test/non-isolated-runner.ts");
     }
+
+    expect(defaultUiConfig.test?.pool).toBe("threads");
+    expect(defaultUiConfig.test?.isolate).toBe(true);
+    expect(defaultUiConfig.test?.runner).toBeUndefined();
   });
 
   it("keeps the process lane off the openclaw runtime setup", () => {
     expect(defaultProcessConfig.test?.setupFiles).toEqual(["test/setup.ts"]);
+    expect(defaultRuntimeConfig.test?.setupFiles).toEqual(["test/setup.ts"]);
     expect(defaultPluginSdkConfig.test?.setupFiles).toEqual([
       "test/setup.ts",
       "test/setup-openclaw-runtime.ts",
@@ -287,7 +313,6 @@ describe("scoped vitest configs", () => {
     expect(defaultExtensionChannelsConfig.test?.dir).toBe("extensions");
     expect(defaultExtensionChannelsConfig.test?.include).toEqual(
       expect.arrayContaining([
-        "browser/**/*.test.ts",
         "discord/**/*.test.ts",
         "line/**/*.test.ts",
         "slack/**/*.test.ts",
@@ -523,6 +548,11 @@ describe("scoped vitest configs", () => {
   it("normalizes gateway include patterns relative to the scoped dir", () => {
     expect(defaultGatewayConfig.test?.dir).toBe("src/gateway");
     expect(defaultGatewayConfig.test?.include).toEqual(["**/*.test.ts"]);
+    expect(defaultGatewayConfig.test?.exclude).toContain("gateway.test.ts");
+    expect(defaultGatewayConfig.test?.exclude).toContain(
+      "server.startup-matrix-migration.integration.test.ts",
+    );
+    expect(defaultGatewayConfig.test?.exclude).toContain("sessions-history-http.test.ts");
   });
 
   it("normalizes infra include patterns relative to the scoped dir", () => {
@@ -631,6 +661,7 @@ describe("scoped vitest configs", () => {
   it("normalizes plugins include patterns relative to the scoped dir", () => {
     expect(defaultPluginsConfig.test?.dir).toBe("src/plugins");
     expect(defaultPluginsConfig.test?.include).toEqual(["**/*.test.ts"]);
+    expect(defaultPluginsConfig.test?.exclude).toContain("contracts/**");
   });
 
   it("normalizes ui include patterns relative to the scoped dir", () => {

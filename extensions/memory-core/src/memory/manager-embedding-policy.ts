@@ -1,3 +1,5 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+
 type MemoryEmbeddingTextPart = {
   type: "text";
   text: string;
@@ -84,6 +86,12 @@ export function isRetryableMemoryEmbeddingError(message: string): boolean {
   );
 }
 
+export function isStructuredInputTooLargeMemoryEmbeddingError(message: string): boolean {
+  return /(413|payload too large|request too large|input too large|too many tokens|input limit|request size)/i.test(
+    message,
+  );
+}
+
 export function resolveMemoryEmbeddingRetryDelay(
   delayMs: number,
   randomValue: number,
@@ -105,7 +113,7 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
     try {
       return await params.run();
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err);
       if (!params.isRetryable(message) || attempt >= params.maxAttempts) {
         throw err;
       }

@@ -23,8 +23,23 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "infer",
+    description: "Run provider-backed inference commands",
+    hasSubcommands: true,
+  },
+  {
+    name: "capability",
+    description: "Run provider-backed inference commands (fallback alias: infer)",
+    hasSubcommands: true,
+  },
+  {
     name: "approvals",
     description: "Manage exec approvals (gateway or node host)",
+    hasSubcommands: true,
+  },
+  {
+    name: "exec-policy",
+    description: "Show or synchronize requested exec policy with host approvals",
     hasSubcommands: true,
   },
   {

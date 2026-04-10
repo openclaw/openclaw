@@ -8,6 +8,7 @@ import type {
 } from "../controllers/skills.ts";
 import { clampText } from "../format.ts";
 import { resolveSafeExternalUrl } from "../open-external-url.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type { SkillStatusEntry, SkillStatusReport } from "../types.ts";
 import { groupSkills } from "./skills-grouping.ts";
 import {
@@ -114,10 +115,12 @@ export function renderSkills(props: SkillsProps) {
       ? skills
       : skills.filter((s) => skillMatchesStatus(s, props.statusFilter));
 
-  const filter = props.filter.trim().toLowerCase();
+  const filter = normalizeLowercaseStringOrEmpty(props.filter);
   const filtered = filter
     ? afterStatus.filter((skill) =>
-        [skill.name, skill.description, skill.source].join(" ").toLowerCase().includes(filter),
+        normalizeLowercaseStringOrEmpty(
+          [skill.name, skill.description, skill.source].join(" "),
+        ).includes(filter),
       )
     : afterStatus;
   const groups = groupSkills(filtered);

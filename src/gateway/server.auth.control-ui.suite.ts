@@ -923,7 +923,9 @@ export function registerControlUiAndPairingSuite(): void {
           timeoutMs: 500,
         }),
       ).rejects.toThrow();
-      await expect(waitForWsClose(wsFail, 1_000)).resolves.toBe(true);
+      // The full agentic shard can saturate the event loop enough that the
+      // server-side close after a pre-hello failure arrives later than 1s.
+      await expect(waitForWsClose(wsFail, 5_000)).resolves.toBe(true);
 
       const wsRetry = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
       const retry = await connectReq(wsRetry, {
@@ -1220,8 +1222,9 @@ export function registerControlUiAndPairingSuite(): void {
       expect(reconnect.ok).toBe(true);
 
       const repaired = await getPairedDevice(deviceId);
-      expect(repaired?.roles ?? []).toContain("operator");
-      expect(repaired?.scopes ?? []).toContain("operator.read");
+      expect(repaired?.role).toBe("operator");
+      expect(repaired?.approvedScopes ?? []).toContain("operator.read");
+      expect(repaired?.tokens?.operator?.scopes ?? []).toContain("operator.read");
       const list = await listDevicePairing();
       expect(list.pending.filter((entry) => entry.deviceId === deviceId)).toEqual([]);
     } finally {

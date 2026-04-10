@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   ProviderAuthContext,
   ProviderResolveDynamicModelContext,
@@ -18,6 +19,7 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { fetchCodexUsage } from "openclaw/plugin-sdk/provider-usage";
+import { normalizeLowercaseStringOrEmpty, readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import { OPENAI_CODEX_DEFAULT_MODEL } from "./default-models.js";
 import { resolveCodexAuthIdentity } from "./openai-codex-auth-identity.js";
 import { buildOpenAICodexProvider } from "./openai-codex-catalog.js";
@@ -108,7 +110,7 @@ function resolveCodexForwardCompatModel(
   ctx: ProviderResolveDynamicModelContext,
 ): ProviderRuntimeModel | undefined {
   const trimmedModelId = ctx.modelId.trim();
-  const lower = trimmedModelId.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmedModelId);
 
   let templateIds: readonly string[];
   let patch: Partial<ProviderRuntimeModel> | undefined;
@@ -182,7 +184,7 @@ async function refreshOpenAICodexOAuthCredential(cred: OAuthCredential) {
       displayName: cred.displayName,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatErrorMessage(error);
     if (
       /extract\s+accountid\s+from\s+token/i.test(message) &&
       typeof cred.access === "string" &&
@@ -213,7 +215,7 @@ async function runOpenAICodexOAuth(ctx: ProviderAuthContext) {
 
   const identity = resolveCodexAuthIdentity({
     accessToken: creds.access,
-    email: typeof creds.email === "string" ? creds.email : undefined,
+    email: readStringValue(creds.email),
   });
 
   return buildOauthProviderAuthResult({
@@ -282,6 +284,9 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
     supportsXHighThinking: ({ modelId }) =>
       matchesExactOrPrefix(modelId, OPENAI_CODEX_XHIGH_MODEL_IDS),
     isModernModelRef: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_CODEX_MODERN_MODEL_IDS),
+    preferRuntimeResolvedModel: (ctx) =>
+      normalizeProviderId(ctx.provider) === PROVIDER_ID &&
+      ctx.modelId.trim().toLowerCase() === OPENAI_CODEX_GPT_54_MODEL_ID,
     buildReplayPolicy: buildOpenAIReplayPolicy,
     prepareExtraParams: (ctx) => {
       const transport = ctx.extraParams?.transport;

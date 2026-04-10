@@ -124,6 +124,7 @@ Example:
 - `channels.zalouser.groups.<group>.requireMention` controls whether group replies require a mention.
 - Resolution order: exact group id/name -> normalized group slug -> `*` -> default (`true`).
 - This applies both to allowlisted groups and open group mode.
+- Quoting a bot message counts as an implicit mention for group activation.
 - Authorized control commands (for example `/new`) can bypass mention gating.
 - When a group message is skipped because mention is required, OpenClaw stores it as pending group history and includes it on the next processed group message.
 - Group history limit defaults to `messages.groupChat.historyLimit` (fallback `50`). You can override per account with `channels.zalouser.historyLimit`.

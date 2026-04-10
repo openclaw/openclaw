@@ -20,6 +20,7 @@ import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { POLL_CREATION_PARAM_DEFS, SHARED_POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { stripReasoningTagsFromText } from "../../shared/text/reasoning-tags.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -282,6 +283,9 @@ function buildEventSchema() {
     endTime: Type.Optional(Type.String()),
     desc: Type.Optional(Type.String()),
     location: Type.Optional(Type.String()),
+    image: Type.Optional(
+      Type.String({ description: "Cover image URL or local file path for the event." }),
+    ),
     durationMin: Type.Optional(Type.Number()),
     until: Type.Optional(Type.String()),
   };
@@ -547,7 +551,7 @@ function buildMessageToolSchema(params: {
 }
 
 function resolveAgentAccountId(value?: string): string | undefined {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }

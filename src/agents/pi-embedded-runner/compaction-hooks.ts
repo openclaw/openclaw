@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { getActiveMemorySearchManager } from "../../plugins/memory-runtime.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -52,7 +53,7 @@ async function runPostCompactionSessionMemorySync(params: {
       sessionFiles: [sessionFile],
     });
   } catch (err) {
-    log.warn(`memory sync skipped (post-compaction): ${String(err)}`);
+    log.warn(`memory sync skipped (post-compaction): ${formatErrorMessage(err)}`);
   }
 }
 
@@ -192,7 +193,7 @@ export async function runBeforeCompactionHooks(params: {
     await triggerInternalHook(hookEvent);
   } catch (err) {
     log.warn("session:compact:before hook failed", {
-      errorMessage: err instanceof Error ? err.message : String(err),
+      errorMessage: formatErrorMessage(err),
       errorStack: err instanceof Error ? err.stack : undefined,
     });
   }
@@ -213,7 +214,7 @@ export async function runBeforeCompactionHooks(params: {
       );
     } catch (err) {
       log.warn("before_compaction hook failed", {
-        errorMessage: err instanceof Error ? err.message : String(err),
+        errorMessage: formatErrorMessage(err),
         errorStack: err instanceof Error ? err.stack : undefined,
       });
     }
@@ -276,7 +277,7 @@ export async function runAfterCompactionHooks(params: {
     await triggerInternalHook(hookEvent);
   } catch (err) {
     log.warn("session:compact:after hook failed", {
-      errorMessage: err instanceof Error ? err.message : String(err),
+      errorMessage: formatErrorMessage(err),
       errorStack: err instanceof Error ? err.stack : undefined,
     });
   }
@@ -299,7 +300,7 @@ export async function runAfterCompactionHooks(params: {
       );
     } catch (err) {
       log.warn("after_compaction hook failed", {
-        errorMessage: err instanceof Error ? err.message : String(err),
+        errorMessage: formatErrorMessage(err),
         errorStack: err instanceof Error ? err.stack : undefined,
       });
     }

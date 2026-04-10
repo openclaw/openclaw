@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import chokidar, { FSWatcher } from "chokidar";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   buildCaseInsensitiveExtensionGlob,
   classifyMemoryMultimodalPath,
@@ -36,6 +37,7 @@ import {
   type MemorySource,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,
@@ -55,6 +57,7 @@ import {
   type MemoryIndexMeta,
 } from "./manager-reindex-state.js";
 import { shouldSyncSessionsForReindex } from "./manager-session-reindex.js";
+import { resolveMemorySessionSyncPlan } from "./manager-session-sync-state.js";
 import {
   loadMemorySourceFileState,
   resolveMemorySourceExistingHash,
@@ -89,7 +92,9 @@ const log = createSubsystemLogger("memory");
 
 function shouldIgnoreMemoryWatchPath(watchPath: string): boolean {
   const normalized = path.normalize(watchPath);
-  const parts = normalized.split(path.sep).map((segment) => segment.trim().toLowerCase());
+  const parts = normalized
+    .split(path.sep)
+    .map((segment) => normalizeLowercaseStringOrEmpty(segment));
   return parts.some((segment) => IGNORED_MEMORY_WATCH_DIR_NAMES.has(segment));
 }
 
@@ -183,7 +188,7 @@ export abstract class MemoryManagerSyncOps {
     try {
       ready = (await this.vectorReady) || false;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err);
       this.vector.available = false;
       this.vector.loadError = message;
       this.vectorReady = null;
@@ -216,7 +221,7 @@ export abstract class MemoryManagerSyncOps {
       this.vector.available = true;
       return true;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err);
       this.vector.available = false;
       this.vector.loadError = message;
       log.warn(`sqlite-vec unavailable: ${message}`);
@@ -244,7 +249,7 @@ export abstract class MemoryManagerSyncOps {
     try {
       this.db.exec(`DROP TABLE IF EXISTS ${VECTOR_TABLE}`);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err);
       log.debug(`Failed to drop ${VECTOR_TABLE}: ${message}`);
     }
   }
@@ -364,7 +369,7 @@ export abstract class MemoryManagerSyncOps {
         }
         if (
           stat.isFile() &&
-          (entry.toLowerCase().endsWith(".md") ||
+          (normalizeLowercaseStringOrEmpty(entry).endsWith(".md") ||
             classifyMemoryMultimodalPath(entry, this.settings.multimodal) !== null)
         ) {
           watchPaths.add(entry);
@@ -753,20 +758,20 @@ export abstract class MemoryManagerSyncOps {
     const files = targetSessionFiles
       ? Array.from(targetSessionFiles)
       : await listSessionFilesForAgent(this.agentId);
-    const activePaths = targetSessionFiles
-      ? null
-      : new Set(files.map((file) => sessionPathForFile(file)));
-    const existingRows =
-      activePaths === null
+    const sessionPlan = resolveMemorySessionSyncPlan({
+      needsFullReindex: params.needsFullReindex,
+      files,
+      targetSessionFiles,
+      sessionsDirtyFiles: this.sessionsDirtyFiles,
+      existingRows: targetSessionFiles
         ? null
         : loadMemorySourceFileState({
             db: this.db,
             source: "sessions",
-          }).rows;
-    const existingHashes =
-      existingRows === null ? null : new Map(existingRows.map((row) => [row.path, row.hash]));
-    const indexAll =
-      params.needsFullReindex || Boolean(targetSessionFiles) || this.sessionsDirtyFiles.size === 0;
+          }).rows,
+      sessionPathForFile,
+    });
+    const { activePaths, existingRows, existingHashes, indexAll } = sessionPlan;
     log.debug("memory sync: indexing session files", {
       files: files.length,
       indexAll,
@@ -1001,7 +1006,7 @@ export abstract class MemoryManagerSyncOps {
         this.sessionsDirty = false;
       }
     } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
+      const reason = formatErrorMessage(err);
       const activated =
         this.shouldFallbackOnError(reason) && (await this.activateFallbackProvider(reason));
       if (activated) {

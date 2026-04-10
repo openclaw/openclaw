@@ -9,7 +9,7 @@ import {
 describe("command-registration-policy", () => {
   it("matches primary command registration policy", () => {
     expect(shouldRegisterPrimaryCommandOnly(["node", "openclaw", "status"])).toBe(true);
-    expect(shouldRegisterPrimaryCommandOnly(["node", "openclaw", "status", "--help"])).toBe(false);
+    expect(shouldRegisterPrimaryCommandOnly(["node", "openclaw", "status", "--help"])).toBe(true);
     expect(shouldRegisterPrimaryCommandOnly(["node", "openclaw", "-V"])).toBe(false);
     expect(shouldRegisterPrimaryCommandOnly(["node", "openclaw", "acp", "-v"])).toBe(true);
   });
@@ -43,7 +43,7 @@ describe("command-registration-policy", () => {
     expect(shouldEagerRegisterSubcommands({ OPENCLAW_DISABLE_LAZY_SUBCOMMANDS: "0" })).toBe(false);
     expect(shouldRegisterPrimarySubcommandOnly(["node", "openclaw", "acp"], {})).toBe(true);
     expect(shouldRegisterPrimarySubcommandOnly(["node", "openclaw", "acp", "--help"], {})).toBe(
-      false,
+      true,
     );
     expect(
       shouldRegisterPrimarySubcommandOnly(["node", "openclaw", "acp"], {

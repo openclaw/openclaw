@@ -5,6 +5,7 @@ import {
   sleepWithAbort,
 } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
 import { type TelegramTransport } from "./fetch.js";
@@ -450,7 +451,7 @@ const isGetUpdatesConflict = (err: unknown) => {
   }
   const haystack = [typed.method, typed.description, typed.message]
     .filter((value): value is string => typeof value === "string")
-    .join(" ")
-    .toLowerCase();
-  return haystack.includes("getupdates");
+    .join(" ");
+  const normalizedHaystack = normalizeLowercaseStringOrEmpty(haystack);
+  return normalizedHaystack.includes("getupdates");
 };

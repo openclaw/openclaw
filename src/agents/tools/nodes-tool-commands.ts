@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import { parseTimeoutMs } from "../../cli/parse-timeout.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { jsonResult, readStringParam } from "./common.js";
 import type { GatewayCallOptions } from "./gateway.js";
 import { callGatewayTool } from "./gateway.js";
@@ -52,10 +54,7 @@ export async function executeNodeCommandAction(params: {
     case "notifications_action": {
       const node = readStringParam(params.input, "node", { required: true });
       const notificationKey = readStringParam(params.input, "notificationKey", { required: true });
-      const notificationAction =
-        typeof params.input.notificationAction === "string"
-          ? params.input.notificationAction.trim().toLowerCase()
-          : "";
+      const notificationAction = normalizeLowercaseStringOrEmpty(params.input.notificationAction);
       if (
         notificationAction !== "open" &&
         notificationAction !== "dismiss" &&
@@ -117,7 +116,7 @@ export async function executeNodeCommandAction(params: {
       const node = readStringParam(params.input, "node", { required: true });
       const nodeId = await resolveNodeId(params.gatewayOpts, node);
       const invokeCommand = readStringParam(params.input, "invokeCommand", { required: true });
-      const invokeCommandNormalized = invokeCommand.trim().toLowerCase();
+      const invokeCommandNormalized = normalizeLowercaseStringOrEmpty(invokeCommand);
       if (BLOCKED_INVOKE_COMMANDS.has(invokeCommandNormalized)) {
         throw new Error(
           `invokeCommand "${invokeCommand}" is reserved for shell execution; use exec with host=node instead`,
@@ -138,7 +137,7 @@ export async function executeNodeCommandAction(params: {
         try {
           invokeParams = JSON.parse(invokeParamsJson);
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = formatErrorMessage(err);
           throw new Error(`invokeParamsJson must be valid JSON: ${message}`, {
             cause: err,
           });

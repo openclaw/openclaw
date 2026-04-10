@@ -1,10 +1,35 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  buildSecretRefCredentialMatrix,
-  type SecretRefCredentialMatrixDocument,
-} from "./credential-matrix.js";
+import type { SecretRefCredentialMatrixDocument } from "./credential-matrix.js";
+
+function buildSecretRefCredentialMatrixJson(): string {
+  const childEnv = { ...process.env };
+  delete childEnv.NODE_OPTIONS;
+  delete childEnv.VITEST;
+  delete childEnv.VITEST_MODE;
+  delete childEnv.VITEST_POOL_ID;
+  delete childEnv.VITEST_WORKER_ID;
+
+  return execFileSync(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "-e",
+      `import { buildSecretRefCredentialMatrix } from "./src/secrets/credential-matrix.ts";
+process.stdout.write(\`\${JSON.stringify(buildSecretRefCredentialMatrix(), null, 2)}\\n\`);`,
+    ],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: childEnv,
+      maxBuffer: 10 * 1024 * 1024,
+    },
+  );
+}
 
 describe("secret target registry docs", () => {
   it("stays in sync with docs/reference/secretref-user-supplied-credentials-matrix.json", () => {
@@ -15,9 +40,9 @@ describe("secret target registry docs", () => {
       "secretref-user-supplied-credentials-matrix.json",
     );
     const raw = fs.readFileSync(pathname, "utf8");
-    const parsed = JSON.parse(raw) as unknown;
+    const expected = buildSecretRefCredentialMatrixJson();
 
-    expect(parsed).toEqual(buildSecretRefCredentialMatrix());
+    expect(raw).toBe(expected);
   });
 
   it("stays in sync with docs/reference/secretref-credential-surface.md", () => {

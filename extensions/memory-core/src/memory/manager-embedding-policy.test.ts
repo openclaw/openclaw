@@ -3,6 +3,7 @@ import {
   buildMemoryEmbeddingBatches,
   filterNonEmptyMemoryChunks,
   isRetryableMemoryEmbeddingError,
+  isStructuredInputTooLargeMemoryEmbeddingError,
   resolveMemoryEmbeddingRetryDelay,
   runMemoryEmbeddingRetryLoop,
 } from "./manager-embedding-policy.js";
@@ -93,6 +94,16 @@ describe("memory embedding policy", () => {
     expect(result).toBe("ok");
     expect(calls).toBe(2);
     expect(waits).toEqual([500]);
+  });
+
+  it("classifies oversized structured-input errors", () => {
+    expect(isStructuredInputTooLargeMemoryEmbeddingError("payload too large")).toBe(true);
+    expect(
+      isStructuredInputTooLargeMemoryEmbeddingError(
+        "gemini embeddings failed: request size exceeded input limit",
+      ),
+    ).toBe(true);
+    expect(isStructuredInputTooLargeMemoryEmbeddingError("connection reset by peer")).toBe(false);
   });
 
   it("caps retry jittered delays", () => {

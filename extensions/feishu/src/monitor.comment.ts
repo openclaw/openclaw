@@ -1,8 +1,15 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
 import { createFeishuClient } from "./client.js";
-import { encodeQuery, extractReplyText, isRecord, readString } from "./comment-shared.js";
+import {
+  encodeQuery,
+  extractReplyText,
+  isRecord,
+  normalizeString,
+  readString,
+} from "./comment-shared.js";
 import { normalizeCommentFileType, type CommentFileType } from "./comment-target.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
@@ -126,7 +133,7 @@ function safeJsonStringify(value: unknown): string {
     return JSON.stringify(value);
   } catch (error) {
     return JSON.stringify({
-      error: error instanceof Error ? error.message : String(error),
+      error: formatErrorMessage(error),
     });
   }
 }
@@ -414,10 +421,10 @@ async function fetchDriveCommentContext(params: {
   const meta = metaResponse?.code === 0 ? metaResponse.data?.metas?.[0] : undefined;
 
   return {
-    documentTitle: meta?.title?.trim() || undefined,
-    documentUrl: meta?.url?.trim() || undefined,
+    documentTitle: normalizeString(meta?.title),
+    documentUrl: normalizeString(meta?.url),
     isWholeComment: commentCard?.is_whole,
-    quoteText: commentCard?.quote?.trim() || undefined,
+    quoteText: normalizeString(commentCard?.quote),
     rootCommentText: extractReplyText(rootReply),
     targetReplyText: extractReplyText(targetReply),
   };
@@ -536,7 +543,7 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
   const fileToken = event.notice_meta?.file_token?.trim();
   const fileType = normalizeCommentFileType(event.notice_meta?.file_type);
   const senderId = event.notice_meta?.from_user_id?.open_id?.trim();
-  const senderUserId = event.notice_meta?.from_user_id?.user_id?.trim() || undefined;
+  const senderUserId = normalizeString(event.notice_meta?.from_user_id?.user_id);
   if (!eventId || !commentId || !noticeType || !fileToken || !fileType || !senderId) {
     logger?.(
       `feishu[${accountId}]: drive comment notice missing required fields event=${eventId ?? "unknown"} comment=${commentId ?? "unknown"}`,

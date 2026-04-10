@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import http from "node:http";
 import type { Duplex } from "node:stream";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceProviderConfig,
@@ -11,7 +12,7 @@ import type { VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
 import type { VoiceCallProvider } from "../providers/base.js";
 import type { CallRecord, NormalizedEvent } from "../types.js";
-import type { WebhookResponsePayload } from "../webhook.js";
+import type { WebhookResponsePayload } from "../webhook.types.js";
 
 export type ToolHandlerFn = (args: unknown, callId: string) => Promise<unknown>;
 
@@ -314,9 +315,9 @@ export class RealtimeCallHandler {
           .hangupCall({ callId, providerCallId: callSid, reason: "error" })
           .catch((error: unknown) => {
             console.warn(
-              `[voice-call] Failed to hang up realtime call ${callSid}: ${
-                error instanceof Error ? error.message : String(error)
-              }`,
+              `[voice-call] Failed to hang up realtime call ${callSid}: ${formatErrorMessage(
+                error,
+              )}`,
             );
           });
       },
@@ -406,7 +407,7 @@ export class RealtimeCallHandler {
     const result = !handler
       ? { error: `Tool "${name}" not available` }
       : await handler(args, callId).catch((error: unknown) => ({
-          error: error instanceof Error ? error.message : String(error),
+          error: formatErrorMessage(error),
         }));
     bridge.submitToolResult(bridgeCallId, result);
   }

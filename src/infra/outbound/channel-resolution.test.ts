@@ -125,6 +125,9 @@ describe("outbound channel resolution", () => {
     getActivePluginRegistryMock.mockReturnValue({
       channels: [{ plugin }],
     });
+    getActivePluginChannelRegistryMock.mockReturnValue({
+      channels: [{ plugin }],
+    });
     const channelResolution = await importChannelResolution("direct-registry");
 
     expect(

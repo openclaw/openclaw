@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { normalizeOptionalString } from "../../src/shared/string-coerce.ts";
 import { parseReleaseVersion } from "../openclaw-npm-release-check.ts";
 import { resolveNpmPublishPlan } from "./npm-publish-plan.mjs";
 
@@ -79,7 +80,7 @@ export function collectExtensionPackageJsonCandidates<
 
   const candidates: PublishablePluginPackageCandidate<TPackageJson>[] = [];
   for (const dir of dirs) {
-    const packageDir = join("extensions", dir.name);
+    const packageDir = `extensions/${dir.name}`;
     const absolutePackageDir = join(extensionsDir, dir.name);
     const packageJsonPath = join(absolutePackageDir, "package.json");
     try {
@@ -270,7 +271,7 @@ export function collectPublishablePluginPackages(
       version,
       channel: parsedVersion.channel,
       publishTag: resolveNpmPublishPlan(version).publishTag,
-      installNpmSpec: packageJson.openclaw?.install?.npmSpec?.trim() || undefined,
+      installNpmSpec: normalizeOptionalString(packageJson.openclaw?.install?.npmSpec),
     });
   }
 

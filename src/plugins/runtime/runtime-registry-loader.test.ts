@@ -27,6 +27,7 @@ vi.mock("../loader.js", () => ({
 }));
 
 vi.mock("../runtime.js", () => ({
+  getActivePluginChannelRegistry: () => null,
   getActivePluginRegistry: (...args: Parameters<typeof mocks.getActivePluginRegistry>) =>
     mocks.getActivePluginRegistry(...args),
 }));

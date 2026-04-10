@@ -1,5 +1,6 @@
 import { normalizeModelRef } from "../agents/model-selection.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export type CachedModelPricing = {
   input: number;
@@ -24,7 +25,9 @@ function modelPricingCacheKey(provider: string, model: string): string {
   if (!providerId || !modelId) {
     return "";
   }
-  return modelId.toLowerCase().startsWith(`${providerId.toLowerCase()}/`)
+  return normalizeLowercaseStringOrEmpty(modelId).startsWith(
+    `${normalizeLowercaseStringOrEmpty(providerId)}/`,
+  )
     ? modelId
     : `${providerId}/${modelId}`;
 }

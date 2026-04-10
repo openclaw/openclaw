@@ -1,5 +1,6 @@
 import { isAbsolute } from "node:path";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { normalizeText } from "../normalize-text.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
 
@@ -319,7 +320,7 @@ export function inferRuntimeOptionPatchFromConfigOption(
   value: string,
 ): Partial<AcpSessionRuntimeOptions> {
   const validated = validateRuntimeConfigOptionInput(key, value);
-  const normalizedKey = validated.key.toLowerCase();
+  const normalizedKey = normalizeLowercaseStringOrEmpty(validated.key);
   if (normalizedKey === "model") {
     return { model: validateRuntimeModelInput(validated.value) };
   }

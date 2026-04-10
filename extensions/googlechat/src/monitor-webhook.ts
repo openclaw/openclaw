@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   readJsonWebhookBodyOrReject,
   resolveWebhookTargetWithAuthOrReject,
@@ -22,7 +23,7 @@ function extractBearerToken(header: unknown): string {
     : typeof header === "string"
       ? header
       : "";
-  return authHeader.toLowerCase().startsWith("bearer ")
+  return normalizeLowercaseStringOrEmpty(authHeader).startsWith("bearer ")
     ? authHeader.slice("bearer ".length).trim()
     : "";
 }

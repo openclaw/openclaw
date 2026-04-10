@@ -1,14 +1,39 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 import { syncMemoryWikiUnsafeLocalSources } from "./unsafe-local.js";
 
-const { createTempDir, createVault } = createMemoryWikiTestHarness();
+const { createVault } = createMemoryWikiTestHarness();
 
 describe("syncMemoryWikiUnsafeLocalSources", () => {
+  let fixtureRoot = "";
+  let caseId = 0;
+
+  beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-unsafe-suite-"));
+  });
+
+  afterAll(async () => {
+    if (!fixtureRoot) {
+      return;
+    }
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  });
+
+  function nextCaseRoot(name: string): string {
+    return path.join(fixtureRoot, `case-${caseId++}-${name}`);
+  }
+
+  async function createPrivateDir(name: string): Promise<string> {
+    const privateDir = nextCaseRoot(name);
+    await fs.mkdir(privateDir, { recursive: true });
+    return privateDir;
+  }
+
   it("imports explicit private paths and preserves unsafe-local provenance", async () => {
-    const privateDir = await createTempDir("memory-wiki-private-");
+    const privateDir = await createPrivateDir("private");
 
     await fs.mkdir(path.join(privateDir, "nested"), { recursive: true });
     await fs.writeFile(path.join(privateDir, "nested", "state.md"), "# internal state\n", "utf8");
@@ -18,7 +43,7 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     await fs.writeFile(directPath, "private log\n", "utf8");
 
     const { rootDir: vaultDir, config } = await createVault({
-      prefix: "memory-wiki-unsafe-vault-",
+      rootDir: nextCaseRoot("vault"),
       config: {
         vaultMode: "unsafe-local",
         unsafeLocal: {
@@ -49,13 +74,13 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
   });
 
   it("prunes stale unsafe-local pages when configured files disappear", async () => {
-    const privateDir = await createTempDir("memory-wiki-private-prune-");
+    const privateDir = await createPrivateDir("private-prune");
 
     const secretPath = path.join(privateDir, "secret.md");
     await fs.writeFile(secretPath, "# private\n", "utf8");
 
     const { rootDir: vaultDir, config } = await createVault({
-      prefix: "memory-wiki-unsafe-prune-vault-",
+      rootDir: nextCaseRoot("prune-vault"),
       config: {
         vaultMode: "unsafe-local",
         unsafeLocal: {

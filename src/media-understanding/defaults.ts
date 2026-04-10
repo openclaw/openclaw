@@ -1,4 +1,10 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  bundledProviderSupportsNativePdfDocument,
+  resolveBundledAutoMediaKeyProviders,
+  resolveBundledDefaultMediaModel,
+} from "./bundled-defaults.js";
 import { buildMediaUnderstandingRegistry, normalizeMediaProviderId } from "./provider-registry.js";
 import type { MediaUnderstandingCapability, MediaUnderstandingProvider } from "./types.js";
 
@@ -52,15 +58,59 @@ function resolveDefaultRegistry(cfg?: OpenClawConfig) {
   return buildMediaUnderstandingRegistry(undefined, cfg ?? ({} as OpenClawConfig));
 }
 
+function resolveConfiguredImageProviderModel(params: {
+  cfg?: OpenClawConfig;
+  providerId: string;
+}): string | undefined {
+  const providers = params.cfg?.models?.providers;
+  if (!providers || typeof providers !== "object") {
+    return undefined;
+  }
+  const normalizedProviderId = normalizeMediaProviderId(params.providerId);
+  for (const [providerKey, providerCfg] of Object.entries(providers)) {
+    if (normalizeMediaProviderId(providerKey) !== normalizedProviderId) {
+      continue;
+    }
+    const models = providerCfg?.models ?? [];
+    const match = models.find(
+      (model) =>
+        Boolean(normalizeOptionalString(model?.id)) &&
+        Array.isArray(model?.input) &&
+        model.input.includes("image"),
+    );
+    return normalizeOptionalString(match?.id);
+  }
+  return undefined;
+}
+
 export function resolveDefaultMediaModel(params: {
   providerId: string;
   capability: MediaUnderstandingCapability;
   cfg?: OpenClawConfig;
   providerRegistry?: Map<string, MediaUnderstandingProvider>;
 }): string | undefined {
+  if (!params.providerRegistry) {
+    const configuredImageModel =
+      params.capability === "image"
+        ? resolveConfiguredImageProviderModel({
+            cfg: params.cfg,
+            providerId: params.providerId,
+          })
+        : undefined;
+    if (configuredImageModel) {
+      return configuredImageModel;
+    }
+    const bundledDefault = resolveBundledDefaultMediaModel({
+      providerId: params.providerId,
+      capability: params.capability,
+    });
+    if (bundledDefault) {
+      return bundledDefault;
+    }
+  }
   const registry = params.providerRegistry ?? resolveDefaultRegistry(params.cfg);
   const provider = registry.get(normalizeMediaProviderId(params.providerId));
-  return provider?.defaultModels?.[params.capability]?.trim() || undefined;
+  return normalizeOptionalString(provider?.defaultModels?.[params.capability]);
 }
 
 export function resolveAutoMediaKeyProviders(params: {
@@ -68,6 +118,28 @@ export function resolveAutoMediaKeyProviders(params: {
   cfg?: OpenClawConfig;
   providerRegistry?: Map<string, MediaUnderstandingProvider>;
 }): string[] {
+  if (!params.providerRegistry) {
+    const bundledProviders = resolveBundledAutoMediaKeyProviders(params.capability);
+    if (params.capability !== "image") {
+      return bundledProviders;
+    }
+    const configProviders = params.cfg?.models?.providers;
+    if (!configProviders || typeof configProviders !== "object") {
+      return bundledProviders;
+    }
+    const merged = [...bundledProviders];
+    for (const [providerKey, providerCfg] of Object.entries(configProviders)) {
+      const normalizedProviderId = normalizeMediaProviderId(providerKey);
+      const models = providerCfg?.models ?? [];
+      const hasImageModel = models.some(
+        (model) => Array.isArray(model?.input) && model.input.includes("image"),
+      );
+      if (hasImageModel && !merged.includes(normalizedProviderId)) {
+        merged.push(normalizedProviderId);
+      }
+    }
+    return merged;
+  }
   const registry = params.providerRegistry ?? resolveDefaultRegistry(params.cfg);
   type AutoProviderEntry = {
     provider: MediaUnderstandingProvider;
@@ -97,6 +169,9 @@ export function providerSupportsNativePdfDocument(params: {
   cfg?: OpenClawConfig;
   providerRegistry?: Map<string, MediaUnderstandingProvider>;
 }): boolean {
+  if (!params.providerRegistry && bundledProviderSupportsNativePdfDocument(params.providerId)) {
+    return true;
+  }
   const registry = params.providerRegistry ?? resolveDefaultRegistry(params.cfg);
   const provider = registry.get(normalizeMediaProviderId(params.providerId));
   return provider?.nativeDocumentInputs?.includes("pdf") ?? false;

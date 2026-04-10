@@ -210,7 +210,7 @@ describe("connectGateway", () => {
     expect(host.lastError).toBeNull();
   });
 
-  it("preserves approval prompts, clears stale run indicators, and resumes queued work after seq-gap reconnect", () => {
+  it("preserves live approval prompts, clears stale run indicators, and resumes queued work after seq-gap reconnect", () => {
     const now = 1_700_000_000_000;
     vi.spyOn(Date, "now").mockReturnValue(now);
     const host = createHost();

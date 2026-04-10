@@ -5,6 +5,7 @@
  * error handling, priority ordering, and async support.
  */
 
+import { formatErrorMessage } from "../infra/errors.js";
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
 import type { PluginRegistry } from "./registry.js";
 import type {
@@ -286,7 +287,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   };
 
   const sanitizeHookError = (error: unknown): string => {
-    const raw = error instanceof Error ? error.message : String(error);
+    const raw = formatErrorMessage(error);
     const firstLine = raw.split("\n")[0]?.trim();
     return firstLine || "unknown error";
   };

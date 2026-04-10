@@ -8,6 +8,7 @@ import { resolvePluginWebFetchProviders } from "../plugins/web-fetch-providers.r
 import { sortWebFetchProvidersForAutoDetect } from "../plugins/web-fetch-providers.shared.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebFetchMetadata } from "../secrets/runtime-web-tools.types.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   hasWebProviderEntryCredential,
   providerRequiresCredential,
@@ -40,6 +41,10 @@ export function resolveWebFetchEnabled(params: {
   return true;
 }
 
+function resolveFetchConfig(config: OpenClawConfig | undefined): WebFetchConfig | undefined {
+  return resolveWebProviderConfig<"fetch", NonNullable<WebFetchConfig>>(config, "fetch");
+}
+
 function hasEntryCredential(
   provider: Pick<
     PluginWebFetchProviderEntry,
@@ -58,6 +63,16 @@ function hasEntryCredential(
     resolveEnvValue: ({ provider: currentProvider }) =>
       readWebProviderEnvValue(currentProvider.envVars),
   });
+}
+
+export function isWebFetchProviderConfigured(params: {
+  provider: Pick<
+    PluginWebFetchProviderEntry,
+    "envVars" | "getConfiguredCredentialValue" | "getCredentialValue" | "requiresCredential"
+  >;
+  config?: OpenClawConfig;
+}): boolean {
+  return hasEntryCredential(params.provider, params.config, resolveFetchConfig(params.config));
 }
 
 export function listWebFetchProviders(params?: {
@@ -93,8 +108,8 @@ export function resolveWebFetchProviderId(params: {
       }),
   );
   const raw =
-    params.fetch && "provider" in params.fetch && typeof params.fetch.provider === "string"
-      ? params.fetch.provider.trim().toLowerCase()
+    params.fetch && "provider" in params.fetch
+      ? normalizeLowercaseStringOrEmpty(params.fetch.provider)
       : "";
 
   if (raw) {

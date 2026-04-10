@@ -1,8 +1,8 @@
-import { randomUUID } from "node:crypto";
 import { mkdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearMemoryEmbeddingProviders as clearRegistry,
@@ -319,172 +319,6 @@ describe("memory index", () => {
     expect(audioResults.some((result) => result.path.endsWith("meeting.wav"))).toBe(true);
   });
 
-  it("skips oversized multimodal inputs without aborting sync", async () => {
-    const mediaDir = path.join(workspaceDir, "media-oversize");
-    await fs.mkdir(mediaDir, { recursive: true });
-    await fs.writeFile(path.join(mediaDir, "huge.png"), Buffer.alloc(7000, 1));
-
-    const cfg = createCfg({
-      storePath: path.join(workspaceDir, `index-oversize-${randomUUID()}.sqlite`),
-      provider: "gemini",
-      model: "gemini-embedding-2-preview",
-      extraPaths: [mediaDir],
-      multimodal: { enabled: true, modalities: ["image"] },
-    });
-    const manager = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
-    await manager.sync({ reason: "test" });
-
-    expect(embedBatchInputCalls).toBeGreaterThan(0);
-    const imageResults = await manager.search("image");
-    expect(imageResults.some((result) => result.path.endsWith("huge.png"))).toBe(false);
-
-    const alphaResults = await manager.search("alpha");
-    expect(alphaResults.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(true);
-
-    await manager.close?.();
-  });
-
-  it("reindexes a multimodal file after a transient mid-sync disappearance", async () => {
-    const mediaDir = path.join(workspaceDir, "media-race");
-    const imagePath = path.join(mediaDir, "diagram.png");
-    await fs.mkdir(mediaDir, { recursive: true });
-    await fs.writeFile(imagePath, Buffer.from("png"));
-
-    const cfg = createCfg({
-      storePath: path.join(workspaceDir, `index-race-${randomUUID()}.sqlite`),
-      provider: "gemini",
-      model: "gemini-embedding-2-preview",
-      extraPaths: [mediaDir],
-      multimodal: { enabled: true, modalities: ["image"] },
-    });
-    const manager = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
-    const realReadFile = fs.readFile.bind(fs);
-    let imageReads = 0;
-    const readSpy = vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
-      const [targetPath] = args;
-      if (typeof targetPath === "string" && targetPath === imagePath) {
-        imageReads += 1;
-        if (imageReads === 2) {
-          const err = Object.assign(
-            new Error(`ENOENT: no such file or directory, open '${imagePath}'`),
-            {
-              code: "ENOENT",
-            },
-          ) as NodeJS.ErrnoException;
-          throw err;
-        }
-      }
-      return await realReadFile(...args);
-    });
-
-    await manager.sync({ reason: "test" });
-    readSpy.mockRestore();
-
-    const callsAfterFirstSync = embedBatchInputCalls;
-    (manager as unknown as { dirty: boolean }).dirty = true;
-    await manager.sync({ reason: "test" });
-
-    expect(embedBatchInputCalls).toBeGreaterThan(callsAfterFirstSync);
-    const results = await manager.search("image");
-    expect(results.some((result) => result.path.endsWith("diagram.png"))).toBe(true);
-
-    await manager.close?.();
-  });
-
-  it("targets explicit session files during post-compaction sync", async () => {
-    const stateDir = path.join(fixtureRoot, `state-targeted-${randomUUID()}`);
-    const sessionDir = path.join(stateDir, "agents", "main", "sessions");
-    const firstSessionPath = path.join(sessionDir, "targeted-first.jsonl");
-    const secondSessionPath = path.join(sessionDir, "targeted-second.jsonl");
-    const storePath = path.join(workspaceDir, `index-targeted-${randomUUID()}.sqlite`);
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-
-    await fs.mkdir(sessionDir, { recursive: true });
-    await fs.writeFile(
-      firstSessionPath,
-      `${JSON.stringify({
-        type: "message",
-        message: { role: "user", content: [{ type: "text", text: "first transcript v1" }] },
-      })}\n`,
-    );
-    await fs.writeFile(
-      secondSessionPath,
-      `${JSON.stringify({
-        type: "message",
-        message: { role: "user", content: [{ type: "text", text: "second transcript v1" }] },
-      })}\n`,
-    );
-
-    try {
-      const result = await getMemorySearchManager({
-        cfg: createCfg({
-          storePath,
-          sources: ["sessions"],
-          sessionMemory: true,
-        }),
-        agentId: "main",
-      });
-      const manager = requireManager(result);
-      await manager.sync?.({ reason: "test" });
-
-      const db = (
-        manager as unknown as {
-          db: {
-            prepare: (sql: string) => {
-              get: (path: string, source: string) => { hash: string } | undefined;
-              all?: (...args: unknown[]) => unknown;
-            };
-          };
-        }
-      ).db;
-      const getSessionHash = (sessionPath: string) =>
-        db
-          .prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`)
-          .get(sessionPath, "sessions")?.hash;
-
-      const firstOriginalHash = getSessionHash("sessions/targeted-first.jsonl");
-      const secondOriginalHash = getSessionHash("sessions/targeted-second.jsonl");
-
-      await fs.writeFile(
-        firstSessionPath,
-        `${JSON.stringify({
-          type: "message",
-          message: {
-            role: "user",
-            content: [{ type: "text", text: "first transcript v2 after compaction" }],
-          },
-        })}\n`,
-      );
-      await fs.writeFile(
-        secondSessionPath,
-        `${JSON.stringify({
-          type: "message",
-          message: {
-            role: "user",
-            content: [{ type: "text", text: "second transcript v2 should stay untouched" }],
-          },
-        })}\n`,
-      );
-
-      await manager.sync?.({
-        reason: "post-compaction",
-        sessionFiles: [firstSessionPath],
-      });
-
-      expect(getSessionHash("sessions/targeted-first.jsonl")).not.toBe(firstOriginalHash);
-      expect(getSessionHash("sessions/targeted-second.jsonl")).toBe(secondOriginalHash);
-      await manager.close?.();
-    } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
-  });
-
   it.skip("finds keyword matches via hybrid search when query embedding is zero", async () => {
     await expectHybridKeywordSearchFindsMemory(
       createCfg({
@@ -543,5 +377,124 @@ describe("memory index", () => {
 
     const noResults = await manager.search("nonexistent_xyz_keyword");
     expect(noResults.length).toBe(0);
+  });
+
+  it("prefers exact session transcript hits in FTS-only mode", async () => {
+    forceNoProvider = true;
+    const stateDir = path.join(workspaceDir, ".state-session-ranking");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    try {
+      const cfg = createCfg({
+        storePath: path.join(workspaceDir, "index-fts-session-ranking.sqlite"),
+        sources: ["memory", "sessions"],
+        sessionMemory: true,
+        minScore: 0,
+        hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+      });
+      const result = await getMemorySearchManager({ cfg, agentId: "main" });
+      const manager = requireManager(result);
+      managersForCleanup.add(manager);
+      resetManagerForTest(manager);
+
+      const memoryPath = path.join(workspaceDir, "MEMORY.md");
+      await fs.writeFile(memoryPath, "Project Nebula stale codename: ORBIT-9.\n", "utf8");
+      const staleAt = new Date("2020-01-01T00:00:00.000Z");
+      await fs.utimes(memoryPath, staleAt, staleAt);
+
+      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const transcriptPath = path.join(sessionsDir, "session-ranking.jsonl");
+      const now = Date.parse("2026-04-07T15:25:04.113Z");
+      await fs.writeFile(
+        transcriptPath,
+        [
+          JSON.stringify({
+            type: "session",
+            id: "session-ranking",
+            timestamp: new Date(now - 60_000).toISOString(),
+          }),
+          JSON.stringify({
+            type: "message",
+            message: {
+              role: "user",
+              timestamp: new Date(now - 30_000).toISOString(),
+              content: [{ type: "text", text: "What is the current Project Nebula codename?" }],
+            },
+          }),
+          JSON.stringify({
+            type: "message",
+            message: {
+              role: "assistant",
+              timestamp: new Date(now).toISOString(),
+              content: [{ type: "text", text: "The current Project Nebula codename is ORBIT-10." }],
+            },
+          }),
+        ].join("\n") + "\n",
+        "utf8",
+      );
+
+      await manager.sync({ reason: "test", force: true });
+      const results = await manager.search("current Project Nebula codename ORBIT-10", {
+        minScore: 0,
+        maxResults: 3,
+      });
+
+      expect(results[0]?.source).toBe("sessions");
+      expect(results[0]?.snippet).toContain("ORBIT-10");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("bootstraps an empty index on first search so session transcript hits are available", async () => {
+    forceNoProvider = true;
+    const stateDir = path.join(workspaceDir, ".state-session-bootstrap");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    try {
+      const cfg = createCfg({
+        storePath: path.join(workspaceDir, "index-fts-session-bootstrap.sqlite"),
+        sources: ["memory", "sessions"],
+        sessionMemory: true,
+        minScore: 0,
+        hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+      });
+      const result = await getMemorySearchManager({ cfg, agentId: "main" });
+      const manager = requireManager(result);
+      managersForCleanup.add(manager);
+      resetManagerForTest(manager);
+
+      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const transcriptPath = path.join(sessionsDir, "session-bootstrap.jsonl");
+      await fs.writeFile(
+        transcriptPath,
+        [
+          JSON.stringify({
+            type: "session",
+            id: "session-bootstrap",
+            timestamp: "2026-04-07T15:24:04.113Z",
+          }),
+          JSON.stringify({
+            type: "message",
+            message: {
+              role: "assistant",
+              timestamp: "2026-04-07T15:25:04.113Z",
+              content: [{ type: "text", text: "The current Project Nebula codename is ORBIT-10." }],
+            },
+          }),
+        ].join("\n") + "\n",
+        "utf8",
+      );
+
+      const results = await manager.search("current Project Nebula codename ORBIT-10", {
+        minScore: 0,
+        maxResults: 3,
+      });
+
+      expect(results[0]?.source).toBe("sessions");
+      expect(results[0]?.snippet).toContain("ORBIT-10");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

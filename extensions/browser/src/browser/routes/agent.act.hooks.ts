@@ -7,6 +7,7 @@ import {
   resolveTargetIdFromBody,
   withRouteTabContext,
 } from "./agent.shared.js";
+import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "./path-output.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 import { jsonError, toBoolean, toNumber, toStringArray, toStringOrEmpty } from "./utils.js";
@@ -46,22 +47,14 @@ export function registerBrowserAgentActHookRoutes(
 
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
           if (element) {
-            return jsonError(
-              res,
-              501,
-              "existing-session file uploads do not support element selectors; use ref/inputRef.",
-            );
+            return jsonError(res, 501, EXISTING_SESSION_LIMITS.hooks.uploadElement);
           }
           if (resolvedPaths.length !== 1) {
-            return jsonError(
-              res,
-              501,
-              "existing-session file uploads currently support one file at a time.",
-            );
+            return jsonError(res, 501, EXISTING_SESSION_LIMITS.hooks.uploadSingleFile);
           }
           const uid = inputRef || ref;
           if (!uid) {
-            return jsonError(res, 501, "existing-session file uploads require ref or inputRef.");
+            return jsonError(res, 501, EXISTING_SESSION_LIMITS.hooks.uploadRefRequired);
           }
           await uploadChromeMcpFile({
             profileName: profileCtx.profile.name,
@@ -100,6 +93,7 @@ export function registerBrowserAgentActHookRoutes(
             await pw.clickViaPlaywright({
               cdpUrl,
               targetId: tab.targetId,
+              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
               ref,
             });
           }
@@ -127,11 +121,7 @@ export function registerBrowserAgentActHookRoutes(
       run: async ({ profileCtx, cdpUrl, tab }) => {
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
           if (timeoutMs) {
-            return jsonError(
-              res,
-              501,
-              "existing-session dialog handling does not support timeoutMs.",
-            );
+            return jsonError(res, 501, EXISTING_SESSION_LIMITS.hooks.dialogTimeout);
           }
           await evaluateChromeMcpScript({
             profileName: profileCtx.profile.name,

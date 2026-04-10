@@ -7,6 +7,7 @@ import {
   type ToolDisplaySpec as ToolDisplaySpecBase,
 } from "../../../src/agents/tool-display-common.js";
 import type { IconName } from "./icons.ts";
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
 type ToolDisplaySpec = ToolDisplaySpecBase & {
   icon?: string;
@@ -120,7 +121,7 @@ export function resolveToolDisplay(params: {
   meta?: string;
 }): ToolDisplay {
   const name = normalizeToolName(params.name);
-  const key = name.toLowerCase();
+  const key = normalizeLowercaseStringOrEmpty(name);
   const spec = TOOL_MAP[key];
   const icon = (spec?.icon ?? FALLBACK.icon ?? "puzzle") as IconName;
   const title = spec?.title ?? defaultTitle(name);

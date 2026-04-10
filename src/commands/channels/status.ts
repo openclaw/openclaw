@@ -17,6 +17,7 @@ import { callGateway } from "../../gateway/call.js";
 import { collectChannelStatusIssues } from "../../infra/channels-status-issues.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import {
@@ -85,7 +86,7 @@ function buildChannelAccountLine(
   bits: string[],
 ): string {
   const accountId = typeof account.accountId === "string" ? account.accountId : "default";
-  const name = typeof account.name === "string" ? account.name.trim() : "";
+  const name = normalizeOptionalString(account.name) ?? "";
   const labelText = formatChannelAccountLabel({
     channel: provider,
     accountId,

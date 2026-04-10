@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { HookRunner } from "../../plugins/hooks.js";
+import { initSessionState } from "./session.js";
 
 const hookRunnerMocks = vi.hoisted(() => ({
   hasHooks: vi.fn<HookRunner["hasHooks"]>(),
@@ -12,7 +13,14 @@ const hookRunnerMocks = vi.hoisted(() => ({
   runSessionEnd: vi.fn<HookRunner["runSessionEnd"]>(),
 }));
 
-let initSessionState: typeof import("./session.js").initSessionState;
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () =>
+    ({
+      hasHooks: hookRunnerMocks.hasHooks,
+      runSessionStart: hookRunnerMocks.runSessionStart,
+      runSessionEnd: hookRunnerMocks.runSessionEnd,
+    }) as unknown as HookRunner,
+}));
 
 async function createStorePath(prefix: string): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), `${prefix}-`));
@@ -46,16 +54,7 @@ async function writeTranscript(
 }
 
 describe("session hook context wiring", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.doMock("../../plugins/hook-runner-global.js", () => ({
-      getGlobalHookRunner: () =>
-        ({
-          hasHooks: hookRunnerMocks.hasHooks,
-          runSessionStart: hookRunnerMocks.runSessionStart,
-          runSessionEnd: hookRunnerMocks.runSessionEnd,
-        }) as unknown as HookRunner,
-    }));
+  beforeEach(() => {
     hookRunnerMocks.hasHooks.mockReset();
     hookRunnerMocks.runSessionStart.mockReset();
     hookRunnerMocks.runSessionEnd.mockReset();
@@ -64,7 +63,6 @@ describe("session hook context wiring", () => {
     hookRunnerMocks.hasHooks.mockImplementation(
       (hookName) => hookName === "session_start" || hookName === "session_end",
     );
-    ({ initSessionState } = await import("./session.js"));
   });
 
   afterEach(() => {

@@ -2815,38 +2815,6 @@ module.exports = {
       expectedChannels: 1,
     },
     {
-      name: "can prefer setupEntry for configured channel loads during startup",
-      fixture: {
-        id: "setup-runtime-preferred-test",
-        label: "Setup Runtime Preferred Test",
-        packageName: "@openclaw/setup-runtime-preferred-test",
-        fullBlurb: "full entry should be deferred while startup is still cold",
-        setupBlurb: "setup runtime preferred",
-        configured: true,
-        startupDeferConfiguredChannelFullLoadUntilAfterListen: true,
-      },
-      load: ({ pluginDir }: { pluginDir: string }) =>
-        loadOpenClawPlugins({
-          cache: false,
-          preferSetupRuntimeForChannelPlugins: true,
-          config: {
-            channels: {
-              "setup-runtime-preferred-test": {
-                enabled: true,
-                token: "configured",
-              },
-            },
-            plugins: {
-              load: { paths: [pluginDir] },
-              allow: ["setup-runtime-preferred-test"],
-            },
-          },
-        }),
-      expectFullLoaded: false,
-      expectSetupLoaded: true,
-      expectedChannels: 1,
-    },
-    {
       name: "does not prefer setupEntry for configured channel loads without startup opt-in",
       fixture: {
         id: "setup-runtime-not-preferred-test",
@@ -2885,6 +2853,26 @@ module.exports = {
     expect(fs.existsSync(built.setupMarker)).toBe(expectSetupLoaded);
     expect(registry.channelSetups).toHaveLength(1);
     expect(registry.channels).toHaveLength(expectedChannels);
+  });
+
+  it("prefers setupEntry for configured channel loads during startup when opted in", () => {
+    expect(
+      __testing.shouldLoadChannelPluginInSetupRuntime({
+        manifestChannels: ["setup-runtime-preferred-test"],
+        setupSource: "./setup-entry.cjs",
+        startupDeferConfiguredChannelFullLoadUntilAfterListen: true,
+        cfg: {
+          channels: {
+            "setup-runtime-preferred-test": {
+              enabled: true,
+              token: "configured",
+            },
+          },
+        },
+        env: {},
+        preferSetupRuntimeForChannelPlugins: true,
+      }),
+    ).toBe(true);
   });
 
   it("blocks before_prompt_build but preserves legacy model overrides when prompt injection is disabled", async () => {

@@ -13,6 +13,10 @@ import {
   removeChannelAllowFromStoreEntry,
 } from "../../pairing/pairing-store.js";
 import { DEFAULT_ACCOUNT_ID, normalizeOptionalAccountId } from "../../routing/session-key.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import {
   rejectNonOwnerCommand,
@@ -65,14 +69,17 @@ function resolveAllowlistAccountId(params: {
     return explicitAccountId;
   }
   const plugin = getChannelPlugin(params.channelId);
-  const configuredDefaultAccountId = plugin?.config.defaultAccountId?.(params.cfg)?.trim();
+  const configuredDefaultAccountId = normalizeOptionalString(
+    plugin?.config.defaultAccountId?.(params.cfg),
+  );
   const ctxAccountId = normalizeOptionalAccountId(params.ctxAccountId);
   return configuredDefaultAccountId || ctxAccountId || DEFAULT_ACCOUNT_ID;
 }
 
 function parseAllowlistCommand(raw: string): AllowlistCommand | null {
   const trimmed = raw.trim();
-  if (!trimmed.toLowerCase().startsWith("/allowlist")) {
+  const trimmedLower = normalizeOptionalLowercaseString(trimmed) ?? "";
+  if (!trimmedLower.startsWith("/allowlist")) {
     return null;
   }
   const rest = trimmed.slice("/allowlist".length).trim();
@@ -90,18 +97,20 @@ function parseAllowlistCommand(raw: string): AllowlistCommand | null {
   const entryTokens: string[] = [];
 
   let i = 0;
-  if (tokens[i] && ACTIONS.has(tokens[i].toLowerCase())) {
-    action = tokens[i].toLowerCase() as AllowlistAction;
+  const firstAction = normalizeOptionalLowercaseString(tokens[i]);
+  if (firstAction && ACTIONS.has(firstAction)) {
+    action = firstAction as AllowlistAction;
     i += 1;
   }
-  if (tokens[i] && SCOPES.has(tokens[i].toLowerCase() as AllowlistScope)) {
-    scope = tokens[i].toLowerCase() as AllowlistScope;
+  const firstScope = normalizeOptionalLowercaseString(tokens[i]);
+  if (firstScope && SCOPES.has(firstScope as AllowlistScope)) {
+    scope = firstScope as AllowlistScope;
     i += 1;
   }
 
   for (; i < tokens.length; i += 1) {
     const token = tokens[i];
-    const lowered = token.toLowerCase();
+    const lowered = normalizeOptionalLowercaseString(token) ?? "";
     if (lowered === "--resolve" || lowered === "resolve") {
       resolve = true;
       continue;
@@ -126,8 +135,8 @@ function parseAllowlistCommand(raw: string): AllowlistCommand | null {
     }
     const kv = token.split("=");
     if (kv.length === 2) {
-      const key = kv[0]?.trim().toLowerCase();
-      const value = kv[1]?.trim();
+      const key = normalizeOptionalLowercaseString(kv[0]);
+      const value = normalizeOptionalString(kv[1]);
       if (key === "channel") {
         if (value) {
           channel = value;
@@ -140,8 +149,9 @@ function parseAllowlistCommand(raw: string): AllowlistCommand | null {
         }
         continue;
       }
-      if (key === "scope" && value && SCOPES.has(value.toLowerCase() as AllowlistScope)) {
-        scope = value.toLowerCase() as AllowlistScope;
+      const normalizedValue = normalizeOptionalLowercaseString(value);
+      if (key === "scope" && normalizedValue && SCOPES.has(normalizedValue as AllowlistScope)) {
+        scope = normalizedValue as AllowlistScope;
         continue;
       }
     }
@@ -269,6 +279,12 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
   if (unauthorized) {
     return unauthorized;
   }
+  if (parsed.action !== "list") {
+    const nonOwner = rejectNonOwnerCommand(params, "/allowlist");
+    if (nonOwner) {
+      return nonOwner;
+    }
+  }
 
   const channelId =
     normalizeChannelId(parsed.channel) ??
@@ -280,7 +296,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
       reply: { text: "⚠️ Unknown channel. Add channel=<id> to the command." },
     };
   }
-  if (parsed.account?.trim() && !normalizeOptionalAccountId(parsed.account)) {
+  if (normalizeOptionalString(parsed.account) && !normalizeOptionalAccountId(parsed.account)) {
     return {
       shouldContinue: false,
       reply: {
@@ -403,11 +419,6 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     }
 
     return { shouldContinue: false, reply: { text: lines.join("\n") } };
-  }
-
-  const nonOwner = rejectNonOwnerCommand(params, "/allowlist");
-  if (nonOwner) {
-    return nonOwner;
   }
 
   const missingAdminScope = requireGatewayClientScopeForInternalChannel(params, {
