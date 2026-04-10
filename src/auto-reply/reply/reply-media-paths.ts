@@ -8,6 +8,7 @@ import { resolveEffectiveToolFsWorkspaceOnly } from "../../agents/tool-fs-policy
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
 import { saveMediaSource } from "../../media/store.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveConfigDir } from "../../utils.js";
 import type { ReplyPayload } from "../types.js";
 
@@ -34,12 +35,19 @@ function isManagedGlobalReplyMediaPath(candidate: string): boolean {
   return MANAGED_GLOBAL_MEDIA_SUBDIRS.has(firstSegment) || firstSegment.startsWith("tool-");
 }
 
+function isManagedTmpReplyMediaPath(candidate: string): boolean {
+  return isPathInside(resolvePreferredOpenClawTmpDir(), candidate);
+}
+
 function isAllowedAbsoluteReplyMediaPath(params: {
   candidate: string;
   workspaceDir: string;
   sandboxRoot?: string;
 }): boolean {
-  if (isManagedGlobalReplyMediaPath(params.candidate)) {
+  if (
+    isManagedGlobalReplyMediaPath(params.candidate) ||
+    isManagedTmpReplyMediaPath(params.candidate)
+  ) {
     return true;
   }
   const volatileRoots = [params.workspaceDir, params.sandboxRoot]

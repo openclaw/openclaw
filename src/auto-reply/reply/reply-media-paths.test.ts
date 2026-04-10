@@ -1,5 +1,6 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 
 const ensureSandboxWorkspaceForSession = vi.hoisted(() => vi.fn());
 const saveMediaSource = vi.hoisted(() => vi.fn());
@@ -148,6 +149,47 @@ describe("createReplyMediaPathNormalizer", () => {
       mediaUrl: undefined,
       mediaUrls: undefined,
     });
+  });
+
+  it("keeps tool-generated media under the OpenClaw tmp root when sandbox mode is off", async () => {
+    const tmpAudioPath = path.join(resolvePreferredOpenClawTmpDir(), "tts", "reply.opus");
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: { sandbox: { mode: "off" } },
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: [tmpAudioPath],
+      audioAsVoice: true,
+    });
+
+    expect(result).toMatchObject({
+      mediaUrl: tmpAudioPath,
+      mediaUrls: [tmpAudioPath],
+      audioAsVoice: true,
+    });
+    expect(saveMediaSource).not.toHaveBeenCalled();
+  });
+
+  it("still drops absolute host-local media outside the OpenClaw tmp root when sandbox mode is off", async () => {
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: { sandbox: { mode: "off" } },
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: ["/tmp/not-openclaw/reply.opus"],
+      audioAsVoice: true,
+    });
+
+    expect(result).toMatchObject({
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+      audioAsVoice: true,
+    });
+    expect(saveMediaSource).not.toHaveBeenCalled();
   });
 
   it("persists volatile agent-state media from the workspace into host outbound media", async () => {
