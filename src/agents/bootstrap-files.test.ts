@@ -236,6 +236,28 @@ describe("resolveBootstrapFilesForRun", () => {
     expect(warnings[0]).toContain("agents.list.coder.agentsFile");
   });
 
+  it("accepts dot-dot-prefixed AGENTS filenames that stay inside the workspace", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "default rules", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "..agents.md"), "prefixed rules", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: {
+        agents: {
+          defaults: {
+            agentsFile: "..agents.md",
+          },
+          list: [{ id: "main" }],
+        },
+      },
+    });
+
+    const agentsFile = files.find((file) => file.name === "AGENTS.md");
+    expect(agentsFile?.path).toBe(path.join(workspaceDir, "..agents.md"));
+    expect(agentsFile?.content).toBe("prefixed rules");
+  });
+
   it("falls back to the default base override when a per-agent base override cannot be loaded", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "default rules", "utf8");
