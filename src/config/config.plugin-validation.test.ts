@@ -278,6 +278,35 @@ describe("config plugin validation", () => {
     }
   });
 
+  it("warns with actionable guidance when a runtime command name is used in plugins.allow", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        allow: ["dreaming"],
+        entries: {
+          "memory-core": {
+            config: { dreaming: { enabled: true } },
+          },
+        },
+      },
+    });
+    // Should not produce the generic "plugin not found" warning.
+    expect(
+      res.warnings?.some(
+        (w) => w.path === "plugins.allow" && w.message.includes("plugin not found: dreaming"),
+      ),
+    ).toBe(false);
+    // Should produce a helpful redirect to the parent plugin.
+    expect(
+      res.warnings?.some(
+        (w) =>
+          w.path === "plugins.allow" &&
+          w.message.includes('"dreaming" is not a plugin') &&
+          w.message.includes("memory-core"),
+      ),
+    ).toBe(true);
+  });
+
   it("does not fail validation for the implicit default memory slot when plugins config is explicit", async () => {
     const res = validateConfigObjectWithPlugins(
       {

@@ -12,7 +12,7 @@ import type { VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
 import type { VoiceCallProvider } from "../providers/base.js";
 import type { CallRecord, NormalizedEvent } from "../types.js";
-import type { WebhookResponsePayload } from "../webhook.js";
+import type { WebhookResponsePayload } from "../webhook.types.js";
 
 export type ToolHandlerFn = (args: unknown, callId: string) => Promise<unknown>;
 

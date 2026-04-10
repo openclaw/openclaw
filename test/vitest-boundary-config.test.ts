@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   createBoundaryVitestConfig,
   loadBoundaryIncludePatternsFromEnv,
-} from "../vitest.boundary.config.ts";
-import { boundaryTestFiles } from "../vitest.unit-paths.mjs";
+} from "./vitest/vitest.boundary.config.ts";
+import { boundaryTestFiles } from "./vitest/vitest.unit-paths.mjs";
 
 describe("loadBoundaryIncludePatternsFromEnv", () => {
   it("returns null when no include file is configured", () => {

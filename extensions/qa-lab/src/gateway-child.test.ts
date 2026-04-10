@@ -88,6 +88,87 @@ describe("buildQaRuntimeEnv", () => {
     expect(env.CODEX_HOME).toBe(codexHome);
   });
 
+  it("forwards host HOME for live Claude CLI runs while keeping OpenClaw home sandboxed", async () => {
+    const hostHome = await mkdtemp(path.join(os.tmpdir(), "qa-host-home-"));
+    cleanups.push(async () => {
+      await rm(hostHome, { recursive: true, force: true });
+    });
+
+    const env = buildQaRuntimeEnv({
+      ...createParams({
+        HOME: hostHome,
+      }),
+      providerMode: "live-frontier",
+      forwardHostHomeForClaudeCli: true,
+    });
+
+    expect(env.HOME).toBe(hostHome);
+    expect(env.OPENCLAW_HOME).toBe("/tmp/openclaw-qa/home");
+    expect(env.OPENCLAW_STATE_DIR).toBe("/tmp/openclaw-qa/state");
+  });
+
+  it("preserves the live Anthropic key for live Claude CLI runs without writing it into config", async () => {
+    const hostHome = await mkdtemp(path.join(os.tmpdir(), "qa-host-home-"));
+    cleanups.push(async () => {
+      await rm(hostHome, { recursive: true, force: true });
+    });
+
+    const env = buildQaRuntimeEnv({
+      ...createParams({
+        HOME: hostHome,
+        OPENCLAW_LIVE_ANTHROPIC_KEY: "anthropic-live",
+        OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV: '["SAFE_KEEP"]',
+      }),
+      providerMode: "live-frontier",
+      forwardHostHomeForClaudeCli: true,
+      claudeCliAuthMode: "api-key",
+    });
+
+    expect(env.ANTHROPIC_API_KEY).toBe("anthropic-live");
+    expect(env.OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV).toBe('["SAFE_KEEP","ANTHROPIC_API_KEY"]');
+    expect(env.OPENCLAW_LIVE_CLI_BACKEND_AUTH_MODE).toBe("api-key");
+  });
+
+  it("removes preserved Anthropic keys for live Claude CLI subscription runs", async () => {
+    const hostHome = await mkdtemp(path.join(os.tmpdir(), "qa-host-home-"));
+    cleanups.push(async () => {
+      await rm(hostHome, { recursive: true, force: true });
+    });
+
+    const env = buildQaRuntimeEnv({
+      ...createParams({
+        HOME: hostHome,
+        ANTHROPIC_API_KEY: "anthropic-live",
+        OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV: '["SAFE_KEEP","ANTHROPIC_API_KEY"]',
+      }),
+      providerMode: "live-frontier",
+      forwardHostHomeForClaudeCli: true,
+      claudeCliAuthMode: "subscription",
+    });
+
+    expect(env.ANTHROPIC_API_KEY).toBe("anthropic-live");
+    expect(env.OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV).toBe('["SAFE_KEEP"]');
+    expect(env.OPENCLAW_LIVE_CLI_BACKEND_AUTH_MODE).toBe("subscription");
+  });
+
+  it("requires an Anthropic key for live Claude CLI API-key mode", async () => {
+    const hostHome = await mkdtemp(path.join(os.tmpdir(), "qa-host-home-"));
+    cleanups.push(async () => {
+      await rm(hostHome, { recursive: true, force: true });
+    });
+
+    expect(() =>
+      buildQaRuntimeEnv({
+        ...createParams({
+          HOME: hostHome,
+        }),
+        providerMode: "live-frontier",
+        forwardHostHomeForClaudeCli: true,
+        claudeCliAuthMode: "api-key",
+      }),
+    ).toThrow("Claude CLI API-key QA mode requires ANTHROPIC_API_KEY");
+  });
+
   it("keeps explicit Codex CLI auth home for live frontier runs", () => {
     const env = buildQaRuntimeEnv({
       ...createParams({

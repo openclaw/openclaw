@@ -1,10 +1,12 @@
 import type { WizardPrompter } from "../../wizard/prompts.js";
-import { splitSetupEntries } from "./setup-wizard-helpers.js";
 
 export type ChannelAccessPolicy = "allowlist" | "open" | "disabled";
 
 export function parseAllowlistEntries(raw: string): string[] {
-  return splitSetupEntries(String(raw ?? ""));
+  return String(raw ?? "")
+    .split(/[\n,;]+/g)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }
 
 export function formatAllowlistEntries(entries: string[]): string {

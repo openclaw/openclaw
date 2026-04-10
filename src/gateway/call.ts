@@ -108,6 +108,19 @@ const gatewayCallDeps = {
   ...defaultGatewayCallDeps,
 };
 
+function resolveGatewayClientDisplayName(opts: CallGatewayBaseOptions): string | undefined {
+  if (opts.clientDisplayName) {
+    return opts.clientDisplayName;
+  }
+  const clientName = opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI;
+  const mode = opts.mode ?? GATEWAY_CLIENT_MODES.CLI;
+  if (mode !== GATEWAY_CLIENT_MODES.BACKEND && clientName !== GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT) {
+    return undefined;
+  }
+  const method = opts.method.trim();
+  return method ? `gateway:${method}` : "gateway:request";
+}
+
 function loadGatewayConfig(): OpenClawConfig {
   const loadConfigFn =
     typeof gatewayCallDeps.loadConfig === "function"
@@ -745,7 +758,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       tlsFingerprint,
       instanceId: opts.instanceId ?? randomUUID(),
       clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
-      clientDisplayName: opts.clientDisplayName,
+      clientDisplayName: resolveGatewayClientDisplayName(opts),
       clientVersion: opts.clientVersion ?? VERSION,
       platform: opts.platform,
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,

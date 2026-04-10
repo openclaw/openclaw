@@ -116,6 +116,7 @@ export function createCronPromptExecutor(params: {
             timeoutMs: params.timeoutMs,
             runId: params.cronSession.sessionEntry.sessionId,
             cliSessionId,
+            skillsSnapshot: params.skillsSnapshot,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
           });

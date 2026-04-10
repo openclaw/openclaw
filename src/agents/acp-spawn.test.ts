@@ -589,7 +589,7 @@ describe("spawnAcpDirect", () => {
         agentSessionKey: "agent:main:matrix:channel:!room:example",
         agentChannel: "matrix",
         agentAccountId: "default",
-        agentTo: "room:!room:example",
+        agentTo: "channel:!room:example",
       },
     );
     expect(result.status, JSON.stringify(result)).toBe("accepted");
@@ -606,7 +606,7 @@ describe("spawnAcpDirect", () => {
     expectAgentGatewayCall({
       deliver: true,
       channel: "matrix",
-      to: "room:!room:example",
+      to: "channel:!room:example",
       threadId: "child-thread",
     });
   });

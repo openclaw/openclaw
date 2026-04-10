@@ -40,7 +40,7 @@ export type {
 export type {
   ChannelSetupWizard,
   ChannelSetupWizardAllowFromEntry,
-} from "../channels/plugins/setup-wizard.js";
+} from "../channels/plugins/setup-wizard-types.js";
 export type {
   AnyAgentTool,
   CliBackendPlugin,

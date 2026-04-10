@@ -10,19 +10,19 @@ import {
   pressChromeMcpKey,
   resizeChromeMcpPage,
 } from "../chrome-mcp.js";
-import type { BrowserActRequest, BrowserFormField } from "../client-actions-core.js";
-import { normalizeBrowserFormField } from "../form-fields.js";
+import type { BrowserActRequest } from "../client-actions.types.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import { matchBrowserUrlPattern } from "../url-pattern.js";
 import { registerBrowserAgentActDownloadRoutes } from "./agent.act.download.js";
-import { registerBrowserAgentActHookRoutes } from "./agent.act.hooks.js";
 import {
-  type ActKind,
-  isActKind,
-  parseClickButton,
-  parseClickModifiers,
-} from "./agent.act.shared.js";
+  ACT_ERROR_CODES,
+  browserEvaluateDisabledMessage,
+  jsonActError,
+} from "./agent.act.errors.js";
+import { registerBrowserAgentActHookRoutes } from "./agent.act.hooks.js";
+import { normalizeActRequest, validateBatchTargetIds } from "./agent.act.normalize.js";
+import { type ActKind, isActKind } from "./agent.act.shared.js";
 import {
   readBody,
   requirePwAi,
@@ -30,20 +30,12 @@ import {
   withRouteTabContext,
   SELECTOR_UNSUPPORTED_MESSAGE,
 } from "./agent.shared.js";
+import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import type { BrowserRouteRegistrar } from "./types.js";
-import { jsonError, toBoolean, toNumber, toStringArray, toStringOrEmpty } from "./utils.js";
+import { jsonError, toNumber, toStringOrEmpty } from "./utils.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function browserEvaluateDisabledMessage(action: "wait" | "evaluate"): string {
-  return [
-    action === "wait"
-      ? "wait --fn is disabled by config (browser.evaluateEnabled=false)."
-      : "act:evaluate is disabled by config (browser.evaluateEnabled=false).",
-    "Docs: /gateway/configuration#browser-openclaw-managed-browser",
-  ].join("\n");
 }
 
 function buildExistingSessionWaitPredicate(params: {
@@ -138,313 +130,65 @@ const SELECTOR_ALLOWED_KINDS: ReadonlySet<string> = new Set([
   "type",
   "wait",
 ]);
-const MAX_BATCH_ACTIONS = 100;
-const MAX_BATCH_CLICK_DELAY_MS = 5_000;
-const MAX_BATCH_WAIT_TIME_MS = 30_000;
-
-function normalizeBoundedNonNegativeMs(
-  value: unknown,
-  fieldName: string,
-  maxMs: number,
-): number | undefined {
-  const ms = toNumber(value);
-  if (ms === undefined) {
-    return undefined;
-  }
-  if (ms < 0) {
-    throw new Error(`${fieldName} must be >= 0`);
-  }
-  const normalized = Math.floor(ms);
-  if (normalized > maxMs) {
-    throw new Error(`${fieldName} exceeds maximum of ${maxMs}ms`);
-  }
-  return normalized;
-}
-
-function countBatchActions(actions: BrowserActRequest[]): number {
-  let count = 0;
-  for (const action of actions) {
-    count += 1;
-    if (action.kind === "batch") {
-      count += countBatchActions(action.actions);
-    }
-  }
-  return count;
-}
-
-function validateBatchTargetIds(actions: BrowserActRequest[], targetId: string): string | null {
-  for (const action of actions) {
-    if (action.targetId && action.targetId !== targetId) {
-      return "batched action targetId must match request targetId";
-    }
-    if (action.kind === "batch") {
-      const nestedError = validateBatchTargetIds(action.actions, targetId);
-      if (nestedError) {
-        return nestedError;
+function getExistingSessionUnsupportedMessage(action: BrowserActRequest): string | null {
+  switch (action.kind) {
+    case "click":
+      if (action.selector) {
+        return EXISTING_SESSION_LIMITS.act.clickSelector;
       }
-    }
-  }
-  return null;
-}
-
-function normalizeBatchAction(value: unknown): BrowserActRequest {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("batch actions must be objects");
-  }
-  const raw = value as Record<string, unknown>;
-  const kind = toStringOrEmpty(raw.kind);
-  if (!isActKind(kind)) {
-    throw new Error("batch actions must use a supported kind");
-  }
-
-  switch (kind) {
-    case "click": {
-      const ref = toStringOrEmpty(raw.ref) || undefined;
-      const selector = toStringOrEmpty(raw.selector) || undefined;
-      if (!ref && !selector) {
-        throw new Error("click requires ref or selector");
+      if (
+        (action.button && action.button !== "left") ||
+        (Array.isArray(action.modifiers) && action.modifiers.length > 0)
+      ) {
+        return EXISTING_SESSION_LIMITS.act.clickButtonOrModifiers;
       }
-      const buttonRaw = toStringOrEmpty(raw.button);
-      const button = buttonRaw ? parseClickButton(buttonRaw) : undefined;
-      if (buttonRaw && !button) {
-        throw new Error("click button must be left|right|middle");
+      return null;
+    case "type":
+      if (action.selector) {
+        return EXISTING_SESSION_LIMITS.act.typeSelector;
       }
-      const modifiersRaw = toStringArray(raw.modifiers) ?? [];
-      const parsedModifiers = parseClickModifiers(modifiersRaw);
-      if (parsedModifiers.error) {
-        throw new Error(parsedModifiers.error);
+      if (action.slowly) {
+        return EXISTING_SESSION_LIMITS.act.typeSlowly;
       }
-      const doubleClick = toBoolean(raw.doubleClick);
-      const delayMs = normalizeBoundedNonNegativeMs(
-        raw.delayMs,
-        "click delayMs",
-        MAX_BATCH_CLICK_DELAY_MS,
-      );
-      const timeoutMs = toNumber(raw.timeoutMs);
-      const targetId = toStringOrEmpty(raw.targetId) || undefined;
-      return {
-        kind,
-        ...(ref ? { ref } : {}),
-        ...(selector ? { selector } : {}),
-        ...(targetId ? { targetId } : {}),
-        ...(doubleClick !== undefined ? { doubleClick } : {}),
-        ...(button ? { button } : {}),
-        ...(parsedModifiers.modifiers ? { modifiers: parsedModifiers.modifiers } : {}),
-        ...(delayMs !== undefined ? { delayMs } : {}),
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-      };
-    }
-    case "type": {
-      const ref = toStringOrEmpty(raw.ref) || undefined;
-      const selector = toStringOrEmpty(raw.selector) || undefined;
-      const text = raw.text;
-      if (!ref && !selector) {
-        throw new Error("type requires ref or selector");
-      }
-      if (typeof text !== "string") {
-        throw new Error("type requires text");
-      }
-      const targetId = toStringOrEmpty(raw.targetId) || undefined;
-      const submit = toBoolean(raw.submit);
-      const slowly = toBoolean(raw.slowly);
-      const timeoutMs = toNumber(raw.timeoutMs);
-      return {
-        kind,
-        ...(ref ? { ref } : {}),
-        ...(selector ? { selector } : {}),
-        text,
-        ...(targetId ? { targetId } : {}),
-        ...(submit !== undefined ? { submit } : {}),
-        ...(slowly !== undefined ? { slowly } : {}),
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-      };
-    }
-    case "press": {
-      const key = toStringOrEmpty(raw.key);
-      if (!key) {
-        throw new Error("press requires key");
-      }
-      const targetId = toStringOrEmpty(raw.targetId) || undefined;
-      const delayMs = toNumber(raw.delayMs);
-      return {
-        kind,
-        key,
-        ...(targetId ? { targetId } : {}),
-        ...(delayMs !== undefined ? { delayMs } : {}),
-      };
-    }
+      return null;
+    case "press":
+      return action.delayMs ? EXISTING_SESSION_LIMITS.act.pressDelay : null;
     case "hover":
-    case "scrollIntoView": {
-      const ref = toStringOrEmpty(raw.ref) || undefined;
-      const selector = toStringOrEmpty(raw.selector) || undefined;
-      if (!ref && !selector) {
-        throw new Error(`${kind} requires ref or selector`);
+      if (action.selector) {
+        return EXISTING_SESSION_LIMITS.act.hoverSelector;
       }
-      const targetId = toStringOrEmpty(raw.targetId) || undefined;
-      const timeoutMs = toNumber(raw.timeoutMs);
-      return {
-        kind,
-        ...(ref ? { ref } : {}),
-        ...(selector ? { selector } : {}),
-        ...(targetId ? { targetId } : {}),
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-      };
-    }
-    case "drag": {
-      const startRef = toStringOrEmpty(raw.startRef) || undefined;
-      const startSelector = toStringOrEmpty(raw.startSelector) || undefined;
-      const endRef = toStringOrEmpty(raw.endRef) || undefined;
-      const endSelector = toStringOrEmpty(raw.endSelector) || undefined;
-      if (!startRef && !startSelector) {
-        throw new Error("drag requires startRef or startSelector");
+      return action.timeoutMs ? EXISTING_SESSION_LIMITS.act.hoverTimeout : null;
+    case "scrollIntoView":
+      if (action.selector) {
+        return EXISTING_SESSION_LIMITS.act.scrollSelector;
       }
-      if (!endRef && !endSelector) {
-        throw new Error("drag requires endRef or endSelector");
+      return action.timeoutMs ? EXISTING_SESSION_LIMITS.act.scrollTimeout : null;
+    case "drag":
+      if (action.startSelector || action.endSelector) {
+        return EXISTING_SESSION_LIMITS.act.dragSelector;
       }
-      const targetId = toStringOrEmpty(raw.targetId) || undefined;
-      const timeoutMs = toNumber(raw.timeoutMs);
-      return {
-        kind,
-        ...(startRef ? { startRef } : {}),
-        ...(startSelector ? { startSelector } : {}),
-        ...(endRef ? { endRef } : {}),
-        ...(endSelector ? { endSelector } : {}),
-        ...(targetId ? { targetId } : {}),
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-      };
-    }
-    case "select": {
-      const ref = toStringOrEmpty(raw.ref) || undefined;
-      const selector = toStringOrEmpty(raw.selector) || undefined;
-      const values = toStringArray(raw.values);
-      if ((!ref && !selector) || !values?.length) {
-        throw new Error("select requires ref/selector and values");
+      return action.timeoutMs ? EXISTING_SESSION_LIMITS.act.dragTimeout : null;
+    case "select":
+      if (action.selector) {
+        return EXISTING_SESSION_LIMITS.act.selectSelector;
       }
-      const targetId = toStringOrEmpty(raw.targetId) || undefined;
-      const timeoutMs = toNumber(raw.timeoutMs);
-      return {
-        kind,
-        ...(ref ? { ref } : {}),
-        ...(selector ? { selector } : {}),
-        values,
-        ...(targetId ? { targetId } : {}),
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-      };
-    }
-    case "fill": {
-      const rawFields = Array.isArray(raw.fields) ? raw.fields : [];
-      const fields = rawFields
-        .map((field) => {
-          if (!field || typeof field !== "object") {
-            return null;
-          }
-          return normalizeBrowserFormField(field as Record<string, unknown>);
-        })
-        .filter((field): field is BrowserFormField => field !== null);
-      if (!fields.length) {
-        throw new Error("fill requires fields");
+      if (action.values.length !== 1) {
+        return EXISTING_SESSION_LIMITS.act.selectSingleValue;
       }
-      const targetId = toStringOrEmpty(raw.targetId) || undefined;
-      const timeoutMs = toNumber(raw.timeoutMs);
-      return {
-        kind,
-        fields,
-        ...(targetId ? { targetId } : {}),
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-      };
-    }
-    case "resize": {
-      const width = toNumber(raw.width);
-      const height = toNumber(raw.height);
-      if (width === undefined || height === undefined) {
-        throw new Error("resize requires width and height");
-      }
-      const targetId = toStringOrEmpty(raw.targetId) || undefined;
-      return {
-        kind,
-        width,
-        height,
-        ...(targetId ? { targetId } : {}),
-      };
-    }
-    case "wait": {
-      const loadStateRaw = toStringOrEmpty(raw.loadState);
-      const loadState =
-        loadStateRaw === "load" ||
-        loadStateRaw === "domcontentloaded" ||
-        loadStateRaw === "networkidle"
-          ? loadStateRaw
-          : undefined;
-      const timeMs = normalizeBoundedNonNegativeMs(
-        raw.timeMs,
-        "wait timeMs",
-        MAX_BATCH_WAIT_TIME_MS,
-      );
-      const text = toStringOrEmpty(raw.text) || undefined;
-      const textGone = toStringOrEmpty(raw.textGone) || undefined;
-      const selector = toStringOrEmpty(raw.selector) || undefined;
-      const url = toStringOrEmpty(raw.url) || undefined;
-      const fn = toStringOrEmpty(raw.fn) || undefined;
-      if (timeMs === undefined && !text && !textGone && !selector && !url && !loadState && !fn) {
-        throw new Error(
-          "wait requires at least one of: timeMs, text, textGone, selector, url, loadState, fn",
-        );
-      }
-      const targetId = toStringOrEmpty(raw.targetId) || undefined;
-      const timeoutMs = toNumber(raw.timeoutMs);
-      return {
-        kind,
-        ...(timeMs !== undefined ? { timeMs } : {}),
-        ...(text ? { text } : {}),
-        ...(textGone ? { textGone } : {}),
-        ...(selector ? { selector } : {}),
-        ...(url ? { url } : {}),
-        ...(loadState ? { loadState } : {}),
-        ...(fn ? { fn } : {}),
-        ...(targetId ? { targetId } : {}),
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-      };
-    }
-    case "evaluate": {
-      const fn = toStringOrEmpty(raw.fn);
-      if (!fn) {
-        throw new Error("evaluate requires fn");
-      }
-      const ref = toStringOrEmpty(raw.ref) || undefined;
-      const targetId = toStringOrEmpty(raw.targetId) || undefined;
-      const timeoutMs = toNumber(raw.timeoutMs);
-      return {
-        kind,
-        fn,
-        ...(ref ? { ref } : {}),
-        ...(targetId ? { targetId } : {}),
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-      };
-    }
-    case "close": {
-      const targetId = toStringOrEmpty(raw.targetId) || undefined;
-      return {
-        kind,
-        ...(targetId ? { targetId } : {}),
-      };
-    }
-    case "batch": {
-      const actions = Array.isArray(raw.actions) ? raw.actions.map(normalizeBatchAction) : [];
-      if (!actions.length) {
-        throw new Error("batch requires actions");
-      }
-      if (countBatchActions(actions) > MAX_BATCH_ACTIONS) {
-        throw new Error(`batch exceeds maximum of ${MAX_BATCH_ACTIONS} actions`);
-      }
-      const targetId = toStringOrEmpty(raw.targetId) || undefined;
-      const stopOnError = toBoolean(raw.stopOnError);
-      return {
-        kind,
-        actions,
-        ...(targetId ? { targetId } : {}),
-        ...(stopOnError !== undefined ? { stopOnError } : {}),
-      };
-    }
+      return action.timeoutMs ? EXISTING_SESSION_LIMITS.act.selectTimeout : null;
+    case "fill":
+      return action.timeoutMs ? EXISTING_SESSION_LIMITS.act.fillTimeout : null;
+    case "wait":
+      return action.loadState === "networkidle"
+        ? EXISTING_SESSION_LIMITS.act.waitNetworkIdle
+        : null;
+    case "evaluate":
+      return action.timeoutMs !== undefined ? EXISTING_SESSION_LIMITS.act.evaluateTimeout : null;
+    case "batch":
+      return EXISTING_SESSION_LIMITS.act.batch;
+    case "resize":
+    case "close":
+      return null;
   }
 }
 
@@ -456,22 +200,34 @@ export function registerBrowserAgentActRoutes(
     const body = readBody(req);
     const kindRaw = toStringOrEmpty(body.kind);
     if (!isActKind(kindRaw)) {
-      return jsonError(res, 400, "kind is required");
+      return jsonActError(res, 400, ACT_ERROR_CODES.kindRequired, "kind is required");
     }
     const kind: ActKind = kindRaw;
+    let action: BrowserActRequest;
+    try {
+      action = normalizeActRequest(body);
+    } catch (err) {
+      return jsonActError(res, 400, ACT_ERROR_CODES.invalidRequest, formatErrorMessage(err));
+    }
     const targetId = resolveTargetIdFromBody(body);
     if (Object.hasOwn(body, "selector") && !SELECTOR_ALLOWED_KINDS.has(kind)) {
-      return jsonError(res, 400, SELECTOR_UNSUPPORTED_MESSAGE);
+      return jsonActError(
+        res,
+        400,
+        ACT_ERROR_CODES.selectorUnsupported,
+        SELECTOR_UNSUPPORTED_MESSAGE,
+      );
     }
-    const earlyFn = kind === "wait" || kind === "evaluate" ? toStringOrEmpty(body.fn) : "";
+    const earlyFn = action.kind === "wait" || action.kind === "evaluate" ? action.fn : "";
     if (
-      (kind === "evaluate" || (kind === "wait" && earlyFn)) &&
+      (action.kind === "evaluate" || (action.kind === "wait" && earlyFn)) &&
       !ctx.state().resolved.evaluateEnabled
     ) {
-      return jsonError(
+      return jsonActError(
         res,
         403,
-        browserEvaluateDisabledMessage(kind === "evaluate" ? "evaluate" : "wait"),
+        ACT_ERROR_CODES.evaluateDisabled,
+        browserEvaluateDisabledMessage(action.kind === "evaluate" ? "evaluate" : "wait"),
       );
     }
 
@@ -483,122 +239,45 @@ export function registerBrowserAgentActRoutes(
       run: async ({ profileCtx, cdpUrl, tab }) => {
         const evaluateEnabled = ctx.state().resolved.evaluateEnabled;
         const ssrfPolicy = ctx.state().resolved.ssrfPolicy;
+        if (action.targetId && action.targetId !== tab.targetId) {
+          return jsonActError(
+            res,
+            403,
+            ACT_ERROR_CODES.targetIdMismatch,
+            "action targetId must match request targetId",
+          );
+        }
         const isExistingSession = getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp;
         const profileName = profileCtx.profile.name;
-
-        switch (kind) {
-          case "click": {
-            const ref = toStringOrEmpty(body.ref) || undefined;
-            const selector = toStringOrEmpty(body.selector) || undefined;
-            if (!ref && !selector) {
-              return jsonError(res, 400, "ref or selector is required");
-            }
-            const doubleClick = toBoolean(body.doubleClick) ?? false;
-            const timeoutMs = toNumber(body.timeoutMs);
-            const delayMs = toNumber(body.delayMs);
-            const buttonRaw = toStringOrEmpty(body.button) || "";
-            const button = buttonRaw ? parseClickButton(buttonRaw) : undefined;
-            if (buttonRaw && !button) {
-              return jsonError(res, 400, "button must be left|right|middle");
-            }
-
-            const modifiersRaw = toStringArray(body.modifiers) ?? [];
-            const parsedModifiers = parseClickModifiers(modifiersRaw);
-            if (parsedModifiers.error) {
-              return jsonError(res, 400, parsedModifiers.error);
-            }
-            const modifiers = parsedModifiers.modifiers;
-            if (isExistingSession) {
-              if (selector) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session click does not support selector targeting yet; use ref.",
-                );
-              }
-              if ((button && button !== "left") || (modifiers && modifiers.length > 0)) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session click currently supports left-click only (no button overrides/modifiers).",
-                );
-              }
+        if (isExistingSession) {
+          const unsupportedMessage = getExistingSessionUnsupportedMessage(action);
+          if (unsupportedMessage) {
+            return jsonActError(
+              res,
+              501,
+              ACT_ERROR_CODES.unsupportedForExistingSession,
+              unsupportedMessage,
+            );
+          }
+          switch (action.kind) {
+            case "click":
               await clickChromeMcpElement({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
-                uid: ref!,
-                doubleClick,
+                uid: action.ref!,
+                doubleClick: action.doubleClick ?? false,
               });
               return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
-            }
-            const pw = await requirePwAi(res, `act:${kind}`);
-            if (!pw) {
-              return;
-            }
-            const clickRequest: Parameters<typeof pw.clickViaPlaywright>[0] = {
-              cdpUrl,
-              targetId: tab.targetId,
-              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
-              doubleClick,
-            };
-            if (ref) {
-              clickRequest.ref = ref;
-            }
-            if (selector) {
-              clickRequest.selector = selector;
-            }
-            if (button) {
-              clickRequest.button = button;
-            }
-            if (modifiers) {
-              clickRequest.modifiers = modifiers;
-            }
-            if (delayMs) {
-              clickRequest.delayMs = delayMs;
-            }
-            if (timeoutMs) {
-              clickRequest.timeoutMs = timeoutMs;
-            }
-            await pw.clickViaPlaywright(clickRequest);
-            return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
-          }
-          case "type": {
-            const ref = toStringOrEmpty(body.ref) || undefined;
-            const selector = toStringOrEmpty(body.selector) || undefined;
-            if (!ref && !selector) {
-              return jsonError(res, 400, "ref or selector is required");
-            }
-            if (typeof body.text !== "string") {
-              return jsonError(res, 400, "text is required");
-            }
-            const text = body.text;
-            const submit = toBoolean(body.submit) ?? false;
-            const slowly = toBoolean(body.slowly) ?? false;
-            const timeoutMs = toNumber(body.timeoutMs);
-            if (isExistingSession) {
-              if (selector) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session type does not support selector targeting yet; use ref.",
-                );
-              }
-              if (slowly) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session type does not support slowly=true; use fill/press instead.",
-                );
-              }
+            case "type":
               await fillChromeMcpElement({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
-                uid: ref!,
-                value: text,
+                uid: action.ref!,
+                value: action.text,
               });
-              if (submit) {
+              if (action.submit) {
                 await pressChromeMcpKey({
                   profileName,
                   userDataDir: profileCtx.profile.userDataDir,
@@ -607,431 +286,91 @@ export function registerBrowserAgentActRoutes(
                 });
               }
               return res.json({ ok: true, targetId: tab.targetId });
-            }
-            const pw = await requirePwAi(res, `act:${kind}`);
-            if (!pw) {
-              return;
-            }
-            const typeRequest: Parameters<typeof pw.typeViaPlaywright>[0] = {
-              cdpUrl,
-              targetId: tab.targetId,
-              text,
-              submit,
-              slowly,
-              ssrfPolicy,
-            };
-            if (ref) {
-              typeRequest.ref = ref;
-            }
-            if (selector) {
-              typeRequest.selector = selector;
-            }
-            if (timeoutMs) {
-              typeRequest.timeoutMs = timeoutMs;
-            }
-            await pw.typeViaPlaywright(typeRequest);
-            return res.json({ ok: true, targetId: tab.targetId });
-          }
-          case "press": {
-            const key = toStringOrEmpty(body.key);
-            if (!key) {
-              return jsonError(res, 400, "key is required");
-            }
-            const delayMs = toNumber(body.delayMs);
-            if (isExistingSession) {
-              if (delayMs) {
-                return jsonError(res, 501, "existing-session press does not support delayMs.");
-              }
+            case "press":
               await pressChromeMcpKey({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
-                key,
+                key: action.key,
               });
               return res.json({ ok: true, targetId: tab.targetId });
-            }
-            const pw = await requirePwAi(res, `act:${kind}`);
-            if (!pw) {
-              return;
-            }
-            await pw.pressKeyViaPlaywright({
-              cdpUrl,
-              targetId: tab.targetId,
-              key,
-              delayMs: delayMs ?? undefined,
-              ssrfPolicy,
-            });
-            return res.json({ ok: true, targetId: tab.targetId });
-          }
-          case "hover": {
-            const ref = toStringOrEmpty(body.ref) || undefined;
-            const selector = toStringOrEmpty(body.selector) || undefined;
-            if (!ref && !selector) {
-              return jsonError(res, 400, "ref or selector is required");
-            }
-            const timeoutMs = toNumber(body.timeoutMs);
-            if (isExistingSession) {
-              if (selector) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session hover does not support selector targeting yet; use ref.",
-                );
-              }
-              if (timeoutMs) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session hover does not support timeoutMs overrides.",
-                );
-              }
+            case "hover":
               await hoverChromeMcpElement({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
-                uid: ref!,
+                uid: action.ref!,
               });
               return res.json({ ok: true, targetId: tab.targetId });
-            }
-            const pw = await requirePwAi(res, `act:${kind}`);
-            if (!pw) {
-              return;
-            }
-            await pw.hoverViaPlaywright({
-              cdpUrl,
-              targetId: tab.targetId,
-              ref,
-              selector,
-              timeoutMs: timeoutMs ?? undefined,
-            });
-            return res.json({ ok: true, targetId: tab.targetId });
-          }
-          case "scrollIntoView": {
-            const ref = toStringOrEmpty(body.ref) || undefined;
-            const selector = toStringOrEmpty(body.selector) || undefined;
-            if (!ref && !selector) {
-              return jsonError(res, 400, "ref or selector is required");
-            }
-            const timeoutMs = toNumber(body.timeoutMs);
-            if (isExistingSession) {
-              if (selector) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session scrollIntoView does not support selector targeting yet; use ref.",
-                );
-              }
-              if (timeoutMs) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session scrollIntoView does not support timeoutMs overrides.",
-                );
-              }
+            case "scrollIntoView":
               await evaluateChromeMcpScript({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
                 fn: `(el) => { el.scrollIntoView({ block: "center", inline: "center" }); return true; }`,
-                args: [ref!],
+                args: [action.ref!],
               });
               return res.json({ ok: true, targetId: tab.targetId });
-            }
-            const pw = await requirePwAi(res, `act:${kind}`);
-            if (!pw) {
-              return;
-            }
-            const scrollRequest: Parameters<typeof pw.scrollIntoViewViaPlaywright>[0] = {
-              cdpUrl,
-              targetId: tab.targetId,
-            };
-            if (ref) {
-              scrollRequest.ref = ref;
-            }
-            if (selector) {
-              scrollRequest.selector = selector;
-            }
-            if (timeoutMs) {
-              scrollRequest.timeoutMs = timeoutMs;
-            }
-            await pw.scrollIntoViewViaPlaywright(scrollRequest);
-            return res.json({ ok: true, targetId: tab.targetId });
-          }
-          case "drag": {
-            const startRef = toStringOrEmpty(body.startRef) || undefined;
-            const startSelector = toStringOrEmpty(body.startSelector) || undefined;
-            const endRef = toStringOrEmpty(body.endRef) || undefined;
-            const endSelector = toStringOrEmpty(body.endSelector) || undefined;
-            if (!startRef && !startSelector) {
-              return jsonError(res, 400, "startRef or startSelector is required");
-            }
-            if (!endRef && !endSelector) {
-              return jsonError(res, 400, "endRef or endSelector is required");
-            }
-            const timeoutMs = toNumber(body.timeoutMs);
-            if (isExistingSession) {
-              if (startSelector || endSelector) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session drag does not support selector targeting yet; use startRef/endRef.",
-                );
-              }
-              if (timeoutMs) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session drag does not support timeoutMs overrides.",
-                );
-              }
+            case "drag":
               await dragChromeMcpElement({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
-                fromUid: startRef!,
-                toUid: endRef!,
+                fromUid: action.startRef!,
+                toUid: action.endRef!,
               });
               return res.json({ ok: true, targetId: tab.targetId });
-            }
-            const pw = await requirePwAi(res, `act:${kind}`);
-            if (!pw) {
-              return;
-            }
-            await pw.dragViaPlaywright({
-              cdpUrl,
-              targetId: tab.targetId,
-              startRef,
-              startSelector,
-              endRef,
-              endSelector,
-              timeoutMs: timeoutMs ?? undefined,
-            });
-            return res.json({ ok: true, targetId: tab.targetId });
-          }
-          case "select": {
-            const ref = toStringOrEmpty(body.ref) || undefined;
-            const selector = toStringOrEmpty(body.selector) || undefined;
-            const values = toStringArray(body.values);
-            if ((!ref && !selector) || !values?.length) {
-              return jsonError(res, 400, "ref/selector and values are required");
-            }
-            const timeoutMs = toNumber(body.timeoutMs);
-            if (isExistingSession) {
-              if (selector) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session select does not support selector targeting yet; use ref.",
-                );
-              }
-              if (values.length !== 1) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session select currently supports a single value only.",
-                );
-              }
-              if (timeoutMs) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session select does not support timeoutMs overrides.",
-                );
-              }
+            case "select":
               await fillChromeMcpElement({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
-                uid: ref!,
-                value: values[0] ?? "",
+                uid: action.ref!,
+                value: action.values[0] ?? "",
               });
               return res.json({ ok: true, targetId: tab.targetId });
-            }
-            const pw = await requirePwAi(res, `act:${kind}`);
-            if (!pw) {
-              return;
-            }
-            await pw.selectOptionViaPlaywright({
-              cdpUrl,
-              targetId: tab.targetId,
-              ref,
-              selector,
-              values,
-              timeoutMs: timeoutMs ?? undefined,
-            });
-            return res.json({ ok: true, targetId: tab.targetId });
-          }
-          case "fill": {
-            const rawFields = Array.isArray(body.fields) ? body.fields : [];
-            const fields = rawFields
-              .map((field) => {
-                if (!field || typeof field !== "object") {
-                  return null;
-                }
-                return normalizeBrowserFormField(field as Record<string, unknown>);
-              })
-              .filter((field): field is BrowserFormField => field !== null);
-            if (!fields.length) {
-              return jsonError(res, 400, "fields are required");
-            }
-            const timeoutMs = toNumber(body.timeoutMs);
-            if (isExistingSession) {
-              if (timeoutMs) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session fill does not support timeoutMs overrides.",
-                );
-              }
+            case "fill":
               await fillChromeMcpForm({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
-                elements: fields.map((field) => ({
+                elements: action.fields.map((field) => ({
                   uid: field.ref,
                   value: String(field.value ?? ""),
                 })),
               });
               return res.json({ ok: true, targetId: tab.targetId });
-            }
-            const pw = await requirePwAi(res, `act:${kind}`);
-            if (!pw) {
-              return;
-            }
-            await pw.fillFormViaPlaywright({
-              cdpUrl,
-              targetId: tab.targetId,
-              fields,
-              timeoutMs: timeoutMs ?? undefined,
-            });
-            return res.json({ ok: true, targetId: tab.targetId });
-          }
-          case "resize": {
-            const width = toNumber(body.width);
-            const height = toNumber(body.height);
-            if (!width || !height) {
-              return jsonError(res, 400, "width and height are required");
-            }
-            if (isExistingSession) {
+            case "resize":
               await resizeChromeMcpPage({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
-                width,
-                height,
+                width: action.width,
+                height: action.height,
               });
               return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
-            }
-            const pw = await requirePwAi(res, `act:${kind}`);
-            if (!pw) {
-              return;
-            }
-            await pw.resizeViewportViaPlaywright({
-              cdpUrl,
-              targetId: tab.targetId,
-              width,
-              height,
-            });
-            return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
-          }
-          case "wait": {
-            const timeMs = toNumber(body.timeMs);
-            const text = toStringOrEmpty(body.text) || undefined;
-            const textGone = toStringOrEmpty(body.textGone) || undefined;
-            const selector = toStringOrEmpty(body.selector) || undefined;
-            const url = toStringOrEmpty(body.url) || undefined;
-            const loadStateRaw = toStringOrEmpty(body.loadState);
-            const loadState =
-              loadStateRaw === "load" ||
-              loadStateRaw === "domcontentloaded" ||
-              loadStateRaw === "networkidle"
-                ? loadStateRaw
-                : undefined;
-            const fn = toStringOrEmpty(body.fn) || undefined;
-            const timeoutMs = toNumber(body.timeoutMs) ?? undefined;
-            if (fn && !evaluateEnabled) {
-              return jsonError(res, 403, browserEvaluateDisabledMessage("wait"));
-            }
-            if (
-              timeMs === undefined &&
-              !text &&
-              !textGone &&
-              !selector &&
-              !url &&
-              !loadState &&
-              !fn
-            ) {
-              return jsonError(
-                res,
-                400,
-                "wait requires at least one of: timeMs, text, textGone, selector, url, loadState, fn",
-              );
-            }
-            if (isExistingSession) {
-              if (loadState === "networkidle") {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session wait does not support loadState=networkidle yet.",
-                );
-              }
+            case "wait":
               await waitForExistingSessionCondition({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
-                timeMs,
-                text,
-                textGone,
-                selector,
-                url,
-                loadState,
-                fn,
-                timeoutMs,
+                timeMs: action.timeMs,
+                text: action.text,
+                textGone: action.textGone,
+                selector: action.selector,
+                url: action.url,
+                loadState: action.loadState,
+                fn: action.fn,
+                timeoutMs: action.timeoutMs,
               });
               return res.json({ ok: true, targetId: tab.targetId });
-            }
-            const pw = await requirePwAi(res, `act:${kind}`);
-            if (!pw) {
-              return;
-            }
-            await pw.waitForViaPlaywright({
-              cdpUrl,
-              targetId: tab.targetId,
-              timeMs,
-              text,
-              textGone,
-              selector,
-              url,
-              loadState,
-              fn,
-              timeoutMs,
-            });
-            return res.json({ ok: true, targetId: tab.targetId });
-          }
-          case "evaluate": {
-            if (!evaluateEnabled) {
-              return jsonError(res, 403, browserEvaluateDisabledMessage("evaluate"));
-            }
-            const fn = toStringOrEmpty(body.fn);
-            if (!fn) {
-              return jsonError(res, 400, "fn is required");
-            }
-            const ref = toStringOrEmpty(body.ref) || undefined;
-            const evalTimeoutMs = toNumber(body.timeoutMs);
-            if (isExistingSession) {
-              if (evalTimeoutMs !== undefined) {
-                return jsonError(
-                  res,
-                  501,
-                  "existing-session evaluate does not support timeoutMs overrides.",
-                );
-              }
+            case "evaluate": {
               const result = await evaluateChromeMcpScript({
                 profileName,
                 userDataDir: profileCtx.profile.userDataDir,
                 targetId: tab.targetId,
-                fn,
-                args: ref ? [ref] : undefined,
+                fn: action.fn,
+                args: action.ref ? [action.ref] : undefined,
               });
               return res.json({
                 ok: true,
@@ -1040,83 +379,52 @@ export function registerBrowserAgentActRoutes(
                 result,
               });
             }
-            const pw = await requirePwAi(res, `act:${kind}`);
-            if (!pw) {
-              return;
-            }
-            const evalRequest: Parameters<typeof pw.evaluateViaPlaywright>[0] = {
-              cdpUrl,
-              targetId: tab.targetId,
-              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
-              fn,
-              ref,
-              signal: req.signal,
-            };
-            if (evalTimeoutMs !== undefined) {
-              evalRequest.timeoutMs = evalTimeoutMs;
-            }
-            const result = await pw.evaluateViaPlaywright(evalRequest);
+            case "close":
+              await closeChromeMcpTab(profileName, tab.targetId, profileCtx.profile.userDataDir);
+              return res.json({ ok: true, targetId: tab.targetId });
+            case "batch":
+              return jsonActError(
+                res,
+                501,
+                ACT_ERROR_CODES.unsupportedForExistingSession,
+                EXISTING_SESSION_LIMITS.act.batch,
+              );
+          }
+        }
+
+        const pw = await requirePwAi(res, `act:${kind}`);
+        if (!pw) {
+          return;
+        }
+        if (action.kind === "batch") {
+          const targetIdError = validateBatchTargetIds(action.actions, tab.targetId);
+          if (targetIdError) {
+            return jsonActError(res, 403, ACT_ERROR_CODES.targetIdMismatch, targetIdError);
+          }
+        }
+        const result = await pw.executeActViaPlaywright({
+          cdpUrl,
+          action,
+          targetId: tab.targetId,
+          evaluateEnabled,
+          ssrfPolicy,
+          signal: req.signal,
+        });
+        switch (action.kind) {
+          case "batch":
+            return res.json({ ok: true, targetId: tab.targetId, results: result.results ?? [] });
+          case "evaluate":
             return res.json({
               ok: true,
               targetId: tab.targetId,
               url: tab.url,
-              result,
+              result: result.result,
             });
-          }
-          case "close": {
-            if (isExistingSession) {
-              await closeChromeMcpTab(profileName, tab.targetId, profileCtx.profile.userDataDir);
-              return res.json({ ok: true, targetId: tab.targetId });
-            }
-            const pw = await requirePwAi(res, `act:${kind}`);
-            if (!pw) {
-              return;
-            }
-            await pw.closePageViaPlaywright({ cdpUrl, targetId: tab.targetId });
+          case "click":
+          case "resize":
+            return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
+          default:
             return res.json({ ok: true, targetId: tab.targetId });
-          }
-          case "batch": {
-            if (isExistingSession) {
-              return jsonError(
-                res,
-                501,
-                "existing-session batch is not supported yet; send actions individually.",
-              );
-            }
-            const pw = await requirePwAi(res, `act:${kind}`);
-            if (!pw) {
-              return;
-            }
-            let actions: BrowserActRequest[];
-            try {
-              actions = Array.isArray(body.actions) ? body.actions.map(normalizeBatchAction) : [];
-            } catch (err) {
-              return jsonError(res, 400, formatErrorMessage(err));
-            }
-            if (!actions.length) {
-              return jsonError(res, 400, "actions are required");
-            }
-            if (countBatchActions(actions) > MAX_BATCH_ACTIONS) {
-              return jsonError(res, 400, `batch exceeds maximum of ${MAX_BATCH_ACTIONS} actions`);
-            }
-            const targetIdError = validateBatchTargetIds(actions, tab.targetId);
-            if (targetIdError) {
-              return jsonError(res, 403, targetIdError);
-            }
-            const stopOnError = toBoolean(body.stopOnError) ?? true;
-            const result = await pw.batchViaPlaywright({
-              cdpUrl,
-              targetId: tab.targetId,
-              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
-              actions,
-              stopOnError,
-              evaluateEnabled,
-            });
-            return res.json({ ok: true, targetId: tab.targetId, results: result.results });
-          }
-          default: {
-            return jsonError(res, 400, "unsupported kind");
-          }
         }
       },
     });
@@ -1142,11 +450,7 @@ export function registerBrowserAgentActRoutes(
       targetId,
       run: async ({ profileCtx, cdpUrl, tab }) => {
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-          return jsonError(
-            res,
-            501,
-            "response body is not supported for existing-session profiles yet.",
-          );
+          return jsonError(res, 501, EXISTING_SESSION_LIMITS.responseBody);
         }
         const pw = await requirePwAi(res, "response body");
         if (!pw) {

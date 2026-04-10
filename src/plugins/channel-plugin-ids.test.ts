@@ -50,6 +50,24 @@ function createManifestRegistryFixture() {
         cliBackends: ["demo-cli"],
       },
       {
+        id: "memory-core",
+        kind: "memory",
+        channels: [],
+        origin: "bundled",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+      {
+        id: "memory-lancedb",
+        kind: "memory",
+        channels: [],
+        origin: "bundled",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+      {
         id: "voice-call",
         channels: [],
         origin: "bundled",
@@ -240,6 +258,77 @@ describe("resolveGatewayStartupPluginIds", () => {
       config: effectiveConfig,
       activationSourceConfig: rawConfig,
       expected: ["demo-channel", "browser"],
+    });
+  });
+
+  it("includes memory-core at startup when dreaming is enabled", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          entries: {
+            "memory-core": {
+              enabled: true,
+              config: {
+                dreaming: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      expected: ["browser", "memory-core"],
+    });
+  });
+
+  it("includes the selected memory-slot plugin and memory-core when dreaming is enabled", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        plugins: {
+          slots: {
+            memory: "memory-lancedb",
+          },
+          entries: {
+            "memory-core": {
+              enabled: true,
+            },
+            "memory-lancedb": {
+              enabled: true,
+              config: {
+                dreaming: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      expected: ["demo-channel", "browser", "memory-core", "memory-lancedb"],
+    });
+  });
+
+  it("does not bypass activation policy for dreaming startup owners", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          slots: {
+            memory: "memory-lancedb",
+          },
+          entries: {
+            "memory-lancedb": {
+              enabled: false,
+              config: {
+                dreaming: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      expected: ["browser"],
     });
   });
 });

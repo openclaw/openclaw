@@ -12,6 +12,7 @@ import {
   resolveSessionTranscriptsDirForAgent,
 } from "openclaw/plugin-sdk/memory-core";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { QaBusState } from "./bus-state.js";
 import { waitForCronRunCompletion } from "./cron-run-wait.js";
@@ -21,9 +22,13 @@ import {
   reportsMissingDiscoveryFiles,
 } from "./discovery-eval.js";
 import { extractQaToolPayload } from "./extract-tool-payload.js";
-import { startQaGatewayChild } from "./gateway-child.js";
-import { startQaLabServer } from "./lab-server.js";
-import type { QaLabLatestReport, QaLabScenarioOutcome } from "./lab-server.js";
+import { startQaGatewayChild, type QaCliBackendAuthMode } from "./gateway-child.js";
+import type {
+  QaLabLatestReport,
+  QaLabScenarioOutcome,
+  QaLabServerHandle,
+  QaLabServerStartParams,
+} from "./lab-server.types.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 import { startQaMockOpenAiServer } from "./mock-openai-server.js";
 import {
@@ -53,7 +58,7 @@ type QaSuiteScenarioResult = {
 };
 
 type QaSuiteEnvironment = {
-  lab: Awaited<ReturnType<typeof startQaLabServer>>;
+  lab: QaLabServerHandle;
   mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | null;
   gateway: Awaited<ReturnType<typeof startQaGatewayChild>>;
   cfg: OpenClawConfig;
@@ -62,6 +67,30 @@ type QaSuiteEnvironment = {
   primaryModel: string;
   alternateModel: string;
 };
+
+export type QaSuiteStartLabFn = (params?: QaLabServerStartParams) => Promise<QaLabServerHandle>;
+
+export type QaSuiteRunParams = {
+  repoRoot?: string;
+  outputDir?: string;
+  providerMode?: QaProviderMode | "live-openai";
+  primaryModel?: string;
+  alternateModel?: string;
+  fastMode?: boolean;
+  thinkingDefault?: QaThinkingLevel;
+  claudeCliAuthMode?: QaCliBackendAuthMode;
+  scenarioIds?: string[];
+  lab?: QaLabServerHandle;
+  startLab?: QaSuiteStartLabFn;
+  concurrency?: number;
+};
+
+async function startQaLabServerRuntime(
+  params?: QaLabServerStartParams,
+): Promise<QaLabServerHandle> {
+  const { startQaLabServer } = await import("./lab-server.js");
+  return await startQaLabServer(params);
+}
 
 const _QA_IMAGE_UNDERSTANDING_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAAAAAklEQVR4AewaftIAAAK4SURBVO3BAQEAMAwCIG//znsQgXfJBZjUALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsl9wFmNQAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwP4TIF+7ciPkoAAAAASUVORK5CYII=";
@@ -107,10 +136,37 @@ type QaRawSessionStoreEntry = {
   updatedAt?: number;
 };
 
-const QA_CONTROL_PLANE_WRITE_WINDOW_MS = 60_000;
-const QA_CONTROL_PLANE_WRITE_MAX_REQUESTS = 2;
+const DEFAULT_QA_SUITE_CONCURRENCY = 64;
 
-const qaControlPlaneWriteTimestamps: number[] = [];
+function normalizeQaSuiteConcurrency(value: number | undefined, scenarioCount: number) {
+  const envValue = Number(process.env.OPENCLAW_QA_SUITE_CONCURRENCY);
+  const raw =
+    typeof value === "number" && Number.isFinite(value)
+      ? value
+      : Number.isFinite(envValue)
+        ? envValue
+        : DEFAULT_QA_SUITE_CONCURRENCY;
+  return Math.max(1, Math.min(Math.floor(raw), Math.max(1, scenarioCount)));
+}
+
+async function mapQaSuiteWithConcurrency<T, U>(
+  items: readonly T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<U>,
+) {
+  const results = Array.from<U>({ length: items.length });
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, Math.floor(concurrency)), items.length);
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
 
 function splitModelRef(ref: string) {
   const slash = ref.indexOf("/");
@@ -327,19 +383,35 @@ async function runScenario(name: string, steps: QaSuiteStep[]): Promise<QaSuiteS
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`request failed ${response.status}: ${url}`);
+  const { response, release } = await fetchWithSsrFGuard({
+    url,
+    policy: { allowPrivateNetwork: true },
+    auditContext: "qa-lab-suite-fetch-json",
+  });
+  try {
+    if (!response.ok) {
+      throw new Error(`request failed ${response.status}: ${url}`);
+    }
+    return (await response.json()) as T;
+  } finally {
+    await release();
   }
-  return (await response.json()) as T;
 }
 
 async function waitForGatewayHealthy(env: QaSuiteEnvironment, timeoutMs = 45_000) {
   await waitForCondition(
     async () => {
       try {
-        const response = await fetch(`${env.gateway.baseUrl}/readyz`);
-        return response.ok ? true : undefined;
+        const { response, release } = await fetchWithSsrFGuard({
+          url: `${env.gateway.baseUrl}/readyz`,
+          policy: { allowPrivateNetwork: true },
+          auditContext: "qa-lab-suite-wait-for-gateway-healthy",
+        });
+        try {
+          return response.ok ? true : undefined;
+        } finally {
+          await release();
+        }
       } catch {
         return undefined;
       }
@@ -394,7 +466,7 @@ async function waitForConfigRestartSettle(
 }
 
 function isGatewayRestartRace(error: unknown) {
-  const text = formatErrorMessage(error);
+  const text = formatGatewayPrimaryErrorText(error);
   return (
     text.includes("gateway closed (1012)") ||
     text.includes("gateway closed (1006") ||
@@ -404,11 +476,17 @@ function isGatewayRestartRace(error: unknown) {
 }
 
 function isConfigHashConflict(error: unknown) {
-  return formatErrorMessage(error).includes("config changed since last load");
+  return formatGatewayPrimaryErrorText(error).includes("config changed since last load");
+}
+
+function formatGatewayPrimaryErrorText(error: unknown) {
+  const text = formatErrorMessage(error);
+  const gatewayLogsIndex = text.indexOf("\nGateway logs:");
+  return (gatewayLogsIndex >= 0 ? text.slice(0, gatewayLogsIndex) : text).trim();
 }
 
 function getGatewayRetryAfterMs(error: unknown) {
-  const text = formatErrorMessage(error);
+  const text = formatGatewayPrimaryErrorText(error);
   const millisecondsMatch = /retryAfterMs["=: ]+(\d+)/i.exec(text);
   if (millisecondsMatch) {
     const parsed = Number(millisecondsMatch[1]);
@@ -424,25 +502,6 @@ function getGatewayRetryAfterMs(error: unknown) {
     }
   }
   return null;
-}
-
-async function waitForQaControlPlaneWriteBudget() {
-  while (true) {
-    const now = Date.now();
-    while (
-      qaControlPlaneWriteTimestamps.length > 0 &&
-      now - qaControlPlaneWriteTimestamps[0] >= QA_CONTROL_PLANE_WRITE_WINDOW_MS
-    ) {
-      qaControlPlaneWriteTimestamps.shift();
-    }
-    if (qaControlPlaneWriteTimestamps.length < QA_CONTROL_PLANE_WRITE_MAX_REQUESTS) {
-      qaControlPlaneWriteTimestamps.push(now);
-      return;
-    }
-    const retryAfterMs =
-      qaControlPlaneWriteTimestamps[0] + QA_CONTROL_PLANE_WRITE_WINDOW_MS - now + 250;
-    await sleep(Math.max(250, retryAfterMs));
-  }
 }
 
 async function readConfigSnapshot(env: QaSuiteEnvironment) {
@@ -473,7 +532,6 @@ async function runConfigMutation(params: {
   for (let attempt = 1; attempt <= 8; attempt += 1) {
     const snapshot = await readConfigSnapshot(params.env);
     try {
-      await waitForQaControlPlaneWriteBudget();
       const result = await params.env.gateway.call(
         params.action,
         {
@@ -1142,6 +1200,10 @@ function createScenarioFlowApi(
 export const qaSuiteTesting = {
   createScenarioWaitForCondition,
   findFailureOutboundMessage,
+  getGatewayRetryAfterMs,
+  isConfigHashConflict,
+  mapQaSuiteWithConcurrency,
+  normalizeQaSuiteConcurrency,
   waitForOutboundMessage,
 };
 
@@ -1160,17 +1222,71 @@ async function runScenarioDefinition(
   });
 }
 
-export async function runQaSuite(params?: {
-  repoRoot?: string;
-  outputDir?: string;
-  providerMode?: QaProviderMode | "live-openai";
-  primaryModel?: string;
-  alternateModel?: string;
-  fastMode?: boolean;
-  thinkingDefault?: QaThinkingLevel;
-  scenarioIds?: string[];
-  lab?: Awaited<ReturnType<typeof startQaLabServer>>;
+function createQaSuiteReportNotes(params: {
+  providerMode: "mock-openai" | "live-frontier";
+  primaryModel: string;
+  alternateModel: string;
+  fastMode: boolean;
+  concurrency: number;
 }) {
+  return [
+    params.providerMode === "mock-openai"
+      ? "Runs against qa-channel + qa-lab bus + real gateway child + mock OpenAI provider."
+      : `Runs against qa-channel + qa-lab bus + real gateway child + live frontier models (${params.primaryModel}, ${params.alternateModel})${params.fastMode ? " with fast mode enabled" : ""}.`,
+    params.concurrency > 1
+      ? `Scenarios run in isolated gateway workers with concurrency ${params.concurrency}.`
+      : "Scenarios run serially in one gateway worker.",
+    "Cron uses a one-minute schedule assertion plus forced execution for fast verification.",
+  ];
+}
+
+async function writeQaSuiteArtifacts(params: {
+  outputDir: string;
+  startedAt: Date;
+  finishedAt: Date;
+  scenarios: QaSuiteScenarioResult[];
+  providerMode: "mock-openai" | "live-frontier";
+  primaryModel: string;
+  alternateModel: string;
+  fastMode: boolean;
+  concurrency: number;
+}) {
+  const report = renderQaMarkdownReport({
+    title: "OpenClaw QA Scenario Suite",
+    startedAt: params.startedAt,
+    finishedAt: params.finishedAt,
+    checks: [],
+    scenarios: params.scenarios.map((scenario) => ({
+      name: scenario.name,
+      status: scenario.status,
+      details: scenario.details,
+      steps: scenario.steps,
+    })) satisfies QaReportScenario[],
+    notes: createQaSuiteReportNotes(params),
+  });
+  const reportPath = path.join(params.outputDir, "qa-suite-report.md");
+  const summaryPath = path.join(params.outputDir, "qa-suite-summary.json");
+  await fs.writeFile(reportPath, report, "utf8");
+  await fs.writeFile(
+    summaryPath,
+    `${JSON.stringify(
+      {
+        scenarios: params.scenarios,
+        counts: {
+          total: params.scenarios.length,
+          passed: params.scenarios.filter((scenario) => scenario.status === "pass").length,
+          failed: params.scenarios.filter((scenario) => scenario.status === "fail").length,
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  return { report, reportPath, summaryPath };
+}
+
+export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResult> {
   const startedAt = new Date();
   const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
   const providerMode = normalizeQaProviderMode(params?.providerMode ?? "mock-openai");
@@ -1185,11 +1301,176 @@ export async function runQaSuite(params?: {
     params?.outputDir ??
     path.join(repoRoot, ".artifacts", "qa-e2e", `suite-${Date.now().toString(36)}`);
   await fs.mkdir(outputDir, { recursive: true });
+  const catalog = readQaBootstrapScenarioCatalog();
+  const requestedScenarioIds =
+    params?.scenarioIds && params.scenarioIds.length > 0 ? new Set(params.scenarioIds) : null;
+  const selectedCatalogScenarios = requestedScenarioIds
+    ? catalog.scenarios.filter((scenario) => requestedScenarioIds.has(scenario.id))
+    : catalog.scenarios;
+  if (requestedScenarioIds) {
+    const foundScenarioIds = new Set(selectedCatalogScenarios.map((scenario) => scenario.id));
+    const missingScenarioIds = [...requestedScenarioIds].filter(
+      (scenarioId) => !foundScenarioIds.has(scenarioId),
+    );
+    if (missingScenarioIds.length > 0) {
+      throw new Error(`unknown QA scenario id(s): ${missingScenarioIds.join(", ")}`);
+    }
+  }
+  const concurrency = normalizeQaSuiteConcurrency(
+    params?.concurrency,
+    selectedCatalogScenarios.length,
+  );
+
+  if (concurrency > 1 && selectedCatalogScenarios.length > 1) {
+    const ownsLab = !params?.lab;
+    const startLab = params?.startLab ?? startQaLabServerRuntime;
+    const lab =
+      params?.lab ??
+      (await startLab({
+        repoRoot,
+        host: "127.0.0.1",
+        port: 0,
+        embeddedGateway: "disabled",
+      }));
+    const liveScenarioOutcomes: QaLabScenarioOutcome[] = selectedCatalogScenarios.map(
+      (scenario) => ({
+        id: scenario.id,
+        name: scenario.title,
+        status: "pending",
+      }),
+    );
+    const updateScenarioRun = () =>
+      lab.setScenarioRun({
+        kind: "suite",
+        status: "running",
+        startedAt: startedAt.toISOString(),
+        scenarios: [...liveScenarioOutcomes],
+      });
+
+    try {
+      updateScenarioRun();
+      const scenarios: QaSuiteScenarioResult[] = await mapQaSuiteWithConcurrency(
+        selectedCatalogScenarios,
+        concurrency,
+        async (scenario, index): Promise<QaSuiteScenarioResult> => {
+          liveScenarioOutcomes[index] = {
+            id: scenario.id,
+            name: scenario.title,
+            status: "running",
+            startedAt: new Date().toISOString(),
+          };
+          updateScenarioRun();
+          try {
+            const scenarioOutputDir = path.join(outputDir, "scenarios", scenario.id);
+            const result: QaSuiteResult = await runQaSuite({
+              repoRoot,
+              outputDir: scenarioOutputDir,
+              providerMode,
+              primaryModel,
+              alternateModel,
+              fastMode,
+              thinkingDefault: params?.thinkingDefault,
+              claudeCliAuthMode: params?.claudeCliAuthMode,
+              scenarioIds: [scenario.id],
+              concurrency: 1,
+            });
+            const scenarioResult: QaSuiteScenarioResult =
+              result.scenarios[0] ??
+              ({
+                name: scenario.title,
+                status: "fail",
+                details: "isolated scenario run returned no scenario result",
+                steps: [
+                  {
+                    name: "isolated scenario worker",
+                    status: "fail",
+                    details: "isolated scenario run returned no scenario result",
+                  },
+                ],
+              } satisfies QaSuiteScenarioResult);
+            liveScenarioOutcomes[index] = {
+              id: scenario.id,
+              name: scenario.title,
+              status: scenarioResult.status,
+              details: scenarioResult.details,
+              steps: scenarioResult.steps,
+              startedAt: liveScenarioOutcomes[index]?.startedAt,
+              finishedAt: new Date().toISOString(),
+            };
+            updateScenarioRun();
+            return scenarioResult;
+          } catch (error) {
+            const details = formatErrorMessage(error);
+            const scenarioResult = {
+              name: scenario.title,
+              status: "fail",
+              details,
+              steps: [
+                {
+                  name: "isolated scenario worker",
+                  status: "fail",
+                  details,
+                },
+              ],
+            } satisfies QaSuiteScenarioResult;
+            liveScenarioOutcomes[index] = {
+              id: scenario.id,
+              name: scenario.title,
+              status: "fail",
+              details,
+              steps: scenarioResult.steps,
+              startedAt: liveScenarioOutcomes[index]?.startedAt,
+              finishedAt: new Date().toISOString(),
+            };
+            updateScenarioRun();
+            return scenarioResult;
+          }
+        },
+      );
+      const finishedAt = new Date();
+      lab.setScenarioRun({
+        kind: "suite",
+        status: "completed",
+        startedAt: startedAt.toISOString(),
+        finishedAt: finishedAt.toISOString(),
+        scenarios: [...liveScenarioOutcomes],
+      });
+      const { report, reportPath, summaryPath } = await writeQaSuiteArtifacts({
+        outputDir,
+        startedAt,
+        finishedAt,
+        scenarios,
+        providerMode,
+        primaryModel,
+        alternateModel,
+        fastMode,
+        concurrency,
+      });
+      lab.setLatestReport({
+        outputPath: reportPath,
+        markdown: report,
+        generatedAt: finishedAt.toISOString(),
+      } satisfies QaLabLatestReport);
+      return {
+        outputDir,
+        reportPath,
+        summaryPath,
+        report,
+        scenarios,
+        watchUrl: lab.baseUrl,
+      } satisfies QaSuiteResult;
+    } finally {
+      if (ownsLab) {
+        await lab.stop();
+      }
+    }
+  }
 
   const ownsLab = !params?.lab;
+  const startLab = params?.startLab ?? startQaLabServerRuntime;
   const lab =
     params?.lab ??
-    (await startQaLabServer({
+    (await startLab({
       repoRoot,
       host: "127.0.0.1",
       port: 0,
@@ -1212,6 +1493,7 @@ export async function runQaSuite(params?: {
     alternateModel,
     fastMode,
     thinkingDefault: params?.thinkingDefault,
+    claudeCliAuthMode: params?.claudeCliAuthMode,
     controlUiEnabled: true,
   });
   lab.setControlUi({
@@ -1238,21 +1520,6 @@ export async function runQaSuite(params?: {
       await waitForQaChannelReady(env, 120_000);
     });
     await sleep(1_000);
-    const catalog = readQaBootstrapScenarioCatalog();
-    const requestedScenarioIds =
-      params?.scenarioIds && params.scenarioIds.length > 0 ? new Set(params.scenarioIds) : null;
-    const selectedCatalogScenarios = requestedScenarioIds
-      ? catalog.scenarios.filter((scenario) => requestedScenarioIds.has(scenario.id))
-      : catalog.scenarios;
-    if (requestedScenarioIds) {
-      const foundScenarioIds = new Set(selectedCatalogScenarios.map((scenario) => scenario.id));
-      const missingScenarioIds = [...requestedScenarioIds].filter(
-        (scenarioId) => !foundScenarioIds.has(scenarioId),
-      );
-      if (missingScenarioIds.length > 0) {
-        throw new Error(`unknown QA scenario id(s): ${missingScenarioIds.join(", ")}`);
-      }
-    }
     const scenarios: QaSuiteScenarioResult[] = [];
     const liveScenarioOutcomes: QaLabScenarioOutcome[] = selectedCatalogScenarios.map(
       (scenario) => ({
@@ -1310,43 +1577,17 @@ export async function runQaSuite(params?: {
       finishedAt: finishedAt.toISOString(),
       scenarios: [...liveScenarioOutcomes],
     });
-    const report = renderQaMarkdownReport({
-      title: "OpenClaw QA Scenario Suite",
+    const { report, reportPath, summaryPath } = await writeQaSuiteArtifacts({
+      outputDir,
       startedAt,
       finishedAt,
-      checks: [],
-      scenarios: scenarios.map((scenario) => ({
-        name: scenario.name,
-        status: scenario.status,
-        details: scenario.details,
-        steps: scenario.steps,
-      })) satisfies QaReportScenario[],
-      notes: [
-        providerMode === "mock-openai"
-          ? "Runs against qa-channel + qa-lab bus + real gateway child + mock OpenAI provider."
-          : `Runs against qa-channel + qa-lab bus + real gateway child + live frontier models (${primaryModel}, ${alternateModel})${fastMode ? " with fast mode enabled" : ""}.`,
-        "Cron uses a one-minute schedule assertion plus forced execution for fast verification.",
-      ],
+      scenarios,
+      providerMode,
+      primaryModel,
+      alternateModel,
+      fastMode,
+      concurrency,
     });
-    const reportPath = path.join(outputDir, "qa-suite-report.md");
-    const summaryPath = path.join(outputDir, "qa-suite-summary.json");
-    await fs.writeFile(reportPath, report, "utf8");
-    await fs.writeFile(
-      summaryPath,
-      `${JSON.stringify(
-        {
-          scenarios,
-          counts: {
-            total: scenarios.length,
-            passed: scenarios.filter((scenario) => scenario.status === "pass").length,
-            failed: scenarios.filter((scenario) => scenario.status === "fail").length,
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
     const latestReport = {
       outputPath: reportPath,
       markdown: report,

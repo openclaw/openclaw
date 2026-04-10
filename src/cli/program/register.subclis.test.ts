@@ -76,10 +76,10 @@ describe("registerSubCliCommands", () => {
     }
   });
 
-  it("registers only the primary placeholder and dispatches", async () => {
+  it("registers the primary placeholder plus completion and dispatches", async () => {
     const program = createRegisteredProgram(["node", "openclaw", "acp"]);
 
-    expect(program.commands.map((cmd) => cmd.name())).toEqual(["acp"]);
+    expect(program.commands.map((cmd) => cmd.name())).toEqual(["acp", "completion"]);
 
     await program.parseAsync(["acp"], { from: "user" });
 
@@ -101,7 +101,7 @@ describe("registerSubCliCommands", () => {
   it("re-parses argv for lazy subcommands", async () => {
     const program = createRegisteredProgram(["node", "openclaw", "nodes", "list"], "openclaw");
 
-    expect(program.commands.map((cmd) => cmd.name())).toEqual(["nodes"]);
+    expect(program.commands.map((cmd) => cmd.name())).toEqual(["nodes", "completion"]);
 
     await program.parseAsync(["nodes", "list"], { from: "user" });
 
@@ -112,7 +112,7 @@ describe("registerSubCliCommands", () => {
   it("registers the infer placeholder and dispatches through the capability registrar", async () => {
     const program = createRegisteredProgram(["node", "openclaw", "infer"], "openclaw");
 
-    expect(program.commands.map((cmd) => cmd.name())).toEqual(["infer"]);
+    expect(program.commands.map((cmd) => cmd.name())).toEqual(["infer", "completion"]);
 
     await program.parseAsync(["infer"], { from: "user" });
 

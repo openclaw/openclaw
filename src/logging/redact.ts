@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { compileConfigRegex } from "../security/config-regex.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
 import { replacePatternBounded } from "./redact-bounded.js";
