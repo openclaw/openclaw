@@ -51,8 +51,6 @@ export {
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/config-runtime";
-export { mergeAllowlist } from "openclaw/plugin-sdk/allow-from";
-export { resolveRuntimeEnv } from "openclaw/plugin-sdk/runtime-logger";
 export {
   addWildcardAllowFrom,
   formatDocsLink,

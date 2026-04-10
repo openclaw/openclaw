@@ -205,11 +205,13 @@ function resolveDiscordGuildNativeCommandAuthorized(params: {
   ownerAllowListConfigured: boolean;
   ownerAllowed: boolean;
 }) {
-  const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
+  const { groupPolicy: rawGroupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
     providerConfigPresent: params.cfg.channels?.discord !== undefined,
     groupPolicy: params.discordConfig?.groupPolicy,
     defaultGroupPolicy: params.cfg.channels?.defaults?.groupPolicy,
   });
+  // Normalize "members" to "open": Discord has no Bot API member-check equivalent.
+  const groupPolicy = normalizeNonTelegramGroupPolicy(rawGroupPolicy);
   const policyAuthorizer = resolveDiscordChannelPolicyCommandAuthorizer({
     groupPolicy,
     guildInfo: params.guildInfo,

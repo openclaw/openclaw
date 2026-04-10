@@ -1,8 +1,8 @@
+import type { GroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 import {
   normalizeNonTelegramGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
 } from "openclaw/plugin-sdk/config-runtime";
-import type { GroupPolicy } from "openclaw/plugin-sdk/whatsapp";
 
 export function resolveWhatsAppRuntimeGroupPolicy(params: {
   providerConfigPresent: boolean;
@@ -19,9 +19,13 @@ export function resolveWhatsAppRuntimeGroupPolicy(params: {
   const normalizedDefaultGroupPolicy = params.defaultGroupPolicy
     ? normalizeNonTelegramGroupPolicy(params.defaultGroupPolicy)
     : params.defaultGroupPolicy;
-  return resolveOpenProviderRuntimeGroupPolicy({
+  const result = resolveOpenProviderRuntimeGroupPolicy({
     providerConfigPresent: params.providerConfigPresent,
     groupPolicy: normalizedGroupPolicy,
     defaultGroupPolicy: normalizedDefaultGroupPolicy,
   });
+  return {
+    groupPolicy: normalizeNonTelegramGroupPolicy(result.groupPolicy),
+    providerMissingFallbackApplied: result.providerMissingFallbackApplied,
+  };
 }

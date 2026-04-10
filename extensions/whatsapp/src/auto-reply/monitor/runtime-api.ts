@@ -10,6 +10,7 @@ export {
   recordSessionMetaFromInbound,
   resolveChannelContextVisibilityMode,
 } from "../config.runtime.js";
+export { normalizeNonTelegramGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 export { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 export type LoadConfigFn = typeof import("../config.runtime.js").loadConfig;
 export {

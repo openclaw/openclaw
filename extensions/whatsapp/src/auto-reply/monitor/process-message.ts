@@ -27,6 +27,7 @@ import {
   formatInboundEnvelope,
   logVerbose,
   normalizeE164,
+  normalizeNonTelegramGroupPolicy,
   readStoreAllowFromForDmPolicy,
   recordSessionMetaFromInbound,
   resolveChannelContextVisibilityMode,
@@ -63,7 +64,8 @@ async function resolveWhatsAppCommandAuthorized(params: {
 
   const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.msg.accountId });
   const dmPolicy = account.dmPolicy ?? "pairing";
-  const groupPolicy = account.groupPolicy ?? "allowlist";
+  // Normalize "members" to "open": WhatsApp has no group membership API.
+  const groupPolicy = normalizeNonTelegramGroupPolicy(account.groupPolicy ?? "allowlist");
   const configuredAllowFrom = account.allowFrom ?? [];
   const defaultGroupAllowFrom = params.cfg.channels?.defaults?.groupAllowFrom;
   const configuredGroupAllowFrom =
@@ -159,7 +161,8 @@ export async function processMessage(params: {
   const configuredGroupAllowFrom =
     account.groupAllowFrom ?? (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined);
   const groupAllowFrom = configuredGroupAllowFrom ?? [];
-  const groupPolicy = account.groupPolicy ?? "allowlist";
+  // Normalize "members" to "open": WhatsApp has no group membership API.
+  const groupPolicy = normalizeNonTelegramGroupPolicy(account.groupPolicy ?? "allowlist");
   const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
     cfg: params.cfg,
     agentId: params.route.agentId,
