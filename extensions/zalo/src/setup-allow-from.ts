@@ -30,9 +30,9 @@ export async function noteZaloTokenHelp(
 export async function promptZaloAllowFrom(params: {
   cfg: OpenClawConfig;
   prompter: Parameters<NonNullable<ChannelSetupDmPolicy["promptAllowFrom"]>>[0]["prompter"];
-  accountId: string;
+  accountId?: string;
 }): Promise<OpenClawConfig> {
-  const { cfg, prompter, accountId } = params;
+  const { cfg, prompter, accountId = DEFAULT_ACCOUNT_ID } = params;
   const resolved = resolveZaloAccount({ cfg, accountId });
   const existingAllowFrom = resolved.config.allowFrom ?? [];
   const entry = await prompter.text({
