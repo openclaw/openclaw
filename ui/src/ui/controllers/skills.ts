@@ -84,21 +84,21 @@ async function runStaleAwareRequest<T>(
   onError: (err: unknown) => void,
   onFinally: () => void,
 ) {
+  let current = false;
   try {
     const result = await request();
-    if (!isCurrent()) {
-      return;
+    current = isCurrent();
+    if (current) {
+      onSuccess(result);
     }
-    onSuccess(result);
   } catch (err) {
-    if (!isCurrent()) {
-      return;
+    current = isCurrent();
+    if (current) {
+      onError(err);
     }
-    onError(err);
-  } finally {
-    if (isCurrent()) {
-      onFinally();
-    }
+  }
+  if (current) {
+    onFinally();
   }
 }
 

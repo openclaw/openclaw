@@ -30,7 +30,6 @@ export type UsageState = {
 };
 
 const LEGACY_USAGE_DATE_PARAMS_STORAGE_KEY = "openclaw.control.usage.date-params.v1";
-const LEGACY_USAGE_DATE_PARAMS_DEFAULT_GATEWAY_KEY = "__default__";
 const LEGACY_USAGE_DATE_PARAMS_MODE_RE = /unexpected property ['"]mode['"]/i;
 const LEGACY_USAGE_DATE_PARAMS_OFFSET_RE = /unexpected property ['"]utcoffset['"]/i;
 const LEGACY_USAGE_DATE_PARAMS_INVALID_RE = /invalid sessions\.usage params/i;
@@ -38,21 +37,18 @@ const LEGACY_USAGE_DATE_PARAMS_INVALID_RE = /invalid sessions\.usage params/i;
 let legacyUsageDateParamsCache: Set<string> | null = null;
 
 function loadLegacyUsageDateParamsCache(): Set<string> {
-  const storage = getSafeLocalStorage();
-  if (!storage) {
+  const raw = getSafeLocalStorage()?.getItem(LEGACY_USAGE_DATE_PARAMS_STORAGE_KEY);
+  if (!raw) {
     return new Set<string>();
   }
   try {
-    const raw = storage.getItem(LEGACY_USAGE_DATE_PARAMS_STORAGE_KEY);
-    if (!raw) {
-      return new Set<string>();
-    }
-    const parsed = JSON.parse(raw) as { unsupportedGatewayKeys?: unknown } | null;
-    if (!parsed || !Array.isArray(parsed.unsupportedGatewayKeys)) {
+    const keys = (JSON.parse(raw) as { unsupportedGatewayKeys?: unknown } | null)
+      ?.unsupportedGatewayKeys;
+    if (!Array.isArray(keys)) {
       return new Set<string>();
     }
     return new Set(
-      parsed.unsupportedGatewayKeys
+      keys
         .filter((entry): entry is string => typeof entry === "string")
         .map((entry) => entry.trim())
         .filter(Boolean),
@@ -63,12 +59,8 @@ function loadLegacyUsageDateParamsCache(): Set<string> {
 }
 
 function persistLegacyUsageDateParamsCache(cache: Set<string>) {
-  const storage = getSafeLocalStorage();
-  if (!storage) {
-    return;
-  }
   try {
-    storage.setItem(
+    getSafeLocalStorage()?.setItem(
       LEGACY_USAGE_DATE_PARAMS_STORAGE_KEY,
       JSON.stringify({ unsupportedGatewayKeys: Array.from(cache) }),
     );
@@ -87,7 +79,7 @@ function getLegacyUsageDateParamsCache(): Set<string> {
 function normalizeGatewayCompatibilityKey(gatewayUrl?: string): string {
   const trimmed = gatewayUrl?.trim();
   if (!trimmed) {
-    return LEGACY_USAGE_DATE_PARAMS_DEFAULT_GATEWAY_KEY;
+    return "__default__";
   }
   try {
     const parsed = new URL(trimmed);
