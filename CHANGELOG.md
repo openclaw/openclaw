@@ -95,6 +95,7 @@ Docs: https://docs.openclaw.ai
 - Agents/BTW: strip replayed tool blocks, hidden reasoning, and malformed image payloads from `/btw` side-question context so Bedrock no-tools side questions keep working after tool-use turns. (#64225) Thanks @ngutman.
 - Commands/btw: keep tool-less side questions from sending injected empty `tools` arrays on strict OpenAI-compatible providers, so `/btw` continues working after prior tool-call history. (#64219) Thanks @ngutman.
 - Agents/Bedrock: let `/btw` side questions use `auth: "aws-sdk"` without a static API key so Bedrock IAM and instance-role sessions stop failing before the side question runs. (#64218) Thanks @SnowSky1.
+- Feishu: route `/btw` side questions and `/stop` onto bounded out-of-band lanes so BTW no longer waits behind a busy normal chat turn while ordinary same-chat traffic stays FIFO. (#64324) Thanks @ngutman.
 - Agents/failover: detect llama.cpp slot context overflows as context-overflow errors so compaction can retry self-hosted OpenAI-compatible runs instead of surfacing the raw upstream 400. (#64196) Thanks @alexander-applyinnovations.
 - Claude CLI/skills: pass eligible OpenClaw skills into CLI runs, including native Claude Code skill resolution via a temporary plugin plus per-run skill env/API key injection. (#62686, #62723) Thanks @zomars.
 - Discord: keep generated auto-thread names working with reasoning models by giving title generation enough output budget for thinking plus visible title text. (#64172) Thanks @hanamizuki.
