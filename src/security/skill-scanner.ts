@@ -194,13 +194,13 @@ const LINE_RULES: LineRule[] = [
     ruleId: "prototype-pollution",
     severity: "critical",
     message: "Prototype pollution pattern detected",
-    pattern: /__proto__|Object\s*\.\s*prototype\s*\.\s*\w+\s*=|\.prototype\s*\[\s*["']/,
+    pattern: /__proto__\s*[=\[]|Object\s*\.\s*prototype\s*\.\s*\w+\s*=|\.prototype\s*\[\s*["'][^\]]*["']\s*\]\s*=/,
   },
   {
     ruleId: "import-aliasing",
     severity: "warn",
     message: "Destructured import aliasing of dangerous function detected",
-    pattern: /\{\s*(exec|execSync|spawn|spawnSync|execFile|execFileSync)\s*:\s*\w+\s*\}/,
+    pattern: /\{\s*(exec|execSync|spawn|spawnSync|execFile|execFileSync)\s*(:|as)\s*\w+/,
     requiresContext: /child_process/,
   },
 ];

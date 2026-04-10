@@ -960,7 +960,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const isBundled = record.origin === "bundled";
     const maxPriority = isBundled ? MAX_BUNDLED_HOOK_PRIORITY : MAX_EXTERNAL_HOOK_PRIORITY;
     const rawPriority = opts?.priority ?? 0;
-    const clampedPriority = Math.min(Math.max(rawPriority, 0), maxPriority);
+    const clampedPriority = Math.min(rawPriority, maxPriority);
     if (rawPriority > maxPriority) {
       pushDiagnostic({
         level: "warn",
