@@ -62,6 +62,9 @@ export function createSubagentRegistryLifecycleController(params: {
   resumeSubagentRun(runId: string): void;
   captureSubagentCompletionReply: typeof captureSubagentCompletionReply;
   runSubagentAnnounceFlow: typeof runSubagentAnnounceFlow;
+  /** Delete a child session and its transcript. Used by the delegate fast path
+   *  which skips the announce flow (the normal owner of session deletion). */
+  deleteChildSession?(childSessionKey: string): Promise<void>;
   warn(message: string, meta?: Record<string, unknown>): void;
 }) {
   const maskRunId = (runId: string): string => {
@@ -489,6 +492,15 @@ export function createSubagentRegistryLifecycleController(params: {
             entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
           if (shouldDeleteAttachments) {
             await safeRemoveAttachmentsDir(entry);
+          }
+          // Delete the child session and transcript for cleanup: "delete" runs.
+          // Normally the announce flow handles this, but delegate runs skip it.
+          if (entry.cleanup === "delete" && params.deleteChildSession) {
+            try {
+              await params.deleteChildSession(entry.childSessionKey);
+            } catch {
+              // Best-effort session deletion only.
+            }
           }
           const completionReason = resolveCleanupCompletionReason(entry);
           await emitCompletionEndedHookIfNeeded(entry, completionReason);
