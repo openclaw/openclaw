@@ -4,7 +4,8 @@ services:
     runtime: docker
     plan: free
     healthCheckPath: /health
-    # Render Docker services use PORT env var, not the port field 
+    # Override default CMD to bind to all interfaces on port 10000
+    startCommand: node openclaw.mjs gateway --bind lan --port 10000 --allow-unconfigured
     envVars:
       - key: PORT
         value: 10000
