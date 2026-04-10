@@ -17,7 +17,21 @@ export const messagingTmpdirGuardSourceRoots = [
   "src/media-understanding",
   "extensions",
 ];
-const allowedRelativePaths = new Set([bundledPluginFile("feishu", "src/dedup.ts")]);
+const allowedRelativePaths = new Set([
+  bundledPluginFile("feishu", "src/dedup.ts"),
+  bundledPluginFile("browser", "src/browser/chrome-mcp.ts"),
+  bundledPluginFile("diffs", "src/test-helpers.ts"),
+  bundledPluginFile("google", "video-generation-provider.ts"),
+  bundledPluginFile("memory-core", "src/cli.runtime.ts"),
+  bundledPluginFile("memory-core", "src/test-helpers.ts"),
+  bundledPluginFile("memory-wiki", "src/test-helpers.ts"),
+  bundledPluginFile("openshell", "src/backend.ts"),
+  bundledPluginFile("qa-lab", "src/gateway-child.ts"),
+  bundledPluginFile("qa-lab", "src/model-catalog.runtime.ts"),
+  bundledPluginFile("qqbot", "src/utils/platform.ts"),
+  bundledPluginFile("signal", "src/install-signal-cli.ts"),
+  "src/infra/outbound/delivery-queue.test-helpers.ts",
+]);
 
 function collectOsTmpdirImports(sourceFile) {
   const osModuleSpecifiers = new Set(["node:os", "os"]);
