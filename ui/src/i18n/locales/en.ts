@@ -296,6 +296,12 @@ export const en: TranslationMap = {
       clearGrounded: "Clear Grounded",
       working: "Working…",
     },
+    phase: {
+      light: "Light",
+      deep: "Deep",
+      rem: "Rem",
+      off: "off",
+    },
     stats: {
       shortTerm: "Short-term",
       grounded: "Grounded",

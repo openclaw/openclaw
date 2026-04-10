@@ -583,12 +583,12 @@ function renderScene(props: DreamingProps, idle: boolean, dreamText: string) {
           const phase = props.phases?.[phaseId as keyof NonNullable<typeof props.phases>];
           const enabled = phase?.enabled ?? false;
           const nextRun = formatPhaseNextRun(phase?.nextRunAtMs);
-          const label = phaseId.charAt(0).toUpperCase() + phaseId.slice(1);
+          const label = t(`dreaming.phase.${phaseId}` as any);
           return html`
             <div class="dreams__phase ${enabled ? "" : "dreams__phase--off"}">
               <div class="dreams__phase-dot ${enabled ? "dreams__phase-dot--on" : ""}"></div>
               <span class="dreams__phase-name">${label}</span>
-              <span class="dreams__phase-next">${enabled ? nextRun : "off"}</span>
+              <span class="dreams__phase-next">${enabled ? nextRun : t("dreaming.phase.off")}</span>
             </div>
           `;
         })}
