@@ -1448,6 +1448,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                         ? buildMatrixFinalizedPreviewContent()
                         : undefined,
                     });
+                  } else if (!(await draftStream.finalizeLive())) {
+                    throw new Error("Matrix draft live finalize failed");
                   }
                 } catch {
                   await redactMatrixDraftEvent(client, roomId, draftEventId);
@@ -1469,6 +1471,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               } else if (draftEventId && hasMedia && !payloadReplyMismatch) {
                 let textEditOk = !mustDeliverFinalNormally;
                 const payloadText = payload.text;
+                const reusesDraftTextUnchanged =
+                  typeof payloadText === "string" &&
+                  Boolean(payloadText.trim()) &&
+                  draftStream.matchesPreparedText(payloadText);
                 const requiresFinalTextEdit =
                   quietDraftStreaming ||
                   (typeof payloadText === "string" &&
@@ -1486,6 +1492,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                     () => true,
                     () => false,
                   );
+                } else if (textEditOk && reusesDraftTextUnchanged) {
+                  textEditOk = await draftStream.finalizeLive();
                 }
                 const reusesDraftAsFinalText = Boolean(payload.text?.trim()) && textEditOk;
                 if (!reusesDraftAsFinalText) {

@@ -29,6 +29,8 @@ export type MatrixDraftStream = {
   flush: () => Promise<void>;
   /** Flush and mark this block as done. Returns the event ID if a message was sent. */
   stop: () => Promise<string | undefined>;
+  /** Clear the MSC4357 live marker in place when the draft is kept as final text. */
+  finalizeLive: () => Promise<boolean>;
   /** Reset state for the next text block (after tool calls). */
   reset: () => void;
   /** The event ID of the current draft message, if any. */
@@ -140,10 +142,7 @@ export function createMatrixDraftStream(params: {
 
   log?.(`draft-stream: ready (throttleMs=${DEFAULT_THROTTLE_MS})`);
 
-  const stop = async (): Promise<string | undefined> => {
-    // Flush before marking stopped so the loop can drain pending text.
-    await loop.flush();
-    stopped = true;
+  const finalizeLive = async (): Promise<boolean> => {
     // Send a final edit without the MSC4357 live marker to signal that
     // the stream is complete. Supporting clients will stop the streaming
     // animation and display the final content.
@@ -160,6 +159,7 @@ export function createMatrixDraftStream(params: {
           live: false,
         });
         log?.(`draft-stream: finalized ${currentEventId} (MSC4357 stream ended)`);
+        return true;
       } catch (err) {
         log?.(`draft-stream: finalize edit failed: ${String(err)}`);
         // If the finalize edit fails, the live marker remains on the last
@@ -167,8 +167,16 @@ export function createMatrixDraftStream(params: {
         // normal final delivery or redaction instead of leaving the message
         // stuck in a "still streaming" state for MSC4357 clients.
         finalizeInPlaceBlocked = true;
+        return false;
       }
     }
+    return true;
+  };
+
+  const stop = async (): Promise<string | undefined> => {
+    // Flush before marking stopped so the loop can drain pending text.
+    await loop.flush();
+    stopped = true;
     return currentEventId;
   };
 
@@ -195,6 +203,7 @@ export function createMatrixDraftStream(params: {
     },
     flush: loop.flush,
     stop,
+    finalizeLive,
     reset,
     eventId: () => currentEventId,
     matchesPreparedText: (text: string) =>
