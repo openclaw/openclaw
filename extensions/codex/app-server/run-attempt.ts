@@ -19,6 +19,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import {
+  clearSharedCodexAppServerClient,
   getSharedCodexAppServerClient,
   isCodexAppServerApprovalRequest,
   type CodexAppServerClient,
@@ -98,13 +99,28 @@ export async function runCodexAppServerAttempt(
     tools,
     signal: runAbortController.signal,
   });
-  const client = await clientFactory();
-  const thread = await startOrResumeThread({
-    client,
-    params,
-    cwd: effectiveWorkspace,
-    dynamicTools: toolBridge.specs,
-  });
+  let client: CodexAppServerClient;
+  let thread: CodexAppServerThreadBinding;
+  try {
+    ({ client, thread } = await withCodexStartupTimeout({
+      timeoutMs: params.timeoutMs,
+      signal: runAbortController.signal,
+      operation: async () => {
+        const startupClient = await clientFactory();
+        const startupThread = await startOrResumeThread({
+          client: startupClient,
+          params,
+          cwd: effectiveWorkspace,
+          dynamicTools: toolBridge.specs,
+        });
+        return { client: startupClient, thread: startupThread };
+      },
+    }));
+  } catch (error) {
+    clearSharedCodexAppServerClient();
+    params.abortSignal?.removeEventListener("abort", abortFromUpstream);
+    throw error;
+  }
 
   let projector: CodexAppServerEventProjector | undefined;
   let turnId: string | undefined;
@@ -335,6 +351,44 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
   });
 }
 
+async function withCodexStartupTimeout<T>(params: {
+  timeoutMs: number;
+  signal: AbortSignal;
+  operation: () => Promise<T>;
+}): Promise<T> {
+  if (params.signal.aborted) {
+    throw new Error("codex app-server startup aborted");
+  }
+  let timeout: NodeJS.Timeout | undefined;
+  let abortCleanup: (() => void) | undefined;
+  try {
+    return await Promise.race([
+      params.operation(),
+      new Promise<never>((_, reject) => {
+        const rejectOnce = (error: Error) => {
+          if (timeout) {
+            clearTimeout(timeout);
+            timeout = undefined;
+          }
+          reject(error);
+        };
+        const timeoutMs = Math.max(100, params.timeoutMs);
+        timeout = setTimeout(() => {
+          rejectOnce(new Error("codex app-server startup timed out"));
+        }, timeoutMs);
+        const abortListener = () => rejectOnce(new Error("codex app-server startup aborted"));
+        params.signal.addEventListener("abort", abortListener, { once: true });
+        abortCleanup = () => params.signal.removeEventListener("abort", abortListener);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+    abortCleanup?.();
+  }
+}
+
 async function startOrResumeThread(params: {
   client: CodexAppServerClient;
   params: EmbeddedRunAttemptParams;
@@ -356,6 +410,7 @@ async function startOrResumeThread(params: {
       try {
         const response = await params.client.request<CodexThreadResumeResponse>("thread/resume", {
           threadId: binding.threadId,
+          persistExtendedHistory: true,
         });
         await writeCodexAppServerBinding(params.params.sessionFile, {
           threadId: response.thread.id,

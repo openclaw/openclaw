@@ -4,10 +4,6 @@
   "name": "Codex",
   "description": "Codex app-server harness and Codex-managed GPT model catalog.",
   "providers": ["codex"],
-  "modelSupport": {
-    "providerIds": ["codex"],
-    "modelPrefixes": ["gpt-", "o1", "o3", "o4", "arcanine"]
-  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

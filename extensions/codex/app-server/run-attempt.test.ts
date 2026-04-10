@@ -10,6 +10,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexServerNotification } from "./protocol.js";
 import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
+import { writeCodexAppServerBinding } from "./session-binding.js";
 
 let tempDir: string;
 
@@ -225,5 +226,80 @@ describe("runCodexAppServerAttempt", () => {
       aborted: false,
       timedOut: false,
     });
+  });
+
+  it("times out app-server startup before thread setup can hang forever", async () => {
+    __testing.setCodexAppServerClientFactoryForTests(() => new Promise<never>(() => undefined));
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 1;
+
+    await expect(runCodexAppServerAttempt(params)).rejects.toThrow(
+      "codex app-server startup timed out",
+    );
+    expect(queueAgentHarnessMessage("session-1", "after timeout")).toBe(false);
+  });
+
+  it("keeps extended history enabled when resuming a bound Codex thread", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-existing",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      dynamicToolsFingerprint: "[]",
+    });
+    const requests: Array<{ method: string; params: unknown }> = [];
+    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      requests.push({ method, params });
+      if (method === "thread/resume") {
+        return { thread: { id: "thread-existing" }, modelProvider: "openai" };
+      }
+      if (method === "turn/start") {
+        return { turn: { id: "turn-1", status: "inProgress" } };
+      }
+      return {};
+    });
+    __testing.setCodexAppServerClientFactoryForTests(
+      async () =>
+        ({
+          request,
+          addNotificationHandler: (handler: typeof notify) => {
+            notify = handler;
+            return () => undefined;
+          },
+          addRequestHandler: () => () => undefined,
+        }) as never,
+    );
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await vi.waitFor(() =>
+      expect(requests.some((entry) => entry.method === "turn/start")).toBe(true),
+    );
+    await notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-existing",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed" },
+      },
+    });
+    await run;
+
+    expect(requests).toEqual(
+      expect.arrayContaining([
+        {
+          method: "thread/resume",
+          params: {
+            threadId: "thread-existing",
+            persistExtendedHistory: true,
+          },
+        },
+      ]),
+    );
   });
 });

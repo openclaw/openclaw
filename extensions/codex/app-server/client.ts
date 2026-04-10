@@ -282,6 +282,13 @@ export function resetSharedCodexAppServerClientForTests(): void {
   sharedClientPromise = undefined;
 }
 
+export function clearSharedCodexAppServerClient(): void {
+  const client = sharedClient;
+  sharedClient = undefined;
+  sharedClientPromise = undefined;
+  client?.close();
+}
+
 function clearSharedClientIfCurrent(client: CodexAppServerClient): void {
   if (sharedClient !== client) {
     return;

@@ -167,4 +167,29 @@ describe("gateway startup primary model warmup", () => {
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
     expect(resolveModelMock).not.toHaveBeenCalled();
   });
+
+  it("keeps PI static warmup when the PI agent runtime is forced", async () => {
+    resolveEmbeddedAgentRuntimeMock.mockReturnValue("pi");
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai-codex/gpt-5.4",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await prewarmConfiguredPrimaryModel({
+      cfg,
+      log: { warn: vi.fn() },
+    });
+
+    expect(selectAgentHarnessMock).toHaveBeenCalledWith({
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+    });
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(cfg, "/tmp/agent");
+    expect(resolveModelMock).toHaveBeenCalled();
+  });
 });
