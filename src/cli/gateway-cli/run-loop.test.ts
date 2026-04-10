@@ -450,6 +450,34 @@ describe("runGatewayLoop", () => {
     });
   });
 
+  it("exits non-zero when startup times out on first start (no network)", async () => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+
+    try {
+      await withIsolatedSignals(async () => {
+        const { runtime } = createRuntimeWithExitSignal();
+        // start() never resolves — simulates a hung network call at boot
+        const start = vi.fn(async () => new Promise<never>(() => {}));
+
+        const { loopPromise } = await runLoopWithStart({ start, runtime });
+
+        // Attach a no-op rejection handler before advancing timers so that the
+        // internal startupTimeoutPromise rejection is not reported as unhandled
+        // while the microtask queue is draining inside advanceTimersByTimeAsync.
+        loopPromise.catch(() => {});
+
+        // Advance past the 60 s startup deadline
+        await vi.advanceTimersByTimeAsync(60_001);
+
+        await expect(loopPromise).rejects.toThrow("gateway startup timed out after 60000ms");
+        expect(start).toHaveBeenCalledTimes(1);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("exits when lock reacquire fails during in-process restart fallback", async () => {
     vi.clearAllMocks();
 
