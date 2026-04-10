@@ -6,6 +6,7 @@ export function shouldAllowCooldownProbeForReason(
   return (
     reason === "rate_limit" ||
     reason === "overloaded" ||
+    reason === "quota_exhausted" ||
     reason === "billing" ||
     reason === "unknown" ||
     reason === "empty_response" ||

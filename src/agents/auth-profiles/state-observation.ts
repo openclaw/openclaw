@@ -1,3 +1,4 @@
+import { triggerInternalHook, createInternalHookEvent } from "../../hooks/internal-hooks.js";
 import { redactIdentifier } from "../../logging/redact-identifier.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { sanitizeForConsole } from "../console-sanitize.js";
@@ -15,7 +16,7 @@ export function logAuthProfileFailureStateChange(params: {
   now: number;
 }): void {
   const windowType =
-    params.reason === "billing" || params.reason === "auth_permanent" ? "disabled" : "cooldown";
+    params.reason === "billing" || params.reason === "auth_permanent" || params.reason === "quota_exhausted" ? "disabled" : "cooldown";
   const previousCooldownUntil = params.previous?.cooldownUntil;
   const previousDisabledUntil = params.previous?.disabledUntil;
   // Active cooldown/disable windows are intentionally immutable; log whether this
@@ -56,4 +57,16 @@ export function logAuthProfileFailureStateChange(params: {
       `auth profile failure state updated: runId=${safeRunId} profile=${safeProfileId} provider=${safeProvider} ` +
       `reason=${params.reason} window=${windowType} reused=${String(windowReused)}`,
   });
+
+  if (windowType === "disabled" && !windowReused) {
+    // Fire internal hook async so ContextClaw can observe provider death
+    triggerInternalHook(
+      createInternalHookEvent("agent", "provider_tripped", undefined, {
+        provider: params.provider,
+        reason: params.reason,
+      })
+    ).catch(e => {
+      observationLog.error("failed to dispatch provider_tripped hook", { error: e?.message });
+    });
+  }
 }
