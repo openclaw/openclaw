@@ -46,6 +46,8 @@ export const CommandArgSchema = Type.Object(
 export const CommandEntrySchema = Type.Object(
   {
     name: NonEmptyString,
+    nativeName: Type.Optional(NonEmptyString),
+    textAliases: Type.Optional(Type.Array(NonEmptyString)),
     description: Type.String(),
     category: Type.Optional(CommandCategorySchema),
     source: CommandSourceSchema,

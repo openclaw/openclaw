@@ -47,7 +47,7 @@ const mockChatCommands: ChatCommandDefinition[] = [
     key: "skill:code-review",
     nativeName: "code_review",
     description: "Run code review",
-    textAliases: [],
+    textAliases: ["/code_review"],
     acceptsArgs: true,
     scope: "both",
     category: "tools",
@@ -89,6 +89,16 @@ vi.mock("../../plugins/command-registry-state.js", () => ({
     }
     return mockPluginSpecs;
   }),
+}));
+vi.mock("../../plugins/commands.js", () => ({
+  listPluginCommands: vi.fn(() => [
+    {
+      name: "tts",
+      description: "Text to speech",
+      pluginId: "plugin-tts",
+      acceptsArgs: false,
+    },
+  ]),
 }));
 vi.mock("../../config/config.js", () => ({
   loadConfig: vi.fn(() => ({})),
@@ -159,6 +169,8 @@ describe("commands.list handler", () => {
     const model = commands.find((c) => c.name === "model");
     expect(model).toMatchObject({
       name: "model",
+      nativeName: "model",
+      textAliases: ["/model", "/m"],
       description: "Set model",
       category: "options",
       source: "native",
@@ -263,6 +275,36 @@ describe("commands.list handler", () => {
     const { payload } = callHandler({ provider: "whatsapp" });
     const { commands } = payload as { commands: Array<{ name: string; source: string }> };
     expect(commands.filter((c) => c.source === "plugin")).toEqual([]);
+  });
+
+  it("uses text-surface names when scope=text even with provider-native aliases", () => {
+    const { payload } = callHandler({ provider: "discord", scope: "text" });
+    const { commands } = payload as {
+      commands: Array<{
+        name: string;
+        nativeName?: string;
+        textAliases?: string[];
+        source: string;
+      }>;
+    };
+    const model = commands.find((c) => c.source === "native" && c.name === "model");
+    expect(model).toMatchObject({
+      name: "model",
+      nativeName: "set_model",
+      textAliases: ["/model", "/m"],
+    });
+    expect(commands.find((c) => c.name === "set_model")).toBeUndefined();
+  });
+
+  it("keeps plugin text commands visible for scope=text even without native provider support", () => {
+    const { payload } = callHandler({ provider: "whatsapp", scope: "text" });
+    const { commands } = payload as {
+      commands: Array<{ name: string; source: string; textAliases?: string[] }>;
+    };
+    expect(commands.find((c) => c.source === "plugin")).toMatchObject({
+      name: "tts",
+      textAliases: ["/tts"],
+    });
   });
 
   it("returns provider-specific plugin command names", () => {

@@ -9,6 +9,7 @@ import { listSkillCommandsForAgents } from "../../auto-reply/skill-commands.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { loadConfig } from "../../config/config.js";
 import { getPluginCommandSpecs } from "../../plugins/command-registry-state.js";
+import { listPluginCommands } from "../../plugins/commands.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import type { CommandEntry, CommandsListResult } from "../protocol/index.js";
 import {
@@ -20,6 +21,7 @@ import {
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 type SerializedArg = NonNullable<CommandEntry["args"]>[number];
+type CommandNameSurface = "text" | "native";
 
 function resolveAgentIdOrRespondError(rawAgentId: unknown, respond: RespondFn) {
   const cfg = loadConfig();
@@ -50,6 +52,35 @@ function resolveNativeName(cmd: ChatCommandDefinition, provider?: string): strin
   );
 }
 
+function stripLeadingSlash(value: string): string {
+  return value.startsWith("/") ? value.slice(1) : value;
+}
+
+function resolveTextAliases(cmd: ChatCommandDefinition): string[] {
+  const seen = new Set<string>();
+  const aliases: string[] = [];
+  for (const alias of cmd.textAliases) {
+    const trimmed = alias.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const exactAlias = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+    if (seen.has(exactAlias)) {
+      continue;
+    }
+    seen.add(exactAlias);
+    aliases.push(exactAlias);
+  }
+  if (aliases.length > 0) {
+    return aliases;
+  }
+  return [`/${cmd.key}`];
+}
+
+function resolvePrimaryTextName(cmd: ChatCommandDefinition): string {
+  return stripLeadingSlash(resolveTextAliases(cmd)[0] ?? `/${cmd.key}`);
+}
+
 function serializeArg(arg: CommandArgDefinition): SerializedArg {
   const isDynamic = typeof arg.choices === "function";
   const staticChoices = Array.isArray(arg.choices) ? arg.choices.map(normalizeChoice) : undefined;
@@ -71,11 +102,15 @@ function mapCommand(
   cmd: ChatCommandDefinition,
   source: "native" | "skill",
   includeArgs: boolean,
+  nameSurface: CommandNameSurface,
   provider?: string,
 ): CommandEntry {
   const shouldIncludeArgs = includeArgs && cmd.acceptsArgs && cmd.args?.length;
+  const nativeName = cmd.scope === "text" ? undefined : resolveNativeName(cmd, provider);
   return {
-    name: resolveNativeName(cmd, provider),
+    name: nameSurface === "text" ? resolvePrimaryTextName(cmd) : (nativeName ?? cmd.key),
+    ...(nativeName ? { nativeName } : {}),
+    ...(cmd.scope !== "native" ? { textAliases: resolveTextAliases(cmd) } : {}),
     description: cmd.description,
     ...(cmd.category ? { category: cmd.category } : {}),
     source,
@@ -94,6 +129,7 @@ export function buildCommandsListResult(params: {
 }): CommandsListResult {
   const includeArgs = params.includeArgs !== false;
   const scopeFilter = params.scope ?? "both";
+  const nameSurface: CommandNameSurface = scopeFilter === "text" ? "text" : "native";
   const provider = normalizeOptionalLowercaseString(params.provider);
 
   const skillCommands = listSkillCommandsForAgents({ cfg: params.cfg, agentIds: [params.agentId] });
@@ -107,19 +143,42 @@ export function buildCommandsListResult(params: {
       continue;
     }
     commands.push(
-      mapCommand(cmd, skillKeys.has(cmd.key) ? "skill" : "native", includeArgs, provider),
+      mapCommand(
+        cmd,
+        skillKeys.has(cmd.key) ? "skill" : "native",
+        includeArgs,
+        nameSurface,
+        provider,
+      ),
     );
   }
 
-  const pluginSpecs = getPluginCommandSpecs(provider);
-  for (const spec of pluginSpecs) {
-    commands.push({
-      name: spec.name,
-      description: spec.description,
-      source: "plugin",
-      scope: "both",
-      acceptsArgs: spec.acceptsArgs,
-    });
+  if (nameSurface === "text") {
+    for (const spec of listPluginCommands()) {
+      commands.push({
+        name: spec.name,
+        textAliases: [`/${spec.name}`],
+        description: spec.description,
+        source: "plugin",
+        scope: "both",
+        acceptsArgs: spec.acceptsArgs,
+      });
+    }
+  } else {
+    const pluginTextSpecs = listPluginCommands();
+    const pluginSpecs = getPluginCommandSpecs(provider);
+    for (const [index, spec] of pluginSpecs.entries()) {
+      const textName = pluginTextSpecs[index]?.name ?? spec.name;
+      commands.push({
+        name: spec.name,
+        nativeName: spec.name,
+        textAliases: [`/${textName}`],
+        description: spec.description,
+        source: "plugin",
+        scope: "both",
+        acceptsArgs: spec.acceptsArgs,
+      });
+    }
   }
 
   return { commands };
