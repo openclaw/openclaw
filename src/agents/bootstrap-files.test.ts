@@ -236,6 +236,76 @@ describe("resolveBootstrapFilesForRun", () => {
     expect(warnings[0]).toContain("agents.list.coder.agentsFile");
   });
 
+  it("falls back to the default base override when a per-agent base override cannot be loaded", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "default rules", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.shared.md"), "shared rules", "utf8");
+    const warnings: string[] = [];
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: {
+        agents: {
+          defaults: {
+            agentsFile: "AGENTS.shared.md",
+          },
+          list: [
+            {
+              id: "coder",
+              agentsFile: "AGENTS.missing.md",
+            },
+          ],
+        },
+      },
+      sessionKey: "agent:coder:main",
+      warn: (message) => warnings.push(message),
+    });
+
+    const agentsFile = files.find((file) => file.name === "AGENTS.md");
+    expect(agentsFile?.path).toBe(path.join(workspaceDir, "AGENTS.shared.md"));
+    expect(warnings[0]).toContain("agents.list.coder.agentsFile");
+  });
+
+  it("falls back to the default model override when a per-agent model override cannot be loaded", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "default rules", "utf8");
+    await fs.writeFile(
+      path.join(workspaceDir, "AGENTS.shared.gpt-5.4.md"),
+      "shared gpt rules",
+      "utf8",
+    );
+    const warnings: string[] = [];
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: {
+        agents: {
+          defaults: {
+            agentsFilesByModel: {
+              "openai/gpt-5.4": "AGENTS.shared.gpt-5.4.md",
+            },
+          },
+          list: [
+            {
+              id: "coder",
+              agentsFilesByModel: {
+                "openai/gpt-5.4": "AGENTS.missing.gpt-5.4.md",
+              },
+            },
+          ],
+        },
+      },
+      sessionKey: "agent:coder:main",
+      modelProviderId: "openai",
+      modelId: "gpt-5.4",
+      warn: (message) => warnings.push(message),
+    });
+
+    const agentsFile = files.find((file) => file.name === "AGENTS.md");
+    expect(agentsFile?.path).toBe(path.join(workspaceDir, "AGENTS.shared.gpt-5.4.md"));
+    expect(warnings[0]).toContain('agents.list.coder.agentsFilesByModel["openai/gpt-5.4"]');
+  });
+
   it("preserves unavailable reasons in fallback warnings", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "default rules", "utf8");
@@ -438,7 +508,8 @@ describe("resolveBootstrapContextForRun", () => {
 
     const result = await resolveBootstrapContextForRun({ workspaceDir });
 
-    expect(result.bootstrapSignature).toBe(`agents:${path.join(workspaceDir, "AGENTS.hook.md")}`);
+    const expectedPath = path.join(workspaceDir, "AGENTS.hook.md").replace(/\\/g, "/");
+    expect(result.bootstrapSignature).toBe(`agents:${expectedPath}`);
   });
 });
 

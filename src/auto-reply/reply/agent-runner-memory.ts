@@ -439,6 +439,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   const result = await memoryDeps.compactEmbeddedPiSession({
     sessionId: entry.sessionId,
     sessionKey: params.sessionKey,
+    agentId: params.followupRun.run.agentId,
     allowGatewaySubagentBinding: true,
     messageChannel: params.followupRun.run.messageProvider,
     groupId: entry.groupId ?? params.followupRun.run.groupId,

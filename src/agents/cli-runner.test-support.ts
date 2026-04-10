@@ -26,6 +26,7 @@ type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type BootstrapContext = {
   bootstrapFiles: WorkspaceBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
+  bootstrapSignature: string;
 };
 type ResolveBootstrapContextForRunMock = Mock<() => Promise<BootstrapContext>>;
 
@@ -44,6 +45,7 @@ const hoisted = vi.hoisted(
       resolveBootstrapContextForRunMock: vi.fn<() => Promise<BootstrapContext>>(async () => ({
         bootstrapFiles: [],
         contextFiles: [],
+        bootstrapSignature: "agents:AGENTS.md",
       })),
     };
   },
