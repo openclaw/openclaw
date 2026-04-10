@@ -175,7 +175,7 @@ function resolvePluginManifestDuplicateRank(params: {
   return 4;
 }
 
-export function resolveEffectivePluginManifestRecord(params: {
+function resolveEffectivePluginManifestRecord(params: {
   cfg: OpenClawConfig;
   pluginId: string;
   workspaceDir?: string;
