@@ -22,8 +22,8 @@ import {
 } from "./client.js";
 import {
   buildButtonProps,
+  ensureInteractionSecret,
   resolveInteractionCallbackUrl,
-  setInteractionSecret,
   type MattermostInteractiveButtonInput,
 } from "./interactions.js";
 import { loadOutboundMediaFromUrl, type OpenClawConfig } from "./runtime-api.js";
@@ -400,7 +400,13 @@ export async function sendMessageMattermost(
   const client = createMattermostClient({ baseUrl, botToken: token, allowPrivateNetwork });
   let props = opts.props;
   if (!props && Array.isArray(opts.buttons) && opts.buttons.length > 0) {
-    setInteractionSecret(accountId, token);
+    ensureInteractionSecret(
+      accountId,
+      resolveMattermostAccount({
+        cfg,
+        accountId,
+      }).interactionSecret,
+    );
     props = buildButtonProps({
       callbackUrl: resolveInteractionCallbackUrl(accountId, {
         gateway: cfg.gateway,

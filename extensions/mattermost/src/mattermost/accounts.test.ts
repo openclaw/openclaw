@@ -109,6 +109,29 @@ describe("resolveMattermostReplyToMode", () => {
     expect(resolveMattermostReplyToMode(account, "channel")).toBe("off");
   });
 
+  it("resolves an account-specific interaction secret", () => {
+    const account = resolveMattermostAccount({
+      cfg: {
+        channels: {
+          mattermost: {
+            accounts: {
+              work: {
+                botToken: "tok-work",
+                baseUrl: "https://chat.example.com",
+                interactions: {
+                  secret: "interaction-secret-work",
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(account.interactionSecret).toBe("interaction-secret-work");
+  });
+
   it("preserves shared commands config when an account overrides one commands field", () => {
     const account = resolveMattermostAccount({
       cfg: {

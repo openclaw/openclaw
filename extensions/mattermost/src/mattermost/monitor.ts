@@ -15,9 +15,9 @@ import {
 import {
   computeInteractionCallbackUrl,
   createMattermostInteractionHandler,
+  ensureInteractionSecret,
   resolveInteractionCallbackPath,
   setInteractionCallbackUrl,
-  setInteractionSecret,
   type MattermostInteractionResponse,
 } from "./interactions.js";
 import {
@@ -325,8 +325,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   const slashEnabled = getSlashCommandState(account.accountId) != null;
 
   // ─── Interactive buttons registration ──────────────────────────────────────
-  // Derive a stable HMAC secret from the bot token so CLI and gateway share it.
-  setInteractionSecret(account.accountId, botToken);
+  ensureInteractionSecret(account.accountId, account.interactionSecret);
 
   // Register HTTP callback endpoint for interactive button clicks.
   // Mattermost POSTs to this URL when a user clicks a button action.
