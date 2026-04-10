@@ -1,7 +1,10 @@
 import {
   buildMSTeamsGraphMessageUrls,
   downloadMSTeamsAttachments,
+  downloadMSTeamsBotFrameworkAttachments,
   downloadMSTeamsGraphMedia,
+  extractMSTeamsHtmlAttachmentIds,
+  isBotFrameworkPersonalChatId,
   type MSTeamsAccessTokenProvider,
   type MSTeamsAttachmentLike,
   type MSTeamsHtmlAttachmentSummary,
@@ -23,6 +26,7 @@ export async function resolveMSTeamsInboundMedia(params: {
   conversationType: string;
   conversationId: string;
   conversationMessageId?: string;
+  serviceUrl?: string;
   activity: Pick<MSTeamsTurnContext["activity"], "id" | "replyToId" | "channelData">;
   log: MSTeamsLogger;
   /** When true, embeds original filename in stored path for later extraction. */
@@ -37,6 +41,7 @@ export async function resolveMSTeamsInboundMedia(params: {
     conversationType,
     conversationId,
     conversationMessageId,
+    serviceUrl,
     activity,
     log,
     preserveFilenames,
@@ -56,7 +61,50 @@ export async function resolveMSTeamsInboundMedia(params: {
       (att) => typeof att.contentType === "string" && att.contentType.startsWith("text/html"),
     );
 
-    if (hasHtmlAttachment) {
+    // Personal DMs with the bot use Bot Framework conversation IDs (`a:...`
+    // or `8:orgid:...`) which Graph's `/chats/{id}` endpoint rejects with
+    // "Invalid ThreadId". Fetch media via the Bot Framework v3 attachments
+    // endpoint instead, which speaks the same identifier space.
+    if (hasHtmlAttachment && isBotFrameworkPersonalChatId(conversationId)) {
+      if (!serviceUrl) {
+        log.debug?.("bot framework attachment skipped (missing serviceUrl)", {
+          conversationType,
+          conversationId,
+        });
+      } else {
+        const attachmentIds = extractMSTeamsHtmlAttachmentIds(attachments);
+        if (attachmentIds.length === 0) {
+          log.debug?.("bot framework attachment ids unavailable", {
+            conversationType,
+            conversationId,
+          });
+        } else {
+          const bfMedia = await downloadMSTeamsBotFrameworkAttachments({
+            serviceUrl,
+            attachmentIds,
+            tokenProvider,
+            maxBytes,
+            allowHosts,
+            authAllowHosts: params.authAllowHosts,
+            preserveFilenames,
+          });
+          if (bfMedia.media.length > 0) {
+            mediaList = bfMedia.media;
+          } else {
+            log.debug?.("bot framework attachments fetch empty", {
+              conversationType,
+              attachmentCount: bfMedia.attachmentCount ?? attachmentIds.length,
+            });
+          }
+        }
+      }
+    }
+
+    if (
+      hasHtmlAttachment &&
+      mediaList.length === 0 &&
+      !isBotFrameworkPersonalChatId(conversationId)
+    ) {
       const messageUrls = buildMSTeamsGraphMessageUrls({
         conversationType,
         conversationId,

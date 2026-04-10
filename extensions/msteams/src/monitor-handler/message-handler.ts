@@ -1,4 +1,5 @@
 import { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
@@ -30,6 +31,7 @@ import {
   formatThreadContext,
   resolveTeamGroupId,
 } from "../graph-thread.js";
+import { resolveGraphChatId } from "../graph-upload.js";
 import {
   extractMSTeamsConversationMessageId,
   extractMSTeamsQuoteInfo,
@@ -73,7 +75,7 @@ function extractTextFromHtmlAttachments(attachments: MSTeamsAttachmentLike[]): s
   }
   return "";
 }
-import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
+import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
 import {
   isMSTeamsGroupAllowed,
   resolveMSTeamsAllowlistMatch,
@@ -92,8 +94,10 @@ function buildStoredConversationReference(params: {
   conversationId: string;
   conversationType: string;
   teamId?: string;
+  /** Thread root message ID for channel thread messages. */
+  threadId?: string;
 }): StoredConversationReference {
-  const { activity, conversationId, conversationType, teamId } = params;
+  const { activity, conversationId, conversationType, teamId, threadId } = params;
   const from = activity.from;
   const conversation = activity.conversation;
   const agent = activity.recipient;
@@ -115,6 +119,7 @@ function buildStoredConversationReference(params: {
     serviceUrl: activity.serviceUrl,
     locale: activity.locale,
     ...(clientInfo?.timezone ? { timezone: clientInfo.timezone } : {}),
+    ...(threadId ? { threadId } : {}),
   };
 }
 
@@ -209,11 +214,19 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const conversationMessageId = extractMSTeamsConversationMessageId(rawConversationId);
     const conversationType = conversation?.conversationType ?? "personal";
     const teamId = activity.channelData?.team?.id;
+    // For channel thread messages, resolve the thread root message ID so outbound
+    // replies land in the correct thread. The root ID comes from the `messageid=`
+    // portion of conversation.id (preferred) or from activity.replyToId.
+    const threadId =
+      conversationType === "channel"
+        ? (conversationMessageId ?? activity.replyToId ?? undefined)
+        : undefined;
     const conversationRef = buildStoredConversationReference({
       activity,
       conversationId,
       conversationType,
       teamId,
+      threadId,
     });
 
     const {
@@ -442,6 +455,21 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       },
     });
 
+    // Isolate channel thread sessions: each thread gets its own session key so
+    // context does not bleed across threads. Prefer conversationMessageId (the
+    // ;messageid= portion of conversation.id, i.e. the thread root) over
+    // activity.replyToId (which may point to a non-root parent in deep threads).
+    // DMs and group chats are unaffected — only channel thread replies fork.
+    const channelThreadId = isChannel
+      ? (conversationMessageId ?? activity.replyToId ?? undefined)
+      : undefined;
+    const threadKeys = resolveThreadSessionKeys({
+      baseSessionKey: route.sessionKey,
+      threadId: channelThreadId,
+      parentSessionKey: channelThreadId ? route.sessionKey : undefined,
+    });
+    route.sessionKey = threadKeys.sessionKey;
+
     const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
     const inboundLabel = isDirectMessage
       ? `Teams DM from ${senderName}`
@@ -499,12 +527,41 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         return;
       }
     }
-    const graphConversationId = translateMSTeamsDmConversationIdForGraph({
+    let graphConversationId = translateMSTeamsDmConversationIdForGraph({
       isDirectMessage,
       conversationId,
       aadObjectId: from.aadObjectId,
       appId,
     });
+
+    // For personal DMs the Bot Framework conversation ID (`a:...`) and the
+    // synthetic `19:{userId}_{appId}@unq.gbl.spaces` format produced by
+    // translateMSTeamsDmConversationIdForGraph are not always accepted by the
+    // Graph `/chats/{chatId}/messages` endpoint. Resolve the real Graph chat
+    // ID via the API (with conversation store caching) so the Graph media
+    // download fallback works when the direct Bot Framework download fails.
+    if (isDirectMessage && conversationId.startsWith("a:")) {
+      const cached = await conversationStore.get(conversationId);
+      if (cached?.graphChatId) {
+        graphConversationId = cached.graphChatId;
+      } else {
+        try {
+          const resolved = await resolveGraphChatId({
+            botFrameworkConversationId: conversationId,
+            userAadObjectId: from.aadObjectId ?? undefined,
+            tokenProvider,
+          });
+          if (resolved) {
+            graphConversationId = resolved;
+            conversationStore
+              .upsert(conversationId, { ...conversationRef, graphChatId: resolved })
+              .catch(() => {});
+          }
+        } catch {
+          log.debug?.("failed to resolve Graph chat ID for inbound media", { conversationId });
+        }
+      }
+    }
 
     const mediaList = await resolveMSTeamsInboundMedia({
       attachments,
@@ -516,6 +573,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       conversationType,
       conversationId: graphConversationId,
       conversationMessageId: conversationMessageId ?? undefined,
+      serviceUrl: activity.serviceUrl,
       activity: {
         id: activity.id,
         replyToId: activity.replyToId,

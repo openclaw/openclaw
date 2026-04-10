@@ -111,6 +111,10 @@ export type AgentRunContext = {
   isHeartbeat?: boolean;
   /** Whether control UI clients should receive chat/agent updates for this run. */
   isControlUiVisible?: boolean;
+  /** Timestamp when this context was first registered (for TTL-based cleanup). */
+  registeredAt?: number;
+  /** Timestamp of last activity (updated on every emitAgentEvent). */
+  lastActiveAt?: number;
 };
 
 type AgentEventState = {
@@ -136,7 +140,10 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   const state = getAgentEventState();
   const existing = state.runContextById.get(runId);
   if (!existing) {
-    state.runContextById.set(runId, { ...context });
+    state.runContextById.set(runId, {
+      ...context,
+      registeredAt: context.registeredAt ?? Date.now(),
+    });
     return;
   }
   if (context.sessionKey && existing.sessionKey !== context.sessionKey) {
@@ -159,10 +166,34 @@ export function getAgentRunContext(runId: string) {
 
 export function clearAgentRunContext(runId: string) {
   getAgentEventState().runContextById.delete(runId);
+  getAgentEventState().seqByRun.delete(runId);
+}
+
+/**
+ * Sweep stale run contexts that exceeded the given TTL.
+ * Guards against orphaned entries when lifecycle "end"/"error" events are missed.
+ */
+export function sweepStaleRunContexts(maxAgeMs = 30 * 60 * 1000): number {
+  const state = getAgentEventState();
+  const now = Date.now();
+  let swept = 0;
+  for (const [runId, ctx] of state.runContextById.entries()) {
+    // Use lastActiveAt (refreshed on every event) to avoid sweeping active runs.
+    // Fall back to registeredAt, then treat missing timestamps as infinitely old.
+    const lastSeen = ctx.lastActiveAt ?? ctx.registeredAt;
+    const age = lastSeen ? now - lastSeen : Infinity;
+    if (age > maxAgeMs) {
+      state.runContextById.delete(runId);
+      state.seqByRun.delete(runId);
+      swept++;
+    }
+  }
+  return swept;
 }
 
 export function resetAgentRunContextForTest() {
   getAgentEventState().runContextById.clear();
+  getAgentEventState().seqByRun.clear();
 }
 
 export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
@@ -170,6 +201,9 @@ export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
   const nextSeq = (state.seqByRun.get(event.runId) ?? 0) + 1;
   state.seqByRun.set(event.runId, nextSeq);
   const context = state.runContextById.get(event.runId);
+  if (context) {
+    context.lastActiveAt = Date.now();
+  }
   const isControlUiVisible = context?.isControlUiVisible ?? true;
   const eventSessionKey =
     typeof event.sessionKey === "string" && event.sessionKey.trim() ? event.sessionKey : undefined;

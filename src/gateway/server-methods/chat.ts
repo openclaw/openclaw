@@ -745,10 +745,17 @@ export function sanitizeChatHistoryMessages(messages: unknown[], maxChars: numbe
   let changed = false;
   const next: unknown[] = [];
   for (const message of messages) {
+    // Drop raw control-token replies before any maxChars truncation can make
+    // an exact token look like partial user-visible text.
+    if (shouldDropAssistantHistoryMessage(message)) {
+      changed = true;
+      continue;
+    }
     const res = sanitizeChatHistoryMessage(message, maxChars);
     changed ||= res.changed;
     // Drop assistant commentary-only entries and exact control replies, but
-    // keep mixed assistant entries that still carry non-text content.
+    // keep mixed assistant entries that still carry non-text content. Run this
+    // again after sanitizing so display-only cleanup can still suppress stale tokens.
     if (shouldDropAssistantHistoryMessage(res.message)) {
       changed = true;
       continue;
@@ -1664,7 +1671,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         SenderId: clientInfo?.id,
         SenderName: clientInfo?.displayName,
         SenderUsername: clientInfo?.displayName,
-        GatewayClientScopes: client?.connect?.scopes,
+        GatewayClientScopes: client?.connect?.scopes ?? [],
       };
 
       const agentId = resolveSessionAgentId({

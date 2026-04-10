@@ -180,6 +180,38 @@ describe("dreaming controller", () => {
     expect(state.dreamingStatusError).toBeNull();
   });
 
+  it("preserves unknown phase state when status omits phase metadata", async () => {
+    const { state, request } = createState();
+    request.mockResolvedValue({
+      dreaming: {
+        enabled: true,
+        shortTermCount: 1,
+        recallSignalCount: 0,
+        dailySignalCount: 0,
+        groundedSignalCount: 0,
+        totalSignalCount: 1,
+        phaseSignalCount: 0,
+        lightPhaseHitCount: 0,
+        remPhaseHitCount: 0,
+        promotedTotal: 0,
+        promotedToday: 0,
+        shortTermEntries: [],
+        signalEntries: [],
+        promotedEntries: [],
+      },
+    });
+
+    await loadDreamingStatus(state);
+
+    expect(state.dreamingStatus).toEqual(
+      expect.objectContaining({
+        enabled: true,
+      }),
+    );
+    expect(state.dreamingStatus?.phases).toBeUndefined();
+    expect(state.dreamingStatusError).toBeNull();
+  });
+
   it("patches config to update global dreaming enablement", async () => {
     const { state, request } = createState();
     state.configSnapshot = {

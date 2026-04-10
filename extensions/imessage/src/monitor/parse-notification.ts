@@ -1,4 +1,5 @@
 import { isRecord } from "openclaw/plugin-sdk/text-runtime";
+import { stripImessageLengthPrefixedUtf8Text } from "./strip-imsg-length-prefixed-text.js";
 import type { IMessagePayload } from "./types.js";
 
 function isOptionalString(value: unknown): value is string | null | undefined {
@@ -61,6 +62,7 @@ export function parseIMessageNotification(raw: unknown): IMessagePayload | null 
     !isOptionalString(message.guid) ||
     !isOptionalNumber(message.chat_id) ||
     !isOptionalString(message.sender) ||
+    !isOptionalString(message.destination_caller_id) ||
     !isOptionalBoolean(message.is_from_me) ||
     !isOptionalString(message.text) ||
     !isOptionalStringOrNumber(message.reply_to_id) ||
@@ -77,5 +79,15 @@ export function parseIMessageNotification(raw: unknown): IMessagePayload | null 
     return null;
   }
 
-  return message;
+  return {
+    ...message,
+    text:
+      typeof message.text === "string"
+        ? stripImessageLengthPrefixedUtf8Text(message.text)
+        : message.text,
+    reply_to_text:
+      typeof message.reply_to_text === "string"
+        ? stripImessageLengthPrefixedUtf8Text(message.reply_to_text)
+        : message.reply_to_text,
+  };
 }

@@ -1466,7 +1466,7 @@ describe("applyAuthChoice", () => {
 
   it("keeps existing default model for explicit provider keys when setDefaultModel=false", async () => {
     const scenarios: Array<{
-      authChoice: "xai-api-key" | "opencode-zen" | "opencode-go";
+      authChoice: "synthetic-api-key" | "opencode-zen" | "opencode-go";
       token: string;
       promptMessage: string;
       existingPrimary: string;
@@ -1478,13 +1478,13 @@ describe("applyAuthChoice", () => {
       agentId?: string;
     }> = [
       {
-        authChoice: "xai-api-key",
-        token: "sk-xai-test",
-        promptMessage: "Enter xAI API key",
+        authChoice: "synthetic-api-key",
+        token: "sk-synthetic-agent-test",
+        promptMessage: "Enter Synthetic API key",
         existingPrimary: "openai/gpt-4o-mini",
-        expectedOverride: "xai/grok-4",
-        profileId: "xai:default",
-        profileProvider: "xai",
+        expectedOverride: "synthetic/Synthetic-1",
+        profileId: "synthetic:default",
+        profileProvider: "synthetic",
         agentId: "agent-1",
       },
       {
@@ -1628,16 +1628,10 @@ describe("applyAuthChoice", () => {
   it("does not persist literal 'undefined' when API key prompts return undefined", async () => {
     const scenarios = [
       {
-        authChoice: "apiKey" as const,
-        envKey: "ANTHROPIC_API_KEY",
-        profileId: "anthropic:default",
-        provider: "anthropic",
-      },
-      {
-        authChoice: "openrouter-api-key" as const,
-        envKey: "OPENROUTER_API_KEY",
-        profileId: "openrouter:default",
-        provider: "openrouter",
+        authChoice: "synthetic-api-key" as const,
+        envKey: "SYNTHETIC_API_KEY",
+        profileId: "synthetic:default",
+        provider: "synthetic",
       },
     ];
 

@@ -35,8 +35,12 @@ export function mergeStoredConversationReference(
 ): StoredConversationReference {
   return {
     // Preserve fields from previous entry that may not be present on every activity
-    // (e.g. timezone is only sent when clientInfo entity is available).
+    // (e.g. timezone is only sent when clientInfo entity is available;
+    // graphChatId is resolved via Graph API and cached for DM media downloads).
     ...(existing?.timezone && !incoming.timezone ? { timezone: existing.timezone } : {}),
+    ...(existing?.graphChatId && !incoming.graphChatId
+      ? { graphChatId: existing.graphChatId }
+      : {}),
     ...incoming,
     lastSeenAt: nowIso,
   };
@@ -51,30 +55,45 @@ export function findPreferredDmConversationByUserId(
     return null;
   }
 
-  const matches: MSTeamsConversationStoreEntry[] = [];
+  // Partition user matches into DM-safe and non-DM buckets.
+  // Channel and group conversations also carry the sender's aadObjectId, but
+  // returning one of those when the caller asked for a user-targeted DM would
+  // leak the reply into a shared channel -- the root cause of #54520.
+  const personalMatches: MSTeamsConversationStoreEntry[] = [];
+  const unknownTypeMatches: MSTeamsConversationStoreEntry[] = [];
   for (const entry of entries) {
-    if (entry.reference.user?.aadObjectId === target || entry.reference.user?.id === target) {
-      matches.push(entry);
+    if (entry.reference.user?.aadObjectId !== target && entry.reference.user?.id !== target) {
+      continue;
+    }
+    const convType = normalizeLowercaseStringOrEmpty(
+      entry.reference.conversation?.conversationType ?? "",
+    );
+    if (convType === "personal") {
+      personalMatches.push(entry);
+    } else if (convType === "channel" || convType === "groupchat") {
+      // Explicitly skip channel/group conversations -- these must never be
+      // returned for a user-targeted DM lookup.
+    } else {
+      // Legacy entries without conversationType are ambiguous. Include them
+      // as a fallback but rank below confirmed personal conversations.
+      unknownTypeMatches.push(entry);
     }
   }
 
-  if (matches.length === 0) {
+  // Prefer confirmed personal DMs, fall back to unknown-type entries.
+  const candidates = personalMatches.length > 0 ? personalMatches : unknownTypeMatches;
+  if (candidates.length === 0) {
     return null;
   }
 
-  matches.sort((a, b) => {
-    const aType = normalizeLowercaseStringOrEmpty(a.reference.conversation?.conversationType ?? "");
-    const bType = normalizeLowercaseStringOrEmpty(b.reference.conversation?.conversationType ?? "");
-    const aPersonal = aType === "personal" ? 1 : 0;
-    const bPersonal = bType === "personal" ? 1 : 0;
-    if (aPersonal !== bPersonal) {
-      return bPersonal - aPersonal;
-    }
-    return (
-      (parseStoredConversationTimestamp(b.reference.lastSeenAt) ?? 0) -
-      (parseStoredConversationTimestamp(a.reference.lastSeenAt) ?? 0)
+  // When multiple candidates exist, prefer the most recently seen one.
+  if (candidates.length > 1) {
+    candidates.sort(
+      (a, b) =>
+        (parseStoredConversationTimestamp(b.reference.lastSeenAt) ?? 0) -
+        (parseStoredConversationTimestamp(a.reference.lastSeenAt) ?? 0),
     );
-  });
+  }
 
-  return matches[0] ?? null;
+  return candidates[0] ?? null;
 }

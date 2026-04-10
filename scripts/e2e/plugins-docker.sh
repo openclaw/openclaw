@@ -2,10 +2,11 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
 IMAGE_NAME="openclaw-plugins-e2e"
 
 echo "Building Docker image..."
-docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
+run_logged plugins-build docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
 
 DOCKER_ENV_ARGS=(-e COREPACK_ENABLE_DOWNLOAD_PROMPT=0)
 if [[ -n "${OPENAI_API_KEY:-}" && "${OPENAI_API_KEY:-}" != "undefined" && "${OPENAI_API_KEY:-}" != "null" ]]; then
@@ -16,7 +17,8 @@ if [[ -n "${OPENAI_BASE_URL:-}" && "${OPENAI_BASE_URL:-}" != "undefined" && "${O
 fi
 
 echo "Running plugins Docker E2E..."
-docker run --rm "${DOCKER_ENV_ARGS[@]}" -i "$IMAGE_NAME" bash -s <<'EOF'
+RUN_LOG="$(mktemp "${TMPDIR:-/tmp}/openclaw-plugins-run.XXXXXX.log")"
+if ! docker run --rm "${DOCKER_ENV_ARGS[@]}" -i "$IMAGE_NAME" bash -s >"$RUN_LOG" 2>&1 <<'EOF'
 set -euo pipefail
 
 if [ -f dist/index.mjs ]; then
@@ -981,5 +983,11 @@ NODE
 echo "Running bundle MCP CLI-agent e2e..."
 pnpm exec vitest run --config vitest.e2e.config.ts src/agents/cli-runner.bundle-mcp.e2e.test.ts
 EOF
+then
+  cat "$RUN_LOG"
+  rm -f "$RUN_LOG"
+  exit 1
+fi
+rm -f "$RUN_LOG"
 
 echo "OK"
