@@ -315,6 +315,27 @@ describe("qa cli runtime", () => {
     );
   });
 
+  it("expands the agentic parity pack onto the suite scenario list", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      parityPack: "agentic",
+      scenarioIds: ["channel-chat-baseline"],
+    });
+
+    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoRoot: path.resolve("/tmp/openclaw-repo"),
+        scenarioIds: [
+          "channel-chat-baseline",
+          "approval-turn-tool-followthrough",
+          "model-switch-tool-continuity",
+          "source-docs-discovery-report",
+          "image-understanding-attachment",
+        ],
+      }),
+    );
+  });
+
   it("rejects unknown suite CLI auth modes", async () => {
     await expect(
       runQaSuiteCommand({
@@ -323,7 +344,6 @@ describe("qa cli runtime", () => {
       }),
     ).rejects.toThrow("--cli-auth-mode must be one of auto, api-key, subscription");
   });
-
   it("resolves character eval paths and passes model refs through", async () => {
     await runQaCharacterEvalCommand({
       repoRoot: "/tmp/openclaw-repo",

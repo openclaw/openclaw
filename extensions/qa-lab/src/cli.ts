@@ -26,6 +26,7 @@ async function runQaSuite(opts: {
   alternateModel?: string;
   fastMode?: boolean;
   cliAuthMode?: string;
+  parityPack?: string;
   scenarioIds?: string[];
   concurrency?: number;
   runner?: string;
@@ -159,6 +160,7 @@ export function registerQaLabCli(program: Command) {
       "--cli-auth-mode <mode>",
       "CLI backend auth mode for live Claude CLI runs: auto, api-key, or subscription",
     )
+    .option("--parity-pack <name>", 'Preset scenario pack; currently only "agentic" is supported')
     .option("--scenario <id>", "Run only the named QA scenario (repeatable)", collectString, [])
     .option("--concurrency <count>", "Scenario worker concurrency", (value: string) =>
       Number(value),
@@ -177,6 +179,7 @@ export function registerQaLabCli(program: Command) {
         model?: string;
         altModel?: string;
         cliAuthMode?: string;
+        parityPack?: string;
         scenario?: string[];
         concurrency?: number;
         fast?: boolean;
@@ -194,6 +197,7 @@ export function registerQaLabCli(program: Command) {
           alternateModel: opts.altModel,
           fastMode: opts.fast,
           cliAuthMode: opts.cliAuthMode,
+          parityPack: opts.parityPack,
           scenarioIds: opts.scenario,
           concurrency: opts.concurrency,
           image: opts.image,
