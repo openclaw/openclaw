@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { buildModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { saveSessionStore } from "../../config/sessions.js";
+import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { applyResetModelOverride } from "./session-reset-model.js";
@@ -1069,6 +1069,63 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       }),
     );
     archiveSpy.mockRestore();
+  });
+
+  it("clears cached skills snapshot and prompt report on /new", async () => {
+    const storePath = await createStorePath("openclaw-reset-skills-snapshot-");
+    const sessionKey = "agent:main:telegram:dm:user-snapshot-reset";
+    const existingSessionId = "existing-session-snapshot";
+    await seedSessionStoreWithOverrides({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      overrides: {
+        skillsSnapshot: {
+          prompt: "OLD",
+          skills: [{ name: "weather" }],
+          resolvedSkills: [],
+          version: 123,
+        },
+        systemPromptReport: {
+          source: "run",
+          generatedAt: Date.now(),
+          sessionId: existingSessionId,
+          sessionKey,
+          provider: "openai",
+          model: "gpt-4o-mini",
+          workspaceDir: "/tmp/workspace",
+        },
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        From: "user-snapshot-reset",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    expect(result.sessionEntry.skillsSnapshot).toBeUndefined();
+    expect(result.sessionEntry.systemPromptReport).toBeUndefined();
+
+    const persisted = loadSessionStore(storePath, { skipCache: true });
+    expect(persisted[sessionKey]?.skillsSnapshot).toBeUndefined();
+    expect(persisted[sessionKey]?.systemPromptReport).toBeUndefined();
   });
 
   it("idle-based new session does NOT preserve overrides (no entry to read)", async () => {

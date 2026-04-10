@@ -463,6 +463,12 @@ export async function initSessionState(params: {
     sessionEntry.compactionCount = 0;
     sessionEntry.memoryFlushCompactionCount = undefined;
     sessionEntry.memoryFlushAt = undefined;
+    // Force the next run to rebuild prompt/bootstrap state for the new session.
+    // Without this, /new can inherit a stale skills snapshot from the prior
+    // session key and miss newly added skills until some unrelated refresh path
+    // bumps the cached snapshot.
+    sessionEntry.skillsSnapshot = undefined;
+    sessionEntry.systemPromptReport = undefined;
     // Clear stale token metrics from previous session so /status doesn't
     // display the old session's context usage after /new or /reset.
     sessionEntry.totalTokens = undefined;
