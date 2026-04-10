@@ -187,6 +187,18 @@ describe("exec approvals store helpers", () => {
     expect(fs.readFileSync(targetPath, "utf8")).toBe('{"sentinel":true}\n');
   });
 
+  it("refuses to traverse a symlinked parent component in the approvals path", () => {
+    const realHome = makeTempDir();
+    const linkedHome = `${realHome}-link`;
+    tempDirs.push(realHome);
+    fs.symlinkSync(realHome, linkedHome);
+    process.env.OPENCLAW_HOME = linkedHome;
+
+    expect(() =>
+      saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
+    ).toThrow(/Refusing to traverse symlink in exec approvals path/);
+  });
+
   it("adds trimmed allowlist entries once and persists generated ids", () => {
     const dir = createHomeDir();
     vi.spyOn(Date, "now").mockReturnValue(123_456);

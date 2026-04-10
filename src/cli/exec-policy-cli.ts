@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import type { Command } from "commander";
 import type { OpenClawConfig } from "../config/config.js";
 import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
@@ -88,10 +89,7 @@ async function runExecPolicyAction(action: () => Promise<void>): Promise<void> {
 }
 
 function sanitizeExecPolicyTableCell(value: string): string {
-  return value
-    .split("\n")
-    .map((line) => sanitizeExecApprovalDisplayText(sanitizeTerminalText(line)))
-    .join("\n");
+  return sanitizeExecApprovalDisplayText(sanitizeTerminalText(value));
 }
 
 function sanitizeExecPolicyMessage(value: unknown): string {
@@ -276,7 +274,13 @@ async function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPol
       nextConfig,
     });
   } catch (err) {
-    saveExecApprovals(approvalsSnapshot.file);
+    if (!approvalsSnapshot.exists) {
+      fs.rmSync(approvalsSnapshot.path, { force: true });
+    } else if (approvalsSnapshot.raw !== null) {
+      fs.writeFileSync(approvalsSnapshot.path, approvalsSnapshot.raw, "utf8");
+    } else {
+      saveExecApprovals(approvalsSnapshot.file);
+    }
     throw err;
   }
   return await buildLocalExecPolicyShowPayload();
