@@ -12,7 +12,7 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
-import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
+import { runWithModelFallback, isFallbackSummaryError, type ModelFallbackRunOptions } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
