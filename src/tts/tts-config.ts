@@ -1,9 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import type { TtsAutoMode, TtsMode } from "../config/types.tts.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
-import { normalizeTtsAutoMode } from "./tts-auto-mode.js";
 export { normalizeTtsAutoMode } from "./tts-auto-mode.js";
 
 export function resolveConfiguredTtsMode(cfg: OpenClawConfig): TtsMode {

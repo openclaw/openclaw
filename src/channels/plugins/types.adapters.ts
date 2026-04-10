@@ -36,6 +36,7 @@ import type {
 } from "./types.core.js";
 
 type ConfiguredBindingRule = AgentBinding;
+export type { ChannelApprovalKind } from "../../infra/approval-handler-runtime-types.js";
 
 export type ChannelActionAvailabilityState =
   | { kind: "enabled" }
@@ -666,8 +667,7 @@ export type ChannelApprovalDeliveryAdapter = {
     request: ExecApprovalRequest;
   }) => boolean;
 };
-
-export type ChannelApprovalKind = "exec" | "plugin";
+export type { ChannelApprovalKind } from "../../infra/approval-handler-runtime-types.js";
 
 export type ChannelApproveCommandBehavior =
   | { kind: "allow" }

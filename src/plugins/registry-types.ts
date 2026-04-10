@@ -1,6 +1,6 @@
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
-import type { OperatorScope } from "../gateway/method-scopes.js";
+import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandlers } from "../gateway/server-methods/types.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { PluginActivationSource } from "./config-state.js";

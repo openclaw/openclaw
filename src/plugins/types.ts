@@ -11,7 +11,8 @@ import type {
   AuthProfileStore,
 } from "../agents/auth-profiles/types.js";
 import type { AgentHarness } from "../agents/harness/types.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+import type { AgentHarness } from "../agents/harness/types.js";
 import type { FailoverReason } from "../agents/pi-embedded-helpers/types.js";
 import type { ModelProviderRequestTransportOverrides } from "../agents/provider-request-config.js";
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
@@ -31,7 +32,7 @@ import type {
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
-import type { OperatorScope } from "../gateway/method-scopes.js";
+import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
@@ -80,8 +81,13 @@ import type {
 import type { DeliveryContext } from "../utils/delivery-context.js";
 import type { VideoGenerationProvider } from "../video-generation/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import type { PluginKind } from "./plugin-kind.types.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 import type { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
+import type {
+  ProviderDefaultThinkingPolicyContext,
+  ProviderThinkingPolicyContext,
+} from "./provider-thinking.types.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 export type { PluginRuntime } from "./runtime/types.js";
@@ -112,7 +118,7 @@ export type PluginConfigUiHint = {
   placeholder?: string;
 };
 
-export type PluginKind = "memory" | "context-engine";
+export type { PluginKind } from "./plugin-kind.types.js";
 
 export type PluginConfigValidation =
   | { ok: true; value?: unknown }
@@ -901,28 +907,10 @@ export type ProviderBuiltInModelSuppressionResult = {
   errorMessage?: string;
 };
 
-/**
- * Provider-owned thinking policy input.
- *
- * Used by shared `/think`, ACP controls, and directive parsing to ask a
- * provider whether a model supports special reasoning UX such as xhigh or a
- * binary on/off toggle.
- */
-export type ProviderThinkingPolicyContext = {
-  provider: string;
-  modelId: string;
-};
-
-/**
- * Provider-owned default thinking policy input.
- *
- * `reasoning` is the merged catalog hint for the selected model when one is
- * available. Providers can use it to keep "reasoning model => low" behavior
- * without re-reading the catalog themselves.
- */
-export type ProviderDefaultThinkingPolicyContext = ProviderThinkingPolicyContext & {
-  reasoning?: boolean;
-};
+export type {
+  ProviderDefaultThinkingPolicyContext,
+  ProviderThinkingPolicyContext,
+} from "./provider-thinking.types.js";
 
 /**
  * Provider-owned "modern model" policy input.

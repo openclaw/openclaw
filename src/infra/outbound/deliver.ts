@@ -13,7 +13,7 @@ import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load
 import type {
   ChannelOutboundAdapter,
   ChannelOutboundContext,
-} from "../../channels/plugins/types.js";
+} from "../../channels/plugins/types.adapters.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
@@ -39,7 +39,6 @@ import type { NormalizedOutboundPayload } from "./payloads.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
 import { resolveOutboundSendDep, type OutboundSendDeps } from "./send-deps.js";
 import type { OutboundSessionContext } from "./session-context.js";
-import type { OutboundChannel } from "./targets.js";
 
 export type { OutboundDeliveryResult } from "./deliver-types.js";
 export type { NormalizedOutboundPayload } from "./payloads.js";
