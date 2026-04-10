@@ -18,6 +18,7 @@ export function createCodexAppServerAgentHarness(options?: {
   id?: string;
   label?: string;
   providerIds?: Iterable<string>;
+  pluginConfig?: unknown;
 }): AgentHarness {
   const providerIds = new Set(
     [...(options?.providerIds ?? DEFAULT_CODEX_HARNESS_PROVIDER_IDS)].map((id) =>
@@ -37,8 +38,10 @@ export function createCodexAppServerAgentHarness(options?: {
         reason: `provider is not one of: ${[...providerIds].toSorted().join(", ")}`,
       };
     },
-    runAttempt: runCodexAppServerAttempt,
-    compact: maybeCompactCodexAppServerSession,
+    runAttempt: (params) =>
+      runCodexAppServerAttempt(params, { pluginConfig: options?.pluginConfig }),
+    compact: (params) =>
+      maybeCompactCodexAppServerSession(params, { pluginConfig: options?.pluginConfig }),
     reset: async (params) => {
       if (params.sessionFile) {
         await clearCodexAppServerBinding(params.sessionFile);
