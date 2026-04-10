@@ -91,6 +91,10 @@ export function buildOpenrouterImageGenerationProvider(): ImageGenerationProvide
       },
     },
     async generateImage(req) {
+      if ((req.inputImages?.length ?? 0) > 0) {
+        throw new Error("OpenRouter image generation does not support image editing");
+      }
+
       const auth = await resolveApiKeyForProvider({
         provider: "openrouter",
         cfg: req.cfg,

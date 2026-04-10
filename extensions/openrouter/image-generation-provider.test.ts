@@ -166,6 +166,19 @@ describe("openrouter image generation provider", () => {
     ).rejects.toThrow("OpenRouter image generation response missing image data");
   });
 
+  it("rejects input images since edit mode is not supported", async () => {
+    const provider = buildOpenrouterImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "openrouter",
+        model: "google/gemini-2.5-flash-image",
+        prompt: "edit this",
+        cfg: {},
+        inputImages: [{ buffer: Buffer.from("img"), mimeType: "image/png" }],
+      }),
+    ).rejects.toThrow("OpenRouter image generation does not support image editing");
+  });
+
   it("throws when API key is missing", async () => {
     resolveApiKeyForProviderMock.mockResolvedValueOnce({ apiKey: "" });
 

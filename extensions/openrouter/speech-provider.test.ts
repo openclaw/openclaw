@@ -239,4 +239,96 @@ describe("openrouter speech provider", () => {
       ]),
     );
   });
+
+  it("normalizes raw provider config via resolveConfig", () => {
+    const provider = buildOpenrouterSpeechProvider();
+    const resolved = provider.resolveConfig?.({
+      cfg: {} as never,
+      timeoutMs: 30_000,
+      rawConfig: {
+        providers: {
+          openrouter: {
+            apiKey: "or-key",
+            model: "openai/gpt-audio",
+            voice: "nova",
+            format: "wav",
+          },
+        },
+      },
+    });
+
+    expect(resolved).toEqual({
+      apiKey: "or-key",
+      model: "openai/gpt-audio",
+      voice: "nova",
+      format: "wav",
+    });
+  });
+
+  it("resolveConfig returns empty config for missing provider section", () => {
+    const provider = buildOpenrouterSpeechProvider();
+    const resolved = provider.resolveConfig?.({
+      cfg: {} as never,
+      timeoutMs: 30_000,
+      rawConfig: {},
+    });
+
+    expect(resolved).toEqual({});
+  });
+
+  it("parses voice directive token", () => {
+    const provider = buildOpenrouterSpeechProvider();
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "voice",
+        value: "nova",
+        policy: { allowVoice: true, allowModelId: true },
+      } as never),
+    ).toEqual({ handled: true, overrides: { voice: "nova" } });
+  });
+
+  it("rejects invalid voice in directive token", () => {
+    const provider = buildOpenrouterSpeechProvider();
+    const result = provider.parseDirectiveToken?.({
+      key: "voice",
+      value: "invalid-voice",
+      policy: { allowVoice: true },
+    } as never);
+
+    expect(result).toMatchObject({ handled: true });
+    expect(result?.warnings).toContain('invalid OpenRouter voice "invalid-voice"');
+  });
+
+  it("parses model directive token", () => {
+    const provider = buildOpenrouterSpeechProvider();
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "model",
+        value: "openai/gpt-audio",
+        policy: { allowModelId: true },
+      } as never),
+    ).toEqual({ handled: true, overrides: { model: "openai/gpt-audio" } });
+  });
+
+  it("does not handle unknown model in directive token", () => {
+    const provider = buildOpenrouterSpeechProvider();
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "model",
+        value: "unknown/model",
+        policy: { allowModelId: true },
+      } as never),
+    ).toEqual({ handled: false });
+  });
+
+  it("ignores voice directive when policy disallows it", () => {
+    const provider = buildOpenrouterSpeechProvider();
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "voice",
+        value: "nova",
+        policy: { allowVoice: false },
+      } as never),
+    ).toEqual({ handled: true });
+  });
 });

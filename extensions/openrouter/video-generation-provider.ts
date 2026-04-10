@@ -232,10 +232,14 @@ export function buildOpenrouterVideoGenerationProvider(): VideoGenerationProvide
         dispatcherPolicy,
       });
 
+      // Release the submit response before the long-running poll+download loop
+      // to avoid holding the connection open for the entire generation duration.
+      let videoId: string;
+      let pollingUrl: string;
       try {
         await assertOkOrThrowHttpError(response, "OpenRouter video generation failed");
         const submitted = (await response.json()) as OpenRouterVideoSubmitResponse;
-        const videoId = normalizeOptionalString(submitted.id);
+        videoId = normalizeOptionalString(submitted.id) ?? "";
         if (!videoId) {
           throw new Error("OpenRouter video generation response missing video id");
         }
@@ -243,37 +247,38 @@ export function buildOpenrouterVideoGenerationProvider(): VideoGenerationProvide
         // Only trust polling_url if it shares the same origin as baseUrl to
         // prevent credential exfiltration via a crafted response.
         const candidatePollingUrl = normalizeOptionalString(submitted.polling_url);
-        const pollingUrl =
+        pollingUrl =
           candidatePollingUrl && isSameOrigin(baseUrl, candidatePollingUrl)
             ? candidatePollingUrl
             : `${baseUrl}/videos/${videoId}`;
-        const completed = await pollOpenRouterVideo({
-          pollingUrl,
-          headers,
-          timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-          fetchFn,
-        });
-
-        const video = await downloadOpenRouterVideo({
-          videoId,
-          baseUrl,
-          headers,
-          timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-          fetchFn,
-          unsignedUrl: completed.unsigned_urls?.[0],
-        });
-
-        return {
-          videos: [video],
-          model,
-          metadata: {
-            videoId,
-            generationId: completed.generation_id,
-          },
-        };
       } finally {
         await release();
       }
+
+      const completed = await pollOpenRouterVideo({
+        pollingUrl,
+        headers,
+        timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        fetchFn,
+      });
+
+      const video = await downloadOpenRouterVideo({
+        videoId,
+        baseUrl,
+        headers,
+        timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        fetchFn,
+        unsignedUrl: completed.unsigned_urls?.[0],
+      });
+
+      return {
+        videos: [video],
+        model,
+        metadata: {
+          videoId,
+          generationId: completed.generation_id,
+        },
+      };
     },
   };
 }

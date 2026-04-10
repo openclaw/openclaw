@@ -1,4 +1,8 @@
-import type { SpeechProviderPlugin } from "openclaw/plugin-sdk/speech";
+import type {
+  SpeechDirectiveTokenParseContext,
+  SpeechProviderConfig,
+  SpeechProviderPlugin,
+} from "openclaw/plugin-sdk/speech";
 import {
   assertOkOrThrowHttpError,
   fetchWithTimeout,
@@ -36,6 +40,32 @@ type OpenRouterSpeechOverrides = {
   voice?: string;
 };
 
+function isValidVoice(voice: string): boolean {
+  return (OPENROUTER_SPEECH_VOICES as readonly string[]).includes(voice);
+}
+
+function isValidModel(model: string): boolean {
+  return (OPENROUTER_SPEECH_MODELS as readonly string[]).includes(model);
+}
+
+function normalizeRawConfig(rawConfig: Record<string, unknown>): OpenRouterSpeechConfig {
+  const providers =
+    rawConfig.providers && typeof rawConfig.providers === "object"
+      ? (rawConfig.providers as Record<string, unknown>)
+      : undefined;
+  const raw =
+    providers?.openrouter && typeof providers.openrouter === "object"
+      ? (providers.openrouter as Record<string, unknown>)
+      : {};
+  return {
+    apiKey: normalizeOptionalString(raw.apiKey),
+    baseUrl: normalizeOptionalString(raw.baseUrl),
+    model: normalizeOptionalString(raw.model),
+    voice: normalizeOptionalString(raw.voice),
+    format: normalizeOptionalString(raw.format),
+  };
+}
+
 function readConfig(providerConfig: Record<string, unknown>): OpenRouterSpeechConfig {
   return {
     apiKey: normalizeOptionalString(providerConfig.apiKey),
@@ -71,12 +101,43 @@ function resolveResponseFormat(
   return { format: "mp3", mimeType: "audio/mpeg", fileExtension: ".mp3" };
 }
 
+function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
+  handled: boolean;
+  overrides?: Record<string, unknown>;
+  warnings?: string[];
+} {
+  switch (ctx.key) {
+    case "voice":
+    case "openrouter_voice":
+      if (!ctx.policy.allowVoice) {
+        return { handled: true };
+      }
+      if (!isValidVoice(ctx.value)) {
+        return { handled: true, warnings: [`invalid OpenRouter voice "${ctx.value}"`] };
+      }
+      return { handled: true, overrides: { voice: ctx.value } };
+    case "model":
+    case "openrouter_model":
+      if (!ctx.policy.allowModelId) {
+        return { handled: true };
+      }
+      if (!isValidModel(ctx.value)) {
+        return { handled: false };
+      }
+      return { handled: true, overrides: { model: ctx.value } };
+    default:
+      return { handled: false };
+  }
+}
+
 export function buildOpenrouterSpeechProvider(): SpeechProviderPlugin {
   return {
     id: "openrouter",
     label: "OpenRouter",
     models: [...OPENROUTER_SPEECH_MODELS],
     voices: [...OPENROUTER_SPEECH_VOICES],
+    resolveConfig: ({ rawConfig }): SpeechProviderConfig => normalizeRawConfig(rawConfig),
+    parseDirectiveToken,
     listVoices: async () =>
       OPENROUTER_SPEECH_VOICES.map((voice) => ({ id: voice, name: voice })),
     isConfigured: ({ providerConfig }) => {
