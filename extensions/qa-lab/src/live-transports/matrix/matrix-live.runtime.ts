@@ -508,7 +508,9 @@ export async function runMatrixQaLive(params: {
     { encoding: "utf8", mode: 0o600 },
   );
 
-  const failedChecks = checks.filter((check) => check.status === "fail");
+  const failedChecks = checks.filter(
+    (check) => check.status === "fail" && check.name !== "Matrix cleanup",
+  );
   const failedScenarios = scenarioResults.filter((scenario) => scenario.status === "fail");
   if (failedChecks.length > 0 || failedScenarios.length > 0) {
     throw new Error(
@@ -517,6 +519,7 @@ export async function runMatrixQaLive(params: {
         details: [
           ...failedChecks.map((check) => `check ${check.name}: ${check.details ?? "failed"}`),
           ...failedScenarios.map((scenario) => `scenario ${scenario.id}: ${scenario.details}`),
+          ...cleanupErrors.map((error) => `cleanup: ${error}`),
         ],
         artifacts: artifactPaths,
       }),

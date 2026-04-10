@@ -4,6 +4,7 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
   execCommand,
+  fetchHealthUrl,
   resolveComposeServiceUrl,
   resolveHostPort,
   waitForDockerServiceHealth,
@@ -62,7 +63,7 @@ function renderMatrixQaCompose(params: {
   ${MATRIX_QA_SERVICE}:
     image: ${params.image}
     ports:
-      - "${params.homeserverPort}:${MATRIX_QA_INTERNAL_PORT}"
+      - "127.0.0.1:${params.homeserverPort}:${MATRIX_QA_INTERNAL_PORT}"
     environment:
       TUWUNEL_ADDRESS: "0.0.0.0"
       TUWUNEL_ALLOW_ENCRYPTION: "false"
@@ -143,11 +144,7 @@ export async function startMatrixQaHarness(
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const resolveHostPortImpl = deps?.resolveHostPortImpl ?? resolveHostPort;
   const runCommand = deps?.runCommand ?? execCommand;
-  const fetchImpl =
-    deps?.fetchImpl ??
-    (async (input: string) => {
-      return await fetch(input);
-    });
+  const fetchImpl = deps?.fetchImpl ?? fetchHealthUrl;
   const sleepImpl = deps?.sleepImpl ?? sleep;
   const homeserverPort = await resolveHostPortImpl(
     params.homeserverPort ?? MATRIX_QA_DEFAULT_PORT,
@@ -194,7 +191,12 @@ export async function startMatrixQaHarness(
       repoRoot,
       runCommand,
     );
-    if (containerBaseUrl) {
+    const containerReachable = containerBaseUrl
+      ? await fetchImpl(buildVersionsUrl(containerBaseUrl))
+          .then((response) => response.ok)
+          .catch(() => false)
+      : false;
+    if (containerReachable && containerBaseUrl) {
       baseUrl = containerBaseUrl;
     }
   }

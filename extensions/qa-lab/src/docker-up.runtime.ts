@@ -3,6 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { writeQaDockerHarnessFiles } from "./docker-harness.js";
 import {
   execCommand,
+  fetchHealthUrl,
   resolveComposeServiceUrl,
   resolveHostPort,
   waitForDockerServiceHealth,
@@ -51,11 +52,7 @@ export async function runQaDockerUp(
   );
   const qaLabPort = await resolveHostPortImpl(params.qaLabPort ?? 43124, params.qaLabPort != null);
   const runCommand = deps?.runCommand ?? execCommand;
-  const fetchImpl =
-    deps?.fetchImpl ??
-    (async (input: string) => {
-      return await fetch(input);
-    });
+  const fetchImpl = deps?.fetchImpl ?? fetchHealthUrl;
   const sleepImpl = deps?.sleepImpl ?? sleep;
 
   if (!params.skipUiBuild) {

@@ -29,6 +29,7 @@ describe("matrix harness runtime", () => {
       };
 
       expect(compose).toContain(`image: ${__testing.MATRIX_QA_DEFAULT_IMAGE}`);
+      expect(compose).toContain('      - "127.0.0.1:28008:8008"');
       expect(compose).toContain('TUWUNEL_ALLOW_REGISTRATION: "true"');
       expect(compose).toContain('TUWUNEL_REGISTRATION_TOKEN: "secret-token"');
       expect(compose).toContain('TUWUNEL_SERVER_NAME: "matrix-qa.test"');
@@ -162,6 +163,55 @@ describe("matrix harness runtime", () => {
       expect(calls).toContain(
         "docker inspect --format {{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}} container-123 @/repo/openclaw",
       );
+    } finally {
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the host URL when the container IP is also unreachable", async () => {
+    const fetchCalls: string[] = [];
+    const outputDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-harness-"));
+
+    try {
+      const result = await startMatrixQaHarness(
+        {
+          outputDir,
+          repoRoot: "/repo/openclaw",
+          homeserverPort: 28008,
+        },
+        {
+          async runCommand(_command, args) {
+            const rendered = args.join(" ");
+            if (rendered.includes("ps --format json")) {
+              return { stdout: '{"State":"running"}\n', stderr: "" };
+            }
+            if (rendered.includes("ps -q")) {
+              return { stdout: "container-123\n", stderr: "" };
+            }
+            if (rendered.includes("inspect --format")) {
+              return { stdout: "172.18.0.10\n", stderr: "" };
+            }
+            return { stdout: "", stderr: "" };
+          },
+          fetchImpl: vi.fn(async (input: string) => {
+            fetchCalls.push(input);
+            return {
+              ok:
+                input === "http://127.0.0.1:28008/_matrix/client/versions" &&
+                fetchCalls.filter((url) => url === input).length > 1,
+            };
+          }),
+          sleepImpl: vi.fn(async () => {}),
+          resolveHostPortImpl: vi.fn(async (port: number) => port),
+        },
+      );
+
+      expect(result.baseUrl).toBe("http://127.0.0.1:28008/");
+      expect(fetchCalls).toEqual([
+        "http://127.0.0.1:28008/_matrix/client/versions",
+        "http://172.18.0.10:8008/_matrix/client/versions",
+        "http://127.0.0.1:28008/_matrix/client/versions",
+      ]);
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }

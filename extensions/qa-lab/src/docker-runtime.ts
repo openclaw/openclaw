@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { createServer } from "node:net";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 export type RunCommand = (
   command: string,
@@ -8,6 +9,22 @@ export type RunCommand = (
 ) => Promise<{ stdout: string; stderr: string }>;
 
 export type FetchLike = (input: string) => Promise<{ ok: boolean }>;
+
+export async function fetchHealthUrl(url: string): Promise<{ ok: boolean }> {
+  const { response, release } = await fetchWithSsrFGuard({
+    url,
+    init: {
+      signal: AbortSignal.timeout(2_000),
+    },
+    policy: { allowPrivateNetwork: true },
+    auditContext: "qa-lab-docker-health-check",
+  });
+  try {
+    return { ok: response.ok };
+  } finally {
+    await release();
+  }
+}
 
 export function describeError(error: unknown) {
   if (error instanceof Error) {
@@ -243,5 +260,6 @@ export async function resolveComposeServiceUrl(
 }
 
 export const __testing = {
+  fetchHealthUrl,
   normalizeDockerServiceStatus,
 };
