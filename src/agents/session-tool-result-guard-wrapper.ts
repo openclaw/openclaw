@@ -23,6 +23,7 @@ export function guardSessionManager(
   opts?: {
     agentId?: string;
     sessionKey?: string;
+    sessionId?: string;
     inputProvenance?: InputProvenance;
     allowSyntheticToolResults?: boolean;
     allowedToolNames?: Iterable<string>;
@@ -67,6 +68,7 @@ export function guardSessionManager(
 
   const guard = installSessionToolResultGuard(sessionManager, {
     sessionKey: opts?.sessionKey,
+    sessionId: opts?.sessionId,
     transformMessageForPersistence: (message) =>
       applyInputProvenanceToUserMessage(message, opts?.inputProvenance),
     transformToolResultForPersistence: transform,

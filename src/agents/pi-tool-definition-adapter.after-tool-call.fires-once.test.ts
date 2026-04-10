@@ -21,6 +21,7 @@ const hookMocks = vi.hoisted(() => ({
 
 const beforeToolCallMocks = vi.hoisted(() => ({
   consumeAdjustedParamsForToolCall: vi.fn((_: string): unknown => undefined),
+  peekAdjustedParamsForToolCall: vi.fn((_: string): unknown => undefined),
   isToolWrappedWithBeforeToolCallHook: vi.fn(() => false),
   runBeforeToolCallHook: vi.fn(async ({ params }: { params: unknown }) => ({
     blocked: false,
@@ -89,6 +90,7 @@ async function loadFreshAfterToolCallModulesForTest() {
   }));
   vi.doMock("./pi-tools.before-tool-call.js", () => ({
     consumeAdjustedParamsForToolCall: beforeToolCallMocks.consumeAdjustedParamsForToolCall,
+    peekAdjustedParamsForToolCall: beforeToolCallMocks.peekAdjustedParamsForToolCall,
     isToolWrappedWithBeforeToolCallHook: beforeToolCallMocks.isToolWrappedWithBeforeToolCallHook,
     runBeforeToolCallHook: beforeToolCallMocks.runBeforeToolCallHook,
   }));
@@ -109,6 +111,8 @@ describe("after_tool_call fires exactly once in embedded runs", () => {
     hookMocks.runner.runBeforeToolCall.mockResolvedValue(undefined);
     beforeToolCallMocks.consumeAdjustedParamsForToolCall.mockClear();
     beforeToolCallMocks.consumeAdjustedParamsForToolCall.mockReturnValue(undefined);
+    beforeToolCallMocks.peekAdjustedParamsForToolCall.mockClear();
+    beforeToolCallMocks.peekAdjustedParamsForToolCall.mockReturnValue(undefined);
     beforeToolCallMocks.isToolWrappedWithBeforeToolCallHook.mockClear();
     beforeToolCallMocks.isToolWrappedWithBeforeToolCallHook.mockReturnValue(false);
     beforeToolCallMocks.runBeforeToolCallHook.mockClear();

@@ -1,6 +1,18 @@
 import { streamSimple } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import {
+  isOllamaCompatProvider,
+  resolveOllamaCompatNumCtxEnabled,
+  shouldInjectOllamaCompatNumCtx,
+  wrapOllamaCompatNumCtx,
+} from "../../../plugin-sdk/ollama-runtime.js";
+import {
+  ASSISTANT_FRESHNESS_GATE_ENV,
+  ASSISTANT_FRESHNESS_GATE_TEMPLATE_A,
+  isAssistantConclusionFreshnessGateEnabled,
+  resolveAssistantConclusionFreshnessGate,
+} from "../../assistant-conclusion-freshness-gate.js";
 import { appendBootstrapPromptWarning } from "../../bootstrap-budget.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../system-prompt-cache-boundary.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
@@ -125,6 +137,588 @@ describe("resolvePromptBuildHookResult", () => {
     expect(result.prependContext).toBe("prompt context\n\nlegacy context");
     expect(result.prependSystemContext).toBe("prompt prepend\n\nlegacy prepend");
     expect(result.appendSystemContext).toBe("prompt append\n\nlegacy append");
+  });
+
+  it("prepends internal freshness gate before hook-provided system context when fresh evidence is missing", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn(() => true),
+      runBeforePromptBuild: vi.fn(async () => ({
+        prependSystemContext: "prompt prepend",
+      })),
+      runBeforeAgentStart: vi.fn(async () => undefined),
+    };
+
+    const result = await resolvePromptBuildHookResult({
+      prompt: "What plugins are currently installed?",
+      messages: [],
+      hookCtx: {},
+      hookRunner,
+      freshnessGateEnv: {
+        [ASSISTANT_FRESHNESS_GATE_ENV]: "1",
+      },
+    });
+
+    expect(result.prependSystemContext).toBe(
+      `${ASSISTANT_FRESHNESS_GATE_TEMPLATE_A}\n\nprompt prepend`,
+    );
+  });
+
+  it("does not inject freshness gate by default when the feature flag is unset", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn(() => true),
+      runBeforePromptBuild: vi.fn(async () => ({
+        prependSystemContext: "prompt prepend",
+      })),
+      runBeforeAgentStart: vi.fn(async () => undefined),
+    };
+
+    const result = await resolvePromptBuildHookResult({
+      prompt: "What plugins are currently installed?",
+      messages: [],
+      hookCtx: {},
+      hookRunner,
+      freshnessGateEnv: {},
+    });
+
+    expect(result.prependSystemContext).toBe("prompt prepend");
+  });
+
+  it("does not inject freshness gate when fresh structured evidence already exists", async () => {
+    const now = Date.now();
+    const messages = [
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "exec",
+        content: "plugin output",
+        timestamp: now - 1_000,
+        __openclaw: {
+          transient: true,
+          diagnosticType: "openclaw.plugins_list",
+          taggedAt: now - 1_000,
+          sourceTool: "exec",
+        },
+      },
+    ];
+
+    const result = await resolvePromptBuildHookResult({
+      prompt: "What plugins are currently installed?",
+      messages,
+      hookCtx: {},
+      hookRunner: undefined,
+    });
+
+    expect(result.prependSystemContext).toBeUndefined();
+  });
+});
+
+describe("resolveAssistantConclusionFreshnessGate", () => {
+  it("treats the feature flag as disabled by default", () => {
+    expect(isAssistantConclusionFreshnessGateEnabled({})).toBe(false);
+  });
+
+  it("accepts explicit truthy feature flag values", () => {
+    expect(
+      isAssistantConclusionFreshnessGateEnabled({
+        [ASSISTANT_FRESHNESS_GATE_ENV]: "1",
+      }),
+    ).toBe(true);
+    expect(
+      isAssistantConclusionFreshnessGateEnabled({
+        [ASSISTANT_FRESHNESS_GATE_ENV]: "true",
+      }),
+    ).toBe(true);
+  });
+
+  it("classifies plugin install questions and injects gate when no evidence exists", () => {
+    const result = resolveAssistantConclusionFreshnessGate({
+      prompt: "What plugins are installed right now?",
+      messages: [],
+      now: 1_000_000,
+    });
+
+    expect(result).toMatchObject({
+      questionType: "plugin_install_state",
+      diagnosticType: "openclaw.plugins_list",
+      freshnessState: "missing",
+      prependSystemContext: ASSISTANT_FRESHNESS_GATE_TEMPLATE_A,
+      templateId: "A",
+    });
+  });
+
+  it("classifies config questions and treats old evidence as stale", () => {
+    const now = 2_000_000;
+    const result = resolveAssistantConclusionFreshnessGate({
+      prompt: "Does the config contain this key?",
+      now,
+      messages: [
+        {
+          role: "toolResult",
+          toolCallId: "call_cfg",
+          toolName: "read",
+          content: "config json",
+          timestamp: now - 2 * 60 * 60 * 1000,
+          __openclaw: {
+            transient: true,
+            diagnosticType: "openclaw.config_snapshot",
+            taggedAt: now - 2 * 60 * 60 * 1000,
+            sourceTool: "read",
+          },
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      questionType: "config_key_presence",
+      diagnosticType: "openclaw.config_snapshot",
+      freshnessState: "stale",
+      prependSystemContext: ASSISTANT_FRESHNESS_GATE_TEMPLATE_A,
+    });
+  });
+
+  it("does not treat mismatched config-target evidence as fresh", () => {
+    const now = 2_500_000;
+    const result = resolveAssistantConclusionFreshnessGate({
+      prompt: "What is the value of plugins.installs.openclaw-qqbot in config?",
+      now,
+      messages: [
+        {
+          role: "toolResult",
+          toolCallId: "call_cfg_target",
+          toolName: "gateway",
+          content: "gateway.mode=true",
+          timestamp: now - 5_000,
+          __openclaw: {
+            transient: true,
+            diagnosticType: "openclaw.config_snapshot",
+            diagnosticTarget: "gateway.mode",
+            taggedAt: now - 5_000,
+            sourceTool: "gateway",
+          },
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      questionType: "config_key_presence",
+      diagnosticType: "openclaw.config_snapshot",
+      freshnessState: "missing",
+      prependSystemContext: ASSISTANT_FRESHNESS_GATE_TEMPLATE_A,
+    });
+  });
+
+  it("allows broad openclaw.json snapshots for config-target freshness", () => {
+    const now = 2_600_000;
+    const result = resolveAssistantConclusionFreshnessGate({
+      prompt: "What is the value of plugins.installs.openclaw-qqbot in config?",
+      now,
+      messages: [
+        {
+          role: "toolResult",
+          toolCallId: "call_cfg_full",
+          toolName: "read",
+          content: "{...}",
+          timestamp: now - 5_000,
+          __openclaw: {
+            transient: true,
+            diagnosticType: "openclaw.config_snapshot",
+            diagnosticTarget: "/repo/openclaw.json",
+            taggedAt: now - 5_000,
+            sourceTool: "read",
+          },
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      questionType: "config_key_presence",
+      diagnosticType: "openclaw.config_snapshot",
+      freshnessState: "fresh",
+      matchedTimestamp: now - 5_000,
+    });
+  });
+
+  it("treats recent gateway config.get history as fresh evidence via toolCall fallback", () => {
+    const now = 4_000_000;
+    const result = resolveAssistantConclusionFreshnessGate({
+      prompt: "当前配置里有没有 plugins.installs.openclaw-qqbot 这一项？",
+      now,
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_cfg_gateway_1",
+              name: "gateway",
+              arguments: {
+                action: "config.get",
+                path: "plugins.installs",
+              },
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_cfg_gateway_1",
+          toolName: "gateway",
+          content: [
+            {
+              type: "text",
+              text: '{"ok":true}',
+            },
+          ],
+          details: {
+            ok: true,
+            result: {
+              path: "plugins.installs",
+            },
+          },
+          timestamp: now - 5_000,
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      questionType: "config_key_presence",
+      diagnosticType: "openclaw.config_snapshot",
+      freshnessState: "fresh",
+    });
+    expect(result.prependSystemContext).toBeUndefined();
+  });
+
+  it("does not treat unrelated config target as fresh via toolCall fallback", () => {
+    const now = 4_100_000;
+    const result = resolveAssistantConclusionFreshnessGate({
+      prompt: "当前配置里有没有 plugins.installs.openclaw-qqbot 这一项？",
+      now,
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_cfg_gateway_mismatch_1",
+              name: "gateway",
+              arguments: {
+                action: "config.get",
+                path: "gateway.mode",
+              },
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_cfg_gateway_mismatch_1",
+          toolName: "gateway",
+          content: [{ type: "text", text: '{"ok":true}' }],
+          details: {
+            ok: true,
+            result: {
+              path: "gateway.mode",
+            },
+          },
+          timestamp: now - 5_000,
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      questionType: "config_key_presence",
+      diagnosticType: "openclaw.config_snapshot",
+      freshnessState: "missing",
+      prependSystemContext: ASSISTANT_FRESHNESS_GATE_TEMPLATE_A,
+    });
+  });
+
+  it("treats recent gateway plugins.entries history as fresh evidence via toolCall fallback", () => {
+    const now = 5_000_000;
+    const result = resolveAssistantConclusionFreshnessGate({
+      prompt: "qqbot 现在在 plugins.entries 里还是 enabled 吗？",
+      now,
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_plugins_entries_1",
+              name: "gateway",
+              arguments: {
+                action: "config.get",
+                path: "plugins.entries",
+              },
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_plugins_entries_1",
+          toolName: "gateway",
+          content: [
+            {
+              type: "text",
+              text: '{"ok":true}',
+            },
+          ],
+          details: {
+            ok: true,
+            result: {
+              path: "plugins.entries",
+            },
+          },
+          timestamp: now - 10_000,
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      questionType: "plugin_install_state",
+      diagnosticType: "openclaw.plugins_list",
+      freshnessState: "fresh",
+    });
+    expect(result.prependSystemContext).toBeUndefined();
+  });
+
+  it("treats stringified toolCall arguments as fresh evidence via fallback inference", () => {
+    const now = 5_100_000;
+    const result = resolveAssistantConclusionFreshnessGate({
+      prompt: "qqbot 现在在 plugins.entries 里还是 enabled 吗？",
+      now,
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_plugins_entries_string_args_1",
+              name: "gateway",
+              arguments: JSON.stringify({
+                action: "config.get",
+                path: "plugins.entries",
+              }),
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_plugins_entries_string_args_1",
+          toolName: "gateway",
+          content: [{ type: "text", text: '{"ok":true}' }],
+          timestamp: now - 8_000,
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      questionType: "plugin_install_state",
+      diagnosticType: "openclaw.plugins_list",
+      freshnessState: "fresh",
+    });
+    expect(result.prependSystemContext).toBeUndefined();
+  });
+
+  it("ignores replay-omitted evidence when evaluating freshness", () => {
+    const now = 3_000_000;
+    const result = resolveAssistantConclusionFreshnessGate({
+      prompt: "What plugins are installed right now?",
+      now,
+      messages: [
+        {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "exec",
+          content: "old plugin output",
+          timestamp: now - 5_000,
+          __openclaw: {
+            transient: true,
+            diagnosticType: "openclaw.plugins_list",
+            taggedAt: now - 5_000,
+            sourceTool: "exec",
+            replayOmitted: true,
+          },
+        },
+      ],
+    });
+
+    expect(result.freshnessState).toBe("stale");
+    expect(result.prependSystemContext).toBe(ASSISTANT_FRESHNESS_GATE_TEMPLATE_A);
+  });
+
+  it("does not treat timestamp-less historical fallback evidence as fresh", () => {
+    const now = 6_000_000;
+    const result = resolveAssistantConclusionFreshnessGate({
+      prompt: "qqbot is enabled in plugins.entries, right?",
+      now,
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_plugins_entries_no_ts",
+              name: "gateway",
+              arguments: {
+                action: "config.get",
+                path: "plugins.entries",
+              },
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_plugins_entries_no_ts",
+          toolName: "gateway",
+          content: [{ type: "text", text: '{"ok":true}' }],
+          details: { ok: true, result: { path: "plugins.entries" } },
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      questionType: "plugin_install_state",
+      diagnosticType: "openclaw.plugins_list",
+      freshnessState: "stale",
+      prependSystemContext: ASSISTANT_FRESHNESS_GATE_TEMPLATE_A,
+    });
+  });
+
+  it("does not treat errored tool results as fresh evidence", () => {
+    const now = 6_100_000;
+    const result = resolveAssistantConclusionFreshnessGate({
+      prompt: "What plugins are installed right now?",
+      now,
+      messages: [
+        {
+          role: "toolResult",
+          toolCallId: "call_error_plugins",
+          toolName: "exec",
+          isError: true,
+          content: "command failed",
+          timestamp: now - 2_000,
+          __openclaw: {
+            transient: true,
+            diagnosticType: "openclaw.plugins_list",
+            taggedAt: now - 2_000,
+            sourceTool: "exec",
+          },
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      questionType: "plugin_install_state",
+      diagnosticType: "openclaw.plugins_list",
+      freshnessState: "stale",
+      prependSystemContext: ASSISTANT_FRESHNESS_GATE_TEMPLATE_A,
+    });
+  });
+
+  it("recognizes toolUse blocks with input in historical fallback inference", () => {
+    const now = 6_200_000;
+    const result = resolveAssistantConclusionFreshnessGate({
+      prompt: "qqbot is enabled in plugins.entries, right?",
+      now,
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolUse",
+              id: "call_tool_use_1",
+              name: "gateway",
+              input: {
+                action: "config.get",
+                path: "plugins.entries",
+              },
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolUseId: "call_tool_use_1",
+          toolName: "gateway",
+          content: [{ type: "text", text: '{"ok":true}' }],
+          timestamp: now - 5_000,
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      questionType: "plugin_install_state",
+      diagnosticType: "openclaw.plugins_list",
+      freshnessState: "fresh",
+    });
+    expect(result.prependSystemContext).toBeUndefined();
+  });
+
+  it("recognizes functionCall blocks in historical fallback inference", () => {
+    const now = 6_300_000;
+    const result = resolveAssistantConclusionFreshnessGate({
+      prompt: "Does the config currently contain this key?",
+      now,
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "functionCall",
+              id: "call_function_1",
+              name: "gateway",
+              arguments: {
+                action: "config.get",
+                path: "plugins.installs",
+              },
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_function_1",
+          toolName: "gateway",
+          content: [{ type: "text", text: '{"ok":true}' }],
+          timestamp: now - 5_000,
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      questionType: "config_key_presence",
+      diagnosticType: "openclaw.config_snapshot",
+      freshnessState: "fresh",
+    });
+    expect(result.prependSystemContext).toBeUndefined();
+  });
+
+  it("treats tagged gateway config.get evidence as fresh for config questions", () => {
+    const now = 4_000_000;
+    const result = resolveAssistantConclusionFreshnessGate({
+      prompt: "Does the config currently contain this key?",
+      now,
+      messages: [
+        {
+          role: "toolResult",
+          toolCallId: "call_gateway_cfg",
+          toolName: "gateway",
+          content: "config json",
+          timestamp: now - 5_000,
+          __openclaw: {
+            transient: true,
+            diagnosticType: "openclaw.config_snapshot",
+            taggedAt: now - 5_000,
+            sourceTool: "gateway",
+          },
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      questionType: "config_key_presence",
+      diagnosticType: "openclaw.config_snapshot",
+      freshnessState: "fresh",
+      matchedTimestamp: now - 5_000,
+    });
+    expect(result.prependSystemContext).toBeUndefined();
   });
 });
 

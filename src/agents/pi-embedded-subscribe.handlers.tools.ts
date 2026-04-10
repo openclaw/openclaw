@@ -42,9 +42,13 @@ import {
   sanitizeToolResult,
 } from "./pi-embedded-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
-import { consumeAdjustedParamsForToolCall } from "./pi-tools.before-tool-call.js";
+import {
+  consumeAdjustedParamsForToolCall,
+  peekAdjustedParamsForToolCall,
+} from "./pi-tools.before-tool-call.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
+import { recordPendingToolResultReplayMetadata } from "./tool-result-replay-metadata.js";
 
 type ToolStartRecord = {
   startTime: number;
@@ -538,12 +542,22 @@ export function handleToolExecutionStart(
     const rawToolName = String(evt.toolName);
     const toolName = normalizeToolName(rawToolName);
     const toolCallId = String(evt.toolCallId);
-    const args = evt.args;
+    const startArgs = evt.args;
     const runId = ctx.params.runId;
+    const adjustedStartArgs = peekAdjustedParamsForToolCall(toolCallId, runId);
+    const args =
+      adjustedStartArgs && typeof adjustedStartArgs === "object" ? adjustedStartArgs : startArgs;
 
     // Track start time and args for after_tool_call hook.
     const startedAt = Date.now();
     toolStartData.set(buildToolStartKey(runId, toolCallId), { startTime: startedAt, args });
+    recordPendingToolResultReplayMetadata({
+      sessionKey: ctx.params.sessionKey,
+      sessionId: ctx.params.sessionId,
+      toolCallId,
+      toolName,
+      args,
+    });
 
     if (toolName === "read") {
       const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
