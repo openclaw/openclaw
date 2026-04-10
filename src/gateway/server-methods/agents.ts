@@ -5,6 +5,8 @@ import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
 } from "../../agents/agent-scope.js";
+import { mergeIdentityMarkdownContent } from "../../agents/identity-file.js";
+import { resolveAgentIdentity } from "../../agents/identity.js";
 import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
@@ -26,18 +28,13 @@ import {
 } from "../../commands/agents.config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
+import type { IdentityConfig } from "../../config/types.base.js";
 import { sameFileIdentity } from "../../infra/file-identity.js";
-import {
-  appendFileWithinRoot,
-  SafeOpenError,
-  readLocalFileSafely,
-  writeFileWithinRoot,
-} from "../../infra/fs-safe.js";
+import { SafeOpenError, readLocalFileSafely, writeFileWithinRoot } from "../../infra/fs-safe.js";
 import { assertNoPathAliasEscape } from "../../infra/path-alias-guards.js";
 import { isNotFoundPathError } from "../../infra/path-guards.js";
 import { movePathToTrash } from "../../plugin-sdk/browser-maintenance.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import {
   ErrorCodes,
@@ -71,7 +68,6 @@ const agentsHandlerDeps = {
   isWorkspaceSetupCompleted,
   readLocalFileSafely,
   resolveAgentWorkspaceFilePath,
-  appendFileWithinRoot,
   writeFileWithinRoot,
 };
 
@@ -81,7 +77,6 @@ export const __testing = {
       isWorkspaceSetupCompleted: typeof isWorkspaceSetupCompleted;
       readLocalFileSafely: typeof readLocalFileSafely;
       resolveAgentWorkspaceFilePath: typeof resolveAgentWorkspaceFilePath;
-      appendFileWithinRoot: typeof appendFileWithinRoot;
       writeFileWithinRoot: typeof writeFileWithinRoot;
     }>,
   ) {
@@ -91,7 +86,6 @@ export const __testing = {
     agentsHandlerDeps.isWorkspaceSetupCompleted = isWorkspaceSetupCompleted;
     agentsHandlerDeps.readLocalFileSafely = readLocalFileSafely;
     agentsHandlerDeps.resolveAgentWorkspaceFilePath = resolveAgentWorkspaceFilePath;
-    agentsHandlerDeps.appendFileWithinRoot = appendFileWithinRoot;
     agentsHandlerDeps.writeFileWithinRoot = writeFileWithinRoot;
   },
 };
@@ -396,6 +390,10 @@ function sanitizeIdentityLine(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
+function resolveOptionalStringParam(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 function respondInvalidMethodParams(
   respond: RespondFn,
   method: string,
@@ -486,26 +484,34 @@ function respondWorkspaceFileMissing(params: {
   );
 }
 
-async function ensureWorkspaceFileReadyOrRespond(params: {
-  respond: RespondFn;
-  workspaceDir: string;
-  name: string;
-}): Promise<boolean> {
-  await fs.mkdir(params.workspaceDir, { recursive: true });
-  const resolvedPath = await resolveWorkspaceFilePathOrRespond(params);
-  return resolvedPath !== undefined;
-}
-
-async function appendWorkspaceFileOrRespond(params: {
+async function writeWorkspaceFileOrRespond(params: {
   respond: RespondFn;
   workspaceDir: string;
   name: string;
   content: string;
 }): Promise<boolean> {
+  await fs.mkdir(params.workspaceDir, { recursive: true });
+  const resolvedPath = await resolveWorkspaceFilePathOrRespond({
+    respond: params.respond,
+    workspaceDir: params.workspaceDir,
+    name: params.name,
+  });
+  if (!resolvedPath) {
+    return false;
+  }
+  const relativeWritePath = path.relative(resolvedPath.workspaceReal, resolvedPath.ioPath);
+  if (
+    !relativeWritePath ||
+    relativeWritePath.startsWith("..") ||
+    path.isAbsolute(relativeWritePath)
+  ) {
+    respondWorkspaceFileUnsafe(params.respond, params.name);
+    return false;
+  }
   try {
-    await agentsHandlerDeps.appendFileWithinRoot({
-      rootDir: params.workspaceDir,
-      relativePath: params.name,
+    await agentsHandlerDeps.writeFileWithinRoot({
+      rootDir: resolvedPath.workspaceReal,
+      relativePath: relativeWritePath,
       data: params.content,
       encoding: "utf8",
     });
@@ -517,6 +523,75 @@ async function appendWorkspaceFileOrRespond(params: {
     throw err;
   }
   return true;
+}
+
+function normalizeIdentityForFile(
+  identity: IdentityConfig | undefined,
+): IdentityConfig | undefined {
+  if (!identity) {
+    return undefined;
+  }
+  const resolved = {
+    name: identity.name?.trim() || undefined,
+    theme: identity.theme?.trim() || undefined,
+    emoji: identity.emoji?.trim() || undefined,
+    avatar: identity.avatar?.trim() || undefined,
+  } satisfies IdentityConfig;
+  if (!resolved.name && !resolved.theme && !resolved.emoji && !resolved.avatar) {
+    return undefined;
+  }
+  return resolved;
+}
+
+async function readWorkspaceFileContent(
+  workspaceDir: string,
+  name: string,
+): Promise<string | undefined> {
+  const resolvedPath = await agentsHandlerDeps.resolveAgentWorkspaceFilePath({
+    workspaceDir,
+    name,
+    allowMissing: true,
+  });
+  if (resolvedPath.kind !== "ready") {
+    return undefined;
+  }
+  try {
+    const safeRead = await agentsHandlerDeps.readLocalFileSafely({ filePath: resolvedPath.ioPath });
+    return safeRead.buffer.toString("utf-8");
+  } catch (err) {
+    if (err instanceof SafeOpenError && err.code === "not-found") {
+      return undefined;
+    }
+    throw err;
+  }
+}
+
+async function buildIdentityMarkdownForWrite(params: {
+  workspaceDir: string;
+  identity: IdentityConfig;
+  fallbackWorkspaceDir?: string;
+  preferFallbackWorkspaceContent?: boolean;
+}): Promise<string> {
+  let baseContent: string | undefined;
+  if (params.preferFallbackWorkspaceContent && params.fallbackWorkspaceDir) {
+    baseContent = await readWorkspaceFileContent(
+      params.fallbackWorkspaceDir,
+      DEFAULT_IDENTITY_FILENAME,
+    );
+    if (baseContent === undefined) {
+      baseContent = await readWorkspaceFileContent(params.workspaceDir, DEFAULT_IDENTITY_FILENAME);
+    }
+  } else {
+    baseContent = await readWorkspaceFileContent(params.workspaceDir, DEFAULT_IDENTITY_FILENAME);
+    if (baseContent === undefined && params.fallbackWorkspaceDir) {
+      baseContent = await readWorkspaceFileContent(
+        params.fallbackWorkspaceDir,
+        DEFAULT_IDENTITY_FILENAME,
+      );
+    }
+  }
+
+  return mergeIdentityMarkdownContent(baseContent, params.identity);
 }
 
 export const agentsHandlers: GatewayRequestHandlers = {
@@ -553,7 +628,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
 
     const cfg = loadConfig();
-    const rawName = normalizeOptionalString(String(params.name ?? "")) ?? "";
+    const rawName = String(params.name ?? "").trim();
     const agentId = normalizeAgentId(rawName);
     if (agentId === DEFAULT_AGENT_ID) {
       respond(
@@ -573,16 +648,27 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const workspaceDir = resolveUserPath(
-      normalizeOptionalString(String(params.workspace ?? "")) ?? "",
-    );
+    const workspaceDir = resolveUserPath(String(params.workspace ?? "").trim());
+
+    const safeName = sanitizeIdentityLine(rawName);
+    const model = resolveOptionalStringParam(params.model);
+    const emoji = resolveOptionalStringParam(params.emoji);
+    const avatar = resolveOptionalStringParam(params.avatar);
+
+    const identity = {
+      name: safeName,
+      ...(emoji ? { emoji: sanitizeIdentityLine(emoji) } : {}),
+      ...(avatar ? { avatar: sanitizeIdentityLine(avatar) } : {}),
+    };
 
     // Resolve agentDir against the config we're about to persist (vs the pre-write config),
     // so subsequent resolutions can't disagree about the agent's directory.
     let nextConfig = applyAgentConfig(cfg, {
       agentId,
-      name: rawName,
+      name: safeName,
       workspace: workspaceDir,
+      model,
+      identity,
     });
     const agentDir = resolveAgentDir(nextConfig, agentId);
     nextConfig = applyAgentConfig(nextConfig, { agentId, agentDir });
@@ -593,41 +679,26 @@ export const agentsHandlers: GatewayRequestHandlers = {
     await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: !skipBootstrap });
     await fs.mkdir(resolveSessionTranscriptsDirForAgent(agentId), { recursive: true });
 
-    // Always write Name to IDENTITY.md; optionally include emoji/avatar.
-    const safeName = sanitizeIdentityLine(rawName);
-    const emoji = normalizeOptionalString(params.emoji);
-    const avatar = normalizeOptionalString(params.avatar);
-    const lines = [
-      "",
-      `- Name: ${safeName}`,
-      ...(emoji ? [`- Emoji: ${sanitizeIdentityLine(emoji)}`] : []),
-      ...(avatar ? [`- Avatar: ${sanitizeIdentityLine(avatar)}`] : []),
-      "",
-    ];
-    if (
-      !(await ensureWorkspaceFileReadyOrRespond({
-        respond,
+    const persistedIdentity = normalizeIdentityForFile(resolveAgentIdentity(nextConfig, agentId));
+    if (persistedIdentity) {
+      const identityContent = await buildIdentityMarkdownForWrite({
         workspaceDir,
-        name: DEFAULT_IDENTITY_FILENAME,
-      }))
-    ) {
-      return;
+        identity: persistedIdentity,
+      });
+      if (
+        !(await writeWorkspaceFileOrRespond({
+          respond,
+          workspaceDir,
+          name: DEFAULT_IDENTITY_FILENAME,
+          content: identityContent,
+        }))
+      ) {
+        return;
+      }
     }
-
-    if (
-      !(await appendWorkspaceFileOrRespond({
-        respond,
-        workspaceDir,
-        name: DEFAULT_IDENTITY_FILENAME,
-        content: lines.join("\n"),
-      }))
-    ) {
-      return;
-    }
-
     await writeConfigFile(nextConfig);
 
-    respond(true, { ok: true, agentId, name: rawName, workspace: workspaceDir }, undefined);
+    respond(true, { ok: true, agentId, name: safeName, workspace: workspaceDir, model }, undefined);
   },
   "agents.update": async ({ params, respond }) => {
     if (!validateAgentsUpdateParams(params)) {
@@ -647,46 +718,62 @@ export const agentsHandlers: GatewayRequestHandlers = {
         ? resolveUserPath(params.workspace.trim())
         : undefined;
 
-    const model = normalizeOptionalString(params.model);
-    const avatar = normalizeOptionalString(params.avatar);
+    const model = resolveOptionalStringParam(params.model);
+    const emoji = resolveOptionalStringParam(params.emoji);
+    const avatar = resolveOptionalStringParam(params.avatar);
+
+    const safeName =
+      typeof params.name === "string" && params.name.trim()
+        ? sanitizeIdentityLine(params.name.trim())
+        : undefined;
+
+    const hasIdentityFields = Boolean(safeName || emoji || avatar);
+    const identity = hasIdentityFields
+      ? {
+          ...(safeName ? { name: safeName } : {}),
+          ...(emoji ? { emoji: sanitizeIdentityLine(emoji) } : {}),
+          ...(avatar ? { avatar: sanitizeIdentityLine(avatar) } : {}),
+        }
+      : undefined;
 
     const nextConfig = applyAgentConfig(cfg, {
       agentId,
-      ...(typeof params.name === "string" && params.name.trim()
-        ? { name: params.name.trim() }
-        : {}),
+      ...(safeName ? { name: safeName } : {}),
       ...(workspaceDir ? { workspace: workspaceDir } : {}),
       ...(model ? { model } : {}),
+      ...(identity ? { identity } : {}),
     });
 
+    let ensuredWorkspace: Awaited<ReturnType<typeof ensureAgentWorkspace>> | undefined;
     if (workspaceDir) {
       const skipBootstrap = Boolean(nextConfig.agents?.defaults?.skipBootstrap);
-      await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: !skipBootstrap });
+      ensuredWorkspace = await ensureAgentWorkspace({
+        dir: workspaceDir,
+        ensureBootstrapFiles: !skipBootstrap,
+      });
     }
 
-    const identityWorkspaceDir = avatar ? resolveAgentWorkspaceDir(nextConfig, agentId) : undefined;
-    if (
-      identityWorkspaceDir &&
-      !(await ensureWorkspaceFileReadyOrRespond({
-        respond,
+    const persistedIdentity = normalizeIdentityForFile(resolveAgentIdentity(nextConfig, agentId));
+    if (persistedIdentity && (workspaceDir || hasIdentityFields)) {
+      const identityWorkspaceDir = resolveAgentWorkspaceDir(nextConfig, agentId);
+      const previousWorkspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+      const fallbackWorkspaceDir =
+        workspaceDir && identityWorkspaceDir !== previousWorkspaceDir
+          ? previousWorkspaceDir
+          : undefined;
+      const identityContent = await buildIdentityMarkdownForWrite({
         workspaceDir: identityWorkspaceDir,
-        name: DEFAULT_IDENTITY_FILENAME,
-      }))
-    ) {
-      return;
-    }
-
-    if (avatar) {
-      if (!identityWorkspaceDir) {
-        respondWorkspaceFileUnsafe(respond, DEFAULT_IDENTITY_FILENAME);
-        return;
-      }
+        identity: persistedIdentity,
+        fallbackWorkspaceDir,
+        preferFallbackWorkspaceContent:
+          Boolean(fallbackWorkspaceDir) && ensuredWorkspace?.identityPathCreated === true,
+      });
       if (
-        !(await appendWorkspaceFileOrRespond({
+        !(await writeWorkspaceFileOrRespond({
           respond,
           workspaceDir: identityWorkspaceDir,
           name: DEFAULT_IDENTITY_FILENAME,
-          content: `\n- Avatar: ${sanitizeIdentityLine(avatar)}\n`,
+          content: identityContent,
         }))
       ) {
         return;

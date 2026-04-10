@@ -262,6 +262,13 @@ function normalizeTelegramConversationIdFallback(params: {
   return /^-?\d+$/.test(normalized) ? normalized : undefined;
 }
 
+const threadBindingFallbackConversationResolvers = {
+  line: (params: { to?: string; groupId?: string }) =>
+    normalizeLineConversationIdFallback(params.groupId ?? params.to),
+  telegram: (params: { to?: string; threadId?: string | number; groupId?: string }) =>
+    normalizeTelegramConversationIdFallback(params),
+} as const;
+
 function resolveSpawnMode(params: {
   requestedMode?: SpawnAcpMode;
   threadRequested: boolean;
@@ -509,17 +516,14 @@ function resolveConversationIdForThreadBinding(params: {
   if (normalizeOptionalString(pluginResolvedConversationId)) {
     return normalizeOptionalString(pluginResolvedConversationId);
   }
-  if (channelKey === "line") {
-    const lineConversationId = normalizeLineConversationIdFallback(params.groupId ?? params.to);
-    if (lineConversationId) {
-      return lineConversationId;
-    }
-  }
-  if (channelKey === "telegram") {
-    const telegramConversationId = normalizeTelegramConversationIdFallback(params);
-    if (telegramConversationId) {
-      return telegramConversationId;
-    }
+  const compatibilityConversationId =
+    channelKey && Object.hasOwn(threadBindingFallbackConversationResolvers, channelKey)
+      ? threadBindingFallbackConversationResolvers[
+          channelKey as keyof typeof threadBindingFallbackConversationResolvers
+        ](params)
+      : undefined;
+  if (compatibilityConversationId) {
+    return compatibilityConversationId;
   }
   const genericConversationId = resolveConversationIdFromTargets({
     threadId: params.threadId,

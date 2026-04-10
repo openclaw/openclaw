@@ -485,7 +485,10 @@ async function sweepSubagentRuns() {
     // Session-mode runs have no archiveAtMs — apply absolute TTL after cleanup completes.
     // Use cleanupCompletedAt (not endedAt) to avoid interrupting deferred cleanup flows.
     if (!entry.archiveAtMs) {
-      if (typeof entry.cleanupCompletedAt === "number" && now - entry.cleanupCompletedAt > SESSION_RUN_TTL_MS) {
+      if (
+        typeof entry.cleanupCompletedAt === "number" &&
+        now - entry.cleanupCompletedAt > SESSION_RUN_TTL_MS
+      ) {
         clearPendingLifecycleError(runId);
         void notifyContextEngineSubagentEnded({
           childSessionKey: entry.childSessionKey,

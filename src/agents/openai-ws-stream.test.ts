@@ -3428,6 +3428,87 @@ describe("releaseWsSession / hasWsSession", () => {
   it("releaseWsSession is a no-op for unknown sessions", () => {
     expect(() => releaseWsSession("nonexistent-session")).not.toThrow();
   });
+
+  it("recreates the cached manager when request overrides change for the same session", async () => {
+    const sessionId = "registry-test";
+    const firstStreamFn = createOpenAIWebSocketStreamFn("sk-test", sessionId, {
+      managerOptions: {
+        request: {
+          headers: { "x-test": "one" },
+        },
+      },
+    });
+    const firstStream = firstStreamFn(
+      {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        contextWindow: 128000,
+        maxTokens: 4096,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        name: "GPT-5.4",
+      } as Parameters<typeof firstStreamFn>[0],
+      {
+        systemPrompt: "test",
+        messages: [userMsg("Hi") as Parameters<typeof convertMessagesToInputItems>[0][number]],
+        tools: [],
+      } as Parameters<typeof firstStreamFn>[1],
+    );
+
+    await new Promise((r) => setImmediate(r));
+    const firstManager = MockManager.lastInstance!;
+    firstManager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp-first", "done"),
+    });
+    for await (const _ of await resolveStream(firstStream)) {
+      // consume
+    }
+
+    const secondStreamFn = createOpenAIWebSocketStreamFn("sk-test", sessionId, {
+      managerOptions: {
+        request: {
+          headers: { "x-test": "two" },
+          allowPrivateNetwork: true,
+        },
+      },
+    });
+    const secondStream = secondStreamFn(
+      {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        contextWindow: 128000,
+        maxTokens: 4096,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        name: "GPT-5.4",
+      } as Parameters<typeof secondStreamFn>[0],
+      {
+        systemPrompt: "test",
+        messages: [userMsg("Again") as Parameters<typeof convertMessagesToInputItems>[0][number]],
+        tools: [],
+      } as Parameters<typeof secondStreamFn>[1],
+    );
+
+    await new Promise((r) => setImmediate(r));
+    expect(MockManager.instances).toHaveLength(2);
+    expect(firstManager.closeCallCount).toBe(1);
+    const secondManager = MockManager.lastInstance!;
+    expect(secondManager).not.toBe(firstManager);
+    expect(secondManager.connectCallCount).toBe(1);
+
+    secondManager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp-second", "done"),
+    });
+    for await (const _ of await resolveStream(secondStream)) {
+      // consume
+    }
+  });
 });
 
 describe("convertMessagesToInputItems — phase inheritance", () => {

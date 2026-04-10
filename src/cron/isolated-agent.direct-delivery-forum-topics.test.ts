@@ -52,11 +52,7 @@ describe("runCronIsolatedAgentTurn forum topic delivery", () => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const deps = createCliDeps();
       mockAgentPayloads(
-        [
-          { text: "section 1" },
-          { text: "temporary error", isError: true },
-          { text: "section 2" },
-        ],
+        [{ text: "section 1" }, { text: "temporary error", isError: true }, { text: "section 2" }],
         { meta: makeRunMeta("section 1\nsection 2") },
       );
 
@@ -105,10 +101,9 @@ describe("runCronIsolatedAgentTurn forum topic delivery", () => {
     await withTempCronHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const deps = createCliDeps();
-      mockAgentPayloads(
-        [{ text: "Working on it..." }, { text: "Final weather summary" }],
-        { meta: makeRunMeta("Final weather summary") },
-      );
+      mockAgentPayloads([{ text: "Working on it..." }, { text: "Final weather summary" }], {
+        meta: makeRunMeta("Final weather summary"),
+      });
 
       const plainRes = await runTelegramAnnounceTurn({
         home,

@@ -296,6 +296,7 @@ async function writeDreamsFileAtomic(dreamsPath: string, content: string): Promi
     if (cleanupError) {
       throw new Error(
         `Atomic DREAMS.md write failed (${formatErrorMessage(err)}); cleanup also failed (${formatErrorMessage(cleanupError)})`,
+        { cause: err },
       );
     }
     throw err;
