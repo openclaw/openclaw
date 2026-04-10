@@ -89,7 +89,12 @@ async function workspaceList(
 
   // Resolve symlinks and verify the target stays within the workspace root
   const realRoot = await fs.realpath(workspaceDir);
-  const realTarget = await fs.realpath(targetPath).catch(() => null);
+  const realTarget = await fs.realpath(targetPath).catch((err) => {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw err;
+  });
   if (!realTarget) {
     // Target directory doesn't exist yet, return empty listing
     return [];
@@ -363,18 +368,22 @@ async function workspaceStat(
     fs.lstat(fullPath).catch(() => null),
   ]);
 
-  if (!stat || !lstat) {
+  // Use lstat as the authoritative existence check so dangling symlinks are still inspectable
+  if (!lstat) {
     throw new Error("File not found");
   }
 
   let type: "file" | "directory" | "symlink";
   if (lstat.isSymbolicLink()) {
     type = "symlink";
-  } else if (stat.isDirectory()) {
+  } else if (lstat.isDirectory()) {
     type = "directory";
   } else {
     type = "file";
   }
+
+  // For non-symlinks or resolvable symlinks, use stat for size/timestamps; fall back to lstat
+  const metaStat = stat ?? lstat;
 
   // Check writability
   const isWritable = await fs
@@ -384,9 +393,9 @@ async function workspaceStat(
 
   return {
     type,
-    size: stat.isFile() ? stat.size : undefined,
-    updatedAtMs: Math.floor(stat.mtimeMs),
-    createdAtMs: Math.floor(stat.ctimeMs),
+    size: metaStat.isFile() ? metaStat.size : undefined,
+    updatedAtMs: Math.floor(metaStat.mtimeMs),
+    createdAtMs: Math.floor(metaStat.ctimeMs),
     isWritable,
   };
 }
