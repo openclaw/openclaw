@@ -301,7 +301,7 @@ class NodeRuntime(
         updateStatus()
         showLocalCanvasOnConnect()
         val endpoint = connectedEndpoint
-        val auth = activeGatewayAuth
+        val auth = clearBootstrapPairingAuthAfterSuccessfulNodeConnect()
         if (endpoint != null && auth != null) {
           maybeStartOperatorSessionAfterNodeConnect(endpoint, auth)
         }
@@ -819,11 +819,16 @@ class NodeRuntime(
   ) {
     activeGatewayAuth = auth
     val tls = connectionManager.resolveTlsParams(endpoint)
+    val storedOperatorToken = loadStoredRoleDeviceToken("operator")
     val operatorAuth =
-      resolveOperatorSessionConnectAuth(
-        auth = auth,
-        storedOperatorToken = loadStoredRoleDeviceToken("operator"),
-      )
+      if (shouldConnectOperatorSession(auth, storedOperatorToken)) {
+        resolveOperatorSessionConnectAuth(
+          auth = auth,
+          storedOperatorToken = storedOperatorToken,
+        )
+      } else {
+        null
+      }
     if (operatorAuth == null) {
       operatorConnected = false
       operatorStatusText = "Offline"
@@ -943,6 +948,16 @@ class NodeRuntime(
   private fun loadStoredRoleDeviceToken(role: String): String? {
     val deviceId = identityStore.loadOrCreate().deviceId
     return deviceAuthStore.loadToken(deviceId, role)
+  }
+
+  private fun clearBootstrapPairingAuthAfterSuccessfulNodeConnect(): GatewayConnectAuth? {
+    val auth = activeGatewayAuth ?: return null
+    if (!usesBootstrapPairing(auth)) return auth
+
+    val clearedAuth = clearBootstrapPairingAuth(auth)
+    activeGatewayAuth = clearedAuth
+    prefs.saveGatewayBootstrapToken("")
+    return clearedAuth
   }
 
   private fun maybeStartOperatorSessionAfterNodeConnect(
@@ -1307,6 +1322,23 @@ class NodeRuntime(
 
 }
 
+internal fun usesBootstrapPairing(auth: NodeRuntime.GatewayConnectAuth): Boolean {
+  val explicitToken = auth.token?.trim()?.takeIf { it.isNotEmpty() }
+  if (explicitToken != null) return false
+
+  val explicitPassword = auth.password?.trim()?.takeIf { it.isNotEmpty() }
+  if (explicitPassword != null) return false
+
+  return auth.bootstrapToken?.trim()?.takeIf { it.isNotEmpty() } != null
+}
+
+internal fun clearBootstrapPairingAuth(
+  auth: NodeRuntime.GatewayConnectAuth,
+): NodeRuntime.GatewayConnectAuth {
+  if (!usesBootstrapPairing(auth)) return auth
+  return auth.copy(bootstrapToken = null)
+}
+
 internal fun resolveOperatorSessionConnectAuth(
   auth: NodeRuntime.GatewayConnectAuth,
   storedOperatorToken: String?,
@@ -1354,7 +1386,17 @@ internal fun shouldConnectOperatorSession(
   auth: NodeRuntime.GatewayConnectAuth,
   storedOperatorToken: String?,
 ): Boolean {
-  return resolveOperatorSessionConnectAuth(auth, storedOperatorToken) != null
+  val explicitToken = auth.token?.trim()?.takeIf { it.isNotEmpty() }
+  if (explicitToken != null) return true
+
+  val explicitPassword = auth.password?.trim()?.takeIf { it.isNotEmpty() }
+  if (explicitPassword != null) return true
+
+  if (usesBootstrapPairing(auth)) {
+    return false
+  }
+
+  return storedOperatorToken?.trim()?.takeIf { it.isNotEmpty() } != null
 }
 
 private enum class HomeCanvasGatewayState {

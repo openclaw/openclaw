@@ -886,8 +886,10 @@ class GatewaySession(
       explicitGatewayToken
         ?: if (
           explicitPassword == null &&
-            (explicitBootstrapToken == null || storedToken != null)
+            explicitBootstrapToken == null
         ) {
+          // A freshly scanned setup code should force the bootstrap pairing path
+          // instead of silently reusing an older stored device token.
           storedToken
         } else {
           null

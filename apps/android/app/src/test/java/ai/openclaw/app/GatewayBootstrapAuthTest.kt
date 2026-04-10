@@ -23,14 +23,14 @@ import java.util.UUID
 @Config(sdk = [34])
 class GatewayBootstrapAuthTest {
   @Test
-  fun connectsOperatorSessionWhenOnlyBootstrapAuthExists() {
-    assertTrue(
+  fun waitsToConnectOperatorSessionWhenOnlyBootstrapAuthExists() {
+    assertFalse(
       shouldConnectOperatorSession(
         NodeRuntime.GatewayConnectAuth(token = "", bootstrapToken = "bootstrap-1", password = ""),
         storedOperatorToken = "",
       ),
     )
-    assertTrue(
+    assertFalse(
       shouldConnectOperatorSession(
         NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null),
         storedOperatorToken = null,
@@ -39,7 +39,7 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
-  fun connectsOperatorSessionWhenSharedPasswordOrStoredAuthExists() {
+  fun connectsOperatorSessionWhenSharedPasswordOrStoredAuthExistsWithoutBootstrap() {
     assertTrue(
       shouldConnectOperatorSession(
         NodeRuntime.GatewayConnectAuth(token = "shared-token", bootstrapToken = "bootstrap-1", password = null),
@@ -52,9 +52,15 @@ class GatewayBootstrapAuthTest {
         storedOperatorToken = null,
       ),
     )
-    assertTrue(
+    assertFalse(
       shouldConnectOperatorSession(
         NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null),
+        storedOperatorToken = "stored-token",
+      ),
+    )
+    assertTrue(
+      shouldConnectOperatorSession(
+        NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = null, password = null),
         storedOperatorToken = "stored-token",
       ),
     )
@@ -70,7 +76,7 @@ class GatewayBootstrapAuthTest {
   fun resolveOperatorSessionConnectAuthUsesStoredTokenPathAfterBootstrapHandoff() {
     val resolved =
       resolveOperatorSessionConnectAuth(
-        auth = NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null),
+        auth = NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = null, password = null),
         storedOperatorToken = "stored-token",
       )
 
@@ -134,7 +140,28 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
-  fun acceptGatewayTrustPrompt_preservesExplicitSetupAuth() =
+  fun clearBootstrapPairingAuth_dropsSpentBootstrapTokenFromReconnectState() {
+    val cleared =
+      clearBootstrapPairingAuth(
+        NodeRuntime.GatewayConnectAuth(
+          token = null,
+          bootstrapToken = "setup-bootstrap-token",
+          password = null,
+        ),
+      )
+
+    assertEquals(
+      NodeRuntime.GatewayConnectAuth(
+        token = null,
+        bootstrapToken = null,
+        password = null,
+      ),
+      cleared,
+    )
+  }
+
+  @Test
+  fun acceptGatewayTrustPrompt_routesExplicitSetupAuthThroughNodeSessionFirst() =
     runBlocking {
       val app = RuntimeEnvironment.getApplication()
       val securePrefs =
@@ -168,7 +195,7 @@ class GatewayBootstrapAuthTest {
 
       assertEquals("fp-1", prefs.loadGatewayTlsFingerprint(endpoint.stableId))
       assertEquals("setup-bootstrap-token", desiredBootstrapToken(runtime, "nodeSession"))
-      assertEquals("setup-bootstrap-token", desiredBootstrapToken(runtime, "operatorSession"))
+      assertNull(desiredBootstrapToken(runtime, "operatorSession"))
     }
 
   @Test
