@@ -14,6 +14,7 @@ import {
   uninstallLaunchAgent,
 } from "./launchd.js";
 import type { GatewayServiceEnv } from "./service-types.js";
+import { resolveGatewayService, startGatewayService } from "./service.js";
 
 const WAIT_INTERVAL_MS = 200;
 const WAIT_TIMEOUT_MS = 30_000;
@@ -162,6 +163,40 @@ describeLaunchdIntegration("launchd integration", () => {
     }
     const before = await waitForRunningRuntime({ env: launchEnv });
     await restartLaunchAgent({ env: launchEnv, stdout });
+    const after = await waitForRunningRuntime({ env: launchEnv, pidNot: before.pid });
+    expect(after.pid).toBeGreaterThan(1);
+    expect(after.pid).not.toBe(before.pid);
+    await fs.access(resolveLaunchAgentPlistPath(launchEnv));
+  }, 60_000);
+
+  it("stops persistently without reinstall and starts later", async () => {
+    if (!env) {
+      throw new Error("launchd integration env was not initialized");
+    }
+    const launchEnv = env;
+    try {
+      await withTimeout({
+        run: async () => {
+          await installLaunchAgent({
+            env: launchEnv,
+            stdout,
+            programArguments: [process.execPath, "-e", "setInterval(() => {}, 1000);"],
+          });
+          await waitForRunningRuntime({ env: launchEnv });
+        },
+        timeoutMs: STARTUP_TIMEOUT_MS,
+        message: "Timed out initializing launchd integration runtime",
+      });
+    } catch {
+      return;
+    }
+
+    const before = await waitForRunningRuntime({ env: launchEnv });
+    await stopLaunchAgent({ env: launchEnv, stdout });
+    await waitForNotRunningRuntime({ env: launchEnv });
+    const service = resolveGatewayService();
+    const startResult = await startGatewayService(service, { env: launchEnv, stdout });
+    expect(startResult.outcome).toBe("started");
     const after = await waitForRunningRuntime({ env: launchEnv, pidNot: before.pid });
     expect(after.pid).toBeGreaterThan(1);
     expect(after.pid).not.toBe(before.pid);

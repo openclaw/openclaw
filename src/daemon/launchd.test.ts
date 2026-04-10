@@ -42,7 +42,9 @@ const state = vi.hoisted(() => ({
 }));
 const launchdRestartHandoffState = vi.hoisted(() => ({
   isCurrentProcessLaunchdServiceLabel: vi.fn<(label: string) => boolean>(() => false),
-  scheduleDetachedLaunchdRestartHandoff: vi.fn((_params: unknown) => ({ ok: true, pid: 7331 })),
+  scheduleDetachedLaunchdRestartHandoff: vi.fn<
+    (_params: unknown) => { ok: boolean; pid?: number; detail?: string }
+  >(() => ({ ok: true, pid: 7331 })),
 }));
 const cleanStaleGatewayProcessesSync = vi.hoisted(() =>
   vi.fn<(port?: number) => number[]>(() => []),
@@ -495,6 +497,29 @@ describe("launchd install", () => {
     expect(output).toContain("Stopped LaunchAgent");
   });
 
+  it("treats already-unloaded services as successfully stopped without bootout fallback", async () => {
+    const env = createDefaultLaunchdEnv();
+    const stdout = new PassThrough();
+    let output = "";
+    state.serviceLoaded = false;
+    state.serviceRunning = false;
+    state.stopError = "Could not find service";
+    state.stopCode = 113;
+    stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+
+    await stopLaunchAgent({ env, stdout });
+
+    expect(state.launchctlCalls).toContainEqual([
+      "disable",
+      `${typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501"}/ai.openclaw.gateway`,
+    ]);
+    expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(false);
+    expect(output).toContain("Stopped LaunchAgent");
+    expect(output).not.toContain("degraded");
+  });
+
   it("falls back to bootout when disable fails so stop remains authoritative", async () => {
     const env = createDefaultLaunchdEnv();
     const stdout = new PassThrough();
@@ -724,6 +749,22 @@ describe("launchd install", () => {
       waitForPid: process.pid,
     });
     expect(state.launchctlCalls).toEqual([]);
+  });
+
+  it("surfaces detached handoff failures", async () => {
+    const env = createDefaultLaunchdEnv();
+    launchdRestartHandoffState.isCurrentProcessLaunchdServiceLabel.mockReturnValue(true);
+    launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff.mockReturnValue({
+      ok: false,
+      detail: "spawn failed",
+    });
+
+    await expect(
+      restartLaunchAgent({
+        env,
+        stdout: new PassThrough(),
+      }),
+    ).rejects.toThrow("launchd restart handoff failed: spawn failed");
   });
 
   it("shows actionable guidance when launchctl gui domain does not support bootstrap", async () => {
