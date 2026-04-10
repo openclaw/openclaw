@@ -471,11 +471,15 @@ export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials):
   const jwt = await import("jsonwebtoken");
   const { JwksClient } = await import("jwks-rsa");
 
-  const allowedAudiences = [creds.appId, `api://${creds.appId}`, "https://api.botframework.com"];
+  const allowedAudiences: [string, ...string[]] = [
+    creds.appId,
+    `api://${creds.appId}`,
+    "https://api.botframework.com",
+  ];
 
   const allowedIssuers = BOT_FRAMEWORK_ISSUERS.map((entry) =>
     typeof entry.issuer === "function" ? entry.issuer(creds.tenantId) : entry.issuer,
-  );
+  ) as [string, ...string[]];
 
   // One JWKS client per distinct endpoint, cached for the validator lifetime.
   const jwksClients = new Map<string, InstanceType<typeof JwksClient>>();
