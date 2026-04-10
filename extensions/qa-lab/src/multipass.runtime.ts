@@ -149,7 +149,9 @@ function createOutputStamp() {
 }
 
 function createVmSuffix() {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const timePart = Date.now().toString(36);
+  const randomPart = Math.random().toString(36).slice(2, 8);
+  return `${timePart}-${randomPart}`;
 }
 
 function sleep(ms: number) {
