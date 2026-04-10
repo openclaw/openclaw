@@ -4,6 +4,7 @@ import type {
   GroupPolicy,
   MarkdownConfig,
   ReplyToMode,
+  SessionThreadBindingsConfig,
   SlackChannelStreamingConfig,
 } from "./types.base.js";
 import type {
@@ -87,6 +88,20 @@ export type SlackSlashCommandConfig = {
   sessionPrefix?: string;
   /** Reply ephemerally (default: true). */
   ephemeral?: boolean;
+};
+
+export type SlackThreadBindingsConfig = SessionThreadBindingsConfig & {
+  /**
+   * Allow `sessions_spawn({ thread: true })` to bind Slack threads to subagent
+   * sessions so completion messages route back into the originating thread.
+   * Default: false (opt-in).
+   */
+  spawnSubagentSessions?: boolean;
+  /**
+   * Allow `/acp spawn` to bind Slack threads to ACP sessions. Default: false
+   * (opt-in).
+   */
+  spawnAcpSessions?: boolean;
 };
 
 export type SlackThreadConfig = {
@@ -173,6 +188,8 @@ export type SlackAccountConfig = {
   replyToModeByChatType?: Partial<Record<"direct" | "group" | "channel", ReplyToMode>>;
   /** Thread session behavior. */
   thread?: SlackThreadConfig;
+  /** Slack thread/conversation binding overrides. */
+  threadBindings?: SlackThreadBindingsConfig;
   actions?: SlackActionConfig;
   slashCommand?: SlackSlashCommandConfig;
   /**

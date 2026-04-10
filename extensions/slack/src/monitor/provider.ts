@@ -10,6 +10,11 @@ import {
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import type { SessionScope } from "openclaw/plugin-sdk/config-runtime";
+import {
+  resolveThreadBindingIdleTimeoutMsForChannel,
+  resolveThreadBindingMaxAgeMsForChannel,
+  resolveThreadBindingSpawnPolicy,
+} from "openclaw/plugin-sdk/conversation-runtime";
 import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
@@ -30,6 +35,7 @@ import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/ind
 import { SLACK_TEXT_LIMIT } from "../limits.js";
 import { resolveSlackChannelAllowlist, type SlackChannelResolution } from "../resolve-channels.js";
 import { resolveSlackUserAllowlist, type SlackUserResolution } from "../resolve-users.js";
+import { createSlackThreadBindingManager } from "../thread-bindings.js";
 import { resolveSlackAppToken, resolveSlackBotToken } from "../token.js";
 import { normalizeAllowList } from "./allow-list.js";
 import { resolveSlackSlashCommandConfig } from "./commands.js";
@@ -282,6 +288,28 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       `Slack signing secret missing for account "${account.accountId}" (set channels.slack.signingSecret or channels.slack.accounts.${account.accountId}.signingSecret).`,
     );
   }
+
+  const threadBindingPolicy = resolveThreadBindingSpawnPolicy({
+    cfg,
+    channel: "slack",
+    accountId: account.accountId,
+    kind: "subagent",
+  });
+  const threadBindingManager = threadBindingPolicy.enabled
+    ? createSlackThreadBindingManager({
+        accountId: account.accountId,
+        idleTimeoutMs: resolveThreadBindingIdleTimeoutMsForChannel({
+          cfg,
+          channel: "slack",
+          accountId: account.accountId,
+        }),
+        maxAgeMs: resolveThreadBindingMaxAgeMsForChannel({
+          cfg,
+          channel: "slack",
+          accountId: account.accountId,
+        }),
+      })
+    : null;
 
   const slackCfg = account.config;
   const dmConfig = slackCfg.dm;
@@ -671,6 +699,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     opts.abortSignal?.removeEventListener("abort", stopOnAbort);
     unregisterHttpHandler?.();
     await gracefulStop();
+    threadBindingManager?.stop();
   }
 }
 

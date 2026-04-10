@@ -72,6 +72,11 @@ import {
   slackConfigAdapter,
 } from "./shared.js";
 import { parseSlackTarget } from "./target-parsing.js";
+import {
+  createSlackThreadBindingManager,
+  setSlackThreadBindingIdleTimeoutBySessionKey,
+  setSlackThreadBindingMaxAgeBySessionKey,
+} from "./thread-bindings.js";
 import { buildSlackThreadingToolContext } from "./threading-tool-context.js";
 
 const resolveSlackDmPolicy = createScopedDmSecurityResolver<ResolvedSlackAccount>({
@@ -176,6 +181,21 @@ async function resolveSlackSendContext(params: {
   const tokenOverride = token && token !== botToken ? token : undefined;
   const threadTsValue = params.replyToId ?? params.threadId;
   return { send, threadTsValue, tokenOverride };
+}
+
+function toConversationLifecycleBinding(binding: {
+  boundAt: number;
+  lastActivityAt?: number;
+  idleTimeoutMs?: number;
+  maxAgeMs?: number;
+}) {
+  return {
+    boundAt: binding.boundAt,
+    lastActivityAt:
+      typeof binding.lastActivityAt === "number" ? binding.lastActivityAt : binding.boundAt,
+    idleTimeoutMs: typeof binding.idleTimeoutMs === "number" ? binding.idleTimeoutMs : undefined,
+    maxAgeMs: typeof binding.maxAgeMs === "number" ? binding.maxAgeMs : undefined,
+  };
 }
 
 function parseSlackExplicitTarget(raw: string) {
@@ -330,6 +350,28 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
     groups: {
       resolveRequireMention: resolveSlackGroupRequireMention,
       resolveToolPolicy: resolveSlackGroupToolPolicy,
+    },
+    conversationBindings: {
+      supportsCurrentConversationBinding: true,
+      defaultTopLevelPlacement: "current",
+      createManager: ({ accountId }) =>
+        createSlackThreadBindingManager({
+          accountId: accountId ?? undefined,
+          persist: false,
+          enableSweeper: false,
+        }),
+      setIdleTimeoutBySessionKey: ({ targetSessionKey, accountId, idleTimeoutMs }) =>
+        setSlackThreadBindingIdleTimeoutBySessionKey({
+          targetSessionKey,
+          accountId: accountId ?? undefined,
+          idleTimeoutMs,
+        }).map(toConversationLifecycleBinding),
+      setMaxAgeBySessionKey: ({ targetSessionKey, accountId, maxAgeMs }) =>
+        setSlackThreadBindingMaxAgeBySessionKey({
+          targetSessionKey,
+          accountId: accountId ?? undefined,
+          maxAgeMs,
+        }).map(toConversationLifecycleBinding),
     },
     messaging: {
       normalizeTarget: normalizeSlackMessagingTarget,
