@@ -44,6 +44,28 @@ describe("compactSkillPaths", () => {
     });
   });
 
+  it("normalizes backslashes to forward slashes on Windows paths", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const skillDir = path.join(workspaceDir, "skills", "win-skill");
+
+      await writeSkill({
+        dir: skillDir,
+        name: "win-skill",
+        description: "Windows path test skill",
+      });
+
+      const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+        bundledSkillsDir: path.join(workspaceDir, ".bundled-empty"),
+        managedSkillsDir: path.join(workspaceDir, ".managed-empty"),
+      });
+
+      // The prompt should contain a location tag with no backslashes
+      const locationMatch = prompt.match(/<location>([^<]+)<\/location>/);
+      expect(locationMatch).not.toBeNull();
+      expect(locationMatch![1]).not.toContain("\\");
+    });
+  });
+
   it("preserves paths outside home directory", async () => {
     // Skills outside ~ should keep their absolute paths
     await withTempWorkspace(async (workspaceDir) => {
