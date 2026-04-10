@@ -124,6 +124,7 @@ Docs: https://docs.openclaw.ai
 - Browser/sandbox: gate `/sandbox/novnc` behind bridge auth and stop surfacing sandbox observer URLs in model-visible prompt context. (#63882) Thanks @eleqtrizit.
 
 - Discord/sandbox: include `image` in sandbox media param normalization so Discord event cover images cannot bypass sandbox path rewriting. (#64377) Thanks @mmaps.
+- Agents/exec: extend exec completion detection to cover local background exec formats so the owner-downgrade fires correctly for all exec paths. (#64376) Thanks @mmaps.
 ## 2026.4.9
 
 ### Changes
