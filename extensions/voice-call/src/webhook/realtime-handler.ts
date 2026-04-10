@@ -18,6 +18,7 @@ export type ToolHandlerFn = (args: unknown, callId: string) => Promise<unknown>;
 
 const STREAM_TOKEN_TTL_MS = 30_000;
 const DEFAULT_HOST = "localhost:8443";
+const MAX_REALTIME_MESSAGE_BYTES = 256 * 1024;
 
 function normalizePath(pathname: string): string {
   const trimmed = pathname.trim();
@@ -57,6 +58,17 @@ type CallRegistration = {
   callId: string;
   initialGreetingInstructions?: string;
 };
+
+type ActiveRealtimeVoiceBridge = Pick<
+  RealtimeVoiceBridge,
+  | "connect"
+  | "sendAudio"
+  | "setMediaTimestamp"
+  | "submitToolResult"
+  | "acknowledgeMark"
+  | "close"
+  | "triggerGreeting"
+>;
 
 export class RealtimeCallHandler {
   private readonly toolHandlers = new Map<string, ToolHandlerFn>();
@@ -123,9 +135,13 @@ export class RealtimeCallHandler {
       return;
     }
 
-    const wss = new WebSocketServer({ noServer: true });
+    const wss = new WebSocketServer({
+      noServer: true,
+      // Reject oversized realtime frames before JSON parsing or bridge setup runs.
+      maxPayload: MAX_REALTIME_MESSAGE_BYTES,
+    });
     wss.handleUpgrade(request, socket, head, (ws) => {
-      let bridge: RealtimeVoiceBridge | null = null;
+      let bridge: ActiveRealtimeVoiceBridge | null = null;
       let initialized = false;
 
       ws.on("message", (data: Buffer) => {
@@ -140,7 +156,11 @@ export class RealtimeCallHandler {
             const streamSid =
               typeof startData?.streamSid === "string" ? startData.streamSid : "unknown";
             const callSid = typeof startData?.callSid === "string" ? startData.callSid : "unknown";
-            bridge = this.handleCall(streamSid, callSid, ws, callerMeta);
+            const nextBridge = this.handleCall(streamSid, callSid, ws, callerMeta);
+            if (!nextBridge) {
+              return;
+            }
+            bridge = nextBridge;
             return;
           }
           if (!bridge) {
@@ -173,6 +193,10 @@ export class RealtimeCallHandler {
 
       ws.on("close", () => {
         bridge?.close();
+      });
+
+      ws.on("error", (error) => {
+        console.error("[voice-call] realtime WS error:", error);
       });
     });
   }
@@ -213,7 +237,7 @@ export class RealtimeCallHandler {
     callSid: string,
     ws: WebSocket,
     callerMeta: Omit<PendingStreamToken, "expiry">,
-  ): RealtimeVoiceBridge | null {
+  ): ActiveRealtimeVoiceBridge | null {
     const registration = this.registerCallInManager(callSid, callerMeta);
     if (!registration) {
       ws.close(1008, "Caller rejected by policy");
@@ -221,7 +245,6 @@ export class RealtimeCallHandler {
     }
 
     const { callId, initialGreetingInstructions } = registration;
-    let bridge: RealtimeVoiceBridge | null = null;
     let callEndEmitted = false;
     const emitCallEnd = (reason: "completed" | "error") => {
       if (callEndEmitted) {
@@ -231,7 +254,8 @@ export class RealtimeCallHandler {
       this.endCallInManager(callSid, callId, reason);
     };
 
-    bridge = this.realtimeProvider.createBridge({
+    const bridgeRef: { current?: ActiveRealtimeVoiceBridge } = {};
+    const bridge = this.realtimeProvider.createBridge({
       providerConfig: this.providerConfig,
       instructions: this.config.instructions,
       tools: this.config.tools,
@@ -286,11 +310,12 @@ export class RealtimeCallHandler {
         });
       },
       onToolCall: (toolEvent) => {
-        if (!bridge) {
+        const activeBridge = bridgeRef.current;
+        if (!activeBridge) {
           return;
         }
         void this.executeToolCall(
-          bridge,
+          activeBridge,
           callId,
           toolEvent.callId || toolEvent.itemId,
           toolEvent.name,
@@ -298,7 +323,7 @@ export class RealtimeCallHandler {
         );
       },
       onReady: () => {
-        bridge?.triggerGreeting?.(initialGreetingInstructions);
+        bridgeRef.current?.triggerGreeting?.(initialGreetingInstructions);
       },
       onError: (error) => {
         console.error("[voice-call] realtime voice error:", error.message);
@@ -323,9 +348,11 @@ export class RealtimeCallHandler {
       },
     });
 
+    bridgeRef.current = bridge;
+
     bridge.connect().catch((error: Error) => {
       console.error("[voice-call] Failed to connect realtime bridge:", error);
-      bridge?.close();
+      bridge.close();
       emitCallEnd("error");
       ws.close(1011, "Failed to connect");
     });
@@ -397,7 +424,7 @@ export class RealtimeCallHandler {
   }
 
   private async executeToolCall(
-    bridge: RealtimeVoiceBridge,
+    bridge: ActiveRealtimeVoiceBridge,
     callId: string,
     bridgeCallId: string,
     name: string,

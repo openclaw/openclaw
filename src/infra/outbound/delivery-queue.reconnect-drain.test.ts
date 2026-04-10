@@ -318,14 +318,27 @@ describe("drainPendingDeliveries for WhatsApp reconnect", () => {
       }
     });
 
-    await enqueueDelivery(
+    const blockerId = await enqueueDelivery(
       { channel: "demo-channel-a", to: "+1000", payloads: [{ text: "blocker" }] },
       tmpDir,
     );
-    await enqueueDelivery(
+    const whatsappId = await enqueueDelivery(
       { channel: "whatsapp", to: "+1555", payloads: [{ text: "hi" }], accountId: "acct1" },
       tmpDir,
     );
+    const queueDir = path.join(tmpDir, "delivery-queue");
+    const blockerPath = path.join(queueDir, `${blockerId}.json`);
+    const whatsappPath = path.join(queueDir, `${whatsappId}.json`);
+    const blockerEntry = JSON.parse(fs.readFileSync(blockerPath, "utf-8")) as {
+      enqueuedAt: number;
+    };
+    const whatsappEntry = JSON.parse(fs.readFileSync(whatsappPath, "utf-8")) as {
+      enqueuedAt: number;
+    };
+    blockerEntry.enqueuedAt = 1;
+    whatsappEntry.enqueuedAt = 2;
+    fs.writeFileSync(blockerPath, JSON.stringify(blockerEntry, null, 2));
+    fs.writeFileSync(whatsappPath, JSON.stringify(whatsappEntry, null, 2));
 
     const startupRecovery = recoverPendingDeliveries({
       cfg: stubCfg,

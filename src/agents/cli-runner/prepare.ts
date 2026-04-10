@@ -22,6 +22,7 @@ import {
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
 } from "../pi-embedded-helpers.js";
+import { resolveSkillsPromptForRun } from "../skills.js";
 import { resolveSystemPromptOverride } from "../system-prompt-override.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -131,6 +132,7 @@ export async function prepareCliRunContext(
           OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
           OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
           OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageProvider ?? "",
+          OPENCLAW_MCP_SENDER_IS_OWNER: params.senderIsOwner === true ? "true" : "false",
         }
       : undefined,
     warn: (message) => cliBackendLog.warn(message),
@@ -162,6 +164,12 @@ export async function prepareCliRunContext(
     cwd: process.cwd(),
     moduleUrl: import.meta.url,
   });
+  const skillsPrompt = resolveSkillsPromptForRun({
+    skillsSnapshot: params.skillsSnapshot,
+    workspaceDir,
+    config: params.config,
+    agentId: sessionAgentId,
+  });
   const systemPrompt =
     resolveSystemPromptOverride({
       config: params.config,
@@ -175,6 +183,7 @@ export async function prepareCliRunContext(
       ownerNumbers: params.ownerNumbers,
       heartbeatPrompt,
       docsPath: docsPath ?? undefined,
+      skillsPrompt,
       tools: [],
       contextFiles,
       modelDisplay,
@@ -199,7 +208,7 @@ export async function prepareCliRunContext(
     systemPrompt,
     bootstrapFiles,
     injectedFiles: contextFiles,
-    skillsPrompt: "",
+    skillsPrompt,
     tools: [],
   });
 

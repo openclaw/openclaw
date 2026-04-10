@@ -54,7 +54,6 @@ describe("buildEmbeddedSandboxInfo", () => {
       workspaceAccess: "none",
       agentWorkspaceMount: undefined,
       browserBridgeUrl: "http://localhost:9222",
-      browserNoVncUrl: "http://localhost:6080",
       hostBrowserAllowed: true,
     });
   });

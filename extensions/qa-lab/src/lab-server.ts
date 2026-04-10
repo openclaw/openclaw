@@ -659,8 +659,8 @@ export async function startQaLabServer(
         };
         activeSuiteRun = (async () => {
           try {
-            const { runQaSuiteFromRuntime } = await import("./suite-launch.runtime.js");
-            const result = await runQaSuiteFromRuntime({
+            const { runQaSuite } = await import("./suite.js");
+            const result = await runQaSuite({
               lab: labHandle ?? undefined,
               outputDir: createQaRunOutputDir(repoRoot),
               providerMode: selection.providerMode,

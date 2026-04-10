@@ -9324,16 +9324,23 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           enum: ["doc", "hot-reload"],
         },
         streaming: {
-          type: "object",
-          properties: {
-            mode: {
-              default: "partial",
-              type: "string",
-              enum: ["off", "partial"],
+          anyOf: [
+            {
+              type: "boolean",
             },
-          },
-          required: ["mode"],
-          additionalProperties: false,
+            {
+              type: "object",
+              properties: {
+                mode: {
+                  default: "partial",
+                  type: "string",
+                  enum: ["off", "partial"],
+                },
+              },
+              required: ["mode"],
+              additionalProperties: {},
+            },
+          ],
         },
         tts: {
           type: "object",
@@ -9537,26 +9544,33 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 enum: ["doc", "hot-reload"],
               },
               streaming: {
-                type: "object",
-                properties: {
-                  mode: {
-                    default: "partial",
-                    type: "string",
-                    enum: ["off", "partial"],
+                anyOf: [
+                  {
+                    type: "boolean",
                   },
-                },
-                required: ["mode"],
-                additionalProperties: false,
+                  {
+                    type: "object",
+                    properties: {
+                      mode: {
+                        default: "partial",
+                        type: "string",
+                        enum: ["off", "partial"],
+                      },
+                    },
+                    required: ["mode"],
+                    additionalProperties: {},
+                  },
+                ],
               },
             },
-            additionalProperties: false,
+            additionalProperties: {},
           },
         },
         defaultAccount: {
           type: "string",
         },
       },
-      additionalProperties: false,
+      additionalProperties: {},
     },
   },
   {

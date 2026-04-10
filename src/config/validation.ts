@@ -11,6 +11,7 @@ import {
   collectRelevantDoctorPluginIds,
   listPluginDoctorLegacyConfigRules,
 } from "../plugins/doctor-contract-registry.js";
+import { resolveManifestCommandAliasOwner } from "../plugins/manifest-command-aliases.runtime.js";
 import {
   loadPluginManifestRegistry,
   resolveManifestContractPluginIds,
@@ -1040,7 +1041,20 @@ function validateConfigObjectWithPluginsBase(
       continue;
     }
     if (!knownIds.has(pluginId)) {
-      pushMissingPluginIssue("plugins.allow", pluginId, { warnOnly: true });
+      const commandAlias = resolveManifestCommandAliasOwner({
+        command: pluginId,
+        registry,
+      });
+      if (commandAlias?.pluginId && knownIds.has(commandAlias.pluginId)) {
+        warnings.push({
+          path: "plugins.allow",
+          message:
+            `"${pluginId}" is not a plugin — it is a command provided by the "${commandAlias.pluginId}" plugin. ` +
+            `Use "${commandAlias.pluginId}" in plugins.allow instead.`,
+        });
+      } else {
+        pushMissingPluginIssue("plugins.allow", pluginId, { warnOnly: true });
+      }
     }
   }
 

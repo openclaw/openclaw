@@ -4,15 +4,15 @@
   "description": "OpenClaw Microsoft Teams channel plugin",
   "type": "module",
   "dependencies": {
-    "@microsoft/teams.api": "2.0.6",
-    "@microsoft/teams.apps": "2.0.6",
+    "@microsoft/teams.api": "2.0.7",
+    "@microsoft/teams.apps": "2.0.7",
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
     "jwks-rsa": "^4.0.1"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
-    "@types/jsonwebtoken": "^9.0.9",
+    "@types/jsonwebtoken": "^9.0.10",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {

@@ -41,10 +41,6 @@ describe("google video generation provider", () => {
       mode: "api-key",
     });
     generateVideosMock.mockResolvedValue({
-      done: false,
-      name: "operations/123",
-    });
-    getVideosOperationMock.mockResolvedValue({
       done: true,
       name: "operations/123",
       response: {

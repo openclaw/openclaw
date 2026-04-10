@@ -208,7 +208,9 @@ const createRedirectResponse = (location: string, status = 302) =>
   new Response(null, { status, headers: { location } });
 
 const createOkFetchMock = (contentType: string, payload = "png") =>
-  vi.fn(async () => createBufferResponse(payload, contentType));
+  vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+    createBufferResponse(payload, contentType),
+  );
 const asFetchFn = (fetchFn: unknown): FetchFn => fetchFn as FetchFn;
 
 const buildDownloadParams = (

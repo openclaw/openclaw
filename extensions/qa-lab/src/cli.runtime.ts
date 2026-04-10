@@ -2,6 +2,7 @@ import path from "node:path";
 import { runQaCharacterEval, type QaCharacterModelOptions } from "./character-eval.js";
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
 import { runQaDockerUp } from "./docker-up.runtime.js";
+import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import { startQaLabServer } from "./lab-server.js";
 import { runQaManualLane } from "./manual-lane.runtime.js";
 import { startQaMockOpenAiServer } from "./mock-openai-server.js";
@@ -13,12 +14,28 @@ import {
   type QaProviderMode,
   type QaProviderModeInput,
 } from "./run-config.js";
-import { runQaSuite } from "./suite.js";
+import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
+import { runTelegramQaLive } from "./telegram-live.runtime.js";
 
 type InterruptibleServer = {
   baseUrl: string;
   stop(): Promise<void>;
 };
+
+function resolveRepoRelativeOutputDir(repoRoot: string, outputDir?: string) {
+  if (!outputDir) {
+    return undefined;
+  }
+  if (path.isAbsolute(outputDir)) {
+    throw new Error("--output-dir must be a relative path inside the repo root.");
+  }
+  const resolved = path.resolve(repoRoot, outputDir);
+  const relative = path.relative(repoRoot, resolved);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error("--output-dir must stay within the repo root.");
+  }
+  return resolved;
+}
 
 function resolveQaManualLaneModels(opts: {
   providerMode: QaProviderMode;
@@ -94,6 +111,17 @@ function parseQaPositiveIntegerOption(label: string, value: number | undefined) 
     throw new Error(`${label} must be a positive integer`);
   }
   return Math.floor(value);
+}
+
+function parseQaCliBackendAuthMode(value: string | undefined): QaCliBackendAuthMode | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === "auto" || normalized === "api-key" || normalized === "subscription") {
+    return normalized;
+  }
+  throw new Error("--cli-auth-mode must be one of auto, api-key, subscription");
 }
 
 function parseQaModelSpecs(label: string, entries: readonly string[] | undefined) {
@@ -199,7 +227,9 @@ export async function runQaSuiteCommand(opts: {
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
+  cliAuthMode?: string;
   scenarioIds?: string[];
+  concurrency?: number;
   image?: string;
   cpus?: number;
   memory?: string;
@@ -211,6 +241,7 @@ export async function runQaSuiteCommand(opts: {
     throw new Error(`--runner must be one of host or multipass, got "${opts.runner}".`);
   }
   const providerMode = normalizeQaProviderMode(opts.providerMode);
+  const claudeCliAuthMode = parseQaCliBackendAuthMode(opts.cliAuthMode);
   if (
     runner === "host" &&
     (opts.image !== undefined ||
@@ -220,15 +251,21 @@ export async function runQaSuiteCommand(opts: {
   ) {
     throw new Error("--image, --cpus, --memory, and --disk require --runner multipass.");
   }
+  if (runner === "multipass" && opts.cliAuthMode !== undefined) {
+    throw new Error("--cli-auth-mode requires --runner host.");
+  }
   if (runner === "multipass") {
     const result = await runQaMultipass({
       repoRoot,
-      outputDir: opts.outputDir ? path.resolve(repoRoot, opts.outputDir) : undefined,
+      outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
       providerMode,
       primaryModel: opts.primaryModel,
       alternateModel: opts.alternateModel,
       fastMode: opts.fastMode,
       scenarioIds: opts.scenarioIds,
+      ...(opts.concurrency !== undefined
+        ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
+        : {}),
       image: opts.image,
       cpus: parseQaPositiveIntegerOption("--cpus", opts.cpus),
       memory: opts.memory,
@@ -241,18 +278,50 @@ export async function runQaSuiteCommand(opts: {
     process.stdout.write(`QA Multipass bootstrap log: ${result.bootstrapLogPath}\n`);
     return;
   }
-  const result = await runQaSuite({
+  const result = await runQaSuiteFromRuntime({
     repoRoot,
-    outputDir: opts.outputDir ? path.resolve(repoRoot, opts.outputDir) : undefined,
+    outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
+    providerMode,
+    primaryModel: opts.primaryModel,
+    alternateModel: opts.alternateModel,
+    fastMode: opts.fastMode,
+    ...(claudeCliAuthMode ? { claudeCliAuthMode } : {}),
+    scenarioIds: opts.scenarioIds,
+    ...(opts.concurrency !== undefined
+      ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
+      : {}),
+  });
+  process.stdout.write(`QA suite watch: ${result.watchUrl}\n`);
+  process.stdout.write(`QA suite report: ${result.reportPath}\n`);
+  process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
+}
+
+export async function runQaTelegramCommand(opts: {
+  repoRoot?: string;
+  outputDir?: string;
+  providerMode?: QaProviderModeInput;
+  primaryModel?: string;
+  alternateModel?: string;
+  fastMode?: boolean;
+  scenarioIds?: string[];
+  sutAccountId?: string;
+}) {
+  const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
+  const providerMode: QaProviderMode =
+    opts.providerMode === undefined ? "live-frontier" : normalizeQaProviderMode(opts.providerMode);
+  const result = await runTelegramQaLive({
+    repoRoot,
+    outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
     providerMode,
     primaryModel: opts.primaryModel,
     alternateModel: opts.alternateModel,
     fastMode: opts.fastMode,
     scenarioIds: opts.scenarioIds,
+    sutAccountId: opts.sutAccountId,
   });
-  process.stdout.write(`QA suite watch: ${result.watchUrl}\n`);
-  process.stdout.write(`QA suite report: ${result.reportPath}\n`);
-  process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
+  process.stdout.write(`Telegram QA report: ${result.reportPath}\n`);
+  process.stdout.write(`Telegram QA summary: ${result.summaryPath}\n`);
+  process.stdout.write(`Telegram QA observed messages: ${result.observedMessagesPath}\n`);
 }
 
 export async function runQaCharacterEvalCommand(opts: {
@@ -274,7 +343,7 @@ export async function runQaCharacterEvalCommand(opts: {
   const judges = parseQaModelSpecs("--judge-model", opts.judgeModel);
   const result = await runQaCharacterEval({
     repoRoot,
-    outputDir: opts.outputDir ? path.resolve(repoRoot, opts.outputDir) : undefined,
+    outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
     models: candidates.models,
     scenarioId: opts.scenario,
     candidateFastMode: opts.fast,
@@ -366,7 +435,10 @@ export async function runQaDockerScaffoldCommand(opts: {
   bindUiDist?: boolean;
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
-  const outputDir = path.resolve(repoRoot, opts.outputDir);
+  const outputDir = resolveRepoRelativeOutputDir(repoRoot, opts.outputDir);
+  if (!outputDir) {
+    throw new Error("--output-dir is required.");
+  }
   const result = await writeQaDockerHarnessFiles({
     outputDir,
     repoRoot,
@@ -403,7 +475,7 @@ export async function runQaDockerUpCommand(opts: {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const result = await runQaDockerUp({
     repoRoot,
-    outputDir: opts.outputDir ? path.resolve(repoRoot, opts.outputDir) : undefined,
+    outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
     gatewayPort: Number.isFinite(opts.gatewayPort) ? opts.gatewayPort : undefined,
     qaLabPort: Number.isFinite(opts.qaLabPort) ? opts.qaLabPort : undefined,
     providerBaseUrl: opts.providerBaseUrl,
@@ -425,3 +497,7 @@ export async function runQaMockOpenAiCommand(opts: { host?: string; port?: numbe
   });
   await runInterruptibleServer("QA mock OpenAI", server);
 }
+
+export const __testing = {
+  resolveRepoRelativeOutputDir,
+};

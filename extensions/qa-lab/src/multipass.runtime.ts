@@ -334,6 +334,7 @@ export function createQaMultipassPlan(params: {
   alternateModel?: string;
   fastMode?: boolean;
   scenarioIds?: string[];
+  concurrency?: number;
   image?: string;
   cpus?: number;
   memory?: string;
@@ -365,6 +366,7 @@ export function createQaMultipassPlan(params: {
       ...(params.primaryModel ? ["--model", params.primaryModel] : []),
       ...(params.alternateModel ? ["--alt-model", params.alternateModel] : []),
       ...(params.fastMode ? ["--fast"] : []),
+      ...(params.concurrency ? ["--concurrency", String(params.concurrency)] : []),
     ],
     scenarioIds,
   );
@@ -632,6 +634,7 @@ export async function runQaMultipass(params: {
   alternateModel?: string;
   fastMode?: boolean;
   scenarioIds?: string[];
+  concurrency?: number;
   image?: string;
   cpus?: number;
   memory?: string;
