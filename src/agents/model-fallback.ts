@@ -786,7 +786,7 @@ export async function runWithModelFallback<T>(params: {
         // are config issues (not model health issues) and should not cause a
         // sticky override that outlives the fix.
         ...(attempts.length > 0
-          ? { previousFailureReasons: attempts.map((a) => a.reason) }
+          ? { previousFailureReasons: attempts.flatMap((a) => (a.reason ? [a.reason] : [])) }
           : undefined),
       },
     });
