@@ -150,6 +150,16 @@ function createSendContext(params: {
   replyToActivityId?: string;
   getToken: () => Promise<string | undefined>;
   treatInvokeResponseAsNoop?: boolean;
+  /**
+   * Azure AD tenant ID for the target conversation. Bot Framework requires this
+   * on outbound proactive activities so the connector can route them to the
+   * correct tenant. Missing `tenantId` causes HTTP 403 on proactive sends.
+   */
+  tenantId?: string;
+  /** Target user's Teams user ID (e.g. `29:xxx`); included on the recipient field for routing. */
+  recipientId?: string;
+  /** Target user's Azure AD object ID; included as the recipient on personal DMs. */
+  recipientAadObjectId?: string;
 }): MSTeamsSendContext {
   const apiClient =
     params.serviceUrl && params.conversationId
@@ -166,16 +176,43 @@ function createSendContext(params: {
         return { id: "unknown" };
       }
 
+      // Merge caller-provided channelData with the tenant metadata so Bot
+      // Framework receives `channelData.tenant.id` (the canonical source it
+      // uses to route proactive sends). Preserve any existing channelData
+      // fields the caller set (e.g. feedbackLoopEnabled).
+      const existingChannelData =
+        msg.channelData && typeof msg.channelData === "object"
+          ? (msg.channelData as Record<string, unknown>)
+          : undefined;
+      const channelData = params.tenantId
+        ? {
+            ...existingChannelData,
+            tenant: { id: params.tenantId },
+          }
+        : existingChannelData;
+
       return await apiClient.conversations.activities(params.conversationId).create({
         type: "message",
         ...msg,
+        ...(channelData ? { channelData } : {}),
         from: params.bot?.id
           ? { id: params.bot.id, name: params.bot.name ?? "", role: "bot" }
           : undefined,
         conversation: {
           id: params.conversationId,
           conversationType: params.conversationType ?? "personal",
+          ...(params.tenantId ? { tenantId: params.tenantId } : {}),
         },
+        ...(params.recipientId || params.recipientAadObjectId
+          ? {
+              recipient: {
+                ...(params.recipientId ? { id: params.recipientId } : {}),
+                ...(params.recipientAadObjectId
+                  ? { aadObjectId: params.recipientAadObjectId }
+                  : {}),
+              },
+            }
+          : {}),
         ...(params.replyToActivityId && !msg.replyToId
           ? { replyToId: params.replyToActivityId }
           : {}),
@@ -364,6 +401,16 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
         throw new Error("Missing conversation.id in conversation reference");
       }
 
+      // Bot Framework requires `tenantId` on proactive sends so the connector
+      // can route them to the correct Azure AD tenant. Without it, requests
+      // fail with HTTP 403. Prefer the top-level `reference.tenantId` (captured
+      // from `activity.channelData.tenant.id` at inbound time) and fall back
+      // to `conversation.tenantId` for older stored references.
+      const tenantId = reference.tenantId ?? reference.conversation?.tenantId;
+      const recipientAadObjectId = reference.aadObjectId ?? reference.user?.aadObjectId;
+
+      const recipientId = reference.user?.id;
+
       const sendContext = createSendContext({
         sdk,
         serviceUrl,
@@ -371,6 +418,9 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
         conversationType: reference.conversation?.conversationType,
         bot: reference.agent ?? undefined,
         getToken: createBotTokenGetter(app),
+        tenantId,
+        recipientId,
+        recipientAadObjectId,
       });
 
       await logic(sendContext);

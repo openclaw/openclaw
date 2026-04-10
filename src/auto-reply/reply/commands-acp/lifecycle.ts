@@ -34,6 +34,7 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import { updateSessionStore } from "../../../config/sessions.js";
 import type { SessionAcpMeta } from "../../../config/sessions/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { normalizeConversationRef } from "../../../infra/outbound/session-binding-normalization.js";
 import {
   getSessionBindingService,
   type ConversationRef,
@@ -250,15 +251,12 @@ async function bindSpawnedAcpSessionToCurrentConversation(params: {
   }
 
   const senderId = normalizeOptionalString(params.commandParams.command.senderId) ?? "";
-  const parentConversationId = normalizeOptionalString(bindingContext.parentConversationId);
-  const conversationRef = {
+  const conversationRef = normalizeConversationRef({
     channel: bindingPolicy.channel,
     accountId: bindingPolicy.accountId,
     conversationId: currentConversationId,
-    ...(parentConversationId && parentConversationId !== currentConversationId
-      ? { parentConversationId }
-      : {}),
-  };
+    parentConversationId: bindingContext.parentConversationId,
+  });
   const existingBinding = bindingService.resolveByConversation(conversationRef);
   const boundBy = normalizeOptionalString(existingBinding?.metadata?.boundBy) ?? "";
   if (existingBinding && boundBy && boundBy !== "system" && senderId && senderId !== boundBy) {
@@ -393,15 +391,12 @@ async function bindSpawnedAcpSessionToThread(params: {
   }
 
   const senderId = normalizeOptionalString(commandParams.command.senderId) ?? "";
-  const parentConversationId = normalizeOptionalString(bindingContext.parentConversationId);
-  const conversationRef = {
+  const conversationRef = normalizeConversationRef({
     channel: spawnPolicy.channel,
     accountId: spawnPolicy.accountId,
     conversationId: currentConversationId,
-    ...(parentConversationId && parentConversationId !== currentConversationId
-      ? { parentConversationId }
-      : {}),
-  };
+    parentConversationId: bindingContext.parentConversationId,
+  });
   if (placement === "current") {
     const existingBinding = bindingService.resolveByConversation(conversationRef);
     const boundBy = normalizeOptionalString(existingBinding?.metadata?.boundBy) ?? "";

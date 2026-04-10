@@ -3,6 +3,7 @@ import type { Socket } from "node:net";
 import type { WebSocket, WebSocketServer } from "ws";
 import { resolveCanvasHostUrl } from "../../infra/canvas-host-url.js";
 import { removeRemoteNodeInfo } from "../../infra/skills-remote.js";
+import { clearNodeWakeState } from "../server-methods/nodes.js";
 import { upsertPresence } from "../../infra/system-presence.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
@@ -325,6 +326,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         if (nodeId) {
           removeRemoteNodeInfo(nodeId);
           context.nodeUnsubscribeAll(nodeId);
+          clearNodeWakeState(nodeId);
         }
       }
       logWs("out", "close", {

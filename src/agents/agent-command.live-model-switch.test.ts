@@ -168,6 +168,7 @@ vi.mock("../logging/subsystem.js", () => ({
 
 vi.mock("../routing/session-key.js", () => ({
   normalizeAgentId: (id: string) => id,
+  normalizeMainKey: (key?: string) => key ?? "main",
 }));
 
 vi.mock("../runtime.js", () => ({

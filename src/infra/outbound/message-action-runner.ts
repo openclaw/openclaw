@@ -79,6 +79,7 @@ export type RunMessageActionParams = {
   params: Record<string, unknown>;
   defaultAccountId?: string;
   requesterSenderId?: string | null;
+  senderIsOwner?: boolean;
   sessionId?: string;
   toolContext?: ChannelThreadingToolContext;
   gateway?: MessageActionRunnerGateway;
@@ -702,6 +703,7 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
     mediaReadFile: mediaAccess.readFile,
     accountId: accountId ?? undefined,
     requesterSenderId: input.requesterSenderId ?? undefined,
+    senderIsOwner: input.senderIsOwner,
     sessionKey: input.sessionKey,
     sessionId: input.sessionId,
     agentId,

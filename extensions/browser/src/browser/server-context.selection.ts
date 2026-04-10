@@ -46,9 +46,16 @@ export function createProfileSelectionOps({
   const assertProfileCdpEndpointAllowed = async (): Promise<void> => {
     await assertCdpEndpointAllowed(profile.cdpUrl, state().resolved.ssrfPolicy);
   };
+  const assertSelectableCdpEndpointAllowed = async (): Promise<void> => {
+    if (capabilities.usesChromeMcp || !profile.cdpUrl) {
+      return;
+    }
+    await assertProfileCdpEndpointAllowed();
+  };
 
   const ensureTabAvailable = async (targetId?: string): Promise<BrowserTab> => {
     await ensureBrowserAvailable();
+    await assertSelectableCdpEndpointAllowed();
     const profileState = getProfileState();
     const tabs1 = await listTabs();
     if (tabs1.length === 0) {
@@ -93,6 +100,7 @@ export function createProfileSelectionOps({
   };
 
   const resolveTargetIdOrThrow = async (targetId: string): Promise<string> => {
+    await assertSelectableCdpEndpointAllowed();
     const tabs = await listTabs();
     const resolved = resolveTargetIdFromTabs(targetId, tabs);
     if (!resolved.ok) {

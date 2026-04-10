@@ -6,7 +6,13 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  applyAuthProfileConfig,
+  upsertAuthProfile,
+  validateAnthropicSetupToken,
+} from "openclaw/plugin-sdk/provider-auth";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
@@ -68,6 +74,10 @@ const QA_MOCK_BLOCKED_ENV_KEY_PATTERNS = Object.freeze([
 ]);
 
 const QA_LIVE_PROVIDER_CONFIG_PATH_ENV = "OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH";
+const QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV = "OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN";
+const QA_LIVE_SETUP_TOKEN_VALUE_ENV = "OPENCLAW_LIVE_SETUP_TOKEN_VALUE";
+const QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE_ENV = "OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE";
+const QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE_ID = "anthropic:qa-setup-token";
 const QA_OPENAI_PLUGIN_ID = "openai";
 const QA_LIVE_CLI_BACKEND_PRESERVE_ENV = "OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV";
 const QA_LIVE_CLI_BACKEND_AUTH_MODE_ENV = "OPENCLAW_LIVE_CLI_BACKEND_AUTH_MODE";
@@ -234,7 +244,57 @@ export function buildQaRuntimeEnv(params: {
       ? { OPENCLAW_COMPATIBILITY_HOST_VERSION: params.compatibilityHostVersion }
       : {}),
   };
-  return normalizeQaProviderModeEnv(env, params.providerMode);
+  const normalizedEnv = normalizeQaProviderModeEnv(env, params.providerMode);
+  delete normalizedEnv[QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV];
+  delete normalizedEnv[QA_LIVE_SETUP_TOKEN_VALUE_ENV];
+  return normalizedEnv;
+}
+
+function resolveQaLiveAnthropicSetupToken(env: NodeJS.ProcessEnv = process.env) {
+  const token = (
+    env[QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV]?.trim() ||
+    env[QA_LIVE_SETUP_TOKEN_VALUE_ENV]?.trim() ||
+    ""
+  ).replaceAll(/\s+/g, "");
+  if (!token) {
+    return null;
+  }
+  const tokenError = validateAnthropicSetupToken(token);
+  if (tokenError) {
+    throw new Error(`Invalid QA Anthropic setup-token: ${tokenError}`);
+  }
+  const profileId =
+    env[QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE_ENV]?.trim() ||
+    QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE_ID;
+  return { token, profileId };
+}
+
+export async function stageQaLiveAnthropicSetupToken(params: {
+  cfg: OpenClawConfig;
+  stateDir: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<OpenClawConfig> {
+  const resolved = resolveQaLiveAnthropicSetupToken(params.env);
+  if (!resolved) {
+    return params.cfg;
+  }
+  const agentDir = path.join(params.stateDir, "agents", "main", "agent");
+  await fs.mkdir(agentDir, { recursive: true });
+  upsertAuthProfile({
+    profileId: resolved.profileId,
+    credential: {
+      type: "token",
+      provider: "anthropic",
+      token: resolved.token,
+    },
+    agentDir,
+  });
+  return applyAuthProfileConfig(params.cfg, {
+    profileId: resolved.profileId,
+    provider: "anthropic",
+    mode: "token",
+    displayName: "QA setup-token",
+  });
 }
 
 function isRetryableGatewayCallError(details: string): boolean {
@@ -248,10 +308,32 @@ function isRetryableGatewayCallError(details: string): boolean {
   );
 }
 
+async function fetchLocalGatewayHealth(params: {
+  baseUrl: string;
+  healthPath: "/readyz" | "/healthz";
+}): Promise<boolean> {
+  const { response, release } = await fetchWithSsrFGuard({
+    url: `${params.baseUrl}${params.healthPath}`,
+    init: {
+      signal: AbortSignal.timeout(2_000),
+    },
+    policy: { allowPrivateNetwork: true },
+    auditContext: "qa-lab-gateway-child-health",
+  });
+  try {
+    return response.ok;
+  } finally {
+    await release();
+  }
+}
+
 export const __testing = {
   buildQaRuntimeEnv,
+  fetchLocalGatewayHealth,
   isRetryableGatewayCallError,
   readQaLiveProviderConfigOverrides,
+  resolveQaLiveAnthropicSetupToken,
+  stageQaLiveAnthropicSetupToken,
   resolveQaLiveCliAuthEnv,
   resolveQaOwnerPluginIdsForProviderIds,
   resolveQaBundledPluginsSourceRoot,
@@ -552,22 +634,10 @@ async function waitForGatewayReady(params: {
         `gateway exited before becoming healthy (exitCode=${String(params.child.exitCode)}, signal=${String(params.child.signalCode)}):\n${params.logs()}`,
       );
     }
-    for (const healthPath of ["/readyz", "/healthz"]) {
+    for (const healthPath of ["/readyz", "/healthz"] as const) {
       try {
-        const { response, release } = await fetchWithSsrFGuard({
-          url: `${params.baseUrl}${healthPath}`,
-          init: {
-            signal: AbortSignal.timeout(2_000),
-          },
-          policy: { allowPrivateNetwork: true },
-          auditContext: "qa-lab-gateway-child-health",
-        });
-        try {
-          if (response.ok) {
-            return;
-          }
-        } finally {
-          await release();
+        if (await fetchLocalGatewayHealth({ baseUrl: params.baseUrl, healthPath })) {
+          return;
         }
       } catch {
         // retry until timeout
@@ -609,6 +679,7 @@ export async function startQaGatewayChild(params: {
   thinkingDefault?: QaThinkingLevel;
   claudeCliAuthMode?: QaCliBackendAuthMode;
   controlUiEnabled?: boolean;
+  mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
 }) {
   const tempRoot = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-qa-suite-"),
@@ -654,7 +725,7 @@ export async function startQaGatewayChild(params: {
           providerConfigs: liveProviderConfigs,
         })
       : undefined;
-  const cfg = buildQaGatewayConfig({
+  let cfg = buildQaGatewayConfig({
     bind: "loopback",
     gatewayPort,
     gatewayToken,
@@ -675,7 +746,15 @@ export async function startQaGatewayChild(params: {
     thinkingDefault: params.thinkingDefault,
     controlUiEnabled: params.controlUiEnabled,
   });
-  await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
+  cfg = await stageQaLiveAnthropicSetupToken({
+    cfg,
+    stateDir,
+  });
+  cfg = params.mutateConfig ? params.mutateConfig(cfg) : cfg;
+  await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
   const allowedPluginIds = [...(cfg.plugins?.allow ?? []), "openai"].filter(
     (pluginId, index, array): pluginId is string => {
       return (

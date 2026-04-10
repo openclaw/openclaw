@@ -14,10 +14,10 @@ import {
   type NormalizedPluginsConfig,
 } from "./config-policy.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
+import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
 import {
   loadPluginManifest,
   type OpenClawPackageManifest,
-  type PluginManifestCommandAlias,
   type PluginManifestConfigContracts,
   type PluginManifest,
   type PluginManifestChannelConfig,
@@ -204,47 +204,6 @@ export function resolveManifestContractOwnerPluginId(params: {
         (candidate) => normalizeOptionalLowercaseString(candidate) === normalizedValue,
       ),
   )?.id;
-}
-
-export type PluginManifestCommandAliasRecord = PluginManifestCommandAlias & {
-  pluginId: string;
-};
-
-export function resolveManifestCommandAliasOwner(params: {
-  command: string | undefined;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  registry?: PluginManifestRegistry;
-}): PluginManifestCommandAliasRecord | undefined {
-  const normalizedCommand = normalizeOptionalLowercaseString(params.command);
-  if (!normalizedCommand) {
-    return undefined;
-  }
-  const registry =
-    params.registry ??
-    loadPluginManifestRegistry({
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-    });
-
-  const commandIsPluginId = registry.plugins.some(
-    (plugin) => normalizeOptionalLowercaseString(plugin.id) === normalizedCommand,
-  );
-  if (commandIsPluginId) {
-    return undefined;
-  }
-
-  for (const plugin of registry.plugins) {
-    const alias = plugin.commandAliases?.find(
-      (entry) => normalizeOptionalLowercaseString(entry.name) === normalizedCommand,
-    );
-    if (alias) {
-      return { ...alias, pluginId: plugin.id };
-    }
-  }
-  return undefined;
 }
 
 function resolveManifestCacheMs(env: NodeJS.ProcessEnv): number {

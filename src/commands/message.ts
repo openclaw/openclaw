@@ -56,6 +56,7 @@ export async function messageCommand(
   const action = actionMatch as ChannelMessageActionName;
 
   const outboundDeps: OutboundSendDeps = createOutboundSendDeps(deps);
+  const senderIsOwner = typeof opts.senderIsOwner === "boolean" ? opts.senderIsOwner : true;
 
   const run = async () =>
     await runMessageAction({
@@ -64,6 +65,7 @@ export async function messageCommand(
       params: opts,
       deps: outboundDeps,
       agentId: resolveDefaultAgentId(cfg),
+      senderIsOwner,
       gateway: {
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,

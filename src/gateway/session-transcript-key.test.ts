@@ -141,4 +141,44 @@ describe("resolveSessionKeyForTranscriptFile", () => {
 
     expect(resolveSessionKeyForTranscriptFile("/tmp/shared.jsonl")).toBe("agent:main:newer");
   });
+
+  it("evicts oldest entry when cache exceeds 256 entries (#63643)", () => {
+    // Fill cache with 256 unique transcript paths
+    for (let i = 0; i < 256; i++) {
+      const sessionKey = `agent:main:session-${i}`;
+      const transcriptPath = `/tmp/session-${i}.jsonl`;
+      const store = {
+        [sessionKey]: { sessionId: `sid-${i}`, updatedAt: now + i },
+      } satisfies Record<string, SessionEntry>;
+      loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+        storePath: "(multiple)",
+        store,
+      });
+      resolveSessionTranscriptCandidatesMock.mockReturnValue([transcriptPath]);
+      resolveSessionKeyForTranscriptFile(transcriptPath);
+    }
+
+    // Now add the 257th — should evict session-0
+    const overflowKey = "agent:main:session-overflow";
+    const overflowPath = "/tmp/session-overflow.jsonl";
+    const overflowStore = {
+      [overflowKey]: { sessionId: "sid-overflow", updatedAt: now + 999 },
+    } satisfies Record<string, SessionEntry>;
+    loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath: "(multiple)",
+      store: overflowStore,
+    });
+    resolveSessionTranscriptCandidatesMock.mockReturnValue([overflowPath]);
+    expect(resolveSessionKeyForTranscriptFile(overflowPath)).toBe(overflowKey);
+
+    // session-0 should have been evicted from cache — next lookup will
+    // re-resolve from the store (returns undefined since store was mocked
+    // with only the overflow entry).
+    loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath: "(multiple)",
+      store: overflowStore,
+    });
+    resolveSessionTranscriptCandidatesMock.mockReturnValue([]);
+    expect(resolveSessionKeyForTranscriptFile("/tmp/session-0.jsonl")).toBeUndefined();
+  });
 });

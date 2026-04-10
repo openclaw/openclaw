@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../../../auto-reply/heartbeat.js";
 import { limitHistoryTurns } from "../history.js";
@@ -8,6 +8,15 @@ import {
   type AttemptContextEngine,
   resolveAttemptBootstrapContext,
 } from "./attempt.context-engine-helpers.js";
+import {
+  cleanupTempPaths,
+  createContextEngineAttemptRunner,
+  getHoisted,
+  resetEmbeddedAttemptHarness,
+} from "./attempt.spawn-workspace.test-support.js";
+
+const hoisted = getHoisted();
+const tempPaths: string[] = [];
 
 async function resolveBootstrapContext(params: {
   contextInjectionMode?: "always" | "continuation-skip";
@@ -37,6 +46,14 @@ async function resolveBootstrapContext(params: {
 }
 
 describe("embedded attempt context injection", () => {
+  beforeEach(() => {
+    resetEmbeddedAttemptHarness();
+  });
+
+  afterEach(async () => {
+    await cleanupTempPaths(tempPaths);
+  });
+
   it("skips bootstrap reinjection on safe continuation turns when configured", async () => {
     const { result, hasCompletedBootstrapTurn, resolveBootstrapContextForRun } =
       await resolveBootstrapContext({
@@ -67,6 +84,28 @@ describe("embedded attempt context injection", () => {
     expect(result.bootstrapFiles).toEqual([{ name: "AGENTS.md" }]);
     expect(result.contextFiles).toEqual([{ path: "AGENTS.md" }]);
     expect(resolver).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards senderIsOwner into embedded message-action discovery", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: {
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
+      },
+      attemptOverrides: {
+        messageChannel: "matrix",
+        messageProvider: "matrix",
+        senderIsOwner: false,
+      },
+      sessionKey: "agent:main",
+      tempPaths,
+    });
+
+    expect(hoisted.buildEmbeddedMessageActionDiscoveryInputMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "matrix",
+        senderIsOwner: false,
+      }),
+    );
   });
 
   it("never skips heartbeat bootstrap filtering", async () => {

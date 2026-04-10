@@ -163,7 +163,10 @@ export async function installPackageDir(params: {
   hasDeps: boolean;
   depsLogMessage: string;
   afterCopy?: (installedDir: string) => void | Promise<void>;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
+  afterInstall?: (
+    installedDir: string,
+  ) => Promise<{ ok: true } | { ok: false; error: string; code?: string }>;
+}): Promise<{ ok: true } | { ok: false; error: string; code?: string }> {
   params.logger?.info?.(`Installing to ${params.targetDir}…`);
   const installBaseDir = path.dirname(params.targetDir);
   await fs.mkdir(installBaseDir, { recursive: true });
@@ -196,6 +199,10 @@ export async function installPackageDir(params: {
       }
     }
     return { ok: false as const, error };
+  };
+  const failWithCode = async (params: { error: string; code?: string }, cause?: unknown) => {
+    const failed = await fail(params.error, cause);
+    return params.code ? { ...failed, code: params.code } : failed;
   };
   const restoreBackup = async () => {
     if (!backupDir) {
@@ -247,6 +254,17 @@ export async function installPackageDir(params: {
       }
     } catch (error) {
       return await fail(`npm install failed: ${String(error)}`, error);
+    }
+  }
+
+  if (params.afterInstall) {
+    try {
+      const postInstallResult = await params.afterInstall(stageDir);
+      if (!postInstallResult.ok) {
+        return await failWithCode(postInstallResult);
+      }
+    } catch (err) {
+      return await fail(`post-install validation failed: ${String(err)}`, err);
     }
   }
 
