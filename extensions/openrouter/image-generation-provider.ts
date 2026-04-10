@@ -18,6 +18,16 @@ const OPENROUTER_IMAGE_MODELS = [
   "google/gemini-3.1-flash-image-preview",
   "black-forest-labs/flux.2-pro",
 ] as const;
+// Image-only models use modalities: ["image"]; dual-output models use ["image", "text"].
+const IMAGE_ONLY_MODEL_PREFIXES = ["black-forest-labs/", "sourceful/"] as const;
+
+function resolveImageModalities(model: string): string[] {
+  if (IMAGE_ONLY_MODEL_PREFIXES.some((prefix) => model.startsWith(prefix))) {
+    return ["image"];
+  }
+  return ["image", "text"];
+}
+
 const OPENROUTER_IMAGE_ASPECT_RATIOS = [
   "1:1",
   "2:3",
@@ -138,7 +148,7 @@ export function buildOpenrouterImageGenerationProvider(): ImageGenerationProvide
         body: {
           model,
           messages: [{ role: "user", content: req.prompt }],
-          modalities: ["image", "text"],
+          modalities: resolveImageModalities(model),
           ...(Object.keys(imageConfig).length > 0 ? { image_config: imageConfig } : {}),
         },
         timeoutMs: req.timeoutMs,

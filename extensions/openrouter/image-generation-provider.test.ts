@@ -166,6 +166,45 @@ describe("openrouter image generation provider", () => {
     ).rejects.toThrow("OpenRouter image generation response missing image data");
   });
 
+  it("uses image-only modalities for Flux models", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                images: [
+                  {
+                    type: "image_url",
+                    image_url: { url: makeImageDataUrl("flux-img") },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildOpenrouterImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openrouter",
+      model: "black-forest-labs/flux.2-pro",
+      prompt: "A mountain",
+      cfg: {},
+    });
+
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          model: "black-forest-labs/flux.2-pro",
+          modalities: ["image"],
+        }),
+      }),
+    );
+  });
+
   it("rejects input images since edit mode is not supported", async () => {
     const provider = buildOpenrouterImageGenerationProvider();
     await expect(

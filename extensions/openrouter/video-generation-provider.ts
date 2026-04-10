@@ -9,6 +9,7 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runt
 import {
   assertOkOrThrowHttpError,
   fetchWithTimeout,
+  fetchWithTimeoutGuarded,
   postJsonRequest,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
@@ -86,9 +87,10 @@ async function pollOpenRouterVideo(params: {
   headers: Headers;
   timeoutMs: number;
   fetchFn: typeof fetch;
+  dispatcherPolicy?: unknown;
 }): Promise<OpenRouterVideoPollResponse> {
   for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
-    const response = await fetchWithTimeout(
+    const { response, release } = await fetchWithTimeoutGuarded(
       params.pollingUrl,
       {
         method: "GET",
@@ -96,9 +98,15 @@ async function pollOpenRouterVideo(params: {
       },
       params.timeoutMs,
       params.fetchFn,
+      { dispatcherPolicy: params.dispatcherPolicy, auditContext: "openrouter-video-poll" },
     );
-    await assertOkOrThrowHttpError(response, "OpenRouter video status request failed");
-    const payload = (await response.json()) as OpenRouterVideoPollResponse;
+    let payload: OpenRouterVideoPollResponse;
+    try {
+      await assertOkOrThrowHttpError(response, "OpenRouter video status request failed");
+      payload = (await response.json()) as OpenRouterVideoPollResponse;
+    } finally {
+      await release();
+    }
 
     if (payload.status === "completed") {
       return payload;
@@ -119,29 +127,42 @@ async function downloadOpenRouterVideo(params: {
   timeoutMs: number;
   fetchFn: typeof fetch;
   unsignedUrl?: string;
+  dispatcherPolicy?: unknown;
 }): Promise<GeneratedVideoAsset> {
   const isUnsigned = Boolean(params.unsignedUrl);
   const url =
     params.unsignedUrl ?? `${params.baseUrl}/videos/${params.videoId}/content?index=0`;
-  // Unsigned URLs may point to third-party CDNs; omit auth headers to avoid leaking the API key.
-  const downloadHeaders = isUnsigned ? new Headers() : params.headers;
-  const response = await fetchWithTimeout(
-    url,
-    {
-      method: "GET",
-      headers: downloadHeaders,
-    },
-    params.timeoutMs,
-    params.fetchFn,
-  );
-  await assertOkOrThrowHttpError(response, "OpenRouter video download failed");
-  const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
-  const arrayBuffer = await response.arrayBuffer();
-  return {
-    buffer: Buffer.from(arrayBuffer),
-    mimeType,
-    fileName: `video-1.${mimeType.includes("webm") ? "webm" : "mp4"}`,
-  };
+
+  let response: Response;
+  let release: (() => Promise<void>) | undefined;
+  if (isUnsigned) {
+    // Unsigned URLs may point to third-party CDNs; use raw fetch without auth headers.
+    response = await fetchWithTimeout(url, { method: "GET" }, params.timeoutMs, params.fetchFn);
+  } else {
+    const guarded = await fetchWithTimeoutGuarded(
+      url,
+      { method: "GET", headers: params.headers },
+      params.timeoutMs,
+      params.fetchFn,
+      { dispatcherPolicy: params.dispatcherPolicy, auditContext: "openrouter-video-download" },
+    );
+    response = guarded.response;
+    release = guarded.release;
+  }
+
+  try {
+    await assertOkOrThrowHttpError(response, "OpenRouter video download failed");
+    const mimeType =
+      normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
+    const arrayBuffer = await response.arrayBuffer();
+    return {
+      buffer: Buffer.from(arrayBuffer),
+      mimeType,
+      fileName: `video-1.${mimeType.includes("webm") ? "webm" : "mp4"}`,
+    };
+  } finally {
+    await release?.();
+  }
 }
 
 export function buildOpenrouterVideoGenerationProvider(): VideoGenerationProvider {
@@ -260,6 +281,7 @@ export function buildOpenrouterVideoGenerationProvider(): VideoGenerationProvide
         headers,
         timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         fetchFn,
+        dispatcherPolicy,
       });
 
       const video = await downloadOpenRouterVideo({
@@ -269,6 +291,7 @@ export function buildOpenrouterVideoGenerationProvider(): VideoGenerationProvide
         timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         fetchFn,
         unsignedUrl: completed.unsigned_urls?.[0],
+        dispatcherPolicy,
       });
 
       return {
