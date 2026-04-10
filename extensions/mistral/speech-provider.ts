@@ -22,21 +22,15 @@ type MistralTtsProviderConfig = {
   baseUrl: string;
   model: string;
   voice: string;
-  speed?: number;
 };
 
 type MistralTtsProviderOverrides = {
   model?: string;
   voice?: string;
-  speed?: number;
 };
 
 function normalizeProviderId(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
-}
-
-function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function hasConfiguredSecret(value: unknown): boolean {
@@ -112,7 +106,6 @@ function normalizeMistralProviderConfig(
     ),
     model: trimToUndefined(raw?.model) ?? DEFAULT_MISTRAL_TTS_MODEL,
     voice: trimToUndefined(raw?.voice) ?? "",
-    speed: asNumber(raw?.speed),
   };
 }
 
@@ -126,7 +119,6 @@ function readMistralProviderConfig(
     baseUrl: normalizeMistralTtsBaseUrl(trimToUndefined(config.baseUrl) ?? normalized.baseUrl),
     model: trimToUndefined(config.model) ?? normalized.model,
     voice: trimToUndefined(config.voice) ?? normalized.voice,
-    speed: asNumber(config.speed) ?? normalized.speed,
   };
 }
 
@@ -139,7 +131,6 @@ function readMistralOverrides(
   return {
     model: trimToUndefined(overrides.model),
     voice: trimToUndefined(overrides.voice),
-    speed: asNumber(overrides.speed),
   };
 }
 
@@ -332,11 +323,10 @@ async function mistralTTS(params: {
   baseUrl: string;
   model: string;
   voice: string;
-  speed?: number;
   responseFormat: "mp3" | "opus" | "pcm" | "wav";
   timeoutMs: number;
 }): Promise<Buffer> {
-  const { text, apiKey, baseUrl, model, voice, speed, responseFormat, timeoutMs } = params;
+  const { text, apiKey, baseUrl, model, voice, responseFormat, timeoutMs } = params;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -353,7 +343,6 @@ async function mistralTTS(params: {
         input: text,
         ...(voice ? { voice_id: voice } : {}),
         response_format: responseFormat,
-        ...(speed != null && { speed }),
       }),
       signal: controller.signal,
     });
@@ -405,9 +394,6 @@ export function buildMistralSpeechProvider(): SpeechProviderPlugin {
         ...(trimToUndefined(talkProviderConfig.voiceId) == null
           ? {}
           : { voice: trimToUndefined(talkProviderConfig.voiceId) }),
-        ...(asNumber(talkProviderConfig.speed) == null
-          ? {}
-          : { speed: asNumber(talkProviderConfig.speed) }),
       };
     },
     resolveTalkOverrides: ({ params }) => ({
@@ -417,7 +403,6 @@ export function buildMistralSpeechProvider(): SpeechProviderPlugin {
       ...(trimToUndefined(params.modelId) == null
         ? {}
         : { model: trimToUndefined(params.modelId) }),
-      ...(asNumber(params.speed) == null ? {} : { speed: asNumber(params.speed) }),
     }),
     isConfigured: ({ cfg, providerConfig }) => {
       const config = readMistralProviderConfig(providerConfig, cfg);
@@ -446,7 +431,6 @@ export function buildMistralSpeechProvider(): SpeechProviderPlugin {
         baseUrl: config.baseUrl,
         model: config.model,
         voice: config.voice,
-        speed: config.speed,
         responseFormat: "wav",
         timeoutMs: req.timeoutMs,
       });
@@ -467,7 +451,6 @@ export function buildMistralSpeechProvider(): SpeechProviderPlugin {
         baseUrl: config.baseUrl,
         model: overrides.model ?? config.model,
         voice: overrides.voice ?? config.voice,
-        speed: overrides.speed ?? config.speed,
         responseFormat,
         timeoutMs: req.timeoutMs,
       });

@@ -237,7 +237,6 @@ describe("mistral speech provider", () => {
         baseUrl: "https://talk.mistral.example/v1",
         modelId: "voxtral-custom-tts",
         voiceId: "voice_123",
-        speed: 1.1,
       },
       timeoutMs: 5000,
     });
@@ -247,7 +246,6 @@ describe("mistral speech provider", () => {
       baseUrl: "https://talk.mistral.example/v1",
       model: "voxtral-custom-tts",
       voice: "voice_123",
-      speed: 1.1,
     });
   });
 
@@ -257,14 +255,12 @@ describe("mistral speech provider", () => {
       params: {
         modelId: "voxtral-live-tts",
         voiceId: "voice_override",
-        speed: 1.25,
       },
     });
 
     expect(talkOverrides).toEqual({
       model: "voxtral-live-tts",
       voice: "voice_override",
-      speed: 1.25,
     });
   });
 
