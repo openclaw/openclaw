@@ -5,6 +5,7 @@ const {
   runQaManualLane,
   runQaSuite,
   runQaCharacterEval,
+  runQaMultipass,
   startQaLabServer,
   writeQaDockerHarnessFiles,
   buildQaDockerHarnessImage,
@@ -13,6 +14,7 @@ const {
   runQaManualLane: vi.fn(),
   runQaSuite: vi.fn(),
   runQaCharacterEval: vi.fn(),
+  runQaMultipass: vi.fn(),
   startQaLabServer: vi.fn(),
   writeQaDockerHarnessFiles: vi.fn(),
   buildQaDockerHarnessImage: vi.fn(),
@@ -29,6 +31,10 @@ vi.mock("./suite.js", () => ({
 
 vi.mock("./character-eval.js", () => ({
   runQaCharacterEval,
+}));
+
+vi.mock("./multipass.runtime.js", () => ({
+  runQaMultipass,
 }));
 
 vi.mock("./lab-server.js", () => ({
@@ -62,6 +68,7 @@ describe("qa cli runtime", () => {
     runQaSuite.mockReset();
     runQaCharacterEval.mockReset();
     runQaManualLane.mockReset();
+    runQaMultipass.mockReset();
     startQaLabServer.mockReset();
     writeQaDockerHarnessFiles.mockReset();
     buildQaDockerHarnessImage.mockReset();
@@ -80,6 +87,16 @@ describe("qa cli runtime", () => {
       waited: { status: "ok" },
       reply: "done",
       watchUrl: "http://127.0.0.1:43124",
+    });
+    runQaMultipass.mockResolvedValue({
+      outputDir: "/tmp/multipass",
+      reportPath: "/tmp/multipass/qa-suite-report.md",
+      summaryPath: "/tmp/multipass/qa-suite-summary.json",
+      hostLogPath: "/tmp/multipass/multipass-host.log",
+      bootstrapLogPath: "/tmp/multipass/multipass-guest-bootstrap.log",
+      guestScriptPath: "/tmp/multipass/multipass-guest-run.sh",
+      vmName: "openclaw-qa-test",
+      scenarioIds: ["channel-chat-baseline"],
     });
     startQaLabServer.mockResolvedValue({
       baseUrl: "http://127.0.0.1:58000",
@@ -265,6 +282,68 @@ describe("qa cli runtime", () => {
       message: "read qa kickoff and reply short",
       timeoutMs: 45_000,
     });
+  });
+
+  it("routes suite runs through multipass when the runner is selected", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      outputDir: ".artifacts/qa-multipass",
+      runner: "multipass",
+      providerMode: "mock-openai",
+      scenarioIds: ["channel-chat-baseline"],
+      image: "lts",
+      cpus: 2,
+      memory: "4G",
+      disk: "24G",
+    });
+
+    expect(runQaMultipass).toHaveBeenCalledWith({
+      repoRoot: path.resolve("/tmp/openclaw-repo"),
+      outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa-multipass"),
+      providerMode: "mock-openai",
+      primaryModel: undefined,
+      alternateModel: undefined,
+      fastMode: undefined,
+      scenarioIds: ["channel-chat-baseline"],
+      image: "lts",
+      cpus: 2,
+      memory: "4G",
+      disk: "24G",
+    });
+    expect(runQaSuite).not.toHaveBeenCalled();
+  });
+
+  it("passes live suite selection through to the multipass runner", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      runner: "multipass",
+      providerMode: "live-frontier",
+      primaryModel: "openai/gpt-5.4",
+      alternateModel: "openai/gpt-5.4",
+      fastMode: true,
+      scenarioIds: ["channel-chat-baseline"],
+    });
+
+    expect(runQaMultipass).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoRoot: path.resolve("/tmp/openclaw-repo"),
+        providerMode: "live-frontier",
+        primaryModel: "openai/gpt-5.4",
+        alternateModel: "openai/gpt-5.4",
+        fastMode: true,
+        scenarioIds: ["channel-chat-baseline"],
+      }),
+    );
+  });
+
+  it("rejects multipass-only suite flags on the host runner", async () => {
+    await expect(
+      runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        runner: "host",
+        image: "lts",
+      }),
+    ).rejects.toThrow("--image, --cpus, --memory, and --disk require --runner multipass.");
   });
 
   it("defaults manual mock runs onto the mock-openai model lane", async () => {

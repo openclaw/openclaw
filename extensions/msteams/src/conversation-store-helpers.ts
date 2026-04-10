@@ -35,8 +35,12 @@ export function mergeStoredConversationReference(
 ): StoredConversationReference {
   return {
     // Preserve fields from previous entry that may not be present on every activity
-    // (e.g. timezone is only sent when clientInfo entity is available).
+    // (e.g. timezone is only sent when clientInfo entity is available;
+    // graphChatId is resolved via Graph API and cached for DM media downloads).
     ...(existing?.timezone && !incoming.timezone ? { timezone: existing.timezone } : {}),
+    ...(existing?.graphChatId && !incoming.graphChatId
+      ? { graphChatId: existing.graphChatId }
+      : {}),
     ...incoming,
     lastSeenAt: nowIso,
   };

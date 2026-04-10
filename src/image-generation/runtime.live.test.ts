@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import falPlugin from "../../extensions/fal/index.js";
-import googlePlugin from "../../extensions/google/index.js";
-import minimaxPlugin from "../../extensions/minimax/index.js";
-import openaiPlugin from "../../extensions/openai/index.js";
-import vydraPlugin from "../../extensions/vydra/index.js";
+import { loadBundledProviderPlugin as loadBundledProviderPluginFromTestHelper } from "../../test/helpers/media-generation/bundled-provider-builders.js";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -52,28 +48,37 @@ type LiveImageCase = {
   inputImages?: Array<{ buffer: Buffer; mimeType: string; fileName?: string }>;
 };
 
+function loadBundledProviderPlugin(pluginId: string): LiveProviderCase["plugin"] {
+  return loadBundledProviderPluginFromTestHelper(pluginId);
+}
+
 const PROVIDER_CASES: LiveProviderCase[] = [
-  { plugin: falPlugin, pluginId: "fal", pluginName: "fal Provider", providerId: "fal" },
   {
-    plugin: googlePlugin,
+    plugin: loadBundledProviderPlugin("fal"),
+    pluginId: "fal",
+    pluginName: "fal Provider",
+    providerId: "fal",
+  },
+  {
+    plugin: loadBundledProviderPlugin("google"),
     pluginId: "google",
     pluginName: "Google Provider",
     providerId: "google",
   },
   {
-    plugin: minimaxPlugin,
+    plugin: loadBundledProviderPlugin("minimax"),
     pluginId: "minimax",
     pluginName: "MiniMax Provider",
     providerId: "minimax",
   },
   {
-    plugin: openaiPlugin,
+    plugin: loadBundledProviderPlugin("openai"),
     pluginId: "openai",
     pluginName: "OpenAI Provider",
     providerId: "openai",
   },
   {
-    plugin: vydraPlugin,
+    plugin: loadBundledProviderPlugin("vydra"),
     pluginId: "vydra",
     pluginName: "Vydra Provider",
     providerId: "vydra",

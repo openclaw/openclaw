@@ -550,5 +550,106 @@ describe("msteams attachments", () => {
       expectAttachmentMediaLength(media, 0);
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
+
+    describe("OneDrive/SharePoint shared links", () => {
+      const GRAPH_SHARES_URL_PREFIX = `https://${GRAPH_HOST}/v1.0/shares/`;
+      const DEFAULT_GRAPH_ALLOW_HOSTS = [GRAPH_HOST];
+      const PDF_PAYLOAD = Buffer.from("pdf-bytes");
+
+      const createGraphSharesFetchMock = () =>
+        vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = typeof input === "string" ? input : input.toString();
+          const auth = new Headers(init?.headers).get("Authorization");
+          if (url.startsWith(GRAPH_SHARES_URL_PREFIX)) {
+            if (!auth) {
+              return createTextResponse("unauthorized", 401);
+            }
+            return createBufferResponse(PDF_PAYLOAD, CONTENT_TYPE_APPLICATION_PDF);
+          }
+          return createNotFoundResponse();
+        });
+
+      it.each([
+        {
+          label: "SharePoint URL",
+          contentUrl: "https://contoso.sharepoint.com/personal/user/Documents/report.pdf",
+        },
+        {
+          label: "OneDrive 1drv.ms URL",
+          contentUrl: "https://1drv.ms/b/s!AkxYabcdefg",
+        },
+        {
+          label: "OneDrive onedrive.live.com URL",
+          contentUrl: "https://onedrive.live.com/share/file",
+        },
+      ])("routes $label through Graph shares endpoint", async ({ contentUrl }) => {
+        const tokenProvider = createTokenProvider();
+        const fetchMock = createGraphSharesFetchMock();
+        detectMimeMock.mockResolvedValueOnce(CONTENT_TYPE_APPLICATION_PDF);
+        saveMediaBufferMock.mockResolvedValueOnce({
+          id: "saved.pdf",
+          path: SAVED_PDF_PATH,
+          size: Buffer.byteLength(PDF_PAYLOAD),
+          contentType: CONTENT_TYPE_APPLICATION_PDF,
+        });
+
+        const media = await downloadMSTeamsAttachments(
+          buildDownloadParams(
+            [
+              {
+                contentType: "reference",
+                contentUrl,
+                name: "report.pdf",
+              },
+            ],
+            {
+              tokenProvider,
+              allowHosts: DEFAULT_GRAPH_ALLOW_HOSTS,
+              authAllowHosts: DEFAULT_GRAPH_ALLOW_HOSTS,
+              fetchFn: asFetchFn(fetchMock),
+            },
+          ),
+        );
+
+        expectAttachmentMediaLength(media, 1);
+        expect(media[0]?.path).toBe(SAVED_PDF_PATH);
+        // The only host that should be fetched is graph.microsoft.com.
+        const calledUrls = (fetchMock.mock.calls as Array<[RequestInfo | URL, RequestInit?]>).map(
+          ([input]) => (typeof input === "string" ? input : String(input)),
+        );
+        expect(calledUrls.length).toBeGreaterThan(0);
+        for (const url of calledUrls) {
+          expect(url.startsWith(GRAPH_SHARES_URL_PREFIX)).toBe(true);
+        }
+        // Graph scope token was acquired for the shares fetch.
+        expect(tokenProvider.getAccessToken).toHaveBeenCalled();
+      });
+
+      it("falls through to direct fetch for non-shared-link URLs", async () => {
+        const directUrl = createTestUrl("direct.pdf");
+        const fetchMock = createOkFetchMock(CONTENT_TYPE_APPLICATION_PDF, "pdf");
+        detectMimeMock.mockResolvedValueOnce(CONTENT_TYPE_APPLICATION_PDF);
+        saveMediaBufferMock.mockResolvedValueOnce({
+          id: "saved.pdf",
+          path: SAVED_PDF_PATH,
+          size: Buffer.byteLength(PDF_BUFFER),
+          contentType: CONTENT_TYPE_APPLICATION_PDF,
+        });
+
+        const media = await downloadAttachmentsWithFetch(
+          createPdfAttachments(directUrl),
+          fetchMock,
+        );
+
+        expectAttachmentMediaLength(media, 1);
+        const calledUrls = (fetchMock.mock.calls as unknown[]).map((call) => {
+          const input = (call as [RequestInfo | URL])[0];
+          return typeof input === "string" ? input : String(input);
+        });
+        // Should have hit the original host, NOT graph shares.
+        expect(calledUrls.some((url) => url === directUrl)).toBe(true);
+        expect(calledUrls.some((url) => url.startsWith(GRAPH_SHARES_URL_PREFIX))).toBe(false);
+      });
+    });
   });
 });

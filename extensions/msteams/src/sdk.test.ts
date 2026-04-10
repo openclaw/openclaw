@@ -7,33 +7,43 @@ import {
 } from "./sdk.js";
 import type { MSTeamsCredentials } from "./token.js";
 
-const jwtValidatorState = vi.hoisted(() => ({
-  instances: [] as Array<{ config: Record<string, unknown> }>,
-  behaviorByJwks: new Map<string, "success" | "null" | "throw">(),
-  calls: [] as Array<{ jwksUri: string; token: string; overrideOptions?: unknown }>,
-}));
-
 const clientConstructorState = vi.hoisted(() => ({
   calls: [] as Array<{ serviceUrl: string; options: unknown }>,
 }));
 
-vi.mock("@microsoft/teams.apps/dist/middleware/auth/jwt-validator.js", () => ({
-  JwtValidator: class JwtValidator {
-    private readonly config: Record<string, unknown>;
+// Track jwt.verify calls to assert audience/issuer/algorithm config.
+const jwtState = vi.hoisted(() => ({
+  verifyBehavior: "success" as "success" | "throw",
+  decodedHeader: { kid: "key-1" } as { kid?: string } | null,
+  decodedPayload: { iss: "https://api.botframework.com" } as { iss?: string } | null,
+  verifyCalls: [] as Array<{ token: string; options: unknown }>,
+}));
 
-    constructor(config: Record<string, unknown>) {
-      this.config = config;
-      jwtValidatorState.instances.push({ config });
+const jwtMockImpl = {
+  decode: (token: string, opts?: { complete?: boolean }) => {
+    if (opts?.complete) {
+      return jwtState.decodedHeader ? { header: jwtState.decodedHeader } : null;
     }
+    return jwtState.decodedPayload;
+  },
+  verify: (token: string, _key: string, options: unknown) => {
+    jwtState.verifyCalls.push({ token, options });
+    if (jwtState.verifyBehavior === "throw") {
+      throw new Error("invalid signature");
+    }
+    return { sub: "ok" };
+  },
+};
 
-    async validateAccessToken(token: string, overrideOptions?: unknown): Promise<object | null> {
-      const jwksUri = String((this.config.jwksUriOptions as { uri?: string })?.uri ?? "");
-      jwtValidatorState.calls.push({ jwksUri, token, overrideOptions });
-      const behavior = jwtValidatorState.behaviorByJwks.get(jwksUri) ?? "null";
-      if (behavior === "throw") {
-        throw new Error("validator error");
-      }
-      return behavior === "success" ? { sub: "ok" } : null;
+vi.mock("jsonwebtoken", () => ({
+  ...jwtMockImpl,
+  default: jwtMockImpl,
+}));
+
+vi.mock("jwks-rsa", () => ({
+  JwksClient: class JwksClient {
+    async getSigningKey(_kid: string) {
+      return { getPublicKey: () => "mock-public-key" };
     }
   },
 }));
@@ -43,9 +53,10 @@ const originalFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = originalFetch;
   clientConstructorState.calls.length = 0;
-  jwtValidatorState.instances.length = 0;
-  jwtValidatorState.calls.length = 0;
-  jwtValidatorState.behaviorByJwks.clear();
+  jwtState.verifyCalls.length = 0;
+  jwtState.verifyBehavior = "success";
+  jwtState.decodedHeader = { kid: "key-1" };
+  jwtState.decodedPayload = { iss: "https://api.botframework.com" };
   vi.restoreAllMocks();
 });
 
@@ -186,106 +197,90 @@ describe("createBotFrameworkJwtValidator", () => {
     tenantId: "tenant-id",
   } satisfies MSTeamsCredentials;
 
-  it("validates with legacy Bot Framework JWKS and issuer first", async () => {
-    jwtValidatorState.behaviorByJwks.set(
-      "https://login.botframework.com/v1/.well-known/keys",
-      "success",
-    );
+  it("validates a token with Bot Framework issuer and correct audience list", async () => {
+    jwtState.decodedPayload = { iss: "https://api.botframework.com" };
 
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer token-1", "https://service.example.com")).resolves.toBe(
-      true,
-    );
+    await expect(validator.validate("Bearer token-bf")).resolves.toBe(true);
 
-    expect(jwtValidatorState.instances).toHaveLength(2);
-    expect(jwtValidatorState.calls).toHaveLength(1);
-    expect(jwtValidatorState.calls[0]).toMatchObject({
-      jwksUri: "https://login.botframework.com/v1/.well-known/keys",
-      token: "token-1",
-      overrideOptions: {
-        validateServiceUrl: { expectedServiceUrl: "https://service.example.com" },
-      },
-    });
+    expect(jwtState.verifyCalls).toHaveLength(1);
+    const opts = jwtState.verifyCalls[0]?.options as Record<string, unknown>;
+    expect(opts.audience).toEqual(["app-id", "api://app-id", "https://api.botframework.com"]);
+    expect(opts.algorithms).toEqual(["RS256"]);
+    expect(opts.clockTolerance).toBe(300);
   });
 
-  it("falls back to Entra JWKS when Bot Framework validation fails", async () => {
-    jwtValidatorState.behaviorByJwks.set(
-      "https://login.botframework.com/v1/.well-known/keys",
-      "null",
-    );
-    jwtValidatorState.behaviorByJwks.set(
-      "https://login.microsoftonline.com/common/discovery/v2.0/keys",
-      "success",
-    );
+  it("accepts tokens with aud: https://api.botframework.com (#58249)", async () => {
+    // This is the critical fix: the old JwtValidator rejected this audience.
+    jwtState.decodedPayload = { iss: "https://api.botframework.com" };
 
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer token-2")).resolves.toBe(true);
+    await expect(validator.validate("Bearer botfw-token")).resolves.toBe(true);
 
-    expect(jwtValidatorState.calls).toHaveLength(2);
-    expect(jwtValidatorState.calls[0]?.jwksUri).toBe(
-      "https://login.botframework.com/v1/.well-known/keys",
-    );
-    expect(jwtValidatorState.calls[1]?.jwksUri).toBe(
-      "https://login.microsoftonline.com/common/discovery/v2.0/keys",
-    );
-
-    const entraConfig = jwtValidatorState.instances
-      .map((instance) => instance.config)
-      .find(
-        (config) =>
-          String((config.jwksUriOptions as { uri?: string })?.uri) ===
-          "https://login.microsoftonline.com/common/discovery/v2.0/keys",
-      );
-    expect(entraConfig).toBeDefined();
-    expect(entraConfig?.validateIssuer).toEqual({ allowedTenantIds: ["tenant-id"] });
+    const opts = jwtState.verifyCalls[0]?.options as Record<string, unknown>;
+    expect((opts.audience as string[]).includes("https://api.botframework.com")).toBe(true);
   });
 
-  it("falls back to Entra JWKS when Bot Framework validation throws", async () => {
-    jwtValidatorState.behaviorByJwks.set(
-      "https://login.botframework.com/v1/.well-known/keys",
-      "throw",
-    );
-    jwtValidatorState.behaviorByJwks.set(
-      "https://login.microsoftonline.com/common/discovery/v2.0/keys",
-      "success",
-    );
+  it("validates a token with Entra issuer", async () => {
+    jwtState.decodedPayload = { iss: `https://login.microsoftonline.com/tenant-id/v2.0` };
 
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(
-      validator.validate("Bearer token-throw", "https://service.example.com"),
-    ).resolves.toBe(true);
+    await expect(validator.validate("Bearer token-entra")).resolves.toBe(true);
 
-    expect(jwtValidatorState.calls).toHaveLength(2);
-    expect(jwtValidatorState.calls[0]).toMatchObject({
-      jwksUri: "https://login.botframework.com/v1/.well-known/keys",
-      token: "token-throw",
-      overrideOptions: {
-        validateServiceUrl: { expectedServiceUrl: "https://service.example.com" },
-      },
-    });
-    expect(jwtValidatorState.calls[1]).toMatchObject({
-      jwksUri: "https://login.microsoftonline.com/common/discovery/v2.0/keys",
-      token: "token-throw",
-      overrideOptions: {
-        validateServiceUrl: { expectedServiceUrl: "https://service.example.com" },
-      },
-    });
+    expect(jwtState.verifyCalls).toHaveLength(1);
+    const opts = jwtState.verifyCalls[0]?.options as Record<string, unknown>;
+    expect(opts.issuer as string[]).toContain("https://login.microsoftonline.com/tenant-id/v2.0");
   });
 
-  it("returns false when all validator paths fail", async () => {
-    jwtValidatorState.behaviorByJwks.set(
-      "https://login.botframework.com/v1/.well-known/keys",
-      "throw",
-    );
+  it("validates a token with STS Windows issuer", async () => {
+    jwtState.decodedPayload = {
+      iss: "https://sts.windows.net/d6d49420-f39b-4df7-a1dc-d59a935871db/",
+    };
 
     const validator = await createBotFrameworkJwtValidator(creds);
-    await expect(validator.validate("Bearer token-3")).resolves.toBe(false);
-    expect(jwtValidatorState.calls).toHaveLength(2);
+    await expect(validator.validate("Bearer token-sts")).resolves.toBe(true);
+
+    expect(jwtState.verifyCalls).toHaveLength(1);
+    const opts = jwtState.verifyCalls[0]?.options as Record<string, unknown>;
+    expect(opts.issuer as string[]).toContain(
+      "https://sts.windows.net/d6d49420-f39b-4df7-a1dc-d59a935871db/",
+    );
+  });
+
+  it("rejects tokens with unknown issuer", async () => {
+    jwtState.decodedPayload = { iss: "https://evil.example.com" };
+
+    const validator = await createBotFrameworkJwtValidator(creds);
+    await expect(validator.validate("Bearer token-evil")).resolves.toBe(false);
+    expect(jwtState.verifyCalls).toHaveLength(0);
+  });
+
+  it("returns false when signature verification fails", async () => {
+    jwtState.verifyBehavior = "throw";
+
+    const validator = await createBotFrameworkJwtValidator(creds);
+    await expect(validator.validate("Bearer token-bad")).resolves.toBe(false);
   });
 
   it("returns false for empty bearer token", async () => {
     const validator = await createBotFrameworkJwtValidator(creds);
     await expect(validator.validate("Bearer ")).resolves.toBe(false);
-    expect(jwtValidatorState.calls).toHaveLength(0);
+    expect(jwtState.verifyCalls).toHaveLength(0);
+  });
+
+  it("returns false when token has no kid header", async () => {
+    jwtState.decodedHeader = { kid: undefined };
+
+    const validator = await createBotFrameworkJwtValidator(creds);
+    await expect(validator.validate("Bearer no-kid")).resolves.toBe(false);
+    expect(jwtState.verifyCalls).toHaveLength(0);
+  });
+
+  it("returns false when token has no issuer claim", async () => {
+    jwtState.decodedPayload = { iss: undefined };
+
+    const validator = await createBotFrameworkJwtValidator(creds);
+    await expect(validator.validate("Bearer no-iss")).resolves.toBe(false);
+    expect(jwtState.verifyCalls).toHaveLength(0);
   });
 });

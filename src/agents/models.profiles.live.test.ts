@@ -9,6 +9,7 @@ import {
   isAnthropicBillingError,
   isAnthropicRateLimitError,
 } from "./live-auth-keys.js";
+import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
 import {
   isHighSignalLiveModelRef,
   resolveHighSignalLiveModelLimit,
@@ -135,35 +136,6 @@ function isGoogleModelNotFoundError(err: unknown): boolean {
   return false;
 }
 
-function isModelNotFoundErrorMessage(raw: string): boolean {
-  const msg = raw.trim();
-  if (!msg) {
-    return false;
-  }
-  if (/\b404\b/.test(msg) && /not(?:[\s_-]+)?found/i.test(msg)) {
-    return true;
-  }
-  if (/not_found_error/i.test(msg)) {
-    return true;
-  }
-  if (/model:\s*[a-z0-9._-]+/i.test(msg) && /not(?:[\s_-]+)?found/i.test(msg)) {
-    return true;
-  }
-  if (/does not exist or you do not have access/i.test(msg)) {
-    return true;
-  }
-  if (/deprecated/i.test(msg) && /(upgrade|transition) to/i.test(msg)) {
-    return true;
-  }
-  if (/stealth model/i.test(msg) && /find it here/i.test(msg)) {
-    return true;
-  }
-  if (/is not a valid model id/i.test(msg)) {
-    return true;
-  }
-  return false;
-}
-
 describe("isModelNotFoundErrorMessage", () => {
   it("matches whitespace-separated not found errors", () => {
     expect(isModelNotFoundErrorMessage("404 model not found")).toBe(true);
@@ -180,6 +152,12 @@ describe("isModelNotFoundErrorMessage", () => {
       isModelNotFoundErrorMessage(
         "404 The free model has been deprecated. Transition to qwen/qwen3.6-plus for continued paid access.",
       ),
+    ).toBe(true);
+  });
+
+  it("matches OpenRouter no-endpoints wording", () => {
+    expect(
+      isModelNotFoundErrorMessage("404 No endpoints found for deepseek/deepseek-r1:free."),
     ).toBe(true);
   });
 });
