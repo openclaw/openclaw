@@ -349,6 +349,7 @@ describe("directive behavior", () => {
         enabled: true,
         allowed: true,
         defaultLevel: "on",
+        fullAccessAvailable: true,
       });
     });
   });

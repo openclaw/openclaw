@@ -1114,6 +1114,16 @@ describe("classifyProviderRuntimeFailureKind", () => {
     ).toBe("auth_scope");
   });
 
+  it("classifies raw missing scope payloads without an HTTP prefix", () => {
+    expect(
+      classifyProviderRuntimeFailureKind({
+        provider: "openai-codex",
+        message:
+          '{"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write"},"code":401}',
+      }),
+    ).toBe("auth_scope");
+  });
+
   it("does not classify non-Codex permission errors as missing scope failures", () => {
     expect(
       classifyProviderRuntimeFailureKind({

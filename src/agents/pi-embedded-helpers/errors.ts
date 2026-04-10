@@ -522,10 +522,18 @@ function isAuthScopeErrorMessage(raw: string, status?: number, provider?: string
     typeof status === "number" && Number.isFinite(status)
       ? status
       : extractLeadingHttpStatus(raw.trim())?.code;
+  const hasScopeHint = AUTH_SCOPE_HINT_RE.test(raw);
+  const hasKnownScopeName = AUTH_SCOPE_NAME_RE.test(raw);
+  if (!hasScopeHint && !hasKnownScopeName) {
+    return false;
+  }
+  if (typeof inferred !== "number") {
+    return hasScopeHint;
+  }
   if (inferred !== 401 && inferred !== 403) {
     return false;
   }
-  return AUTH_SCOPE_HINT_RE.test(raw) || AUTH_SCOPE_NAME_RE.test(raw);
+  return true;
 }
 
 function isProxyErrorMessage(raw: string, status?: number): boolean {

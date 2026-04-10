@@ -233,6 +233,15 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it("returns a missing-scope message for raw OpenAI Codex scope payloads without an HTTP prefix", () => {
+    const msg = makeAssistantError(
+      '{"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write model.request"},"code":401}',
+    );
+    expect(formatAssistantErrorText(msg, { provider: "openai-codex" })).toBe(
+      "Authentication is missing the required OpenAI Codex scopes. Re-run OpenAI/Codex login and try again.",
+    );
+  });
+
   it("does not misdiagnose non-Codex permission errors as missing-scope failures", () => {
     const msg = makeAssistantError(
       '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write model.request"}}',
