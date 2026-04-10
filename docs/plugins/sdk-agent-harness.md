@@ -124,6 +124,63 @@ when you want Codex-managed auth, Codex model discovery, native threads, and
 Codex app-server execution. `/model` can switch among the Codex models returned
 by the Codex app server without requiring OpenAI provider credentials.
 
+OpenClaw requires Codex app-server `0.118.0` or newer. The Codex plugin checks
+the app-server initialize handshake and blocks older or unversioned servers so
+OpenClaw only runs against the protocol surface it has been tested with.
+
+## Harness selection policy
+
+By default, OpenClaw runs embedded agents with `agents.defaults.embeddedHarness`
+set to `{ runtime: "auto", fallback: "pi" }`. In `auto` mode, registered plugin
+harnesses can claim a provider/model pair. If none match, or if an auto-selected
+plugin harness fails before producing output, OpenClaw falls back to PI.
+
+Set `fallback: "none"` when you need to prove that a plugin harness is the only
+runtime being exercised:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "model": "codex/gpt-5.4",
+      "embeddedHarness": {
+        "runtime": "codex",
+        "fallback": "none"
+      }
+    }
+  }
+}
+```
+
+Per-agent overrides use the same shape:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "embeddedHarness": {
+        "runtime": "auto",
+        "fallback": "pi"
+      }
+    },
+    "list": [
+      {
+        "id": "codex-only",
+        "model": "codex/gpt-5.4",
+        "embeddedHarness": {
+          "runtime": "codex",
+          "fallback": "none"
+        }
+      }
+    ]
+  }
+}
+```
+
+`OPENCLAW_AGENT_RUNTIME` still overrides the configured runtime. Use
+`OPENCLAW_AGENT_HARNESS_FALLBACK=none` to disable PI fallback from the
+environment.
+
 ## Native sessions and transcript mirror
 
 A harness may keep a native session id, thread id, or daemon-side resume token.

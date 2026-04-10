@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness";
 import {
+  type CodexInitializeResponse,
   isRpcResponse,
   type CodexServerNotification,
   type JsonObject,
@@ -10,6 +11,8 @@ import {
   type RpcRequest,
   type RpcResponse,
 } from "./protocol.js";
+
+export const MIN_CODEX_APP_SERVER_VERSION = "0.118.0";
 
 type PendingRequest = {
   method: string;
@@ -109,7 +112,9 @@ export class CodexAppServerClient {
     if (this.initialized) {
       return;
     }
-    await this.request("initialize", {
+    // The handshake identifies the exact app-server process we will keep using,
+    // which matters when callers override the binary or app-server args.
+    const response = await this.request<CodexInitializeResponse>("initialize", {
       clientInfo: {
         name: "openclaw",
         title: "OpenClaw",
@@ -119,6 +124,7 @@ export class CodexAppServerClient {
         experimentalApi: true,
       },
     });
+    assertSupportedCodexAppServerVersion(response);
     this.notify("initialized");
     this.initialized = true;
   }
@@ -265,8 +271,15 @@ export async function getSharedCodexAppServerClient(): Promise<CodexAppServerCli
   sharedClientPromise ??= (async () => {
     const client = CodexAppServerClient.start();
     sharedClient = client;
-    await client.initialize();
-    return client;
+    try {
+      await client.initialize();
+      return client;
+    } catch (error) {
+      // Startup failures happen before callers own the shared client, so close
+      // the child here instead of leaving a rejected daemon attached to stdio.
+      client.close();
+      throw error;
+    }
   })();
   try {
     return await sharedClientPromise;
@@ -435,6 +448,50 @@ function readNonEmptyString(value: unknown): string | undefined {
 
 function isJsonObjectValue(value: unknown): value is JsonObject {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function assertSupportedCodexAppServerVersion(response: CodexInitializeResponse): void {
+  const detectedVersion = readCodexVersionFromUserAgent(response.userAgent);
+  if (!detectedVersion) {
+    throw new Error(
+      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but OpenClaw could not determine the running Codex version. Upgrade Codex CLI and retry.`,
+    );
+  }
+  if (compareVersions(detectedVersion, MIN_CODEX_APP_SERVER_VERSION) < 0) {
+    throw new Error(
+      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected ${detectedVersion}. Upgrade Codex CLI and retry.`,
+    );
+  }
+}
+
+export function readCodexVersionFromUserAgent(userAgent: string | undefined): string | undefined {
+  // Codex returns `<originator>/<codex-version> ...`; the originator can be
+  // OpenClaw or an env override, so only the slash-delimited version is stable.
+  const match = userAgent?.match(/^[^/\s]+\/(\d+\.\d+\.\d+(?:[-+][^\s()]*)?)/);
+  return match?.[1];
+}
+
+function compareVersions(left: string, right: string): number {
+  const leftParts = numericVersionParts(left);
+  const rightParts = numericVersionParts(right);
+  for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
+    const leftPart = leftParts[index] ?? 0;
+    const rightPart = rightParts[index] ?? 0;
+    if (leftPart !== rightPart) {
+      return leftPart < rightPart ? -1 : 1;
+    }
+  }
+  return 0;
+}
+
+function numericVersionParts(version: string): number[] {
+  // Pre-release/build tags do not affect our minimum gate; 0.118.0-dev should
+  // satisfy the same protocol floor as 0.118.0.
+  return version
+    .split(/[+-]/, 1)[0]
+    .split(".")
+    .map((part) => Number.parseInt(part, 10))
+    .map((part) => (Number.isFinite(part) ? part : 0));
 }
 
 async function withTimeout<T>(

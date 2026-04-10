@@ -20,6 +20,13 @@ export type RpcResponse = {
 
 export type RpcMessage = RpcRequest | RpcResponse;
 
+export type CodexInitializeResponse = {
+  userAgent?: string;
+  codexHome?: string;
+  platformFamily?: string;
+  platformOs?: string;
+};
+
 export type CodexUserInput =
   | {
       type: "text";
