@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { parseIMessageNotification } from "./parse-notification.js";
 
 describe("parseIMessageNotification", () => {
-  it("strips a length-prefixed UTF-8 wrapper from text and reply_to_text", () => {
-    const wrappedText = `${String.fromCharCode(11)}hello world`;
-    const wrappedReply = `${String.fromCharCode(5)}quote`;
+  it("strips a length-delimited field wrapper from text and reply_to_text", () => {
+    const wrappedText = `${String.fromCharCode(0x0a, 11)}hello world`;
+    const wrappedReply = `${String.fromCharCode(0x0a, 5)}quote`;
     const raw = {
       message: {
         id: 1,
