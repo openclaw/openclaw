@@ -54,6 +54,9 @@ For model selection rules, see [/concepts/models](/concepts/models).
   Use `codex/gpt-*` when you want Codex-owned login, model discovery, native
   thread resume, and app-server execution. Plain `openai/gpt-*` refs continue
   to use the OpenAI provider and the normal OpenClaw provider transport.
+  Codex-only deployments can disable automatic PI fallback with
+  `agents.defaults.embeddedHarness.fallback: "none"`; see
+  [Agent Harness Plugins](/plugins/sdk-agent-harness#disable-pi-fallback).
 
 ## Plugin-owned provider behavior
 
