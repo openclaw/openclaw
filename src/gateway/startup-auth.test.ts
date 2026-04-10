@@ -117,6 +117,22 @@ describe("ensureGatewayStartupAuth", () => {
     });
   });
 
+  it("replaces the shipped example gateway token at startup", async () => {
+    const result = await ensureGatewayStartupAuth({
+      cfg: {},
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: "change-me-to-a-long-random-token",
+      } as NodeJS.ProcessEnv,
+      persist: true,
+    });
+
+    expect(result.generatedToken).toMatch(/^[0-9a-f]{48}$/);
+    expect(result.persistedGeneratedToken).toBe(true);
+    expect(result.auth.mode).toBe("token");
+    expect(result.auth.token).toBe(result.generatedToken);
+    expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(1);
+  });
+
   it("does not generate when token already exists", async () => {
     await expectResolvedToken({
       cfg: {

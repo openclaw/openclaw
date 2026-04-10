@@ -28,6 +28,11 @@ export type GatewayRemoteCredentialPrecedence = "remote-first" | "env-first";
 export type GatewayRemoteCredentialFallback = "remote-env-local" | "remote-only";
 
 const GATEWAY_SECRET_REF_UNAVAILABLE_ERROR_CODE = "GATEWAY_SECRET_REF_UNAVAILABLE"; // pragma: allowlist secret
+const EXAMPLE_GATEWAY_TOKEN = "change-me-to-a-long-random-token"; // pragma: allowlist secret
+
+function sanitizeGatewayToken(value: string | undefined): string | undefined {
+  return value === EXAMPLE_GATEWAY_TOKEN ? undefined : value;
+}
 
 export class GatewaySecretRefUnavailableError extends Error {
   readonly code = GATEWAY_SECRET_REF_UNAVAILABLE_ERROR_CODE;
@@ -80,9 +85,9 @@ export function resolveGatewayCredentialsFromValues(params: {
   passwordPrecedence?: GatewayCredentialPrecedence;
 }): ResolvedGatewayCredentials {
   const env = params.env ?? process.env;
-  const envToken = trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN);
+  const envToken = sanitizeGatewayToken(trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN));
   const envPassword = trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD);
-  const configToken = trimCredentialToUndefined(params.configToken);
+  const configToken = sanitizeGatewayToken(trimCredentialToUndefined(params.configToken));
   const configPassword = trimCredentialToUndefined(params.configPassword);
   const tokenPrecedence = params.tokenPrecedence ?? "env-first";
   const passwordPrecedence = params.passwordPrecedence ?? "env-first";

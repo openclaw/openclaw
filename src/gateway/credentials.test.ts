@@ -543,6 +543,17 @@ describe("resolveGatewayCredentialsFromValues", () => {
     expect(resolved).toEqual({ token: undefined, password: undefined });
   });
 
+  it("treats the shipped example gateway token as unset", () => {
+    const resolved = resolveGatewayCredentialsFromValues({
+      configToken: "change-me-to-a-long-random-token",
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: "change-me-to-a-long-random-token",
+      } as NodeJS.ProcessEnv,
+      tokenPrecedence: "config-first",
+    });
+    expect(resolved).toEqual({ token: undefined, password: undefined });
+  });
+
   it("accepts config credentials that do not contain env var references", () => {
     const resolved = resolveGatewayCredentialsFromValues({
       configToken: "real-token-value",
