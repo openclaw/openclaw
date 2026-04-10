@@ -49,9 +49,7 @@ function resolveGatewayStartupDreamingPluginIds(config: OpenClawConfig): Set<str
   return new Set(["memory-core", resolveMemoryDreamingPluginId(config)]);
 }
 
-function resolveExplicitMemorySlotStartupPluginId(
-  config: OpenClawConfig,
-): string | undefined {
+function resolveExplicitMemorySlotStartupPluginId(config: OpenClawConfig): string | undefined {
   const configuredSlot = config.plugins?.slots?.memory?.trim();
   if (!configuredSlot || configuredSlot.toLowerCase() === "none") {
     return undefined;
