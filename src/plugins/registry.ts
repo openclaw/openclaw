@@ -5,7 +5,6 @@ import { registerContextEngineForOwner } from "../context-engine/registry.js";
 import type { OperatorScope } from "../gateway/method-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { HookEntry } from "../hooks/types.js";
 import {
   NODE_EXEC_APPROVALS_COMMANDS,
@@ -13,6 +12,7 @@ import {
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,

@@ -342,8 +342,8 @@ describe("runAgentTurnWithFallback", () => {
       delivered.push(payload.text ?? "");
     });
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      params.onToolResult?.({ text: "first", mediaUrls: [] });
-      params.onToolResult?.({ text: "second", mediaUrls: [] });
+      void params.onToolResult?.({ text: "first", mediaUrls: [] });
+      void params.onToolResult?.({ text: "second", mediaUrls: [] });
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
@@ -388,8 +388,8 @@ describe("runAgentTurnWithFallback", () => {
       deliveryOrder.push(payload.text ?? "");
     });
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      params.onToolResult?.({ text: "first", mediaUrls: [] });
-      params.onToolResult?.({ text: "second", mediaUrls: [] });
+      void params.onToolResult?.({ text: "first", mediaUrls: [] });
+      void params.onToolResult?.({ text: "second", mediaUrls: [] });
       return { payloads: [{ text: "final" }], meta: {} };
     });
 

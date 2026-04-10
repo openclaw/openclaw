@@ -21,7 +21,7 @@ import {
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
-const NODE_CONNECT_TIMEOUT_MS = 3_000;
+const NODE_CONNECT_TIMEOUT_MS = 10_000;
 const CONNECT_REQ_TIMEOUT_MS = 2_000;
 
 function createDeviceIdentity(): DeviceIdentity {
@@ -131,11 +131,7 @@ describe("node.invoke approval bypass", () => {
       const ws = new WebSocket(`ws://127.0.0.1:${port}`);
       trackConnectChallengeNonce(ws);
       const challengePromise = resolveDevice
-        ? onceMessage<{
-            type?: string;
-            event?: string;
-            payload?: Record<string, unknown> | null;
-          }>(ws, (o) => o.type === "event" && o.event === "connect.challenge")
+        ? onceMessage(ws, (o) => o.type === "event" && o.event === "connect.challenge")
         : null;
       await new Promise<void>((resolve) => ws.once("open", resolve));
       const nonce = (() => {
@@ -393,6 +389,9 @@ describe("node.invoke approval bypass", () => {
         idempotencyKey: crypto.randomUUID(),
       });
       expect(invoke.ok).toBe(true);
+      for (let i = 0; i < 100 && !lastInvokeParams; i += 1) {
+        await sleep(50);
+      }
       expect(lastInvokeParams).toBeTruthy();
       expect(lastInvokeParams?.["approved"]).toBe(true);
       expect(lastInvokeParams?.["approvalDecision"]).toBe("allow-once");

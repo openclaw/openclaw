@@ -1742,6 +1742,14 @@ export function createExecTool(
 
       // Tool-call abort should not kill backgrounded sessions; timeouts still must.
       const onAbortSignal = () => {
+        // Immediately suppress onUpdate calls so that any late stdout/stderr
+        // from the still-running process cannot push a rejected Promise into
+        // pi-agent-core's updateEvents after the agent run has ended (#62520).
+        // Intentionally placed *before* the yielded/backgrounded guard: the
+        // agent run is ending regardless, so no consumer exists for further
+        // tool_execution_update events even for backgrounded sessions (which
+        // retrieve output via process poll/log instead of onUpdate callbacks).
+        run.disableUpdates();
         if (yielded || run.session.backgrounded) {
           return;
         }

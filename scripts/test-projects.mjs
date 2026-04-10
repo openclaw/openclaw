@@ -3,6 +3,7 @@ import { acquireLocalHeavyCheckLockSync } from "./lib/local-heavy-check-runtime.
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
 import { resolveVitestCliEntry, resolveVitestNodeArgs } from "./run-vitest.mjs";
 import {
+  applyParallelVitestCachePaths,
   buildFullSuiteVitestRunPlans,
   createVitestRunSpecs,
   parseTestProjectsArgs,
@@ -130,7 +131,7 @@ function applyDefaultParallelVitestWorkerBudget(specs, env) {
     ...spec,
     env: {
       ...spec.env,
-      OPENCLAW_VITEST_MAX_WORKERS: "2",
+      OPENCLAW_VITEST_MAX_WORKERS: "1",
     },
   }));
 }
@@ -161,6 +162,7 @@ async function runVitestSpecsParallel(specs, concurrency) {
       console.error(`[test] starting ${spec.config}`);
       const result = await runVitestSpec(spec);
       if (result.signal) {
+        console.error(`[test] ${spec.config} exited by signal ${result.signal}`);
         releaseLockOnce();
         process.kill(process.pid, result.signal);
         return;
@@ -213,7 +215,10 @@ async function main() {
     const concurrency = resolveParallelFullSuiteConcurrency(runSpecs.length, process.env);
     if (concurrency > 1) {
       const parallelSpecs = applyDefaultParallelVitestWorkerBudget(
-        orderFullSuiteSpecsForParallelRun(runSpecs),
+        applyParallelVitestCachePaths(orderFullSuiteSpecsForParallelRun(runSpecs), {
+          cwd: process.cwd(),
+          env: process.env,
+        }),
         process.env,
       );
       console.error(
@@ -233,8 +238,10 @@ async function main() {
 
   let exitCode = 0;
   for (const spec of runSpecs) {
+    console.error(`[test] starting ${spec.config}`);
     const result = await runVitestSpec(spec);
     if (result.signal) {
+      console.error(`[test] ${spec.config} exited by signal ${result.signal}`);
       releaseLockOnce();
       process.kill(process.pid, result.signal);
       return;

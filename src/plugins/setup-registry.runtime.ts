@@ -20,6 +20,16 @@ const SETUP_REGISTRY_RUNTIME_CANDIDATES = ["./setup-registry.js", "./setup-regis
 let setupRegistryRuntimeModule: SetupRegistryRuntimeModule | undefined;
 let bundledSetupCliBackendsCache: SetupCliBackendRuntimeEntry[] | undefined;
 
+export const __testing = {
+  resetRuntimeState(): void {
+    setupRegistryRuntimeModule = undefined;
+    bundledSetupCliBackendsCache = undefined;
+  },
+  setRuntimeModuleForTest(module: SetupRegistryRuntimeModule | undefined): void {
+    setupRegistryRuntimeModule = module;
+  },
+};
+
 function resolveBundledSetupCliBackends(): SetupCliBackendRuntimeEntry[] {
   if (bundledSetupCliBackendsCache) {
     return bundledSetupCliBackendsCache;

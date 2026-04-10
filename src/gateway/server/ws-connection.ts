@@ -12,6 +12,7 @@ import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
 import { getPreauthHandshakeTimeoutMsFromEnv } from "../handshake-timeouts.js";
 import { isLoopbackAddress } from "../net.js";
+import { clearNodeWakeState } from "../server-methods/nodes.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
 import { logWs } from "../ws-log.js";
@@ -325,6 +326,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         if (nodeId) {
           removeRemoteNodeInfo(nodeId);
           context.nodeUnsubscribeAll(nodeId);
+          clearNodeWakeState(nodeId);
         }
       }
       logWs("out", "close", {

@@ -49,6 +49,12 @@ type MessageSendParams = {
   content: string;
   /** Active agent id for per-agent outbound media root scoping. */
   agentId?: string;
+  /** Originating session key used for requester-scoped outbound media policy. */
+  requesterSessionKey?: string;
+  /** Originating account id used for requester-scoped outbound media policy. */
+  requesterAccountId?: string;
+  /** Originating sender id used for sender-scoped outbound media policy. */
+  requesterSenderId?: string;
   channel?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
@@ -265,7 +271,9 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     const outboundSession = buildOutboundSessionContext({
       cfg,
       agentId: params.agentId,
-      sessionKey: params.mirror?.sessionKey,
+      sessionKey: params.requesterSessionKey ?? params.mirror?.sessionKey,
+      requesterAccountId: params.requesterAccountId ?? params.accountId,
+      requesterSenderId: params.requesterSenderId,
     });
     const results = await deliverOutboundPayloads({
       cfg,

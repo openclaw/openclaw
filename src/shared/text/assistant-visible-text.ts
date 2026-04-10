@@ -110,10 +110,7 @@ function findTagCloseIndex(text: string, start: number): number {
 
 function looksLikeToolCallPayloadStart(text: string, start: number): boolean {
   const rest = text.slice(start);
-  return (
-    TOOL_CALL_JSON_PAYLOAD_START_RE.test(rest) ||
-    TOOL_CALL_XML_PAYLOAD_START_RE.test(rest)
-  );
+  return TOOL_CALL_JSON_PAYLOAD_START_RE.test(rest) || TOOL_CALL_XML_PAYLOAD_START_RE.test(rest);
 }
 
 function parseToolCallTagAt(text: string, start: number): ParsedToolCallTag | null {
@@ -223,10 +220,7 @@ export function stripToolCallXmlTags(text: string): string {
         tag.tagName === "tool_call"
           ? looksLikeToolCallPayloadStart(text, payloadStart)
           : TOOL_CALL_JSON_PAYLOAD_START_RE.test(text.slice(payloadStart));
-      if (
-        !tag.isClose &&
-        hasToolCallPayloadStart
-      ) {
+      if (!tag.isClose && hasToolCallPayloadStart) {
         inToolCallBlock = true;
         toolCallContentStart = tag.end;
         toolCallBlockTagName = tag.tagName;

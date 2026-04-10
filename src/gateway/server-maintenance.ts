@@ -2,6 +2,7 @@ import type { HealthSummary } from "../commands/health.js";
 import { sweepStaleRunContexts } from "../infra/agent-events.js";
 import { cleanOldMedia } from "../media/store.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
+import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
 import type { ChatRunEntry } from "./server-chat.js";
 import {
   DEDUPE_MAX,
@@ -134,6 +135,10 @@ export function startGatewayMaintenanceTimers(params: {
       params.chatDeltaSentAt.delete(runId);
       params.chatDeltaLastBroadcastLen.delete(runId);
     }
+
+    // Prune expired control-plane rate-limit buckets to prevent unbounded
+    // growth when many unique clients connect over time.
+    pruneStaleControlPlaneBuckets(now);
 
     // Sweep stale buffers for runs that were never explicitly aborted.
     // Only reap orphaned buffers after the abort controller is gone; active

@@ -1,7 +1,8 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
+import { __testing as setupRegistryRuntimeTesting } from "../plugins/setup-registry.runtime.js";
 import {
   buildAllowedModelSet,
   inferUniqueProviderFromConfiguredModels,
@@ -135,6 +136,23 @@ describe("model-selection", () => {
   });
 
   describe("isCliProvider", () => {
+    beforeEach(() => {
+      setupRegistryRuntimeTesting.resetRuntimeState();
+      setupRegistryRuntimeTesting.setRuntimeModuleForTest({
+        resolvePluginSetupCliBackend: ({ backend }) =>
+          backend === "claude-cli"
+            ? {
+                pluginId: "anthropic",
+                backend: { id: "claude-cli", config: { command: "claude" } },
+              }
+            : undefined,
+      });
+    });
+
+    afterEach(() => {
+      setupRegistryRuntimeTesting.resetRuntimeState();
+    });
+
     it("returns true for setup-registered cli backends", () => {
       expect(isCliProvider("claude-cli", {} as OpenClawConfig)).toBe(true);
     });

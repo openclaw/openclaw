@@ -104,6 +104,13 @@ function buildStoredConversationReference(params: {
   const clientInfo = activity.entities?.find((e) => e.type === "clientInfo") as
     | { timezone?: string }
     | undefined;
+  // Bot Framework requires `tenantId` on outbound proactive activities so the
+  // connector can route them to the correct Azure AD tenant; missing it causes
+  // HTTP 403. Channel activities often leave `conversation.tenantId` unset, so
+  // prefer the canonical `channelData.tenant.id` source when available.
+  const channelDataTenantId = activity.channelData?.tenant?.id;
+  const tenantId = channelDataTenantId ?? conversation?.tenantId;
+  const aadObjectId = from?.aadObjectId;
   return {
     activityId: activity.id,
     user: from ? { id: from.id, name: from.name, aadObjectId: from.aadObjectId } : undefined,
@@ -112,8 +119,10 @@ function buildStoredConversationReference(params: {
     conversation: {
       id: conversationId,
       conversationType,
-      tenantId: conversation?.tenantId,
+      tenantId,
     },
+    ...(tenantId ? { tenantId } : {}),
+    ...(aadObjectId ? { aadObjectId } : {}),
     teamId,
     channelId: activity.channelId,
     serviceUrl: activity.serviceUrl,

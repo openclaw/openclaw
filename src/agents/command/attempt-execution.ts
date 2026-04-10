@@ -395,6 +395,7 @@ export function runAgentAttempt(params: {
         streamParams: params.opts.streamParams,
         messageProvider: params.messageChannel,
         agentAccountId: params.runContext.accountId,
+        senderIsOwner: params.opts.senderIsOwner,
       });
     return runCliWithSession(cliSessionBinding?.sessionId).catch(async (err) => {
       if (
