@@ -481,8 +481,32 @@ export function createSubagentRegistryLifecycleController(params: {
     // Skip the announce flow for delegate runs (expectsCompletionMessage: false).
     // The delegate tool already read and returned the child output as a tool result,
     // so an auto-announce would cause duplicate or out-of-band parent responses.
+    // Go straight to cleanup completion instead of the deferred-retry path.
     if (entry.expectsCompletionMessage === false) {
-      finalizeAnnounceCleanup(false);
+      void (async () => {
+        try {
+          const shouldDeleteAttachments =
+            entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
+          if (shouldDeleteAttachments) {
+            await safeRemoveAttachmentsDir(entry);
+          }
+          const completionReason = resolveCleanupCompletionReason(entry);
+          await emitCompletionEndedHookIfNeeded(entry, completionReason);
+          completeCleanupBookkeeping({
+            runId,
+            entry,
+            cleanup: entry.cleanup,
+            completedAt: Date.now(),
+          });
+        } catch (err) {
+          defaultRuntime.log(`[warn] delegate cleanup failed (${runId}): ${String(err)}`);
+          const current = params.runs.get(runId);
+          if (current && !current.cleanupCompletedAt) {
+            current.cleanupHandled = false;
+            params.persist();
+          }
+        }
+      })();
       return true;
     }
 

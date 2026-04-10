@@ -247,6 +247,10 @@ describe("subagent registry lifecycle hardening", () => {
     // Delegate runs (expectsCompletionMessage: false) skip the announce flow
     // since the delegate tool already returned the child output as a tool result.
     expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    // Cleanup should still complete — not get stuck in the deferred-retry path.
+    await vi.waitFor(() => {
+      expect(persist).toHaveBeenCalled();
+    });
   });
 
   it("does not wait for a completion reply when the run does not expect one", async () => {
