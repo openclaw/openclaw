@@ -6,6 +6,7 @@ import {
 import {
   buildStepFunPlanProvider,
   buildStepFunProvider,
+  STEPFUN_DEFAULT_MODEL_ID,
   STEPFUN_DEFAULT_MODEL_REF,
   STEPFUN_FLASH_2603_MODEL_ID,
   STEPFUN_PLAN_CN_BASE_URL,
@@ -27,7 +28,7 @@ export {
 };
 
 const STEPFUN_MANAGED_MODEL_IDS = new Set([
-  STEPFUN_DEFAULT_MODEL_REF.split("/")[1],
+  STEPFUN_DEFAULT_MODEL_ID,
   STEPFUN_FLASH_2603_MODEL_ID,
 ]);
 
