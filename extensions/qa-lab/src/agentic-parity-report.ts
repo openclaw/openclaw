@@ -147,6 +147,7 @@ export function buildQaAgenticParityComparison(params: {
   const baselineMetrics = computeQaAgenticParityMetrics(params.baselineSummary);
 
   const scenarioNames = new Set([
+    ...QA_AGENTIC_PARITY_SCENARIO_TITLES,
     ...params.candidateSummary.scenarios.map((scenario) => scenario.name),
     ...params.baselineSummary.scenarios.map((scenario) => scenario.name),
   ]);
