@@ -176,7 +176,7 @@ const createShouldEmitVerboseProgress = (params: {
       try {
         const store = loadSessionStore(params.storePath);
         const entry = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey }).existing;
-        const currentLevel = normalizeVerboseLevel(String(entry?.verboseLevel ?? ""));
+        const currentLevel = normalizeVerboseLevel(entry?.verboseLevel ?? "");
         if (currentLevel) {
           return currentLevel !== "off";
         }
@@ -206,7 +206,7 @@ export async function dispatchReplyFromConfig(params: {
 }): Promise<DispatchFromConfigResult> {
   const { ctx, cfg, dispatcher } = params;
   const diagnosticsEnabled = isDiagnosticsEnabled(cfg);
-  const channel = normalizeLowercaseStringOrEmpty(String(ctx.Surface ?? ctx.Provider ?? "unknown"));
+  const channel = normalizeLowercaseStringOrEmpty(ctx.Surface ?? ctx.Provider ?? "unknown");
   const chatId = ctx.To ?? ctx.From;
   const messageId = ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
   const sessionKey = ctx.SessionKey;
@@ -272,12 +272,10 @@ export async function dispatchReplyFromConfig(params: {
     storePath: sessionStoreEntry.storePath,
     fallbackLevel:
       normalizeVerboseLevel(
-        String(
-          sessionStoreEntry.entry?.verboseLevel ??
-            sessionAgentCfg?.verboseDefault ??
-            cfg.agents?.defaults?.verboseDefault ??
-            "",
-        ),
+        sessionStoreEntry.entry?.verboseLevel ??
+          sessionAgentCfg?.verboseDefault ??
+          cfg.agents?.defaults?.verboseDefault ??
+          "",
       ) ?? "off",
   });
   // Restore route thread context only from the active turn or the thread-scoped session key.
