@@ -749,33 +749,31 @@ describe("exec backgrounded onUpdate suppression", () => {
   );
 
   it(
-    "does not crash when onUpdate throws (simulates agent run ended)",
+    "suppresses onUpdate after abort signal fires",
     async () => {
-      let callCount = 0;
-      const throwingOnUpdate = () => {
-        callCount++;
-        if (callCount > 1) {
-          throw new Error("Agent listener invoked outside active run");
-        }
-      };
-      // Run a command that produces multiple output chunks.
+      const onUpdateSpy = vi.fn();
+      const abortController = new AbortController();
+      // Run a command that produces output over time.
       const command = joinCommands([
-        shellEcho("chunk1"),
+        shellEcho("before-abort"),
         shortDelayCmd,
-        shellEcho("chunk2"),
-        shortDelayCmd,
-        shellEcho("chunk3"),
+        shellEcho("after-abort"),
       ]);
-      // Must not throw — the error should be caught internally and
-      // subsequent updates suppressed.
+      // Abort almost immediately so the signal fires while the command
+      // is still producing output.
+      setTimeout(() => abortController.abort(), 10);
       const result = await execTool.execute(
         nextCallId(),
         { command },
-        undefined,
-        throwingOnUpdate as never,
+        abortController.signal,
+        onUpdateSpy,
       );
+      const callsAtAbort = onUpdateSpy.mock.calls.length;
+      // Allow extra time for any straggling stdout data events.
+      await new Promise((r) => setTimeout(r, 100));
+      // After abort, no new onUpdate calls should have been made.
+      expect(onUpdateSpy.mock.calls.length).toBe(callsAtAbort);
       expect(result).toBeDefined();
-      expect(result.details).toBeDefined();
     },
     isWin ? 10_000 : 5_000,
   );

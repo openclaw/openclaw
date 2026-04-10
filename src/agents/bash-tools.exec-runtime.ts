@@ -23,7 +23,7 @@ export {
   normalizeExecSecurity,
   normalizeExecTarget,
 } from "../infra/exec-approvals.js";
-import { logDebug, logWarn } from "../logger.js";
+import { logWarn } from "../logger.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
@@ -207,6 +207,8 @@ export type ExecProcessHandle = {
   pid?: number;
   promise: Promise<ExecProcessOutcome>;
   kill: () => void;
+  /** Immediately suppress all future `onUpdate` calls for this handle. */
+  disableUpdates: () => void;
 };
 
 export function renderExecHostLabel(host: ExecHost) {
@@ -596,30 +598,26 @@ export async function runExecProcess(opts: {
     }
     const tailText = session.tail || session.aggregated;
     const warningText = opts.warnings.length ? `${opts.warnings.join("\n")}\n\n` : "";
-    try {
-      opts.onUpdate({
-        content: [{ type: "text", text: warningText + (tailText || "") }],
-        details: {
-          status: "running",
-          sessionId,
-          pid: session.pid ?? undefined,
-          startedAt,
-          cwd: session.cwd,
-          tail: session.tail,
-        },
-      });
-    } catch {
-      // The agent run may have ended (e.g. subagent abort/timeout) while
-      // the exec process is still producing output.  In that case
-      // pi-agent-core's processEvents() throws because activeRun is
-      // already cleared.  Suppress all further updates for this session
-      // rather than propagating the error as an unhandled rejection that
-      // would crash the gateway.
-      updatesDisabled = true;
-      logDebug(
-        `[exec] onUpdate suppressed for session ${sessionId}: agent run is no longer active`,
-      );
-    }
+    // Note: opts.onUpdate() is provided by pi-agent-core's agent-loop and
+    // internally pushes Promise.resolve(emit(event)) into an updateEvents
+    // array.  Because emit → processEvents is async, any failure (e.g.
+    // activeRun cleared) produces a *rejected Promise*, not a synchronous
+    // throw — so a try-catch here would be ineffective.  Instead we rely
+    // on the `updatesDisabled` flag being set proactively: by the promise
+    // chain on process exit (Layer 1) and by `disableUpdates()` on abort
+    // signal (Layer 2) — both of which prevent this call from ever being
+    // reached after the agent run has ended.
+    opts.onUpdate({
+      content: [{ type: "text", text: warningText + (tailText || "") }],
+      details: {
+        status: "running",
+        sessionId,
+        pid: session.pid ?? undefined,
+        startedAt,
+        cwd: session.cwd,
+        tail: session.tail,
+      },
+    });
   };
 
   const handleStdout = (data: string) => {
@@ -842,6 +840,9 @@ export async function runExecProcess(opts: {
     promise,
     kill: () => {
       managedRun?.cancel("manual-cancel");
+    },
+    disableUpdates: () => {
+      updatesDisabled = true;
     },
   };
 }
