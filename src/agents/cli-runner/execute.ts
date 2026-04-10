@@ -93,6 +93,47 @@ function buildCliLogArgs(params: {
   return logArgs;
 }
 
+const CLI_ENV_AUTH_LOG_KEYS = [
+  "AI_GATEWAY_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_API_KEY_OLD",
+  "ANTHROPIC_API_TOKEN",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_CUSTOM_HEADERS",
+  "ANTHROPIC_OAUTH_TOKEN",
+  "ANTHROPIC_UNIX_SOCKET",
+  "AZURE_OPENAI_API_KEY",
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
+  "OPENAI_API_KEY",
+  "OPENAI_STEIPETE_API_KEY",
+  "OPENROUTER_API_KEY",
+] as const;
+
+function listPresentCliAuthEnvKeys(env: Record<string, string | undefined>): string[] {
+  return CLI_ENV_AUTH_LOG_KEYS.filter((key) => {
+    const value = env[key];
+    return typeof value === "string" && value.length > 0;
+  });
+}
+
+function formatCliEnvKeyList(keys: readonly string[]): string {
+  return keys.length > 0 ? keys.join(",") : "none";
+}
+
+export function buildCliEnvAuthLog(childEnv: Record<string, string>): string {
+  const hostKeys = listPresentCliAuthEnvKeys(process.env);
+  const childKeys = listPresentCliAuthEnvKeys(childEnv);
+  const childKeySet = new Set(childKeys);
+  const clearedKeys = hostKeys.filter((key) => !childKeySet.has(key));
+  return [
+    `host=${formatCliEnvKeyList(hostKeys)}`,
+    `child=${formatCliEnvKeyList(childKeys)}`,
+    `cleared=${formatCliEnvKeyList(clearedKeys)}`,
+  ].join(" ");
+}
+
 export async function executePreparedCliRun(
   context: PreparedCliRunContext,
   cliSessionIdToUse?: string,
@@ -174,18 +215,6 @@ export async function executePreparedCliRun(
       const logOutputText =
         isTruthyEnvValue(process.env[CLI_BACKEND_LOG_OUTPUT_ENV]) ||
         isTruthyEnvValue(process.env[LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV]);
-      if (logOutputText) {
-        const logArgs = buildCliLogArgs({
-          args,
-          systemPromptArg: backend.systemPromptArg,
-          sessionArg: backend.sessionArg,
-          modelArg: backend.modelArg,
-          imageArg: backend.imageArg,
-          argsPrompt,
-        });
-        cliBackendLog.info(`cli argv: ${backend.command} ${logArgs.join(" ")}`);
-      }
-
       const env = (() => {
         const next = sanitizeHostExecEnv({
           baseEnv: process.env,
@@ -207,6 +236,19 @@ export async function executePreparedCliRun(
         Object.assign(next, context.preparedBackend.env);
         return next;
       })();
+      if (logOutputText) {
+        const logArgs = buildCliLogArgs({
+          args,
+          systemPromptArg: backend.systemPromptArg,
+          sessionArg: backend.sessionArg,
+          modelArg: backend.modelArg,
+          imageArg: backend.imageArg,
+          argsPrompt,
+        });
+        cliBackendLog.info(`cli argv: ${backend.command} ${logArgs.join(" ")}`);
+        cliBackendLog.info(`cli env auth: ${buildCliEnvAuthLog(env)}`);
+      }
+
       const noOutputTimeoutMs = resolveCliNoOutputTimeoutMs({
         backend,
         timeoutMs: params.timeoutMs,

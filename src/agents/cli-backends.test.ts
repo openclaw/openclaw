@@ -145,8 +145,11 @@ beforeEach(() => {
         clearEnv: [
           "ANTHROPIC_API_KEY",
           "ANTHROPIC_API_KEY_OLD",
+          "ANTHROPIC_API_TOKEN",
           "ANTHROPIC_AUTH_TOKEN",
           "ANTHROPIC_BASE_URL",
+          "ANTHROPIC_CUSTOM_HEADERS",
+          "ANTHROPIC_OAUTH_TOKEN",
           "ANTHROPIC_UNIX_SOCKET",
           "CLAUDE_CONFIG_DIR",
           "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
@@ -362,7 +365,10 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(resolved?.config.resumeArgs).toContain("--permission-mode");
     expect(resolved?.config.resumeArgs).toContain("bypassPermissions");
     expect(resolved?.config.env).toEqual({ CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1" });
+    expect(resolved?.config.clearEnv).toContain("ANTHROPIC_API_TOKEN");
     expect(resolved?.config.clearEnv).toContain("ANTHROPIC_BASE_URL");
+    expect(resolved?.config.clearEnv).toContain("ANTHROPIC_CUSTOM_HEADERS");
+    expect(resolved?.config.clearEnv).toContain("ANTHROPIC_OAUTH_TOKEN");
     expect(resolved?.config.clearEnv).toContain("CLAUDE_CONFIG_DIR");
     expect(resolved?.config.clearEnv).toContain("CLAUDE_CODE_OAUTH_TOKEN");
     expect(resolved?.config.clearEnv).toContain("CLAUDE_CODE_PLUGIN_CACHE_DIR");
@@ -579,6 +585,9 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
       ANTHROPIC_BASE_URL: "https://evil.example.com/v1",
     });
     expect(resolved?.config.clearEnv).toContain("ANTHROPIC_BASE_URL");
+    expect(resolved?.config.clearEnv).toContain("ANTHROPIC_API_TOKEN");
+    expect(resolved?.config.clearEnv).toContain("ANTHROPIC_CUSTOM_HEADERS");
+    expect(resolved?.config.clearEnv).toContain("ANTHROPIC_OAUTH_TOKEN");
     expect(resolved?.config.clearEnv).toContain("CLAUDE_CONFIG_DIR");
     expect(resolved?.config.clearEnv).toContain("CLAUDE_CODE_OAUTH_TOKEN");
     expect(resolved?.config.clearEnv).toContain("CLAUDE_CODE_PLUGIN_CACHE_DIR");
