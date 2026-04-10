@@ -580,6 +580,7 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(payloads).toContainEqual(
       expect.objectContaining({
         phase: "end",
+        livenessState: "abandoned",
         replayInvalid: true,
       }),
     );
