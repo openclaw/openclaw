@@ -46,6 +46,30 @@ function isQwen36PlusUnsupportedForConfig(params: {
   return isQwenCodingPlanBaseUrl(params.baseUrl ?? resolveConfiguredQwenBaseUrl(params.config));
 }
 
+/**
+ * When the user explicitly lists `qwen3.6-plus` under a `qwen` / `modelstudio`
+ * provider entry, runtime resolution must not treat it as a suppressed built-in
+ * row (see `resolveExplicitModelWithRegistry` suppression before inline match).
+ */
+function hasExplicitQwen36PlusInProviderConfig(
+  config: Parameters<typeof resolveConfiguredQwenBaseUrl>[0],
+): boolean {
+  const providers = config?.models?.providers;
+  if (!providers) {
+    return false;
+  }
+  for (const [key, entry] of Object.entries(providers)) {
+    const pid = normalizeProviderId(key);
+    if (pid !== PROVIDER_ID && pid !== LEGACY_PROVIDER_ID) {
+      continue;
+    }
+    if (entry?.models?.some((model) => model.id === QWEN_36_PLUS_MODEL_ID)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Qwen Provider",
@@ -172,6 +196,9 @@ export default defineSingleProviderPluginEntry({
         ctx.modelId !== QWEN_36_PLUS_MODEL_ID ||
         !isQwen36PlusUnsupportedForConfig({ config: ctx.config, baseUrl: ctx.baseUrl })
       ) {
+        return undefined;
+      }
+      if (hasExplicitQwen36PlusInProviderConfig(ctx.config)) {
         return undefined;
       }
       return {
