@@ -119,7 +119,7 @@ export function createProfileSelectionOps({
       const focusPageByTargetIdViaPlaywright = (mod as Partial<PwAiModule> | null)
         ?.focusPageByTargetIdViaPlaywright;
       if (typeof focusPageByTargetIdViaPlaywright === "function") {
-        await assertProfileCdpEndpointAllowed();
+        // SSRF check runs inside connectBrowser on cache miss.
         await focusPageByTargetIdViaPlaywright({
           cdpUrl: profile.cdpUrl,
           targetId: resolvedTargetId,
@@ -151,7 +151,7 @@ export function createProfileSelectionOps({
       const closePageByTargetIdViaPlaywright = (mod as Partial<PwAiModule> | null)
         ?.closePageByTargetIdViaPlaywright;
       if (typeof closePageByTargetIdViaPlaywright === "function") {
-        await assertProfileCdpEndpointAllowed();
+        // SSRF check runs inside connectBrowser on cache miss.
         await closePageByTargetIdViaPlaywright({
           cdpUrl: profile.cdpUrl,
           targetId: resolvedTargetId,

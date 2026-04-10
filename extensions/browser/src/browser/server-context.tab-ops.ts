@@ -82,7 +82,9 @@ export function createProfileTabOps({
       const mod = await getPwAiModule({ mode: "strict" });
       const listPagesViaPlaywright = (mod as Partial<PwAiModule> | null)?.listPagesViaPlaywright;
       if (typeof listPagesViaPlaywright === "function") {
-        await assertProfileCdpEndpointAllowed();
+        // SSRF check runs inside connectBrowser on cache miss; skip the
+        // redundant pre-call DNS lookup so cached sessions are not broken
+        // by transient resolver failures.
         const pages = await listPagesViaPlaywright({
           cdpUrl: profile.cdpUrl,
           ssrfPolicy: state().resolved.ssrfPolicy,

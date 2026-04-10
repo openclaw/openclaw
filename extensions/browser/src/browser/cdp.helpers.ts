@@ -246,6 +246,9 @@ export async function fetchCdpChecked(
   const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
   try {
     const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
+    // Block redirects on all CDP HTTP paths (not just probes) because a
+    // redirect to an internal host is an SSRF vector regardless of whether
+    // the call is /json/version, /json/list, /json/activate, or /json/close.
     const res = await withNoProxyForCdpUrl(url, () =>
       fetch(url, { ...init, headers, redirect: "manual", signal: ctrl.signal }),
     );
