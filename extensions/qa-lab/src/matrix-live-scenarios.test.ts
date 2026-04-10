@@ -7,6 +7,8 @@ describe("matrix live qa scenarios", () => {
       "matrix-thread-follow-up",
       "matrix-thread-isolation",
       "matrix-top-level-reply-shape",
+      "matrix-reaction-notification",
+      "matrix-restart-resume",
       "matrix-mention-gating",
       "matrix-allowlist-block",
     ]);

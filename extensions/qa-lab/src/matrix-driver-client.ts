@@ -38,6 +38,14 @@ type MatrixQaSendMessageContent = {
   msgtype: "m.text";
 };
 
+type MatrixQaSendReactionContent = {
+  "m.relates_to": {
+    event_id: string;
+    key: string;
+    rel_type: "m.annotation";
+  };
+};
+
 type MatrixQaSyncResponse = {
   next_batch?: string;
   rooms?: {
@@ -88,6 +96,10 @@ export type MatrixQaObservedEvent = {
     room?: boolean;
     userIds?: string[];
   };
+  reaction?: {
+    eventId?: string;
+    key?: string;
+  };
 };
 
 export type MatrixQaRegisteredAccount = {
@@ -125,6 +137,27 @@ function buildMatrixThreadRelation(threadRootEventId: string, replyToEventId?: s
       "m.in_reply_to": {
         event_id: replyToEventId?.trim() || threadRootEventId,
       },
+    },
+  };
+}
+
+function buildMatrixReactionRelation(
+  messageId: string,
+  emoji: string,
+): MatrixQaSendReactionContent {
+  const normalizedMessageId = messageId.trim();
+  const normalizedEmoji = emoji.trim();
+  if (!normalizedMessageId) {
+    throw new Error("Matrix reaction requires a messageId");
+  }
+  if (!normalizedEmoji) {
+    throw new Error("Matrix reaction requires an emoji");
+  }
+  return {
+    "m.relates_to": {
+      rel_type: "m.annotation",
+      event_id: normalizedMessageId,
+      key: normalizedEmoji,
     },
   };
 }
@@ -233,6 +266,12 @@ export function normalizeMatrixQaObservedEvent(
     typeof mentionsRaw === "object" && mentionsRaw !== null
       ? (mentionsRaw as Record<string, unknown>)
       : null;
+  const reactionKey =
+    type === "m.reaction" && typeof relatesTo?.key === "string" ? relatesTo.key : undefined;
+  const reactionEventId =
+    type === "m.reaction" && typeof relatesTo?.event_id === "string"
+      ? relatesTo.event_id
+      : undefined;
 
   return {
     roomId,
@@ -266,6 +305,14 @@ export function normalizeMatrixQaObservedEvent(
             ...(normalizeMentionUserIds(mentions.user_ids)
               ? { userIds: normalizeMentionUserIds(mentions.user_ids) }
               : {}),
+          },
+        }
+      : {}),
+    ...(reactionEventId || reactionKey
+      ? {
+          reaction: {
+            ...(reactionEventId ? { eventId: reactionEventId } : {}),
+            ...(reactionKey ? { key: reactionKey } : {}),
           },
         }
       : {}),
@@ -540,6 +587,22 @@ export function createMatrixQaClient(params: {
       }
       return eventId;
     },
+    async sendReaction(opts: { emoji: string; messageId: string; roomId: string }) {
+      const txnId = randomUUID();
+      const result = await requestMatrixJson<{ event_id?: string }>({
+        accessToken: params.accessToken,
+        baseUrl: params.baseUrl,
+        body: buildMatrixReactionRelation(opts.messageId, opts.emoji),
+        endpoint: `/_matrix/client/v3/rooms/${encodeURIComponent(opts.roomId)}/send/m.reaction/${encodeURIComponent(txnId)}`,
+        fetchImpl,
+        method: "PUT",
+      });
+      const eventId = result.body.event_id?.trim();
+      if (!eventId) {
+        throw new Error("Matrix sendReaction did not return event_id.");
+      }
+      return eventId;
+    },
     async joinRoom(roomId: string) {
       const result = await requestMatrixJson<{ room_id?: string }>({
         accessToken: params.accessToken,
@@ -654,6 +717,7 @@ export async function provisionMatrixQaRoom(params: {
 
 export const __testing = {
   buildMatrixQaMessageContent,
+  buildMatrixReactionRelation,
   buildMatrixThreadRelation,
   normalizeMatrixQaObservedEvent,
   resolveNextRegistrationAuth,

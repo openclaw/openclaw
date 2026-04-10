@@ -5,6 +5,8 @@ export type MatrixQaScenarioId =
   | "matrix-thread-follow-up"
   | "matrix-thread-isolation"
   | "matrix-top-level-reply-shape"
+  | "matrix-reaction-notification"
+  | "matrix-restart-resume"
   | "matrix-mention-gating"
   | "matrix-allowlist-block";
 
@@ -15,11 +17,12 @@ export type MatrixQaScenarioDefinition = {
 };
 
 export type MatrixQaReplyArtifact = {
+  bodyPreview?: string;
   eventId: string;
   mentions?: MatrixQaObservedEvent["mentions"];
   relatesTo?: MatrixQaObservedEvent["relatesTo"];
   sender?: string;
-  tokenMatched: boolean;
+  tokenMatched?: boolean;
 };
 
 export type MatrixQaCanaryArtifact = {
@@ -32,7 +35,11 @@ export type MatrixQaScenarioArtifacts = {
   actorUserId?: string;
   driverEventId?: string;
   expectedNoReplyWindowMs?: number;
+  reactionEmoji?: string;
+  reactionEventId?: string;
+  reactionTargetEventId?: string;
   reply?: MatrixQaReplyArtifact;
+  restartSignal?: string;
   rootEventId?: string;
   threadDriverEventId?: string;
   threadReply?: MatrixQaReplyArtifact;
@@ -53,11 +60,13 @@ export type MatrixQaScenarioExecution = {
 
 type MatrixQaScenarioContext = {
   baseUrl: string;
+  canary?: MatrixQaCanaryArtifact;
   driverAccessToken: string;
   driverUserId: string;
   observedEvents: MatrixQaObservedEvent[];
   observerAccessToken: string;
   observerUserId: string;
+  restartGateway?: () => Promise<void>;
   roomId: string;
   since?: string;
   sutUserId: string;
@@ -81,6 +90,16 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     id: "matrix-top-level-reply-shape",
     timeoutMs: 45_000,
     title: "Matrix top-level reply keeps replyToMode off",
+  },
+  {
+    id: "matrix-reaction-notification",
+    timeoutMs: 45_000,
+    title: "Matrix reactions on bot replies are observed",
+  },
+  {
+    id: "matrix-restart-resume",
+    timeoutMs: 60_000,
+    title: "Matrix lane resumes cleanly after gateway restart",
   },
   {
     id: "matrix-mention-gating",
@@ -119,21 +138,24 @@ function buildExactMarkerPrompt(token: string) {
 
 function buildMatrixReplyArtifact(
   event: MatrixQaObservedEvent,
-  token: string,
+  token?: string,
 ): MatrixQaReplyArtifact {
   return {
+    bodyPreview: event.body?.slice(0, 200),
     eventId: event.eventId,
     mentions: event.mentions,
     relatesTo: event.relatesTo,
     sender: event.sender,
-    tokenMatched: (event.body ?? "").includes(token),
+    ...(token ? { tokenMatched: (event.body ?? "").includes(token) } : {}),
   };
 }
 
 export function buildMatrixReplyDetails(label: string, artifact: MatrixQaReplyArtifact) {
   return [
     `${label} event: ${artifact.eventId}`,
-    `${label} token matched: ${artifact.tokenMatched ? "yes" : "no"}`,
+    `${label} token matched: ${
+      artifact.tokenMatched === undefined ? "n/a" : artifact.tokenMatched ? "yes" : "no"
+    }`,
     `${label} rel_type: ${artifact.relatesTo?.relType ?? "<none>"}`,
     `${label} in_reply_to: ${artifact.relatesTo?.inReplyToId ?? "<none>"}`,
     `${label} is_falling_back: ${artifact.relatesTo?.isFallingBack === true ? "true" : "false"}`,
@@ -322,6 +344,83 @@ async function runNoReplyExpectedScenario(params: {
   } satisfies MatrixQaScenarioExecution;
 }
 
+async function runReactionNotificationScenario(context: MatrixQaScenarioContext) {
+  const reactionTargetEventId = context.canary?.reply.eventId?.trim();
+  if (!reactionTargetEventId) {
+    throw new Error("Matrix reaction scenario requires a canary reply event id");
+  }
+  const client = createMatrixQaClient({
+    accessToken: context.driverAccessToken,
+    baseUrl: context.baseUrl,
+  });
+  const startSince = context.since ?? (await client.primeRoom());
+  const reactionEmoji = "👍";
+  const reactionEventId = await client.sendReaction({
+    emoji: reactionEmoji,
+    messageId: reactionTargetEventId,
+    roomId: context.roomId,
+  });
+  const matched = await client.waitForRoomEvent({
+    observedEvents: context.observedEvents,
+    predicate: (event) =>
+      event.roomId === context.roomId &&
+      event.sender === context.driverUserId &&
+      event.type === "m.reaction" &&
+      event.eventId === reactionEventId &&
+      event.reaction?.eventId === reactionTargetEventId &&
+      event.reaction?.key === reactionEmoji,
+    roomId: context.roomId,
+    since: startSince,
+    timeoutMs: context.timeoutMs,
+  });
+  return {
+    artifacts: {
+      reactionEmoji,
+      reactionEventId,
+      reactionTargetEventId,
+    },
+    details: [
+      `reaction event: ${reactionEventId}`,
+      `reaction target: ${reactionTargetEventId}`,
+      `reaction emoji: ${reactionEmoji}`,
+      `observed reaction key: ${matched.event.reaction?.key ?? "<none>"}`,
+    ].join("\n"),
+    since: matched.since,
+  } satisfies MatrixQaScenarioExecution;
+}
+
+async function runRestartResumeScenario(context: MatrixQaScenarioContext) {
+  if (!context.restartGateway) {
+    throw new Error("Matrix restart scenario requires a gateway restart callback");
+  }
+  await context.restartGateway();
+  const result = await runTopLevelMentionScenario({
+    accessToken: context.driverAccessToken,
+    baseUrl: context.baseUrl,
+    observedEvents: context.observedEvents,
+    roomId: context.roomId,
+    since: context.since,
+    sutUserId: context.sutUserId,
+    timeoutMs: context.timeoutMs,
+    tokenPrefix: "MATRIX_QA_RESTART",
+  });
+  assertTopLevelReplyArtifact("post-restart reply", result.reply);
+  return {
+    artifacts: {
+      driverEventId: result.driverEventId,
+      reply: result.reply,
+      restartSignal: "SIGUSR1",
+      token: result.token,
+    },
+    details: [
+      "restart signal: SIGUSR1",
+      `post-restart driver event: ${result.driverEventId}`,
+      ...buildMatrixReplyDetails("reply", result.reply),
+    ].join("\n"),
+    since: result.since,
+  } satisfies MatrixQaScenarioExecution;
+}
+
 export async function runMatrixQaCanary(params: {
   baseUrl: string;
   driverAccessToken: string;
@@ -433,6 +532,10 @@ export async function runMatrixQaScenario(
         since: result.since,
       };
     }
+    case "matrix-reaction-notification":
+      return await runReactionNotificationScenario(context);
+    case "matrix-restart-resume":
+      return await runRestartResumeScenario(context);
     case "matrix-mention-gating": {
       const token = `MATRIX_QA_NOMENTION_${randomUUID().slice(0, 8).toUpperCase()}`;
       return await runNoReplyExpectedScenario({

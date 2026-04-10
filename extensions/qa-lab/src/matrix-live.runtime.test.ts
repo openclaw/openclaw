@@ -101,6 +101,109 @@ describe("matrix live qa runtime", () => {
     ]);
   });
 
+  it("keeps reaction metadata in redacted Matrix observed-event artifacts", () => {
+    expect(
+      liveTesting.buildObservedEventsArtifact({
+        includeContent: false,
+        observedEvents: [
+          {
+            roomId: "!room:matrix-qa.test",
+            eventId: "$reaction",
+            sender: "@driver:matrix-qa.test",
+            type: "m.reaction",
+            reaction: {
+              eventId: "$reply",
+              key: "👍",
+            },
+            relatesTo: {
+              relType: "m.annotation",
+              eventId: "$reply",
+            },
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        roomId: "!room:matrix-qa.test",
+        eventId: "$reaction",
+        sender: "@driver:matrix-qa.test",
+        type: "m.reaction",
+        originServerTs: undefined,
+        msgtype: undefined,
+        membership: undefined,
+        relatesTo: {
+          relType: "m.annotation",
+          eventId: "$reply",
+        },
+        mentions: undefined,
+        reaction: {
+          eventId: "$reply",
+          key: "👍",
+        },
+      },
+    ]);
+  });
+
+  it("preserves negative-scenario artifacts in the Matrix summary", () => {
+    expect(
+      liveTesting.buildMatrixQaSummary({
+        artifactPaths: {
+          observedEvents: "/tmp/observed.json",
+          report: "/tmp/report.md",
+          summary: "/tmp/summary.json",
+        },
+        checks: [{ name: "Matrix harness ready", status: "pass" }],
+        finishedAt: "2026-04-10T10:05:00.000Z",
+        harness: {
+          baseUrl: "http://127.0.0.1:28008/",
+          composeFile: "/tmp/docker-compose.yml",
+          image: "ghcr.io/matrix-construct/tuwunel:v1.5.1",
+          roomId: "!room:matrix-qa.test",
+          serverName: "matrix-qa.test",
+        },
+        observedEventCount: 4,
+        scenarios: [
+          {
+            id: "matrix-mention-gating",
+            title: "Matrix room message without mention does not trigger",
+            status: "pass",
+            details: "no reply",
+            artifacts: {
+              actorUserId: "@driver:matrix-qa.test",
+              driverEventId: "$driver",
+              expectedNoReplyWindowMs: 8_000,
+              token: "MATRIX_QA_NOMENTION_TOKEN",
+              triggerBody: "reply with only this exact marker: MATRIX_QA_NOMENTION_TOKEN",
+            },
+          },
+        ],
+        startedAt: "2026-04-10T10:00:00.000Z",
+        sutAccountId: "sut",
+        userIds: {
+          driver: "@driver:matrix-qa.test",
+          observer: "@observer:matrix-qa.test",
+          sut: "@sut:matrix-qa.test",
+        },
+      }),
+    ).toMatchObject({
+      counts: {
+        total: 2,
+        passed: 2,
+        failed: 0,
+      },
+      scenarios: [
+        {
+          id: "matrix-mention-gating",
+          artifacts: {
+            actorUserId: "@driver:matrix-qa.test",
+            expectedNoReplyWindowMs: 8_000,
+            triggerBody: "reply with only this exact marker: MATRIX_QA_NOMENTION_TOKEN",
+          },
+        },
+      ],
+    });
+  });
+
   it("treats only connected, healthy Matrix accounts as ready", () => {
     expect(liveTesting.isMatrixAccountReady({ running: true, connected: true })).toBe(true);
     expect(liveTesting.isMatrixAccountReady({ running: true, connected: false })).toBe(false);

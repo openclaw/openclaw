@@ -83,6 +83,48 @@ describe("matrix driver client", () => {
     });
   });
 
+  it("builds trimmed Matrix reaction relations for QA driver events", () => {
+    expect(__testing.buildMatrixReactionRelation(" $msg-1 ", " 👍 ")).toEqual({
+      "m.relates_to": {
+        rel_type: "m.annotation",
+        event_id: "$msg-1",
+        key: "👍",
+      },
+    });
+  });
+
+  it("normalizes Matrix reaction events with target metadata", () => {
+    expect(
+      __testing.normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
+        event_id: "$reaction",
+        sender: "@driver:matrix-qa.test",
+        type: "m.reaction",
+        origin_server_ts: 1_700_000_000_000,
+        content: {
+          "m.relates_to": {
+            rel_type: "m.annotation",
+            event_id: "$msg",
+            key: "👍",
+          },
+        },
+      }),
+    ).toEqual({
+      roomId: "!room:matrix-qa.test",
+      eventId: "$reaction",
+      sender: "@driver:matrix-qa.test",
+      type: "m.reaction",
+      originServerTs: 1_700_000_000_000,
+      relatesTo: {
+        eventId: "$msg",
+        relType: "m.annotation",
+      },
+      reaction: {
+        eventId: "$msg",
+        key: "👍",
+      },
+    });
+  });
+
   it("advances Matrix registration through token then dummy auth stages", () => {
     const firstStage = __testing.resolveNextRegistrationAuth({
       registrationToken: "reg-token",
@@ -157,15 +199,50 @@ describe("matrix driver client", () => {
       matched: false,
       since: "next-batch-2",
     });
-    expect(observedEvents).toEqual([
-      expect.objectContaining({
-        body: "hello",
-        eventId: "$driver",
+    expect(observedEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          body: "hello",
+          eventId: "$driver",
+          roomId: "!room:matrix-qa.test",
+          sender: "@driver:matrix-qa.test",
+          type: "m.room.message",
+        }),
+      ]),
+    );
+  });
+
+  it("sends Matrix reactions through the protocol send endpoint", async () => {
+    const fetchImpl: typeof fetch = async (input, init) => {
+      expect(String(input)).toContain(
+        "/_matrix/client/v3/rooms/!room%3Amatrix-qa.test/send/m.reaction/",
+      );
+      expect(JSON.parse(String(init?.body))).toEqual({
+        "m.relates_to": {
+          rel_type: "m.annotation",
+          event_id: "$msg-1",
+          key: "👍",
+        },
+      });
+      return new Response(JSON.stringify({ event_id: "$reaction-1" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    const client = createMatrixQaClient({
+      accessToken: "token",
+      baseUrl: "http://127.0.0.1:28008/",
+      fetchImpl,
+    });
+
+    await expect(
+      client.sendReaction({
+        emoji: "👍",
+        messageId: "$msg-1",
         roomId: "!room:matrix-qa.test",
-        sender: "@driver:matrix-qa.test",
-        type: "m.room.message",
       }),
-    ]);
+    ).resolves.toBe("$reaction-1");
   });
 
   it("provisions a three-member room so Matrix QA runs in a group context", async () => {
