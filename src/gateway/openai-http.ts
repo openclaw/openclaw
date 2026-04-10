@@ -148,6 +148,7 @@ function writeAssistantContentChunk(
   res: ServerResponse,
   params: { runId: string; model: string; content: string; finishReason: "stop" | null },
 ) {
+  const isLast = params.finishReason != null;
   writeSse(res, {
     id: params.runId,
     object: "chat.completion.chunk",
@@ -156,8 +157,8 @@ function writeAssistantContentChunk(
     choices: [
       {
         index: 0,
-        delta: { content: params.content },
-        finish_reason: params.finishReason,
+        delta: isLast ? {} : { content: params.content },
+        ...(isLast ? { finish_reason: params.finishReason } : { finish_reason: null }),
       },
     ],
   });
@@ -559,6 +560,7 @@ export async function handleOpenAiHttpRequest(
 
   let wroteRole = false;
   let sawAssistantDelta = false;
+  let wroteFinalChunk = false;
   let closed = false;
   let stopWatchingDisconnect = () => {};
 
@@ -593,7 +595,22 @@ export async function handleOpenAiHttpRequest(
 
     if (evt.stream === "lifecycle") {
       const phase = evt.data?.phase;
-      if (phase === "end" || phase === "error") {
+      if (phase === "end") {
+        closed = true;
+        unsubscribe();
+        if (!wroteFinalChunk) {
+          wroteFinalChunk = true;
+          writeAssistantContentChunk(res, {
+            runId,
+            model,
+            content: "",
+            finishReason: "stop",
+          });
+        }
+        writeDone(res);
+        res.end();
+      }
+      if (phase === "error") {
         closed = true;
         stopWatchingDisconnect();
         unsubscribe();
@@ -636,13 +653,22 @@ export async function handleOpenAiHttpRequest(
       if (closed || abortController.signal.aborted) {
         return;
       }
+      // Send error content as a regular chunk (no finish_reason)
       logWarn(`openai-compat: streaming chat completion failed: ${String(err)}`);
       writeAssistantContentChunk(res, {
         runId,
         model,
         content: "Error: internal error",
+        finishReason: null,
+      });
+      // Then send the final stop chunk
+      writeAssistantContentChunk(res, {
+        runId,
+        model,
+        content: "",
         finishReason: "stop",
       });
+      wroteFinalChunk = true;
       emitAgentEvent({
         runId,
         stream: "lifecycle",
@@ -653,6 +679,17 @@ export async function handleOpenAiHttpRequest(
         closed = true;
         stopWatchingDisconnect();
         unsubscribe();
+        // Send final stop chunk if not already sent by phase === "end" listener.
+        // wroteFinalChunk guard ensures we never send duplicate final chunks.
+        if (!wroteFinalChunk) {
+          wroteFinalChunk = true;
+          writeAssistantContentChunk(res, {
+            runId,
+            model,
+            content: "",
+            finishReason: "stop",
+          });
+        }
         writeDone(res);
         res.end();
       }

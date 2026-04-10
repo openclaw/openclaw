@@ -792,6 +792,20 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           .filter((v): v is string => typeof v === "string")
           .join("");
         expect(allContent).toBe("hello");
+
+        // Per OpenAI streaming spec: finish_reason only on last chunk, at choices[0] level (not inside delta)
+        const allChoices = jsonChunks.flatMap(
+          (c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [],
+        );
+        const middleChunks = allChoices.filter((choice) => choice.finish_reason === undefined);
+        const lastChunk = allChoices.findLast((choice) => choice.finish_reason === "stop");
+        // Middle chunks should NOT have finish_reason
+        for (const chunk of middleChunks) {
+          expect(chunk).not.toHaveProperty("finish_reason");
+        }
+        // Last chunk should have finish_reason: "stop" and empty delta
+        expect(lastChunk).toHaveProperty("finish_reason", "stop");
+        expect((lastChunk?.delta as Record<string, unknown>)?.content).toBeUndefined();
       }
 
       {
@@ -860,9 +874,19 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const stopChoice = errorChunks
           .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
           .find((choice) => choice.finish_reason === "stop");
-        expect((stopChoice?.delta as Record<string, unknown> | undefined)?.content).toBe(
-          "Error: internal error",
-        );
+        // Error chunk: finish_reason at choices[0] level, delta is empty
+        expect(stopChoice).toHaveProperty("finish_reason", "stop");
+        expect((stopChoice?.delta as Record<string, unknown> | undefined)?.content).toBeUndefined();
+        // The error message should be in a separate content chunk before the stop chunk
+        const errorContentChunk = errorChunks
+          .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
+          .find(
+            (choice) =>
+              (choice.delta as Record<string, unknown> | undefined)?.content ===
+              "Error: internal error",
+          );
+        expect(errorContentChunk).toBeDefined();
+        expect(errorContentChunk).not.toHaveProperty("finish_reason");
       }
     } finally {
       // shared server
