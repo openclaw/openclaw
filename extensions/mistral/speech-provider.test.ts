@@ -1,3 +1,4 @@
+import { Mistral } from "@mistralai/mistralai";
 import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   parseTtsDirectives,
@@ -6,6 +7,8 @@ import {
 } from "openclaw/plugin-sdk/speech";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildMistralSpeechProvider, decodeMistralWavToS16le } from "./speech-provider.js";
+
+vi.mock("@mistralai/mistralai", () => ({ Mistral: vi.fn() }));
 
 /** Build a minimal RIFF/WAVE buffer with f32le mono audio at the given sample rate. */
 function buildF32leWav(samples: Float32Array, sampleRate: number): Buffer {
@@ -66,8 +69,14 @@ function insertChunkBeforeData(buffer: Buffer, chunkId: string, payload: Buffer)
 }
 
 describe("mistral speech provider", () => {
-  const originalFetch = globalThis.fetch;
   const provider = buildMistralSpeechProvider();
+
+  function mockMistralComplete(impl: () => Promise<unknown>) {
+    const mockComplete = vi.fn(impl);
+    vi.mocked(Mistral).mockImplementation(function () {
+      return { audio: { speech: { complete: mockComplete } } } as unknown as Mistral;
+    });
+  }
 
   function buildSynthesisRequest(
     overrides: Partial<SpeechSynthesisRequest> = {},
@@ -107,7 +116,7 @@ describe("mistral speech provider", () => {
   } as const;
 
   afterEach(() => {
-    globalThis.fetch = originalFetch;
+    vi.mocked(Mistral).mockReset();
     vi.restoreAllMocks();
     delete process.env.MISTRAL_API_KEY;
     delete process.env.MISTRAL_TTS_BASE_URL;
@@ -322,23 +331,20 @@ describe("mistral speech provider", () => {
       mode: "api-key",
       profileId: "mistral:default",
     });
-    const fetchMock = vi.fn(async (_url, init) => {
-      const body = JSON.parse(String(init?.body));
-      expect(body.model).toBe("voxtral-mini-tts-2603");
-      expect(body.voice_id).toBeUndefined();
-      expect(body.response_format).toBe("opus");
-      expect(init?.headers).toMatchObject({
-        Authorization: "Bearer resolved-profile-key",
-      });
-      return new Response(JSON.stringify({ audio_data: audio.toString("base64") }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+    const mockComplete = vi.fn().mockResolvedValue({ audioData: audio.toString("base64") });
+    vi.mocked(Mistral).mockImplementation(function (opts) {
+      expect(opts?.apiKey).toBe("resolved-profile-key");
+      expect(opts?.serverURL).toBe("https://api.mistral.ai");
+      return { audio: { speech: { complete: mockComplete } } } as unknown as Mistral;
     });
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
 
     const result = await provider.synthesize(buildSynthesisRequest());
 
+    expect(mockComplete).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "voxtral-mini-tts-2603", responseFormat: "opus" }),
+      expect.anything(),
+    );
+    expect(mockComplete.mock.calls[0][0].voiceId).toBeUndefined();
     expect(result.audioBuffer.equals(audio)).toBe(true);
     expect(result.outputFormat).toBe("opus");
     expect(result.fileExtension).toBe(".opus");
@@ -352,43 +358,16 @@ describe("mistral speech provider", () => {
       mode: "api-key",
       profileId: "mistral:default",
     });
-    globalThis.fetch = vi.fn(async () => {
-      return new Response(
-        JSON.stringify({
-          error: {
-            message: "bad credentials",
-            type: "invalid_request",
-            code: "bad_auth",
-          },
-        }),
-        {
-          status: 401,
-          headers: { "Content-Type": "application/json" },
-        },
-      );
-    }) as unknown as typeof fetch;
+    const sdkError = Object.assign(new Error("SDK error"), {
+      statusCode: 401,
+      body: JSON.stringify({
+        error: { message: "bad credentials", type: "invalid_request", code: "bad_auth" },
+      }),
+    });
+    mockMistralComplete(() => Promise.reject(sdkError));
 
     await expect(provider.synthesize(buildSynthesisRequest())).rejects.toThrow(
       "Mistral TTS API error (401): bad credentials [type=invalid_request, code=bad_auth]",
-    );
-  });
-
-  it("throws when Voxtral omits audio_data from the response envelope", async () => {
-    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "resolved-profile-key",
-      source: "profile:mistral:default",
-      mode: "api-key",
-      profileId: "mistral:default",
-    });
-    globalThis.fetch = vi.fn(async () => {
-      return new Response(JSON.stringify({ id: "tts_123" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    }) as unknown as typeof fetch;
-
-    await expect(provider.synthesize(buildSynthesisRequest())).rejects.toThrow(
-      "Mistral TTS response missing audio_data",
     );
   });
 
@@ -401,15 +380,13 @@ describe("mistral speech provider", () => {
       mode: "api-key",
       profileId: "mistral:default",
     });
-    const fetchMock = vi.fn(async (_url, init) => {
-      const body = JSON.parse(String(init?.body));
-      expect(body.response_format).toBe("wav");
-      return new Response(JSON.stringify({ audio_data: wavBuf.toString("base64") }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+    const mockComplete = vi.fn().mockImplementation(async (req: { responseFormat: string }) => {
+      expect(req.responseFormat).toBe("wav");
+      return { audioData: wavBuf.toString("base64") };
     });
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    vi.mocked(Mistral).mockImplementation(function () {
+      return { audio: { speech: { complete: mockComplete } } } as unknown as Mistral;
+    });
 
     const result = await provider.synthesizeTelephony!({
       text: "hello",

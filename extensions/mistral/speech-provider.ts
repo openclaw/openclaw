@@ -1,3 +1,4 @@
+import { Mistral } from "@mistralai/mistralai";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { requireApiKey, resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
@@ -7,12 +8,7 @@ import type {
   SpeechProviderOverrides,
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech";
-import {
-  asObject,
-  readResponseTextLimited,
-  trimToUndefined,
-  truncateErrorDetail,
-} from "openclaw/plugin-sdk/speech";
+import { asObject, trimToUndefined, truncateErrorDetail } from "openclaw/plugin-sdk/speech";
 import { MISTRAL_BASE_URL } from "./model-definitions.js";
 
 const DEFAULT_MISTRAL_TTS_MODEL = "voxtral-mini-tts-2603";
@@ -166,10 +162,6 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
   }
 }
 
-function decodeBase64Audio(value: string): Buffer {
-  return Buffer.from(value, "base64");
-}
-
 type WavChunkInfo = {
   audioData: Buffer;
   sampleRate: number;
@@ -290,18 +282,6 @@ function formatMistralErrorPayload(payload: unknown): string | undefined {
   return undefined;
 }
 
-async function extractMistralErrorDetail(response: Response): Promise<string | undefined> {
-  const rawBody = trimToUndefined(await readResponseTextLimited(response));
-  if (!rawBody) {
-    return undefined;
-  }
-  try {
-    return formatMistralErrorPayload(JSON.parse(rawBody)) ?? truncateErrorDetail(rawBody);
-  } catch {
-    return truncateErrorDetail(rawBody);
-  }
-}
-
 async function resolveMistralApiKey(params: {
   cfg: OpenClawConfig;
   providerConfig: MistralTtsProviderConfig;
@@ -317,6 +297,21 @@ async function resolveMistralApiKey(params: {
   return requireApiKey(auth, "mistral");
 }
 
+function isMistralSdkError(err: unknown): err is { statusCode: number; body: string } {
+  return (
+    err != null &&
+    typeof err === "object" &&
+    typeof (err as Record<string, unknown>).statusCode === "number" &&
+    typeof (err as Record<string, unknown>).body === "string"
+  );
+}
+
+function toMistralSdkServerUrl(baseUrl: string): string {
+  // The SDK appends /v1/audio/speech to its serverURL. Our baseUrl config
+  // includes /v1 as part of the REST API path prefix, so strip the suffix.
+  return baseUrl.replace(/\/v1$/, "");
+}
+
 async function mistralTTS(params: {
   text: string;
   apiKey: string;
@@ -327,41 +322,32 @@ async function mistralTTS(params: {
   timeoutMs: number;
 }): Promise<Buffer> {
   const { text, apiKey, baseUrl, model, voice, responseFormat, timeoutMs } = params;
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
+  const client = new Mistral({ apiKey, serverURL: toMistralSdkServerUrl(baseUrl) });
   try {
-    const response = await fetch(`${baseUrl}/audio/speech`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const response = await client.audio.speech.complete(
+      {
         model,
         input: text,
-        ...(voice ? { voice_id: voice } : {}),
-        response_format: responseFormat,
-      }),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      const detail = await extractMistralErrorDetail(response);
-      throw new Error(`Mistral TTS API error (${response.status})${detail ? `: ${detail}` : ""}`);
+        ...(voice ? { voiceId: voice } : {}),
+        responseFormat,
+      },
+      { timeoutMs },
+    );
+    // SDK returns audioData as a base64 string; decode to binary
+    return Buffer.from(response.audioData, "base64");
+  } catch (err) {
+    if (isMistralSdkError(err)) {
+      let detail: string | undefined;
+      try {
+        detail = formatMistralErrorPayload(JSON.parse(err.body)) ?? truncateErrorDetail(err.body);
+      } catch {
+        detail = truncateErrorDetail(err.body);
+      }
+      throw new Error(`Mistral TTS API error (${err.statusCode})${detail ? `: ${detail}` : ""}`, {
+        cause: err,
+      });
     }
-
-    // Voxtral returns synthesized audio inside a JSON envelope instead of
-    // streaming raw audio bytes directly like the OpenAI TTS endpoint.
-    const payload = (await response.json()) as Record<string, unknown>;
-    const audioData = trimToUndefined(payload.audio_data);
-    if (!audioData) {
-      throw new Error("Mistral TTS response missing audio_data");
-    }
-    return decodeBase64Audio(audioData);
-  } finally {
-    clearTimeout(timeout);
+    throw err;
   }
 }
 
