@@ -1198,6 +1198,7 @@ describe("runHeartbeatOnce", () => {
   type HeartbeatFileState =
     | "empty"
     | "actionable"
+    | "legacy-comment-only"
     | "fenced-empty"
     | "fenced-actionable"
     | "missing"
@@ -1218,6 +1219,17 @@ describe("runHeartbeatOnce", () => {
       await fs.writeFile(
         path.join(workspaceDir, "HEARTBEAT.md"),
         "# HEARTBEAT.md\n\n## Tasks\n\n",
+        "utf-8",
+      );
+    } else if (params.fileState === "legacy-comment-only") {
+      // Compatibility case for the pre-198de10523 template shape, before the
+      // docs template started wrapping the scaffold in a fenced ```markdown block.
+      await fs.writeFile(
+        path.join(workspaceDir, "HEARTBEAT.md"),
+        `# Keep this file empty (or with only comments) to skip heartbeat API calls.
+
+# Add tasks below when you want the agent to check something periodically.
+`,
         "utf-8",
       );
     } else if (params.fileState === "fenced-empty") {
@@ -1334,6 +1346,14 @@ describe("runHeartbeatOnce", () => {
       {
         name: "empty file + interval skips",
         fileState: "empty",
+        expectedStatus: "skipped",
+        expectedSkipReason: "empty-heartbeat-file",
+        expectedSendCalls: 0,
+        expectedReplyCalls: 0,
+      },
+      {
+        name: "legacy comment-only template + interval skips",
+        fileState: "legacy-comment-only",
         expectedStatus: "skipped",
         expectedSkipReason: "empty-heartbeat-file",
         expectedSendCalls: 0,
