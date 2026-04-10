@@ -76,6 +76,7 @@ function createFeedbackInvokeContext(params: {
   conversationType: string;
   senderId: string;
   senderName?: string;
+  recipientAadObjectId?: string;
   teamId?: string;
   channelName?: string;
   comment?: string;
@@ -95,6 +96,7 @@ function createFeedbackInvokeContext(params: {
       recipient: {
         id: "bot-id",
         name: "Bot",
+        aadObjectId: params.recipientAadObjectId,
       },
       conversation: {
         id: params.conversationId,
@@ -298,6 +300,58 @@ describe("msteams feedback invoke authz", () => {
 
       await expectFileMissing(path.join(tmpDir, "msteams_group_19_group_thread_tacv2.jsonl"));
       expect(feedbackReflectionMockState.runFeedbackReflection).not.toHaveBeenCalled();
+      expect(originalRun).not.toHaveBeenCalled();
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes bot aadObjectId through feedback reflection proactive refs", async () => {
+    const tmpDir = await mkdtemp(path.join(tmpdir(), "openclaw-msteams-feedback-"));
+    try {
+      const originalRun = vi.fn(async () => undefined);
+      const handler = registerMSTeamsHandlers(
+        createActivityHandler(originalRun),
+        createDeps({
+          cfg: {
+            session: { store: tmpDir },
+            channels: {
+              msteams: {
+                dmPolicy: "allowlist",
+                allowFrom: ["owner-aad"],
+                feedbackReflection: true,
+              },
+            },
+          } as OpenClawConfig,
+        }),
+      ) as MSTeamsActivityHandler & {
+        run: NonNullable<MSTeamsActivityHandler["run"]>;
+      };
+
+      await handler.run(
+        createFeedbackInvokeContext({
+          reaction: "dislike",
+          conversationId: "a:personal-chat;messageid=bot-msg-1",
+          conversationType: "personal",
+          senderId: "owner-aad",
+          senderName: "Owner",
+          recipientAadObjectId: "bot-aad-object-id",
+          comment: "needs follow-up",
+        }),
+      );
+
+      expect(feedbackReflectionMockState.runFeedbackReflection).toHaveBeenCalledTimes(1);
+      expect(feedbackReflectionMockState.runFeedbackReflection).toHaveBeenCalledWith(
+        expect.objectContaining({
+          conversationRef: expect.objectContaining({
+            agent: expect.objectContaining({
+              id: "bot-id",
+              name: "Bot",
+              aadObjectId: "bot-aad-object-id",
+            }),
+          }),
+        }),
+      );
       expect(originalRun).not.toHaveBeenCalled();
     } finally {
       await rm(tmpDir, { recursive: true, force: true });

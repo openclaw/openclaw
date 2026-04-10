@@ -327,7 +327,11 @@ async function handleFeedbackInvoke(
       aadObjectId: activity.from?.aadObjectId,
     },
     agent: activity.recipient
-      ? { id: activity.recipient.id, name: activity.recipient.name }
+      ? {
+          id: activity.recipient.id,
+          name: activity.recipient.name,
+          aadObjectId: activity.recipient.aadObjectId,
+        }
       : undefined,
     bot: activity.recipient
       ? { id: activity.recipient.id, name: activity.recipient.name }
